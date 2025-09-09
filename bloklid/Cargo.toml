@@ -12,3 +12,7 @@ edition = "2024"
 clap = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { version = "1.0", features = ["derive"] }
+serde_yaml = "0.9"
