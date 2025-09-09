@@ -1,0 +1,14 @@
+[package]
+name = "bloklid"
+version = "0.1.0"
+description = "Daemon for indexing HOPR on-chain events and executing HOPR-related on-chain transactions"
+authors = ["HOPR Association <tech@hoprnet.org>"]
+homepage = "https://hoprnet.org/"
+repository = "https://github.com/hoprnet/hoprnet"
+license = "GPL-3.0-only"
+edition = "2024"
+
+[dependencies]
+clap = { workspace = true }
+futures = { workspace = true }
+tokio = { workspace = true }
