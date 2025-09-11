@@ -6,7 +6,7 @@ use clap::Parser;
 use futures::TryStreamExt;
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
-use tracing::{info, warn};
+use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
 use validator::Validate;
 
@@ -95,12 +95,14 @@ async fn main() -> errors::Result<()> {
         match signal {
             Signal::Hup => {
                 info!("received SIGHUP; reloading configuration");
-                let new_cfg = args.load_config(false)?;
-                {
-                    let mut cfg_guard = config.write().map_err(|_| {
-                        BloklidError::NonSpecificError("failed to lock config".into())
-                    })?;
-                    *cfg_guard = new_cfg;
+                match args.load_config(false) {
+                    Ok(new_cfg) => {
+                        let mut cfg_guard = config.write().map_err(|_| {
+                            BloklidError::NonSpecificError("failed to lock config".into())
+                        })?;
+                        *cfg_guard = new_cfg;
+                    }
+                    Err(error) => error!(%error, "failed to reload configuration"),
                 }
             }
             Signal::Int | Signal::Term => {
