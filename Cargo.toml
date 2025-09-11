@@ -16,16 +16,20 @@ alloy = { version = "=1.0.27", default-features = false, features = [
   "std",
 ] } # pinned to 1.0.16 due to many breaking changes in patch releases
 anyhow = "1.0.99"
+async-signal = "0.2.12"
 axum = { version = "0.8.4", features = ["ws", "http2"] }
 axum-extra = { version = "0.10.1", features = ["query"] }
 clap = { version = "4.5.47", features = ["derive", "env", "string"] }
 futures = "0.3.31"
+serde = { version = "1.0", features = ["derive"] }
+serde_with = { version = "3.14.0" }
+serde_yaml = "0.9"
+smart-default = "0.7.1"
 thiserror = "2.0.16"
 tokio = { version = "1.47.1", features = [
   "rt-multi-thread",
   "macros",
   "tracing",
-  "signal",
   "fs",
   "time",
   "sync",
@@ -38,6 +42,7 @@ tracing-subscriber = { version = "0.3.20", features = [
   "registry",
   "std",
 ] }
+validator = { version = "0.20.0", features = ["derive"] }
 
 [profile.dev]
 panic = "abort"
