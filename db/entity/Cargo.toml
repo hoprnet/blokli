@@ -1,10 +1,10 @@
 [package]
-name = "hopr-db-entity"
-description = "Contains all HOPR database entities"
-version = "0.4.0"
+name = "blokli-db-entity"
+description = "Contains all BLOKLI database entities"
+version = "0.1.0"
 edition = "2021"
 homepage = "https://hoprnet.org/"
-repository = "https://github.com/hoprnet/hoprnet"
+repository = "https://github.com/hoprnet/blokli"
 license = "GPL-3.0-only"
 
 [features]
@@ -25,7 +25,7 @@ sea-orm-cli = { workspace = true }
 sea-orm-migration = { workspace = true }
 tokio = { workspace = true }
 
-hopr-db-migration = { workspace = true }
+blokli-db-migration = { workspace = true }
 
 [dependencies]
 chrono = { workspace = true }

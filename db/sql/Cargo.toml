@@ -1,10 +1,10 @@
 [package]
-name = "hopr-db-sql"
-version = "0.18.0"
+name = "blokli-db-sql"
+version = "0.1.0"
 edition = "2021"
 description = "Contains SQL DB functionality implementing the DB API traits to be used by other crates in the code base"
 homepage = "https://hoprnet.org/"
-repository = "https://github.com/hoprnet/hoprnet"
+repository = "https://github.com/hoprnet/blokli"
 license = "GPL-3.0-only"
 
 [features]
@@ -49,9 +49,9 @@ validator = { workspace = true }
 
 hopr-crypto-packet = { workspace = true }
 hopr-crypto-types = { workspace = true }
-hopr-db-api = { workspace = true }
-hopr-db-entity = { workspace = true }
-hopr-db-migration = { workspace = true }
+blokli-db-api = { workspace = true }
+blokli-db-entity = { workspace = true }
+blokli-db-migration = { workspace = true }
 hopr-async-runtime = { workspace = true }
 hopr-internal-types = { workspace = true }
 hopr-metrics = { workspace = true, optional = true }
@@ -78,4 +78,4 @@ hopr-async-runtime = { workspace = true, features = ["runtime-tokio"] }
 hopr-crypto-random = { workspace = true }
 
 [package.metadata.cargo-machete]
-ignored = ["hopr-db-migration"]
+ignored = ["blokli-db-migration"]
