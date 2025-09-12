@@ -1,37 +1,37 @@
 [package]
-name = "blokli-db-entity"
 description = "Contains all BLOKLI database entities"
-version = "0.1.0"
-edition = "2021"
-homepage = "https://hoprnet.org/"
-repository = "https://github.com/hoprnet/blokli"
-license = "GPL-3.0-only"
+edition     = "2021"
+homepage    = "https://hoprnet.org/"
+license     = "GPL-3.0-only"
+name        = "blokli-db-entity"
+repository  = "https://github.com/hoprnet/blokli"
+version     = "0.1.0"
 
 [features]
 default = ["sqlite"]
 runtime-tokio = [
-  "sea-orm/runtime-tokio-rustls",
   "sea-orm-cli/runtime-tokio-rustls",
   "sea-orm-migration/runtime-tokio-rustls",
+  "sea-orm/runtime-tokio-rustls",
 ]
 sqlite = []
 
 [build-dependencies]
-anyhow = { workspace = true }
-clap = { workspace = true }
-futures = { workspace = true }
-sea-orm = { workspace = true }
-sea-orm-cli = { workspace = true }
+anyhow            = { workspace = true }
+clap              = { workspace = true }
+futures           = { workspace = true }
+sea-orm           = { workspace = true }
+sea-orm-cli       = { workspace = true }
 sea-orm-migration = { workspace = true }
-tokio = { workspace = true }
+tokio             = { workspace = true }
 
 blokli-db-migration = { workspace = true }
 
 [dependencies]
-chrono = { workspace = true }
-sea-orm = { workspace = true }
+chrono    = { workspace = true }
+sea-orm   = { workspace = true }
 thiserror = { workspace = true }
 
-hopr-crypto-types = { workspace = true }
-hopr-internal-types = { workspace = true }
+hopr-crypto-types    = { workspace = true }
+hopr-internal-types  = { workspace = true }
 hopr-primitive-types = { workspace = true }

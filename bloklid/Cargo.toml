@@ -1,23 +1,23 @@
 [package]
-name = "bloklid"
-version = "0.1.0"
+authors     = ["HOPR Association <tech@hoprnet.org>"]
 description = "Daemon for indexing HOPR on-chain events and executing HOPR-related on-chain transactions"
-authors = ["HOPR Association <tech@hoprnet.org>"]
-homepage = "https://hoprnet.org/"
-repository = "https://github.com/hoprnet/hoprnet"
-license = "GPL-3.0-only"
-edition = "2024"
+edition     = "2024"
+homepage    = "https://hoprnet.org/"
+license     = "GPL-3.0-only"
+name        = "bloklid"
+repository  = "https://github.com/hoprnet/hoprnet"
+version     = "0.1.0"
 
 [dependencies]
-async-signal = { workspace = true }
-clap = { workspace = true }
-futures = { workspace = true }
-serde = { workspace = true }
-serde_yaml = { workspace = true }
-serde_with = { workspace = true }
-smart-default = { workspace = true }
-tokio = { workspace = true }
-tracing = { workspace = true }
+async-signal       = { workspace = true }
+clap               = { workspace = true }
+futures            = { workspace = true }
+serde              = { workspace = true }
+serde_with         = { workspace = true }
+serde_yaml         = { workspace = true }
+smart-default      = { workspace = true }
+thiserror          = { workspace = true }
+tokio              = { workspace = true }
+tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
-thiserror = { workspace = true }
-validator = { workspace = true }
+validator          = { workspace = true }

@@ -106,6 +106,14 @@
 
   # TOML formatting
   programs.taplo.enable = true;
+  settings.formatter.taplo.options = [
+    "-o"
+    "align_entries=true"
+    "-o"
+    "reorder_keys=true"
+    "-o"
+    "reorder_arrays=true"
+  ];
 
   # Python formatting with Ruff
   programs.ruff-format.enable = true;

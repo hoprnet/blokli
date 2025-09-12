@@ -1,12 +1,12 @@
 [package]
-name = "blokli-db-migration"
 description = "Contains database migrations for a BLOKLI database"
-version = "0.1.0"
-edition = "2021"
-publish = false
-homepage = "https://hoprnet.org/"
-repository = "https://github.com/hoprnet/blokli"
-license = "GPL-3.0-only"
+edition     = "2021"
+homepage    = "https://hoprnet.org/"
+license     = "GPL-3.0-only"
+name        = "blokli-db-migration"
+publish     = false
+repository  = "https://github.com/hoprnet/blokli"
+version     = "0.1.0"
 
 
 [lib]
@@ -14,8 +14,8 @@ name = "migration"
 path = "src/lib.rs"
 
 [dependencies]
-tokio = { workspace = true }
 sea-orm-migration = { workspace = true }
+tokio             = { workspace = true }
 
+hopr-internal-types  = { workspace = true }
 hopr-primitive-types = { workspace = true }
-hopr-internal-types = { workspace = true }
