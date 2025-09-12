@@ -122,21 +122,52 @@ impl MigrationTrait for Migration {
                     .to_owned(),
             )
             .await
-
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         // Drop all indices
-        manager.drop_index(Index::drop().name("idx_announcement_account_id").to_owned()).await?;
-        manager.drop_index(Index::drop().name("idx_account_chain_packet_key").to_owned()).await?;
-        manager.drop_index(Index::drop().name("idx_account_packet_key").to_owned()).await?;
-        manager.drop_index(Index::drop().name("idx_account_chain_key").to_owned()).await?;
-        manager.drop_index(Index::drop().name("idx_channel_status").to_owned()).await?;
-        manager.drop_index(Index::drop().name("idx_channel_closure_time").to_owned()).await?;
-        manager.drop_index(Index::drop().name("idx_channel_id_channel_epoch").to_owned()).await?;
-        manager.drop_index(Index::drop().name("idx_channel_source_destination").to_owned()).await?;
-        manager.drop_index(Index::drop().name("idx_channel_source").to_owned()).await?;
-        manager.drop_index(Index::drop().name("idx_channel_destination").to_owned()).await
+        manager
+            .drop_index(Index::drop().name("idx_announcement_account_id").to_owned())
+            .await?;
+        manager
+            .drop_index(
+                Index::drop()
+                    .name("idx_account_chain_packet_key")
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_index(Index::drop().name("idx_account_packet_key").to_owned())
+            .await?;
+        manager
+            .drop_index(Index::drop().name("idx_account_chain_key").to_owned())
+            .await?;
+        manager
+            .drop_index(Index::drop().name("idx_channel_status").to_owned())
+            .await?;
+        manager
+            .drop_index(Index::drop().name("idx_channel_closure_time").to_owned())
+            .await?;
+        manager
+            .drop_index(
+                Index::drop()
+                    .name("idx_channel_id_channel_epoch")
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_index(
+                Index::drop()
+                    .name("idx_channel_source_destination")
+                    .to_owned(),
+            )
+            .await?;
+        manager
+            .drop_index(Index::drop().name("idx_channel_source").to_owned())
+            .await?;
+        manager
+            .drop_index(Index::drop().name("idx_channel_destination").to_owned())
+            .await
     }
 }
 

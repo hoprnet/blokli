@@ -59,7 +59,12 @@ impl TryFrom<CachedValue> for Option<SafeInfo> {
 struct ExpiryNever;
 
 impl<K, V> Expiry<K, V> for ExpiryNever {
-    fn expire_after_create(&self, _key: &K, _value: &V, _current_time: std::time::Instant) -> Option<Duration> {
+    fn expire_after_create(
+        &self,
+        _key: &K,
+        _value: &V,
+        _current_time: std::time::Instant,
+    ) -> Option<Duration> {
         None
     }
 }
@@ -100,7 +105,10 @@ impl<S> SurbRingBuffer<S> {
     /// Push all SURBs with their IDs into the RB.
     ///
     /// Returns the total number of elements in the RB after the push.
-    pub fn push<I: IntoIterator<Item = (HoprSurbId, S)>>(&self, surbs: I) -> Result<usize, DbError> {
+    pub fn push<I: IntoIterator<Item = (HoprSurbId, S)>>(
+        &self,
+        surbs: I,
+    ) -> Result<usize, DbError> {
         let mut rb = self
             .0
             .lock()
@@ -117,7 +125,9 @@ impl<S> SurbRingBuffer<S> {
             .lock()
             .map_err(|_| DbError::LogicalError("failed to lock surbs".into()))?;
 
-        let (id, surb) = rb.dequeue().ok_or(DbError::NoSurbAvailable("no more surbs".into()))?;
+        let (id, surb) = rb
+            .dequeue()
+            .ok_or(DbError::NoSurbAvailable("no more surbs".into()))?;
         Ok(PoppedSurb {
             id,
             surb,
@@ -133,14 +143,18 @@ impl<S> SurbRingBuffer<S> {
             .map_err(|_| DbError::LogicalError("failed to lock surbs".into()))?;
 
         if rb.peek().is_some_and(|(surb_id, _)| surb_id == id) {
-            let (id, surb) = rb.dequeue().ok_or(DbError::NoSurbAvailable("no more surbs".into()))?;
+            let (id, surb) = rb
+                .dequeue()
+                .ok_or(DbError::NoSurbAvailable("no more surbs".into()))?;
             Ok(PoppedSurb {
                 id,
                 surb,
                 remaining: rb.len(),
             })
         } else {
-            Err(DbError::NoSurbAvailable("surb does not match the given id".into()))
+            Err(DbError::NoSurbAvailable(
+                "surb does not match the given id".into(),
+            ))
         }
     }
 }
@@ -166,13 +180,21 @@ pub struct HoprDbCaches {
 impl Default for HoprDbCaches {
     fn default() -> Self {
         Self {
-            single_values: Cache::builder().time_to_idle(Duration::from_secs(1800)).build(),
+            single_values: Cache::builder()
+                .time_to_idle(Duration::from_secs(1800))
+                .build(),
             unacked_tickets: Cache::builder()
                 .time_to_live(Duration::from_secs(30))
                 .max_capacity(1_000_000_000)
                 .build(),
-            ticket_index: Cache::builder().expire_after(ExpiryNever).max_capacity(10_000).build(),
-            unrealized_value: Cache::builder().expire_after(ExpiryNever).max_capacity(10_000).build(),
+            ticket_index: Cache::builder()
+                .expire_after(ExpiryNever)
+                .max_capacity(10_000)
+                .build(),
+            unrealized_value: Cache::builder()
+                .expire_after(ExpiryNever)
+                .max_capacity(10_000)
+                .build(),
             chain_to_offchain: Cache::builder()
                 .time_to_idle(Duration::from_secs(600))
                 .max_capacity(100_000)
@@ -260,7 +282,10 @@ pub(crate) struct CacheKeyMapper(
 
 impl CacheKeyMapper {
     pub fn with_capacity(capacity: usize) -> Self {
-        Self(DashMap::with_capacity(capacity), DashMap::with_capacity(capacity))
+        Self(
+            DashMap::with_capacity(capacity),
+            DashMap::with_capacity(capacity),
+        )
     }
 
     /// Creates key id mapping for a public key of an [account](AccountEntry).
@@ -303,7 +328,9 @@ impl CacheKeyMapper {
                     "attempt to insert key {key} with key-id {id} failed because key is already set as {}",
                     v_key.get()
                 );
-                Err(DbSqlError::LogicalError("inconsistent key-id binding".into()))
+                Err(DbSqlError::LogicalError(
+                    "inconsistent key-id binding".into(),
+                ))
             }
             // This should never happen.
             (Entry::Occupied(v_id), Entry::Vacant(_)) => {
@@ -311,7 +338,9 @@ impl CacheKeyMapper {
                     "attempt to insert key {key} with key-id {id} failed because key-id is already set as {}",
                     v_id.get()
                 );
-                Err(DbSqlError::LogicalError("inconsistent key-id binding".into()))
+                Err(DbSqlError::LogicalError(
+                    "inconsistent key-id binding".into(),
+                ))
             }
         }
     }

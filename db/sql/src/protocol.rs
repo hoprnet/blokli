@@ -6,7 +6,10 @@ use hopr_crypto_types::{crypto_traits::Randomizable, prelude::*};
 use hopr_db_api::{
     errors::Result,
     prelude::{AuxiliaryPacketInfo, DbError, SurbCacheConfig},
-    protocol::{FoundSurb, HoprDbProtocolOperations, IncomingPacket, OutgoingPacket, ResolvedAcknowledgement},
+    protocol::{
+        FoundSurb, HoprDbProtocolOperations, IncomingPacket, OutgoingPacket,
+        ResolvedAcknowledgement,
+    },
     resolver::HoprDbResolverOperations,
 };
 use hopr_internal_types::prelude::*;
@@ -58,19 +61,25 @@ impl HoprDb {
         outgoing_ticket_win_prob: WinningProbability,
         outgoing_ticket_price: HoprBalance,
     ) -> std::result::Result<HoprForwardedPacket, DbSqlError> {
-        let previous_hop_addr = self.resolve_chain_key(&fwd.previous_hop).await?.ok_or_else(|| {
-            DbSqlError::LogicalError(format!(
-                "failed to find channel key for packet key {} on previous hop",
-                fwd.previous_hop.to_peerid_str()
-            ))
-        })?;
+        let previous_hop_addr = self
+            .resolve_chain_key(&fwd.previous_hop)
+            .await?
+            .ok_or_else(|| {
+                DbSqlError::LogicalError(format!(
+                    "failed to find channel key for packet key {} on previous hop",
+                    fwd.previous_hop.to_peerid_str()
+                ))
+            })?;
 
-        let next_hop_addr = self.resolve_chain_key(&fwd.outgoing.next_hop).await?.ok_or_else(|| {
-            DbSqlError::LogicalError(format!(
-                "failed to find channel key for packet key {} on next hop",
-                fwd.outgoing.next_hop.to_peerid_str()
-            ))
-        })?;
+        let next_hop_addr = self
+            .resolve_chain_key(&fwd.outgoing.next_hop)
+            .await?
+            .ok_or_else(|| {
+                DbSqlError::LogicalError(format!(
+                    "failed to find channel key for packet key {} on next hop",
+                    fwd.outgoing.next_hop.to_peerid_str()
+                ))
+            })?;
 
         let incoming_channel = self
             .get_channel_by_parties(None, &previous_hop_addr, &self.me_onchain, true)
@@ -82,14 +91,21 @@ impl HoprDb {
             })?;
 
         // Check: is the ticket in the packet really for the given channel?
-        if !fwd.outgoing.ticket.channel_id.eq(&incoming_channel.get_id()) {
-            return Err(DbSqlError::LogicalError("invalid ticket for channel".into()));
+        if !fwd
+            .outgoing
+            .ticket
+            .channel_id
+            .eq(&incoming_channel.get_id())
+        {
+            return Err(DbSqlError::LogicalError(
+                "invalid ticket for channel".into(),
+            ));
         }
 
         let chain_data = self.get_indexer_data(None).await?;
-        let domain_separator = chain_data
-            .channels_dst
-            .ok_or_else(|| DbSqlError::LogicalError("failed to fetch the domain separator".into()))?;
+        let domain_separator = chain_data.channels_dst.ok_or_else(|| {
+            DbSqlError::LogicalError("failed to fetch the domain separator".into())
+        })?;
 
         // The ticket price from the oracle times my node's position on the
         // path is the acceptable minimum
@@ -101,9 +117,11 @@ impl HoprDb {
         #[cfg(all(feature = "prometheus", not(test)))]
         METRIC_INCOMING_WIN_PROB.observe(fwd.outgoing.ticket.win_prob().as_f64());
 
-        let remaining_balance = incoming_channel
-            .balance
-            .sub(self.ticket_manager.unrealized_value((&incoming_channel).into()).await?);
+        let remaining_balance = incoming_channel.balance.sub(
+            self.ticket_manager
+                .unrealized_value((&incoming_channel).into())
+                .await?,
+        );
 
         // Here also the signature on the ticket gets validated,
         // so afterward we are sure the source of the `channel`
@@ -122,13 +140,17 @@ impl HoprDb {
         })
         .await?;
         if start.elapsed().as_millis() > SLOW_OP_MS {
-            warn!("validate_unacknowledged_ticket took {} ms", start.elapsed().as_millis());
+            warn!(
+                "validate_unacknowledged_ticket took {} ms",
+                start.elapsed().as_millis()
+            );
         }
 
         // We currently take the maximum of the win prob from the incoming ticket
         // and the one configured on this node.
         // Therefore, the winning probability can only increase along the path.
-        let outgoing_ticket_win_prob = outgoing_ticket_win_prob.max(&verified_incoming_ticket.win_prob());
+        let outgoing_ticket_win_prob =
+            outgoing_ticket_win_prob.max(&verified_incoming_ticket.win_prob());
 
         // The ticket is now validated, let's place it into the acknowledgement waiting queue
         self.caches
@@ -136,7 +158,9 @@ impl HoprDb {
             .insert(
                 fwd.outgoing.ack_challenge,
                 PendingAcknowledgement::WaitingAsRelayer(
-                    verified_incoming_ticket.into_unacknowledged(fwd.own_key).into(),
+                    verified_incoming_ticket
+                        .into_unacknowledged(fwd.own_key)
+                        .into(),
                 ),
             )
             .await;
@@ -172,9 +196,10 @@ impl HoprDb {
         // Finally, replace the ticket in the outgoing packet with a new one
         let ticket_builder = ticket_builder.eth_challenge(fwd.next_challenge);
         let me_clone = me.clone();
-        fwd.outgoing.ticket = spawn_fifo_blocking(move || ticket_builder.build_signed(&me_clone, &domain_separator))
-            .await?
-            .leak();
+        fwd.outgoing.ticket =
+            spawn_fifo_blocking(move || ticket_builder.build_signed(&me_clone, &domain_separator))
+                .await?
+                .leak();
 
         Ok(fwd)
     }
@@ -185,35 +210,50 @@ impl HoprDb {
         ack: &VerifiedAcknowledgement,
     ) -> std::result::Result<ResolvedAcknowledgement, DbSqlError> {
         let ack_half_key = *ack.ack_key_share();
-        let challenge = hopr_parallelize::cpu::spawn_blocking(move || ack_half_key.to_challenge()).await?;
+        let challenge =
+            hopr_parallelize::cpu::spawn_blocking(move || ack_half_key.to_challenge()).await?;
 
-        let pending_ack = self.caches.unacked_tickets.remove(&challenge).await.ok_or_else(|| {
-            DbSqlError::AcknowledgementValidationError(format!(
-                "received unexpected acknowledgement for half key challenge {}",
-                ack.ack_key_share().to_hex()
-            ))
-        })?;
+        let pending_ack = self
+            .caches
+            .unacked_tickets
+            .remove(&challenge)
+            .await
+            .ok_or_else(|| {
+                DbSqlError::AcknowledgementValidationError(format!(
+                    "received unexpected acknowledgement for half key challenge {}",
+                    ack.ack_key_share().to_hex()
+                ))
+            })?;
 
         match pending_ack {
             PendingAcknowledgement::WaitingAsSender => {
-                trace!("received acknowledgement as sender: first relayer has processed the packet");
+                trace!(
+                    "received acknowledgement as sender: first relayer has processed the packet"
+                );
                 Ok(ResolvedAcknowledgement::Sending(*ack))
             }
 
             PendingAcknowledgement::WaitingAsRelayer(unacknowledged) => {
                 let maybe_channel_with_issuer = self
-                    .get_channel_by_parties(None, unacknowledged.ticket.verified_issuer(), &self.me_onchain, true)
+                    .get_channel_by_parties(
+                        None,
+                        unacknowledged.ticket.verified_issuer(),
+                        &self.me_onchain,
+                        true,
+                    )
                     .await?;
 
                 // Issuer's channel must have an epoch matching with the unacknowledged ticket
-                if maybe_channel_with_issuer
-                    .is_some_and(|c| c.channel_epoch.as_u32() == unacknowledged.verified_ticket().channel_epoch)
-                {
+                if maybe_channel_with_issuer.is_some_and(|c| {
+                    c.channel_epoch.as_u32() == unacknowledged.verified_ticket().channel_epoch
+                }) {
                     let domain_separator = self
                         .get_indexer_data(None)
                         .await?
                         .channels_dst
-                        .ok_or_else(|| DbSqlError::LogicalError("domain separator missing".into()))?;
+                        .ok_or_else(|| {
+                            DbSqlError::LogicalError("domain separator missing".into())
+                        })?;
 
                     let myself = self.clone();
                     let ack = *ack;
@@ -254,7 +294,9 @@ impl HoprDbProtocolOperations for HoprDb {
         match &result {
             ResolvedAcknowledgement::RelayingWin(ack_ticket) => {
                 // If the ticket was a win, store it
-                self.ticket_manager.insert_ticket(ack_ticket.clone()).await?;
+                self.ticket_manager
+                    .insert_ticket(ack_ticket.clone())
+                    .await?;
 
                 #[cfg(all(feature = "prometheus", not(test)))]
                 {
@@ -321,11 +363,13 @@ impl HoprDbProtocolOperations for HoprDb {
             .ok_or(DbError::NoSurbAvailable("pseudonym not found".into()))?;
 
         match matcher {
-            SurbMatcher::Pseudonym(_) => Ok(surbs_for_pseudonym.pop_one().map(|popped_surb| FoundSurb {
-                sender_id: HoprSenderId::from_pseudonym_and_id(&pseudonym, popped_surb.id),
-                surb: popped_surb.surb,
-                remaining: popped_surb.remaining,
-            })?),
+            SurbMatcher::Pseudonym(_) => {
+                Ok(surbs_for_pseudonym.pop_one().map(|popped_surb| FoundSurb {
+                    sender_id: HoprSenderId::from_pseudonym_and_id(&pseudonym, popped_surb.id),
+                    surb: popped_surb.surb,
+                    remaining: popped_surb.remaining,
+                })?)
+            }
             // The following code intentionally only checks the first SURB in the ring buffer
             // and does not search the entire RB.
             // This is because the exact match use-case is suited only for situations
@@ -349,7 +393,11 @@ impl HoprDbProtocolOperations for HoprDb {
     }
 
     #[tracing::instrument(level = "trace", skip(self, data))]
-    async fn to_send_no_ack(&self, data: Box<[u8]>, destination: OffchainPublicKey) -> Result<OutgoingPacket> {
+    async fn to_send_no_ack(
+        &self,
+        data: Box<[u8]>,
+        destination: OffchainPublicKey,
+    ) -> Result<OutgoingPacket> {
         let next_peer = self.resolve_chain_key(&destination).await?.ok_or_else(|| {
             DbSqlError::LogicalError(format!(
                 "failed to find chain key for packet key {} on previous hop",
@@ -361,11 +409,13 @@ impl HoprDbProtocolOperations for HoprDb {
         let pseudonym = HoprPseudonym::random();
         let next_ticket = TicketBuilder::zero_hop().direction(&self.me_onchain, &next_peer);
 
-        let domain_separator = self
-            .get_indexer_data(None)
-            .await?
-            .channels_dst
-            .ok_or_else(|| DbSqlError::LogicalError("failed to fetch the domain separator".into()))?;
+        let domain_separator =
+            self.get_indexer_data(None)
+                .await?
+                .channels_dst
+                .ok_or_else(|| {
+                    DbSqlError::LogicalError("failed to fetch the domain separator".into())
+                })?;
 
         // Construct the outgoing packet
         let myself = self.clone();
@@ -381,7 +431,9 @@ impl HoprDbProtocolOperations for HoprDb {
                 None, // NoAck messages currently do not have signals
             )
             .map_err(|e| {
-                DbSqlError::LogicalError(format!("failed to construct chain components for a no-ack packet: {e}"))
+                DbSqlError::LogicalError(format!(
+                    "failed to construct chain components for a no-ack packet: {e}"
+                ))
             })
         })
         .await?;
@@ -437,7 +489,9 @@ impl HoprDbProtocolOperations for HoprDb {
 
                 (
                     next,
-                    surb.additional_data_receiver.proof_of_relay_values().chain_length() as usize,
+                    surb.additional_data_receiver
+                        .proof_of_relay_values()
+                        .chain_length() as usize,
                     sender_id.pseudonym(),
                     PacketRouting::Surb(sender_id.surb_id(), surb),
                 )
@@ -456,7 +510,9 @@ impl HoprDbProtocolOperations for HoprDb {
             let channel = self
                 .get_channel_by_parties(None, &self.me_onchain, &next_peer, true)
                 .await?
-                .ok_or(DbSqlError::LogicalError(format!("channel to '{next_peer}' not found")))?;
+                .ok_or(DbSqlError::LogicalError(format!(
+                    "channel to '{next_peer}' not found"
+                )))?;
 
             self.create_multihop_ticket(
                 channel,
@@ -471,11 +527,13 @@ impl HoprDbProtocolOperations for HoprDb {
             TicketBuilder::zero_hop().direction(&self.me_onchain, &next_peer)
         };
 
-        let domain_separator = self
-            .get_indexer_data(None)
-            .await?
-            .channels_dst
-            .ok_or_else(|| DbSqlError::LogicalError("failed to fetch the domain separator".into()))?;
+        let domain_separator =
+            self.get_indexer_data(None)
+                .await?
+                .channels_dst
+                .ok_or_else(|| {
+                    DbSqlError::LogicalError("failed to fetch the domain separator".into())
+                })?;
 
         // Construct the outgoing packet
         let myself = self.clone();
@@ -490,15 +548,21 @@ impl HoprDbProtocolOperations for HoprDb {
                 &domain_separator,
                 signals,
             )
-            .map_err(|e| DbSqlError::LogicalError(format!("failed to construct chain components for a packet: {e}")))
+            .map_err(|e| {
+                DbSqlError::LogicalError(format!(
+                    "failed to construct chain components for a packet: {e}"
+                ))
+            })
         })
         .await?;
 
         // Store the reply openers under the given SenderId
         // This is a no-op for reply packets
         openers.into_iter().for_each(|(surb_id, opener)| {
-            self.caches
-                .insert_pseudonym_opener(HoprSenderId::from_pseudonym_and_id(&pseudonym, surb_id), opener)
+            self.caches.insert_pseudonym_opener(
+                HoprSenderId::from_pseudonym_and_id(&pseudonym, surb_id),
+                opener,
+            )
         });
 
         if let Some(out) = packet.try_as_outgoing() {
@@ -535,10 +599,16 @@ impl HoprDbProtocolOperations for HoprDb {
 
         let start = std::time::Instant::now();
         let packet = spawn_fifo_blocking(move || {
-            HoprPacket::from_incoming(&data, &offchain_keypair, sender, &myself.caches.key_id_mapper, |p| {
-                myself.caches.extract_pseudonym_opener(p)
+            HoprPacket::from_incoming(
+                &data,
+                &offchain_keypair,
+                sender,
+                &myself.caches.key_id_mapper,
+                |p| myself.caches.extract_pseudonym_opener(p),
+            )
+            .map_err(|e| {
+                DbSqlError::LogicalError(format!("failed to construct an incoming packet: {e}"))
             })
-            .map_err(|e| DbSqlError::LogicalError(format!("failed to construct an incoming packet: {e}")))
         })
         .await?;
         if start.elapsed().as_millis() > SLOW_OP_MS {
@@ -598,7 +668,12 @@ impl HoprDbProtocolOperations for HoprDb {
             HoprPacket::Forwarded(fwd) => {
                 let start = std::time::Instant::now();
                 let validation_res = self
-                    .validate_and_replace_ticket(*fwd, &self.chain_key, outgoing_ticket_win_prob, outgoing_ticket_price)
+                    .validate_and_replace_ticket(
+                        *fwd,
+                        &self.chain_key,
+                        outgoing_ticket_win_prob,
+                        outgoing_ticket_price,
+                    )
                     .await;
                 if start.elapsed().as_millis() > SLOW_OP_MS {
                     warn!(
@@ -633,12 +708,17 @@ impl HoprDbProtocolOperations for HoprDb {
                             )))
                         })?;
 
-                        Err(DbSqlError::TicketValidationError(Box::new((rejected_ticket, error))).into())
+                        Err(
+                            DbSqlError::TicketValidationError(Box::new((rejected_ticket, error)))
+                                .into(),
+                        )
                     }
                     Err(e) => Err(e.into()),
                 }
             }
-            HoprPacket::Outgoing(_) => Err(DbSqlError::LogicalError("cannot receive an outgoing packet".into()).into()),
+            HoprPacket::Outgoing(_) => {
+                Err(DbSqlError::LogicalError("cannot receive an outgoing packet".into()).into())
+            }
         }
     }
 }
@@ -678,7 +758,10 @@ impl HoprDb {
         let ticket_builder = TicketBuilder::default()
             .direction(&me_onchain, &destination)
             .balance(amount)
-            .index(self.increment_outgoing_ticket_index(channel.get_id()).await?)
+            .index(
+                self.increment_outgoing_ticket_index(channel.get_id())
+                    .await?,
+            )
             .index_offset(1) // unaggregated always have index_offset == 1
             .win_prob(winning_prob)
             .channel_epoch(channel.channel_epoch.as_u32());
@@ -698,7 +781,10 @@ impl PathAddressResolver for HoprDb {
             .map_err(|_| PathError::UnknownPeer(address.to_string()))
     }
 
-    async fn resolve_chain_address(&self, key: &OffchainPublicKey) -> std::result::Result<Option<Address>, PathError> {
+    async fn resolve_chain_address(
+        &self,
+        key: &OffchainPublicKey,
+    ) -> std::result::Result<Option<Address>, PathError> {
         self.resolve_chain_key(key)
             .await
             .map_err(|_| PathError::UnknownPeer(key.to_string()))

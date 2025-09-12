@@ -47,7 +47,6 @@ impl MigrationTrait for Migration {
                     .to_owned(),
             )
             .await
-
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -55,7 +54,11 @@ impl MigrationTrait for Migration {
             .drop_index(Index::drop().name("idx_contract_log_topic").to_owned())
             .await?;
         manager
-            .drop_index(Index::drop().name("idx_log_status_block_number_processed").to_owned())
+            .drop_index(
+                Index::drop()
+                    .name("idx_log_status_block_number_processed")
+                    .to_owned(),
+            )
             .await?;
         manager
             .drop_index(Index::drop().name("idx_unprocessed_log_status").to_owned())

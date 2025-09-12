@@ -4,13 +4,15 @@ use hopr_crypto_types::prelude::Hash;
 use hopr_db_api::info::*;
 use hopr_db_entity::{
     chain_info, global_settings, node_info,
-    prelude::{Account, Announcement, ChainInfo, Channel, NetworkEligibility, NetworkRegistry, NodeInfo},
+    prelude::{
+        Account, Announcement, ChainInfo, Channel, NetworkEligibility, NetworkRegistry, NodeInfo,
+    },
 };
 use hopr_internal_types::prelude::WinningProbability;
 use hopr_primitive_types::prelude::*;
 use sea_orm::{
-    ActiveModelBehavior, ActiveModelTrait, ColumnTrait, EntityOrSelect, EntityTrait, IntoActiveModel, PaginatorTrait,
-    QueryFilter, Set,
+    ActiveModelBehavior, ActiveModelTrait, ColumnTrait, EntityOrSelect, EntityTrait,
+    IntoActiveModel, PaginatorTrait, QueryFilter, Set,
 };
 use tracing::trace;
 
@@ -66,13 +68,21 @@ pub trait HoprDbInfoOperations {
     async fn get_safe_hopr_balance<'a>(&'a self, tx: OptTx<'a>) -> Result<HoprBalance>;
 
     /// Sets node's Safe balance of HOPR tokens.
-    async fn set_safe_hopr_balance<'a>(&'a self, tx: OptTx<'a>, new_balance: HoprBalance) -> Result<()>;
+    async fn set_safe_hopr_balance<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        new_balance: HoprBalance,
+    ) -> Result<()>;
 
     /// Gets node's Safe allowance of HOPR tokens.
     async fn get_safe_hopr_allowance<'a>(&'a self, tx: OptTx<'a>) -> Result<HoprBalance>;
 
     /// Sets node's Safe allowance of HOPR tokens.
-    async fn set_safe_hopr_allowance<'a>(&'a self, tx: OptTx<'a>, new_allowance: HoprBalance) -> Result<()>;
+    async fn set_safe_hopr_allowance<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        new_allowance: HoprBalance,
+    ) -> Result<()>;
 
     /// Gets node's Safe addresses info.
     async fn get_safe_info<'a>(&'a self, tx: OptTx<'a>) -> Result<Option<SafeInfo>>;
@@ -90,7 +100,12 @@ pub trait HoprDbInfoOperations {
     ///
     /// To retrieve stored domain separator info, use [`HoprDbInfoOperations::get_indexer_data`],
     /// note that this setter should invalidate the cache.
-    async fn set_domain_separator<'a>(&'a self, tx: OptTx<'a>, dst_type: DomainSeparator, value: Hash) -> Result<()>;
+    async fn set_domain_separator<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        dst_type: DomainSeparator,
+        value: Hash,
+    ) -> Result<()>;
 
     /// Sets the minimum required winning probability for incoming tickets.
     /// The value must be between zero and 1.
@@ -114,16 +129,26 @@ pub trait HoprDbInfoOperations {
     /// Updates the network registry state.
     /// To retrieve the stored network registry state, use [`HoprDbInfoOperations::get_indexer_data`],
     /// note that this setter should invalidate the cache.
-    async fn set_network_registry_enabled<'a>(&'a self, tx: OptTx<'a>, enabled: bool) -> Result<()>;
+    async fn set_network_registry_enabled<'a>(&'a self, tx: OptTx<'a>, enabled: bool)
+    -> Result<()>;
 
     /// Gets global setting value with the given key.
-    async fn get_global_setting<'a>(&'a self, tx: OptTx<'a>, key: &str) -> Result<Option<Box<[u8]>>>;
+    async fn get_global_setting<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        key: &str,
+    ) -> Result<Option<Box<[u8]>>>;
 
     /// Sets the global setting value with the given key.
     ///
     /// If the setting with the given `key` does not exist, it is created.
     /// If `value` is `None` and a setting with the given `key` exists, it is removed.
-    async fn set_global_setting<'a>(&'a self, tx: OptTx<'a>, key: &str, value: Option<&[u8]>) -> Result<()>;
+    async fn set_global_setting<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        key: &str,
+        value: Option<&[u8]>,
+    ) -> Result<()>;
 }
 
 #[async_trait]
@@ -202,7 +227,11 @@ impl HoprDbInfoOperations for HoprDb {
             .await
     }
 
-    async fn set_safe_hopr_balance<'a>(&'a self, tx: OptTx<'a>, new_balance: HoprBalance) -> Result<()> {
+    async fn set_safe_hopr_balance<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        new_balance: HoprBalance,
+    ) -> Result<()> {
         self.nest_transaction(tx)
             .await?
             .perform(|tx| {
@@ -238,7 +267,11 @@ impl HoprDbInfoOperations for HoprDb {
             .await
     }
 
-    async fn set_safe_hopr_allowance<'a>(&'a self, tx: OptTx<'a>, new_allowance: HoprBalance) -> Result<()> {
+    async fn set_safe_hopr_allowance<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        new_allowance: HoprBalance,
+    ) -> Result<()> {
         self.nest_transaction(tx)
             .await?
             .perform(|tx| {
@@ -359,8 +392,12 @@ impl HoprDbInfoOperations for HoprDb {
                                     ledger_dst,
                                     safe_registry_dst,
                                     channels_dst,
-                                    ticket_price: model.ticket_price.map(HoprBalance::from_be_bytes),
-                                    minimum_incoming_ticket_winning_prob: (model.min_incoming_ticket_win_prob as f64)
+                                    ticket_price: model
+                                        .ticket_price
+                                        .map(HoprBalance::from_be_bytes),
+                                    minimum_incoming_ticket_winning_prob: (model
+                                        .min_incoming_ticket_win_prob
+                                        as f64)
                                         .try_into()?,
                                     nr_enabled: model.network_registry_enabled,
                                 }))
@@ -373,7 +410,12 @@ impl HoprDbInfoOperations for HoprDb {
             .try_into()?)
     }
 
-    async fn set_domain_separator<'a>(&'a self, tx: OptTx<'a>, dst_type: DomainSeparator, value: Hash) -> Result<()> {
+    async fn set_domain_separator<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        dst_type: DomainSeparator,
+        value: Hash,
+    ) -> Result<()> {
         self.nest_transaction(tx)
             .await?
             .perform(|tx| {
@@ -511,7 +553,11 @@ impl HoprDbInfoOperations for HoprDb {
             .await
     }
 
-    async fn set_network_registry_enabled<'a>(&'a self, tx: OptTx<'a>, enabled: bool) -> Result<()> {
+    async fn set_network_registry_enabled<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        enabled: bool,
+    ) -> Result<()> {
         self.nest_transaction(tx)
             .await?
             .perform(|tx| {
@@ -535,7 +581,11 @@ impl HoprDbInfoOperations for HoprDb {
         Ok(())
     }
 
-    async fn get_global_setting<'a>(&'a self, tx: OptTx<'a>, key: &str) -> Result<Option<Box<[u8]>>> {
+    async fn get_global_setting<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        key: &str,
+    ) -> Result<Option<Box<[u8]>>> {
         let k = key.to_owned();
         self.nest_transaction(tx)
             .await?
@@ -553,7 +603,12 @@ impl HoprDbInfoOperations for HoprDb {
             .await
     }
 
-    async fn set_global_setting<'a>(&'a self, tx: OptTx<'a>, key: &str, value: Option<&[u8]>) -> Result<()> {
+    async fn set_global_setting<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        key: &str,
+        value: Option<&[u8]>,
+    ) -> Result<()> {
         let k = key.to_owned();
         let value = value.map(Vec::from);
         self.nest_transaction(tx)
@@ -654,7 +709,8 @@ mod tests {
         let price = HoprBalance::from(10);
         db.update_ticket_price(None, price).await?;
 
-        db.set_minimum_incoming_ticket_win_prob(None, 0.5.try_into()?).await?;
+        db.set_minimum_incoming_ticket_win_prob(None, 0.5.try_into()?)
+            .await?;
 
         let data = db.get_indexer_data(None).await?;
 

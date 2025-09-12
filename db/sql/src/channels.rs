@@ -4,7 +4,9 @@ use hopr_crypto_types::prelude::*;
 use hopr_db_entity::{channel, conversions::channels::ChannelStatusUpdate, prelude::Channel};
 use hopr_internal_types::prelude::*;
 use hopr_primitive_types::prelude::*;
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
+};
 use tracing::instrument;
 
 use crate::{
@@ -64,16 +66,28 @@ pub trait HoprDbChannelOperations {
     /// Retrieves channel by its channel ID hash.
     ///
     /// See [generate_channel_id] on how to generate a channel ID hash from source and destination [Addresses](Address).
-    async fn get_channel_by_id<'a>(&'a self, tx: OptTx<'a>, id: &Hash) -> Result<Option<ChannelEntry>>;
+    async fn get_channel_by_id<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        id: &Hash,
+    ) -> Result<Option<ChannelEntry>>;
 
     /// Start changes to channel entry.
     /// If the channel with the given ID exists, the [ChannelEditor] is returned.
     /// Use [`HoprDbChannelOperations::finish_channel_update`] to commit edits to the DB when done.
-    async fn begin_channel_update<'a>(&'a self, tx: OptTx<'a>, id: &Hash) -> Result<Option<ChannelEditor>>;
+    async fn begin_channel_update<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        id: &Hash,
+    ) -> Result<Option<ChannelEditor>>;
 
     /// Commits changes of the channel to the database.
     /// Returns the updated channel, or on deletion, the deleted channel entry.
-    async fn finish_channel_update<'a>(&'a self, tx: OptTx<'a>, editor: ChannelEditor) -> Result<Option<ChannelEntry>>;
+    async fn finish_channel_update<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        editor: ChannelEditor,
+    ) -> Result<Option<ChannelEntry>>;
 
     /// Retrieves the channel by source and destination.
     /// This operation should be able to use cache since it can be also called from
@@ -109,12 +123,17 @@ pub trait HoprDbChannelOperations {
     async fn stream_active_channels<'a>(&'a self) -> Result<BoxStream<'a, Result<ChannelEntry>>>;
 
     /// Inserts or updates the given channel entry.
-    async fn upsert_channel<'a>(&'a self, tx: OptTx<'a>, channel_entry: ChannelEntry) -> Result<()>;
+    async fn upsert_channel<'a>(&'a self, tx: OptTx<'a>, channel_entry: ChannelEntry)
+    -> Result<()>;
 }
 
 #[async_trait]
 impl HoprDbChannelOperations for HoprDb {
-    async fn get_channel_by_id<'a>(&'a self, tx: OptTx<'a>, id: &Hash) -> Result<Option<ChannelEntry>> {
+    async fn get_channel_by_id<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        id: &Hash,
+    ) -> Result<Option<ChannelEntry>> {
         let id_hex = id.to_hex();
         self.nest_transaction(tx)
             .await?
@@ -136,7 +155,11 @@ impl HoprDbChannelOperations for HoprDb {
             .await
     }
 
-    async fn begin_channel_update<'a>(&'a self, tx: OptTx<'a>, id: &Hash) -> Result<Option<ChannelEditor>> {
+    async fn begin_channel_update<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        id: &Hash,
+    ) -> Result<Option<ChannelEditor>> {
         let id_hex = id.to_hex();
         self.nest_transaction(tx)
             .await?
@@ -159,7 +182,11 @@ impl HoprDbChannelOperations for HoprDb {
             .await
     }
 
-    async fn finish_channel_update<'a>(&'a self, tx: OptTx<'a>, editor: ChannelEditor) -> Result<Option<ChannelEntry>> {
+    async fn finish_channel_update<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        editor: ChannelEditor,
+    ) -> Result<Option<ChannelEntry>> {
         let epoch = editor.model.epoch.clone();
 
         let parties = ChannelParties(editor.orig.source, editor.orig.destination);
@@ -254,7 +281,9 @@ impl HoprDbChannelOperations for HoprDb {
                 Box::pin(async move {
                     Channel::find()
                         .filter(match direction {
-                            ChannelDirection::Incoming => channel::Column::Destination.eq(target_hex),
+                            ChannelDirection::Incoming => {
+                                channel::Column::Destination.eq(target_hex)
+                            }
                             ChannelDirection::Outgoing => channel::Column::Source.eq(target_hex),
                         })
                         .all(tx.as_ref())
@@ -312,7 +341,11 @@ impl HoprDbChannelOperations for HoprDb {
             .boxed())
     }
 
-    async fn upsert_channel<'a>(&'a self, tx: OptTx<'a>, channel_entry: ChannelEntry) -> Result<()> {
+    async fn upsert_channel<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        channel_entry: ChannelEntry,
+    ) -> Result<()> {
         let parties = ChannelParties(channel_entry.source, channel_entry.destination);
         self.nest_transaction(tx)
             .await?
@@ -392,7 +425,14 @@ mod tests {
         let a = Address::from(random_bytes());
         let b = Address::from(random_bytes());
 
-        let ce = ChannelEntry::new(a, b, 0.into(), 0_u32.into(), ChannelStatus::Open, 0_u32.into());
+        let ce = ChannelEntry::new(
+            a,
+            b,
+            0.into(),
+            0_u32.into(),
+            ChannelStatus::Open,
+            0_u32.into(),
+        );
 
         db.upsert_channel(None, ce).await?;
         let from_db = db
@@ -406,7 +446,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_channel_get_for_destination_that_does_not_exist_returns_none() -> anyhow::Result<()> {
+    async fn test_channel_get_for_destination_that_does_not_exist_returns_none()
+    -> anyhow::Result<()> {
         let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
 
         let from_db = db
@@ -421,7 +462,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_channel_get_for_destination_that_exists_should_be_returned() -> anyhow::Result<()> {
+    async fn test_channel_get_for_destination_that_exists_should_be_returned() -> anyhow::Result<()>
+    {
         let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
 
         let expected_destination = Address::default();

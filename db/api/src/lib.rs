@@ -6,15 +6,10 @@ pub mod errors;
 pub mod info;
 pub mod logs;
 
-use crate::{
-    logs::HoprDbLogOperations,
-};
+use crate::logs::HoprDbLogOperations;
 
 /// Convenience trait that contains all HOPR DB operation interfaces.
-pub trait HoprDbAllAbstractedOperations:
-    HoprDbLogOperations
-{
-}
+pub trait HoprDbAllAbstractedOperations: HoprDbLogOperations {}
 
 #[doc(hidden)]
 pub mod prelude {

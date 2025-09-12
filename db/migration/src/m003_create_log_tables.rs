@@ -22,10 +22,23 @@ impl MigrationTrait for Migration {
                             .col(LogStatus::TransactionIndex)
                             .col(LogStatus::LogIndex),
                     )
-                    .col(ColumnDef::new(LogStatus::TransactionIndex).not_null().binary_len(8))
+                    .col(
+                        ColumnDef::new(LogStatus::TransactionIndex)
+                            .not_null()
+                            .binary_len(8),
+                    )
                     .col(ColumnDef::new(LogStatus::LogIndex).not_null().binary_len(8))
-                    .col(ColumnDef::new(LogStatus::BlockNumber).not_null().binary_len(8))
-                    .col(ColumnDef::new(LogStatus::Processed).boolean().not_null().default(false))
+                    .col(
+                        ColumnDef::new(LogStatus::BlockNumber)
+                            .not_null()
+                            .binary_len(8),
+                    )
+                    .col(
+                        ColumnDef::new(LogStatus::Processed)
+                            .boolean()
+                            .not_null()
+                            .default(false),
+                    )
                     .col(ColumnDef::new(LogStatus::ProcessedAt).date_time())
                     .col(ColumnDef::new(LogStatus::Checksum).binary_len(32))
                     .to_owned(),
@@ -45,22 +58,42 @@ impl MigrationTrait for Migration {
                             .col(Log::TransactionIndex)
                             .col(Log::LogIndex),
                     )
-                    .col(ColumnDef::new(Log::TransactionIndex).not_null().binary_len(8))
+                    .col(
+                        ColumnDef::new(Log::TransactionIndex)
+                            .not_null()
+                            .binary_len(8),
+                    )
                     .col(ColumnDef::new(Log::LogIndex).not_null().binary_len(8))
                     .col(ColumnDef::new(Log::BlockNumber).not_null().binary_len(8))
                     .col(ColumnDef::new(Log::BlockHash).binary_len(32).not_null())
-                    .col(ColumnDef::new(Log::TransactionHash).binary_len(32).not_null())
+                    .col(
+                        ColumnDef::new(Log::TransactionHash)
+                            .binary_len(32)
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(Log::Address).binary_len(20).not_null())
                     .col(ColumnDef::new(Log::Topics).binary().not_null())
                     .col(ColumnDef::new(Log::Data).binary().not_null())
-                    .col(ColumnDef::new(Log::Removed).boolean().not_null().default(false))
+                    .col(
+                        ColumnDef::new(Log::Removed)
+                            .boolean()
+                            .not_null()
+                            .default(false),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_log_status_log")
-                            .from(Log::Table, (Log::BlockNumber, Log::TransactionIndex, Log::LogIndex))
+                            .from(
+                                Log::Table,
+                                (Log::BlockNumber, Log::TransactionIndex, Log::LogIndex),
+                            )
                             .to(
                                 LogStatus::Table,
-                                (LogStatus::BlockNumber, LogStatus::TransactionIndex, LogStatus::LogIndex),
+                                (
+                                    LogStatus::BlockNumber,
+                                    LogStatus::TransactionIndex,
+                                    LogStatus::LogIndex,
+                                ),
                             )
                             .on_delete(ForeignKeyAction::Cascade)
                             .on_update(ForeignKeyAction::Cascade),
@@ -82,17 +115,28 @@ impl MigrationTrait for Migration {
                             .integer()
                             .auto_increment(),
                     )
-                    .col(ColumnDef::new(LogTopicInfo::Address).string_len(40).not_null())
-                    .col(ColumnDef::new(LogTopicInfo::Topic).string_len(64).not_null())
+                    .col(
+                        ColumnDef::new(LogTopicInfo::Address)
+                            .string_len(40)
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(LogTopicInfo::Topic)
+                            .string_len(64)
+                            .not_null(),
+                    )
                     .to_owned(),
             )
             .await
-
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager.drop_table(Table::drop().table(LogTopicInfo::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(Log::Table).to_owned()).await?;
+        manager
+            .drop_table(Table::drop().table(LogTopicInfo::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(Log::Table).to_owned())
+            .await?;
         manager
             .drop_table(Table::drop().table(LogStatus::Table).to_owned())
             .await

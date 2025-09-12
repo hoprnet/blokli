@@ -39,7 +39,9 @@ impl TryFrom<&channel::Model> for ChannelStatus {
                     "channel is pending to close but without closure time".into(),
                 ))
                 .map(|time| ChannelStatus::PendingToClose(time.into())),
-            _ => Err(DbEntityError::ConversionError("invalid channel status value".into())),
+            _ => Err(DbEntityError::ConversionError(
+                "invalid channel status value".into(),
+            )),
         }
     }
 }

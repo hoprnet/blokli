@@ -53,7 +53,11 @@ pub trait HoprDbProtocolOperations {
     fn get_surb_config(&self) -> SurbCacheConfig;
 
     /// Process the data into an outgoing packet that is not going to be acknowledged.
-    async fn to_send_no_ack(&self, data: Box<[u8]>, destination: OffchainPublicKey) -> Result<OutgoingPacket>;
+    async fn to_send_no_ack(
+        &self,
+        data: Box<[u8]>,
+        destination: OffchainPublicKey,
+    ) -> Result<OutgoingPacket>;
 
     /// Process the data into an outgoing packet
     async fn to_send(

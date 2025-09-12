@@ -2,9 +2,7 @@
 
 resolver = "2"
 
-members = [
-  "bloklid"
-]
+members = ["bloklid"]
 
 [workspace.dependencies]
 alloy = { version = "=1.0.27", default-features = false, features = [
@@ -67,4 +65,3 @@ lto = "fat"
 panic = "abort"
 strip = true
 opt-level = 3
-

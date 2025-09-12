@@ -18,9 +18,7 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 pub use hopr_db_api as api;
-use hopr_db_api::{
-    logs::HoprDbLogOperations,
-};
+use hopr_db_api::logs::HoprDbLogOperations;
 use sea_orm::{ConnectionTrait, TransactionTrait};
 pub use sea_orm::{DatabaseConnection, DatabaseTransaction};
 
@@ -180,9 +178,16 @@ pub trait HoprDbGeneralModelOperations {
     ///
     /// If `tx` is `Some`, the `target_db` must match with the one in `tx`. In other words,
     /// nesting across different databases is forbidden and the method will panic.
-    async fn nest_transaction_in_db(&self, tx: OptTx<'_>, target_db: TargetDb) -> Result<OpenTransaction> {
+    async fn nest_transaction_in_db(
+        &self,
+        tx: OptTx<'_>,
+        target_db: TargetDb,
+    ) -> Result<OpenTransaction> {
         if let Some(t) = tx {
-            assert_eq!(t.1, target_db, "attempt to create nest into tx from a different db");
+            assert_eq!(
+                t.1, target_db,
+                "attempt to create nest into tx from a different db"
+            );
             Ok(OpenTransaction(t.as_ref().begin().await?, target_db))
         } else {
             self.begin_transaction_in_db(target_db).await
@@ -210,8 +215,11 @@ impl HoprDbGeneralModelOperations for HoprDb {
     async fn begin_transaction_in_db(&self, target_db: TargetDb) -> Result<OpenTransaction> {
         match target_db {
             TargetDb::Index => Ok(OpenTransaction(
-                self.index_db.read_write().begin_with_config(None, None).await?, /* TODO: cannot estimate intent,
-                                                                                  * must be readwrite */
+                self.index_db
+                    .read_write()
+                    .begin_with_config(None, None)
+                    .await?, /* TODO: cannot estimate intent,
+                              * must be readwrite */
                 target_db,
             )),
             TargetDb::Logs => Ok(OpenTransaction(
@@ -270,7 +278,7 @@ pub trait HoprDbAllOperations:
 
 #[doc(hidden)]
 pub mod prelude {
-    pub use hopr_db_api::{logs::*};
+    pub use hopr_db_api::logs::*;
 
     pub use super::*;
     pub use crate::{accounts::*, channels::*, corrupted_channels::*, db::*, errors::*, info::*};

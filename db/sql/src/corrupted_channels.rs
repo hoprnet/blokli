@@ -25,10 +25,17 @@ pub trait HoprDbCorruptedChannelOperations {
     ) -> Result<Option<CorruptedChannelEntry>>;
 
     /// Retrieves all corrupted channels information from the DB.
-    async fn get_all_corrupted_channels<'a>(&'a self, tx: OptTx<'a>) -> Result<Vec<CorruptedChannelEntry>>;
+    async fn get_all_corrupted_channels<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+    ) -> Result<Vec<CorruptedChannelEntry>>;
 
     /// Inserts the given ChannelID as a corrupted channel entry.
-    async fn upsert_corrupted_channel<'a>(&'a self, tx: OptTx<'a>, channel_id: ChannelId) -> Result<()>;
+    async fn upsert_corrupted_channel<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        channel_id: ChannelId,
+    ) -> Result<()>;
 }
 
 #[async_trait]
@@ -59,7 +66,10 @@ impl HoprDbCorruptedChannelOperations for HoprDb {
             .await
     }
 
-    async fn get_all_corrupted_channels<'a>(&'a self, tx: OptTx<'a>) -> Result<Vec<CorruptedChannelEntry>> {
+    async fn get_all_corrupted_channels<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+    ) -> Result<Vec<CorruptedChannelEntry>> {
         self.nest_transaction(tx)
             .await?
             .perform(|tx| {
@@ -68,7 +78,9 @@ impl HoprDbCorruptedChannelOperations for HoprDb {
                         .stream(tx.as_ref())
                         .await?
                         .map_err(DbSqlError::from)
-                        .try_filter_map(|m| async move { Ok(Some(CorruptedChannelEntry::try_from(m)?)) })
+                        .try_filter_map(
+                            |m| async move { Ok(Some(CorruptedChannelEntry::try_from(m)?)) },
+                        )
                         .try_collect()
                         .await
                 })
@@ -76,7 +88,11 @@ impl HoprDbCorruptedChannelOperations for HoprDb {
             .await
     }
 
-    async fn upsert_corrupted_channel<'a>(&'a self, tx: OptTx<'a>, channel_id: ChannelId) -> Result<()> {
+    async fn upsert_corrupted_channel<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        channel_id: ChannelId,
+    ) -> Result<()> {
         self.nest_transaction(tx)
             .await?
             .perform(|tx| {
@@ -84,7 +100,10 @@ impl HoprDbCorruptedChannelOperations for HoprDb {
                     let channel_entry = CorruptedChannelEntry::from(channel_id);
                     let mut model = corrupted_channel::ActiveModel::from(channel_entry);
                     if let Some(channel) = corrupted_channel::Entity::find()
-                        .filter(corrupted_channel::Column::ChannelId.eq(channel_entry.channel_id().to_hex()))
+                        .filter(
+                            corrupted_channel::Column::ChannelId
+                                .eq(channel_entry.channel_id().to_hex()),
+                        )
                         .one(tx.as_ref())
                         .await?
                     {
@@ -141,7 +160,11 @@ mod tests {
 
         let all_channels = db.get_all_corrupted_channels(None).await?;
 
-        assert_eq!(all_channels.len(), 1, "There should be only one corrupted channel");
+        assert_eq!(
+            all_channels.len(),
+            1,
+            "There should be only one corrupted channel"
+        );
         assert_eq!(
             all_channels[0].channel_id(),
             &channel_id,

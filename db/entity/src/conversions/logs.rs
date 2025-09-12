@@ -63,9 +63,12 @@ impl From<SerializableLog> for log_status::ActiveModel {
     fn from(value: SerializableLog) -> Self {
         let processed = value.processed.unwrap_or(false);
         let processed_at = value.processed_at.map(|p| p.naive_utc());
-        let checksum = value
-            .checksum
-            .map(|c| Hash::from_hex(&c).expect("Invalid checksum").as_ref().to_vec());
+        let checksum = value.checksum.map(|c| {
+            Hash::from_hex(&c)
+                .expect("Invalid checksum")
+                .as_ref()
+                .to_vec()
+        });
 
         log_status::ActiveModel {
             block_number: Set(value.block_number.to_be_bytes().to_vec()),

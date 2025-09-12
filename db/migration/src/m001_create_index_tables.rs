@@ -27,7 +27,11 @@ impl MigrationTrait for Migration {
                             .unique_key(),
                     )
                     .col(ColumnDef::new(Channel::Source).string_len(40).not_null())
-                    .col(ColumnDef::new(Channel::Destination).string_len(40).not_null())
+                    .col(
+                        ColumnDef::new(Channel::Destination)
+                            .string_len(40)
+                            .not_null(),
+                    )
                     .col(ColumnDef::new(Channel::Balance).binary_len(12).not_null())
                     .col(ColumnDef::new(Channel::Status).tiny_unsigned().not_null())
                     .col(
@@ -43,7 +47,12 @@ impl MigrationTrait for Migration {
                             .default(U256::zero().to_be_bytes().to_vec()),
                     )
                     .col(ColumnDef::new(Channel::ClosureTime).timestamp().null())
-                    .col(ColumnDef::new(Channel::CorruptedState).boolean().not_null().default(false))
+                    .col(
+                        ColumnDef::new(Channel::CorruptedState)
+                            .boolean()
+                            .not_null()
+                            .default(false),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -82,8 +91,16 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(ColumnDef::new(Announcement::AccountId).integer().not_null())
-                    .col(ColumnDef::new(Announcement::KeyBinding).binary_len(64).not_null())
-                    .col(ColumnDef::new(Announcement::MultiaddressList).binary().not_null())
+                    .col(
+                        ColumnDef::new(Announcement::KeyBinding)
+                            .binary_len(64)
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(Announcement::MultiaddressList)
+                            .binary()
+                            .not_null(),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_announcement_account_id")
@@ -122,7 +139,11 @@ impl MigrationTrait for Migration {
                             .default(vec![0u8; 12]),
                     )
                     .col(ColumnDef::new(NodeInfo::SafeAddress).string_len(40).null())
-                    .col(ColumnDef::new(NodeInfo::ModuleAddress).string_len(40).null())
+                    .col(
+                        ColumnDef::new(NodeInfo::ModuleAddress)
+                            .string_len(40)
+                            .null(),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -150,7 +171,11 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(ChainInfo::TicketPrice).binary_len(12).null())
                     .col(ColumnDef::new(ChainInfo::ChannelsDST).binary_len(32).null())
                     .col(ColumnDef::new(ChainInfo::LedgerDST).binary_len(32).null())
-                    .col(ColumnDef::new(ChainInfo::SafeRegistryDST).binary_len(32).null())
+                    .col(
+                        ColumnDef::new(ChainInfo::SafeRegistryDST)
+                            .binary_len(32)
+                            .null(),
+                    )
                     .col(
                         ColumnDef::new(ChainInfo::NetworkRegistryEnabled)
                             .boolean()
@@ -162,7 +187,11 @@ impl MigrationTrait for Migration {
                             .binary_len(32)
                             .default(vec![0u8; 32]),
                     )
-                    .col(ColumnDef::new(ChainInfo::PreChecksumBlock).unsigned().null())
+                    .col(
+                        ColumnDef::new(ChainInfo::PreChecksumBlock)
+                            .unsigned()
+                            .null(),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -180,22 +209,45 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(CorruptedChannel::ChannelId).string_len(64).not_null())
-                    .col(ColumnDef::new(CorruptedChannel::Source).string_len(40).not_null())
-                    .col(ColumnDef::new(CorruptedChannel::Destination).string_len(40).not_null())
+                    .col(
+                        ColumnDef::new(CorruptedChannel::ChannelId)
+                            .string_len(64)
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(CorruptedChannel::Source)
+                            .string_len(40)
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(CorruptedChannel::Destination)
+                            .string_len(40)
+                            .not_null(),
+                    )
                     .to_owned(),
             )
             .await
-
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager.drop_table(Table::drop().table(CorruptedChannel::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(ChainInfo::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(NodeInfo::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(Announcement::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(Account::Table).to_owned()).await?;
-        manager.drop_table(Table::drop().table(Channel::Table).to_owned()).await
+        manager
+            .drop_table(Table::drop().table(CorruptedChannel::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(ChainInfo::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(NodeInfo::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(Announcement::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(Account::Table).to_owned())
+            .await?;
+        manager
+            .drop_table(Table::drop().table(Channel::Table).to_owned())
+            .await
     }
 }
 

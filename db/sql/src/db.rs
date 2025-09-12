@@ -5,11 +5,8 @@ use std::{
     time::Duration,
 };
 
-
 use hopr_crypto_types::{keypairs::Keypair, prelude::ChainKeypair};
-use hopr_db_entity::{
-    prelude::{Account, Announcement},
-};
+use hopr_db_entity::prelude::{Account, Announcement};
 use hopr_primitive_types::primitives::Address;
 use migration::{MigratorChainLogs, MigratorIndex, MigratorPeers, MigratorTickets, MigratorTrait};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, SqlxSqliteConnector};
@@ -106,11 +103,15 @@ impl HoprDb {
             lazy_static::initialize(&crate::protocol::METRIC_TICKETS_COUNT);
         }
 
-        cfg.validate()
-            .map_err(|e| DbSqlError::Construction(format!("failed configuration validation: {e}")))?;
+        cfg.validate().map_err(|e| {
+            DbSqlError::Construction(format!("failed configuration validation: {e}"))
+        })?;
 
-        fs::create_dir_all(directory)
-            .map_err(|_e| DbSqlError::Construction(format!("cannot create main database directory {directory:?}")))?;
+        fs::create_dir_all(directory).map_err(|_e| {
+            DbSqlError::Construction(format!(
+                "cannot create main database directory {directory:?}"
+            ))
+        })?;
 
         let index = Self::create_pool(
             cfg.clone(),
@@ -214,41 +215,48 @@ impl HoprDb {
         let index_db_rw = SqlxSqliteConnector::from_sqlx_sqlite_pool(index_db_pool);
         let index_db_ro = SqlxSqliteConnector::from_sqlx_sqlite_pool(index_db_ro_pool);
 
-        MigratorIndex::up(&index_db_rw, None)
-            .await
-            .map_err(|e| DbSqlError::Construction(format!("cannot apply database migration: {e}")))?;
+        MigratorIndex::up(&index_db_rw, None).await.map_err(|e| {
+            DbSqlError::Construction(format!("cannot apply database migration: {e}"))
+        })?;
 
         let tickets_db = SqlxSqliteConnector::from_sqlx_sqlite_pool(tickets_db_pool);
 
-        MigratorTickets::up(&tickets_db, None)
-            .await
-            .map_err(|e| DbSqlError::Construction(format!("cannot apply database migration: {e}")))?;
+        MigratorTickets::up(&tickets_db, None).await.map_err(|e| {
+            DbSqlError::Construction(format!("cannot apply database migration: {e}"))
+        })?;
 
         let peers_db = SqlxSqliteConnector::from_sqlx_sqlite_pool(peers_db_pool);
 
-        MigratorPeers::up(&peers_db, None)
-            .await
-            .map_err(|e| DbSqlError::Construction(format!("cannot apply database migration: {e}")))?;
+        MigratorPeers::up(&peers_db, None).await.map_err(|e| {
+            DbSqlError::Construction(format!("cannot apply database migration: {e}"))
+        })?;
 
         let logs_db = SqlxSqliteConnector::from_sqlx_sqlite_pool(logs_db_pool.clone());
 
-        MigratorChainLogs::up(&logs_db, None)
-            .await
-            .map_err(|e| DbSqlError::Construction(format!("cannot apply database migration: {e}")))?;
+        MigratorChainLogs::up(&logs_db, None).await.map_err(|e| {
+            DbSqlError::Construction(format!("cannot apply database migration: {e}"))
+        })?;
 
         // Reset the peer network information
         let res = hopr_db_entity::network_peer::Entity::delete_many()
             .filter(
                 sea_orm::Condition::all().add(
-                    hopr_db_entity::network_peer::Column::LastSeen.lt(chrono::DateTime::<chrono::Utc>::from(
+                    hopr_db_entity::network_peer::Column::LastSeen.lt(chrono::DateTime::<
+                        chrono::Utc,
+                    >::from(
                         hopr_platform::time::native::current_time()
                             .checked_sub(std::time::Duration::from_secs(
-                                std::env::var("HOPR_INTERNAL_DB_PEERS_PERSISTENCE_AFTER_RESTART_IN_SECONDS")
-                                    .unwrap_or_else(|_| {
-                                        HOPR_INTERNAL_DB_PEERS_PERSISTENCE_AFTER_RESTART_IN_SECONDS.to_string()
-                                    })
-                                    .parse::<u64>()
-                                    .unwrap_or(HOPR_INTERNAL_DB_PEERS_PERSISTENCE_AFTER_RESTART_IN_SECONDS),
+                                std::env::var(
+                                    "HOPR_INTERNAL_DB_PEERS_PERSISTENCE_AFTER_RESTART_IN_SECONDS",
+                                )
+                                .unwrap_or_else(|_| {
+                                    HOPR_INTERNAL_DB_PEERS_PERSISTENCE_AFTER_RESTART_IN_SECONDS
+                                        .to_string()
+                                })
+                                .parse::<u64>()
+                                .unwrap_or(
+                                    HOPR_INTERNAL_DB_PEERS_PERSISTENCE_AFTER_RESTART_IN_SECONDS,
+                                ),
                             ))
                             .unwrap_or_else(hopr_platform::time::native::current_time),
                     )),
@@ -257,7 +265,10 @@ impl HoprDb {
             .exec(&peers_db)
             .await
             .map_err(|e| DbSqlError::Construction(format!("must reset peers on init: {e}")))?;
-        debug!(rows = res.rows_affected, "Cleaned up rows from the 'peers' table");
+        debug!(
+            rows = res.rows_affected,
+            "Cleaned up rows from the 'peers' table"
+        );
 
         // Reset all BeingAggregated ticket states to Untouched
         ticket::Entity::update_many()
@@ -309,11 +320,15 @@ impl HoprDb {
     ///
     /// If the notifier is given, it will receive notifications once new ticket has been
     /// persisted into the Tickets DB.
-    pub fn start_ticket_processing(&self, ticket_notifier: Option<UnboundedSender<AcknowledgedTicket>>) -> Result<()> {
+    pub fn start_ticket_processing(
+        &self,
+        ticket_notifier: Option<UnboundedSender<AcknowledgedTicket>>,
+    ) -> Result<()> {
         if let Some(notifier) = ticket_notifier {
             self.ticket_manager.start_ticket_processing(notifier)
         } else {
-            self.ticket_manager.start_ticket_processing(futures::sink::drain())
+            self.ticket_manager
+                .start_ticket_processing(futures::sink::drain())
         }
     }
 
@@ -370,7 +385,9 @@ impl HoprDb {
         let pool = options
             .connect_with(cfg.filename(directory.join(path)))
             .await
-            .map_err(|e| DbSqlError::Construction(format!("failed to create {path} database: {e}")))?;
+            .map_err(|e| {
+                DbSqlError::Construction(format!("failed to create {path} database: {e}"))
+            })?;
 
         Ok(pool)
     }
@@ -387,7 +404,7 @@ mod tests {
     use hopr_db_api::peers::{HoprDbPeersOperations, PeerOrigin};
     use hopr_primitive_types::sma::SingleSumSMA;
     use libp2p_identity::PeerId;
-use migration::{MigratorSQLiteTrait, MigratorSQLite, MigratorTrait};
+    use migration::{MigratorSQLite, MigratorSQLiteTrait, MigratorTrait};
     use multiaddr::Multiaddr;
     use rand::{Rng, distributions::Alphanumeric};
 
@@ -408,7 +425,8 @@ use migration::{MigratorSQLiteTrait, MigratorSQLite, MigratorTrait};
     }
 
     #[tokio::test]
-    async fn peers_without_any_recent_updates_should_be_discarded_on_restarts() -> anyhow::Result<()> {
+    async fn peers_without_any_recent_updates_should_be_discarded_on_restarts() -> anyhow::Result<()>
+    {
         let random_filename: String = rand::thread_rng()
             .sample_iter(&Alphanumeric)
             .take(15)
@@ -423,7 +441,12 @@ use migration::{MigratorSQLiteTrait, MigratorSQLite, MigratorTrait};
         let path = std::path::Path::new(&random_tmp_file);
 
         {
-            let db = HoprDb::new(path, ChainKeypair::random(), crate::db::HoprDbConfig::default()).await?;
+            let db = HoprDb::new(
+                path,
+                ChainKeypair::random(),
+                crate::db::HoprDbConfig::default(),
+            )
+            .await?;
 
             db.add_network_peer(
                 &peer_id,
@@ -436,7 +459,12 @@ use migration::{MigratorSQLiteTrait, MigratorSQLite, MigratorTrait};
         }
 
         {
-            let db = HoprDb::new(path, ChainKeypair::random(), crate::db::HoprDbConfig::default()).await?;
+            let db = HoprDb::new(
+                path,
+                ChainKeypair::random(),
+                crate::db::HoprDbConfig::default(),
+            )
+            .await?;
 
             let not_found_peer = db.get_network_peer(&peer_id).await?;
 
@@ -463,7 +491,12 @@ use migration::{MigratorSQLiteTrait, MigratorSQLite, MigratorTrait};
         let path = std::path::Path::new(&random_tmp_file);
 
         {
-            let db = HoprDb::new(path, ChainKeypair::random(), crate::db::HoprDbConfig::default()).await?;
+            let db = HoprDb::new(
+                path,
+                ChainKeypair::random(),
+                crate::db::HoprDbConfig::default(),
+            )
+            .await?;
 
             db.add_network_peer(
                 &peer_id,
@@ -492,7 +525,12 @@ use migration::{MigratorSQLiteTrait, MigratorSQLite, MigratorTrait};
             .await?;
         }
         {
-            let db = HoprDb::new(path, ChainKeypair::random(), crate::db::HoprDbConfig::default()).await?;
+            let db = HoprDb::new(
+                path,
+                ChainKeypair::random(),
+                crate::db::HoprDbConfig::default(),
+            )
+            .await?;
 
             let found_peer = db.get_network_peer(&peer_id).await?.map(|p| p.id.1);
 
