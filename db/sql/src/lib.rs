@@ -12,12 +12,6 @@ pub mod db;
 pub mod errors;
 pub mod info;
 pub mod logs;
-pub mod peers;
-pub mod protocol;
-pub mod registry;
-pub mod resolver;
-mod ticket_manager;
-pub mod tickets;
 
 use std::path::PathBuf;
 
@@ -25,8 +19,7 @@ use async_trait::async_trait;
 use futures::future::BoxFuture;
 pub use hopr_db_api as api;
 use hopr_db_api::{
-    logs::HoprDbLogOperations, peers::HoprDbPeersOperations, protocol::HoprDbProtocolOperations,
-    resolver::HoprDbResolverOperations, tickets::HoprDbTicketOperations,
+    logs::HoprDbLogOperations,
 };
 use sea_orm::{ConnectionTrait, TransactionTrait};
 pub use sea_orm::{DatabaseConnection, DatabaseTransaction};
@@ -38,7 +31,6 @@ use crate::{
     db::HoprDb,
     errors::{DbSqlError, Result},
     info::HoprDbInfoOperations,
-    registry::HoprDbRegistryOperations,
 };
 
 /// Primary key used in tables that contain only a single row.
@@ -110,17 +102,13 @@ impl From<OpenTransaction> for DatabaseTransaction {
 pub type OptTx<'a> = Option<&'a OpenTransaction>;
 
 /// When Sqlite is used as a backend, model needs to be split
-/// into 4 different databases to avoid locking the database.
+/// into 2 different databases to avoid locking the database.
 /// On Postgres backend, these should actually point to the same database.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Default)]
 pub enum TargetDb {
     #[default]
     /// Indexer database.
     Index,
-    /// Acknowledged winning ticket database.
-    Tickets,
-    /// Network peers database
-    Peers,
     /// RPC logs database
     Logs,
 }
@@ -214,8 +202,6 @@ impl HoprDbGeneralModelOperations for HoprDb {
         match target_db {
             TargetDb::Index => self.index_db.read_only(), // TODO: no write access needed here, deserves better
             // wrapping
-            TargetDb::Tickets => &self.tickets_db,
-            TargetDb::Peers => &self.peers_db,
             TargetDb::Logs => &self.logs_db,
         }
     }
@@ -226,15 +212,6 @@ impl HoprDbGeneralModelOperations for HoprDb {
             TargetDb::Index => Ok(OpenTransaction(
                 self.index_db.read_write().begin_with_config(None, None).await?, /* TODO: cannot estimate intent,
                                                                                   * must be readwrite */
-                target_db,
-            )),
-            // TODO: when adding Postgres support, redirect `Tickets` and `Peers` into `self.db`
-            TargetDb::Tickets => Ok(OpenTransaction(
-                self.tickets_db.begin_with_config(None, None).await?,
-                target_db,
-            )),
-            TargetDb::Peers => Ok(OpenTransaction(
-                self.peers_db.begin_with_config(None, None).await?,
                 target_db,
             )),
             TargetDb::Logs => Ok(OpenTransaction(
@@ -288,18 +265,13 @@ pub trait HoprDbAllOperations:
     + HoprDbCorruptedChannelOperations
     + HoprDbInfoOperations
     + HoprDbLogOperations
-    + HoprDbPeersOperations
-    + HoprDbProtocolOperations
-    + HoprDbRegistryOperations
-    + HoprDbResolverOperations
-    + HoprDbTicketOperations
 {
 }
 
 #[doc(hidden)]
 pub mod prelude {
-    pub use hopr_db_api::{logs::*, peers::*, protocol::*, resolver::*, tickets::*};
+    pub use hopr_db_api::{logs::*};
 
     pub use super::*;
-    pub use crate::{accounts::*, channels::*, corrupted_channels::*, db::*, errors::*, info::*, registry::*};
+    pub use crate::{accounts::*, channels::*, corrupted_channels::*, db::*, errors::*, info::*};
 }

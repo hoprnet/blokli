@@ -5,13 +5,11 @@ use std::{
     time::Duration,
 };
 
-use futures::channel::mpsc::UnboundedSender;
+
 use hopr_crypto_types::{keypairs::Keypair, prelude::ChainKeypair};
 use hopr_db_entity::{
     prelude::{Account, Announcement},
-    ticket,
 };
-use hopr_internal_types::prelude::{AcknowledgedTicket, AcknowledgedTicketStatus};
 use hopr_primitive_types::primitives::Address;
 use migration::{MigratorChainLogs, MigratorIndex, MigratorPeers, MigratorTickets, MigratorTrait};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, SqlxSqliteConnector};
@@ -29,7 +27,6 @@ use crate::{
     accounts::model_to_account_entry,
     cache::HoprDbCaches,
     errors::{DbSqlError, Result},
-    ticket_manager::TicketManager,
 };
 
 pub const HOPR_INTERNAL_DB_PEERS_PERSISTENCE_AFTER_RESTART_IN_SECONDS: u64 = 5 * 60; // 5 minutes
@@ -76,8 +73,6 @@ impl DbConnection {
 /// locking conflicts and improve performance:
 ///
 /// - **Index DB**: Blockchain indexing and contract data
-/// - **Tickets DB**: Payment tickets and acknowledgments
-/// - **Peers DB**: Network peer information and metadata
 /// - **Logs DB**: Blockchain logs and processing status
 ///
 /// Supports database snapshot imports for fast synchronization via
@@ -85,14 +80,11 @@ impl DbConnection {
 #[derive(Debug, Clone)]
 pub struct HoprDb {
     pub(crate) index_db: DbConnection,
-    pub(crate) tickets_db: sea_orm::DatabaseConnection,
-    pub(crate) peers_db: sea_orm::DatabaseConnection,
     pub(crate) logs_db: sea_orm::DatabaseConnection,
 
     pub(crate) caches: Arc<HoprDbCaches>,
     pub(crate) chain_key: ChainKeypair,
     pub(crate) me_onchain: Address,
-    pub(crate) ticket_manager: Arc<TicketManager>,
     pub(crate) cfg: HoprDbConfig,
 }
 
@@ -395,7 +387,7 @@ mod tests {
     use hopr_db_api::peers::{HoprDbPeersOperations, PeerOrigin};
     use hopr_primitive_types::sma::SingleSumSMA;
     use libp2p_identity::PeerId;
-    use migration::{MigratorChainLogs, MigratorIndex, MigratorPeers, MigratorTickets, MigratorTrait};
+use migration::{MigratorSQLiteTrait, MigratorSQLite, MigratorTrait};
     use multiaddr::Multiaddr;
     use rand::{Rng, distributions::Alphanumeric};
 
