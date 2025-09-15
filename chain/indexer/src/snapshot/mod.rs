@@ -23,7 +23,7 @@
 //! use std::path::Path;
 //! use blokli_chain_indexer::snapshot::{SnapshotResult, SnapshotManager};
 //!
-//! # async fn example(db: impl blokli_db_sql::HoprDbGeneralModelOperations + Clone + Send + Sync + 'static) -> SnapshotResult<()> {
+//! # async fn example(db: impl blokli_db_sql::BlokliDbGeneralModelOperations + Clone + Send + Sync + 'static) -> SnapshotResult<()> {
 //! let manager = SnapshotManager::with_db(db)?;
 //! let info = manager
 //!     .download_and_setup_snapshot(
@@ -49,7 +49,7 @@ pub(crate) mod test_utils;
 use std::{fs, path::Path};
 
 pub use error::{SnapshotError, SnapshotResult};
-use blokli_db_sql::HoprDbGeneralModelOperations;
+use blokli_db_sql::BlokliDbGeneralModelOperations;
 use tracing::{debug, error, info};
 pub use validate::SnapshotInfo;
 
@@ -162,10 +162,10 @@ impl SnapshotWorkflow {
 /// - [`SnapshotDownloader`] - HTTP/HTTPS and file:// URL handling with retry logic
 /// - [`SnapshotExtractor`] - Secure tar.xz extraction with path validation
 /// - [`SnapshotValidator`] - SQLite integrity and content verification
-/// - Database integration via [`HoprDbGeneralModelOperations::import_logs_db`]
+/// - Database integration via [`BlokliDbGeneralModelOperations::import_logs_db`]
 pub struct SnapshotManager<Db>
 where
-    Db: HoprDbGeneralModelOperations + Clone + Send + Sync + 'static,
+    Db: BlokliDbGeneralModelOperations + Clone + Send + Sync + 'static,
 {
     db: Db,
     workflow: SnapshotWorkflow,
@@ -173,20 +173,20 @@ where
 
 impl<Db> SnapshotManager<Db>
 where
-    Db: HoprDbGeneralModelOperations + Clone + Send + Sync + 'static,
+    Db: BlokliDbGeneralModelOperations + Clone + Send + Sync + 'static,
 {
     /// Creates a snapshot manager with database integration.
     ///
     /// # Arguments
     ///
-    /// * `db` - Database instance implementing [`HoprDbGeneralModelOperations`]
+    /// * `db` - Database instance implementing [`BlokliDbGeneralModelOperations`]
     ///
     /// # Example
     ///
     /// ```no_run
     /// # use blokli_chain_indexer::snapshot::{SnapshotResult, SnapshotManager};
     ///
-    /// # fn example(db: impl blokli_db_sql::HoprDbGeneralModelOperations + Clone + Send + Sync + 'static) -> SnapshotResult<()> {
+    /// # fn example(db: impl blokli_db_sql::BlokliDbGeneralModelOperations + Clone + Send + Sync + 'static) -> SnapshotResult<()> {
     /// let manager = SnapshotManager::with_db(db)?;
     /// # Ok(())
     /// # }
@@ -204,7 +204,7 @@ where
     /// 1. Downloads archive from URL (HTTP/HTTPS/file://)
     /// 2. Extracts tar.xz archive safely
     /// 3. Validates database integrity
-    /// 4. Installs via [`HoprDbGeneralModelOperations::import_logs_db`]
+    /// 4. Installs via [`BlokliDbGeneralModelOperations::import_logs_db`]
     /// 5. Cleans up temporary files
     ///
     /// # Arguments
@@ -225,7 +225,7 @@ where
     /// ```no_run
     /// # use std::path::Path;
     /// # use blokli_chain_indexer::snapshot::SnapshotManager;
-    /// # async fn example(manager: SnapshotManager<impl blokli_db_sql::HoprDbGeneralModelOperations + Clone + Send + Sync + 'static>) -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn example(manager: SnapshotManager<impl blokli_db_sql::BlokliDbGeneralModelOperations + Clone + Send + Sync + 'static>) -> Result<(), Box<dyn std::error::Error>> {
     /// // Download from HTTPS
     /// let info = manager
     ///     .download_and_setup_snapshot("https://snapshots.hoprnet.org/logs.tar.xz", Path::new("/data"))
@@ -246,7 +246,7 @@ where
 #[async_trait::async_trait]
 impl<Db> SnapshotInstaller for SnapshotManager<Db>
 where
-    Db: HoprDbGeneralModelOperations + Clone + Send + Sync + 'static,
+    Db: BlokliDbGeneralModelOperations + Clone + Send + Sync + 'static,
 {
     async fn install_snapshot(
         &self,

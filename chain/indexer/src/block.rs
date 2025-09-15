@@ -16,8 +16,8 @@ use hopr_bindings::hoprtoken::HoprToken::{Approval, Transfer};
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::chain_events::SignificantChainEvent;
 use hopr_crypto_types::types::Hash;
-use blokli_db_api::logs::HoprDbLogOperations;
-use blokli_db_sql::{HoprDbGeneralModelOperations, info::HoprDbInfoOperations};
+use blokli_db_api::logs::BlokliDbLogOperations;
+use blokli_db_sql::{BlokliDbGeneralModelOperations, info::BlokliDbInfoOperations};
 use hopr_primitive_types::prelude::*;
 use tracing::{debug, error, info, trace};
 
@@ -72,7 +72,7 @@ pub struct Indexer<T, U, Db>
 where
     T: HoprIndexerRpcOperations + Send + 'static,
     U: ChainLogHandler + Send + 'static,
-    Db: HoprDbGeneralModelOperations + HoprDbInfoOperations + HoprDbLogOperations + Clone + Send + Sync + 'static,
+    Db: BlokliDbGeneralModelOperations + BlokliDbInfoOperations + BlokliDbLogOperations + Clone + Send + Sync + 'static,
 {
     rpc: Option<T>,
     db_processor: Option<U>,
@@ -88,7 +88,7 @@ impl<T, U, Db> Indexer<T, U, Db>
 where
     T: HoprIndexerRpcOperations + Sync + Send + 'static,
     U: ChainLogHandler + Send + Sync + 'static,
-    Db: HoprDbGeneralModelOperations + HoprDbInfoOperations + HoprDbLogOperations + Clone + Send + Sync + 'static,
+    Db: BlokliDbGeneralModelOperations + BlokliDbInfoOperations + BlokliDbLogOperations + Clone + Send + Sync + 'static,
 {
     pub fn new(
         rpc: T,
@@ -117,7 +117,7 @@ where
     where
         T: HoprIndexerRpcOperations + 'static,
         U: ChainLogHandler + 'static,
-        Db: HoprDbGeneralModelOperations + HoprDbInfoOperations + HoprDbLogOperations + Clone + Send + Sync + 'static,
+        Db: BlokliDbGeneralModelOperations + BlokliDbInfoOperations + BlokliDbLogOperations + Clone + Send + Sync + 'static,
     {
         if self.rpc.is_none() || self.db_processor.is_none() {
             return Err(CoreEthereumIndexerError::ProcessError(
@@ -491,7 +491,7 @@ where
     ) -> crate::errors::Result<Option<Vec<SignificantChainEvent>>>
     where
         U: ChainLogHandler + 'static,
-        Db: HoprDbLogOperations + 'static,
+        Db: BlokliDbLogOperations + 'static,
     {
         let logs = db.get_logs(Some(block_id), Some(0)).await?;
         let mut block = BlockWithLogs {
@@ -538,7 +538,7 @@ where
     ) -> Option<Vec<SignificantChainEvent>>
     where
         U: ChainLogHandler + 'static,
-        Db: HoprDbLogOperations + 'static,
+        Db: BlokliDbLogOperations + 'static,
     {
         let block_id = block.block_id;
         let log_count = block.logs.len();
@@ -665,7 +665,7 @@ where
         channels_address: Option<Address>,
     ) where
         T: HoprIndexerRpcOperations + 'static,
-        Db: HoprDbInfoOperations + Clone + Send + Sync + 'static,
+        Db: BlokliDbInfoOperations + Clone + Send + Sync + 'static,
     {
         #[cfg(all(feature = "prometheus", not(test)))]
         {
@@ -825,7 +825,7 @@ mod tests {
         keypairs::{Keypair, OffchainKeypair},
         prelude::ChainKeypair,
     };
-    use blokli_db_sql::{accounts::HoprDbAccountOperations, db::HoprDb};
+    use blokli_db_sql::{accounts::BlokliDbAccountOperations, db::BlokliDb};
     use hopr_internal_types::account::{AccountEntry, AccountType};
     use hopr_primitive_types::prelude::*;
     use mockall::mock;
@@ -907,7 +907,7 @@ mod tests {
     -> anyhow::Result<()> {
         let mut handlers = MockChainLogHandler::new();
         let mut rpc = MockHoprIndexerOps::new();
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let addr = Address::new(b"my address 123456789");
         let topic = Hash::create(&[b"my topic"]);
@@ -960,7 +960,7 @@ mod tests {
     {
         let mut handlers = MockChainLogHandler::new();
         let mut rpc = MockHoprIndexerOps::new();
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
         let head_block = 1000;
         let latest_block = 15u64;
 
@@ -1036,7 +1036,7 @@ mod tests {
     async fn test_indexer_should_pass_blocks_that_are_finalized() -> anyhow::Result<()> {
         let mut handlers = MockChainLogHandler::new();
         let mut rpc = MockHoprIndexerOps::new();
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let cfg = IndexerConfig::default();
 
@@ -1101,7 +1101,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn test_indexer_fast_sync_full_with_resume() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let addr = Address::new(b"my address 123456789");
         let topic = Hash::create(&[b"my topic"]);
@@ -1265,7 +1265,7 @@ mod tests {
     async fn test_indexer_should_yield_back_once_the_past_events_are_indexed() -> anyhow::Result<()> {
         let mut handlers = MockChainLogHandler::new();
         let mut rpc = MockHoprIndexerOps::new();
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let cfg = IndexerConfig::default();
 
@@ -1351,7 +1351,7 @@ mod tests {
     async fn test_indexer_should_not_reprocess_last_processed_block() -> anyhow::Result<()> {
         let last_processed_block = 100_u64;
 
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let addr = Address::new(b"my address 123456789");
         let topic = Hash::create(&[b"my topic"]);

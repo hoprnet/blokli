@@ -23,7 +23,7 @@ use blokli_chain_types::{
 };
 use hopr_crypto_types::prelude::*;
 use blokli_db_sql::{
-    HoprDbAllOperations, OpenTransaction,
+    BlokliDbAllOperations, OpenTransaction,
     api::{info::DomainSeparator, tickets::TicketSelector},
     errors::DbSqlError,
     prelude::TicketMarker,
@@ -76,7 +76,7 @@ impl<T, Db> Debug for ContractEventHandlers<T, Db> {
 impl<T, Db> ContractEventHandlers<T, Db>
 where
     T: HoprIndexerRpcOperations + Clone + Send + 'static,
-    Db: HoprDbAllOperations + Clone,
+    Db: BlokliDbAllOperations + Clone,
 {
     /// Creates a new instance of contract event handlers with RPC operations support.
     ///
@@ -1087,7 +1087,7 @@ where
 impl<T, Db> crate::traits::ChainLogHandler for ContractEventHandlers<T, Db>
 where
     T: HoprIndexerRpcOperations + Clone + Send + Sync + 'static,
-    Db: HoprDbAllOperations + Clone + Debug + Send + Sync + 'static,
+    Db: BlokliDbAllOperations + Clone + Debug + Send + Sync + 'static,
 {
     fn contract_addresses(&self) -> Vec<Address> {
         vec![
@@ -1185,15 +1185,15 @@ mod tests {
     };
     use hopr_crypto_types::prelude::*;
     use blokli_db_sql::{
-        HoprDbAllOperations, HoprDbGeneralModelOperations,
-        accounts::{ChainOrPacketKey, HoprDbAccountOperations},
-        api::{info::DomainSeparator, tickets::HoprDbTicketOperations},
-        channels::HoprDbChannelOperations,
-        corrupted_channels::HoprDbCorruptedChannelOperations,
-        db::HoprDb,
-        info::HoprDbInfoOperations,
-        prelude::HoprDbResolverOperations,
-        registry::HoprDbRegistryOperations,
+        BlokliDbAllOperations, BlokliDbGeneralModelOperations,
+        accounts::{ChainOrPacketKey, BlokliDbAccountOperations},
+        api::{info::DomainSeparator, tickets::BlokliDbTicketOperations},
+        channels::BlokliDbChannelOperations,
+        corrupted_channels::BlokliDbCorruptedChannelOperations,
+        db::BlokliDb,
+        info::BlokliDbInfoOperations,
+        prelude::BlokliDbResolverOperations,
+        registry::BlokliDbRegistryOperations,
     };
     use hopr_internal_types::prelude::*;
     use hopr_primitive_types::prelude::*;
@@ -1281,7 +1281,7 @@ mod tests {
         }
     }
 
-    fn init_handlers<T: Clone, Db: HoprDbAllOperations + Clone>(
+    fn init_handlers<T: Clone, Db: BlokliDbAllOperations + Clone>(
         rpc_operations: T,
         db: Db,
     ) -> ContractEventHandlers<T, Db> {
@@ -1311,7 +1311,7 @@ mod tests {
 
     #[tokio::test]
     async fn announce_keybinding() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
 
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
@@ -1363,7 +1363,7 @@ mod tests {
 
     #[tokio::test]
     async fn announce_address_announcement() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -1555,7 +1555,7 @@ mod tests {
 
     #[tokio::test]
     async fn announce_revoke() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -1620,7 +1620,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_token_transfer_to() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
 
         let value = U256::MAX;
         let target_hopr_balance = HoprBalance::from(primitive_types::U256::from_big_endian(
@@ -1670,7 +1670,7 @@ mod tests {
 
     #[test_log::test(tokio::test)]
     async fn on_token_transfer_from() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
 
         let mut rpc_operations = MockIndexerRpcOperations::new();
         rpc_operations
@@ -1725,7 +1725,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_token_approval_correct() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
 
         let target_allowance = HoprBalance::from(primitive_types::U256::from(1000u64));
         let mut rpc_operations = MockIndexerRpcOperations::new();
@@ -1792,7 +1792,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_network_registry_event_registered() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -1841,7 +1841,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_network_registry_event_registered_by_manager() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -1889,7 +1889,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_network_registry_event_deregistered() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -1940,7 +1940,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_network_registry_event_deregistered_by_manager() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -1992,7 +1992,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_network_registry_event_enabled() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -2029,7 +2029,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_network_registry_event_disabled() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -2068,7 +2068,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_network_registry_set_eligible() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -2109,7 +2109,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_network_registry_set_not_eligible() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -2152,7 +2152,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_channel_event_balance_increased() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
 
         let value = U256::MAX;
         let target_hopr_balance = HoprBalance::from(primitive_types::U256::from_big_endian(
@@ -2222,7 +2222,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_channel_event_domain_separator_updated() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -2272,7 +2272,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_channel_event_balance_decreased() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
 
         let value = U256::MAX;
         let target_hopr_balance = HoprBalance::from(primitive_types::U256::from_big_endian(
@@ -2343,7 +2343,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_channel_closed() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -2409,7 +2409,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_foreign_channel_closed() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -2464,7 +2464,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_channel_opened() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -2519,7 +2519,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_channel_reopened() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -2584,7 +2584,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_channel_should_not_reopen_when_not_closed() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -2638,7 +2638,7 @@ mod tests {
 
     #[tokio::test]
     async fn event_for_non_existing_channel_should_create_corrupted_channel() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -2709,7 +2709,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_channel_ticket_redeemed_incoming_channel() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         db.set_domain_separator(None, DomainSeparator::Channel, Hash::default())
             .await?;
         let rpc_operations = MockIndexerRpcOperations::new();
@@ -2823,7 +2823,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_channel_ticket_redeemed_incoming_channel_neglect_left_over_tickets() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         db.set_domain_separator(None, DomainSeparator::Channel, Hash::default())
             .await?;
         let rpc_operations = MockIndexerRpcOperations::new();
@@ -2935,7 +2935,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_channel_ticket_redeemed_outgoing_channel() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         db.set_domain_separator(None, DomainSeparator::Channel, Hash::default())
             .await?;
         let rpc_operations = MockIndexerRpcOperations::new();
@@ -3012,7 +3012,7 @@ mod tests {
     #[tokio::test]
     async fn on_channel_ticket_redeemed_on_incoming_channel_with_non_existent_ticket_should_pass() -> anyhow::Result<()>
     {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         db.set_domain_separator(None, DomainSeparator::Channel, Hash::default())
             .await?;
         let rpc_operations = MockIndexerRpcOperations::new();
@@ -3072,7 +3072,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_channel_ticket_redeemed_on_foreign_channel_should_pass() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -3130,7 +3130,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_channel_closure_initiated() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -3192,7 +3192,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_node_safe_registry_registered() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -3229,7 +3229,7 @@ mod tests {
 
     #[tokio::test]
     async fn on_node_safe_registry_deregistered() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -3271,7 +3271,7 @@ mod tests {
 
     #[tokio::test]
     async fn ticket_price_update() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -3315,7 +3315,7 @@ mod tests {
 
     #[tokio::test]
     async fn minimum_win_prob_update() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
@@ -3363,7 +3363,7 @@ mod tests {
 
     #[tokio::test]
     async fn lowering_minimum_win_prob_update_should_reject_non_satisfying_unredeemed_tickets() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
+        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
         db.set_minimum_incoming_ticket_win_prob(None, 0.1.try_into()?).await?;
 
         let new_minimum = 0.5;

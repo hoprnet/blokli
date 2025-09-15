@@ -3,7 +3,7 @@ use thiserror::Error;
 /// Error representing all possible erroneous states of the entire HOPR
 /// on-chain interactions.
 #[derive(Error, Debug)]
-pub enum HoprChainError {
+pub enum BlokliChainError {
     #[error("API error: {0}")]
     Api(String),
 
@@ -20,5 +20,5 @@ pub enum HoprChainError {
     Configuration(String),
 }
 
-/// The default [Result] object translating errors in the [HoprChainError] type
-pub type Result<T> = core::result::Result<T, HoprChainError>;
+/// The default [Result] object translating errors in the [BlokliChainError] type
+pub type Result<T> = core::result::Result<T, BlokliChainError>;

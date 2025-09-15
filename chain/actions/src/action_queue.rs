@@ -16,7 +16,7 @@ use futures::{FutureExt, StreamExt, future::Either, pin_mut};
 use hopr_async_runtime::prelude::spawn;
 use blokli_chain_types::{actions::Action, chain_events::ChainEventType};
 use hopr_crypto_types::types::Hash;
-use blokli_db_sql::{api::tickets::HoprDbTicketOperations, info::HoprDbInfoOperations};
+use blokli_db_sql::{api::tickets::BlokliDbTicketOperations, info::BlokliDbInfoOperations};
 use hopr_internal_types::prelude::*;
 use hopr_primitive_types::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -316,7 +316,7 @@ where
 #[derive(Debug, Clone)]
 pub struct ActionQueue<Db, S, TxExec>
 where
-    Db: HoprDbInfoOperations + HoprDbTicketOperations + Send + Sync,
+    Db: BlokliDbInfoOperations + BlokliDbTicketOperations + Send + Sync,
     S: ActionState + Send + Sync,
     TxExec: TransactionExecutor + Send + Sync,
 {
@@ -328,7 +328,7 @@ where
 
 impl<Db, S, TxExec> ActionQueue<Db, S, TxExec>
 where
-    Db: HoprDbInfoOperations + HoprDbTicketOperations + Clone + Send + Sync + 'static,
+    Db: BlokliDbInfoOperations + BlokliDbTicketOperations + Clone + Send + Sync + 'static,
     S: ActionState + Send + Sync + 'static,
     TxExec: TransactionExecutor + Send + Sync + 'static,
 {

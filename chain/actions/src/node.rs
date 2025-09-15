@@ -14,7 +14,7 @@
 use async_trait::async_trait;
 use blokli_chain_types::actions::Action;
 use hopr_crypto_types::{keypairs::OffchainKeypair, prelude::Keypair};
-use blokli_db_sql::accounts::HoprDbAccountOperations;
+use blokli_db_sql::accounts::BlokliDbAccountOperations;
 use hopr_internal_types::prelude::*;
 use hopr_primitive_types::prelude::*;
 use multiaddr::Multiaddr;
@@ -49,7 +49,7 @@ pub trait NodeActions {
 #[async_trait]
 impl<Db> NodeActions for ChainActions<Db>
 where
-    Db: HoprDbAccountOperations + Clone + Send + Sync + std::fmt::Debug,
+    Db: BlokliDbAccountOperations + Clone + Send + Sync + std::fmt::Debug,
 {
     #[tracing::instrument(level = "debug", skip(self))]
     async fn withdraw(&self, recipient: Address, amount: HoprBalance) -> Result<PendingAction> {
@@ -112,7 +112,7 @@ mod tests {
     use hopr_crypto_random::random_bytes;
     use hopr_crypto_types::prelude::*;
     use blokli_db_sql::{
-        accounts::HoprDbAccountOperations, api::info::DomainSeparator, db::HoprDb, info::HoprDbInfoOperations,
+        accounts::BlokliDbAccountOperations, api::info::DomainSeparator, db::BlokliDb, info::BlokliDbInfoOperations,
     };
     use hopr_internal_types::prelude::*;
     use hopr_primitive_types::prelude::*;
@@ -139,7 +139,7 @@ mod tests {
         let random_hash = Hash::from(random_bytes::<{ Hash::SIZE }>());
         let announce_multiaddr = Multiaddr::from_str("/ip4/1.2.3.4/tcp/9009")?;
 
-        let db = HoprDb::new_in_memory(ALICE_KP.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE_KP.clone()).await?;
         db.set_domain_separator(None, DomainSeparator::Channel, Default::default())
             .await?;
 
@@ -196,7 +196,7 @@ mod tests {
     async fn test_announce_should_not_allow_reannouncing_with_same_multiaddress() -> anyhow::Result<()> {
         let announce_multiaddr = Multiaddr::from_str("/ip4/1.2.3.4/tcp/9009")?;
 
-        let db = HoprDb::new_in_memory(ALICE_KP.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE_KP.clone()).await?;
         db.set_domain_separator(None, DomainSeparator::Channel, Default::default())
             .await?;
 
@@ -238,7 +238,7 @@ mod tests {
         let stake = HoprBalance::from(10_u32);
         let random_hash = Hash::from(random_bytes::<{ Hash::SIZE }>());
 
-        let db = HoprDb::new_in_memory(ALICE_KP.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE_KP.clone()).await?;
         db.set_domain_separator(None, DomainSeparator::Channel, Default::default())
             .await?;
 
@@ -277,7 +277,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_should_not_withdraw_zero_amount() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ALICE_KP.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE_KP.clone()).await?;
         db.set_domain_separator(None, DomainSeparator::Channel, Default::default())
             .await?;
 

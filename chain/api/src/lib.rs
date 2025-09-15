@@ -33,7 +33,7 @@ use blokli_chain_rpc::{
 use blokli_chain_types::ContractAddresses;
 pub use blokli_chain_types::chain_events::SignificantChainEvent;
 use hopr_crypto_types::prelude::*;
-use blokli_db_sql::HoprDbAllOperations;
+use blokli_db_sql::BlokliDbAllOperations;
 pub use hopr_internal_types::channels::ChannelEntry;
 use hopr_internal_types::{
     account::AccountEntry, channels::CorruptedChannelEntry, prelude::ChannelDirection, tickets::WinningProbability,
@@ -41,7 +41,7 @@ use hopr_internal_types::{
 use hopr_primitive_types::prelude::*;
 use tracing::{debug, error, info, warn};
 
-use crate::errors::{HoprChainError, Result};
+use crate::errors::{BlokliChainError, Result};
 
 pub type DefaultHttpRequestor = blokli_chain_rpc::transport::ReqwestClient;
 
@@ -56,7 +56,7 @@ pub async fn can_register_with_safe<Rpc: HoprRpcOperations>(
 
     if target_address != safe_address {
         // cannot proceed when the safe address is not the target/owner of given module
-        return Err(HoprChainError::Api("safe is not the module target".into()));
+        return Err(BlokliChainError::Api("safe is not the module target".into()));
     }
 
     let registered_address = rpc.get_safe_from_node_safe_registry(me).await?;
@@ -66,7 +66,7 @@ pub async fn can_register_with_safe<Rpc: HoprRpcOperations>(
         info!("Node is not associated with a Safe in NodeSafeRegistry yet");
         Ok(true)
     } else if registered_address != safe_address {
-        Err(HoprChainError::Api(
+        Err(BlokliChainError::Api(
             "Node is associated with a different Safe in NodeSafeRegistry".into(),
         ))
     } else {
@@ -105,7 +105,7 @@ pub async fn wait_for_funds<Rpc: HoprRpcOperations>(
         current_delay = current_delay.mul_f64(multiplier);
     }
 
-    Err(HoprChainError::Api("timeout waiting for funds".into()))
+    Err(BlokliChainError::Api("timeout waiting for funds".into()))
 }
 
 fn build_transport_client(url: &str) -> Result<Http<ReqwestClient>> {
@@ -114,7 +114,7 @@ fn build_transport_client(url: &str) -> Result<Http<ReqwestClient>> {
 }
 
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
-pub enum HoprChainProcess {
+pub enum BlokliChainProcess {
     Indexer,
     OutgoingOnchainActionQueue,
 }
@@ -131,12 +131,12 @@ type ActionQueueType<T> = ActionQueue<
 
 /// Represents all chain interactions exported to be used in the hopr-lib
 ///
-/// NOTE: instead of creating a unified interface the [HoprChain] exports
+/// NOTE: instead of creating a unified interface the [BlokliChain] exports
 /// some functionality (e.g. the [ChainActions] as a referentially used)
 /// object. This behavior will be refactored and hidden behind a trait
 /// in the future implementations.
 #[derive(Debug, Clone)]
-pub struct HoprChain<T: HoprDbAllOperations + Send + Sync + Clone + std::fmt::Debug> {
+pub struct BlokliChain<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug> {
     me_onchain: ChainKeypair,
     safe_address: Address,
     contract_addresses: ContractAddresses,
@@ -149,7 +149,7 @@ pub struct HoprChain<T: HoprDbAllOperations + Send + Sync + Clone + std::fmt::De
     rpc_operations: RpcOperations<DefaultHttpRequestor>,
 }
 
-impl<T: HoprDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static> HoprChain<T> {
+impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static> BlokliChain<T> {
     #[allow(clippy::too_many_arguments)] // TODO: refactor this function into a reasonable group of components once fully rearchitected
     pub fn new(
         me_onchain: ChainKeypair,
@@ -240,19 +240,19 @@ impl<T: HoprDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static> H
         })
     }
 
-    /// Execute all processes of the [`HoprChain`] object.
+    /// Execute all processes of the [`BlokliChain`] object.
     ///
-    /// This method will spawn the [`HoprChainProcess::Indexer`] and [`HoprChainProcess::OutgoingOnchainActionQueue`]
+    /// This method will spawn the [`BlokliChainProcess::Indexer`] and [`BlokliChainProcess::OutgoingOnchainActionQueue`]
     /// processes and return join handles to the calling function.
-    pub async fn start(&self) -> errors::Result<HashMap<HoprChainProcess, AbortHandle>> {
-        let mut processes: HashMap<HoprChainProcess, AbortHandle> = HashMap::new();
+    pub async fn start(&self) -> errors::Result<HashMap<BlokliChainProcess, AbortHandle>> {
+        let mut processes: HashMap<BlokliChainProcess, AbortHandle> = HashMap::new();
 
         processes.insert(
-            HoprChainProcess::OutgoingOnchainActionQueue,
+            BlokliChainProcess::OutgoingOnchainActionQueue,
             spawn_as_abortable!(self.action_queue.clone().start()),
         );
         processes.insert(
-            HoprChainProcess::Indexer,
+            BlokliChainProcess::Indexer,
             Indexer::new(
                 self.rpc_operations.clone(),
                 ContractEventHandlers::new(
@@ -288,9 +288,9 @@ impl<T: HoprDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static> H
         self.db
             .get_channel_by_parties(None, src, dest, false)
             .await
-            .map_err(HoprChainError::from)
+            .map_err(BlokliChainError::from)
             .and_then(|v| {
-                v.ok_or(errors::HoprChainError::Api(format!(
+                v.ok_or(errors::BlokliChainError::Api(format!(
                     "Channel entry not available {src}-{dest}"
                 )))
             })
@@ -353,7 +353,7 @@ impl<T: HoprDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static> H
                 .await?
                 .to_be_bytes()
         } else {
-            return Err(HoprChainError::Api("unsupported currency".into()));
+            return Err(BlokliChainError::Api("unsupported currency".into()));
         };
 
         Ok(Balance::<C>::from(U256::from_be_bytes(bal)))
@@ -377,7 +377,7 @@ impl<T: HoprDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static> H
         } else if C::is::<WxHOPR>() {
             self.rpc_operations.get_hopr_balance(safe_address).await?.to_be_bytes()
         } else {
-            return Err(HoprChainError::Api("unsupported currency".into()));
+            return Err(BlokliChainError::Api("unsupported currency".into()));
         };
 
         Ok(Balance::<C>::from(U256::from_be_bytes(bal)))

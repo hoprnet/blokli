@@ -7,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use validator::Validate;
 
-use crate::errors::HoprChainError;
+use crate::errors::BlokliChainError;
 
 /// Types of HOPR network environments.
 #[derive(Debug, Copy, Clone, Deserialize, Serialize, Eq, PartialEq, strum::Display, strum::EnumString)]
@@ -161,10 +161,10 @@ pub struct ChainNetworkConfig {
 /// Check whether the version is allowed
 fn satisfies(version: &str, allowed_versions: &str) -> crate::errors::Result<bool> {
     let allowed_versions = VersionReq::parse(allowed_versions)
-        .map_err(|e| HoprChainError::Configuration(format!("failed to deserialize allowed version string: {e}")))?;
+        .map_err(|e| BlokliChainError::Configuration(format!("failed to deserialize allowed version string: {e}")))?;
 
     let version = Version::from_str(version)
-        .map_err(|e| HoprChainError::Configuration(format!("failed to deserialize current lib version string: {e}")))?;
+        .map_err(|e| BlokliChainError::Configuration(format!("failed to deserialize current lib version string: {e}")))?;
 
     Ok(allowed_versions.matches(&version))
 }

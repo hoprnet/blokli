@@ -18,7 +18,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use blokli_chain_types::actions::Action;
 use hopr_crypto_types::types::Hash;
-use blokli_db_sql::HoprDbAllOperations;
+use blokli_db_sql::BlokliDbAllOperations;
 use hopr_internal_types::prelude::*;
 use hopr_platform::time::native::current_time;
 use hopr_primitive_types::prelude::*;
@@ -59,7 +59,7 @@ pub trait ChannelActions {
 #[async_trait]
 impl<Db> ChannelActions for ChainActions<Db>
 where
-    Db: HoprDbAllOperations + Clone + Send + Sync + std::fmt::Debug + 'static,
+    Db: BlokliDbAllOperations + Clone + Send + Sync + std::fmt::Debug + 'static,
 {
     #[tracing::instrument(level = "debug", skip(self))]
     async fn open_channel(&self, destination: Address, amount: HoprBalance) -> Result<PendingAction> {
@@ -243,8 +243,8 @@ mod tests {
     use hopr_crypto_random::random_bytes;
     use hopr_crypto_types::prelude::*;
     use blokli_db_sql::{
-        HoprDbGeneralModelOperations, api::info::DomainSeparator, channels::HoprDbChannelOperations, db::HoprDb,
-        errors::DbSqlError, info::HoprDbInfoOperations,
+        BlokliDbGeneralModelOperations, api::info::DomainSeparator, channels::BlokliDbChannelOperations, db::BlokliDb,
+        errors::DbSqlError, info::BlokliDbInfoOperations,
     };
     use hopr_internal_types::prelude::*;
     use hopr_primitive_types::prelude::*;
@@ -273,7 +273,7 @@ mod tests {
     }
 
     async fn init_db(
-        db: &HoprDb,
+        db: &BlokliDb,
         safe_balance: HoprBalance,
         safe_allowance: HoprBalance,
         channel: Option<ChannelEntry>,
@@ -306,7 +306,7 @@ mod tests {
         let stake: HoprBalance = 10_u32.into();
         let random_hash = Hash::from(random_bytes::<{ Hash::SIZE }>());
 
-        let db = HoprDb::new_in_memory(ALICE_KP.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE_KP.clone()).await?;
         init_db(&db, 5_000_000_u64.into(), 10_000_000_u64.into(), None).await?;
 
         let mut tx_exec = MockTransactionExecutor::new();
@@ -358,7 +358,7 @@ mod tests {
 
         let channel = ChannelEntry::new(*ALICE, *BOB, stake, U256::zero(), ChannelStatus::Open, U256::zero());
 
-        let db = HoprDb::new_in_memory(ALICE_KP.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE_KP.clone()).await?;
         init_db(&db, 5_000_000_u64.into(), 10_000_000_u64.into(), Some(channel)).await?;
 
         let tx_queue = ActionQueue::new(
@@ -389,7 +389,7 @@ mod tests {
     async fn test_should_not_open_channel_to_self() -> anyhow::Result<()> {
         let stake = 10_u32.into();
 
-        let db = HoprDb::new_in_memory(ALICE_KP.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE_KP.clone()).await?;
         init_db(&db, 5_000_000_u64.into(), 10_000_000_u64.into(), None).await?;
 
         let tx_queue = ActionQueue::new(
@@ -417,7 +417,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_should_not_open_channel_with_too_big_stake() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ALICE_KP.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE_KP.clone()).await?;
         init_db(&db, U256::max_value().into(), U256::max_value().into(), None).await?;
 
         let tx_queue = ActionQueue::new(
@@ -447,7 +447,7 @@ mod tests {
     async fn test_should_not_open_if_not_enough_allowance() -> anyhow::Result<()> {
         let stake = 10_000_u32.into();
 
-        let db = HoprDb::new_in_memory(ALICE_KP.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE_KP.clone()).await?;
         init_db(&db, 5_000_000_u64.into(), 1_000_u64.into(), None).await?;
 
         let tx_queue = ActionQueue::new(
@@ -477,7 +477,7 @@ mod tests {
     async fn test_should_not_open_if_not_enough_token_balance() -> anyhow::Result<()> {
         let stake = 10_000_u32.into();
 
-        let db = HoprDb::new_in_memory(ALICE_KP.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE_KP.clone()).await?;
         init_db(&db, 1_u64.into(), 10_000_000_u64.into(), None).await?;
 
         let tx_queue = ActionQueue::new(
@@ -509,7 +509,7 @@ mod tests {
         let random_hash = Hash::from(random_bytes::<{ Hash::SIZE }>());
         let channel = ChannelEntry::new(*ALICE, *BOB, stake, U256::zero(), ChannelStatus::Open, U256::zero());
 
-        let db = HoprDb::new_in_memory(ALICE_KP.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE_KP.clone()).await?;
         init_db(&db, 5_000_000_u64.into(), 10_000_000_u64.into(), Some(channel)).await?;
 
         let mut tx_exec = MockTransactionExecutor::new();
@@ -564,7 +564,7 @@ mod tests {
             U256::zero(),
         );
 
-        let db = HoprDb::new_in_memory(ALICE_KP.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE_KP.clone()).await?;
         init_db(&db, U256::max_value().into(), U256::max_value().into(), Some(channel)).await?;
 
         let tx_queue = ActionQueue::new(
@@ -594,7 +594,7 @@ mod tests {
     async fn test_should_not_fund_nonexistent_channel() -> anyhow::Result<()> {
         let channel_id = generate_channel_id(&ALICE, &BOB);
 
-        let db = HoprDb::new_in_memory(ALICE_KP.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE_KP.clone()).await?;
         init_db(&db, 5_000_000_u64.into(), 10_000_000_u64.into(), None).await?;
 
         let tx_queue = ActionQueue::new(
@@ -624,7 +624,7 @@ mod tests {
     async fn test_should_not_fund_if_not_enough_allowance() -> anyhow::Result<()> {
         let channel_id = generate_channel_id(&ALICE, &BOB);
 
-        let db = HoprDb::new_in_memory(ALICE_KP.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE_KP.clone()).await?;
         init_db(&db, 5_000_000_u64.into(), 1_000_u64.into(), None).await?;
 
         let tx_queue = ActionQueue::new(
@@ -654,7 +654,7 @@ mod tests {
     async fn test_should_not_fund_if_not_enough_balance() -> anyhow::Result<()> {
         let channel_id = generate_channel_id(&ALICE, &BOB);
 
-        let db = HoprDb::new_in_memory(ALICE_KP.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE_KP.clone()).await?;
         init_db(&db, 1_u64.into(), 100_000_u64.into(), None).await?;
 
         let tx_queue = ActionQueue::new(
@@ -687,7 +687,7 @@ mod tests {
 
         let mut channel = ChannelEntry::new(*ALICE, *BOB, stake, U256::zero(), ChannelStatus::Open, U256::zero());
 
-        let db = HoprDb::new_in_memory(ALICE_KP.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE_KP.clone()).await?;
         init_db(&db, 5_000_000_u64.into(), 1000_u64.into(), Some(channel)).await?;
 
         let mut tx_exec = MockTransactionExecutor::new();
@@ -784,7 +784,7 @@ mod tests {
 
         let channel = ChannelEntry::new(*BOB, *ALICE, stake, U256::zero(), ChannelStatus::Open, U256::zero());
 
-        let db = HoprDb::new_in_memory(ALICE_KP.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE_KP.clone()).await?;
         init_db(&db, 5_000_000_u64.into(), 1000_u64.into(), Some(channel)).await?;
 
         let mut tx_exec = MockTransactionExecutor::new();
@@ -845,7 +845,7 @@ mod tests {
             U256::zero(),
         );
 
-        let db = HoprDb::new_in_memory(ALICE_KP.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE_KP.clone()).await?;
         init_db(&db, 5_000_000_u64.into(), 1000_u64.into(), Some(channel)).await?;
 
         let tx_queue = ActionQueue::new(
@@ -873,7 +873,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_should_not_close_nonexistent_channel() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ALICE_KP.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE_KP.clone()).await?;
         init_db(&db, 5_000_000_u64.into(), 1000_u64.into(), None).await?;
 
         let tx_queue = ActionQueue::new(
@@ -903,7 +903,7 @@ mod tests {
         let stake = 10_u32.into();
         let channel = ChannelEntry::new(*ALICE, *BOB, stake, U256::zero(), ChannelStatus::Closed, U256::zero());
 
-        let db = HoprDb::new_in_memory(ALICE_KP.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE_KP.clone()).await?;
         init_db(&db, 5_000_000_u64.into(), 1000_u64.into(), Some(channel)).await?;
 
         let tx_queue = ActionQueue::new(

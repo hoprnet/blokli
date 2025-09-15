@@ -29,10 +29,10 @@ use hopr_crypto_types::types::Hash;
 use blokli_db_sql::{
     api::{
         info::DomainSeparator,
-        tickets::{HoprDbTicketOperations, TicketSelector},
+        tickets::{BlokliDbTicketOperations, TicketSelector},
     },
-    channels::HoprDbChannelOperations,
-    prelude::HoprDbInfoOperations,
+    channels::BlokliDbChannelOperations,
+    prelude::BlokliDbInfoOperations,
 };
 use hopr_internal_types::prelude::*;
 use hopr_primitive_types::prelude::*;
@@ -83,7 +83,7 @@ pub trait TicketRedeemActions {
 #[async_trait]
 impl<Db> TicketRedeemActions for ChainActions<Db>
 where
-    Db: HoprDbChannelOperations + HoprDbTicketOperations + HoprDbInfoOperations + Clone + Send + Sync + std::fmt::Debug,
+    Db: BlokliDbChannelOperations + BlokliDbTicketOperations + BlokliDbInfoOperations + Clone + Send + Sync + std::fmt::Debug,
 {
     #[tracing::instrument(level = "debug", skip(self))]
     async fn redeem_all_tickets(&self, only_aggregated: bool) -> Result<Vec<PendingAction>> {
@@ -264,8 +264,8 @@ mod tests {
     use hopr_crypto_random::{Randomizable, random_bytes};
     use hopr_crypto_types::prelude::*;
     use blokli_db_sql::{
-        HoprDbGeneralModelOperations, TargetDb, api::info::DomainSeparator, db::HoprDb, errors::DbSqlError,
-        info::HoprDbInfoOperations,
+        BlokliDbGeneralModelOperations, TargetDb, api::info::DomainSeparator, db::BlokliDb, errors::DbSqlError,
+        info::BlokliDbInfoOperations,
     };
 
     use super::*;
@@ -305,7 +305,7 @@ mod tests {
     }
 
     async fn create_channel_with_ack_tickets(
-        db: HoprDb,
+        db: BlokliDb,
         ticket_count: usize,
         counterparty: &ChainKeypair,
         channel_epoch: u32,
@@ -361,7 +361,7 @@ mod tests {
         let random_hash = Hash::from(random_bytes::<{ Hash::SIZE }>());
 
         let ticket_count = 5;
-        let db = HoprDb::new_in_memory(ALICE.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE.clone()).await?;
 
         // All the tickets can be redeemed because they are issued with the same channel epoch
         let (channel_from_bob, bob_tickets) =
@@ -461,7 +461,7 @@ mod tests {
         let random_hash = Hash::from(random_bytes::<{ Hash::SIZE }>());
 
         let ticket_count = 5;
-        let db = HoprDb::new_in_memory(ALICE.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE.clone()).await?;
 
         // All the tickets can be redeemed because they are issued with the same channel epoch
         let (mut channel_from_bob, bob_tickets) =
@@ -552,7 +552,7 @@ mod tests {
         let random_hash = Hash::from(random_bytes::<{ Hash::SIZE }>());
 
         let ticket_count = 3;
-        let db = HoprDb::new_in_memory(ALICE.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE.clone()).await?;
 
         let (channel_from_bob, mut tickets) =
             create_channel_with_ack_tickets(db.clone(), ticket_count, &BOB, 4u32).await?;
@@ -633,7 +633,7 @@ mod tests {
     -> anyhow::Result<()> {
         let ticket_count = 3;
         let ticket_from_previous_epoch_count = 2;
-        let db = HoprDb::new_in_memory(ALICE.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE.clone()).await?;
         let random_hash = Hash::from(random_bytes::<{ Hash::SIZE }>());
 
         // Create 1 ticket in Epoch 4
@@ -703,7 +703,7 @@ mod tests {
     async fn test_redeem_must_not_work_for_tickets_of_next_epoch_being_redeemed() -> anyhow::Result<()> {
         let ticket_count = 3;
         let ticket_from_next_epoch_count = 2;
-        let db = HoprDb::new_in_memory(ALICE.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE.clone()).await?;
         let random_hash = Hash::from(random_bytes::<{ Hash::SIZE }>());
 
         // Create 1 ticket in Epoch 4
@@ -773,7 +773,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_should_redeem_single_ticket() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ALICE.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE.clone()).await?;
         let random_hash = Hash::from(random_bytes::<{ Hash::SIZE }>());
 
         let (channel_from_bob, tickets) = create_channel_with_ack_tickets(db.clone(), 1, &BOB, 1u32).await?;
@@ -827,7 +827,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_should_not_redeem_single_ticket_with_lower_index_than_channel_index() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ALICE.clone()).await?;
+        let db = BlokliDb::new_in_memory(ALICE.clone()).await?;
         let random_hash = Hash::from(random_bytes::<{ Hash::SIZE }>());
 
         let (mut channel_from_bob, tickets) = create_channel_with_ack_tickets(db.clone(), 1, &BOB, 1u32).await?;
