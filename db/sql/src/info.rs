@@ -3,7 +3,7 @@ use futures::TryFutureExt;
 use hopr_crypto_types::prelude::Hash;
 use blokli_db_api::info::*;
 use blokli_db_entity::{
-    chain_info, global_settings, node_info,
+    chain_info, node_info,
     prelude::{
         Account, Announcement, ChainInfo, Channel, NodeInfo,
     },
@@ -122,24 +122,6 @@ pub trait BlokliDbInfoOperations {
 
     /// Updates the indexer state info.
     async fn set_indexer_state_info<'a>(&'a self, tx: OptTx<'a>, block_num: u32) -> Result<()>;
-
-    /// Gets global setting value with the given key.
-    async fn get_global_setting<'a>(
-        &'a self,
-        tx: OptTx<'a>,
-        key: &str,
-    ) -> Result<Option<Box<[u8]>>>;
-
-    /// Sets the global setting value with the given key.
-    ///
-    /// If the setting with the given `key` does not exist, it is created.
-    /// If `value` is `None` and a setting with the given `key` exists, it is removed.
-    async fn set_global_setting<'a>(
-        &'a self,
-        tx: OptTx<'a>,
-        key: &str,
-        value: Option<&[u8]>,
-    ) -> Result<()>;
 }
 
 #[async_trait]
@@ -297,8 +279,7 @@ impl BlokliDbInfoOperations for BlokliDb {
                             Ok(None)
                         }
                     })
-            ?
-            .try_into()?)
+            ?)
     }
 
     async fn set_safe_info<'a>(&'a self, tx: OptTx<'a>, safe_info: SafeInfo) -> Result<()> {
@@ -366,8 +347,7 @@ impl BlokliDbInfoOperations for BlokliDb {
                             })
                         })
                     })
-                    .await
-            .try_into()?)
+                    .await?)
     }
 
     async fn set_domain_separator<'a>(
@@ -500,65 +480,8 @@ impl BlokliDbInfoOperations for BlokliDb {
             })
             .await
     }
-
-    async fn get_global_setting<'a>(
-        &'a self,
-        tx: OptTx<'a>,
-        key: &str,
-    ) -> Result<Option<Box<[u8]>>> {
-        let k = key.to_owned();
-        self.nest_transaction(tx)
-            .await?
-            .perform(|tx| {
-                Box::pin(async move {
-                    Ok::<Option<Box<[u8]>>, DbSqlError>(
-                        global_settings::Entity::find()
-                            .filter(global_settings::Column::Key.eq(k))
-                            .one(tx.as_ref())
-                            .await?
-                            .map(|m| m.value.into_boxed_slice()),
-                    )
-                })
-            })
-            .await
     }
 
-    async fn set_global_setting<'a>(
-        &'a self,
-        tx: OptTx<'a>,
-        key: &str,
-        value: Option<&[u8]>,
-    ) -> Result<()> {
-        let k = key.to_owned();
-        let value = value.map(Vec::from);
-        self.nest_transaction(tx)
-            .await?
-            .perform(|tx| {
-                Box::pin(async move {
-                    if let Some(v) = value {
-                        let mut am = global_settings::Entity::find()
-                            .filter(global_settings::Column::Key.eq(k.clone()))
-                            .one(tx.as_ref())
-                            .await?
-                            .map(|m| m.into_active_model())
-                            .unwrap_or(global_settings::ActiveModel {
-                                key: Set(k),
-                                ..Default::default()
-                            });
-                        am.value = Set(v);
-                        am.save(tx.as_ref()).await?;
-                    } else {
-                        global_settings::Entity::delete_many()
-                            .filter(global_settings::Column::Key.eq(k))
-                            .exec(tx.as_ref())
-                            .await?;
-                    }
-                    Ok::<(), DbSqlError>(())
-                })
-            })
-            .await
-    }
-}
 
 #[cfg(test)]
 mod tests {
@@ -653,25 +576,6 @@ mod tests {
         db.set_safe_info(None, safe_info).await?;
 
         assert_eq!(Some(safe_info), db.get_safe_info(None).await?);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_set_get_global_setting() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
-
-        let key = "test";
-        let value = hex!("deadbeef");
-
-        assert_eq!(None, db.get_global_setting(None, key).await?);
-
-        db.set_global_setting(None, key, Some(&value)).await?;
-
-        assert_eq!(Some(value.into()), db.get_global_setting(None, key).await?);
-
-        db.set_global_setting(None, key, None).await?;
-
-        assert_eq!(None, db.get_global_setting(None, key).await?);
         Ok(())
     }
 }

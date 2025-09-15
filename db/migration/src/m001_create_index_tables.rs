@@ -101,7 +101,7 @@ impl MigrationTrait for Migration {
                             .binary()
                             .not_null(),
                     )
-                    .col(ColumnDef::new(Account::PublishedBlock).unsigned().not_null().default(0))
+                    .col(ColumnDef::new(Announcement::PublishedBlock).unsigned().not_null().default(0))
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_announcement_account_id")

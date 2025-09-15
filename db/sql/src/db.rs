@@ -176,7 +176,7 @@ impl BlokliDb {
             .try_for_each(|(a, b)| match model_to_account_entry(a, b) {
                 Ok(account) => {
                     // FIXME: update key id mapper
-                    Ok(())
+                    Ok::<(), DbSqlError>(())
                 }
                 Err(error) => {
                     // Undecodeable accounts are skipped and will be unreachable

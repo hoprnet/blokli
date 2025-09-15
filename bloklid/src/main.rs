@@ -47,7 +47,7 @@ impl Args {
 
         config
             .validate()
-            .map_err(|e| ConfigError::ValidationError(e))?;
+            .map_err(ConfigError::ValidationError)?;
         Ok(config)
     }
 }
