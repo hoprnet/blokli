@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
-use hopr_crypto_packet::errors::TicketValidationError;
 use hopr_crypto_types::{prelude::CryptoError, types::Hash};
-use hopr_db_entity::errors::DbEntityError;
-use hopr_internal_types::{errors::CoreTypesError, tickets::Ticket};
+use blokli_db_entity::errors::DbEntityError;
+use hopr_internal_types::{errors::CoreTypesError};
 use sea_orm::TransactionError;
 use thiserror::Error;
 
@@ -36,12 +35,6 @@ pub enum DbSqlError {
     #[error("missing fixed entry in table {0}")]
     MissingFixedTableEntry(String),
 
-    #[error("ticket aggregation error: {0}")]
-    TicketAggregationError(String),
-
-    #[error("ticket validation error for {}: {}", .0.0, .0.1)]
-    TicketValidationError(Box<(Ticket, String)>),
-
     #[error("transaction error: {0}")]
     TransactionError(Box<dyn std::error::Error + Send + Sync>),
 
@@ -73,18 +66,12 @@ pub enum DbSqlError {
     NonSpecificError(#[from] hopr_primitive_types::errors::GeneralError),
 
     #[error(transparent)]
-    ApiError(#[from] hopr_db_api::errors::DbError),
+    ApiError(#[from] blokli_db_api::errors::DbError),
 }
 
-impl From<TicketValidationError> for DbSqlError {
-    fn from(value: TicketValidationError) -> Self {
-        DbSqlError::TicketValidationError(Box::new((*value.ticket, value.reason)))
-    }
-}
-
-impl From<DbSqlError> for hopr_db_api::errors::DbError {
+impl From<DbSqlError> for blokli_db_api::errors::DbError {
     fn from(value: DbSqlError) -> Self {
-        hopr_db_api::errors::DbError::General(value.to_string())
+        blokli_db_api::errors::DbError::General(value.to_string())
     }
 }
 

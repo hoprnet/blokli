@@ -29,8 +29,6 @@ target
 /.cargo/.crates2.json
 !/.cargo/config.toml
 
-/.foundry/
-
 # make sure anything which is vendored is copied
 !/vendor/**/*
 vendor/.DS_Store

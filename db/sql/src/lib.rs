@@ -17,8 +17,8 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
-pub use hopr_db_api as api;
-use hopr_db_api::logs::HoprDbLogOperations;
+pub use blokli_db_api as api;
+use blokli_db_api::logs::HoprDbLogOperations;
 use sea_orm::{ConnectionTrait, TransactionTrait};
 pub use sea_orm::{DatabaseConnection, DatabaseTransaction};
 
@@ -155,7 +155,7 @@ pub trait HoprDbGeneralModelOperations {
     ///
     /// ```no_run
     /// # use std::path::PathBuf;
-    /// # use hopr_db_sql::HoprDbGeneralModelOperations;
+    /// # use blokli_db_sql::HoprDbGeneralModelOperations;
     /// # async fn example(db: impl HoprDbGeneralModelOperations) -> Result<(), Box<dyn std::error::Error>> {
     /// let snapshot_dir = PathBuf::from("/tmp/snapshot_extracted");
     /// db.import_logs_db(snapshot_dir).await?;
@@ -278,7 +278,7 @@ pub trait HoprDbAllOperations:
 
 #[doc(hidden)]
 pub mod prelude {
-    pub use hopr_db_api::logs::*;
+    pub use blokli_db_api::logs::*;
 
     pub use super::*;
     pub use crate::{accounts::*, channels::*, corrupted_channels::*, db::*, errors::*, info::*};

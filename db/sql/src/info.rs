@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use futures::TryFutureExt;
 use hopr_crypto_types::prelude::Hash;
-use hopr_db_api::info::*;
-use hopr_db_entity::{
+use blokli_db_api::info::*;
+use blokli_db_entity::{
     chain_info, global_settings, node_info,
     prelude::{
         Account, Announcement, ChainInfo, Channel, NetworkEligibility, NetworkRegistry, NodeInfo,

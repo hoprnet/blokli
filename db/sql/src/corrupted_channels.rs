@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use futures::TryStreamExt;
 use hopr_crypto_types::prelude::*;
-use hopr_db_entity::{corrupted_channel, prelude::CorruptedChannel};
+use blokli_db_entity::{corrupted_channel, prelude::CorruptedChannel};
 use hopr_internal_types::{channels::CorruptedChannelEntry, prelude::*};
 use hopr_primitive_types::prelude::*;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};

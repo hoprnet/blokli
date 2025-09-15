@@ -1,11 +1,11 @@
 use async_trait::async_trait;
 use futures::{StreamExt, stream};
 use hopr_crypto_types::prelude::Hash;
-use hopr_db_api::{
+use blokli_db_api::{
     errors::{DbError, Result},
     logs::HoprDbLogOperations,
 };
-use hopr_db_entity::{
+use blokli_db_entity::{
     errors::DbEntityError,
     log, log_status, log_topic_info,
     prelude::{Log, LogStatus, LogTopicInfo},

@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use futures::TryFutureExt;
 use hopr_crypto_types::prelude::OffchainPublicKey;
-use hopr_db_entity::{
+use blokli_db_entity::{
     account, announcement,
     prelude::{Account, Announcement},
 };

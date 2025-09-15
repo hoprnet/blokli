@@ -29,28 +29,32 @@ impl MigratorTrait for Migrator {
     }
 }
 
-/// Used to instantiate all tables for SQLite database.
-/// Since SQLite cannot handle multiple concurrent writers, a separate
-/// set of migrations is needed for the different database instances.
-#[async_trait::async_trait]
-pub trait MigratorSQLiteTrait {
-    fn index_migrations() -> Vec<Box<dyn MigrationTrait>>;
-    fn logs_migrations() -> Vec<Box<dyn MigrationTrait>>;
-}
-
-pub struct MigratorSQLite;
+/// SQLite does not allow writing lock tables only, and the write lock
+/// will apply to the entire database file. It is therefore beneficial
+/// to separate the exclusive concurrently accessing components into
+/// separate database files to benefit from multiple write locks over
+/// different parts of the database.
+pub struct MigratorIndex;
 
 #[async_trait::async_trait]
-impl MigratorSQLiteTrait for MigratorSQLite {
-    fn index_migrations() -> Vec<Box<dyn MigrationTrait>> {
+impl MigratorTrait for MigratorIndex {
+    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         vec![
             Box::new(m001_create_index_tables::Migration),
             Box::new(m002_create_index_indices::Migration),
             Box::new(m005_seed_initial_data::Migration),
         ]
     }
+}
 
-    fn logs_migrations() -> Vec<Box<dyn MigrationTrait>> {
+/// The logs are kept separate from the rest of the database to allow for
+/// easier export of the logs themselves and also to not block any other database operations
+/// made by the node at runtime.
+pub struct MigratorChainLogs;
+
+#[async_trait::async_trait]
+impl MigratorTrait for MigratorChainLogs {
+    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         vec![
             Box::new(m003_create_log_tables::Migration),
             Box::new(m004_create_log_indices::Migration),
