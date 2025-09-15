@@ -7,7 +7,6 @@
   pkgs,
   config,
   crane,
-  solcDefault,
   bloklid,
   extraPackages ? [ ],
 }:
@@ -17,7 +16,6 @@ import ./test.nix {
     pkgs
     config
     crane
-    solcDefault
     ;
 
   # Include pre-built binaries for testing

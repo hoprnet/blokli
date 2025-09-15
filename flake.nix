@@ -29,10 +29,6 @@
   # - rust-overlay: Provides up-to-date Rust toolchains with cross-compilation support
   # - crane: Incremental Rust build system for Nix with excellent caching
   #
-  # Ethereum/Solidity development tools:
-  # - foundry: Ethereum development framework (pinned to specific version for reproducibility)
-  # - solc: Solidity compiler packages for various versions
-  #
   # Development tools and quality assurance:
   # - pre-commit: Git hooks for code quality enforcement
   # - treefmt-nix: Universal code formatter integration for Nix
@@ -51,10 +47,6 @@
     rust-overlay.url = "github:oxalica/rust-overlay/master";
     crane.url = "github:ipetkov/crane/v0.21.0";
 
-    # Ethereum/Solidity development tools
-    foundry.url = "github:hoprnet/foundry.nix/tb/202505-add-xz";
-    solc.url = "github:hellwolf/solc.nix";
-
     # Development tools and quality assurance
     pre-commit.url = "github:cachix/git-hooks.nix";
     treefmt-nix.url = "github:numtide/treefmt-nix";
@@ -62,12 +54,8 @@
 
     # Input dependency optimization
     flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
-    foundry.inputs.flake-utils.follows = "flake-utils";
-    foundry.inputs.nixpkgs.follows = "nixpkgs";
     pre-commit.inputs.nixpkgs.follows = "nixpkgs";
     rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
-    solc.inputs.flake-utils.follows = "flake-utils";
-    solc.inputs.nixpkgs.follows = "nixpkgs";
     treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
@@ -79,8 +67,6 @@
       flake-parts,
       rust-overlay,
       crane,
-      foundry,
-      solc,
       pre-commit,
       ...
     }@inputs:
@@ -110,11 +96,9 @@
           # System configuration
           localSystem = system;
 
-          # Nixpkgs with overlays for Rust and Solidity tools
+          # Nixpkgs with overlays for Rust
           overlays = [
             (import rust-overlay)
-            foundry.overlay
-            solc.overlay
           ];
           pkgs = import nixpkgs {
             system = localSystem;
@@ -123,9 +107,6 @@
 
           # Platform information
           buildPlatform = pkgs.stdenv.buildPlatform;
-
-          # Default Solidity compiler version
-          solcDefault = solc.mkDefault pkgs pkgs.solc_0_8_19;
 
           # Crane library for Rust builds
           craneLib = (crane.mkLib pkgs).overrideToolchain (p: p.rust-bin.stable.latest.default);
@@ -149,8 +130,6 @@
               nixpkgs
               rust-overlay
               crane
-              foundry
-              solc
               localSystem
               ;
           };
@@ -224,7 +203,6 @@
                 pkgs
                 config
                 crane
-                solcDefault
                 ;
               pre-commit-check = packages.pre-commit-check;
               extraPackages = with pkgs; [
@@ -242,7 +220,6 @@
                 pkgs
                 config
                 crane
-                solcDefault
                 ;
             };
 
@@ -251,7 +228,6 @@
                 pkgs
                 config
                 crane
-                solcDefault
                 ;
               bloklid = bloklidPackages.bloklid-candidate;
             };
@@ -261,7 +237,6 @@
                 pkgs
                 config
                 crane
-                solcDefault
                 ;
               bloklid = bloklidPackages.bloklid-dev;
             };
@@ -271,7 +246,6 @@
                 pkgs
                 config
                 crane
-                solcDefault
                 ;
               pre-commit-check = packages.pre-commit-check;
             };
@@ -279,13 +253,13 @@
 
           # Import checks
           checks = import ./nix/checks.nix {
-            inherit pkgs solcDefault bloklidCrateInfo;
+            inherit pkgs bloklidCrateInfo;
             packages = bloklidPackages;
           };
 
           # Import treefmt configuration
           treefmtConfig = import ./nix/treefmt.nix {
-            inherit config pkgs solcDefault;
+            inherit config pkgs;
           };
         in
         {
@@ -327,9 +301,9 @@
         };
 
       # Supported systems for building
-      # Note: aarch64-linux blocked by solc support
       systems = [
         "x86_64-linux"
+        "aarch64-linux"
         "aarch64-darwin"
         "x86_64-darwin"
       ];

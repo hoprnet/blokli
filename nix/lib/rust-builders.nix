@@ -7,8 +7,6 @@
   nixpkgs,
   rust-overlay,
   crane,
-  foundry,
-  solc,
   localSystem,
 }:
 
@@ -24,8 +22,6 @@ rec {
         nixpkgs
         rust-overlay
         crane
-        foundry
-        solc
         localSystem
         useRustNightly
         ;
@@ -40,8 +36,6 @@ rec {
         nixpkgs
         rust-overlay
         crane
-        foundry
-        solc
         localSystem
         ;
       crossSystem = (import nixpkgs { inherit localSystem; }).lib.systems.examples.musl64;
@@ -58,8 +52,6 @@ rec {
         nixpkgs
         rust-overlay
         crane
-        foundry
-        solc
         localSystem
         ;
       crossSystem =
@@ -77,8 +69,6 @@ rec {
         nixpkgs
         rust-overlay
         crane
-        foundry
-        solc
         localSystem
         ;
       crossSystem = (import nixpkgs { inherit localSystem; }).lib.systems.examples.x86_64-darwin;
@@ -94,8 +84,6 @@ rec {
         nixpkgs
         rust-overlay
         crane
-        foundry
-        solc
         localSystem
         ;
       crossSystem = (import nixpkgs { inherit localSystem; }).lib.systems.examples.aarch64-darwin;

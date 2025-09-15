@@ -6,7 +6,6 @@
 {
   config,
   pkgs,
-  solcDefault,
 }:
 
 {
@@ -32,7 +31,6 @@
 
     # Generated code - don't format to avoid churn
     "db/entity/src/codegen/*"
-    "ethereum/bindings/src/codegen/*"
 
     # External configuration
     "deploy/compose/grafana/config.monitoring"
@@ -43,17 +41,12 @@
     "docs/*"
 
     # Build artifacts
-    "ethereum/contracts/broadcast/*"
     "target/*"
 
     # Vendor code
     "vendor/*"
 
     # Other specific files
-    "ethereum/contracts/contracts-addresses.json"
-    "ethereum/contracts/remappings.txt"
-    "ethereum/contracts/src/static/*"
-    "ethereum/contracts/test/static/*"
     "bloklid/.dockerignore"
     "nix/setup-hook-darwin.sh"
     "tests/pytest.ini"
@@ -65,7 +58,6 @@
     "*.sh"
     "deploy/compose/.env.sample"
     "deploy/compose/.env-secrets.sample"
-    "ethereum/contracts/.env.example"
   ];
 
   # YAML formatting
@@ -87,10 +79,8 @@
   settings.formatter.prettier.includes = [
     "*.md"
     "*.json"
-    "ethereum/contracts/README.md"
   ];
   settings.formatter.prettier.excludes = [
-    "ethereum/contracts/*"
     "*.yml"
     "*.yaml"
   ];
@@ -121,36 +111,4 @@
 
   # Python formatting with Ruff
   programs.ruff-format.enable = true;
-
-  # Solidity formatting with Forge
-  settings.formatter.solc = {
-    command = "sh";
-    options = [
-      "-euc"
-      ''
-        # Generate foundry.toml if needed
-        if ! grep -q "solc = \"${solcDefault}/bin/solc\"" ethereum/contracts/foundry.toml; then
-          echo "solc = \"${solcDefault}/bin/solc\""
-          echo "Generating foundry.toml file!"
-          sed "s|# solc = .*|solc = \"${solcDefault}/bin/solc\"|g" \
-            ethereum/contracts/foundry.in.toml >| \
-            ethereum/contracts/foundry.toml
-        else
-          echo "foundry.toml file already exists!"
-        fi
-
-        # Format each file with forge fmt, abort on first failure
-        for file in "$@"; do
-          ${pkgs.foundry-bin}/bin/forge fmt "$file" \
-            --root ./ethereum/contracts
-          if [ $? -ne 0 ]; then
-            echo "forge fmt failed for file: $file" >&2
-            exit $?
-          fi
-        done
-      ''
-      "--"
-    ];
-    includes = [ "*.sol" ];
-  };
 }

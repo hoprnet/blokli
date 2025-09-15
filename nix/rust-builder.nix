@@ -7,27 +7,21 @@
 {
   crane, # Crane build system for Rust
   crossSystem ? localSystem, # Target system for cross-compilation
-  foundry, # Ethereum development framework
   isCross ? false, # Whether this is a cross-compilation build
   isStatic ? false, # Whether to create statically linked binaries
   localSystem, # Host system where compilation occurs
   nixpkgs, # Nixpkgs package set
   rust-overlay, # Rust toolchain overlay
-  solc, # Solidity compiler
   useRustNightly ? false, # Whether to use nightly Rust toolchain
 }@args:
 let
   crossSystem0 = crossSystem;
 in
 let
-  # The foundry overlay uses the hostPlatform, so we need to use a
-  # localSystem-only pkgs to get the correct architecture for native tools
   pkgsLocal = import nixpkgs {
     localSystem = args.localSystem;
     overlays = [
-      foundry.overlay
       rust-overlay.overlays.default
-      solc.overlay
     ];
   };
 
@@ -45,7 +39,6 @@ let
     inherit localSystem crossSystem;
     overlays = [
       rust-overlay.overlays.default
-      solc.overlay
     ];
   };
 
@@ -54,11 +47,7 @@ let
   buildPlatform = pkgs.stdenv.buildPlatform;
   hostPlatform = pkgs.stdenv.hostPlatform;
 
-  foundryBin = pkgsLocal.foundry-bin;
-
   envCase = triple: pkgsLocal.lib.strings.toUpper (builtins.replaceStrings [ "-" ] [ "_" ] triple);
-
-  solcDefault = solc.mkDefault pkgs pkgs.pkgsBuildHost.solc_0_8_19;
 
   cargoTarget =
     if hostPlatform.config == "arm64-apple-darwin" then "aarch64-apple-darwin" else hostPlatform.config;
@@ -111,8 +100,6 @@ in
         args
         // {
           inherit
-            foundryBin
-            solcDefault
             craneLib
             isCross
             isStatic

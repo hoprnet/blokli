@@ -8,7 +8,6 @@
   config,
   crane,
   pre-commit-check,
-  solcDefault,
   extraPackages ? [ ],
   useRustNightly ? false,
 }:
@@ -18,7 +17,6 @@ import ./test.nix {
     pkgs
     config
     crane
-    solcDefault
     useRustNightly
     ;
 

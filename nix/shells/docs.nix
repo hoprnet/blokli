@@ -8,7 +8,6 @@
   config,
   crane,
   pre-commit-check,
-  solcDefault,
 }:
 
 import ./dev.nix {
@@ -17,7 +16,6 @@ import ./dev.nix {
     config
     crane
     pre-commit-check
-    solcDefault
     ;
 
   # Additional packages for documentation work

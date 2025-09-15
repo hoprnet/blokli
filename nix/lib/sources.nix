@@ -35,15 +35,11 @@ rec {
 
         # Runtime data and configuration
         (root + "/ethereum/contracts/contracts-addresses.json")
-        (root + "/ethereum/contracts/foundry.in.toml")
-        (root + "/ethereum/contracts/remappings.txt")
         (root + "/bloklid/example_cfg.yaml")
 
         # Source files
         (fs.fileFilter (file: file.hasExt "rs") root)
         (fs.fileFilter (file: file.hasExt "toml") root)
-        (fs.fileFilter (file: file.hasExt "sol") (root + "/vendor/solidity"))
-        (fs.fileFilter (file: file.hasExt "sol") (root + "/ethereum/contracts/src"))
       ];
     in
     fs.toSource {
@@ -62,16 +58,11 @@ rec {
         (root + "/README.md")
 
         # Runtime data and configuration
-        (root + "/ethereum/contracts/contracts-addresses.json")
-        (root + "/ethereum/contracts/foundry.in.toml")
-        (root + "/ethereum/contracts/remappings.txt")
         (root + "/bloklid/example_cfg.yaml")
 
         # Source files
         (fs.fileFilter (file: file.hasExt "rs") root)
         (fs.fileFilter (file: file.hasExt "toml") root)
-        (fs.fileFilter (file: file.hasExt "sol") (root + "/vendor/solidity"))
-        (fs.fileFilter (file: file.hasExt "sol") (root + "/ethereum/contracts/src"))
       ];
     in
     fs.toSource {
