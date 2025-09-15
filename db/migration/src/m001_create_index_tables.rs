@@ -72,7 +72,7 @@ impl MigrationTrait for Migration {
                     )
                     .col(ColumnDef::new(Account::ChainKey).string_len(40).not_null())
                     .col(ColumnDef::new(Account::PacketKey).string_len(64).not_null())
-                    .col(ColumnDef::new(Account::PublishedBlock).unsigned().null())
+                    .col(ColumnDef::new(Account::PublishedBlock).unsigned().not_null().default(0))
                     .to_owned(),
             )
             .await?;
@@ -101,6 +101,7 @@ impl MigrationTrait for Migration {
                             .binary()
                             .not_null(),
                     )
+                    .col(ColumnDef::new(Account::PublishedBlock).unsigned().not_null().default(0))
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_announcement_account_id")
@@ -177,12 +178,6 @@ impl MigrationTrait for Migration {
                             .null(),
                     )
                     .col(
-                        ColumnDef::new(ChainInfo::NetworkRegistryEnabled)
-                            .boolean()
-                            .not_null()
-                            .default(false),
-                    )
-                    .col(
                         ColumnDef::new(ChainInfo::ChainChecksum)
                             .binary_len(32)
                             .default(vec![0u8; 32]),
@@ -192,6 +187,11 @@ impl MigrationTrait for Migration {
                             .unsigned()
                             .null(),
                     )
+                        .col(
+                        ColumnDef::new(ChainInfo::MinIncomingTicketWinProb)
+                            .float()
+                            .not_null().default(hopr_internal_types::protocol::DEFAULT_MINIMUM_INCOMING_TICKET_WIN_PROB)
+                        )
                     .to_owned(),
             )
             .await?;
@@ -282,6 +282,7 @@ enum Announcement {
     AccountId,
     KeyBinding,
     MultiaddressList,
+    PublishedBlock,
 }
 
 #[derive(DeriveIden)]
@@ -303,9 +304,9 @@ enum ChainInfo {
     ChannelsDST,
     LedgerDST,
     SafeRegistryDST,
-    NetworkRegistryEnabled,
     ChainChecksum,
     PreChecksumBlock,
+    MinIncomingTicketWinProb
 }
 
 #[derive(DeriveIden)]

@@ -10,9 +10,8 @@ use sea_orm::{
 use tracing::instrument;
 
 use crate::{
-    HoprDbGeneralModelOperations, OptTx,
-    cache::ChannelParties,
-    db::HoprDb,
+    BlokliDbGeneralModelOperations, OptTx,
+    db::BlokliDb,
     errors::{DbSqlError, Result},
 };
 
@@ -62,7 +61,7 @@ impl ChannelEditor {
 
 /// Defines DB API for accessing information about HOPR payment channels.
 #[async_trait]
-pub trait HoprDbChannelOperations {
+pub trait BlokliDbChannelOperations {
     /// Retrieves channel by its channel ID hash.
     ///
     /// See [generate_channel_id] on how to generate a channel ID hash from source and destination [Addresses](Address).
@@ -74,7 +73,7 @@ pub trait HoprDbChannelOperations {
 
     /// Start changes to channel entry.
     /// If the channel with the given ID exists, the [ChannelEditor] is returned.
-    /// Use [`HoprDbChannelOperations::finish_channel_update`] to commit edits to the DB when done.
+    /// Use [`BlokliDbChannelOperations::finish_channel_update`] to commit edits to the DB when done.
     async fn begin_channel_update<'a>(
         &'a self,
         tx: OptTx<'a>,
@@ -90,14 +89,11 @@ pub trait HoprDbChannelOperations {
     ) -> Result<Option<ChannelEntry>>;
 
     /// Retrieves the channel by source and destination.
-    /// This operation should be able to use cache since it can be also called from
-    /// performance-sensitive locations.
     async fn get_channel_by_parties<'a>(
         &'a self,
         tx: OptTx<'a>,
         src: &Address,
         dst: &Address,
-        use_cache: bool,
     ) -> Result<Option<ChannelEntry>>;
 
     /// Fetches all channels that are `Incoming` to the given `target`, or `Outgoing` from the given `target`
@@ -128,7 +124,7 @@ pub trait HoprDbChannelOperations {
 }
 
 #[async_trait]
-impl HoprDbChannelOperations for HoprDb {
+impl BlokliDbChannelOperations for BlokliDb {
     async fn get_channel_by_id<'a>(
         &'a self,
         tx: OptTx<'a>,
@@ -189,7 +185,6 @@ impl HoprDbChannelOperations for HoprDb {
     ) -> Result<Option<ChannelEntry>> {
         let epoch = editor.model.epoch.clone();
 
-        let parties = ChannelParties(editor.orig.source, editor.orig.destination);
         let ret = self
             .nest_transaction(tx)
             .await?
@@ -208,18 +203,6 @@ impl HoprDbChannelOperations for HoprDb {
                 })
             })
             .await?;
-        self.caches.src_dst_to_channel.invalidate(&parties).await;
-
-        // Finally invalidate any unrealized values from the cache.
-        // This might be a no-op if the channel was not in the cache
-        // like for channels that are not ours.
-        let channel_id = editor.orig.get_id();
-        if let Some(channel_epoch) = epoch.try_as_ref() {
-            self.caches
-                .unrealized_value
-                .invalidate(&(channel_id, U256::from_big_endian(channel_epoch.as_slice())))
-                .await;
-        }
 
         Ok(ret)
     }
@@ -230,12 +213,10 @@ impl HoprDbChannelOperations for HoprDb {
         tx: OptTx<'a>,
         src: &Address,
         dst: &Address,
-        use_cache: bool,
     ) -> Result<Option<ChannelEntry>> {
         let fetch_channel = async move {
             let src_hex = src.to_hex();
             let dst_hex = dst.to_hex();
-            tracing::warn!(%src, %dst, "cache miss on get_channel_by_parties");
             self.nest_transaction(tx)
                 .await?
                 .perform(|tx| {
@@ -257,15 +238,7 @@ impl HoprDbChannelOperations for HoprDb {
                 .await
         };
 
-        if use_cache {
-            Ok(self
-                .caches
-                .src_dst_to_channel
-                .try_get_with(ChannelParties(*src, *dst), fetch_channel)
-                .await?)
-        } else {
             fetch_channel.await
-        }
     }
 
     async fn get_channels_via<'a>(
@@ -346,7 +319,6 @@ impl HoprDbChannelOperations for HoprDb {
         tx: OptTx<'a>,
         channel_entry: ChannelEntry,
     ) -> Result<()> {
-        let parties = ChannelParties(channel_entry.source, channel_entry.destination);
         self.nest_transaction(tx)
             .await?
             .perform(|tx| {
@@ -365,18 +337,6 @@ impl HoprDbChannelOperations for HoprDb {
             })
             .await?;
 
-        self.caches.src_dst_to_channel.invalidate(&parties).await;
-
-        // Finally, invalidate any unrealized values from the cache.
-        // This might be a no-op if the channel was not in the cache
-        // like for channels that are not ours.
-        let channel_id = channel_entry.get_id();
-        let channel_epoch = channel_entry.channel_epoch;
-        self.caches
-            .unrealized_value
-            .invalidate(&(channel_id, channel_epoch))
-            .await;
-
         Ok(())
     }
 }
@@ -392,11 +352,11 @@ mod tests {
     };
     use hopr_primitive_types::prelude::Address;
 
-    use crate::{HoprDbGeneralModelOperations, channels::HoprDbChannelOperations, db::HoprDb};
+    use crate::{BlokliDbGeneralModelOperations, channels::BlokliDbChannelOperations, db::BlokliDb};
 
     #[tokio::test]
     async fn test_insert_get_by_id() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let ce = ChannelEntry::new(
             Address::default(),
@@ -420,7 +380,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_get_by_parties() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let a = Address::from(random_bytes());
         let b = Address::from(random_bytes());
@@ -448,7 +408,7 @@ mod tests {
     #[tokio::test]
     async fn test_channel_get_for_destination_that_does_not_exist_returns_none()
     -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let from_db = db
             .get_channels_via(None, ChannelDirection::Incoming, &Address::default())
@@ -464,7 +424,7 @@ mod tests {
     #[tokio::test]
     async fn test_channel_get_for_destination_that_exists_should_be_returned() -> anyhow::Result<()>
     {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let expected_destination = Address::default();
 
@@ -495,7 +455,7 @@ mod tests {
         let addr_1 = ckp.public().to_address();
         let addr_2 = ChainKeypair::random().public().to_address();
 
-        let db = HoprDb::new_in_memory(ckp).await?;
+        let db = BlokliDb::new_in_memory(ckp).await?;
 
         let ce_1 = ChannelEntry::new(
             addr_1,

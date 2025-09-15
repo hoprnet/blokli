@@ -5,7 +5,7 @@ use blokli_db_api::info::*;
 use blokli_db_entity::{
     chain_info, global_settings, node_info,
     prelude::{
-        Account, Announcement, ChainInfo, Channel, NetworkEligibility, NetworkRegistry, NodeInfo,
+        Account, Announcement, ChainInfo, Channel, NodeInfo,
     },
 };
 use hopr_internal_types::prelude::WinningProbability;
@@ -17,9 +17,8 @@ use sea_orm::{
 use tracing::trace;
 
 use crate::{
-    HoprDbGeneralModelOperations, OptTx, SINGULAR_TABLE_FIXED_ID, TargetDb,
-    cache::{CachedValue, CachedValueDiscriminants},
-    db::HoprDb,
+    BlokliDbGeneralModelOperations, OptTx, SINGULAR_TABLE_FIXED_ID, TargetDb,
+    db::BlokliDb,
     errors::{DbSqlError, DbSqlError::MissingFixedTableEntry, Result},
 };
 
@@ -49,7 +48,7 @@ pub struct IndexerStateInfo {
 /// C_{k+1} = H(C_k || H_{b_{k+1}})
 /// ```
 #[async_trait]
-pub trait HoprDbInfoOperations {
+pub trait BlokliDbInfoOperations {
     /// Checks if the index is empty.
     ///
     /// # Returns
@@ -90,16 +89,15 @@ pub trait HoprDbInfoOperations {
     /// Sets node's Safe addresses info.
     async fn set_safe_info<'a>(&'a self, tx: OptTx<'a>, safe_info: SafeInfo) -> Result<()>;
 
-    /// Gets stored Indexer data (either from the cache or from the DB).
+    /// Gets stored Indexer data.
     ///
     /// To update information stored in [IndexerData], use the individual setter methods,
-    /// such as [`HoprDbInfoOperations::set_domain_separator`]... etc.
+    /// such as [`BlokliDbInfoOperations::set_domain_separator`]... etc.
     async fn get_indexer_data<'a>(&'a self, tx: OptTx<'a>) -> Result<IndexerData>;
 
     /// Sets a domain separator.
     ///
-    /// To retrieve stored domain separator info, use [`HoprDbInfoOperations::get_indexer_data`],
-    /// note that this setter should invalidate the cache.
+    /// To retrieve stored domain separator info, use [`BlokliDbInfoOperations::get_indexer_data`],
     async fn set_domain_separator<'a>(
         &'a self,
         tx: OptTx<'a>,
@@ -116,8 +114,7 @@ pub trait HoprDbInfoOperations {
     ) -> Result<()>;
 
     /// Updates the ticket price.
-    /// To retrieve the stored ticket price, use [`HoprDbInfoOperations::get_indexer_data`],
-    /// note that this setter should invalidate the cache.
+    /// To retrieve the stored ticket price, use [`BlokliDbInfoOperations::get_indexer_data`],
     async fn update_ticket_price<'a>(&'a self, tx: OptTx<'a>, price: HoprBalance) -> Result<()>;
 
     /// Gets the indexer state info.
@@ -125,12 +122,6 @@ pub trait HoprDbInfoOperations {
 
     /// Updates the indexer state info.
     async fn set_indexer_state_info<'a>(&'a self, tx: OptTx<'a>, block_num: u32) -> Result<()>;
-
-    /// Updates the network registry state.
-    /// To retrieve the stored network registry state, use [`HoprDbInfoOperations::get_indexer_data`],
-    /// note that this setter should invalidate the cache.
-    async fn set_network_registry_enabled<'a>(&'a self, tx: OptTx<'a>, enabled: bool)
-    -> Result<()>;
 
     /// Gets global setting value with the given key.
     async fn get_global_setting<'a>(
@@ -152,7 +143,7 @@ pub trait HoprDbInfoOperations {
 }
 
 #[async_trait]
-impl HoprDbInfoOperations for HoprDb {
+impl BlokliDbInfoOperations for BlokliDb {
     async fn index_is_empty(&self) -> Result<bool> {
         let c = self.conn(TargetDb::Index);
 
@@ -169,14 +160,6 @@ impl HoprDbInfoOperations for HoprDb {
             return Ok(false);
         }
 
-        if NetworkEligibility::find().one(c).await?.is_some() {
-            return Ok(false);
-        }
-
-        if NetworkRegistry::find().one(c).await?.is_some() {
-            return Ok(false);
-        }
-
         Ok(true)
     }
 
@@ -188,8 +171,6 @@ impl HoprDbInfoOperations for HoprDb {
                     Account::delete_many().exec(tx.as_ref()).await?;
                     Announcement::delete_many().exec(tx.as_ref()).await?;
                     Channel::delete_many().exec(tx.as_ref()).await?;
-                    NetworkEligibility::delete_many().exec(tx.as_ref()).await?;
-                    NetworkRegistry::delete_many().exec(tx.as_ref()).await?;
                     ChainInfo::delete_many().exec(tx.as_ref()).await?;
                     NodeInfo::delete_many().exec(tx.as_ref()).await?;
 
@@ -292,11 +273,7 @@ impl HoprDbInfoOperations for HoprDb {
 
     async fn get_safe_info<'a>(&'a self, tx: OptTx<'a>) -> Result<Option<SafeInfo>> {
         let myself = self.clone();
-        Ok(self
-            .caches
-            .single_values
-            .try_get_with_by_ref(&CachedValueDiscriminants::SafeInfoCache, async move {
-                myself
+        Ok( myself
                     .nest_transaction(tx)
                     .and_then(|op| {
                         op.perform(|tx| {
@@ -320,8 +297,6 @@ impl HoprDbInfoOperations for HoprDb {
                             Ok(None)
                         }
                     })
-                    .map(CachedValue::SafeInfoCache)
-            })
             .await?
             .try_into()?)
     }
@@ -343,24 +318,12 @@ impl HoprDbInfoOperations for HoprDb {
                 })
             })
             .await?;
-        self.caches
-            .single_values
-            .insert(
-                CachedValueDiscriminants::SafeInfoCache,
-                CachedValue::SafeInfoCache(Some(safe_info)),
-            )
-            .await;
         Ok(())
     }
 
     async fn get_indexer_data<'a>(&'a self, tx: OptTx<'a>) -> Result<IndexerData> {
         let myself = self.clone();
-        Ok(self
-            .caches
-            .single_values
-            .try_get_with_by_ref(&CachedValueDiscriminants::IndexerDataCache, async move {
-                tracing::warn!("cache miss on get_indexer_data");
-                myself
+        Ok(myself
                     .nest_transaction(tx)
                     .and_then(|op| {
                         op.perform(|tx| {
@@ -388,7 +351,7 @@ impl HoprDbInfoOperations for HoprDb {
                                     None
                                 };
 
-                                Ok::<_, DbSqlError>(CachedValue::IndexerDataCache(IndexerData {
+                                Ok::<_, DbSqlError>(IndexerData {
                                     ledger_dst,
                                     safe_registry_dst,
                                     channels_dst,
@@ -399,14 +362,11 @@ impl HoprDbInfoOperations for HoprDb {
                                         .min_incoming_ticket_win_prob
                                         as f64)
                                         .try_into()?,
-                                    nr_enabled: model.network_registry_enabled,
-                                }))
+                                })
                             })
                         })
                     })
                     .await
-            })
-            .await?
             .try_into()?)
     }
 
@@ -445,10 +405,6 @@ impl HoprDbInfoOperations for HoprDb {
             })
             .await?;
 
-        self.caches
-            .single_values
-            .invalidate(&CachedValueDiscriminants::IndexerDataCache)
-            .await;
         Ok(())
     }
 
@@ -474,10 +430,6 @@ impl HoprDbInfoOperations for HoprDb {
             })
             .await?;
 
-        self.caches
-            .single_values
-            .invalidate(&CachedValueDiscriminants::IndexerDataCache)
-            .await;
         Ok(())
     }
 
@@ -499,10 +451,6 @@ impl HoprDbInfoOperations for HoprDb {
             })
             .await?;
 
-        self.caches
-            .single_values
-            .invalidate(&CachedValueDiscriminants::IndexerDataCache)
-            .await;
         Ok(())
     }
 
@@ -551,34 +499,6 @@ impl HoprDbInfoOperations for HoprDb {
                 })
             })
             .await
-    }
-
-    async fn set_network_registry_enabled<'a>(
-        &'a self,
-        tx: OptTx<'a>,
-        enabled: bool,
-    ) -> Result<()> {
-        self.nest_transaction(tx)
-            .await?
-            .perform(|tx| {
-                Box::pin(async move {
-                    chain_info::ActiveModel {
-                        id: Set(SINGULAR_TABLE_FIXED_ID),
-                        network_registry_enabled: Set(enabled),
-                        ..Default::default()
-                    }
-                    .update(tx.as_ref())
-                    .await?;
-                    Ok::<_, DbSqlError>(())
-                })
-            })
-            .await?;
-
-        self.caches
-            .single_values
-            .invalidate(&CachedValueDiscriminants::IndexerDataCache)
-            .await;
-        Ok(())
     }
 
     async fn get_global_setting<'a>(
@@ -647,8 +567,8 @@ mod tests {
     use hopr_primitive_types::{balance::HoprBalance, prelude::Address};
 
     use crate::{
-        db::HoprDb,
-        info::{HoprDbInfoOperations, SafeInfo},
+        db::BlokliDb,
+        info::{BlokliDbInfoOperations, SafeInfo},
     };
 
     lazy_static::lazy_static! {
@@ -658,7 +578,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_get_balance() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         assert_eq!(
             HoprBalance::zero(),
@@ -679,7 +599,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_get_allowance() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         assert_eq!(
             HoprBalance::zero(),
@@ -701,7 +621,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_get_indexer_data() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let data = db.get_indexer_data(None).await?;
         assert_eq!(data.ticket_price, None);
@@ -720,25 +640,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_set_get_safe_info_with_cache() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
-
-        assert_eq!(None, db.get_safe_info(None).await?);
-
-        let safe_info = SafeInfo {
-            safe_address: *ADDR_1,
-            module_address: *ADDR_2,
-        };
-
-        db.set_safe_info(None, safe_info).await?;
-
-        assert_eq!(Some(safe_info), db.get_safe_info(None).await?);
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_set_get_safe_info() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         assert_eq!(None, db.get_safe_info(None).await?);
 
@@ -748,7 +651,6 @@ mod tests {
         };
 
         db.set_safe_info(None, safe_info).await?;
-        db.caches.single_values.invalidate_all();
 
         assert_eq!(Some(safe_info), db.get_safe_info(None).await?);
         Ok(())
@@ -756,7 +658,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_get_global_setting() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let key = "test";
         let value = hex!("deadbeef");

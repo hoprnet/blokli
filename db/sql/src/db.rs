@@ -20,14 +20,13 @@ use tracing::{debug, log::LevelFilter};
 use validator::Validate;
 
 use crate::{
-    HoprDbAllOperations,
+    BlokliDbAllOperations,
     accounts::model_to_account_entry,
-    cache::HoprDbCaches,
     errors::{DbSqlError, Result},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, smart_default::SmartDefault, validator::Validate)]
-pub struct HoprDbConfig {
+pub struct BlokliDbConfig {
     #[default(true)]
     pub create_if_missing: bool,
     #[default(false)]
@@ -63,16 +62,15 @@ impl DbConnection {
 /// - **Logs DB**: Blockchain logs and processing status
 ///
 /// Supports database snapshot imports for fast synchronization via
-/// [`HoprDbGeneralModelOperations::import_logs_db`].
+/// [`BlokliDbGeneralModelOperations::import_logs_db`].
 #[derive(Debug, Clone)]
-pub struct HoprDb {
+pub struct BlokliDb {
     pub(crate) index_db: DbConnection,
     pub(crate) logs_db: sea_orm::DatabaseConnection,
 
-    pub(crate) caches: Arc<HoprDbCaches>,
     pub(crate) chain_key: ChainKeypair,
     pub(crate) me_onchain: Address,
-    pub(crate) cfg: HoprDbConfig,
+    pub(crate) cfg: BlokliDbConfig,
 }
 
 /// Filename for the blockchain-indexing database.
@@ -80,8 +78,8 @@ pub const SQL_DB_INDEX_FILE_NAME: &str = "hopr_index.db";
 /// Filename for the blockchain logs database (used in snapshots).
 pub const SQL_DB_LOGS_FILE_NAME: &str = "hopr_logs.db";
 
-impl HoprDb {
-    pub async fn new(directory: &Path, chain_key: ChainKeypair, cfg: HoprDbConfig) -> Result<Self> {
+impl BlokliDb {
+    pub async fn new(directory: &Path, chain_key: ChainKeypair, cfg: BlokliDbConfig) -> Result<Self> {
         cfg.validate().map_err(|e| {
             DbSqlError::Construction(format!("failed configuration validation: {e}"))
         })?;
@@ -143,12 +141,6 @@ impl HoprDb {
             SqlitePool::connect(":memory:")
                 .await
                 .map_err(|e| DbSqlError::Construction(e.to_string()))?,
-            SqlitePool::connect(":memory:")
-                .await
-                .map_err(|e| DbSqlError::Construction(e.to_string()))?,
-            SqlitePool::connect(":memory:")
-                .await
-                .map_err(|e| DbSqlError::Construction(e.to_string()))?,
             Default::default(),
         )
         .await
@@ -160,7 +152,7 @@ impl HoprDb {
         index_db_pool: SqlitePool,
         index_db_ro_pool: SqlitePool,
         logs_db_pool: SqlitePool,
-        cfg: HoprDbConfig,
+        cfg: BlokliDbConfig,
     ) -> Result<Self> {
         let index_db_rw = SqlxSqliteConnector::from_sqlx_sqlite_pool(index_db_pool);
         let index_db_ro = SqlxSqliteConnector::from_sqlx_sqlite_pool(index_db_ro_pool);
@@ -175,9 +167,6 @@ impl HoprDb {
             DbSqlError::Construction(format!("cannot apply database migration: {e}"))
         })?;
 
-        let caches = Arc::new(HoprDbCaches::default());
-        caches.invalidate_all();
-
         // Initialize KeyId mapping for accounts
         Account::find()
             .find_with_related(Announcement)
@@ -185,7 +174,10 @@ impl HoprDb {
             .await?
             .into_iter()
             .try_for_each(|(a, b)| match model_to_account_entry(a, b) {
-                Ok(account) => caches.key_id_mapper.update_key_id_binding(&account),
+                Ok(account) => {
+                    // FIXME: update key id mapper
+                    Ok(())
+                }
                 Err(error) => {
                     // Undecodeable accounts are skipped and will be unreachable
                     tracing::error!(%error, "undecodeable account");
@@ -196,7 +188,6 @@ impl HoprDb {
         Ok(Self {
             me_onchain: chain_key.public().to_address(),
             chain_key,
-            caches,
 
             index_db: DbConnection {
                 ro: index_db_ro,
@@ -208,7 +199,7 @@ impl HoprDb {
     }
 
     /// Default SQLite config values for all DBs with RW  (read-write) access.
-    fn common_connection_cfg_rw(cfg: HoprDbConfig) -> SqliteConnectOptions {
+    fn common_connection_cfg_rw(cfg: BlokliDbConfig) -> SqliteConnectOptions {
         SqliteConnectOptions::default()
             .create_if_missing(cfg.create_if_missing)
             .log_slow_statements(LevelFilter::Warn, cfg.log_slow_queries)
@@ -223,7 +214,7 @@ impl HoprDb {
     }
 
     /// Default SQLite config values for all DBs with RO (read-only) access.
-    fn common_connection_cfg_ro(cfg: HoprDbConfig) -> SqliteConnectOptions {
+    fn common_connection_cfg_ro(cfg: BlokliDbConfig) -> SqliteConnectOptions {
         SqliteConnectOptions::default()
             .create_if_missing(cfg.create_if_missing)
             .log_slow_statements(LevelFilter::Warn, cfg.log_slow_queries)
@@ -236,7 +227,7 @@ impl HoprDb {
     }
 
     pub async fn create_pool(
-        cfg: HoprDbConfig,
+        cfg: BlokliDbConfig,
         directory: PathBuf,
         mut options: PoolOptions<sqlx::Sqlite>,
         min_conn: Option<u32>,
@@ -268,7 +259,7 @@ impl HoprDb {
     }
 }
 
-impl HoprDbAllOperations for HoprDb {}
+impl BlokliDbAllOperations for BlokliDb {}
 
 #[cfg(test)]
 mod tests {
@@ -282,11 +273,11 @@ mod tests {
     use multiaddr::Multiaddr;
     use rand::{Rng, distributions::Alphanumeric};
 
-    use crate::{HoprDbGeneralModelOperations, TargetDb, db::HoprDb}; // 0.8
+    use crate::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb}; // 0.8
 
     #[tokio::test]
     async fn test_basic_db_init() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         // NOTE: cfg-if this on Postgres to do only `Migrator::status(db.conn(Default::default)).await.expect("status
         // must be ok");`

@@ -6,10 +6,10 @@ pub mod errors;
 pub mod info;
 pub mod logs;
 
-use crate::logs::HoprDbLogOperations;
+use crate::logs::BlokliDbLogOperations;
 
 /// Convenience trait that contains all HOPR DB operation interfaces.
-pub trait HoprDbAllAbstractedOperations: HoprDbLogOperations {}
+pub trait BlokliDbAllAbstractedOperations: BlokliDbLogOperations {}
 
 #[doc(hidden)]
 pub mod prelude {

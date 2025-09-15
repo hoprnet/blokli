@@ -5,7 +5,6 @@
 //! and supports importing logs database snapshots for fast synchronization.
 
 pub mod accounts;
-mod cache;
 pub mod channels;
 pub mod corrupted_channels;
 pub mod db;
@@ -18,17 +17,17 @@ use std::path::PathBuf;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
 pub use blokli_db_api as api;
-use blokli_db_api::logs::HoprDbLogOperations;
+use blokli_db_api::logs::BlokliDbLogOperations;
 use sea_orm::{ConnectionTrait, TransactionTrait};
 pub use sea_orm::{DatabaseConnection, DatabaseTransaction};
 
 use crate::{
-    accounts::HoprDbAccountOperations,
-    channels::HoprDbChannelOperations,
-    corrupted_channels::HoprDbCorruptedChannelOperations,
-    db::HoprDb,
+    accounts::BlokliDbAccountOperations,
+    channels::BlokliDbChannelOperations,
+    corrupted_channels::BlokliDbCorruptedChannelOperations,
+    db::BlokliDb,
     errors::{DbSqlError, Result},
-    info::HoprDbInfoOperations,
+    info::BlokliDbInfoOperations,
 };
 
 /// Primary key used in tables that contain only a single row.
@@ -96,7 +95,7 @@ impl From<OpenTransaction> for DatabaseTransaction {
 }
 
 /// Shorthand for optional transaction.
-/// Useful for transaction nesting (see [`HoprDbGeneralModelOperations::nest_transaction`]).
+/// Useful for transaction nesting (see [`BlokliDbGeneralModelOperations::nest_transaction`]).
 pub type OptTx<'a> = Option<&'a OpenTransaction>;
 
 /// When Sqlite is used as a backend, model needs to be split
@@ -112,11 +111,11 @@ pub enum TargetDb {
 }
 
 #[async_trait]
-pub trait HoprDbGeneralModelOperations {
+pub trait BlokliDbGeneralModelOperations {
     /// Returns reference to the database connection.
     /// Can be used in case transaction is not needed, but
-    /// users should aim to use [`HoprDbGeneralModelOperations::begin_transaction`]
-    /// and [`HoprDbGeneralModelOperations::nest_transaction`] as much as possible.
+    /// users should aim to use [`BlokliDbGeneralModelOperations::begin_transaction`]
+    /// and [`BlokliDbGeneralModelOperations::nest_transaction`] as much as possible.
     fn conn(&self, target_db: TargetDb) -> &DatabaseConnection;
 
     /// Creates a new transaction.
@@ -155,8 +154,8 @@ pub trait HoprDbGeneralModelOperations {
     ///
     /// ```no_run
     /// # use std::path::PathBuf;
-    /// # use blokli_db_sql::HoprDbGeneralModelOperations;
-    /// # async fn example(db: impl HoprDbGeneralModelOperations) -> Result<(), Box<dyn std::error::Error>> {
+    /// # use blokli_db_sql::BlokliDbGeneralModelOperations;
+    /// # async fn example(db: impl BlokliDbGeneralModelOperations) -> Result<(), Box<dyn std::error::Error>> {
     /// let snapshot_dir = PathBuf::from("/tmp/snapshot_extracted");
     /// db.import_logs_db(snapshot_dir).await?;
     /// # Ok(())
@@ -164,14 +163,14 @@ pub trait HoprDbGeneralModelOperations {
     /// ```
     async fn import_logs_db(self, src_dir: PathBuf) -> Result<()>;
 
-    /// Same as [`HoprDbGeneralModelOperations::begin_transaction_in_db`] with default [TargetDb].
+    /// Same as [`BlokliDbGeneralModelOperations::begin_transaction_in_db`] with default [TargetDb].
     async fn begin_transaction(&self) -> Result<OpenTransaction> {
         self.begin_transaction_in_db(Default::default()).await
     }
 
     /// Creates a nested transaction inside the given transaction.
     ///
-    /// If `None` is given, behaves exactly as [`HoprDbGeneralModelOperations::begin_transaction`].
+    /// If `None` is given, behaves exactly as [`BlokliDbGeneralModelOperations::begin_transaction`].
     ///
     /// This method is useful for creating APIs that should be agnostic whether they are being
     /// run from an existing transaction or without it (via [OptTx]).
@@ -194,14 +193,14 @@ pub trait HoprDbGeneralModelOperations {
         }
     }
 
-    /// Same as [`HoprDbGeneralModelOperations::nest_transaction_in_db`] with default [TargetDb].
+    /// Same as [`BlokliDbGeneralModelOperations::nest_transaction_in_db`] with default [TargetDb].
     async fn nest_transaction(&self, tx: OptTx<'_>) -> Result<OpenTransaction> {
         self.nest_transaction_in_db(tx, Default::default()).await
     }
 }
 
 #[async_trait]
-impl HoprDbGeneralModelOperations for HoprDb {
+impl BlokliDbGeneralModelOperations for BlokliDb {
     /// Retrieves raw database connection to the given [DB](TargetDb).
     fn conn(&self, target_db: TargetDb) -> &DatabaseConnection {
         match target_db {
@@ -266,13 +265,13 @@ impl HoprDbGeneralModelOperations for HoprDb {
 }
 
 /// Convenience trait that contain all HOPR DB operations crates.
-pub trait HoprDbAllOperations:
-    HoprDbGeneralModelOperations
-    + HoprDbAccountOperations
-    + HoprDbChannelOperations
-    + HoprDbCorruptedChannelOperations
-    + HoprDbInfoOperations
-    + HoprDbLogOperations
+pub trait BlokliDbAllOperations:
+    BlokliDbGeneralModelOperations
+    + BlokliDbAccountOperations
+    + BlokliDbChannelOperations
+    + BlokliDbCorruptedChannelOperations
+    + BlokliDbInfoOperations
+    + BlokliDbLogOperations
 {
 }
 

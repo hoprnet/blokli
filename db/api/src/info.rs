@@ -1,10 +1,10 @@
 use hopr_crypto_types::prelude::Hash;
+use hopr_primitive_types::prelude::HoprBalance;
+use hopr_primitive_types::prelude::Address;
 use hopr_internal_types::prelude::WinningProbability;
-use hopr_primitive_types::prelude::*;
 
 /// Contains various on-chain information collected by Indexer,
-/// such as domain separators, ticket price, Network Registry status...etc.
-/// All these members change very rarely and therefore can be cached.
+/// such as domain separators, ticket price, ...etc.
 #[derive(Clone, Copy, Debug)]
 pub struct IndexerData {
     /// Ledger smart contract domain separator
@@ -17,8 +17,6 @@ pub struct IndexerData {
     pub ticket_price: Option<HoprBalance>,
     /// Minimum winning probability
     pub minimum_incoming_ticket_winning_prob: WinningProbability,
-    /// Network registry state
-    pub nr_enabled: bool,
 }
 
 impl IndexerData {

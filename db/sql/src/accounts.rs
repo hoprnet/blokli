@@ -19,8 +19,8 @@ use sea_query::{Condition, IntoCondition, OnConflict};
 use tracing::instrument;
 
 use crate::{
-    HoprDbGeneralModelOperations, OptTx,
-    db::HoprDb,
+    BlokliDbGeneralModelOperations, OptTx,
+    db::BlokliDb,
     errors::{DbSqlError, DbSqlError::MissingAccount, Result},
 };
 
@@ -86,7 +86,7 @@ impl IntoCondition for ChainOrPacketKey {
 /// Accounts store the Chain and Packet key information, so as the
 /// routable network information if the account has been announced as well.
 #[async_trait]
-pub trait HoprDbAccountOperations {
+pub trait BlokliDbAccountOperations {
     /// Retrieves the account entry using a Packet key or Chain key.
     async fn get_account<'a, T>(&'a self, tx: OptTx<'a>, key: T) -> Result<Option<AccountEntry>>
     where
@@ -113,13 +113,13 @@ pub trait HoprDbAccountOperations {
     /// If an account matching the given `key` (chain or off-chain key) does not exist, an
     /// error is returned.
     /// If such `multiaddr` has been already announced for the given account `key`, only
-    /// the `at_block` will be updated on that announcement.
+    /// the `published_block` will be updated on that announcement.
     async fn insert_announcement<'a, T>(
         &'a self,
         tx: OptTx<'a>,
         key: T,
         multiaddr: Multiaddr,
-        at_block: u32,
+        published_block: u32,
     ) -> Result<AccountEntry>
     where
         T: Into<ChainOrPacketKey> + Send + Sync;
@@ -158,7 +158,7 @@ pub(crate) fn model_to_account_entry(
     Ok(AccountEntry {
         public_key: OffchainPublicKey::from_hex(&account.packet_key)?,
         chain_addr: account.chain_key.parse()?,
-        published_at: account.published_at as u32,
+        published_at: account.published_block as u32,
         entry_type: match announcement {
             None => AccountType::NotAnnounced,
             Some(a) => AccountType::Announced {
@@ -166,14 +166,14 @@ pub(crate) fn model_to_account_entry(
                     .multiaddress
                     .parse()
                     .map_err(|_| DbSqlError::DecodingError)?,
-                updated_block: a.at_block as u32,
+                updated_block: a.published_block as u32,
             },
         },
     })
 }
 
 #[async_trait]
-impl HoprDbAccountOperations for HoprDb {
+impl BlokliDbAccountOperations for BlokliDb {
     async fn get_account<'a, T: Into<ChainOrPacketKey> + Send + Sync>(
         &'a self,
         tx: OptTx<'a>,
@@ -244,7 +244,7 @@ impl HoprDbAccountOperations for HoprDb {
                     match account::Entity::insert(account::ActiveModel {
                         chain_key: Set(account.chain_addr.to_hex()),
                         packet_key: Set(account.public_key.to_hex()),
-                        published_at: Set(account.published_at as i32),
+                        published_block: Set(account.published_block as i32),
                         ..Default::default()
                     })
                     .on_conflict(
@@ -260,25 +260,11 @@ impl HoprDbAccountOperations for HoprDb {
                     {
                         // Proceed if succeeded or already exists
                         res @ Ok(_) | res @ Err(DbErr::RecordNotInserted) => {
-                            myself
-                                .caches
-                                .chain_to_offchain
-                                .insert(account.chain_addr, Some(account.public_key))
-                                .await;
-                            myself
-                                .caches
-                                .offchain_to_chain
-                                .insert(account.public_key, Some(account.chain_addr))
-                                .await;
-
                             // Update key-id binding only if the account was inserted successfully
                             // (= not re-announced)
                             if res.is_ok() {
-                                if let Err(error) =
-                                    myself.caches.key_id_mapper.update_key_id_binding(&account)
-                                {
+                                // FIXME: update key id binding
                                     tracing::warn!(?account, %error, "keybinding not updated")
-                                }
                             }
 
                             if let AccountType::Announced {
@@ -310,7 +296,7 @@ impl HoprDbAccountOperations for HoprDb {
         tx: OptTx<'a>,
         key: T,
         multiaddr: Multiaddr,
-        at_block: u32,
+        published_block: u32,
     ) -> Result<AccountEntry>
     where
         T: Into<ChainOrPacketKey> + Send + Sync,
@@ -339,7 +325,7 @@ impl HoprDbAccountOperations for HoprDb {
                     {
                         let mut existing_announcement =
                             existing_announcements.remove(index).into_active_model();
-                        existing_announcement.at_block = Set(at_block as i32);
+                        existing_announcement.published_block = Set(published_block as i32);
                         let updated_announcement =
                             existing_announcement.update(tx.as_ref()).await?;
 
@@ -349,7 +335,7 @@ impl HoprDbAccountOperations for HoprDb {
                         let new_announcement = announcement::ActiveModel {
                             account_id: Set(existing_account.id),
                             multiaddress: Set(multiaddr.to_string()),
-                            at_block: Set(at_block as i32),
+                            published_block: Set(published_block as i32),
                             ..Default::default()
                         }
                         .insert(tx.as_ref())
@@ -413,16 +399,6 @@ impl HoprDbAccountOperations for HoprDb {
                         let account_entry = model_to_account_entry(entry.clone(), vec![])?;
                         entry.delete(tx.as_ref()).await?;
 
-                        myself
-                            .caches
-                            .chain_to_offchain
-                            .invalidate(&account_entry.chain_addr)
-                            .await;
-                        myself
-                            .caches
-                            .offchain_to_chain
-                            .invalidate(&account_entry.public_key)
-                            .await;
                         Ok::<_, DbSqlError>(())
                     } else {
                         Err(MissingAccount)
@@ -440,12 +416,7 @@ impl HoprDbAccountOperations for HoprDb {
     ) -> Result<Option<ChainOrPacketKey>> {
         Ok(match key.into() {
             ChainOrPacketKey::ChainKey(chain_key) => self
-                .caches
-                .chain_to_offchain
-                .try_get_with_by_ref(
-                    &chain_key,
-                    self.nest_transaction(tx).and_then(|op| {
-                        tracing::warn!(?chain_key, "cache miss on chain key lookup");
+                    nest_transaction(tx).and_then(|op| {
                         op.perform(|tx| {
                             Box::pin(async move {
                                 let maybe_model = Account::find()
@@ -459,17 +430,10 @@ impl HoprDbAccountOperations for HoprDb {
                                 }
                             })
                         })
-                    }),
-                )
+                    })
                 .await?
                 .map(ChainOrPacketKey::PacketKey),
-            ChainOrPacketKey::PacketKey(packet_key) => self
-                .caches
-                .offchain_to_chain
-                .try_get_with_by_ref(
-                    &packet_key,
-                    self.nest_transaction(tx).and_then(|op| {
-                        tracing::warn!(?packet_key, "cache miss on packet key lookup");
+            ChainOrPacketKey::PacketKey(packet_key) => self.nest_transaction(tx).and_then(|op| {
                         op.perform(|tx| {
                             Box::pin(async move {
                                 let maybe_model = Account::find()
@@ -483,8 +447,7 @@ impl HoprDbAccountOperations for HoprDb {
                                 }
                             })
                         })
-                    }),
-                )
+                    })
                 .await?
                 .map(ChainOrPacketKey::ChainKey),
         })
@@ -499,13 +462,13 @@ mod tests {
 
     use super::*;
     use crate::{
-        HoprDbGeneralModelOperations,
+        BlokliDbGeneralModelOperations,
         errors::{DbSqlError, DbSqlError::DecodingError},
     };
 
     #[tokio::test]
     async fn test_insert_account_announcement() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let chain_1 = ChainKeypair::random().public().to_address();
         let packet_1 = *OffchainKeypair::random().public();
@@ -515,7 +478,7 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_at: 1,
+                published_block: 1,
                 entry_type: AccountType::NotAnnounced,
             },
         )
@@ -527,7 +490,7 @@ mod tests {
             .expect("should contain account");
         assert_eq!(packet_1, acc.public_key, "pub keys must match");
         assert_eq!(AccountType::NotAnnounced, acc.entry_type.clone());
-        assert_eq!(1, acc.published_at);
+        assert_eq!(1, acc.published_block);
 
         let maddr: Multiaddr = "/ip4/1.2.3.4/tcp/8000".parse()?;
         let block = 100;
@@ -580,7 +543,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_should_allow_reannouncement() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let chain_1 = ChainKeypair::random().public().to_address();
         let packet_1 = *OffchainKeypair::random().public();
@@ -590,7 +553,7 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_at: 1,
+                published_block: 1,
                 entry_type: AccountType::NotAnnounced,
             },
         )
@@ -622,7 +585,7 @@ mod tests {
     #[tokio::test]
     async fn test_should_not_insert_account_announcement_to_nonexisting_account()
     -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let chain_1 = ChainKeypair::random().public().to_address();
 
@@ -643,7 +606,7 @@ mod tests {
     #[tokio::test]
     async fn test_should_allow_duplicate_announcement_per_different_accounts() -> anyhow::Result<()>
     {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let chain_1 = ChainKeypair::random().public().to_address();
         let packet_1 = *OffchainKeypair::random().public();
@@ -653,7 +616,7 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_at: 1,
+                published_block: 1,
                 entry_type: AccountType::NotAnnounced,
             },
         )
@@ -667,7 +630,7 @@ mod tests {
             AccountEntry {
                 public_key: packet_2,
                 chain_addr: chain_2,
-                published_at: 2,
+                published_block: 2,
                 entry_type: AccountType::NotAnnounced,
             },
         )
@@ -712,7 +675,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_account() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let packet_1 = *OffchainKeypair::random().public();
         let chain_1 = ChainKeypair::random().public().to_address();
@@ -721,7 +684,7 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_at: 1,
+                published_block: 1,
                 entry_type: AccountType::Announced {
                     multiaddr: "/ip4/1.2.3.4/tcp/1234".parse()?,
                     updated_block: 10,
@@ -741,7 +704,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_should_fail_to_delete_nonexistent_account() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let chain_1 = ChainKeypair::random().public().to_address();
 
@@ -756,7 +719,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_should_not_fail_on_duplicate_account_insert() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let chain_1 = ChainKeypair::random().public().to_address();
         let packet_1 = *OffchainKeypair::random().public();
@@ -766,7 +729,7 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_at: 1,
+                published_block: 1,
                 entry_type: AccountType::NotAnnounced,
             },
         )
@@ -777,7 +740,7 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_at: 1,
+                published_block: 1,
                 entry_type: AccountType::NotAnnounced,
             },
         )
@@ -788,14 +751,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_announcements() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let packet_1 = *OffchainKeypair::random().public();
         let chain_1 = ChainKeypair::random().public().to_address();
         let mut entry = AccountEntry {
             public_key: packet_1,
             chain_addr: chain_1,
-            published_at: 1,
+            published_block: 1,
             entry_type: AccountType::Announced {
                 multiaddr: "/ip4/1.2.3.4/tcp/1234".parse()?,
                 updated_block: 10,
@@ -817,7 +780,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_should_fail_to_delete_nonexistent_account_announcements() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let chain_1 = ChainKeypair::random().public().to_address();
 
@@ -832,7 +795,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_translate_key() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let chain_1 = ChainKeypair::random().public().to_address();
         let packet_1 = *OffchainKeypair::random().public();
@@ -851,7 +814,7 @@ mod tests {
                             AccountEntry {
                                 public_key: packet_1,
                                 chain_addr: chain_1,
-                                published_at: 1,
+                                published_block: 1,
                                 entry_type: AccountType::NotAnnounced,
                             },
                         )
@@ -862,7 +825,7 @@ mod tests {
                             AccountEntry {
                                 public_key: packet_2,
                                 chain_addr: chain_2,
-                                published_at: 2,
+                                published_block: 2,
                                 entry_type: AccountType::NotAnnounced,
                             },
                         )
@@ -891,8 +854,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_translate_key_no_cache() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+    async fn test_translate_key() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let chain_1 = ChainKeypair::random().public().to_address();
         let packet_1 = *OffchainKeypair::random().public();
@@ -911,7 +874,7 @@ mod tests {
                             AccountEntry {
                                 public_key: packet_1,
                                 chain_addr: chain_1,
-                                published_at: 1,
+                                published_block: 1,
                                 entry_type: AccountType::NotAnnounced,
                             },
                         )
@@ -922,7 +885,7 @@ mod tests {
                             AccountEntry {
                                 public_key: packet_2,
                                 chain_addr: chain_2,
-                                published_at: 2,
+                                published_block: 2,
                                 entry_type: AccountType::NotAnnounced,
                             },
                         )
@@ -931,8 +894,6 @@ mod tests {
                 })
             })
             .await?;
-
-        db.caches.invalidate_all();
 
         let a: Address = db
             .translate_key(None, packet_1)
@@ -954,7 +915,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_accounts() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let chain_1 = ChainKeypair::random().public().to_address();
         let chain_2 = ChainKeypair::random().public().to_address();
@@ -972,7 +933,7 @@ mod tests {
                                 public_key: *OffchainKeypair::random().public(),
                                 chain_addr: chain_1,
                                 entry_type: AccountType::NotAnnounced,
-                                published_at: 1,
+                                published_block: 1,
                             },
                         )
                         .await?;
@@ -988,7 +949,7 @@ mod tests {
                                         .map_err(|_| DecodingError)?,
                                     updated_block: 10,
                                 },
-                                published_at: 2,
+                                published_block: 2,
                             },
                         )
                         .await?;
@@ -999,7 +960,7 @@ mod tests {
                                 public_key: *OffchainKeypair::random().public(),
                                 chain_addr: chain_3,
                                 entry_type: AccountType::NotAnnounced,
-                                published_at: 3,
+                                published_block: 3,
                             },
                         )
                         .await?;

@@ -7,14 +7,14 @@ use hopr_primitive_types::prelude::*;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 
 use crate::{
-    HoprDbGeneralModelOperations, OptTx,
-    db::HoprDb,
+    BlokliDbGeneralModelOperations, OptTx,
+    db::BlokliDb,
     errors::{DbSqlError, Result},
 };
 
 /// Defines DB API for accessing information about HOPR payment channels.
 #[async_trait]
-pub trait HoprDbCorruptedChannelOperations {
+pub trait BlokliDbCorruptedChannelOperations {
     /// Retrieves corrupted channel by its channel ID hash.
     ///
     /// See [generate_channel_id] on how to generate a channel ID hash from source and destination [Addresses](Address).
@@ -39,7 +39,7 @@ pub trait HoprDbCorruptedChannelOperations {
 }
 
 #[async_trait]
-impl HoprDbCorruptedChannelOperations for HoprDb {
+impl BlokliDbCorruptedChannelOperations for BlokliDb {
     async fn get_corrupted_channel_by_id<'a>(
         &'a self,
         tx: OptTx<'a>,
@@ -125,11 +125,11 @@ mod tests {
     use hopr_crypto_random::random_bytes;
     use hopr_crypto_types::{keypairs::ChainKeypair, prelude::Keypair, types::Hash};
 
-    use crate::{corrupted_channels::HoprDbCorruptedChannelOperations, db::HoprDb};
+    use crate::{corrupted_channels::BlokliDbCorruptedChannelOperations, db::BlokliDb};
 
     #[tokio::test]
     async fn test_insert_get_by_id() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let channel_id = Hash::from(random_bytes());
 
@@ -147,7 +147,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_duplicates_should_not_insert() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
         let channel_id = Hash::from(random_bytes());
 
         db.upsert_corrupted_channel(None, channel_id)

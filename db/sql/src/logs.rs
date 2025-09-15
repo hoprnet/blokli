@@ -3,7 +3,7 @@ use futures::{StreamExt, stream};
 use hopr_crypto_types::prelude::Hash;
 use blokli_db_api::{
     errors::{DbError, Result},
-    logs::HoprDbLogOperations,
+    logs::BlokliDbLogOperations,
 };
 use blokli_db_entity::{
     errors::DbEntityError,
@@ -20,7 +20,7 @@ use sea_orm::{
 };
 use tracing::{error, trace, warn};
 
-use crate::{HoprDbGeneralModelOperations, TargetDb, db::HoprDb, errors::DbSqlError};
+use crate::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, errors::DbSqlError};
 
 #[derive(FromQueryResult)]
 struct BlockNumber {
@@ -28,7 +28,7 @@ struct BlockNumber {
 }
 
 #[async_trait]
-impl HoprDbLogOperations for HoprDb {
+impl BlokliDbLogOperations for BlokliDb {
     async fn store_log<'a>(&'a self, log: SerializableLog) -> Result<()> {
         match self.store_logs([log].to_vec()).await {
             Ok(results) => {
@@ -499,7 +499,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_single_log() {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await.unwrap();
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await.unwrap();
 
         let log = SerializableLog {
             address: Address::new(b"my address 123456789"),
@@ -525,7 +525,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_multiple_logs() {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await.unwrap();
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await.unwrap();
 
         let log_1 = SerializableLog {
             address: Address::new(b"my address 123456789"),
@@ -574,7 +574,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_duplicate_log() {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await.unwrap();
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await.unwrap();
 
         let log = SerializableLog {
             address: Address::new(b"my address 123456789"),
@@ -602,7 +602,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_log_processed() {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await.unwrap();
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await.unwrap();
 
         let log = SerializableLog {
             address: Address::new(b"my address 123456789"),
@@ -640,7 +640,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_logs_ordered() {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await.unwrap();
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await.unwrap();
 
         let logs_per_tx = 3;
         let tx_per_block = 3;
@@ -706,7 +706,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_nonexistent_log() {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await.unwrap();
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await.unwrap();
 
         let result = db.get_log(999, 999, 999).await;
 
@@ -715,7 +715,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_logs_with_block_offset() {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await.unwrap();
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await.unwrap();
 
         let log_1 = SerializableLog {
             address: Address::new(b"my address 123456789"),
@@ -759,7 +759,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_logs_unprocessed() {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await.unwrap();
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await.unwrap();
 
         let log = SerializableLog {
             address: Address::new(b"my address 123456789"),
@@ -791,7 +791,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_logs_block_numbers() {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await.unwrap();
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await.unwrap();
 
         let log_1 = SerializableLog {
             address: Address::new(b"my address 123456789"),
@@ -876,7 +876,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_logs_checksums() {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await.unwrap();
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await.unwrap();
 
         // insert first log and update checksum
         let log_1 = SerializableLog {
@@ -950,7 +950,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_should_not_allow_inconsistent_logs_in_the_db() -> anyhow::Result<()> {
-        let db = HoprDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
         let addr_1 = Address::new(b"my address 123456789");
         let addr_2 = Address::new(b"my 2nd address 12345");
         let topic_1 = Hash::create(&[b"my topic 1"]);

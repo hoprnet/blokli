@@ -5,7 +5,7 @@ use hopr_primitive_types::prelude::{Address, SerializableLog};
 use crate::errors::Result;
 
 #[async_trait]
-pub trait HoprDbLogOperations {
+pub trait BlokliDbLogOperations {
     /// Ensures that logs in this database have been created by scanning the given contract address
     /// and their corresponding topics. If the log DB is empty, the given addresses and topics
     /// are used to prime the table.
