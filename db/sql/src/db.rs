@@ -1,22 +1,20 @@
 use std::{
     fs,
     path::{Path, PathBuf},
-    sync::Arc,
     time::Duration,
 };
 
-use hopr_crypto_types::{keypairs::Keypair, prelude::ChainKeypair};
 use blokli_db_entity::prelude::{Account, Announcement};
+use hopr_crypto_types::{keypairs::Keypair, prelude::ChainKeypair};
 use hopr_primitive_types::primitives::Address;
 use migration::{MigratorChainLogs, MigratorIndex, MigratorTrait};
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, SqlxSqliteConnector};
-use sea_query::Expr;
+use sea_orm::{EntityTrait, SqlxSqliteConnector};
 use sqlx::{
     ConnectOptions, SqlitePool,
     pool::PoolOptions,
     sqlite::{SqliteAutoVacuum, SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
 };
-use tracing::{debug, log::LevelFilter};
+use tracing::log::LevelFilter;
 use validator::Validate;
 
 use crate::{
@@ -68,8 +66,10 @@ pub struct BlokliDb {
     pub(crate) index_db: DbConnection,
     pub(crate) logs_db: sea_orm::DatabaseConnection,
 
+    #[allow(dead_code)]
     pub(crate) chain_key: ChainKeypair,
     pub(crate) me_onchain: Address,
+    #[allow(dead_code)]
     pub(crate) cfg: BlokliDbConfig,
 }
 
@@ -79,7 +79,11 @@ pub const SQL_DB_INDEX_FILE_NAME: &str = "hopr_index.db";
 pub const SQL_DB_LOGS_FILE_NAME: &str = "hopr_logs.db";
 
 impl BlokliDb {
-    pub async fn new(directory: &Path, chain_key: ChainKeypair, cfg: BlokliDbConfig) -> Result<Self> {
+    pub async fn new(
+        directory: &Path,
+        chain_key: ChainKeypair,
+        cfg: BlokliDbConfig,
+    ) -> Result<Self> {
         cfg.validate().map_err(|e| {
             DbSqlError::Construction(format!("failed configuration validation: {e}"))
         })?;
@@ -174,7 +178,7 @@ impl BlokliDb {
             .await?
             .into_iter()
             .try_for_each(|(a, b)| match model_to_account_entry(a, b) {
-                Ok(account) => {
+                Ok(_account) => {
                     // FIXME: update key id mapper
                     Ok::<(), DbSqlError>(())
                 }

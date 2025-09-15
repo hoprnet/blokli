@@ -106,12 +106,12 @@ panic = "abort"
 
 # this profile focuses on the speed of compilation
 [profile.candidate]
-codegen-units = 16   # normal release default
-inherits = "release"
-lto = false          # do the smallest amount of link-time optimization
-opt-level = 2
-panic = "abort"
-strip = true
+codegen-units = 16        # normal release default
+inherits      = "release"
+lto           = false     # do the smallest amount of link-time optimization
+opt-level     = 2
+panic         = "abort"
+strip         = true
 
 # perform minimal optimizations to prevent stack overflows in large tests
 [profile.test]
@@ -120,7 +120,7 @@ opt-level = 1
 # this profile focuses on the best runtime performance and the smallest binary size
 [profile.release]
 codegen-units = 1
-lto = "fat"
-opt-level = 3
-panic = "abort"
-strip = true
+lto           = "fat"
+opt-level     = 3
+panic         = "abort"
+strip         = true

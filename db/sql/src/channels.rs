@@ -1,7 +1,7 @@
 use async_trait::async_trait;
+use blokli_db_entity::{channel, conversions::channels::ChannelStatusUpdate, prelude::Channel};
 use futures::{StreamExt, TryStreamExt, stream::BoxStream};
 use hopr_crypto_types::prelude::*;
-use blokli_db_entity::{channel, conversions::channels::ChannelStatusUpdate, prelude::Channel};
 use hopr_internal_types::prelude::*;
 use hopr_primitive_types::prelude::*;
 use sea_orm::{
@@ -183,7 +183,7 @@ impl BlokliDbChannelOperations for BlokliDb {
         tx: OptTx<'a>,
         editor: ChannelEditor,
     ) -> Result<Option<ChannelEntry>> {
-        let epoch = editor.model.epoch.clone();
+        let _epoch = editor.model.epoch.clone();
 
         let ret = self
             .nest_transaction(tx)
@@ -238,7 +238,7 @@ impl BlokliDbChannelOperations for BlokliDb {
                 .await
         };
 
-            fetch_channel.await
+        fetch_channel.await
     }
 
     async fn get_channels_via<'a>(
@@ -352,7 +352,9 @@ mod tests {
     };
     use hopr_primitive_types::prelude::Address;
 
-    use crate::{BlokliDbGeneralModelOperations, channels::BlokliDbChannelOperations, db::BlokliDb};
+    use crate::{
+        BlokliDbGeneralModelOperations, channels::BlokliDbChannelOperations, db::BlokliDb,
+    };
 
     #[tokio::test]
     async fn test_insert_get_by_id() -> anyhow::Result<()> {

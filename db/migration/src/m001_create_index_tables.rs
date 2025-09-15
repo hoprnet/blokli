@@ -72,7 +72,12 @@ impl MigrationTrait for Migration {
                     )
                     .col(ColumnDef::new(Account::ChainKey).string_len(40).not_null())
                     .col(ColumnDef::new(Account::PacketKey).string_len(64).not_null())
-                    .col(ColumnDef::new(Account::PublishedBlock).unsigned().not_null().default(0))
+                    .col(
+                        ColumnDef::new(Account::PublishedBlock)
+                            .unsigned()
+                            .not_null()
+                            .default(0),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -101,7 +106,12 @@ impl MigrationTrait for Migration {
                             .binary()
                             .not_null(),
                     )
-                    .col(ColumnDef::new(Announcement::PublishedBlock).unsigned().not_null().default(0))
+                    .col(
+                        ColumnDef::new(Announcement::PublishedBlock)
+                            .unsigned()
+                            .not_null()
+                            .default(0),
+                    )
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_announcement_account_id")
@@ -306,7 +316,7 @@ enum ChainInfo {
     SafeRegistryDST,
     ChainChecksum,
     PreChecksumBlock,
-    MinIncomingTicketWinProb
+    MinIncomingTicketWinProb,
 }
 
 #[derive(DeriveIden)]

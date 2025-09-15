@@ -1,10 +1,10 @@
 use async_trait::async_trait;
-use futures::TryFutureExt;
-use hopr_crypto_types::prelude::OffchainPublicKey;
 use blokli_db_entity::{
     account, announcement,
     prelude::{Account, Announcement},
 };
+use futures::TryFutureExt;
+use hopr_crypto_types::prelude::OffchainPublicKey;
 use hopr_internal_types::{account::AccountType, prelude::AccountEntry};
 use hopr_primitive_types::{
     errors::GeneralError,
@@ -264,7 +264,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                             // (= not re-announced)
                             if res.is_ok() {
                                 // FIXME: update key id binding
-                                    // tracing::warn!(?account, %error, "keybinding not updated")
+                                // tracing::warn!(?account, %error, "keybinding not updated")
                             }
 
                             if let AccountType::Announced {
@@ -320,7 +320,8 @@ impl BlokliDbAccountOperations for BlokliDb {
                             .iter()
                             .enumerate()
                             .find(|(_, announcement)| {
-                                std::str::from_utf8(&announcement.multiaddress_list).unwrap_or("") == multiaddr.to_string()
+                                std::str::from_utf8(&announcement.multiaddress_list).unwrap_or("")
+                                    == multiaddr.to_string()
                             })
                     {
                         let mut existing_announcement =
@@ -387,7 +388,7 @@ impl BlokliDbAccountOperations for BlokliDb {
     where
         T: Into<ChainOrPacketKey> + Send + Sync,
     {
-        let myself = self.clone();
+        let _myself = self.clone();
         let cpk = key.into();
         self.nest_transaction(tx)
             .await?
@@ -396,7 +397,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                     if let Some(entry) =
                         account::Entity::find().filter(cpk).one(tx.as_ref()).await?
                     {
-                        let account_entry = model_to_account_entry(entry.clone(), vec![])?;
+                        let _account_entry = model_to_account_entry(entry.clone(), vec![])?;
                         entry.delete(tx.as_ref()).await?;
 
                         Ok::<_, DbSqlError>(())

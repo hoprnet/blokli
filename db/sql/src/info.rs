@@ -1,18 +1,16 @@
 use async_trait::async_trait;
-use futures::TryFutureExt;
-use hopr_crypto_types::prelude::Hash;
 use blokli_db_api::info::*;
 use blokli_db_entity::{
     chain_info, node_info,
-    prelude::{
-        Account, Announcement, ChainInfo, Channel, NodeInfo,
-    },
+    prelude::{Account, Announcement, ChainInfo, Channel, NodeInfo},
 };
+use futures::TryFutureExt;
+use hopr_crypto_types::prelude::Hash;
 use hopr_internal_types::prelude::WinningProbability;
 use hopr_primitive_types::prelude::*;
 use sea_orm::{
-    ActiveModelBehavior, ActiveModelTrait, ColumnTrait, EntityOrSelect, EntityTrait,
-    IntoActiveModel, PaginatorTrait, QueryFilter, Set,
+    ActiveModelBehavior, ActiveModelTrait, EntityOrSelect, EntityTrait, IntoActiveModel,
+    PaginatorTrait, Set,
 };
 use tracing::trace;
 
@@ -255,31 +253,30 @@ impl BlokliDbInfoOperations for BlokliDb {
 
     async fn get_safe_info<'a>(&'a self, tx: OptTx<'a>) -> Result<Option<SafeInfo>> {
         let myself = self.clone();
-        Ok( myself
-                    .nest_transaction(tx)
-                    .and_then(|op| {
-                        op.perform(|tx| {
-                            Box::pin(async move {
-                                let info = node_info::Entity::find_by_id(SINGULAR_TABLE_FIXED_ID)
-                                    .one(tx.as_ref())
-                                    .await?
-                                    .ok_or(MissingFixedTableEntry("node_info".into()))?;
-                                Ok::<_, DbSqlError>(info.safe_address.zip(info.module_address))
-                            })
-                        })
+        Ok(myself
+            .nest_transaction(tx)
+            .and_then(|op| {
+                op.perform(|tx| {
+                    Box::pin(async move {
+                        let info = node_info::Entity::find_by_id(SINGULAR_TABLE_FIXED_ID)
+                            .one(tx.as_ref())
+                            .await?
+                            .ok_or(MissingFixedTableEntry("node_info".into()))?;
+                        Ok::<_, DbSqlError>(info.safe_address.zip(info.module_address))
                     })
-                    .await
-                    .and_then(|addrs| {
-                        if let Some((safe_address, module_address)) = addrs {
-                            Ok(Some(SafeInfo {
-                                safe_address: safe_address.parse()?,
-                                module_address: module_address.parse()?,
-                            }))
-                        } else {
-                            Ok(None)
-                        }
-                    })
-            ?)
+                })
+            })
+            .await
+            .and_then(|addrs| {
+                if let Some((safe_address, module_address)) = addrs {
+                    Ok(Some(SafeInfo {
+                        safe_address: safe_address.parse()?,
+                        module_address: module_address.parse()?,
+                    }))
+                } else {
+                    Ok(None)
+                }
+            })?)
     }
 
     async fn set_safe_info<'a>(&'a self, tx: OptTx<'a>, safe_info: SafeInfo) -> Result<()> {
@@ -305,49 +302,47 @@ impl BlokliDbInfoOperations for BlokliDb {
     async fn get_indexer_data<'a>(&'a self, tx: OptTx<'a>) -> Result<IndexerData> {
         let myself = self.clone();
         Ok(myself
-                    .nest_transaction(tx)
-                    .and_then(|op| {
-                        op.perform(|tx| {
-                            Box::pin(async move {
-                                let model = chain_info::Entity::find_by_id(SINGULAR_TABLE_FIXED_ID)
-                                    .one(tx.as_ref())
-                                    .await?
-                                    .ok_or(MissingFixedTableEntry("chain_info".into()))?;
+            .nest_transaction(tx)
+            .and_then(|op| {
+                op.perform(|tx| {
+                    Box::pin(async move {
+                        let model = chain_info::Entity::find_by_id(SINGULAR_TABLE_FIXED_ID)
+                            .one(tx.as_ref())
+                            .await?
+                            .ok_or(MissingFixedTableEntry("chain_info".into()))?;
 
-                                let ledger_dst = if let Some(b) = model.ledger_dst {
-                                    Some(Hash::try_from(b.as_ref())?)
-                                } else {
-                                    None
-                                };
+                        let ledger_dst = if let Some(b) = model.ledger_dst {
+                            Some(Hash::try_from(b.as_ref())?)
+                        } else {
+                            None
+                        };
 
-                                let safe_registry_dst = if let Some(b) = model.safe_registry_dst {
-                                    Some(Hash::try_from(b.as_ref())?)
-                                } else {
-                                    None
-                                };
+                        let safe_registry_dst = if let Some(b) = model.safe_registry_dst {
+                            Some(Hash::try_from(b.as_ref())?)
+                        } else {
+                            None
+                        };
 
-                                let channels_dst = if let Some(b) = model.channels_dst {
-                                    Some(Hash::try_from(b.as_ref())?)
-                                } else {
-                                    None
-                                };
+                        let channels_dst = if let Some(b) = model.channels_dst {
+                            Some(Hash::try_from(b.as_ref())?)
+                        } else {
+                            None
+                        };
 
-                                Ok::<_, DbSqlError>(IndexerData {
-                                    ledger_dst,
-                                    safe_registry_dst,
-                                    channels_dst,
-                                    ticket_price: model
-                                        .ticket_price
-                                        .map(HoprBalance::from_be_bytes),
-                                    minimum_incoming_ticket_winning_prob: (model
-                                        .min_incoming_ticket_win_prob
-                                        as f64)
-                                        .try_into()?,
-                                })
-                            })
+                        Ok::<_, DbSqlError>(IndexerData {
+                            ledger_dst,
+                            safe_registry_dst,
+                            channels_dst,
+                            ticket_price: model.ticket_price.map(HoprBalance::from_be_bytes),
+                            minimum_incoming_ticket_winning_prob: (model
+                                .min_incoming_ticket_win_prob
+                                as f64)
+                                .try_into()?,
                         })
                     })
-                    .await?)
+                })
+            })
+            .await?)
     }
 
     async fn set_domain_separator<'a>(
@@ -480,8 +475,7 @@ impl BlokliDbInfoOperations for BlokliDb {
             })
             .await
     }
-    }
-
+}
 
 #[cfg(test)]
 mod tests {

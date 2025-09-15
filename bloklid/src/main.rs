@@ -45,9 +45,7 @@ impl Args {
         )?)
         .map_err(|e| ConfigError::ParseError(e.to_string()))?;
 
-        config
-            .validate()
-            .map_err(ConfigError::ValidationError)?;
+        config.validate().map_err(ConfigError::ValidationError)?;
         Ok(config)
     }
 }

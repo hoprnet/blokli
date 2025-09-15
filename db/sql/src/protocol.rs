@@ -2,16 +2,12 @@ use std::ops::{Mul, Sub};
 
 use async_trait::async_trait;
 use hopr_db_api::{
-    errors::Result,
-    prelude::{DbError},
-    protocol::{
-        BlokliDbProtocolOperations,
-    },
+    errors::Result, prelude::DbError, protocol::BlokliDbProtocolOperations,
     resolver::BlokliDbResolverOperations,
 };
 #[cfg(all(feature = "prometheus", not(test)))]
-use hopr_metrics::metrics::{SimpleHistogram};
-use hopr_network_types::prelude::{ResolvedTransportRouting};
+use hopr_metrics::metrics::SimpleHistogram;
+use hopr_network_types::prelude::ResolvedTransportRouting;
 use hopr_parallelize::cpu::spawn_fifo_blocking;
 use hopr_path::{Path, PathAddressResolver, ValidatedPath, errors::PathError};
 use hopr_primitive_types::prelude::*;
@@ -30,7 +26,7 @@ lazy_static::lazy_static! {
             "Observes the winning probabilities on incoming tickets",
             vec![0.0, 0.0001, 0.001, 0.01, 0.05, 0.1, 0.15, 0.25, 0.3, 0.5],
         ).unwrap();
-
+}
 
 const SLOW_OP_MS: u128 = 150;
 
@@ -49,5 +45,4 @@ impl BlokliDbProtocolOperations for BlokliDb {
                 .ok_or(DbSqlError::LogicalError("missing ticket price".into()))
         })?)
     }
-    }
-
+}

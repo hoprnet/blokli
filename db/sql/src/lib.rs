@@ -15,9 +15,9 @@ pub mod logs;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-use futures::future::BoxFuture;
 pub use blokli_db_api as api;
 use blokli_db_api::logs::BlokliDbLogOperations;
+use futures::future::BoxFuture;
 use sea_orm::{ConnectionTrait, TransactionTrait};
 pub use sea_orm::{DatabaseConnection, DatabaseTransaction};
 
