@@ -8,18 +8,15 @@ use std::{
 use anyhow::Context;
 use clap::Parser;
 use migration::MigrationTrait;
-// use sea_orm::sqlx::migrate::Migration;
+use sea_orm::{ConnectOptions, Database};
+use sea_orm_cli::{Cli, Commands, run_generate_command};
 
 async fn execute_sea_orm_cli_command<I, T>(itr: I) -> anyhow::Result<()>
 where
     I: IntoIterator<Item = T>,
     T: Into<std::ffi::OsString> + Clone,
 {
-    use sea_orm::{ConnectOptions, Database};
-    use sea_orm_cli::*;
-
-    let cli = sea_orm_cli::Cli::try_parse_from(itr)
-        .context("should be able to parse a sea-orm-cli command")?;
+    let cli = Cli::try_parse_from(itr).context("should be able to parse a sea-orm-cli command")?;
 
     match cli.command {
         Commands::Generate { command } => run_generate_command(command, true)

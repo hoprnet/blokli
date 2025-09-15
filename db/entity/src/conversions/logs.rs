@@ -1,5 +1,9 @@
 use hopr_crypto_types::types::Hash;
-use hopr_primitive_types::prelude::*;
+use hopr_primitive_types::prelude::Address;
+use hopr_primitive_types::prelude::IntoEndian;
+use hopr_primitive_types::prelude::SerializableLog;
+use hopr_primitive_types::prelude::ToHex;
+use hopr_primitive_types::prelude::U256;
 use sea_orm::Set;
 
 use crate::{errors::DbEntityError, log, log_status};

@@ -10,7 +10,13 @@ use blokli_db_entity::{
 };
 use futures::{StreamExt, stream};
 use hopr_crypto_types::prelude::Hash;
-use hopr_primitive_types::prelude::*;
+use hopr_primitive_types::prelude::Address;
+use hopr_primitive_types::prelude::DateTime;
+use hopr_primitive_types::prelude::IntoEndian;
+use hopr_primitive_types::prelude::SerializableLog;
+use hopr_primitive_types::prelude::ToHex;
+use hopr_primitive_types::prelude::U256;
+use hopr_primitive_types::prelude::Utc;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, FromQueryResult, IntoActiveModel,
     PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,

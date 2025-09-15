@@ -1,4 +1,6 @@
-pub use sea_orm_migration::prelude::*;
+pub use sea_orm_migration::MigrationTrait;
+pub use sea_orm_migration::MigratorTrait;
+use sea_orm_migration::async_trait;
 
 mod m001_create_index_tables;
 mod m002_create_index_indices;

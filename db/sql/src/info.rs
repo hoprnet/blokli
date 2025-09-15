@@ -1,5 +1,7 @@
 use async_trait::async_trait;
-use blokli_db_api::info::*;
+use blokli_db_api::info::DomainSeparator;
+use blokli_db_api::info::IndexerData;
+use blokli_db_api::info::SafeInfo;
 use blokli_db_entity::{
     chain_info, node_info,
     prelude::{Account, Announcement, ChainInfo, Channel, NodeInfo},
@@ -7,7 +9,9 @@ use blokli_db_entity::{
 use futures::TryFutureExt;
 use hopr_crypto_types::prelude::Hash;
 use hopr_internal_types::prelude::WinningProbability;
-use hopr_primitive_types::prelude::*;
+use hopr_primitive_types::prelude::HoprBalance;
+use hopr_primitive_types::prelude::IntoEndian;
+use hopr_primitive_types::prelude::ToHex;
 use sea_orm::{
     ActiveModelBehavior, ActiveModelTrait, EntityOrSelect, EntityTrait, IntoActiveModel,
     PaginatorTrait, Set,

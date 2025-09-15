@@ -10,7 +10,7 @@ use hopr_metrics::metrics::SimpleHistogram;
 use hopr_network_types::prelude::ResolvedTransportRouting;
 use hopr_parallelize::cpu::spawn_fifo_blocking;
 use hopr_path::{Path, PathAddressResolver, ValidatedPath, errors::PathError};
-use hopr_primitive_types::prelude::*;
+use hopr_primitive_types::{HoprBalance, WinningProbability};
 use tracing::{instrument, trace, warn};
 
 use crate::{

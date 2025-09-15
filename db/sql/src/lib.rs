@@ -277,8 +277,7 @@ pub trait BlokliDbAllOperations:
 
 #[doc(hidden)]
 pub mod prelude {
-    pub use blokli_db_api::logs::*;
-
     pub use super::*;
     pub use crate::{accounts::*, channels::*, corrupted_channels::*, db::*, errors::*, info::*};
+    pub use blokli_db_api::logs::*;
 }
