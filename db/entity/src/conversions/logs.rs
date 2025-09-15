@@ -28,11 +28,11 @@ impl TryFrom<log::Model> for SerializableLog {
         let tx_hash: [u8; 32] = value
             .transaction_hash
             .try_into()
-            .map_err(|_| DbEntityError::ConversionError("Invalid tx_hash".into()))?;
+            .map_err(|_| DbEntityError::Conversion("Invalid tx_hash".into()))?;
         let block_hash: [u8; 32] = value
             .block_hash
             .try_into()
-            .map_err(|_| DbEntityError::ConversionError("Invalid block_hash".into()))?;
+            .map_err(|_| DbEntityError::Conversion("Invalid block_hash".into()))?;
         let address = Address::new(value.address.as_ref());
 
         let mut topics: Vec<[u8; 32]> = Vec::new();

@@ -43,9 +43,9 @@ impl Args {
         let config: Config = serde_yaml::from_reader(std::fs::File::open(
             self.config.as_ref().ok_or(ConfigError::NoConfiguration)?,
         )?)
-        .map_err(|e| ConfigError::ParseError(e.to_string()))?;
+        .map_err(|e| ConfigError::Parse(e.to_string()))?;
 
-        config.validate().map_err(ConfigError::ValidationError)?;
+        config.validate().map_err(ConfigError::Validation)?;
         Ok(config)
     }
 }
@@ -96,7 +96,7 @@ async fn main() -> errors::Result<()> {
                 match args.load_config(false) {
                     Ok(new_cfg) => {
                         let mut cfg_guard = config.write().map_err(|_| {
-                            BloklidError::NonSpecificError("failed to lock config".into())
+                            BloklidError::NonSpecific("failed to lock config".into())
                         })?;
                         *cfg_guard = new_cfg;
                     }

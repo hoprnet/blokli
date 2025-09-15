@@ -1,9 +1,7 @@
 use async_trait::async_trait;
 use blokli_db_entity::{corrupted_channel, prelude::CorruptedChannel};
 use futures::TryStreamExt;
-use hopr_crypto_types::prelude::*;
-use hopr_internal_types::{channels::CorruptedChannelEntry, prelude::*};
-use hopr_primitive_types::prelude::*;
+use hopr_internal_types::{channels::CorruptedChannelEntry} 
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 
 use crate::{
@@ -52,7 +50,7 @@ impl BlokliDbCorruptedChannelOperations for BlokliDb {
                 Box::pin(async move {
                     Ok::<_, DbSqlError>(
                         if let Some(model) = CorruptedChannel::find()
-                            .filter(corrupted_channel::Column::ChannelId.eq(id_hex))
+                            .filter(corrupted_channel::Column::ConcreteChannelId.eq(id_hex))
                             .one(tx.as_ref())
                             .await?
                         {
@@ -101,7 +99,7 @@ impl BlokliDbCorruptedChannelOperations for BlokliDb {
                     let mut model = corrupted_channel::ActiveModel::from(channel_entry);
                     if let Some(channel) = corrupted_channel::Entity::find()
                         .filter(
-                            corrupted_channel::Column::ChannelId
+                            corrupted_channel::Column::ConcreteChannelId
                                 .eq(channel_entry.channel_id().to_hex()),
                         )
                         .one(tx.as_ref())

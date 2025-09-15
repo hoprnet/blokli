@@ -10,7 +10,7 @@ impl TryFrom<crate::codegen::sqlite::account::Model> for Address {
         value: crate::codegen::sqlite::account::Model,
     ) -> std::result::Result<Self, Self::Error> {
         Ok(Address::from_str(&value.chain_key)
-            .map_err(|e| Self::Error::ConversionError(format!("{e}")))?)
+            .map_err(|e| Self::Error::Conversion(format!("{e}")))?)
     }
 }
 
@@ -21,6 +21,6 @@ impl TryFrom<crate::codegen::sqlite::account::Model> for OffchainPublicKey {
         value: crate::codegen::sqlite::account::Model,
     ) -> std::result::Result<Self, Self::Error> {
         Ok(OffchainPublicKey::from_hex(&value.packet_key)
-            .map_err(|e| Self::Error::ConversionError(format!("{e}")))?)
+            .map_err(|e| Self::Error::Conversion(format!("{e}")))?)
     }
 }

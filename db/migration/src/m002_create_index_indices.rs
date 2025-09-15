@@ -47,7 +47,7 @@ impl MigrationTrait for Migration {
                     .if_not_exists()
                     .name("idx_channel_id_channel_epoch")
                     .table(Channel::Table)
-                    .col(Channel::ChannelId)
+                    .col(Channel::ConcreteChannelId)
                     .col(Channel::Epoch)
                     .to_owned(),
             )
@@ -174,7 +174,7 @@ impl MigrationTrait for Migration {
 #[derive(DeriveIden)]
 enum Channel {
     Table,
-    ChannelId,
+    ConcreteChannelId,
     Source,
     Destination,
     Epoch,

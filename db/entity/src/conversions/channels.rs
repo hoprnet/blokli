@@ -35,11 +35,11 @@ impl TryFrom<&channel::Model> for ChannelStatus {
             1 => Ok(ChannelStatus::Open),
             2 => value
                 .closure_time
-                .ok_or(DbEntityError::ConversionError(
+                .ok_or(DbEntityError::Conversion(
                     "channel is pending to close but without closure time".into(),
                 ))
                 .map(|time| ChannelStatus::PendingToClose(time.into())),
-            _ => Err(DbEntityError::ConversionError(
+            _ => Err(DbEntityError::Conversion(
                 "invalid channel status value".into(),
             )),
         }
@@ -72,7 +72,7 @@ impl TryFrom<channel::Model> for ChannelEntry {
 impl From<ChannelEntry> for channel::ActiveModel {
     fn from(value: ChannelEntry) -> Self {
         let mut ret = channel::ActiveModel {
-            channel_id: Set(value.get_id().to_hex()),
+            concrete_channel_id: Set(value.get_id().to_hex()),
             source: Set(value.source.to_hex()),
             destination: Set(value.destination.to_hex()),
             balance: Set(value.balance.amount().to_be_bytes().into()),
@@ -89,8 +89,8 @@ impl TryFrom<&corrupted_channel::Model> for CorruptedChannelEntry {
     type Error = DbEntityError;
 
     fn try_from(value: &corrupted_channel::Model) -> Result<Self, Self::Error> {
-        let channel_id = ChannelId::from_hex(value.channel_id.as_str())
-            .map_err(|_| DbEntityError::ConversionError("invalid channel ID".into()))?;
+        let channel_id = ChannelId::from_hex(value.concrete_channel_id.as_str())
+            .map_err(|_| DbEntityError::Conversion("invalid channel ID".into()))?;
 
         Ok(channel_id.into())
     }
@@ -107,7 +107,7 @@ impl TryFrom<corrupted_channel::Model> for CorruptedChannelEntry {
 impl From<CorruptedChannelEntry> for corrupted_channel::ActiveModel {
     fn from(value: CorruptedChannelEntry) -> Self {
         corrupted_channel::ActiveModel {
-            channel_id: Set(value.channel_id().to_hex()),
+            concrete_channel_id: Set(value.channel_id().to_hex()),
             ..Default::default()
         }
     }

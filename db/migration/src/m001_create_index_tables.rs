@@ -21,7 +21,7 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(
-                        ColumnDef::new(Channel::ChannelId)
+                        ColumnDef::new(Channel::ConcreteChannelId)
                             .string_len(64)
                             .not_null()
                             .unique_key(),
@@ -220,7 +220,7 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(
-                        ColumnDef::new(CorruptedChannel::ChannelId)
+                        ColumnDef::new(CorruptedChannel::ConcreteChannelId)
                             .string_len(64)
                             .not_null(),
                     )
@@ -265,7 +265,7 @@ impl MigrationTrait for Migration {
 enum Channel {
     Table,
     Id,
-    ChannelId,
+    ConcreteChannelId,
     Source,
     Destination,
     Balance,
@@ -323,7 +323,7 @@ enum ChainInfo {
 enum CorruptedChannel {
     Table,
     Id,
-    ChannelId,
+    ConcreteChannelId,
     Source,
     Destination,
 }

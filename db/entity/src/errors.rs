@@ -3,7 +3,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum DbEntityError {
     #[error("conversion error: {0}")]
-    ConversionError(String),
+    Conversion(String),
 
     #[error(transparent)]
     TypesError(#[from] hopr_internal_types::errors::CoreTypesError),

@@ -463,7 +463,7 @@ fn create_log(
         if let Ok(hash) = h {
             Some(Hash::from(hash).to_hex())
         } else {
-            return Err(DbSqlError::from(DbEntityError::ConversionError(
+            return Err(DbSqlError::from(DbEntityError::Conversion(
                 "Invalid log checksum".into(),
             )));
         }
