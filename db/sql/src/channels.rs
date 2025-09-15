@@ -1,6 +1,13 @@
 use async_trait::async_trait;
 use blokli_db_entity::{channel, conversions::channels::ChannelStatusUpdate, prelude::Channel};
+use chrono::Utc;
 use futures::{StreamExt, TryStreamExt, stream::BoxStream};
+use hopr_crypto_types::types::Hash;
+use hopr_internal_types::channels::{ChannelDirection, ChannelEntry, ChannelStatus};
+use hopr_primitive_types::{
+    prelude::{Address, HoprBalance, U256},
+    traits::{IntoEndian, ToHex},
+};
 use sea_orm::{
     ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter,
 };
@@ -322,7 +329,9 @@ impl BlokliDbChannelOperations for BlokliDb {
                 Box::pin(async move {
                     let mut model = channel::ActiveModel::from(channel_entry);
                     if let Some(channel) = channel::Entity::find()
-                        .filter(channel::Column::ConcreteChannelId.eq(channel_entry.get_id().to_hex()))
+                        .filter(
+                            channel::Column::ConcreteChannelId.eq(channel_entry.get_id().to_hex()),
+                        )
                         .one(tx.as_ref())
                         .await?
                     {

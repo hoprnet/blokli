@@ -1,7 +1,9 @@
 use async_trait::async_trait;
 use blokli_db_entity::{corrupted_channel, prelude::CorruptedChannel};
 use futures::TryStreamExt;
-use hopr_internal_types::{channels::CorruptedChannelEntry} 
+use hopr_crypto_types::types::Hash;
+use hopr_internal_types::channels::{ChannelId, CorruptedChannelEntry};
+use hopr_primitive_types::traits::ToHex;
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
 
 use crate::{
