@@ -297,7 +297,7 @@ impl BlokliDbInfoOperations for BlokliDb {
                             Ok(None)
                         }
                     })
-            .await?
+            ?
             .try_into()?)
     }
 

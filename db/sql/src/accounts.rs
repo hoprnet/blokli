@@ -162,8 +162,8 @@ pub(crate) fn model_to_account_entry(
         entry_type: match announcement {
             None => AccountType::NotAnnounced,
             Some(a) => AccountType::Announced {
-                multiaddr: a
-                    .multiaddress
+                multiaddr: std::str::from_utf8(&a.multiaddress_list)
+                    .map_err(|e| GeneralError::ParseError(e.to_string()))?
                     .parse()
                     .map_err(|_| DbSqlError::DecodingError)?,
                 updated_block: a.published_block as u32,
@@ -187,7 +187,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                     let maybe_model = Account::find()
                         .find_with_related(Announcement)
                         .filter(cpk)
-                        .order_by_desc(announcement::Column::AtBlock)
+                        .order_by_desc(announcement::Column::PublishedBlock)
                         .all(tx.as_ref())
                         .await?
                         .pop();
@@ -220,11 +220,11 @@ impl BlokliDbAccountOperations for BlokliDb {
                     Account::find()
                         .find_with_related(Announcement)
                         .filter(if public_only {
-                            announcement::Column::Multiaddress.ne("")
+                            announcement::Column::MultiaddressList.ne("")
                         } else {
                             Expr::value(1)
                         })
-                        .order_by_desc(announcement::Column::AtBlock)
+                        .order_by_desc(announcement::Column::PublishedBlock)
                         .all(tx.as_ref())
                         .await?
                         .into_iter()
@@ -244,7 +244,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                     match account::Entity::insert(account::ActiveModel {
                         chain_key: Set(account.chain_addr.to_hex()),
                         packet_key: Set(account.public_key.to_hex()),
-                        published_block: Set(account.published_block as i32),
+                        published_block: Set(account.published_at as i32),
                         ..Default::default()
                     })
                     .on_conflict(
@@ -264,7 +264,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                             // (= not re-announced)
                             if res.is_ok() {
                                 // FIXME: update key id binding
-                                    tracing::warn!(?account, %error, "keybinding not updated")
+                                    // tracing::warn!(?account, %error, "keybinding not updated")
                             }
 
                             if let AccountType::Announced {
@@ -309,7 +309,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                     let (existing_account, mut existing_announcements) = account::Entity::find()
                         .find_with_related(announcement::Entity)
                         .filter(cpk)
-                        .order_by_desc(announcement::Column::AtBlock)
+                        .order_by_desc(announcement::Column::PublishedBlock)
                         .all(tx.as_ref())
                         .await?
                         .pop()
@@ -320,7 +320,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                             .iter()
                             .enumerate()
                             .find(|(_, announcement)| {
-                                announcement.multiaddress == multiaddr.to_string()
+                                std::str::from_utf8(&announcement.multiaddress_list).unwrap_or("") == multiaddr.to_string()
                             })
                     {
                         let mut existing_announcement =
@@ -334,7 +334,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                     } else {
                         let new_announcement = announcement::ActiveModel {
                             account_id: Set(existing_account.id),
-                            multiaddress: Set(multiaddr.to_string()),
+                            multiaddress_list: Set(multiaddr.to_string().into_bytes()),
                             published_block: Set(published_block as i32),
                             ..Default::default()
                         }
@@ -416,38 +416,41 @@ impl BlokliDbAccountOperations for BlokliDb {
     ) -> Result<Option<ChainOrPacketKey>> {
         Ok(match key.into() {
             ChainOrPacketKey::ChainKey(chain_key) => self
-                    nest_transaction(tx).and_then(|op| {
-                        op.perform(|tx| {
-                            Box::pin(async move {
-                                let maybe_model = Account::find()
-                                    .filter(account::Column::ChainKey.eq(chain_key.to_string()))
-                                    .one(tx.as_ref())
-                                    .await?;
-                                if let Some(m) = maybe_model {
-                                    Ok(Some(OffchainPublicKey::from_hex(&m.packet_key)?))
-                                } else {
-                                    Ok(None)
-                                }
-                            })
+                .nest_transaction(tx)
+                .and_then(|op| {
+                    op.perform(|tx| {
+                        Box::pin(async move {
+                            let maybe_model = Account::find()
+                                .filter(account::Column::ChainKey.eq(chain_key.to_string()))
+                                .one(tx.as_ref())
+                                .await?;
+                            if let Some(m) = maybe_model {
+                                Ok(Some(OffchainPublicKey::from_hex(&m.packet_key)?))
+                            } else {
+                                Ok(None)
+                            }
                         })
                     })
+                })
                 .await?
                 .map(ChainOrPacketKey::PacketKey),
-            ChainOrPacketKey::PacketKey(packet_key) => self.nest_transaction(tx).and_then(|op| {
-                        op.perform(|tx| {
-                            Box::pin(async move {
-                                let maybe_model = Account::find()
-                                    .filter(account::Column::PacketKey.eq(packet_key.to_string()))
-                                    .one(tx.as_ref())
-                                    .await?;
-                                if let Some(m) = maybe_model {
-                                    Ok(Some(Address::from_hex(&m.chain_key)?))
-                                } else {
-                                    Ok(None)
-                                }
-                            })
+            ChainOrPacketKey::PacketKey(packet_key) => self
+                .nest_transaction(tx)
+                .and_then(|op| {
+                    op.perform(|tx| {
+                        Box::pin(async move {
+                            let maybe_model = Account::find()
+                                .filter(account::Column::PacketKey.eq(packet_key.to_string()))
+                                .one(tx.as_ref())
+                                .await?;
+                            if let Some(m) = maybe_model {
+                                Ok(Some(Address::from_hex(&m.chain_key)?))
+                            } else {
+                                Ok(None)
+                            }
                         })
                     })
+                })
                 .await?
                 .map(ChainOrPacketKey::ChainKey),
         })
