@@ -1,9 +1,5 @@
 use hopr_crypto_types::types::Hash;
-use hopr_primitive_types::prelude::Address;
-use hopr_primitive_types::prelude::IntoEndian;
-use hopr_primitive_types::prelude::SerializableLog;
-use hopr_primitive_types::prelude::ToHex;
-use hopr_primitive_types::prelude::U256;
+use hopr_primitive_types::prelude::{Address, IntoEndian, SerializableLog, ToHex, U256};
 use sea_orm::Set;
 
 use crate::{errors::DbEntityError, log, log_status};
@@ -67,12 +63,9 @@ impl From<SerializableLog> for log_status::ActiveModel {
     fn from(value: SerializableLog) -> Self {
         let processed = value.processed.unwrap_or(false);
         let processed_at = value.processed_at.map(|p| p.naive_utc());
-        let checksum = value.checksum.map(|c| {
-            Hash::from_hex(&c)
-                .expect("Invalid checksum")
-                .as_ref()
-                .to_vec()
-        });
+        let checksum = value
+            .checksum
+            .map(|c| Hash::from_hex(&c).expect("Invalid checksum").as_ref().to_vec());
 
         log_status::ActiveModel {
             block_number: Set(value.block_number.to_be_bytes().to_vec()),

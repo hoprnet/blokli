@@ -1,17 +1,22 @@
 mod config;
 mod errors;
 
+use std::{
+    path::PathBuf,
+    sync::{Arc, RwLock},
+};
+
 use async_signal::{Signal, Signals};
 use clap::Parser;
 use futures::TryStreamExt;
-use std::path::PathBuf;
-use std::sync::{Arc, RwLock};
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
 use validator::Validate;
 
-use crate::config::Config;
-use crate::errors::{BloklidError, ConfigError};
+use crate::{
+    config::Config,
+    errors::{BloklidError, ConfigError},
+};
 
 /// Bloklid: Daemon for indexing HOPR on-chain events and executing HOPR-related on-chain transactions
 #[derive(Debug, Parser)]
@@ -75,11 +80,7 @@ async fn main() -> errors::Result<()> {
 
     info!(
         verbosity = args.verbose,
-        config = args
-            .config
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .as_deref(),
+        config = args.config.as_ref().map(|p| p.display().to_string()).as_deref(),
         "bloklid starting"
     );
 
@@ -95,9 +96,9 @@ async fn main() -> errors::Result<()> {
                 info!("received SIGHUP; reloading configuration");
                 match args.load_config(false) {
                     Ok(new_cfg) => {
-                        let mut cfg_guard = config.write().map_err(|_| {
-                            BloklidError::NonSpecific("failed to lock config".into())
-                        })?;
+                        let mut cfg_guard = config
+                            .write()
+                            .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
                         *cfg_guard = new_cfg;
                     }
                     Err(error) => error!(%error, "failed to reload configuration"),

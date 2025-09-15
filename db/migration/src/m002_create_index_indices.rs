@@ -130,11 +130,7 @@ impl MigrationTrait for Migration {
             .drop_index(Index::drop().name("idx_announcement_account_id").to_owned())
             .await?;
         manager
-            .drop_index(
-                Index::drop()
-                    .name("idx_account_chain_packet_key")
-                    .to_owned(),
-            )
+            .drop_index(Index::drop().name("idx_account_chain_packet_key").to_owned())
             .await?;
         manager
             .drop_index(Index::drop().name("idx_account_packet_key").to_owned())
@@ -149,18 +145,10 @@ impl MigrationTrait for Migration {
             .drop_index(Index::drop().name("idx_channel_closure_time").to_owned())
             .await?;
         manager
-            .drop_index(
-                Index::drop()
-                    .name("idx_channel_id_channel_epoch")
-                    .to_owned(),
-            )
+            .drop_index(Index::drop().name("idx_channel_id_channel_epoch").to_owned())
             .await?;
         manager
-            .drop_index(
-                Index::drop()
-                    .name("idx_channel_source_destination")
-                    .to_owned(),
-            )
+            .drop_index(Index::drop().name("idx_channel_source_destination").to_owned())
             .await?;
         manager
             .drop_index(Index::drop().name("idx_channel_source").to_owned())

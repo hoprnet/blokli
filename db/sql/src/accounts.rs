@@ -12,8 +12,8 @@ use hopr_primitive_types::{
 };
 use multiaddr::Multiaddr;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, ModelTrait, QueryFilter,
-    QueryOrder, Related, Set, sea_query::Expr,
+    ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, ModelTrait, QueryFilter, QueryOrder, Related,
+    Set, sea_query::Expr,
 };
 use sea_query::{Condition, IntoCondition, OnConflict};
 use tracing::instrument;
@@ -71,12 +71,12 @@ impl TryFrom<ChainOrPacketKey> for Address {
 impl IntoCondition for ChainOrPacketKey {
     fn into_condition(self) -> Condition {
         match self {
-            ChainOrPacketKey::ChainKey(chain_key) => account::Column::ChainKey
-                .eq(chain_key.to_string())
-                .into_condition(),
-            ChainOrPacketKey::PacketKey(packet_key) => account::Column::PacketKey
-                .eq(packet_key.to_string())
-                .into_condition(),
+            ChainOrPacketKey::ChainKey(chain_key) => {
+                account::Column::ChainKey.eq(chain_key.to_string()).into_condition()
+            }
+            ChainOrPacketKey::PacketKey(packet_key) => {
+                account::Column::PacketKey.eq(packet_key.to_string()).into_condition()
+            }
         }
     }
 }
@@ -98,11 +98,7 @@ pub trait BlokliDbAccountOperations {
 
     /// Retrieves entries of accounts with routable address announcements (if `public_only` is `true`)
     /// or about all accounts without routeable address announcements (if `public_only` is `false`).
-    async fn get_accounts<'a>(
-        &'a self,
-        tx: OptTx<'a>,
-        public_only: bool,
-    ) -> Result<Vec<AccountEntry>>;
+    async fn get_accounts<'a>(&'a self, tx: OptTx<'a>, public_only: bool) -> Result<Vec<AccountEntry>>;
 
     /// Inserts a new account entry to the database.
     /// Fails if such an entry already exists.
@@ -138,11 +134,7 @@ pub trait BlokliDbAccountOperations {
     ///
     /// If `Address` is given as `key`, the result will contain `OffchainPublicKey` if present.
     /// If `OffchainPublicKey` is given as `key`, the result will contain `Address` if present.
-    async fn translate_key<'a, T>(
-        &'a self,
-        tx: OptTx<'a>,
-        key: T,
-    ) -> Result<Option<ChainOrPacketKey>>
+    async fn translate_key<'a, T>(&'a self, tx: OptTx<'a>, key: T) -> Result<Option<ChainOrPacketKey>>
     where
         T: Into<ChainOrPacketKey> + Send + Sync;
 }
@@ -208,11 +200,7 @@ impl BlokliDbAccountOperations for BlokliDb {
             .ok_or(DbSqlError::MissingAccount)
     }
 
-    async fn get_accounts<'a>(
-        &'a self,
-        tx: OptTx<'a>,
-        public_only: bool,
-    ) -> Result<Vec<AccountEntry>> {
+    async fn get_accounts<'a>(&'a self, tx: OptTx<'a>, public_only: bool) -> Result<Vec<AccountEntry>> {
         self.nest_transaction(tx)
             .await?
             .perform(|tx| {
@@ -248,12 +236,9 @@ impl BlokliDbAccountOperations for BlokliDb {
                         ..Default::default()
                     })
                     .on_conflict(
-                        OnConflict::columns([
-                            account::Column::ChainKey,
-                            account::Column::PacketKey,
-                        ])
-                        .do_nothing()
-                        .to_owned(),
+                        OnConflict::columns([account::Column::ChainKey, account::Column::PacketKey])
+                            .do_nothing()
+                            .to_owned(),
                     )
                     .exec(tx.as_ref())
                     .await
@@ -273,12 +258,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                             } = account.entry_type
                             {
                                 myself
-                                    .insert_announcement(
-                                        Some(tx),
-                                        account.chain_addr,
-                                        multiaddr,
-                                        updated_block,
-                                    )
+                                    .insert_announcement(Some(tx), account.chain_addr, multiaddr, updated_block)
                                     .await?;
                             }
 
@@ -315,20 +295,12 @@ impl BlokliDbAccountOperations for BlokliDb {
                         .pop()
                         .ok_or(MissingAccount)?;
 
-                    if let Some((index, _)) =
-                        existing_announcements
-                            .iter()
-                            .enumerate()
-                            .find(|(_, announcement)| {
-                                std::str::from_utf8(&announcement.multiaddress_list).unwrap_or("")
-                                    == multiaddr.to_string()
-                            })
-                    {
-                        let mut existing_announcement =
-                            existing_announcements.remove(index).into_active_model();
+                    if let Some((index, _)) = existing_announcements.iter().enumerate().find(|(_, announcement)| {
+                        std::str::from_utf8(&announcement.multiaddress_list).unwrap_or("") == multiaddr.to_string()
+                    }) {
+                        let mut existing_announcement = existing_announcements.remove(index).into_active_model();
                         existing_announcement.published_block = Set(published_block as i32);
-                        let updated_announcement =
-                            existing_announcement.update(tx.as_ref()).await?;
+                        let updated_announcement = existing_announcement.update(tx.as_ref()).await?;
 
                         // To maintain the sort order, insert at the original location
                         existing_announcements.insert(index, updated_announcement);
@@ -394,9 +366,7 @@ impl BlokliDbAccountOperations for BlokliDb {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    if let Some(entry) =
-                        account::Entity::find().filter(cpk).one(tx.as_ref()).await?
-                    {
+                    if let Some(entry) = account::Entity::find().filter(cpk).one(tx.as_ref()).await? {
                         let _account_entry = model_to_account_entry(entry.clone(), vec![])?;
                         entry.delete(tx.as_ref()).await?;
 
@@ -488,10 +458,7 @@ mod tests {
         )
         .await?;
 
-        let acc = db
-            .get_account(None, chain_1)
-            .await?
-            .expect("should contain account");
+        let acc = db.get_account(None, chain_1).await?.expect("should contain account");
         assert_eq!(packet_1, acc.public_key, "pub keys must match");
         assert_eq!(AccountType::NotAnnounced, acc.entry_type.clone());
         assert_eq!(1, acc.published_block);
@@ -499,45 +466,26 @@ mod tests {
         let maddr: Multiaddr = "/ip4/1.2.3.4/tcp/8000".parse()?;
         let block = 100;
 
-        let db_acc = db
-            .insert_announcement(None, chain_1, maddr.clone(), block)
-            .await?;
+        let db_acc = db.insert_announcement(None, chain_1, maddr.clone(), block).await?;
 
-        let acc = db
-            .get_account(None, chain_1)
-            .await?
-            .context("should contain account")?;
-        assert_eq!(
-            Some(maddr.clone()),
-            acc.get_multiaddr(),
-            "multiaddress must match"
-        );
+        let acc = db.get_account(None, chain_1).await?.context("should contain account")?;
+        assert_eq!(Some(maddr.clone()), acc.get_multiaddr(), "multiaddress must match");
         assert_eq!(Some(block), acc.updated_at());
         assert_eq!(acc, db_acc);
 
         let block = 200;
-        let db_acc = db
-            .insert_announcement(None, chain_1, maddr.clone(), block)
-            .await?;
+        let db_acc = db.insert_announcement(None, chain_1, maddr.clone(), block).await?;
 
-        let acc = db
-            .get_account(None, chain_1)
-            .await?
-            .expect("should contain account");
+        let acc = db.get_account(None, chain_1).await?.expect("should contain account");
         assert_eq!(Some(maddr), acc.get_multiaddr(), "multiaddress must match");
         assert_eq!(Some(block), acc.updated_at());
         assert_eq!(acc, db_acc);
 
         let maddr: Multiaddr = "/dns4/useful.domain/tcp/56".parse()?;
         let block = 300;
-        let db_acc = db
-            .insert_announcement(None, chain_1, maddr.clone(), block)
-            .await?;
+        let db_acc = db.insert_announcement(None, chain_1, maddr.clone(), block).await?;
 
-        let acc = db
-            .get_account(None, chain_1)
-            .await?
-            .expect("should contain account");
+        let acc = db.get_account(None, chain_1).await?.expect("should contain account");
         assert_eq!(Some(maddr), acc.get_multiaddr(), "multiaddress must match");
         assert_eq!(Some(block), acc.updated_at());
         assert_eq!(acc, db_acc);
@@ -587,8 +535,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_should_not_insert_account_announcement_to_nonexisting_account()
-    -> anyhow::Result<()> {
+    async fn test_should_not_insert_account_announcement_to_nonexisting_account() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let chain_1 = ChainKeypair::random().public().to_address();
@@ -596,9 +543,7 @@ mod tests {
         let maddr: Multiaddr = "/ip4/1.2.3.4/tcp/8000".parse()?;
         let block = 100;
 
-        let r = db
-            .insert_announcement(None, chain_1, maddr.clone(), block)
-            .await;
+        let r = db.insert_announcement(None, chain_1, maddr.clone(), block).await;
         assert!(
             matches!(r, Err(MissingAccount)),
             "should not insert announcement to non-existing account"
@@ -608,8 +553,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_should_allow_duplicate_announcement_per_different_accounts() -> anyhow::Result<()>
-    {
+    async fn test_should_allow_duplicate_announcement_per_different_accounts() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
 
         let chain_1 = ChainKeypair::random().public().to_address();
@@ -643,34 +587,16 @@ mod tests {
         let maddr: Multiaddr = "/ip4/1.2.3.4/tcp/8000".parse()?;
         let block = 100;
 
-        let db_acc_1 = db
-            .insert_announcement(None, chain_1, maddr.clone(), block)
-            .await?;
-        let db_acc_2 = db
-            .insert_announcement(None, chain_2, maddr.clone(), block)
-            .await?;
+        let db_acc_1 = db.insert_announcement(None, chain_1, maddr.clone(), block).await?;
+        let db_acc_2 = db.insert_announcement(None, chain_2, maddr.clone(), block).await?;
 
-        let acc = db
-            .get_account(None, chain_1)
-            .await?
-            .expect("should contain account");
-        assert_eq!(
-            Some(maddr.clone()),
-            acc.get_multiaddr(),
-            "multiaddress must match"
-        );
+        let acc = db.get_account(None, chain_1).await?.expect("should contain account");
+        assert_eq!(Some(maddr.clone()), acc.get_multiaddr(), "multiaddress must match");
         assert_eq!(Some(block), acc.updated_at());
         assert_eq!(acc, db_acc_1);
 
-        let acc = db
-            .get_account(None, chain_2)
-            .await?
-            .expect("should contain account");
-        assert_eq!(
-            Some(maddr.clone()),
-            acc.get_multiaddr(),
-            "multiaddress must match"
-        );
+        let acc = db.get_account(None, chain_2).await?.expect("should contain account");
+        assert_eq!(Some(maddr.clone()), acc.get_multiaddr(), "multiaddress must match");
         assert_eq!(Some(block), acc.updated_at());
         assert_eq!(acc, db_acc_2);
 
@@ -948,9 +874,7 @@ mod tests {
                                 public_key: *OffchainKeypair::random().public(),
                                 chain_addr: chain_2,
                                 entry_type: AccountType::Announced {
-                                    multiaddr: "/ip4/10.10.10.10/tcp/1234"
-                                        .parse()
-                                        .map_err(|_| DecodingError)?,
+                                    multiaddr: "/ip4/10.10.10.10/tcp/1234".parse().map_err(|_| DecodingError)?,
                                     updated_block: 10,
                                 },
                                 published_block: 2,
@@ -1015,17 +939,11 @@ mod tests {
 
         assert_eq!(
             "/ip4/10.10.10.10/tcp/1234",
-            acc_1
-                .get_multiaddr()
-                .expect("should have a multiaddress")
-                .to_string()
+            acc_1.get_multiaddr().expect("should have a multiaddress").to_string()
         );
         assert_eq!(
             "/ip4/8.8.1.1/tcp/1234",
-            acc_2
-                .get_multiaddr()
-                .expect("should have a multiaddress")
-                .to_string()
+            acc_2.get_multiaddr().expect("should have a multiaddress").to_string()
         );
 
         Ok(())

@@ -27,11 +27,7 @@ impl MigrationTrait for Migration {
                             .unique_key(),
                     )
                     .col(ColumnDef::new(Channel::Source).string_len(40).not_null())
-                    .col(
-                        ColumnDef::new(Channel::Destination)
-                            .string_len(40)
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(Channel::Destination).string_len(40).not_null())
                     .col(ColumnDef::new(Channel::Balance).binary_len(12).not_null())
                     .col(ColumnDef::new(Channel::Status).tiny_unsigned().not_null())
                     .col(
@@ -72,12 +68,7 @@ impl MigrationTrait for Migration {
                     )
                     .col(ColumnDef::new(Account::ChainKey).string_len(40).not_null())
                     .col(ColumnDef::new(Account::PacketKey).string_len(64).not_null())
-                    .col(
-                        ColumnDef::new(Account::PublishedBlock)
-                            .unsigned()
-                            .not_null()
-                            .default(0),
-                    )
+                    .col(ColumnDef::new(Account::PublishedBlock).unsigned().not_null().default(0))
                     .to_owned(),
             )
             .await?;
@@ -96,16 +87,8 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(ColumnDef::new(Announcement::AccountId).integer().not_null())
-                    .col(
-                        ColumnDef::new(Announcement::KeyBinding)
-                            .binary_len(64)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(Announcement::MultiaddressList)
-                            .binary()
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(Announcement::KeyBinding).binary_len(64).not_null())
+                    .col(ColumnDef::new(Announcement::MultiaddressList).binary().not_null())
                     .col(
                         ColumnDef::new(Announcement::PublishedBlock)
                             .unsigned()
@@ -150,11 +133,7 @@ impl MigrationTrait for Migration {
                             .default(vec![0u8; 12]),
                     )
                     .col(ColumnDef::new(NodeInfo::SafeAddress).string_len(40).null())
-                    .col(
-                        ColumnDef::new(NodeInfo::ModuleAddress)
-                            .string_len(40)
-                            .null(),
-                    )
+                    .col(ColumnDef::new(NodeInfo::ModuleAddress).string_len(40).null())
                     .to_owned(),
             )
             .await?;
@@ -182,26 +161,19 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(ChainInfo::TicketPrice).binary_len(12).null())
                     .col(ColumnDef::new(ChainInfo::ChannelsDST).binary_len(32).null())
                     .col(ColumnDef::new(ChainInfo::LedgerDST).binary_len(32).null())
-                    .col(
-                        ColumnDef::new(ChainInfo::SafeRegistryDST)
-                            .binary_len(32)
-                            .null(),
-                    )
+                    .col(ColumnDef::new(ChainInfo::SafeRegistryDST).binary_len(32).null())
                     .col(
                         ColumnDef::new(ChainInfo::ChainChecksum)
                             .binary_len(32)
                             .default(vec![0u8; 32]),
                     )
+                    .col(ColumnDef::new(ChainInfo::PreChecksumBlock).unsigned().null())
                     .col(
-                        ColumnDef::new(ChainInfo::PreChecksumBlock)
-                            .unsigned()
-                            .null(),
-                    )
-                        .col(
                         ColumnDef::new(ChainInfo::MinIncomingTicketWinProb)
                             .float()
-                            .not_null().default(hopr_internal_types::protocol::DEFAULT_MINIMUM_INCOMING_TICKET_WIN_PROB)
-                        )
+                            .not_null()
+                            .default(hopr_internal_types::protocol::DEFAULT_MINIMUM_INCOMING_TICKET_WIN_PROB),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -224,16 +196,8 @@ impl MigrationTrait for Migration {
                             .string_len(64)
                             .not_null(),
                     )
-                    .col(
-                        ColumnDef::new(CorruptedChannel::Source)
-                            .string_len(40)
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(CorruptedChannel::Destination)
-                            .string_len(40)
-                            .not_null(),
-                    )
+                    .col(ColumnDef::new(CorruptedChannel::Source).string_len(40).not_null())
+                    .col(ColumnDef::new(CorruptedChannel::Destination).string_len(40).not_null())
                     .to_owned(),
             )
             .await
@@ -255,9 +219,7 @@ impl MigrationTrait for Migration {
         manager
             .drop_table(Table::drop().table(Account::Table).to_owned())
             .await?;
-        manager
-            .drop_table(Table::drop().table(Channel::Table).to_owned())
-            .await
+        manager.drop_table(Table::drop().table(Channel::Table).to_owned()).await
     }
 }
 

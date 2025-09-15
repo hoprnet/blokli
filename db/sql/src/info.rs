@@ -1,7 +1,5 @@
 use async_trait::async_trait;
-use blokli_db_api::info::DomainSeparator;
-use blokli_db_api::info::IndexerData;
-use blokli_db_api::info::SafeInfo;
+use blokli_db_api::info::{DomainSeparator, IndexerData, SafeInfo};
 use blokli_db_entity::{
     chain_info, node_info,
     prelude::{Account, Announcement, ChainInfo, Channel, NodeInfo},
@@ -9,12 +7,9 @@ use blokli_db_entity::{
 use futures::TryFutureExt;
 use hopr_crypto_types::prelude::Hash;
 use hopr_internal_types::prelude::WinningProbability;
-use hopr_primitive_types::prelude::HoprBalance;
-use hopr_primitive_types::prelude::IntoEndian;
-use hopr_primitive_types::prelude::ToHex;
+use hopr_primitive_types::prelude::{HoprBalance, IntoEndian, ToHex};
 use sea_orm::{
-    ActiveModelBehavior, ActiveModelTrait, EntityOrSelect, EntityTrait, IntoActiveModel,
-    PaginatorTrait, Set,
+    ActiveModelBehavior, ActiveModelTrait, EntityOrSelect, EntityTrait, IntoActiveModel, PaginatorTrait, Set,
 };
 use tracing::trace;
 
@@ -69,21 +64,13 @@ pub trait BlokliDbInfoOperations {
     async fn get_safe_hopr_balance<'a>(&'a self, tx: OptTx<'a>) -> Result<HoprBalance>;
 
     /// Sets node's Safe balance of HOPR tokens.
-    async fn set_safe_hopr_balance<'a>(
-        &'a self,
-        tx: OptTx<'a>,
-        new_balance: HoprBalance,
-    ) -> Result<()>;
+    async fn set_safe_hopr_balance<'a>(&'a self, tx: OptTx<'a>, new_balance: HoprBalance) -> Result<()>;
 
     /// Gets node's Safe allowance of HOPR tokens.
     async fn get_safe_hopr_allowance<'a>(&'a self, tx: OptTx<'a>) -> Result<HoprBalance>;
 
     /// Sets node's Safe allowance of HOPR tokens.
-    async fn set_safe_hopr_allowance<'a>(
-        &'a self,
-        tx: OptTx<'a>,
-        new_allowance: HoprBalance,
-    ) -> Result<()>;
+    async fn set_safe_hopr_allowance<'a>(&'a self, tx: OptTx<'a>, new_allowance: HoprBalance) -> Result<()>;
 
     /// Gets node's Safe addresses info.
     async fn get_safe_info<'a>(&'a self, tx: OptTx<'a>) -> Result<Option<SafeInfo>>;
@@ -100,12 +87,7 @@ pub trait BlokliDbInfoOperations {
     /// Sets a domain separator.
     ///
     /// To retrieve stored domain separator info, use [`BlokliDbInfoOperations::get_indexer_data`],
-    async fn set_domain_separator<'a>(
-        &'a self,
-        tx: OptTx<'a>,
-        dst_type: DomainSeparator,
-        value: Hash,
-    ) -> Result<()>;
+    async fn set_domain_separator<'a>(&'a self, tx: OptTx<'a>, dst_type: DomainSeparator, value: Hash) -> Result<()>;
 
     /// Sets the minimum required winning probability for incoming tickets.
     /// The value must be between zero and 1.
@@ -192,11 +174,7 @@ impl BlokliDbInfoOperations for BlokliDb {
             .await
     }
 
-    async fn set_safe_hopr_balance<'a>(
-        &'a self,
-        tx: OptTx<'a>,
-        new_balance: HoprBalance,
-    ) -> Result<()> {
+    async fn set_safe_hopr_balance<'a>(&'a self, tx: OptTx<'a>, new_balance: HoprBalance) -> Result<()> {
         self.nest_transaction(tx)
             .await?
             .perform(|tx| {
@@ -232,11 +210,7 @@ impl BlokliDbInfoOperations for BlokliDb {
             .await
     }
 
-    async fn set_safe_hopr_allowance<'a>(
-        &'a self,
-        tx: OptTx<'a>,
-        new_allowance: HoprBalance,
-    ) -> Result<()> {
+    async fn set_safe_hopr_allowance<'a>(&'a self, tx: OptTx<'a>, new_allowance: HoprBalance) -> Result<()> {
         self.nest_transaction(tx)
             .await?
             .perform(|tx| {
@@ -338,9 +312,7 @@ impl BlokliDbInfoOperations for BlokliDb {
                             safe_registry_dst,
                             channels_dst,
                             ticket_price: model.ticket_price.map(HoprBalance::from_be_bytes),
-                            minimum_incoming_ticket_winning_prob: (model
-                                .min_incoming_ticket_win_prob
-                                as f64)
+                            minimum_incoming_ticket_winning_prob: (model.min_incoming_ticket_win_prob as f64)
                                 .try_into()?,
                         })
                     })
@@ -349,12 +321,7 @@ impl BlokliDbInfoOperations for BlokliDb {
             .await?)
     }
 
-    async fn set_domain_separator<'a>(
-        &'a self,
-        tx: OptTx<'a>,
-        dst_type: DomainSeparator,
-        value: Hash,
-    ) -> Result<()> {
+    async fn set_domain_separator<'a>(&'a self, tx: OptTx<'a>, dst_type: DomainSeparator, value: Hash) -> Result<()> {
         self.nest_transaction(tx)
             .await?
             .perform(|tx| {
@@ -550,8 +517,7 @@ mod tests {
         let price = HoprBalance::from(10);
         db.update_ticket_price(None, price).await?;
 
-        db.set_minimum_incoming_ticket_win_prob(None, 0.5.try_into()?)
-            .await?;
+        db.set_minimum_incoming_ticket_win_prob(None, 0.5.try_into()?).await?;
 
         let data = db.get_indexer_data(None).await?;
 

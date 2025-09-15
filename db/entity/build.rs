@@ -51,22 +51,16 @@ where
                     .await
                     .map_err(|e| anyhow::anyhow!(e.to_string()))
             } else {
-                sea_orm_migration::cli::run_migrate(
-                    migration::Migrator {},
-                    db,
-                    command,
-                    cli.verbose,
-                )
-                .await
-                .map_err(|e| anyhow::anyhow!(e.to_string()))
+                sea_orm_migration::cli::run_migrate(migration::Migrator {}, db, command, cli.verbose)
+                    .await
+                    .map_err(|e| anyhow::anyhow!(e.to_string()))
             }
         }
     }
 }
 
 fn main() -> anyhow::Result<()> {
-    let cargo_manifest_dir =
-        &env::var("CARGO_MANIFEST_DIR").context("should point to a valid manifest dir")?;
+    let cargo_manifest_dir = &env::var("CARGO_MANIFEST_DIR").context("should point to a valid manifest dir")?;
     let db_migration_package_path = Path::new(&cargo_manifest_dir)
         .parent()
         .context("should have a parent dir")?
@@ -78,10 +72,7 @@ fn main() -> anyhow::Result<()> {
     );
     println!(
         "cargo:rerun-if-changed={}",
-        db_migration_package_path
-            .join("Cargo.toml")
-            .to_str()
-            .unwrap()
+        db_migration_package_path.join("Cargo.toml").to_str().unwrap()
     );
 
     let codegen_path = Path::new(&cargo_manifest_dir)
@@ -112,9 +103,7 @@ fn main() -> anyhow::Result<()> {
                 .clone()
                 .into_os_string()
                 .into_string()
-                .map_err(|e| anyhow::anyhow!(
-                    e.to_str().unwrap_or("illegible error").to_string()
-                ))?
+                .map_err(|e| anyhow::anyhow!(e.to_str().unwrap_or("illegible error").to_string()))?
         )
         .as_str(),
         "-d",
@@ -138,9 +127,7 @@ fn main() -> anyhow::Result<()> {
             tmp_db
                 .into_os_string()
                 .into_string()
-                .map_err(|e| anyhow::anyhow!(
-                    e.to_str().unwrap_or("illegible error").to_string()
-                ))?
+                .map_err(|e| anyhow::anyhow!(e.to_str().unwrap_or("illegible error").to_string()))?
         )
         .as_str(),
     ]))?;

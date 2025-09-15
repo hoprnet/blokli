@@ -5,14 +5,7 @@ fn default_host() -> std::net::SocketAddr {
 }
 
 #[serde_with::serde_as]
-#[derive(
-    Debug,
-    Clone,
-    serde::Serialize,
-    serde::Deserialize,
-    smart_default::SmartDefault,
-    validator::Validate,
-)]
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault, validator::Validate)]
 pub struct Config {
     #[serde_as(as = "serde_with::DisplayFromStr")]
     #[default(_code = "default_host()")]

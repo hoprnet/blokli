@@ -2,8 +2,7 @@ use std::ops::{Mul, Sub};
 
 use async_trait::async_trait;
 use hopr_db_api::{
-    errors::Result, prelude::DbError, protocol::BlokliDbProtocolOperations,
-    resolver::BlokliDbResolverOperations,
+    errors::Result, prelude::DbError, protocol::BlokliDbProtocolOperations, resolver::BlokliDbResolverOperations,
 };
 #[cfg(all(feature = "prometheus", not(test)))]
 use hopr_metrics::metrics::SimpleHistogram;
@@ -14,8 +13,8 @@ use hopr_primitive_types::{HoprBalance, WinningProbability};
 use tracing::{instrument, trace, warn};
 
 use crate::{
-    channels::BlokliDbChannelOperations, db::BlokliDb, errors::DbSqlError,
-    info::BlokliDbInfoOperations, prelude::BlokliDbTicketOperations,
+    channels::BlokliDbChannelOperations, db::BlokliDb, errors::DbSqlError, info::BlokliDbInfoOperations,
+    prelude::BlokliDbTicketOperations,
 };
 
 #[cfg(all(feature = "prometheus", not(test)))]

@@ -79,20 +79,12 @@ pub const SQL_DB_INDEX_FILE_NAME: &str = "hopr_index.db";
 pub const SQL_DB_LOGS_FILE_NAME: &str = "hopr_logs.db";
 
 impl BlokliDb {
-    pub async fn new(
-        directory: &Path,
-        chain_key: ChainKeypair,
-        cfg: BlokliDbConfig,
-    ) -> Result<Self> {
-        cfg.validate().map_err(|e| {
-            DbSqlError::Construction(format!("failed configuration validation: {e}"))
-        })?;
+    pub async fn new(directory: &Path, chain_key: ChainKeypair, cfg: BlokliDbConfig) -> Result<Self> {
+        cfg.validate()
+            .map_err(|e| DbSqlError::Construction(format!("failed configuration validation: {e}")))?;
 
-        fs::create_dir_all(directory).map_err(|_e| {
-            DbSqlError::Construction(format!(
-                "cannot create main database directory {directory:?}"
-            ))
-        })?;
+        fs::create_dir_all(directory)
+            .map_err(|_e| DbSqlError::Construction(format!("cannot create main database directory {directory:?}")))?;
 
         let index = Self::create_pool(
             cfg.clone(),
@@ -161,15 +153,15 @@ impl BlokliDb {
         let index_db_rw = SqlxSqliteConnector::from_sqlx_sqlite_pool(index_db_pool);
         let index_db_ro = SqlxSqliteConnector::from_sqlx_sqlite_pool(index_db_ro_pool);
 
-        MigratorIndex::up(&index_db_rw, None).await.map_err(|e| {
-            DbSqlError::Construction(format!("cannot apply database migration: {e}"))
-        })?;
+        MigratorIndex::up(&index_db_rw, None)
+            .await
+            .map_err(|e| DbSqlError::Construction(format!("cannot apply database migration: {e}")))?;
 
         let logs_db = SqlxSqliteConnector::from_sqlx_sqlite_pool(logs_db_pool.clone());
 
-        MigratorChainLogs::up(&logs_db, None).await.map_err(|e| {
-            DbSqlError::Construction(format!("cannot apply database migration: {e}"))
-        })?;
+        MigratorChainLogs::up(&logs_db, None)
+            .await
+            .map_err(|e| DbSqlError::Construction(format!("cannot apply database migration: {e}")))?;
 
         // Initialize KeyId mapping for accounts
         Account::find()
@@ -255,9 +247,7 @@ impl BlokliDb {
         let pool = options
             .connect_with(cfg.filename(directory.join(path)))
             .await
-            .map_err(|e| {
-                DbSqlError::Construction(format!("failed to create {path} database: {e}"))
-            })?;
+            .map_err(|e| DbSqlError::Construction(format!("failed to create {path} database: {e}")))?;
 
         Ok(pool)
     }

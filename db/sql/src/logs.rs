@@ -10,16 +10,10 @@ use blokli_db_entity::{
 };
 use futures::{StreamExt, stream};
 use hopr_crypto_types::prelude::Hash;
-use hopr_primitive_types::prelude::Address;
-use hopr_primitive_types::prelude::DateTime;
-use hopr_primitive_types::prelude::IntoEndian;
-use hopr_primitive_types::prelude::SerializableLog;
-use hopr_primitive_types::prelude::ToHex;
-use hopr_primitive_types::prelude::U256;
-use hopr_primitive_types::prelude::Utc;
+use hopr_primitive_types::prelude::{Address, DateTime, IntoEndian, SerializableLog, ToHex, U256, Utc};
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, FromQueryResult, IntoActiveModel,
-    PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+    ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, FromQueryResult, IntoActiveModel, PaginatorTrait, QueryFilter,
+    QueryOrder, QuerySelect,
     entity::Set,
     query::QueryTrait,
     sea_query::{Expr, OnConflict, Value},
@@ -81,9 +75,7 @@ impl BlokliDbLogOperations for BlokliDb {
                                 Ok(_) => Ok(()),
                                 Err(DbErr::RecordNotInserted) => {
                                     warn!(log_id, "log already in the DB");
-                                    Err(DbError::General(format!(
-                                        "log already exists in the DB: {log_id}"
-                                    )))
+                                    Err(DbError::General(format!("log already exists in the DB: {log_id}")))
                                 }
                                 Err(e) => {
                                     error!("Failed to insert log into db: {:?}", e);
@@ -108,12 +100,7 @@ impl BlokliDbLogOperations for BlokliDb {
             .await
     }
 
-    async fn get_log(
-        &self,
-        block_number: u64,
-        tx_index: u64,
-        log_index: u64,
-    ) -> Result<SerializableLog> {
+    async fn get_log(&self, block_number: u64, tx_index: u64, log_index: u64) -> Result<SerializableLog> {
         let bn_enc = block_number.to_be_bytes().to_vec();
         let tx_index_enc = tx_index.to_be_bytes().to_vec();
         let log_index_enc = log_index.to_be_bytes().to_vec();
@@ -177,11 +164,7 @@ impl BlokliDbLogOperations for BlokliDb {
         }
     }
 
-    async fn get_logs_count(
-        &self,
-        block_number: Option<u64>,
-        block_offset: Option<u64>,
-    ) -> Result<u64> {
+    async fn get_logs_count(&self, block_number: Option<u64>, block_offset: Option<u64>) -> Result<u64> {
         let min_block_number = block_number.unwrap_or(0);
         let max_block_number = block_offset.map(|v| min_block_number + v + 1);
 
@@ -216,9 +199,7 @@ impl BlokliDbLogOperations for BlokliDb {
             .apply_if(max_block_number, |q, v| {
                 q.filter(log_status::Column::BlockNumber.lt(v.to_be_bytes().to_vec()))
             })
-            .apply_if(processed, |q, v| {
-                q.filter(log_status::Column::Processed.eq(v))
-            })
+            .apply_if(processed, |q, v| q.filter(log_status::Column::Processed.eq(v)))
             .order_by_asc(log_status::Column::BlockNumber)
             .into_model::<BlockNumber>()
             .all(self.conn(TargetDb::Logs))
@@ -234,20 +215,13 @@ impl BlokliDbLogOperations for BlokliDb {
             })
     }
 
-    async fn set_logs_processed(
-        &self,
-        block_number: Option<u64>,
-        block_offset: Option<u64>,
-    ) -> Result<()> {
+    async fn set_logs_processed(&self, block_number: Option<u64>, block_offset: Option<u64>) -> Result<()> {
         let min_block_number = block_number.unwrap_or(0);
         let max_block_number = block_offset.map(|v| min_block_number + v + 1);
         let now = Utc::now();
 
         let query = LogStatus::update_many()
-            .col_expr(
-                log_status::Column::Processed,
-                Expr::value(Value::Bool(Some(true))),
-            )
+            .col_expr(log_status::Column::Processed, Expr::value(Value::Bool(Some(true))))
             .col_expr(
                 log_status::Column::ProcessedAt,
                 Expr::value(Value::ChronoDateTimeUtc(Some(now.into()))),
@@ -285,19 +259,12 @@ impl BlokliDbLogOperations for BlokliDb {
             .await
     }
 
-    async fn set_logs_unprocessed(
-        &self,
-        block_number: Option<u64>,
-        block_offset: Option<u64>,
-    ) -> Result<()> {
+    async fn set_logs_unprocessed(&self, block_number: Option<u64>, block_offset: Option<u64>) -> Result<()> {
         let min_block_number = block_number.unwrap_or(0);
         let max_block_number = block_offset.map(|v| min_block_number + v + 1);
 
         let query = LogStatus::update_many()
-            .col_expr(
-                log_status::Column::Processed,
-                Expr::value(Value::Bool(Some(false))),
-            )
+            .col_expr(log_status::Column::Processed, Expr::value(Value::Bool(Some(false))))
             .col_expr(
                 log_status::Column::ProcessedAt,
                 Expr::value(Value::ChronoDateTimeUtc(None)),
@@ -396,10 +363,7 @@ impl BlokliDbLogOperations for BlokliDb {
             .await
     }
 
-    async fn ensure_logs_origin(
-        &self,
-        contract_address_topics: Vec<(Address, Hash)>,
-    ) -> Result<()> {
+    async fn ensure_logs_origin(&self, contract_address_topics: Vec<(Address, Hash)>) -> Result<()> {
         if contract_address_topics.is_empty() {
             return Err(DbError::LogicalError(
                 "contract address topics must not be empty".into(),
@@ -426,13 +390,13 @@ impl BlokliDbLogOperations for BlokliDb {
 
                     if log_count == 0 && log_topic_count == 0 {
                         // Prime the DB with the values
-                        LogTopicInfo::insert_many(contract_address_topics.into_iter().map(
-                            |(addr, topic)| log_topic_info::ActiveModel {
+                        LogTopicInfo::insert_many(contract_address_topics.into_iter().map(|(addr, topic)| {
+                            log_topic_info::ActiveModel {
                                 address: Set(addr.to_string()),
                                 topic: Set(topic.to_string()),
                                 ..Default::default()
-                            },
-                        ))
+                            }
+                        }))
                         .exec(tx.as_ref())
                         .await
                         .map_err(|e| DbError::from(DbSqlError::from(e)))?;
@@ -457,10 +421,7 @@ impl BlokliDbLogOperations for BlokliDb {
     }
 }
 
-fn create_log(
-    raw_log: log::Model,
-    status: log_status::Model,
-) -> crate::errors::Result<SerializableLog> {
+fn create_log(raw_log: log::Model, status: log_status::Model) -> crate::errors::Result<SerializableLog> {
     let log = SerializableLog::try_from(raw_log).map_err(DbSqlError::from)?;
 
     let checksum = if let Some(c) = status.checksum {
@@ -505,9 +466,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_single_log() {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random())
-            .await
-            .unwrap();
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await.unwrap();
 
         let log = SerializableLog {
             address: Address::new(b"my address 123456789"),
@@ -533,9 +492,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_multiple_logs() {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random())
-            .await
-            .unwrap();
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await.unwrap();
 
         let log_1 = SerializableLog {
             address: Address::new(b"my address 123456789"),
@@ -584,9 +541,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_store_duplicate_log() {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random())
-            .await
-            .unwrap();
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await.unwrap();
 
         let log = SerializableLog {
             address: Address::new(b"my address 123456789"),
@@ -614,9 +569,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_log_processed() {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random())
-            .await
-            .unwrap();
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await.unwrap();
 
         let log = SerializableLog {
             address: Address::new(b"my address 123456789"),
@@ -633,20 +586,14 @@ mod tests {
 
         db.store_log(log.clone()).await.unwrap();
 
-        let log_db = db
-            .get_log(log.block_number, log.tx_index, log.log_index)
-            .await
-            .unwrap();
+        let log_db = db.get_log(log.block_number, log.tx_index, log.log_index).await.unwrap();
 
         assert_eq!(log_db.processed, Some(false));
         assert_eq!(log_db.processed_at, None);
 
         db.set_log_processed(log.clone()).await.unwrap();
 
-        let log_db_updated = db
-            .get_log(log.block_number, log.tx_index, log.log_index)
-            .await
-            .unwrap();
+        let log_db_updated = db.get_log(log.block_number, log.tx_index, log.log_index).await.unwrap();
 
         assert_eq!(log_db_updated.processed, Some(true));
         assert!(log_db_updated.processed_at.is_some());
@@ -654,9 +601,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_logs_ordered() {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random())
-            .await
-            .unwrap();
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await.unwrap();
 
         let logs_per_tx = 3;
         let tx_per_block = 3;
@@ -693,10 +638,7 @@ mod tests {
         let mut next_block = start_block;
 
         while next_block <= start_block + blocks {
-            let ordered_logs = db
-                .get_logs(Some(next_block), Some(block_fetch_interval))
-                .await
-                .unwrap();
+            let ordered_logs = db.get_logs(Some(next_block), Some(block_fetch_interval)).await.unwrap();
 
             assert!(!ordered_logs.is_empty());
 
@@ -722,9 +664,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_nonexistent_log() {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random())
-            .await
-            .unwrap();
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await.unwrap();
 
         let result = db.get_log(999, 999, 999).await;
 
@@ -733,9 +673,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_logs_with_block_offset() {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random())
-            .await
-            .unwrap();
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await.unwrap();
 
         let log_1 = SerializableLog {
             address: Address::new(b"my address 123456789"),
@@ -779,9 +717,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_logs_unprocessed() {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random())
-            .await
-            .unwrap();
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await.unwrap();
 
         let log = SerializableLog {
             address: Address::new(b"my address 123456789"),
@@ -802,10 +738,7 @@ mod tests {
 
         db.set_logs_unprocessed(Some(1), Some(0)).await.unwrap();
 
-        let log_db = db
-            .get_log(log.block_number, log.tx_index, log.log_index)
-            .await
-            .unwrap();
+        let log_db = db.get_log(log.block_number, log.tx_index, log.log_index).await.unwrap();
 
         assert_eq!(log_db.processed, Some(false));
         assert!(log_db.processed_at.is_none());
@@ -813,9 +746,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_logs_block_numbers() {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random())
-            .await
-            .unwrap();
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await.unwrap();
 
         let log_1 = SerializableLog {
             address: Address::new(b"my address 123456789"),
@@ -869,40 +800,26 @@ mod tests {
         assert_eq!(block_numbers_all.len(), 3);
         assert_eq!(block_numbers_all, [1, 2, 3]);
 
-        let block_numbers_first_only = db
-            .get_logs_block_numbers(Some(1), Some(0), None)
-            .await
-            .unwrap();
+        let block_numbers_first_only = db.get_logs_block_numbers(Some(1), Some(0), None).await.unwrap();
         assert_eq!(block_numbers_first_only.len(), 1);
         assert_eq!(block_numbers_first_only[0], 1);
 
-        let block_numbers_last_only = db
-            .get_logs_block_numbers(Some(3), Some(0), None)
-            .await
-            .unwrap();
+        let block_numbers_last_only = db.get_logs_block_numbers(Some(3), Some(0), None).await.unwrap();
         assert_eq!(block_numbers_last_only.len(), 1);
         assert_eq!(block_numbers_last_only[0], 3);
 
-        let block_numbers_processed = db
-            .get_logs_block_numbers(None, None, Some(true))
-            .await
-            .unwrap();
+        let block_numbers_processed = db.get_logs_block_numbers(None, None, Some(true)).await.unwrap();
         assert_eq!(block_numbers_processed.len(), 1);
         assert_eq!(block_numbers_processed[0], 1);
 
-        let block_numbers_unprocessed_second = db
-            .get_logs_block_numbers(Some(2), Some(0), Some(false))
-            .await
-            .unwrap();
+        let block_numbers_unprocessed_second = db.get_logs_block_numbers(Some(2), Some(0), Some(false)).await.unwrap();
         assert_eq!(block_numbers_unprocessed_second.len(), 1);
         assert_eq!(block_numbers_unprocessed_second[0], 2);
     }
 
     #[tokio::test]
     async fn test_update_logs_checksums() {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random())
-            .await
-            .unwrap();
+        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await.unwrap();
 
         // insert first log and update checksum
         let log_1 = SerializableLog {
@@ -946,25 +863,16 @@ mod tests {
         // ensure the first log is still the last updated
         assert_eq!(
             updated_log_1.clone().checksum.unwrap(),
-            db.get_last_checksummed_log()
-                .await
-                .unwrap()
-                .unwrap()
-                .checksum
-                .unwrap()
+            db.get_last_checksummed_log().await.unwrap().unwrap().checksum.unwrap()
         );
 
         db.update_logs_checksums().await.unwrap();
 
         let updated_log_3 = db.get_last_checksummed_log().await.unwrap().unwrap();
 
-        db.get_logs(None, None)
-            .await
-            .unwrap()
-            .into_iter()
-            .for_each(|log| {
-                assert!(log.checksum.is_some());
-            });
+        db.get_logs(None, None).await.unwrap().into_iter().for_each(|log| {
+            assert!(log.checksum.is_some());
+        });
 
         // ensure the first log is not the last updated anymore
         assert_ne!(

@@ -17,8 +17,7 @@ pub trait BlokliDbLogOperations {
     /// # Returns
     /// A `Result` which is `Ok(())` if the database contains correct log data,
     /// or it has been primed successfully. An `Err` is returned otherwise.
-    async fn ensure_logs_origin(&self, contract_address_topics: Vec<(Address, Hash)>)
-    -> Result<()>;
+    async fn ensure_logs_origin(&self, contract_address_topics: Vec<(Address, Hash)>) -> Result<()>;
 
     /// Stores a single log entry in the database.
     ///
@@ -53,12 +52,7 @@ pub trait BlokliDbLogOperations {
     /// # Returns
     ///
     /// A `Result` containing the `SerializableLog` if the operation succeeds or an error if it fails.
-    async fn get_log(
-        &self,
-        block_number: u64,
-        tx_index: u64,
-        log_index: u64,
-    ) -> Result<SerializableLog>;
+    async fn get_log(&self, block_number: u64, tx_index: u64, log_index: u64) -> Result<SerializableLog>;
 
     /// Retrieves multiple log entries from the database.
     ///
@@ -86,11 +80,7 @@ pub trait BlokliDbLogOperations {
     /// # Returns
     ///
     /// A `Result` containing the count of log entries if the operation succeeds or an error if it fails.
-    async fn get_logs_count(
-        &self,
-        block_number: Option<u64>,
-        block_offset: Option<u64>,
-    ) -> Result<u64>;
+    async fn get_logs_count(&self, block_number: Option<u64>, block_offset: Option<u64>) -> Result<u64>;
 
     /// Retrieves block numbers of log entries from the database.
     ///
@@ -131,11 +121,7 @@ pub trait BlokliDbLogOperations {
     /// # Returns
     ///
     /// A `Result` which is `Ok(())` if the operation succeeds or an error if it fails.
-    async fn set_logs_processed(
-        &self,
-        block_number: Option<u64>,
-        block_offset: Option<u64>,
-    ) -> Result<()>;
+    async fn set_logs_processed(&self, block_number: Option<u64>, block_offset: Option<u64>) -> Result<()>;
 
     /// Marks multiple log entries as unprocessed.
     ///
@@ -147,11 +133,7 @@ pub trait BlokliDbLogOperations {
     /// # Returns
     ///
     /// A `Result` which is `Ok(())` if the operation succeeds or an error if it fails.
-    async fn set_logs_unprocessed(
-        &self,
-        block_number: Option<u64>,
-        block_offset: Option<u64>,
-    ) -> Result<()>;
+    async fn set_logs_unprocessed(&self, block_number: Option<u64>, block_offset: Option<u64>) -> Result<()>;
 
     /// Retrieves the last checksummed log entry from the database.
     ///

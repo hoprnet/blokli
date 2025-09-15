@@ -99,6 +99,10 @@
   programs.rustfmt.enable = true;
   settings.formatter.rustfmt = {
     command = "${pkgs.rust-bin.selectLatestNightlyWith (toolchain: toolchain.default)}/bin/rustfmt";
+    options = [
+      "--config-path"
+      "."
+    ];
   };
 
   # Nix formatting using official Nixpkgs style
