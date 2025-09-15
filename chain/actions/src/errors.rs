@@ -61,10 +61,10 @@ pub enum ChainActionsError {
     MissingDomainSeparator,
 
     #[error(transparent)]
-    DbBackendError(#[from] hopr_db_sql::errors::DbSqlError),
+    DbBackendError(#[from] blokli_db_sql::errors::DbSqlError),
 
     #[error(transparent)]
-    DbError(#[from] hopr_db_sql::api::errors::DbError),
+    DbError(#[from] blokli_db_sql::api::errors::DbError),
 
     #[error(transparent)]
     RpcError(#[from] RpcError),

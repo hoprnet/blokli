@@ -26,7 +26,7 @@ use async_trait::async_trait;
 use futures::StreamExt;
 use hopr_chain_types::actions::Action;
 use hopr_crypto_types::types::Hash;
-use hopr_db_sql::{
+use blokli_db_sql::{
     api::{
         info::DomainSeparator,
         tickets::{HoprDbTicketOperations, TicketSelector},
@@ -263,7 +263,7 @@ mod tests {
     use hopr_chain_types::chain_events::{ChainEventType::TicketRedeemed, SignificantChainEvent};
     use hopr_crypto_random::{Randomizable, random_bytes};
     use hopr_crypto_types::prelude::*;
-    use hopr_db_sql::{
+    use blokli_db_sql::{
         HoprDbGeneralModelOperations, TargetDb, api::info::DomainSeparator, db::HoprDb, errors::DbSqlError,
         info::HoprDbInfoOperations,
     };
@@ -344,7 +344,7 @@ mod tests {
                     let mut input_tickets = Vec::new();
                     for i in 0..ticket_count {
                         let ack_ticket = generate_random_ack_ticket(i as u64, &ckp, channel_epoch)
-                            .map_err(|e| hopr_db_sql::errors::DbSqlError::LogicalError(e.to_string()))?;
+                            .map_err(|e| blokli_db_sql::errors::DbSqlError::LogicalError(e.to_string()))?;
                         db.upsert_ticket(Some(tx), ack_ticket.clone()).await?;
                         input_tickets.push(ack_ticket);
                     }

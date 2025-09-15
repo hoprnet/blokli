@@ -22,7 +22,7 @@ use hopr_chain_types::{
     chain_events::{ChainEventType, NetworkRegistryStatus, SignificantChainEvent},
 };
 use hopr_crypto_types::prelude::*;
-use hopr_db_sql::{
+use blokli_db_sql::{
     HoprDbAllOperations, OpenTransaction,
     api::{info::DomainSeparator, tickets::TicketSelector},
     errors::DbSqlError,
@@ -1184,7 +1184,7 @@ mod tests {
         chain_events::{ChainEventType, NetworkRegistryStatus},
     };
     use hopr_crypto_types::prelude::*;
-    use hopr_db_sql::{
+    use blokli_db_sql::{
         HoprDbAllOperations, HoprDbGeneralModelOperations,
         accounts::{ChainOrPacketKey, HoprDbAccountOperations},
         api::{info::DomainSeparator, tickets::HoprDbTicketOperations},

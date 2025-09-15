@@ -1,7 +1,7 @@
 use std::ops::{Mul, Sub};
 
 use async_trait::async_trait;
-use hopr_db_api::{
+use blokli_db_api::{
     errors::Result, prelude::DbError, protocol::BlokliDbProtocolOperations, resolver::BlokliDbResolverOperations,
 };
 #[cfg(all(feature = "prometheus", not(test)))]

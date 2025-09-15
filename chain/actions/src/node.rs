@@ -14,7 +14,7 @@
 use async_trait::async_trait;
 use hopr_chain_types::actions::Action;
 use hopr_crypto_types::{keypairs::OffchainKeypair, prelude::Keypair};
-use hopr_db_sql::accounts::HoprDbAccountOperations;
+use blokli_db_sql::accounts::HoprDbAccountOperations;
 use hopr_internal_types::prelude::*;
 use hopr_primitive_types::prelude::*;
 use multiaddr::Multiaddr;
@@ -111,7 +111,7 @@ mod tests {
     };
     use hopr_crypto_random::random_bytes;
     use hopr_crypto_types::prelude::*;
-    use hopr_db_sql::{
+    use blokli_db_sql::{
         accounts::HoprDbAccountOperations, api::info::DomainSeparator, db::HoprDb, info::HoprDbInfoOperations,
     };
     use hopr_internal_types::prelude::*;

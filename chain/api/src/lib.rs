@@ -33,7 +33,7 @@ use hopr_chain_rpc::{
 use hopr_chain_types::ContractAddresses;
 pub use hopr_chain_types::chain_events::SignificantChainEvent;
 use hopr_crypto_types::prelude::*;
-use hopr_db_sql::HoprDbAllOperations;
+use blokli_db_sql::HoprDbAllOperations;
 pub use hopr_internal_types::channels::ChannelEntry;
 use hopr_internal_types::{
     account::AccountEntry, channels::CorruptedChannelEntry, prelude::ChannelDirection, tickets::WinningProbability,

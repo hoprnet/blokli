@@ -16,7 +16,7 @@ use futures::{FutureExt, StreamExt, future::Either, pin_mut};
 use hopr_async_runtime::prelude::spawn;
 use hopr_chain_types::{actions::Action, chain_events::ChainEventType};
 use hopr_crypto_types::types::Hash;
-use hopr_db_sql::{api::tickets::HoprDbTicketOperations, info::HoprDbInfoOperations};
+use blokli_db_sql::{api::tickets::HoprDbTicketOperations, info::HoprDbInfoOperations};
 use hopr_internal_types::prelude::*;
 use hopr_primitive_types::prelude::*;
 use serde::{Deserialize, Serialize};

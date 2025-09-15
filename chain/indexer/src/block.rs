@@ -16,8 +16,8 @@ use hopr_bindings::hoprtoken::HoprToken::{Approval, Transfer};
 use hopr_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use hopr_chain_types::chain_events::SignificantChainEvent;
 use hopr_crypto_types::types::Hash;
-use hopr_db_api::logs::HoprDbLogOperations;
-use hopr_db_sql::{HoprDbGeneralModelOperations, info::HoprDbInfoOperations};
+use blokli_db_api::logs::HoprDbLogOperations;
+use blokli_db_sql::{HoprDbGeneralModelOperations, info::HoprDbInfoOperations};
 use hopr_primitive_types::prelude::*;
 use tracing::{debug, error, info, trace};
 
@@ -825,7 +825,7 @@ mod tests {
         keypairs::{Keypair, OffchainKeypair},
         prelude::ChainKeypair,
     };
-    use hopr_db_sql::{accounts::HoprDbAccountOperations, db::HoprDb};
+    use blokli_db_sql::{accounts::HoprDbAccountOperations, db::HoprDb};
     use hopr_internal_types::account::{AccountEntry, AccountType};
     use hopr_primitive_types::prelude::*;
     use mockall::mock;

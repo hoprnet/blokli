@@ -18,7 +18,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use hopr_chain_types::actions::Action;
 use hopr_crypto_types::types::Hash;
-use hopr_db_sql::HoprDbAllOperations;
+use blokli_db_sql::HoprDbAllOperations;
 use hopr_internal_types::prelude::*;
 use hopr_platform::time::native::current_time;
 use hopr_primitive_types::prelude::*;
@@ -242,7 +242,7 @@ mod tests {
     };
     use hopr_crypto_random::random_bytes;
     use hopr_crypto_types::prelude::*;
-    use hopr_db_sql::{
+    use blokli_db_sql::{
         HoprDbGeneralModelOperations, api::info::DomainSeparator, channels::HoprDbChannelOperations, db::HoprDb,
         errors::DbSqlError, info::HoprDbInfoOperations,
     };
