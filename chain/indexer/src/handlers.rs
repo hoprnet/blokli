@@ -16,8 +16,8 @@ use hopr_bindings::{
     hoprticketpriceoracle::HoprTicketPriceOracle::HoprTicketPriceOracleEvents, hoprtoken::HoprToken::HoprTokenEvents,
     hoprwinningprobabilityoracle::HoprWinningProbabilityOracle::HoprWinningProbabilityOracleEvents,
 };
-use hopr_chain_rpc::{HoprIndexerRpcOperations, Log};
-use hopr_chain_types::{
+use blokli_chain_rpc::{HoprIndexerRpcOperations, Log};
+use blokli_chain_types::{
     ContractAddresses,
     chain_events::{ChainEventType, NetworkRegistryStatus, SignificantChainEvent},
 };
@@ -1178,8 +1178,8 @@ mod tests {
     };
     use anyhow::{Context, anyhow};
     use hex_literal::hex;
-    use hopr_chain_rpc::HoprIndexerRpcOperations;
-    use hopr_chain_types::{
+    use blokli_chain_rpc::HoprIndexerRpcOperations;
+    use blokli_chain_types::{
         ContractAddresses,
         chain_events::{ChainEventType, NetworkRegistryStatus},
     };
@@ -1225,20 +1225,20 @@ mod tests {
 
         #[async_trait::async_trait]
         impl HoprIndexerRpcOperations for IndexerRpcOperations {
-            async fn block_number(&self) -> hopr_chain_rpc::errors::Result<u64>;
+            async fn block_number(&self) -> blokli_chain_rpc::errors::Result<u64>;
 
-        async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> hopr_chain_rpc::errors::Result<HoprBalance>;
+        async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
 
-        async fn get_xdai_balance(&self, address: Address) -> hopr_chain_rpc::errors::Result<XDaiBalance>;
+        async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance>;
 
-        async fn get_hopr_balance(&self, address: Address) -> hopr_chain_rpc::errors::Result<HoprBalance>;
+        async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
 
         fn try_stream_logs<'a>(
             &'a self,
             start_block_number: u64,
-            filters: hopr_chain_rpc::FilterSet,
+            filters: blokli_chain_rpc::FilterSet,
             is_synced: bool,
-        ) -> hopr_chain_rpc::errors::Result<std::pin::Pin<Box<dyn futures::Stream<Item=hopr_chain_rpc::BlockWithLogs> + Send + 'a> > >;
+        ) -> blokli_chain_rpc::errors::Result<std::pin::Pin<Box<dyn futures::Stream<Item=blokli_chain_rpc::BlockWithLogs> + Send + 'a> > >;
         }
     }
 
@@ -1249,7 +1249,7 @@ mod tests {
 
     #[async_trait::async_trait]
     impl HoprIndexerRpcOperations for ClonableMockOperations {
-        async fn block_number(&self) -> hopr_chain_rpc::errors::Result<u64> {
+        async fn block_number(&self) -> blokli_chain_rpc::errors::Result<u64> {
             self.inner.block_number().await
         }
 
@@ -1257,25 +1257,25 @@ mod tests {
             &self,
             owner: Address,
             spender: Address,
-        ) -> hopr_chain_rpc::errors::Result<HoprBalance> {
+        ) -> blokli_chain_rpc::errors::Result<HoprBalance> {
             self.inner.get_hopr_allowance(owner, spender).await
         }
 
-        async fn get_xdai_balance(&self, address: Address) -> hopr_chain_rpc::errors::Result<XDaiBalance> {
+        async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {
             self.inner.get_xdai_balance(address).await
         }
 
-        async fn get_hopr_balance(&self, address: Address) -> hopr_chain_rpc::errors::Result<HoprBalance> {
+        async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance> {
             self.inner.get_hopr_balance(address).await
         }
 
         fn try_stream_logs<'a>(
             &'a self,
             start_block_number: u64,
-            filters: hopr_chain_rpc::FilterSet,
+            filters: blokli_chain_rpc::FilterSet,
             is_synced: bool,
-        ) -> hopr_chain_rpc::errors::Result<
-            std::pin::Pin<Box<dyn futures::Stream<Item = hopr_chain_rpc::BlockWithLogs> + Send + 'a>>,
+        ) -> blokli_chain_rpc::errors::Result<
+            std::pin::Pin<Box<dyn futures::Stream<Item = blokli_chain_rpc::BlockWithLogs> + Send + 'a>>,
         > {
             self.inner.try_stream_logs(start_block_number, filters, is_synced)
         }

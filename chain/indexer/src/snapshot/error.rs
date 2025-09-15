@@ -71,7 +71,7 @@ pub enum SnapshotError {
 /// # Example
 ///
 /// ```no_run
-/// use hopr_chain_indexer::snapshot::error::SnapshotResult;
+/// use blokli_chain_indexer::snapshot::error::SnapshotResult;
 ///
 /// async fn download_file(url: &str) -> SnapshotResult<Vec<u8>> {
 ///     // Implementation that may return various SnapshotError variants

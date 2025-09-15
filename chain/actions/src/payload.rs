@@ -36,7 +36,7 @@ use hopr_bindings::{
     hoprnodesaferegistry::HoprNodeSafeRegistry::{deregisterNodeBySafeCall, registerSafeByNodeCall},
     hoprtoken::HoprToken::{approveCall, transferCall},
 };
-use hopr_chain_types::ContractAddresses;
+use blokli_chain_types::ContractAddresses;
 use hopr_crypto_types::prelude::*;
 use hopr_internal_types::prelude::*;
 use hopr_primitive_types::prelude::*;
@@ -578,8 +578,8 @@ mod tests {
     use alloy::{primitives::U256, providers::Provider};
     use anyhow::Context;
     use hex_literal::hex;
-    use hopr_chain_rpc::client::create_rpc_client_to_anvil;
-    use hopr_chain_types::ContractInstances;
+    use blokli_chain_rpc::client::create_rpc_client_to_anvil;
+    use blokli_chain_types::ContractInstances;
     use hopr_crypto_types::prelude::*;
     use hopr_internal_types::prelude::*;
     use hopr_primitive_types::prelude::HoprBalance;
@@ -594,7 +594,7 @@ mod tests {
     async fn test_announce() -> anyhow::Result<()> {
         let test_multiaddr = Multiaddr::from_str("/ip4/1.2.3.4/tcp/56")?;
 
-        let anvil = hopr_chain_types::utils::create_anvil(None);
+        let anvil = blokli_chain_types::utils::create_anvil(None);
         let chain_key_0 = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
         let client = create_rpc_client_to_anvil(&anvil, &chain_key_0);
 
@@ -636,7 +636,7 @@ mod tests {
 
     #[tokio::test]
     async fn redeem_ticket() -> anyhow::Result<()> {
-        let anvil = hopr_chain_types::utils::create_anvil(None);
+        let anvil = blokli_chain_types::utils::create_anvil(None);
         let chain_key_alice = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
         let chain_key_bob = ChainKeypair::from_secret(anvil.keys()[1].to_bytes().as_ref())?;
         let client = create_rpc_client_to_anvil(&anvil, &chain_key_alice);
@@ -645,12 +645,12 @@ mod tests {
         let contract_instances = ContractInstances::deploy_for_testing(client.clone(), &chain_key_alice).await?;
 
         // Mint 1000 HOPR to Alice
-        let _ = hopr_chain_types::utils::mint_tokens(contract_instances.token.clone(), U256::from(1000_u128)).await;
+        let _ = blokli_chain_types::utils::mint_tokens(contract_instances.token.clone(), U256::from(1000_u128)).await;
 
         let domain_separator: Hash = contract_instances.channels.domainSeparator().call().await?.0.into();
 
         // Open channel Alice -> Bob
-        let _ = hopr_chain_types::utils::fund_channel(
+        let _ = blokli_chain_types::utils::fund_channel(
             (&chain_key_bob).into(),
             contract_instances.token.clone(),
             contract_instances.channels.clone(),
@@ -659,7 +659,7 @@ mod tests {
         .await;
 
         // Fund Bob's node
-        let _ = hopr_chain_types::utils::fund_node(
+        let _ = blokli_chain_types::utils::fund_node(
             (&chain_key_bob).into(),
             U256::from(1000000000000000000_u128),
             U256::from(10_u128),
@@ -704,7 +704,7 @@ mod tests {
 
     #[tokio::test]
     async fn withdraw_token() -> anyhow::Result<()> {
-        let anvil = hopr_chain_types::utils::create_anvil(None);
+        let anvil = blokli_chain_types::utils::create_anvil(None);
         let chain_key_alice = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
         let chain_key_bob = ChainKeypair::from_secret(anvil.keys()[1].to_bytes().as_ref())?;
         let client = create_rpc_client_to_anvil(&anvil, &chain_key_alice);
@@ -714,7 +714,7 @@ mod tests {
         let generator = BasicPayloadGenerator::new((&chain_key_alice).into(), (&contract_instances).into());
 
         // Mint 1000 HOPR to Alice
-        let _ = hopr_chain_types::utils::mint_tokens(contract_instances.token.clone(), U256::from(1000_u128)).await;
+        let _ = blokli_chain_types::utils::mint_tokens(contract_instances.token.clone(), U256::from(1000_u128)).await;
 
         // Check balance is 1000 HOPR
         let balance = contract_instances

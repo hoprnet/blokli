@@ -13,8 +13,8 @@ use futures::{
     stream::{self},
 };
 use hopr_bindings::hoprtoken::HoprToken::{Approval, Transfer};
-use hopr_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
-use hopr_chain_types::chain_events::SignificantChainEvent;
+use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
+use blokli_chain_types::chain_events::SignificantChainEvent;
 use hopr_crypto_types::types::Hash;
 use blokli_db_api::logs::HoprDbLogOperations;
 use blokli_db_sql::{HoprDbGeneralModelOperations, info::HoprDbInfoOperations};
@@ -56,9 +56,9 @@ lazy_static::lazy_static! {
 
 /// Indexer
 ///
-/// Accepts the RPC operational functionality [hopr_chain_rpc::HoprIndexerRpcOperations]
+/// Accepts the RPC operational functionality [blokli_chain_rpc::HoprIndexerRpcOperations]
 /// and provides the indexing operation resulting in and output of
-/// [hopr_chain_types::chain_events::SignificantChainEvent] streamed outside the indexer by the unbounded channel.
+/// [blokli_chain_types::chain_events::SignificantChainEvent] streamed outside the indexer by the unbounded channel.
 ///
 /// The roles of the indexer:
 /// 1. prime the RPC endpoint
@@ -819,8 +819,8 @@ mod tests {
     use async_trait::async_trait;
     use futures::{Stream, join};
     use hex_literal::hex;
-    use hopr_chain_rpc::BlockWithLogs;
-    use hopr_chain_types::{ContractAddresses, chain_events::ChainEventType};
+    use blokli_chain_rpc::BlockWithLogs;
+    use blokli_chain_types::{ContractAddresses, chain_events::ChainEventType};
     use hopr_crypto_types::{
         keypairs::{Keypair, OffchainKeypair},
         prelude::ChainKeypair,
@@ -888,17 +888,17 @@ mod tests {
 
         #[async_trait]
         impl HoprIndexerRpcOperations for HoprIndexerOps {
-            async fn block_number(&self) -> hopr_chain_rpc::errors::Result<u64>;
-            async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> hopr_chain_rpc::errors::Result<HoprBalance>;
-            async fn get_xdai_balance(&self, address: Address) -> hopr_chain_rpc::errors::Result<XDaiBalance>;
-            async fn get_hopr_balance(&self, address: Address) -> hopr_chain_rpc::errors::Result<HoprBalance>;
+            async fn block_number(&self) -> blokli_chain_rpc::errors::Result<u64>;
+            async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
+            async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance>;
+            async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
 
             fn try_stream_logs<'a>(
                 &'a self,
                 start_block_number: u64,
                 filters: FilterSet,
                 is_synced: bool,
-            ) -> hopr_chain_rpc::errors::Result<Pin<Box<dyn Stream<Item = BlockWithLogs> + Send + 'a>>>;
+            ) -> blokli_chain_rpc::errors::Result<Pin<Box<dyn Stream<Item = BlockWithLogs> + Send + 'a>>>;
         }
     }
 

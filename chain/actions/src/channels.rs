@@ -12,11 +12,11 @@
 //! The functions return immediately but provide futures that can be awaited in case the callers wishes to await the
 //! on-chain confirmation of the corresponding operation.
 //! See the details in [ActionQueue](crate::action_queue::ActionQueue) on how the confirmation is realized by awaiting
-//! the respective [SignificantChainEvent](hopr_chain_types::chain_events::SignificantChainEvent) by the Indexer.
+//! the respective [SignificantChainEvent](blokli_chain_types::chain_events::SignificantChainEvent) by the Indexer.
 use std::time::Duration;
 
 use async_trait::async_trait;
-use hopr_chain_types::actions::Action;
+use blokli_chain_types::actions::Action;
 use hopr_crypto_types::types::Hash;
 use blokli_db_sql::HoprDbAllOperations;
 use hopr_internal_types::prelude::*;
@@ -236,7 +236,7 @@ mod tests {
 
     use futures::FutureExt;
     use hex_literal::hex;
-    use hopr_chain_types::{
+    use blokli_chain_types::{
         actions::Action,
         chain_events::{ChainEventType, SignificantChainEvent},
     };

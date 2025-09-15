@@ -8,10 +8,10 @@ pub enum HoprChainError {
     Api(String),
 
     #[error("rpc error: {0}")]
-    Rpc(#[from] hopr_chain_rpc::errors::RpcError),
+    Rpc(#[from] blokli_chain_rpc::errors::RpcError),
 
     #[error("indexer error: {0}")]
-    Indexer(#[from] hopr_chain_indexer::errors::CoreEthereumIndexerError),
+    Indexer(#[from] blokli_chain_indexer::errors::CoreEthereumIndexerError),
 
     #[error(transparent)]
     DbError(#[from] blokli_db_sql::errors::DbSqlError),

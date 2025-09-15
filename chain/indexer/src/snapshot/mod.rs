@@ -21,7 +21,7 @@
 //!
 //! ```no_run
 //! use std::path::Path;
-//! use hopr_chain_indexer::snapshot::{SnapshotResult, SnapshotManager};
+//! use blokli_chain_indexer::snapshot::{SnapshotResult, SnapshotManager};
 //!
 //! # async fn example(db: impl blokli_db_sql::HoprDbGeneralModelOperations + Clone + Send + Sync + 'static) -> SnapshotResult<()> {
 //! let manager = SnapshotManager::with_db(db)?;
@@ -184,7 +184,7 @@ where
     /// # Example
     ///
     /// ```no_run
-    /// # use hopr_chain_indexer::snapshot::{SnapshotResult, SnapshotManager};
+    /// # use blokli_chain_indexer::snapshot::{SnapshotResult, SnapshotManager};
     ///
     /// # fn example(db: impl blokli_db_sql::HoprDbGeneralModelOperations + Clone + Send + Sync + 'static) -> SnapshotResult<()> {
     /// let manager = SnapshotManager::with_db(db)?;
@@ -224,7 +224,7 @@ where
     ///
     /// ```no_run
     /// # use std::path::Path;
-    /// # use hopr_chain_indexer::snapshot::SnapshotManager;
+    /// # use blokli_chain_indexer::snapshot::SnapshotManager;
     /// # async fn example(manager: SnapshotManager<impl blokli_db_sql::HoprDbGeneralModelOperations + Clone + Send + Sync + 'static>) -> Result<(), Box<dyn std::error::Error>> {
     /// // Download from HTTPS
     /// let info = manager

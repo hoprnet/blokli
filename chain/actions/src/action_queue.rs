@@ -1,6 +1,6 @@
 //! Defines the main FIFO MPSC queue for actions - the [ActionQueue] type.
 //!
-//! The [ActionQueue] acts as a MPSC queue of [Actions](hopr_chain_types::actions::Action) which are executed one-by-one
+//! The [ActionQueue] acts as a MPSC queue of [Actions](blokli_chain_types::actions::Action) which are executed one-by-one
 //! as they are being popped up from the queue by a runner task.
 use std::{
     fmt::{Display, Formatter},
@@ -14,7 +14,7 @@ use async_channel::{Receiver, Sender, bounded};
 use async_trait::async_trait;
 use futures::{FutureExt, StreamExt, future::Either, pin_mut};
 use hopr_async_runtime::prelude::spawn;
-use hopr_chain_types::{actions::Action, chain_events::ChainEventType};
+use blokli_chain_types::{actions::Action, chain_events::ChainEventType};
 use hopr_crypto_types::types::Hash;
 use blokli_db_sql::{api::tickets::HoprDbTicketOperations, info::HoprDbInfoOperations};
 use hopr_internal_types::prelude::*;
@@ -33,7 +33,7 @@ use crate::{
 #[cfg(all(feature = "prometheus", not(test)))]
 lazy_static::lazy_static! {
     static ref METRIC_COUNT_ACTIONS: hopr_metrics::MultiCounter = hopr_metrics::MultiCounter::new(
-        "hopr_chain_actions_count",
+        "blokli_chain_actions_count",
         "Number of different chain actions and their results",
         &["action", "result"]
     )

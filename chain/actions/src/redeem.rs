@@ -21,10 +21,10 @@
 //! each ticket redemption.
 //!
 //! See the details in [ActionQueue](crate::action_queue::ActionQueue) on how the confirmation is realized by awaiting
-//! the respective [SignificantChainEvent](hopr_chain_types::chain_events::SignificantChainEvent). by the Indexer.
+//! the respective [SignificantChainEvent](blokli_chain_types::chain_events::SignificantChainEvent). by the Indexer.
 use async_trait::async_trait;
 use futures::StreamExt;
-use hopr_chain_types::actions::Action;
+use blokli_chain_types::actions::Action;
 use hopr_crypto_types::types::Hash;
 use blokli_db_sql::{
     api::{
@@ -260,7 +260,7 @@ where
 mod tests {
     use futures::FutureExt;
     use hex_literal::hex;
-    use hopr_chain_types::chain_events::{ChainEventType::TicketRedeemed, SignificantChainEvent};
+    use blokli_chain_types::chain_events::{ChainEventType::TicketRedeemed, SignificantChainEvent};
     use hopr_crypto_random::{Randomizable, random_bytes};
     use hopr_crypto_types::prelude::*;
     use blokli_db_sql::{

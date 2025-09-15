@@ -12,7 +12,7 @@
 //! to the [ActionQueue](crate::action_queue::ActionQueue).
 
 use async_trait::async_trait;
-use hopr_chain_types::actions::Action;
+use blokli_chain_types::actions::Action;
 use hopr_crypto_types::{keypairs::OffchainKeypair, prelude::Keypair};
 use blokli_db_sql::accounts::HoprDbAccountOperations;
 use hopr_internal_types::prelude::*;
@@ -105,7 +105,7 @@ mod tests {
 
     use futures::FutureExt;
     use hex_literal::hex;
-    use hopr_chain_types::{
+    use blokli_chain_types::{
         actions::Action,
         chain_events::{ChainEventType, SignificantChainEvent},
     };

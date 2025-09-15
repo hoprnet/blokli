@@ -30,7 +30,7 @@ use crate::{
 lazy_static::lazy_static! {
     static ref METRIC_RPC_CHAIN_HEAD: SimpleGauge =
         SimpleGauge::new(
-            "hopr_chain_head_block_number",
+            "blokli_chain_head_block_number",
             "Current block number of chain head",
     ).unwrap();
 }
@@ -294,7 +294,7 @@ mod tests {
         hoprchannelsevents::HoprChannelsEvents::{ChannelBalanceIncreased, ChannelOpened},
         hoprtoken::HoprToken::{Approval, Transfer},
     };
-    use hopr_chain_types::{ContractAddresses, ContractInstances};
+    use blokli_chain_types::{ContractAddresses, ContractInstances};
     use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
     use tokio::time::timeout;
     use tracing::debug;
@@ -371,7 +371,7 @@ mod tests {
     #[tokio::test]
     async fn test_should_get_block_number() -> anyhow::Result<()> {
         let expected_block_time = Duration::from_secs(1);
-        let anvil = hopr_chain_types::utils::create_anvil(Some(expected_block_time));
+        let anvil = blokli_chain_types::utils::create_anvil(Some(expected_block_time));
         let chain_key_0 = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
 
         let transport_client = ReqwestTransport::new(anvil.endpoint_url());
@@ -409,7 +409,7 @@ mod tests {
 
         let expected_block_time = Duration::from_secs(1);
 
-        let anvil = hopr_chain_types::utils::create_anvil(Some(expected_block_time));
+        let anvil = blokli_chain_types::utils::create_anvil(Some(expected_block_time));
         let chain_key_0 = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
         let chain_key_1 = ChainKeypair::from_secret(anvil.keys()[1].to_bytes().as_ref())?;
 
@@ -449,7 +449,7 @@ mod tests {
         debug!("{:#?}", log_filter);
 
         let tokens_minted_at =
-            hopr_chain_types::utils::mint_tokens(contract_instances.token.clone(), U256::from(1000_u128))
+            blokli_chain_types::utils::mint_tokens(contract_instances.token.clone(), U256::from(1000_u128))
                 .await?
                 .unwrap();
         debug!("tokens were minted at block {tokens_minted_at}");
@@ -485,7 +485,7 @@ mod tests {
         });
 
         // Spawn channel funding
-        let _ = hopr_chain_types::utils::fund_channel(
+        let _ = blokli_chain_types::utils::fund_channel(
             chain_key_1.public().to_address(),
             contract_instances.token,
             contract_instances.channels,
@@ -542,7 +542,7 @@ mod tests {
 
         let expected_block_time = Duration::from_secs(1);
 
-        let anvil = hopr_chain_types::utils::create_anvil(Some(expected_block_time));
+        let anvil = blokli_chain_types::utils::create_anvil(Some(expected_block_time));
         let chain_key_0 = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
         let chain_key_1 = ChainKeypair::from_secret(anvil.keys()[1].to_bytes().as_ref())?;
 
@@ -553,7 +553,7 @@ mod tests {
         };
 
         let tokens_minted_at =
-            hopr_chain_types::utils::mint_tokens(contract_instances.token.clone(), U256::from(1000_u128))
+            blokli_chain_types::utils::mint_tokens(contract_instances.token.clone(), U256::from(1000_u128))
                 .await?
                 .unwrap();
         debug!("tokens were minted at block {tokens_minted_at}");
@@ -613,7 +613,7 @@ mod tests {
         });
 
         // Spawn channel funding
-        let _ = hopr_chain_types::utils::fund_channel(
+        let _ = blokli_chain_types::utils::fund_channel(
             chain_key_1.public().to_address(),
             contract_instances.token,
             contract_instances.channels,

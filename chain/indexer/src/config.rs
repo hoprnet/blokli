@@ -87,7 +87,7 @@ impl IndexerConfig {
     /// # Example
     ///
     /// ```
-    /// use hopr_chain_indexer::IndexerConfig;
+    /// use blokli_chain_indexer::IndexerConfig;
     ///
     /// let config = IndexerConfig::new(
     ///     100,
@@ -120,7 +120,7 @@ impl IndexerConfig {
     /// # Example
     ///
     /// ```
-    /// use hopr_chain_indexer::IndexerConfig;
+    /// use blokli_chain_indexer::IndexerConfig;
     ///
     /// let config = IndexerConfig::default();
     /// if !config.is_valid() {

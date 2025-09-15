@@ -17,21 +17,21 @@ use config::ChainNetworkConfig;
 use executors::{EthereumTransactionExecutor, RpcEthereumClient, RpcEthereumClientConfig};
 use futures::future::AbortHandle;
 use hopr_async_runtime::{prelude::sleep, spawn_as_abortable};
-use hopr_chain_actions::{
+use blokli_chain_actions::{
     ChainActions,
     action_queue::{ActionQueue, ActionQueueConfig},
     action_state::IndexerActionTracker,
     payload::SafePayloadGenerator,
 };
-use hopr_chain_indexer::{IndexerConfig, block::Indexer, handlers::ContractEventHandlers};
-use hopr_chain_rpc::{
+use blokli_chain_indexer::{IndexerConfig, block::Indexer, handlers::ContractEventHandlers};
+use blokli_chain_rpc::{
     HoprRpcOperations,
     client::DefaultRetryPolicy,
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
 };
-use hopr_chain_types::ContractAddresses;
-pub use hopr_chain_types::chain_events::SignificantChainEvent;
+use blokli_chain_types::ContractAddresses;
+pub use blokli_chain_types::chain_events::SignificantChainEvent;
 use hopr_crypto_types::prelude::*;
 use blokli_db_sql::HoprDbAllOperations;
 pub use hopr_internal_types::channels::ChannelEntry;
@@ -43,7 +43,7 @@ use tracing::{debug, error, info, warn};
 
 use crate::errors::{HoprChainError, Result};
 
-pub type DefaultHttpRequestor = hopr_chain_rpc::transport::ReqwestClient;
+pub type DefaultHttpRequestor = blokli_chain_rpc::transport::ReqwestClient;
 
 /// Checks whether the node can be registered with the Safe in the NodeSafeRegistry
 pub async fn can_register_with_safe<Rpc: HoprRpcOperations>(
@@ -143,7 +143,7 @@ pub struct HoprChain<T: HoprDbAllOperations + Send + Sync + Clone + std::fmt::De
     indexer_cfg: IndexerConfig,
     indexer_events_tx: async_channel::Sender<SignificantChainEvent>,
     db: T,
-    hopr_chain_actions: ChainActions<T>,
+    blokli_chain_actions: ChainActions<T>,
     action_queue: ActionQueueType<T>,
     action_state: Arc<IndexerActionTracker>,
     rpc_operations: RpcOperations<DefaultHttpRequestor>,
@@ -164,7 +164,7 @@ impl<T: HoprDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static> H
         indexer_events_tx: async_channel::Sender<SignificantChainEvent>,
     ) -> Result<Self> {
         // TODO: extract this from the global config type
-        let mut rpc_http_config = hopr_chain_rpc::HttpPostRequestorConfig::default();
+        let mut rpc_http_config = blokli_chain_rpc::HttpPostRequestorConfig::default();
         if let Some(max_rpc_req) = chain_config.max_requests_per_sec {
             rpc_http_config.max_requests_per_sec = Some(max_rpc_req); // override the default if set
         }
@@ -224,7 +224,7 @@ impl<T: HoprDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static> H
         let action_sender = action_queue.new_sender();
 
         // Instantiate Chain Actions
-        let hopr_chain_actions = ChainActions::new(&me_onchain, db.clone(), action_sender);
+        let blokli_chain_actions = ChainActions::new(&me_onchain, db.clone(), action_sender);
 
         Ok(Self {
             me_onchain,
@@ -233,7 +233,7 @@ impl<T: HoprDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static> H
             indexer_cfg,
             indexer_events_tx,
             db,
-            hopr_chain_actions,
+            blokli_chain_actions,
             action_queue,
             action_state,
             rpc_operations,
@@ -321,11 +321,11 @@ impl<T: HoprDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static> H
     }
 
     pub fn actions_ref(&self) -> &ChainActions<T> {
-        &self.hopr_chain_actions
+        &self.blokli_chain_actions
     }
 
     pub fn actions_mut_ref(&mut self) -> &mut ChainActions<T> {
-        &mut self.hopr_chain_actions
+        &mut self.blokli_chain_actions
     }
 
     pub fn rpc(&self) -> &RpcOperations<DefaultHttpRequestor> {

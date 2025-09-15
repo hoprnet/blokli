@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use hopr_chain_types::ContractAddresses;
+use blokli_chain_types::ContractAddresses;
 use hopr_primitive_types::primitives::Address;
 use semver::{Version, VersionReq};
 use serde::{Deserialize, Serialize};

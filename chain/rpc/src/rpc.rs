@@ -23,7 +23,7 @@ use alloy::{
 };
 use async_trait::async_trait;
 use hopr_bindings::hoprnodemanagementmodule::HoprNodeManagementModule::{self, HoprNodeManagementModuleInstance};
-use hopr_chain_types::{ContractAddresses, ContractInstances, NetworkRegistryProxy};
+use blokli_chain_types::{ContractAddresses, ContractInstances, NetworkRegistryProxy};
 use hopr_crypto_types::{
     keypairs::{ChainKeypair, Keypair},
     prelude::Hash,
@@ -458,7 +458,7 @@ mod tests {
     };
     use hex_literal::hex;
     use hopr_async_runtime::prelude::sleep;
-    use hopr_chain_types::{ContractAddresses, ContractInstances, NetworkRegistryProxy, utils::create_native_transfer};
+    use blokli_chain_types::{ContractAddresses, ContractInstances, NetworkRegistryProxy, utils::create_native_transfer};
     use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
     use hopr_primitive_types::prelude::*;
     use primitive_types::H160;
@@ -509,7 +509,7 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
 
         let expected_block_time = Duration::from_secs(1);
-        let anvil = hopr_chain_types::utils::create_anvil(Some(expected_block_time));
+        let anvil = blokli_chain_types::utils::create_anvil(Some(expected_block_time));
         let chain_key_0 = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
 
         let mut server = mockito::Server::new_async().await;
@@ -565,7 +565,7 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
 
         let expected_block_time = Duration::from_secs(1);
-        let anvil = hopr_chain_types::utils::create_anvil(Some(expected_block_time));
+        let anvil = blokli_chain_types::utils::create_anvil(Some(expected_block_time));
         let chain_key_0 = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
 
         let cfg = RpcOperationsConfig {
@@ -609,7 +609,7 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
 
         let expected_block_time = Duration::from_secs(1);
-        let anvil = hopr_chain_types::utils::create_anvil(Some(expected_block_time));
+        let anvil = blokli_chain_types::utils::create_anvil(Some(expected_block_time));
         let chain_key_0 = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
 
         let cfg = RpcOperationsConfig {
@@ -671,7 +671,7 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
 
         let expected_block_time = Duration::from_secs(1);
-        let anvil = hopr_chain_types::utils::create_anvil(Some(expected_block_time));
+        let anvil = blokli_chain_types::utils::create_anvil(Some(expected_block_time));
         let chain_key_0 = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
 
         let cfg = RpcOperationsConfig {
@@ -715,7 +715,7 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
 
         let expected_block_time = Duration::from_secs(1);
-        let anvil = hopr_chain_types::utils::create_anvil(Some(expected_block_time));
+        let anvil = blokli_chain_types::utils::create_anvil(Some(expected_block_time));
         let chain_key_0 = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
 
         // Deploy contracts
@@ -735,7 +735,7 @@ mod tests {
         };
 
         let amount = 1024_u64;
-        let _ = hopr_chain_types::utils::mint_tokens(contract_instances.token, U256::from(amount)).await;
+        let _ = blokli_chain_types::utils::mint_tokens(contract_instances.token, U256::from(amount)).await;
 
         let transport_client = ReqwestTransport::new(anvil.endpoint_url());
 
@@ -759,7 +759,7 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
 
         let expected_block_time = Duration::from_secs(1);
-        let anvil = hopr_chain_types::utils::create_anvil(Some(expected_block_time));
+        let anvil = blokli_chain_types::utils::create_anvil(Some(expected_block_time));
         let chain_key_0 = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
 
         // Deploy contracts
@@ -770,7 +770,7 @@ mod tests {
             // deploy MULTICALL contract to anvil
             deploy_multicall3_to_anvil(&client.clone()).await?;
 
-            let (module, safe) = hopr_chain_types::utils::deploy_one_safe_one_module_and_setup_for_testing::<
+            let (module, safe) = blokli_chain_types::utils::deploy_one_safe_one_module_and_setup_for_testing::<
                 Arc<AnvilRpcClient>,
             >(&instances, client.clone(), &chain_key_0)
             .await?;
@@ -819,7 +819,7 @@ mod tests {
         );
 
         // including node to the module
-        hopr_chain_types::utils::include_node_to_module_by_safe(
+        blokli_chain_types::utils::include_node_to_module_by_safe(
             contract_instances.channels.provider().clone(),
             safe,
             module,
@@ -851,7 +851,7 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
 
         let expected_block_time = Duration::from_secs(1);
-        let anvil = hopr_chain_types::utils::create_anvil(Some(expected_block_time));
+        let anvil = blokli_chain_types::utils::create_anvil(Some(expected_block_time));
         let chain_key_0 = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
         let node_address: H160 = chain_key_0.public().to_address().into();
 
@@ -863,7 +863,7 @@ mod tests {
             // deploy MULTICALL contract to anvil
             deploy_multicall3_to_anvil(&client.clone()).await?;
 
-            let (module, safe) = hopr_chain_types::utils::deploy_one_safe_one_module_and_setup_for_testing::<
+            let (module, safe) = blokli_chain_types::utils::deploy_one_safe_one_module_and_setup_for_testing::<
                 Arc<AnvilRpcClient>,
             >(&instances, client.clone(), &chain_key_0)
             .await?;
@@ -942,7 +942,7 @@ mod tests {
         let _ = env_logger::builder().is_test(true).try_init();
 
         let expected_block_time = Duration::from_secs(1);
-        let anvil = hopr_chain_types::utils::create_anvil(Some(expected_block_time));
+        let anvil = blokli_chain_types::utils::create_anvil(Some(expected_block_time));
         let chain_key_0 = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
         let node_address: H160 = chain_key_0.public().to_address().into();
 
@@ -955,7 +955,7 @@ mod tests {
             // deploy MULTICALL contract to anvil
             deploy_multicall3_to_anvil(&client.clone()).await?;
 
-            let (module, safe) = hopr_chain_types::utils::deploy_one_safe_one_module_and_setup_for_testing::<
+            let (module, safe) = blokli_chain_types::utils::deploy_one_safe_one_module_and_setup_for_testing::<
                 Arc<AnvilRpcClient>,
             >(&instances, client.clone(), &chain_key_0)
             .await?;

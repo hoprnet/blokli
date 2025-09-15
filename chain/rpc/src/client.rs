@@ -893,7 +893,7 @@ mod tests {
     };
     use anyhow::Ok;
     use hopr_async_runtime::prelude::sleep;
-    use hopr_chain_types::{ContractAddresses, ContractInstances, utils::create_anvil};
+    use blokli_chain_types::{ContractAddresses, ContractInstances, utils::create_anvil};
     use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
     use hopr_primitive_types::primitives::Address;
     use serde_json::json;

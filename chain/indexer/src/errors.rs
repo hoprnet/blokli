@@ -56,7 +56,7 @@ pub enum CoreEthereumIndexerError {
     MultiaddrParseError(#[from] multiaddr::Error),
 
     #[error(transparent)]
-    RpcError(#[from] hopr_chain_rpc::errors::RpcError),
+    RpcError(#[from] blokli_chain_rpc::errors::RpcError),
 
     #[error("Snapshot error: {0}")]
     SnapshotError(String),
