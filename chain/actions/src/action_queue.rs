@@ -17,15 +17,14 @@ use blokli_db_sql::info::BlokliDbInfoOperations;
 use futures::{FutureExt, StreamExt, future::Either, pin_mut};
 use hopr_async_runtime::prelude::spawn;
 use hopr_crypto_types::types::Hash;
-use hopr_internal_types::prelude::*;
-use hopr_primitive_types::prelude::*;
+use hopr_primitive_types::prelude::{Address, Balance, Currency};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace};
 
 use crate::{
     action_state::{ActionState, IndexerExpectation},
     errors::{
-        ChainActionsError::{ChannelAlreadyClosed, InvalidState, Timeout, TransactionSubmissionFailed},
+        ChainActionsError::{InvalidState, Timeout, TransactionSubmissionFailed},
         Result,
     },
 };
@@ -216,7 +215,7 @@ where
     S: ActionState + Send + Sync,
     TxExec: TransactionExecutor + Send + Sync,
 {
-    db: Db,
+    _db: Db,
     queue_send: Sender<(Action, ActionFinisher)>,
     queue_recv: Receiver<(Action, ActionFinisher)>,
     ctx: ExecutionContext<S, TxExec>,
@@ -235,7 +234,7 @@ where
     pub fn new(db: Db, action_state: S, tx_exec: TxExec, cfg: ActionQueueConfig) -> Self {
         let (queue_send, queue_recv) = bounded(Self::ACTION_QUEUE_SIZE);
         Self {
-            db,
+            _db: db,
             ctx: ExecutionContext {
                 action_state: Arc::new(action_state),
                 tx_exec: Arc::new(tx_exec),
@@ -268,7 +267,6 @@ where
             futures_timer::Delay::new(Duration::from_millis(100)).await;
 
             let exec_context = self.ctx.clone();
-            let db_clone = self.db.clone();
 
             // NOTE: the process is "daemonized" and not awaited, so it will run in the background
             spawn(async move {

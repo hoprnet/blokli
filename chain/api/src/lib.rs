@@ -286,7 +286,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
 
     pub async fn channel(&self, src: &Address, dest: &Address) -> errors::Result<ChannelEntry> {
         self.db
-            .get_channel_by_parties(None, src, dest, false)
+            .get_channel_by_parties(None, src, dest)
             .await
             .map_err(BlokliChainError::from)
             .and_then(|v| {

@@ -109,8 +109,8 @@ where
     Db: Clone + std::fmt::Debug,
 {
     me: Address,
-    chain_key: ChainKeypair,
-    db: Db,
+    _chain_key: ChainKeypair,
+    _db: Db,
     tx_sender: ActionSender,
 }
 
@@ -122,8 +122,8 @@ where
     pub fn new(me: &ChainKeypair, db: Db, tx_sender: ActionSender) -> Self {
         Self {
             me: me.public().to_address(),
-            chain_key: me.clone(),
-            db,
+            _chain_key: me.clone(),
+            _db: db,
             tx_sender,
         }
     }

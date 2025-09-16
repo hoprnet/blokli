@@ -7,8 +7,7 @@
 //! See the `chain-actions` crate for details.
 use std::fmt::{Display, Formatter};
 
-use hopr_internal_types::prelude::*;
-use hopr_primitive_types::prelude::*;
+use hopr_primitive_types::prelude::{Address, HoprBalance, XDaiBalance};
 
 /// Enumerates all possible on-chain state change requests.
 ///

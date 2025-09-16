@@ -7,7 +7,6 @@ use blokli_chain_rpc::{HoprRpcOperations, errors::RpcError};
 use futures::{FutureExt, future::Either, pin_mut};
 use hopr_async_runtime::prelude::sleep;
 use hopr_crypto_types::types::Hash;
-use hopr_internal_types::prelude::*;
 use hopr_primitive_types::prelude::*;
 use serde::{Deserialize, Serialize};
 

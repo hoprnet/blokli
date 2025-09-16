@@ -14,19 +14,13 @@
 use async_trait::async_trait;
 use blokli_chain_types::actions::Action;
 use blokli_db_sql::accounts::BlokliDbAccountOperations;
-use hopr_crypto_types::{keypairs::OffchainKeypair, prelude::Keypair};
-use hopr_internal_types::prelude::*;
-use hopr_primitive_types::prelude::*;
-use multiaddr::Multiaddr;
+use hopr_primitive_types::prelude::{Address, HoprBalance, XDaiBalance};
 use tracing::info;
 
 use crate::{
     ChainActions,
     action_queue::PendingAction,
-    errors::{
-        ChainActionsError::{AlreadyAnnounced, InvalidArguments},
-        Result,
-    },
+    errors::{ChainActionsError::InvalidArguments, Result},
 };
 
 /// Contains all on-chain calls specific to the HOPR node itself.
