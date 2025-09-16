@@ -9,9 +9,12 @@ repository  = "https://github.com/hoprnet/hoprnet"
 version     = "0.1.0"
 
 [dependencies]
+alloy              = { workspace = true }
 async-signal       = { workspace = true }
+async-channel      = { workspace = true }
 clap               = { workspace = true }
 futures            = { workspace = true }
+hex                = { workspace = true }
 serde              = { workspace = true }
 serde_with         = { workspace = true }
 serde_yaml         = { workspace = true }
@@ -20,4 +23,18 @@ thiserror          = { workspace = true }
 tokio              = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
+url                = { workspace = true }
 validator          = { workspace = true }
+
+# Local dependencies
+blokli-chain-api     = { path = "../chain/api" }
+blokli-chain-indexer = { path = "../chain/indexer" }
+blokli-chain-rpc     = { path = "../chain/rpc" }
+blokli-chain-types   = { path = "../chain/types" }
+blokli-db-api        = { path = "../db/api" }
+blokli-db-sql        = { path = "../db/sql" }
+
+# HOPR dependencies
+hopr-crypto-types    = { workspace = true }
+hopr-internal-types  = { workspace = true }
+hopr-primitive-types = { workspace = true }

@@ -10,6 +10,21 @@ pub enum BloklidError {
 
     #[error("Unspecified error: {0}")]
     NonSpecific(String),
+
+    #[error("database error: {0}")]
+    Database(#[from] blokli_db_sql::errors::DbSqlError),
+
+    #[error("chain error: {0}")]
+    Chain(#[from] blokli_chain_api::errors::BlokliChainError),
+
+    #[error("rpc error: {0}")]
+    Rpc(#[from] blokli_chain_rpc::errors::RpcError),
+
+    #[error("indexer error: {0}")]
+    Indexer(#[from] blokli_chain_indexer::errors::CoreEthereumIndexerError),
+
+    #[error("crypto error: {0}")]
+    Crypto(String),
 }
 
 #[derive(Debug, thiserror::Error)]

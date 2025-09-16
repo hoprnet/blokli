@@ -1657,9 +1657,21 @@ dependencies = [
 name = "bloklid"
 version = "0.1.0"
 dependencies = [
+ "alloy",
+ "async-channel 2.5.0",
  "async-signal",
+ "blokli-chain-api",
+ "blokli-chain-indexer",
+ "blokli-chain-rpc",
+ "blokli-chain-types",
+ "blokli-db-api",
+ "blokli-db-sql",
  "clap",
  "futures",
+ "hex",
+ "hopr-crypto-types",
+ "hopr-internal-types",
+ "hopr-primitive-types",
  "serde",
  "serde_with",
  "serde_yaml",
@@ -1668,6 +1680,7 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+ "url",
  "validator",
 ]
 
