@@ -48,8 +48,8 @@ pub(crate) mod test_utils;
 // Re-export commonly used types
 use std::{fs, path::Path};
 
-pub use error::{SnapshotError, SnapshotResult};
 use blokli_db_sql::BlokliDbGeneralModelOperations;
+pub use error::{SnapshotError, SnapshotResult};
 use tracing::{debug, error, info};
 pub use validate::SnapshotInfo;
 

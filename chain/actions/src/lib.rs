@@ -6,7 +6,6 @@
 //! by the [ChainActions] type.
 //! There are 3 classes of actions implemented in submodules of this crate:
 //! - [channel actions](channels)
-//! - [ticket redeem actions](redeem)
 //! - [node actions](node)
 //!
 //! Each action is represented by a method (or methods) that are imported into the [ChainActions] type
@@ -98,12 +97,10 @@ use crate::action_queue::ActionSender;
 
 pub mod action_queue;
 pub mod action_state;
-pub mod channels;
 /// Contains all errors used in this crate.
 pub mod errors;
 pub mod node;
 pub mod payload;
-pub mod redeem;
 
 /// Contains all actions that a node can execute on-chain.
 #[derive(Debug, Clone)]

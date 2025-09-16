@@ -23,8 +23,8 @@ use std::{
 
 use async_lock::RwLock;
 use async_trait::async_trait;
-use futures::{FutureExt, TryFutureExt, channel};
 use blokli_chain_types::chain_events::{ChainEventType, SignificantChainEvent};
+use futures::{FutureExt, TryFutureExt, channel};
 use hopr_crypto_types::types::Hash;
 use tracing::{debug, error, trace};
 
@@ -170,8 +170,8 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     use anyhow::Context;
-    use hex_literal::hex;
     use blokli_chain_types::chain_events::{ChainEventType, NetworkRegistryStatus, SignificantChainEvent};
+    use hex_literal::hex;
     use hopr_crypto_random::random_bytes;
     use hopr_crypto_types::types::Hash;
     use hopr_primitive_types::prelude::*;

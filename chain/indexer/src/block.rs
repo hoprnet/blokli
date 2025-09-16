@@ -7,17 +7,17 @@ use std::{
 };
 
 use alloy::sol_types::SolEvent;
+use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
+use blokli_chain_types::chain_events::SignificantChainEvent;
+use blokli_db_api::logs::BlokliDbLogOperations;
+use blokli_db_sql::{BlokliDbGeneralModelOperations, info::BlokliDbInfoOperations};
 use futures::{
     StreamExt,
     future::AbortHandle,
     stream::{self},
 };
 use hopr_bindings::hoprtoken::HoprToken::{Approval, Transfer};
-use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
-use blokli_chain_types::chain_events::SignificantChainEvent;
 use hopr_crypto_types::types::Hash;
-use blokli_db_api::logs::BlokliDbLogOperations;
-use blokli_db_sql::{BlokliDbGeneralModelOperations, info::BlokliDbInfoOperations};
 use hopr_primitive_types::prelude::*;
 use tracing::{debug, error, info, trace};
 
@@ -117,7 +117,13 @@ where
     where
         T: HoprIndexerRpcOperations + 'static,
         U: ChainLogHandler + 'static,
-        Db: BlokliDbGeneralModelOperations + BlokliDbInfoOperations + BlokliDbLogOperations + Clone + Send + Sync + 'static,
+        Db: BlokliDbGeneralModelOperations
+            + BlokliDbInfoOperations
+            + BlokliDbLogOperations
+            + Clone
+            + Send
+            + Sync
+            + 'static,
     {
         if self.rpc.is_none() || self.db_processor.is_none() {
             return Err(CoreEthereumIndexerError::ProcessError(
@@ -817,15 +823,15 @@ mod tests {
         sol_types::SolEvent,
     };
     use async_trait::async_trait;
-    use futures::{Stream, join};
-    use hex_literal::hex;
     use blokli_chain_rpc::BlockWithLogs;
     use blokli_chain_types::{ContractAddresses, chain_events::ChainEventType};
+    use blokli_db_sql::{accounts::BlokliDbAccountOperations, db::BlokliDb};
+    use futures::{Stream, join};
+    use hex_literal::hex;
     use hopr_crypto_types::{
         keypairs::{Keypair, OffchainKeypair},
         prelude::ChainKeypair,
     };
-    use blokli_db_sql::{accounts::BlokliDbAccountOperations, db::BlokliDb};
     use hopr_internal_types::account::{AccountEntry, AccountType};
     use hopr_primitive_types::prelude::*;
     use mockall::mock;

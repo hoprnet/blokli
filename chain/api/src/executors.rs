@@ -2,10 +2,10 @@ use std::{marker::PhantomData, time::Duration};
 
 use alloy::{providers::PendingTransaction, rpc::types::TransactionRequest};
 use async_trait::async_trait;
-use futures::{FutureExt, future::Either, pin_mut};
-use hopr_async_runtime::prelude::sleep;
 use blokli_chain_actions::{action_queue::TransactionExecutor, payload::PayloadGenerator};
 use blokli_chain_rpc::{HoprRpcOperations, errors::RpcError};
+use futures::{FutureExt, future::Either, pin_mut};
+use hopr_async_runtime::prelude::sleep;
 use hopr_crypto_types::types::Hash;
 use hopr_internal_types::prelude::*;
 use hopr_primitive_types::prelude::*;
@@ -54,7 +54,10 @@ impl<Rpc: HoprRpcOperations> RpcEthereumClient<Rpc> {
     ///
     /// If the transaction yields a result before the timeout, the result value is returned.
     /// Otherwise, an [RpcError::Timeout] is returned and the transaction sending is aborted.
-    async fn post_tx_with_timeout(&self, tx: TransactionRequest) -> blokli_chain_rpc::errors::Result<PendingTransaction> {
+    async fn post_tx_with_timeout(
+        &self,
+        tx: TransactionRequest,
+    ) -> blokli_chain_rpc::errors::Result<PendingTransaction> {
         let submit_tx = self.rpc.send_transaction(tx).fuse();
         let timeout = sleep(self.cfg.max_tx_submission_wait).fuse();
         pin_mut!(submit_tx, timeout);
@@ -134,35 +137,6 @@ where
     C: EthereumClient<T> + Clone + Sync + Send,
     PGen: PayloadGenerator<T> + Clone + Sync + Send,
 {
-    async fn redeem_ticket(&self, acked_ticket: RedeemableTicket) -> blokli_chain_actions::errors::Result<Hash> {
-        let payload = self.payload_generator.redeem_ticket(acked_ticket)?;
-        Ok(self.client.post_transaction(payload).await?)
-    }
-
-    async fn fund_channel(
-        &self,
-        destination: Address,
-        balance: HoprBalance,
-    ) -> blokli_chain_actions::errors::Result<Hash> {
-        let payload = self.payload_generator.fund_channel(destination, balance)?;
-        Ok(self.client.post_transaction(payload).await?)
-    }
-
-    async fn initiate_outgoing_channel_closure(&self, dst: Address) -> blokli_chain_actions::errors::Result<Hash> {
-        let payload = self.payload_generator.initiate_outgoing_channel_closure(dst)?;
-        Ok(self.client.post_transaction(payload).await?)
-    }
-
-    async fn finalize_outgoing_channel_closure(&self, dst: Address) -> blokli_chain_actions::errors::Result<Hash> {
-        let payload = self.payload_generator.finalize_outgoing_channel_closure(dst)?;
-        Ok(self.client.post_transaction(payload).await?)
-    }
-
-    async fn close_incoming_channel(&self, src: Address) -> blokli_chain_actions::errors::Result<Hash> {
-        let payload = self.payload_generator.close_incoming_channel(src)?;
-        Ok(self.client.post_transaction(payload).await?)
-    }
-
     async fn withdraw<Cr: Currency + Send>(
         &self,
         recipient: Address,
@@ -173,11 +147,6 @@ where
         // Withdraw transaction is out-of-band from Indexer, so its confirmation
         // is awaited via polling.
         Ok(self.client.post_transaction_and_await_confirmation(payload).await?)
-    }
-
-    async fn announce(&self, data: AnnouncementData) -> blokli_chain_actions::errors::Result<Hash> {
-        let payload = self.payload_generator.announce(data)?;
-        Ok(self.client.post_transaction(payload).await?)
     }
 
     async fn register_safe(&self, safe_address: Address) -> blokli_chain_actions::errors::Result<Hash> {

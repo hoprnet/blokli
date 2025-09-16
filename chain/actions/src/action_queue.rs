@@ -1,7 +1,7 @@
 //! Defines the main FIFO MPSC queue for actions - the [ActionQueue] type.
 //!
-//! The [ActionQueue] acts as a MPSC queue of [Actions](blokli_chain_types::actions::Action) which are executed one-by-one
-//! as they are being popped up from the queue by a runner task.
+//! The [ActionQueue] acts as a MPSC queue of [Actions](blokli_chain_types::actions::Action) which are executed
+//! one-by-one as they are being popped up from the queue by a runner task.
 use std::{
     fmt::{Display, Formatter},
     future::Future,
@@ -12,11 +12,11 @@ use std::{
 
 use async_channel::{Receiver, Sender, bounded};
 use async_trait::async_trait;
+use blokli_chain_types::{actions::Action, chain_events::ChainEventType};
+use blokli_db_sql::info::BlokliDbInfoOperations;
 use futures::{FutureExt, StreamExt, future::Either, pin_mut};
 use hopr_async_runtime::prelude::spawn;
-use blokli_chain_types::{actions::Action, chain_events::ChainEventType};
 use hopr_crypto_types::types::Hash;
-use blokli_db_sql::{api::tickets::BlokliDbTicketOperations, info::BlokliDbInfoOperations};
 use hopr_internal_types::prelude::*;
 use hopr_primitive_types::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -46,29 +46,10 @@ lazy_static::lazy_static! {
 #[cfg_attr(test, mockall::automock)]
 #[async_trait]
 pub trait TransactionExecutor {
-    /// Executes ticket redemption transaction given a ticket.
-    async fn redeem_ticket(&self, ticket: RedeemableTicket) -> Result<Hash>;
-
-    /// Executes channel funding transaction (or channel opening) to the given `destination` and stake.
-    /// Channel funding and channel opening are both same transactions.
-    async fn fund_channel(&self, destination: Address, balance: HoprBalance) -> Result<Hash>;
-
-    /// Initiates closure of an outgoing channel.
-    async fn initiate_outgoing_channel_closure(&self, dst: Address) -> Result<Hash>;
-
-    /// Finalizes closure of an outgoing channel.
-    async fn finalize_outgoing_channel_closure(&self, dst: Address) -> Result<Hash>;
-
-    /// Closes incoming channel.
-    async fn close_incoming_channel(&self, src: Address) -> Result<Hash>;
-
     /// Performs withdrawal of a certain amount from an address.
     /// Note that this transaction is typically awaited via polling and is not tracked
     /// by the Indexer.
     async fn withdraw<C: Currency + Send + 'static>(&self, recipient: Address, amount: Balance<C>) -> Result<Hash>;
-
-    /// Announces the node on-chain given the `AnnouncementData`
-    async fn announce(&self, data: AnnouncementData) -> Result<Hash>;
 
     /// Registers Safe with the node.
     async fn register_safe(&self, safe_address: Address) -> Result<Hash>;
@@ -167,83 +148,6 @@ where
     #[tracing::instrument(level = "debug", skip(self))]
     pub async fn execute_action(self, action: Action) -> Result<ActionConfirmation> {
         let expectation = match action.clone() {
-            Action::RedeemTicket(ticket) => {
-                debug!(%ticket, "redeeming ticket");
-                let ticket_channel_id = ticket.verified_ticket().channel_id;
-                let tx_hash = self.tx_exec.redeem_ticket(ticket).await?;
-                IndexerExpectation::new(
-                    tx_hash,
-                    move |event| matches!(event, ChainEventType::TicketRedeemed(channel, _) if ticket_channel_id == channel.get_id()),
-                )
-            }
-
-            Action::OpenChannel(address, stake) => {
-                debug!(%address, %stake, "opening channel");
-                let tx_hash = self.tx_exec.fund_channel(address, stake).await?;
-                IndexerExpectation::new(
-                    tx_hash,
-                    move |event| matches!(event, ChainEventType::ChannelOpened(channel) if channel.destination == address),
-                )
-            }
-
-            Action::FundChannel(channel, amount) => {
-                if channel.status == ChannelStatus::Open {
-                    debug!(%channel, "funding channel");
-                    let tx_hash = self.tx_exec.fund_channel(channel.destination, amount).await?;
-                    IndexerExpectation::new(
-                        tx_hash,
-                        move |event| matches!(event, ChainEventType::ChannelBalanceIncreased(r_channel, diff) if r_channel.get_id() == channel.get_id() && amount.eq(diff)),
-                    )
-                } else {
-                    return Err(InvalidState(format!("cannot fund {channel} because it is not opened")));
-                }
-            }
-
-            Action::CloseChannel(channel, direction) => match direction {
-                ChannelDirection::Incoming => match channel.status {
-                    ChannelStatus::Open | ChannelStatus::PendingToClose(_) => {
-                        debug!(%channel, "closing incoming channel");
-                        let tx_hash = self.tx_exec.close_incoming_channel(channel.source).await?;
-                        IndexerExpectation::new(
-                            tx_hash,
-                            move |event| matches!(event, ChainEventType::ChannelClosed(r_channel) if r_channel.get_id() == channel.get_id()),
-                        )
-                    }
-                    ChannelStatus::Closed => {
-                        warn!(%channel, "channel already closed");
-                        return Err(ChannelAlreadyClosed);
-                    }
-                },
-                ChannelDirection::Outgoing => match channel.status {
-                    ChannelStatus::Open => {
-                        debug!(%channel, "initiating channel closure");
-                        let tx_hash = self
-                            .tx_exec
-                            .initiate_outgoing_channel_closure(channel.destination)
-                            .await?;
-                        IndexerExpectation::new(
-                            tx_hash,
-                            move |event| matches!(event, ChainEventType::ChannelClosureInitiated(r_channel) if r_channel.get_id() == channel.get_id()),
-                        )
-                    }
-                    ChannelStatus::PendingToClose(_) => {
-                        debug!(%channel, "finalizing channel closure");
-                        let tx_hash = self
-                            .tx_exec
-                            .finalize_outgoing_channel_closure(channel.destination)
-                            .await?;
-                        IndexerExpectation::new(
-                            tx_hash,
-                            move |event| matches!(event, ChainEventType::ChannelClosed(r_channel) if r_channel.get_id() == channel.get_id()),
-                        )
-                    }
-                    ChannelStatus::Closed => {
-                        warn!(%channel, "channel already closed");
-                        return Err(ChannelAlreadyClosed);
-                    }
-                },
-            },
-
             // Withdrawals are not awaited via the Indexer, but polled for completion,
             // so no indexer event stream expectation awaiting is needed.
             // So return once the future completes
@@ -262,14 +166,6 @@ where
                     event: None,
                     action: action.clone(),
                 });
-            }
-            Action::Announce(data) => {
-                debug!(mutliaddress = %data.multiaddress(), "announcing node");
-                let tx_hash = self.tx_exec.announce(data.clone()).await?;
-                IndexerExpectation::new(
-                    tx_hash,
-                    move |event| matches!(event, ChainEventType::Announcement{multiaddresses,..} if multiaddresses.contains(data.multiaddress())),
-                )
             }
             Action::RegisterSafe(safe_address) => {
                 debug!(%safe_address, "registering safe");
@@ -316,7 +212,7 @@ where
 #[derive(Debug, Clone)]
 pub struct ActionQueue<Db, S, TxExec>
 where
-    Db: BlokliDbInfoOperations + BlokliDbTicketOperations + Send + Sync,
+    Db: BlokliDbInfoOperations + Send + Sync,
     S: ActionState + Send + Sync,
     TxExec: TransactionExecutor + Send + Sync,
 {
@@ -328,7 +224,7 @@ where
 
 impl<Db, S, TxExec> ActionQueue<Db, S, TxExec>
 where
-    Db: BlokliDbInfoOperations + BlokliDbTicketOperations + Clone + Send + Sync + 'static,
+    Db: BlokliDbInfoOperations + Clone + Send + Sync + 'static,
     S: ActionState + Send + Sync + 'static,
     TxExec: TransactionExecutor + Send + Sync + 'static,
 {
@@ -389,18 +285,6 @@ where
                         METRIC_COUNT_ACTIONS.increment(&[act_name, "success"]);
                     }
                     Err(err) => {
-                        // On error in Ticket redeem action, we also need to reset ack ticket state
-                        if let Action::RedeemTicket(ack) = act {
-                            error!(rror = %err, "marking the acknowledged ticket as untouched - redeem action failed");
-
-                            if let Err(e) = db_clone
-                                .update_ticket_states((&ack).into(), AcknowledgedTicketStatus::Untouched)
-                                .await
-                            {
-                                error!(%ack, error = %e, "cannot mark ticket as untouched");
-                            }
-                        }
-
                         // Timeouts are accounted in different metric
                         if let Timeout = err {
                             error!(act_id, "timeout while waiting for confirmation");

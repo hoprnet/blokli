@@ -13,8 +13,8 @@
 
 use async_trait::async_trait;
 use blokli_chain_types::actions::Action;
-use hopr_crypto_types::{keypairs::OffchainKeypair, prelude::Keypair};
 use blokli_db_sql::accounts::BlokliDbAccountOperations;
+use hopr_crypto_types::{keypairs::OffchainKeypair, prelude::Keypair};
 use hopr_internal_types::prelude::*;
 use hopr_primitive_types::prelude::*;
 use multiaddr::Multiaddr;
@@ -37,10 +37,6 @@ pub trait NodeActions {
 
     /// Withdraws the specified `amount` of native coins to the given `recipient`.
     async fn withdraw_native(&self, recipient: Address, amount: XDaiBalance) -> Result<PendingAction>;
-
-    /// Announces node on-chain with key binding.
-    /// The operation should also check if such an announcement has not been already made on-chain.
-    async fn announce(&self, multiaddrs: &[Multiaddr], offchain_key: &OffchainKeypair) -> Result<PendingAction>;
 
     /// Registers the safe address with the node
     async fn register_safe_by_node(&self, safe_address: Address) -> Result<PendingAction>;
@@ -72,27 +68,6 @@ where
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn announce(&self, multiaddrs: &[Multiaddr], offchain_key: &OffchainKeypair) -> Result<PendingAction> {
-        // TODO: allow announcing all addresses once that option is supported
-        let announcement_data = AnnouncementData::new(
-            multiaddrs[0].clone(),
-            Some(KeyBinding::new(self.self_address(), offchain_key)),
-        )?;
-
-        if !self.db.get_accounts(None, true).await?.into_iter().any(|account| {
-            account.public_key.eq(offchain_key.public())
-                && account
-                    .get_multiaddr()
-                    .is_some_and(|ma| decapsulate_multiaddress(ma).eq(announcement_data.multiaddress()))
-        }) {
-            info!(%announcement_data, "initiating announcement");
-            self.tx_sender.send(Action::Announce(announcement_data)).await
-        } else {
-            Err(AlreadyAnnounced)
-        }
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
     async fn register_safe_by_node(&self, safe_address: Address) -> Result<PendingAction> {
         info!(%safe_address, "initiating safe address registration");
         self.tx_sender.send(Action::RegisterSafe(safe_address)).await
@@ -103,17 +78,17 @@ where
 mod tests {
     use std::str::FromStr;
 
-    use futures::FutureExt;
-    use hex_literal::hex;
     use blokli_chain_types::{
         actions::Action,
         chain_events::{ChainEventType, SignificantChainEvent},
     };
-    use hopr_crypto_random::random_bytes;
-    use hopr_crypto_types::prelude::*;
     use blokli_db_sql::{
         accounts::BlokliDbAccountOperations, api::info::DomainSeparator, db::BlokliDb, info::BlokliDbInfoOperations,
     };
+    use futures::FutureExt;
+    use hex_literal::hex;
+    use hopr_crypto_random::random_bytes;
+    use hopr_crypto_types::prelude::*;
     use hopr_internal_types::prelude::*;
     use hopr_primitive_types::prelude::*;
     use multiaddr::Multiaddr;

@@ -288,13 +288,13 @@ mod tests {
         transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
     };
     use anyhow::Context;
+    use blokli_chain_types::{ContractAddresses, ContractInstances};
     use futures::StreamExt;
     use hopr_async_runtime::prelude::{sleep, spawn};
     use hopr_bindings::{
         hoprchannelsevents::HoprChannelsEvents::{ChannelBalanceIncreased, ChannelOpened},
         hoprtoken::HoprToken::{Approval, Transfer},
     };
-    use blokli_chain_types::{ContractAddresses, ContractInstances};
     use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
     use tokio::time::timeout;
     use tracing::debug;

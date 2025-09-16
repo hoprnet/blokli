@@ -19,6 +19,7 @@ use alloy::{
     rpc::types::TransactionRequest,
     sol_types::SolCall,
 };
+use blokli_chain_types::ContractAddresses;
 use hopr_bindings::{
     hoprannouncements::HoprAnnouncements::{
         announceCall, announceSafeCall, bindKeysAnnounceCall, bindKeysAnnounceSafeCall,
@@ -36,7 +37,6 @@ use hopr_bindings::{
     hoprnodesaferegistry::HoprNodeSafeRegistry::{deregisterNodeBySafeCall, registerSafeByNodeCall},
     hoprtoken::HoprToken::{approveCall, transferCall},
 };
-use blokli_chain_types::ContractAddresses;
 use hopr_crypto_types::prelude::*;
 use hopr_internal_types::prelude::*;
 use hopr_primitive_types::prelude::*;
@@ -577,9 +577,9 @@ mod tests {
 
     use alloy::{primitives::U256, providers::Provider};
     use anyhow::Context;
-    use hex_literal::hex;
     use blokli_chain_rpc::client::create_rpc_client_to_anvil;
     use blokli_chain_types::ContractInstances;
+    use hex_literal::hex;
     use hopr_crypto_types::prelude::*;
     use hopr_internal_types::prelude::*;
     use hopr_primitive_types::prelude::HoprBalance;

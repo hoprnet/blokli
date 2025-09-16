@@ -1,6 +1,5 @@
 //! Crate containing the API object for chain operations used by the HOPRd node.
 
-pub mod config;
 pub mod errors;
 pub mod executors;
 
@@ -13,10 +12,6 @@ use alloy::{
         layers::RetryBackoffLayer,
     },
 };
-use config::ChainNetworkConfig;
-use executors::{EthereumTransactionExecutor, RpcEthereumClient, RpcEthereumClientConfig};
-use futures::future::AbortHandle;
-use hopr_async_runtime::{prelude::sleep, spawn_as_abortable};
 use blokli_chain_actions::{
     ChainActions,
     action_queue::{ActionQueue, ActionQueueConfig},
@@ -32,8 +27,12 @@ use blokli_chain_rpc::{
 };
 use blokli_chain_types::ContractAddresses;
 pub use blokli_chain_types::chain_events::SignificantChainEvent;
-use hopr_crypto_types::prelude::*;
 use blokli_db_sql::BlokliDbAllOperations;
+use executors::{EthereumTransactionExecutor, RpcEthereumClient, RpcEthereumClientConfig};
+use futures::future::AbortHandle;
+use hopr_async_runtime::{prelude::sleep, spawn_as_abortable};
+use hopr_chain_config::ChainNetworkConfig;
+use hopr_crypto_types::prelude::*;
 pub use hopr_internal_types::channels::ChannelEntry;
 use hopr_internal_types::{
     account::AccountEntry, channels::CorruptedChannelEntry, prelude::ChannelDirection, tickets::WinningProbability,
@@ -242,8 +241,9 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
 
     /// Execute all processes of the [`BlokliChain`] object.
     ///
-    /// This method will spawn the [`BlokliChainProcess::Indexer`] and [`BlokliChainProcess::OutgoingOnchainActionQueue`]
-    /// processes and return join handles to the calling function.
+    /// This method will spawn the [`BlokliChainProcess::Indexer`] and
+    /// [`BlokliChainProcess::OutgoingOnchainActionQueue`] processes and return join handles to the calling
+    /// function.
     pub async fn start(&self) -> errors::Result<HashMap<BlokliChainProcess, AbortHandle>> {
         let mut processes: HashMap<BlokliChainProcess, AbortHandle> = HashMap::new();
 

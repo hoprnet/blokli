@@ -49,6 +49,7 @@ blokli-chain-rpc     = { workspace = true }
 blokli-chain-types   = { workspace = true }
 blokli-db-sql        = { workspace = true }
 hopr-async-runtime   = { workspace = true }
+hopr-chain-config    = { workspace = true }
 hopr-crypto-types    = { workspace = true }
 hopr-internal-types  = { workspace = true }
 hopr-primitive-types = { workspace = true }

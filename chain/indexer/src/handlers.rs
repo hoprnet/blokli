@@ -1,5 +1,4 @@
 use std::{
-    cmp::Ordering,
     fmt::{Debug, Formatter},
     ops::Add,
     sync::Arc,
@@ -8,26 +7,20 @@ use std::{
 
 use alloy::{primitives::B256, sol_types::SolEventInterface};
 use async_trait::async_trait;
+use blokli_chain_rpc::{HoprIndexerRpcOperations, Log};
+use blokli_chain_types::{
+    ContractAddresses,
+    chain_events::{ChainEventType, SignificantChainEvent},
+};
+use blokli_db_sql::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator, errors::DbSqlError};
 use hopr_bindings::{
     hoprannouncements::HoprAnnouncements::HoprAnnouncementsEvents, hoprchannels::HoprChannels::HoprChannelsEvents,
-    hoprnetworkregistry::HoprNetworkRegistry::HoprNetworkRegistryEvents,
     hoprnodemanagementmodule::HoprNodeManagementModule::HoprNodeManagementModuleEvents,
     hoprnodesaferegistry::HoprNodeSafeRegistry::HoprNodeSafeRegistryEvents,
     hoprticketpriceoracle::HoprTicketPriceOracle::HoprTicketPriceOracleEvents, hoprtoken::HoprToken::HoprTokenEvents,
     hoprwinningprobabilityoracle::HoprWinningProbabilityOracle::HoprWinningProbabilityOracleEvents,
 };
-use blokli_chain_rpc::{HoprIndexerRpcOperations, Log};
-use blokli_chain_types::{
-    ContractAddresses,
-    chain_events::{ChainEventType, NetworkRegistryStatus, SignificantChainEvent},
-};
 use hopr_crypto_types::prelude::*;
-use blokli_db_sql::{
-    BlokliDbAllOperations, OpenTransaction,
-    api::{info::DomainSeparator, tickets::TicketSelector},
-    errors::DbSqlError,
-    prelude::TicketMarker,
-};
 use hopr_internal_types::prelude::*;
 use hopr_primitive_types::prelude::*;
 use tracing::{debug, error, info, trace, warn};
@@ -50,7 +43,7 @@ lazy_static::lazy_static! {
 /// and passed on to this object that handles event-specific actions for each on-chain operation.
 #[derive(Clone)]
 pub struct ContractEventHandlers<T, Db> {
-    /// channels, announcements, network_registry, token: contract addresses
+    /// channels, announcements, token: contract addresses
     /// whose event we process
     addresses: Arc<ContractAddresses>,
     /// Safe on-chain address which we are monitoring
@@ -378,14 +371,10 @@ where
                         // Perform additional tasks based on the channel's direction
                         match direction {
                             ChannelDirection::Incoming => {
-                                // On incoming channel, mark all unredeemed tickets as neglected
-                                self.db
-                                    .mark_tickets_as(updated_channel.into(), TicketMarker::Neglected)
-                                    .await?;
+                                // Do Nothing
                             }
                             ChannelDirection::Outgoing => {
-                                // On outgoing channels, reset the current_ticket_index to zero
-                                self.db.reset_outgoing_ticket_index(channel_id).await?;
+                                // Do Nothing
                             }
                         }
                         updated_channel
@@ -440,17 +429,6 @@ where
 
                     let current_epoch = channel_edits.entry().channel_epoch;
 
-                    // cleanup tickets from previous epochs on channel re-opening
-                    if source == self.chain_key.public().to_address()
-                        || destination == self.chain_key.public().to_address()
-                    {
-                        self.db
-                            .mark_tickets_as(TicketSelector::new(channel_id, current_epoch), TicketMarker::Neglected)
-                            .await?;
-
-                        self.db.reset_outgoing_ticket_index(channel_id).await?;
-                    }
-
                     // set all channel fields like we do on-chain on close
                     self.db
                         .finish_channel_update(
@@ -493,121 +471,8 @@ where
                     }
                 };
 
-                if let Some(channel_edits) = maybe_channel {
-                    let ack_ticket = match channel_edits.entry().direction(&self.chain_key.public().to_address()) {
-                        // For channels where destination is us, it means that our ticket
-                        // has been redeemed, so mark it in the DB as redeemed
-                        Some(ChannelDirection::Incoming) => {
-                            // Filter all BeingRedeemed tickets in this channel and its current epoch
-                            let mut matching_tickets = self
-                                .db
-                                .get_tickets(
-                                    TicketSelector::from(channel_edits.entry())
-                                        .with_state(AcknowledgedTicketStatus::BeingRedeemed),
-                                )
-                                .await?
-                                .into_iter()
-                                .filter(|ticket| {
-                                    // The ticket that has been redeemed at this point has: index + index_offset - 1 ==
-                                    // new_ticket_index - 1 Since unaggregated
-                                    // tickets have index_offset = 1, for the unagg case this leads to: index ==
-                                    // new_ticket_index - 1
-                                    let ticket_idx = ticket.verified_ticket().index;
-                                    let ticket_off = ticket.verified_ticket().index_offset as u64;
-
-                                    ticket_idx + ticket_off == ticket_redeemed.newTicketIndex.to::<u64>()
-                                })
-                                .collect::<Vec<_>>();
-
-                            match matching_tickets.len().cmp(&1) {
-                                Ordering::Equal => {
-                                    let ack_ticket = matching_tickets.pop().unwrap();
-
-                                    self.db
-                                        .mark_tickets_as((&ack_ticket).into(), TicketMarker::Redeemed)
-                                        .await?;
-                                    info!(%ack_ticket, "ticket marked as redeemed");
-                                    Some(ack_ticket)
-                                }
-                                Ordering::Less => {
-                                    error!(
-                                        idx = %ticket_redeemed.newTicketIndex.to::<u64>() - 1,
-                                        entry = %channel_edits.entry(),
-                                        "could not find acknowledged 'BeingRedeemed' ticket",
-                                    );
-                                    // This is not an error, because the ticket might've become neglected before
-                                    // the ticket redemption could finish
-                                    None
-                                }
-                                Ordering::Greater => {
-                                    error!(
-                                        count = matching_tickets.len(),
-                                        index = %ticket_redeemed.newTicketIndex.to::<u64>() - 1,
-                                        entry = %channel_edits.entry(),
-                                        "found tickets matching 'BeingRedeemed'",
-                                    );
-
-                                    let entry_str = channel_edits.entry().to_string();
-
-                                    self.db.finish_channel_update(tx.into(), channel_edits.delete()).await?;
-                                    self.db.upsert_corrupted_channel(tx.into(), channel_id).await?;
-
-                                    return Err(CoreEthereumIndexerError::ProcessError(format!(
-                                        "multiple tickets matching idx {} found in {}",
-                                        ticket_redeemed.newTicketIndex.to::<u64>() - 1,
-                                        entry_str
-                                    )));
-                                }
-                            }
-                        }
-                        // For the channel where the source is us, it means a ticket that we
-                        // issue has been redeemed.
-                        // So we just need to be sure our outgoing ticket
-                        // index value in the cache is at least the index of the redeemed ticket
-                        Some(ChannelDirection::Outgoing) => {
-                            // We need to ensure the outgoing ticket index is at least this new value
-                            debug!(channel = %channel_edits.entry(), "observed redeem event on an outgoing channel");
-                            self.db
-                                .compare_and_set_outgoing_ticket_index(
-                                    channel_edits.entry().get_id(),
-                                    ticket_redeemed.newTicketIndex.to::<u64>(),
-                                )
-                                .await?;
-                            None
-                        }
-                        // For a channel where neither source nor destination is us, we don't care
-                        None => {
-                            // Not our redeem event
-                            debug!(channel = %channel_edits.entry(), "observed redeem event on a foreign channel");
-                            None
-                        }
-                    };
-
-                    // Update the ticket index on the Channel entry and get the updated model
-                    let channel = self
-                        .db
-                        .finish_channel_update(
-                            tx.into(),
-                            channel_edits.change_ticket_index(U256::from_be_bytes(
-                                ticket_redeemed.newTicketIndex.to_be_bytes::<6>(),
-                            )),
-                        )
-                        .await?
-                        .ok_or(CoreEthereumIndexerError::ProcessError(format!(
-                            "ticket redeemed event for channel {channel_id} did not return an updated channel",
-                        )))?;
-
-                    // Neglect all the tickets in this channel
-                    // which have a lower ticket index than `ticket_redeemed.new_ticket_index`
-                    self.db
-                        .mark_tickets_as(
-                            TicketSelector::from(&channel)
-                                .with_index_range(..ticket_redeemed.newTicketIndex.to::<u64>()),
-                            TicketMarker::Neglected,
-                        )
-                        .await?;
-
-                    Ok(Some(ChainEventType::TicketRedeemed(channel, ack_ticket)))
+                if let Some(_) = maybe_channel {
+                    Ok(None)
                 } else {
                     error!(%channel_id, "observed ticket redeem on a channel that we don't have in the DB");
                     self.db.upsert_corrupted_channel(tx.into(), channel_id).await?;
@@ -763,113 +628,6 @@ where
         Ok(None)
     }
 
-    async fn on_network_registry_event(
-        &self,
-        tx: &OpenTransaction,
-        event: HoprNetworkRegistryEvents,
-        _is_synced: bool,
-    ) -> Result<Option<ChainEventType>> {
-        #[cfg(all(feature = "prometheus", not(test)))]
-        METRIC_INDEXER_LOG_COUNTERS.increment(&["network_registry"]);
-
-        match event {
-            HoprNetworkRegistryEvents::DeregisteredByManager(deregistered) => {
-                debug!(
-                    node_address = %deregistered.nodeAddress,
-                    "on_network_registry_deregistered_by_manager_event",
-                );
-                let node_address: Address = deregistered.nodeAddress.into();
-                self.db
-                    .set_access_in_network_registry(Some(tx), node_address, false)
-                    .await?;
-
-                return Ok(Some(ChainEventType::NetworkRegistryUpdate(
-                    node_address,
-                    NetworkRegistryStatus::Denied,
-                )));
-            }
-            HoprNetworkRegistryEvents::Deregistered(deregistered) => {
-                debug!(
-                    node_address = %deregistered.nodeAddress,
-                    "on_network_registry_deregistered_event",
-                );
-                let node_address: Address = deregistered.nodeAddress.into();
-                self.db
-                    .set_access_in_network_registry(Some(tx), node_address, false)
-                    .await?;
-
-                return Ok(Some(ChainEventType::NetworkRegistryUpdate(
-                    node_address,
-                    NetworkRegistryStatus::Denied,
-                )));
-            }
-            HoprNetworkRegistryEvents::RegisteredByManager(registered) => {
-                let node_address: Address = registered.nodeAddress.into();
-                debug!(
-                    %node_address,
-                    "Node registered by manager, adding to the network registry",
-                );
-                self.db
-                    .set_access_in_network_registry(Some(tx), node_address, true)
-                    .await?;
-
-                if node_address == self.chain_key.public().to_address() {
-                    info!(
-                        "This node has been added to the registry, node activation process continues on: http://hub.hoprnet.org/."
-                    );
-                }
-
-                return Ok(Some(ChainEventType::NetworkRegistryUpdate(
-                    node_address,
-                    NetworkRegistryStatus::Allowed,
-                )));
-            }
-            HoprNetworkRegistryEvents::Registered(registered) => {
-                let node_address: Address = registered.nodeAddress.into();
-                debug!(
-                    %node_address,
-                    "Node registered, adding to the network registry",
-                );
-                self.db
-                    .set_access_in_network_registry(Some(tx), node_address, true)
-                    .await?;
-
-                if node_address == self.chain_key.public().to_address() {
-                    info!(
-                        "This node has been added to the registry, node can now continue the node activation process on: http://hub.hoprnet.org/."
-                    );
-                }
-
-                return Ok(Some(ChainEventType::NetworkRegistryUpdate(
-                    node_address,
-                    NetworkRegistryStatus::Allowed,
-                )));
-            }
-            HoprNetworkRegistryEvents::EligibilityUpdated(eligibility_updated) => {
-                debug!(
-                    staking_account = %eligibility_updated.stakingAccount,
-                    eligibility = %eligibility_updated.eligibility,
-                    "Node eligibility updated, updating the safe eligibility",
-                );
-                let account: Address = eligibility_updated.stakingAccount.into();
-                self.db
-                    .set_safe_eligibility(Some(tx), account, eligibility_updated.eligibility)
-                    .await?;
-            }
-            HoprNetworkRegistryEvents::NetworkRegistryStatusUpdated(enabled) => {
-                debug!(enabled = enabled.isEnabled, "on_network_registry_status_updated_event",);
-                self.db
-                    .set_network_registry_enabled(Some(tx), enabled.isEnabled)
-                    .await?;
-            }
-            _ => {
-                debug!("on_network_registry_event - not implemented for event: {:?}", event);
-            } // Not important to at the moment
-        };
-
-        Ok(None)
-    }
-
     async fn on_node_safe_registry_event(
         &self,
         tx: &OpenTransaction,
@@ -950,31 +708,7 @@ where
                     "minimum ticket winning probability updated"
                 );
 
-                // If the old minimum was less strict, we need to mark of all the
-                // tickets below the new higher minimum as rejected
-                if old_minimum_win_prob.approx_cmp(&new_minimum_win_prob).is_lt() {
-                    let mut selector: Option<TicketSelector> = None;
-                    for channel in self.db.get_incoming_channels(tx.into()).await? {
-                        selector = selector
-                            .map(|s| s.also_on_channel(channel.get_id(), channel.channel_epoch))
-                            .or_else(|| Some(TicketSelector::from(channel)));
-                    }
-                    // Reject unredeemed tickets on all the channels with win prob lower than the new one
-                    if let Some(selector) = selector {
-                        let num_rejected = self
-                            .db
-                            .mark_tickets_as(
-                                selector.with_winning_probability(..new_minimum_win_prob),
-                                TicketMarker::Rejected,
-                            )
-                            .await?;
-                        info!(
-                            count = num_rejected,
-                            "unredeemed tickets were rejected, because the minimum winning probability has been \
-                             increased"
-                        );
-                    }
-                }
+                ()
             }
             _ => {
                 // Ignore other events
@@ -1051,9 +785,6 @@ where
                 }
                 Err(e) => Err(e),
             }
-        } else if log.address.eq(&self.addresses.network_registry) {
-            let event = HoprNetworkRegistryEvents::decode_log(&primitive_log)?;
-            self.on_network_registry_event(tx, event.data, is_synced).await
         } else if log.address.eq(&self.addresses.token) {
             let event = HoprTokenEvents::decode_log(&primitive_log)?;
             self.on_token_event(tx, event.data, is_synced).await
@@ -1094,7 +825,6 @@ where
             self.addresses.announcements,
             self.addresses.channels,
             self.addresses.module_implementation,
-            self.addresses.network_registry,
             self.addresses.price_oracle,
             self.addresses.win_prob_oracle,
             self.addresses.safe_registry,
@@ -1117,8 +847,6 @@ where
             crate::constants::topics::channel()
         } else if contract.eq(&self.addresses.module_implementation) {
             crate::constants::topics::module_implementation()
-        } else if contract.eq(&self.addresses.network_registry) {
-            crate::constants::topics::network_registry()
         } else if contract.eq(&self.addresses.price_oracle) {
             crate::constants::topics::ticket_price_oracle()
         } else if contract.eq(&self.addresses.win_prob_oracle) {
@@ -1177,16 +905,11 @@ mod tests {
         sol_types::{SolEvent, SolValue},
     };
     use anyhow::{Context, anyhow};
-    use hex_literal::hex;
     use blokli_chain_rpc::HoprIndexerRpcOperations;
-    use blokli_chain_types::{
-        ContractAddresses,
-        chain_events::{ChainEventType, NetworkRegistryStatus},
-    };
-    use hopr_crypto_types::prelude::*;
+    use blokli_chain_types::{ContractAddresses, chain_events::ChainEventType};
     use blokli_db_sql::{
         BlokliDbAllOperations, BlokliDbGeneralModelOperations,
-        accounts::{ChainOrPacketKey, BlokliDbAccountOperations},
+        accounts::{BlokliDbAccountOperations, ChainOrPacketKey},
         api::{info::DomainSeparator, tickets::BlokliDbTicketOperations},
         channels::BlokliDbChannelOperations,
         corrupted_channels::BlokliDbCorruptedChannelOperations,
@@ -1195,6 +918,8 @@ mod tests {
         prelude::BlokliDbResolverOperations,
         registry::BlokliDbRegistryOperations,
     };
+    use hex_literal::hex;
+    use hopr_crypto_types::prelude::*;
     use hopr_internal_types::prelude::*;
     use hopr_primitive_types::prelude::*;
     use multiaddr::Multiaddr;
@@ -1211,7 +936,6 @@ mod tests {
         static ref STAKE_ADDRESS: Address = "4331eaa9542b6b034c43090d9ec1c2198758dbc3".parse().expect("lazy static address should be constructible");
         static ref CHANNELS_ADDR: Address = "bab20aea98368220baa4e3b7f151273ee71df93b".parse().expect("lazy static address should be constructible"); // just a dummy
         static ref TOKEN_ADDR: Address = "47d1677e018e79dcdd8a9c554466cb1556fa5007".parse().expect("lazy static address should be constructible"); // just a dummy
-        static ref NETWORK_REGISTRY_ADDR: Address = "a469d0225f884fb989cbad4fe289f6fd2fb98051".parse().expect("lazy static address should be constructible"); // just a dummy
         static ref NODE_SAFE_REGISTRY_ADDR: Address = "0dcd1bf9a1b36ce34237eeafef220932846bcd82".parse().expect("lazy static address should be constructible"); // just a dummy
         static ref ANNOUNCEMENTS_ADDR: Address = "11db4791bf45ef31a10ea4a1b5cb90f46cc72c7e".parse().expect("lazy static address should be constructible"); // just a dummy
         static ref SAFE_MANAGEMENT_MODULE_ADDR: Address = "9b91245a65ad469163a86e32b2281af7a25f38ce".parse().expect("lazy static address should be constructible"); // just a dummy
@@ -1289,8 +1013,6 @@ mod tests {
             addresses: Arc::new(ContractAddresses {
                 channels: *CHANNELS_ADDR,
                 token: *TOKEN_ADDR,
-                network_registry: *NETWORK_REGISTRY_ADDR,
-                network_registry_proxy: Default::default(),
                 safe_registry: *NODE_SAFE_REGISTRY_ADDR,
                 announcements: *ANNOUNCEMENTS_ADDR,
                 module_implementation: *SAFE_MANAGEMENT_MODULE_ADDR,
@@ -1787,366 +1509,6 @@ mod tests {
         assert!(event_type.is_none(), "token approval does not have chain event type");
 
         assert_eq!(db.get_safe_hopr_allowance(None).await?, target_allowance);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn on_network_registry_event_registered() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
-        let rpc_operations = MockIndexerRpcOperations::new();
-        // ==> set mock expectations here
-        let clonable_rpc_operations = ClonableMockOperations {
-            //
-            inner: Arc::new(rpc_operations),
-        };
-        let handlers = init_handlers(clonable_rpc_operations, db.clone());
-
-        let encoded_data = ().abi_encode();
-
-        let registered_log = SerializableLog {
-            address: handlers.addresses.network_registry,
-            topics: vec![
-                hopr_bindings::hoprnetworkregistry::HoprNetworkRegistry::Registered::SIGNATURE_HASH.into(),
-                H256::from_slice(&STAKE_ADDRESS.to_bytes32()).into(),
-                H256::from_slice(&SELF_CHAIN_ADDRESS.to_bytes32()).into(),
-            ],
-            data: encoded_data,
-            // data: encode(&[]).into(),
-            ..test_log()
-        };
-
-        assert!(
-            !db.is_allowed_in_network_registry(None, &SELF_CHAIN_ADDRESS.as_ref())
-                .await?
-        );
-
-        let event_type = db
-            .begin_transaction()
-            .await?
-            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, registered_log, false).await }))
-            .await?;
-
-        assert!(
-            matches!(event_type, Some(ChainEventType::NetworkRegistryUpdate(a, s)) if a == *SELF_CHAIN_ADDRESS && s == NetworkRegistryStatus::Allowed),
-            "must return correct NR update"
-        );
-
-        assert!(
-            db.is_allowed_in_network_registry(None, &SELF_CHAIN_ADDRESS.as_ref())
-                .await?,
-            "must be allowed in NR"
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn on_network_registry_event_registered_by_manager() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
-        let rpc_operations = MockIndexerRpcOperations::new();
-        // ==> set mock expectations here
-        let clonable_rpc_operations = ClonableMockOperations {
-            //
-            inner: Arc::new(rpc_operations),
-        };
-        let handlers = init_handlers(clonable_rpc_operations, db.clone());
-
-        let registered_log = SerializableLog {
-            address: handlers.addresses.network_registry,
-            topics: vec![
-                hopr_bindings::hoprnetworkregistry::HoprNetworkRegistry::RegisteredByManager::SIGNATURE_HASH.into(),
-                // RegisteredByManagerFilter::signature().into(),
-                H256::from_slice(&STAKE_ADDRESS.to_bytes32()).into(),
-                H256::from_slice(&SELF_CHAIN_ADDRESS.to_bytes32()).into(),
-            ],
-            data: ().abi_encode(),
-            // data: encode(&[]).into(),
-            ..test_log()
-        };
-
-        assert!(
-            !db.is_allowed_in_network_registry(None, &SELF_CHAIN_ADDRESS.as_ref())
-                .await?
-        );
-
-        let event_type = db
-            .begin_transaction()
-            .await?
-            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, registered_log, false).await }))
-            .await?;
-
-        assert!(
-            matches!(event_type, Some(ChainEventType::NetworkRegistryUpdate(a, s)) if a == *SELF_CHAIN_ADDRESS && s == NetworkRegistryStatus::Allowed),
-            "must return correct NR update"
-        );
-
-        assert!(
-            db.is_allowed_in_network_registry(None, &SELF_CHAIN_ADDRESS.as_ref())
-                .await?,
-            "must be allowed in NR"
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn on_network_registry_event_deregistered() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
-        let rpc_operations = MockIndexerRpcOperations::new();
-        // ==> set mock expectations here
-        let clonable_rpc_operations = ClonableMockOperations {
-            //
-            inner: Arc::new(rpc_operations),
-        };
-        let handlers = init_handlers(clonable_rpc_operations, db.clone());
-
-        db.set_access_in_network_registry(None, *SELF_CHAIN_ADDRESS, true)
-            .await?;
-
-        let encoded_data = ().abi_encode();
-
-        let registered_log = SerializableLog {
-            address: handlers.addresses.network_registry,
-            topics: vec![
-                hopr_bindings::hoprnetworkregistry::HoprNetworkRegistry::Deregistered::SIGNATURE_HASH.into(),
-                H256::from_slice(&STAKE_ADDRESS.to_bytes32()).into(),
-                H256::from_slice(&SELF_CHAIN_ADDRESS.to_bytes32()).into(),
-            ],
-            data: encoded_data,
-            ..test_log()
-        };
-
-        assert!(
-            db.is_allowed_in_network_registry(None, &SELF_CHAIN_ADDRESS.as_ref())
-                .await?
-        );
-
-        let event_type = db
-            .begin_transaction()
-            .await?
-            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, registered_log, false).await }))
-            .await?;
-
-        assert!(
-            matches!(event_type, Some(ChainEventType::NetworkRegistryUpdate(a, s)) if a == *SELF_CHAIN_ADDRESS && s == NetworkRegistryStatus::Denied),
-            "must return correct NR update"
-        );
-
-        assert!(
-            !db.is_allowed_in_network_registry(None, &SELF_CHAIN_ADDRESS.as_ref())
-                .await?,
-            "must not be allowed in NR"
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn on_network_registry_event_deregistered_by_manager() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
-        let rpc_operations = MockIndexerRpcOperations::new();
-        // ==> set mock expectations here
-        let clonable_rpc_operations = ClonableMockOperations {
-            //
-            inner: Arc::new(rpc_operations),
-        };
-        let handlers = init_handlers(clonable_rpc_operations, db.clone());
-
-        db.set_access_in_network_registry(None, *SELF_CHAIN_ADDRESS, true)
-            .await?;
-
-        let encoded_data = ().abi_encode();
-
-        let registered_log = SerializableLog {
-            address: handlers.addresses.network_registry,
-            topics: vec![
-                hopr_bindings::hoprnetworkregistry::HoprNetworkRegistry::DeregisteredByManager::SIGNATURE_HASH.into(),
-                // DeregisteredByManagerFilter::signature().into(),
-                H256::from_slice(&STAKE_ADDRESS.to_bytes32()).into(),
-                H256::from_slice(&SELF_CHAIN_ADDRESS.to_bytes32()).into(),
-            ],
-            data: encoded_data,
-            ..test_log()
-        };
-
-        assert!(
-            db.is_allowed_in_network_registry(None, &SELF_CHAIN_ADDRESS.as_ref())
-                .await?
-        );
-
-        let event_type = db
-            .begin_transaction()
-            .await?
-            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, registered_log, false).await }))
-            .await?;
-
-        assert!(
-            matches!(event_type, Some(ChainEventType::NetworkRegistryUpdate(a, s)) if a == *SELF_CHAIN_ADDRESS && s == NetworkRegistryStatus::Denied),
-            "must return correct NR update"
-        );
-
-        assert!(
-            !db.is_allowed_in_network_registry(None, &SELF_CHAIN_ADDRESS.as_ref())
-                .await?,
-            "must not be allowed in NR"
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn on_network_registry_event_enabled() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
-        let rpc_operations = MockIndexerRpcOperations::new();
-        // ==> set mock expectations here
-        let clonable_rpc_operations = ClonableMockOperations {
-            //
-            inner: Arc::new(rpc_operations),
-        };
-        let handlers = init_handlers(clonable_rpc_operations, db.clone());
-
-        let encoded_data = ().abi_encode();
-
-        let nr_enabled = SerializableLog {
-            address: handlers.addresses.network_registry,
-            topics: vec![
-                hopr_bindings::hoprnetworkregistry::HoprNetworkRegistry::NetworkRegistryStatusUpdated::SIGNATURE_HASH
-                    .into(),
-                // NetworkRegistryStatusUpdatedFilter::signature().into(),
-                H256::from_low_u64_be(1).into(),
-            ],
-            data: encoded_data,
-            ..test_log()
-        };
-
-        let event_type = db
-            .begin_transaction()
-            .await?
-            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, nr_enabled, false).await }))
-            .await?;
-
-        assert!(event_type.is_none(), "there's no chain event type for nr disable");
-
-        assert!(db.get_indexer_data(None).await?.nr_enabled);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn on_network_registry_event_disabled() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
-        let rpc_operations = MockIndexerRpcOperations::new();
-        // ==> set mock expectations here
-        let clonable_rpc_operations = ClonableMockOperations {
-            //
-            inner: Arc::new(rpc_operations),
-        };
-        let handlers = init_handlers(clonable_rpc_operations, db.clone());
-
-        db.set_network_registry_enabled(None, true).await?;
-
-        let encoded_data = ().abi_encode();
-
-        let nr_disabled = SerializableLog {
-            address: handlers.addresses.network_registry,
-            topics: vec![
-                hopr_bindings::hoprnetworkregistry::HoprNetworkRegistry::NetworkRegistryStatusUpdated::SIGNATURE_HASH
-                    .into(),
-                // NetworkRegistryStatusUpdatedFilter::signature().into(),
-                H256::from_low_u64_be(0).into(),
-            ],
-            data: encoded_data,
-            ..test_log()
-        };
-
-        let event_type = db
-            .begin_transaction()
-            .await?
-            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, nr_disabled, false).await }))
-            .await?;
-
-        assert!(event_type.is_none(), "there's no chain event type for nr enable");
-
-        assert!(!db.get_indexer_data(None).await?.nr_enabled);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn on_network_registry_set_eligible() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
-        let rpc_operations = MockIndexerRpcOperations::new();
-        // ==> set mock expectations here
-        let clonable_rpc_operations = ClonableMockOperations {
-            //
-            inner: Arc::new(rpc_operations),
-        };
-        let handlers = init_handlers(clonable_rpc_operations, db.clone());
-
-        let encoded_data = ().abi_encode();
-
-        let set_eligible = SerializableLog {
-            address: handlers.addresses.network_registry,
-            topics: vec![
-                hopr_bindings::hoprnetworkregistry::HoprNetworkRegistry::EligibilityUpdated::SIGNATURE_HASH.into(),
-                // EligibilityUpdatedFilter::signature().into(),
-                H256::from_slice(&STAKE_ADDRESS.to_bytes32()).into(),
-                H256::from_low_u64_be(1).into(),
-            ],
-            data: encoded_data,
-            ..test_log()
-        };
-
-        let event_type = db
-            .begin_transaction()
-            .await?
-            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, set_eligible, false).await }))
-            .await?;
-
-        assert!(
-            event_type.is_none(),
-            "there's no chain event type for setting nr eligibility"
-        );
-
-        assert!(db.is_safe_eligible(None, *STAKE_ADDRESS).await?);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn on_network_registry_set_not_eligible() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(SELF_CHAIN_KEY.clone()).await?;
-        let rpc_operations = MockIndexerRpcOperations::new();
-        // ==> set mock expectations here
-        let clonable_rpc_operations = ClonableMockOperations {
-            //
-            inner: Arc::new(rpc_operations),
-        };
-        let handlers = init_handlers(clonable_rpc_operations, db.clone());
-
-        db.set_safe_eligibility(None, *STAKE_ADDRESS, false).await?;
-
-        let encoded_data = ().abi_encode();
-
-        let set_eligible = SerializableLog {
-            address: handlers.addresses.network_registry,
-            topics: vec![
-                hopr_bindings::hoprnetworkregistry::HoprNetworkRegistry::EligibilityUpdated::SIGNATURE_HASH.into(),
-                // EligibilityUpdatedFilter::signature().into(),
-                H256::from_slice(&STAKE_ADDRESS.to_bytes32()).into(),
-                H256::from_low_u64_be(0).into(),
-            ],
-            data: encoded_data,
-            ..test_log()
-        };
-
-        let event_type = db
-            .begin_transaction()
-            .await?
-            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, set_eligible, true).await }))
-            .await?;
-
-        assert!(
-            event_type.is_none(),
-            "there's no chain event type for unsetting nr eligibility"
-        );
-
-        assert!(!db.is_safe_eligible(None, *STAKE_ADDRESS).await?);
-
         Ok(())
     }
 

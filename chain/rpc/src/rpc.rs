@@ -22,8 +22,8 @@ use alloy::{
     sol,
 };
 use async_trait::async_trait;
-use hopr_bindings::hoprnodemanagementmodule::HoprNodeManagementModule::{self, HoprNodeManagementModuleInstance};
 use blokli_chain_types::{ContractAddresses, ContractInstances, NetworkRegistryProxy};
+use hopr_bindings::hoprnodemanagementmodule::HoprNodeManagementModule::{self, HoprNodeManagementModuleInstance};
 use hopr_crypto_types::{
     keypairs::{ChainKeypair, Keypair},
     prelude::Hash,
@@ -456,9 +456,11 @@ mod tests {
         rpc::{client::ClientBuilder, types::TransactionRequest},
         transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
     };
+    use blokli_chain_types::{
+        ContractAddresses, ContractInstances, NetworkRegistryProxy, utils::create_native_transfer,
+    };
     use hex_literal::hex;
     use hopr_async_runtime::prelude::sleep;
-    use blokli_chain_types::{ContractAddresses, ContractInstances, NetworkRegistryProxy, utils::create_native_transfer};
     use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
     use hopr_primitive_types::prelude::*;
     use primitive_types::H160;
