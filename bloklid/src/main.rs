@@ -7,13 +7,8 @@ use std::{
     time::Duration,
 };
 
-use alloy::{rpc::client::RpcClient, transports::http::Http};
 use async_signal::{Signal, Signals};
-use blokli_chain_indexer::{block::Indexer, handlers::ContractEventHandlers};
-use blokli_chain_rpc::{
-    rpc::{RpcOperations, RpcOperationsConfig},
-    transport::ReqwestClient,
-};
+use blokli_chain_api::{BlokliChain, SignificantChainEvent};
 use blokli_chain_types::ContractAddresses;
 use blokli_db_sql::db::{BlokliDb, BlokliDbConfig};
 use clap::Parser;
@@ -99,16 +94,16 @@ async fn main() -> errors::Result<()> {
     let config = Arc::new(RwLock::new(args.load_config(true)?));
 
     // Initialize components
-    let (_chain_key, _db, _rpc_operations, indexer_handle) = {
+    let process_handles = {
         // Extract all needed values from config before any await
-        let (database_path, rpc_url_str, indexer_cfg, data_directory) = {
+        let (database_path, chain_cfg, indexer_cfg, data_directory) = {
             let cfg = config
                 .read()
                 .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
 
             (
                 cfg.database_path.clone(),
-                cfg.rpc_url.clone(),
+                cfg.chain.clone(),
                 cfg.indexer.clone(),
                 cfg.data_directory.clone(),
             )
@@ -125,43 +120,14 @@ async fn main() -> errors::Result<()> {
         let db_path = Path::new(&database_path);
         let db = BlokliDb::new(db_path, db_config).await?;
 
-        info!("Connecting to RPC endpoint: {}", rpc_url_str);
-
-        // Initialize RPC client
-        let rpc_config = RpcOperationsConfig {
-            chain_id: 100, // Gnosis chain
-            contract_addrs: ContractAddresses {
-                token: Address::default(),
-                channels: Address::default(),
-                announcements: Address::default(),
-                network_registry: Address::default(),
-                network_registry_proxy: Address::default(),
-                safe_registry: Address::default(),
-                price_oracle: Address::default(),
-                win_prob_oracle: Address::default(),
-                stake_factory: Address::default(),
-                module_implementation: Address::default(),
-            },
-            module_address: Address::default(),
-            safe_address: Address::default(),
-            ..Default::default()
-        };
-
-        let rpc_url = rpc_url_str
-            .parse::<url::Url>()
-            .map_err(|e| BloklidError::Crypto(format!("Failed to parse RPC URL: {}", e)))?;
-        let reqwest_client = ReqwestClient::new();
-        let http = Http::<ReqwestClient>::with_client(reqwest_client.clone(), rpc_url);
-        let rpc_client = RpcClient::new(http, true);
+        info!("Connecting to RPC endpoint: {}", chain_cfg.chain.default_provider);
 
         // Create a temporary chain key - this appears to be what needs to be made "obsolete"
         let chain_key = ChainKeypair::random();
-        let rpc_operations = RpcOperations::new(rpc_client, reqwest_client, &chain_key, rpc_config, None)?;
+        let safe_address = chain_key.public().to_address();
+        let module_address = safe_address; // For now, use the same address
 
-        // Create channel for chain events
-        let (tx_events, _rx_events) = async_channel::unbounded();
-
-        // Initialize contract event handlers
+        // Default contract addresses - should be configured properly
         let contract_addresses = ContractAddresses {
             token: Address::default(),
             channels: Address::default(),
@@ -175,15 +141,6 @@ async fn main() -> errors::Result<()> {
             module_implementation: Address::default(),
         };
 
-        let safe_address = chain_key.public().to_address();
-        let handlers = ContractEventHandlers::new(
-            contract_addresses,
-            safe_address,
-            chain_key.clone(),
-            db.clone(),
-            rpc_operations.clone(),
-        );
-
         // Configure indexer
         let indexer_config = blokli_chain_indexer::IndexerConfig {
             start_block_number: indexer_cfg.start_block_number,
@@ -193,16 +150,29 @@ async fn main() -> errors::Result<()> {
             data_directory,
         };
 
-        info!("Starting indexer from block {}", indexer_config.start_block_number);
+        // Create channel for chain events
+        let (tx_events, _rx_events) = async_channel::unbounded::<SignificantChainEvent>();
 
-        // Create and start indexer
-        let indexer = Indexer::new(rpc_operations.clone(), handlers, db.clone(), indexer_config, tx_events);
+        // Create BlokliChain instance
+        let blokli_chain = BlokliChain::new(
+            chain_key,
+            db,
+            chain_cfg.into(), // Convert to the API's ChainNetworkConfig
+            module_address,
+            contract_addresses,
+            safe_address,
+            indexer_config,
+            tx_events,
+        )?;
 
-        let indexer_handle = indexer.start().await?;
+        info!("Starting BlokliChain processes");
 
-        info!("Indexer started successfully");
+        // Start all chain processes
+        let process_handles = blokli_chain.start().await?;
 
-        (chain_key, db, rpc_operations, indexer_handle)
+        info!("BlokliChain started successfully");
+
+        process_handles
     };
 
     info!("daemon running; send SIGHUP to reload config, SIGINT/SIGTERM to stop");
@@ -233,9 +203,12 @@ async fn main() -> errors::Result<()> {
         }
     }
 
-    // Abort indexer
-    indexer_handle.abort();
-    info!("Indexer stopped");
+    // Abort all chain processes
+    for (process_type, handle) in process_handles {
+        info!("Stopping {:?} process", process_type);
+        handle.abort();
+    }
+    info!("All BlokliChain processes stopped");
 
     info!("bloklid stopped gracefully");
     Ok(())

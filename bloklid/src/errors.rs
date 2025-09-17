@@ -22,9 +22,6 @@ pub enum BloklidError {
 
     #[error("indexer error: {0}")]
     Indexer(#[from] blokli_chain_indexer::errors::CoreEthereumIndexerError),
-
-    #[error("crypto error: {0}")]
-    Crypto(String),
 }
 
 #[derive(Debug, thiserror::Error)]

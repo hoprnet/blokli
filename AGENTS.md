@@ -25,7 +25,7 @@ Legacy cargo commands (prefer using `just` instead):
 
 ## Code Style
 
-- **Imports**: Use workspace dependencies, group std/external/local imports separately
+- **Imports**: Use workspace dependencies, group std/external/local imports separately, do not use wildcard imports
 - **Error Handling**: Use `thiserror::Error` for custom errors, return `Result<T>`
 - **Naming**: snake_case for functions/variables, PascalCase for types/enums
 - **Documentation**: Use `//!` for module docs, `///` for item docs

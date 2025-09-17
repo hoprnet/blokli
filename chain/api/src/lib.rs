@@ -31,14 +31,33 @@ use blokli_db_sql::BlokliDbAllOperations;
 use executors::{EthereumTransactionExecutor, RpcEthereumClient, RpcEthereumClientConfig};
 use futures::future::AbortHandle;
 use hopr_async_runtime::{prelude::sleep, spawn_as_abortable};
-use hopr_chain_config::ChainNetworkConfig;
-use hopr_crypto_types::prelude::*;
+use hopr_crypto_types::prelude::{ChainKeypair, Keypair};
 pub use hopr_internal_types::channels::ChannelEntry;
 use hopr_internal_types::{
     account::AccountEntry, channels::CorruptedChannelEntry, prelude::ChannelDirection, tickets::WinningProbability,
 };
-use hopr_primitive_types::prelude::*;
+use hopr_primitive_types::{
+    prelude::{Address, Balance, Currency, HoprBalance, U256, WxHOPR, XDai, XDaiBalance},
+    traits::IntoEndian,
+};
 use tracing::{debug, error, info, warn};
+
+// Temporarily use our own config until hopr_chain_config is available
+#[derive(Debug, Clone)]
+pub struct ChainNetworkConfig {
+    pub chain: ChainConfig,
+    pub max_requests_per_sec: Option<u32>,
+    pub tx_polling_interval: u64,
+    pub confirmations: u32,
+    pub max_block_range: u64,
+}
+
+#[derive(Debug, Clone)]
+pub struct ChainConfig {
+    pub chain_id: u32,
+    pub block_time: u64,
+    pub default_provider: String,
+}
 
 use crate::errors::{BlokliChainError, Result};
 
