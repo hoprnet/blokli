@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use blokli_db_api::info::{DomainSeparator, IndexerData, SafeInfo};
+use blokli_db_api::info::{DomainSeparator, IndexerData};
 use blokli_db_entity::{
     chain_info, node_info,
     prelude::{Account, Announcement, ChainInfo, Channel, NodeInfo},
@@ -7,7 +7,7 @@ use blokli_db_entity::{
 use futures::TryFutureExt;
 use hopr_crypto_types::prelude::Hash;
 use hopr_internal_types::prelude::WinningProbability;
-use hopr_primitive_types::prelude::{HoprBalance, IntoEndian, ToHex};
+use hopr_primitive_types::prelude::{HoprBalance, IntoEndian};
 use sea_orm::{
     ActiveModelBehavior, ActiveModelTrait, EntityOrSelect, EntityTrait, IntoActiveModel, PaginatorTrait, Set,
 };
@@ -71,12 +71,6 @@ pub trait BlokliDbInfoOperations {
 
     /// Sets node's Safe allowance of HOPR tokens.
     async fn set_safe_hopr_allowance<'a>(&'a self, tx: OptTx<'a>, new_allowance: HoprBalance) -> Result<()>;
-
-    /// Gets node's Safe addresses info.
-    async fn get_safe_info<'a>(&'a self, tx: OptTx<'a>) -> Result<Option<SafeInfo>>;
-
-    /// Sets node's Safe addresses info.
-    async fn set_safe_info<'a>(&'a self, tx: OptTx<'a>, safe_info: SafeInfo) -> Result<()>;
 
     /// Gets stored Indexer data.
     ///
@@ -406,10 +400,7 @@ mod tests {
     use hopr_crypto_types::{keypairs::ChainKeypair, prelude::Keypair};
     use hopr_primitive_types::{balance::HoprBalance, prelude::Address};
 
-    use crate::{
-        db::BlokliDb,
-        info::{BlokliDbInfoOperations, SafeInfo},
-    };
+    use crate::{db::BlokliDb, info::BlokliDbInfoOperations};
 
     lazy_static::lazy_static! {
         static ref ADDR_1: Address = Address::from(hex!("86fa27add61fafc955e2da17329bba9f31692fe7"));

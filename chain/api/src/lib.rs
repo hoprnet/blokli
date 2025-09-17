@@ -16,7 +16,6 @@ use blokli_chain_actions::{
     ChainActions,
     action_queue::{ActionQueue, ActionQueueConfig},
     action_state::IndexerActionTracker,
-    payload::SafePayloadGenerator,
 };
 use blokli_chain_indexer::{IndexerConfig, block::Indexer, handlers::ContractEventHandlers};
 use blokli_chain_rpc::{
@@ -30,84 +29,20 @@ pub use blokli_chain_types::chain_events::SignificantChainEvent;
 use blokli_db_sql::BlokliDbAllOperations;
 use executors::{EthereumTransactionExecutor, RpcEthereumClient, RpcEthereumClientConfig};
 use futures::future::AbortHandle;
-use hopr_async_runtime::{prelude::sleep, spawn_as_abortable};
-use hopr_crypto_types::prelude::{ChainKeypair, Keypair};
+use hopr_async_runtime::spawn_as_abortable;
+use hopr_chain_config::ChainNetworkConfig;
 pub use hopr_internal_types::channels::ChannelEntry;
 use hopr_internal_types::{
     account::AccountEntry, channels::CorruptedChannelEntry, prelude::ChannelDirection, tickets::WinningProbability,
 };
 use hopr_primitive_types::{
-    prelude::{Address, Balance, Currency, HoprBalance, U256, WxHOPR, XDai, XDaiBalance},
+    prelude::{Address, Balance, Currency, HoprBalance, U256, WxHOPR, XDai},
     traits::IntoEndian,
 };
-use tracing::{debug, error, info, warn};
 
 use crate::errors::{BlokliChainError, Result};
 
 pub type DefaultHttpRequestor = blokli_chain_rpc::transport::ReqwestClient;
-
-/// Checks whether the node can be registered with the Safe in the NodeSafeRegistry
-pub async fn can_register_with_safe<Rpc: HoprRpcOperations>(
-    me: Address,
-    safe_address: Address,
-    rpc: &Rpc,
-) -> Result<bool> {
-    let target_address = rpc.get_module_target_address().await?;
-    debug!(node_address = %me, %safe_address, %target_address, "can register with safe");
-
-    if target_address != safe_address {
-        // cannot proceed when the safe address is not the target/owner of given module
-        return Err(BlokliChainError::Api("safe is not the module target".into()));
-    }
-
-    let registered_address = rpc.get_safe_from_node_safe_registry(me).await?;
-    info!(%registered_address, "currently registered Safe address in NodeSafeRegistry");
-
-    if registered_address.is_zero() {
-        info!("Node is not associated with a Safe in NodeSafeRegistry yet");
-        Ok(true)
-    } else if registered_address != safe_address {
-        Err(BlokliChainError::Api(
-            "Node is associated with a different Safe in NodeSafeRegistry".into(),
-        ))
-    } else {
-        info!("Node is associated with correct Safe in NodeSafeRegistry");
-        Ok(false)
-    }
-}
-
-/// Waits until the given address is funded.
-///
-/// This is done by querying the RPC provider for balance with backoff until `max_delay` argument.
-pub async fn wait_for_funds<Rpc: HoprRpcOperations>(
-    address: Address,
-    min_balance: XDaiBalance,
-    max_delay: Duration,
-    rpc: &Rpc,
-) -> Result<()> {
-    let multiplier = 1.05;
-    let mut current_delay = Duration::from_secs(2).min(max_delay);
-
-    while current_delay <= max_delay {
-        match rpc.get_xdai_balance(address).await {
-            Ok(current_balance) => {
-                info!(balance = %current_balance, "balance status");
-                if current_balance.ge(&min_balance) {
-                    info!("node is funded");
-                    return Ok(());
-                } else {
-                    warn!("still unfunded, trying again soon");
-                }
-            }
-            Err(e) => error!(error = %e, "failed to fetch balance from the chain"),
-        }
-
-        sleep(current_delay).await;
-        current_delay = current_delay.mul_f64(multiplier);
-    }
-
-    Err(BlokliChainError::Api("timeout waiting for funds".into()))
-}
 
 fn build_transport_client(url: &str) -> Result<Http<ReqwestClient>> {
     let parsed_url = url::Url::parse(url).unwrap_or_else(|_| panic!("failed to parse URL: {url}"));
@@ -123,11 +58,7 @@ pub enum BlokliChainProcess {
 type ActionQueueType<T> = ActionQueue<
     T,
     IndexerActionTracker,
-    EthereumTransactionExecutor<
-        TransactionRequest,
-        RpcEthereumClient<RpcOperations<DefaultHttpRequestor>>,
-        SafePayloadGenerator,
-    >,
+    EthereumTransactionExecutor<TransactionRequest, RpcEthereumClient<RpcOperations<DefaultHttpRequestor>>>,
 >;
 
 /// Represents all chain interactions exported to be used in the hopr-lib
@@ -203,7 +134,8 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         //     RpcEthereumClient::new(rpc_operations.clone(), rpc_client_cfg),
         //     SafePayloadGenerator::new(contract_addresses),
         // );
-        let ethereum_tx_executor::default();
+        let ethereum_tx_executor =
+            EthereumTransactionExecutor::new(RpcEthereumClient::new(rpc_operations.clone(), rpc_client_cfg));
 
         // Build the Action Queue
         let action_queue = ActionQueue::new(

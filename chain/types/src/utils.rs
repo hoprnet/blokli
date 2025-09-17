@@ -4,32 +4,23 @@
 
 #![allow(clippy::too_many_arguments)]
 
-use std::str::FromStr;
-
 use SafeContract::SafeContractInstance;
 use alloy::{
-    contract::{Error as ContractError, Result as ContractResult},
+    contract::Result as ContractResult,
     network::{ReceiptResponse, TransactionBuilder},
-    primitives::{self, Bytes, U256, address, aliases, keccak256},
-    rpc::types::TransactionRequest,
+    primitives::{self, Bytes, U256, aliases, keccak256},
     signers::{Signer, local::PrivateKeySigner},
     sol,
-    sol_types::{SolCall, SolValue},
+    sol_types::SolCall,
 };
 use hopr_bindings::{
     hoprchannels::HoprChannels::HoprChannelsInstance,
-    hoprnodemanagementmodule::HoprNodeManagementModule,
-    hoprnodestakefactory::HoprNodeStakeFactory,
     hoprtoken::HoprToken::{self, HoprTokenInstance},
 };
 use hopr_crypto_types::prelude::*;
 use hopr_primitive_types::primitives::Address;
-use tracing::debug;
 
-use crate::{
-    ContractInstances, constants,
-    errors::{ChainTypesError, Result as ChainTypesResult},
-};
+use crate::errors::Result as ChainTypesResult;
 
 // define basic safe abi
 sol!(

@@ -34,15 +34,6 @@ pub trait ChainLogHandler {
     /// * `Vec<B256>` - Vector of event signature hashes (topics) for the contract
     fn contract_address_topics(&self, contract: Address) -> Vec<B256>;
 
-    /// Returns the safe address for this HOPR node.
-    ///
-    /// The safe address is the Ethereum address that holds the node's tokens
-    /// and is used for filtering events that are relevant to this specific node.
-    ///
-    /// # Returns
-    /// * `Address` - The safe contract address for this node
-    fn safe_address(&self) -> Address;
-
     /// Processes a single blockchain log and extracts significant events.
     ///
     /// This method processes individual blockchain logs, replacing the previous
@@ -82,7 +73,6 @@ mock! {
         fn contract_addresses(&self) -> Vec<Address>;
         fn contract_addresses_map(&self) -> Arc<ContractAddresses>;
         fn contract_address_topics(&self, contract: Address) -> Vec<B256>;
-        fn safe_address(&self) -> Address;
         async fn collect_log_event(&self, log: SerializableLog, is_synced: bool) -> Result<Option<SignificantChainEvent>>;
     }
 }

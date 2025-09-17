@@ -46,22 +46,16 @@ pub struct ContractEventHandlers<T, Db> {
     /// channels, announcements, token: contract addresses
     /// whose event we process
     addresses: Arc<ContractAddresses>,
-    /// Safe on-chain address which we are monitoring
-    safe_address: Address,
-    /// own address, aka message sender
-    chain_key: ChainKeypair, // TODO: store only address here once Ticket have TryFrom DB
     /// callbacks to inform other modules
     db: Db,
     /// rpc operations to interact with the chain
-    rpc_operations: T,
+    _rpc_operations: T,
 }
 
 impl<T, Db> Debug for ContractEventHandlers<T, Db> {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("ContractEventHandler")
             .field("addresses", &self.addresses)
-            .field("safe_address", &self.safe_address)
-            .field("chain_key", &self.chain_key)
             .finish_non_exhaustive()
     }
 }
@@ -81,26 +75,16 @@ where
     ///
     /// # Arguments
     /// * `addresses` - Contract addresses configuration
-    /// * `safe_address` - The node's safe address for filtering relevant events
-    /// * `chain_key` - Cryptographic key for chain operations
     /// * `db` - Database connection for persistent storage
     /// * `rpc_operations` - RPC interface for direct blockchain queries
     ///
     /// # Returns
     /// * `Self` - New instance of `ContractEventHandlers`
-    pub fn new(
-        addresses: ContractAddresses,
-        safe_address: Address,
-        chain_key: ChainKeypair,
-        db: Db,
-        rpc_operations: T,
-    ) -> Self {
+    pub fn new(addresses: ContractAddresses, db: Db, rpc_operations: T) -> Self {
         Self {
             addresses: Arc::new(addresses),
-            safe_address,
-            chain_key,
             db,
-            rpc_operations,
+            _rpc_operations: rpc_operations,
         }
     }
 
@@ -212,7 +196,7 @@ where
         &self,
         tx: &OpenTransaction,
         event: HoprChannelsEvents,
-        is_synced: bool,
+        _is_synced: bool,
     ) -> Result<Option<ChainEventType>> {
         #[cfg(all(feature = "prometheus", not(test)))]
         METRIC_INDEXER_LOG_COUNTERS.increment(&["channels"]);
@@ -247,21 +231,6 @@ where
                             "channel balance decreased event for channel {channel_id} did not return an updated \
                              channel"
                         )))?;
-
-                    if is_synced
-                        && (updated_channel.source == self.chain_key.public().to_address()
-                            || updated_channel.destination == self.chain_key.public().to_address())
-                    {
-                        info!("updating safe balance from chain after channel balance decreased event");
-                        match self.rpc_operations.get_hopr_balance(self.safe_address).await {
-                            Ok(balance) => {
-                                self.db.set_safe_hopr_balance(Some(tx), balance).await?;
-                            }
-                            Err(error) => {
-                                error!(%error, "error getting safe balance from chain after channel balance decreased event");
-                            }
-                        }
-                    }
 
                     Ok(Some(ChainEventType::ChannelBalanceDecreased(updated_channel, diff)))
                 } else {
@@ -300,31 +269,6 @@ where
                              channel"
                         )))?;
 
-                    if updated_channel.source == self.chain_key.public().to_address() && is_synced {
-                        info!("updating safe balance from chain after channel balance increased event");
-                        match self.rpc_operations.get_hopr_balance(self.safe_address).await {
-                            Ok(balance) => {
-                                self.db.set_safe_hopr_balance(Some(tx), balance).await?;
-                            }
-                            Err(error) => {
-                                error!(%error, "error getting safe balance from chain after channel balance increased event");
-                            }
-                        }
-                        info!("updating safe allowance from chain after channel balance increased event");
-                        match self
-                            .rpc_operations
-                            .get_hopr_allowance(self.safe_address, self.addresses.channels)
-                            .await
-                        {
-                            Ok(allowance) => {
-                                self.db.set_safe_hopr_allowance(Some(tx), allowance).await?;
-                            }
-                            Err(error) => {
-                                error!(%error, "error getting safe allowance from chain after channel balance increased event");
-                            }
-                        }
-                    }
-
                     Ok(Some(ChainEventType::ChannelBalanceIncreased(updated_channel, diff)))
                 } else {
                     error!(%channel_id, "observed balance increased event for a channel that does not exist");
@@ -350,47 +294,17 @@ where
                 );
 
                 if let Some(channel_edits) = maybe_channel {
-                    let channel_id = channel_edits.entry().get_id();
-                    let orientation = channel_edits.entry().orientation(&self.chain_key.public().to_address());
+                    // Set all channel fields like we do on-chain on close
+                    let channel_edits = channel_edits
+                        .change_status(ChannelStatus::Closed)
+                        .change_balance(HoprBalance::zero())
+                        .change_ticket_index(0);
 
-                    // If the channel is our own (incoming or outgoing) reset its fields
-                    // and change its state to Closed.
-                    let updated_channel = if let Some((direction, _)) = orientation {
-                        // Set all channel fields like we do on-chain on close
-                        let channel_edits = channel_edits
-                            .change_status(ChannelStatus::Closed)
-                            .change_balance(HoprBalance::zero())
-                            .change_ticket_index(0);
-
-                        let updated_channel = self.db.finish_channel_update(tx.into(), channel_edits).await?.ok_or(
-                            CoreEthereumIndexerError::ProcessError(format!(
-                                "channel closed event for channel {channel_id} did not return an updated channel",
-                            )),
-                        )?;
-
-                        // Perform additional tasks based on the channel's direction
-                        match direction {
-                            ChannelDirection::Incoming => {
-                                // Do Nothing
-                            }
-                            ChannelDirection::Outgoing => {
-                                // Do Nothing
-                            }
-                        }
-                        updated_channel
-                    } else {
-                        // Closed channels that are not our own can be safely removed from the database
-                        let updated_channel = self
-                            .db
-                            .finish_channel_update(tx.into(), channel_edits.delete())
-                            .await?
-                            .ok_or(CoreEthereumIndexerError::ProcessError(format!(
-                                "channel closed event for channel {channel_id} did not return an updated channel",
-                            )))?;
-
-                        debug!(%channel_id, "foreign closed closed channel was deleted");
-                        updated_channel
-                    };
+                    let updated_channel = self.db.finish_channel_update(tx.into(), channel_edits).await?.ok_or(
+                        CoreEthereumIndexerError::ProcessError(format!(
+                            "channel closed event for channel {channel_id} did not return an updated channel",
+                        )),
+                    )?;
 
                     Ok(Some(ChainEventType::ChannelClosed(updated_channel)))
                 } else {
@@ -539,9 +453,9 @@ where
 
     async fn on_token_event(
         &self,
-        tx: &OpenTransaction,
+        _tx: &OpenTransaction,
         event: HoprTokenEvents,
-        is_synced: bool,
+        _is_synced: bool,
     ) -> Result<Option<ChainEventType>> {
         #[cfg(all(feature = "prometheus", not(test)))]
         METRIC_INDEXER_LOG_COUNTERS.increment(&["token"]);
@@ -552,75 +466,19 @@ where
                 let to: Address = transferred.to.into();
 
                 trace!(
-                    safe_address = %&self.safe_address, %from, %to,
+                    %from, %to,
                     "on_token_transfer_event"
                 );
-
-                if to.ne(&self.safe_address) && from.ne(&self.safe_address) {
-                    error!(
-                    safe_address = %&self.safe_address, %from, %to,
-                        "filter misconfiguration: transfer event not involving the safe");
-                    return Ok(None);
-                }
-
-                if is_synced {
-                    info!("updating safe balance from chain after transfer event");
-                    match self.rpc_operations.get_hopr_balance(self.safe_address).await {
-                        Ok(balance) => {
-                            self.db.set_safe_hopr_balance(Some(tx), balance).await?;
-                        }
-                        Err(error) => {
-                            error!(%error, "error getting safe balance from chain after transfer event");
-                        }
-                    }
-                    info!("updating safe allowance from chain after transfer event");
-                    match self
-                        .rpc_operations
-                        .get_hopr_allowance(self.safe_address, self.addresses.channels)
-                        .await
-                    {
-                        Ok(allowance) => {
-                            self.db.set_safe_hopr_allowance(Some(tx), allowance).await?;
-                        }
-                        Err(error) => {
-                            error!(%error, "error getting safe allowance from chain after transfer event");
-                        }
-                    }
-                }
             }
             HoprTokenEvents::Approval(approved) => {
                 let owner: Address = approved.owner.into();
                 let spender: Address = approved.spender.into();
 
                 trace!(
-                    address = %&self.safe_address, %owner, %spender, allowance = %approved.value,
+                    %owner, %spender, allowance = %approved.value,
                     "on_token_approval_event",
 
-                );
-
-                if owner.ne(&self.safe_address) || spender.ne(&self.addresses.channels) {
-                    error!(
-                        address = %&self.safe_address, %owner, %spender, allowance = %approved.value,
-                        "filter misconfiguration: approval event not involving the safe and channels contract");
-                    return Ok(None);
-                }
-
-                // if approval is for tokens on Safe contract to be spent by HoprChannels
-                if is_synced {
-                    info!("updating safe allowance from chain after approval event");
-                    match self
-                        .rpc_operations
-                        .get_hopr_allowance(self.safe_address, self.addresses.channels)
-                        .await
-                    {
-                        Ok(allowance) => {
-                            self.db.set_safe_hopr_allowance(Some(tx), allowance).await?;
-                        }
-                        Err(error) => {
-                            error!(%error, "error getting safe allowance from chain after approval event");
-                        }
-                    }
-                }
+                )
             }
             _ => error!("Implement all the other filters for HoprTokenEvents"),
         }
@@ -639,17 +497,10 @@ where
 
         match event {
             HoprNodeSafeRegistryEvents::RegisteredNodeSafe(registered) => {
-                if self.chain_key.public().to_address() == registered.nodeAddress.into() {
-                    info!(safe_address = %registered.safeAddress, "Node safe registered", );
-                    // NOTE: we don't store this state in the DB
-                    return Ok(Some(ChainEventType::NodeSafeRegistered(registered.safeAddress.into())));
-                }
+                info!(node_address = %registered.nodeAddress, safe_address = %registered.safeAddress, "Node safe registered", );
             }
             HoprNodeSafeRegistryEvents::DergisteredNodeSafe(deregistered) => {
-                if self.chain_key.public().to_address() == deregistered.nodeAddress.into() {
-                    info!("Node safe unregistered");
-                    // NOTE: we don't store this state in the DB
-                }
+                info!(node_address = %deregistered.nodeAddress, safe_address = %deregistered.safeAddress, "Node safe deregistered", );
             }
             HoprNodeSafeRegistryEvents::DomainSeparatorUpdated(domain_separator_updated) => {
                 self.db
@@ -665,6 +516,7 @@ where
         Ok(None)
     }
 
+    #[allow(dead_code)]
     async fn on_node_management_module_event(
         &self,
         _db: &OpenTransaction,
@@ -789,9 +641,6 @@ where
         } else if log.address.eq(&self.addresses.safe_registry) {
             let event = HoprNodeSafeRegistryEvents::decode_log(&primitive_log)?;
             self.on_node_safe_registry_event(tx, event.data, is_synced).await
-        } else if log.address.eq(&self.addresses.module_implementation) {
-            let event = HoprNodeManagementModuleEvents::decode_log(&primitive_log)?;
-            self.on_node_management_module_event(tx, event.data, is_synced).await
         } else if log.address.eq(&self.addresses.price_oracle) {
             let event = HoprTicketPriceOracleEvents::decode_log(&primitive_log)?;
             self.on_ticket_price_oracle_event(tx, event.data, is_synced).await
@@ -822,7 +671,6 @@ where
         vec![
             self.addresses.announcements,
             self.addresses.channels,
-            self.addresses.module_implementation,
             self.addresses.price_oracle,
             self.addresses.win_prob_oracle,
             self.addresses.safe_registry,
@@ -834,17 +682,11 @@ where
         self.addresses.clone()
     }
 
-    fn safe_address(&self) -> Address {
-        self.safe_address
-    }
-
     fn contract_address_topics(&self, contract: Address) -> Vec<B256> {
         if contract.eq(&self.addresses.announcements) {
             crate::constants::topics::announcement()
         } else if contract.eq(&self.addresses.channels) {
             crate::constants::topics::channel()
-        } else if contract.eq(&self.addresses.module_implementation) {
-            crate::constants::topics::module_implementation()
         } else if contract.eq(&self.addresses.price_oracle) {
             crate::constants::topics::ticket_price_oracle()
         } else if contract.eq(&self.addresses.win_prob_oracle) {
@@ -927,17 +769,11 @@ mod tests {
 
     lazy_static::lazy_static! {
         static ref SELF_PRIV_KEY: OffchainKeypair = OffchainKeypair::from_secret(&hex!("492057cf93e99b31d2a85bc5e98a9c3aa0021feec52c227cc8170e8f7d047775")).expect("lazy static keypair should be constructible");
-        static ref COUNTERPARTY_CHAIN_KEY: ChainKeypair = ChainKeypair::random();
-        static ref COUNTERPARTY_CHAIN_ADDRESS: Address = COUNTERPARTY_CHAIN_KEY.public().to_address();
-        static ref SELF_CHAIN_KEY: ChainKeypair = ChainKeypair::random();
-        static ref SELF_CHAIN_ADDRESS: Address = SELF_CHAIN_KEY.public().to_address();
         static ref STAKE_ADDRESS: Address = "4331eaa9542b6b034c43090d9ec1c2198758dbc3".parse().expect("lazy static address should be constructible");
         static ref CHANNELS_ADDR: Address = "bab20aea98368220baa4e3b7f151273ee71df93b".parse().expect("lazy static address should be constructible"); // just a dummy
         static ref TOKEN_ADDR: Address = "47d1677e018e79dcdd8a9c554466cb1556fa5007".parse().expect("lazy static address should be constructible"); // just a dummy
         static ref NODE_SAFE_REGISTRY_ADDR: Address = "0dcd1bf9a1b36ce34237eeafef220932846bcd82".parse().expect("lazy static address should be constructible"); // just a dummy
         static ref ANNOUNCEMENTS_ADDR: Address = "11db4791bf45ef31a10ea4a1b5cb90f46cc72c7e".parse().expect("lazy static address should be constructible"); // just a dummy
-        static ref SAFE_MANAGEMENT_MODULE_ADDR: Address = "9b91245a65ad469163a86e32b2281af7a25f38ce".parse().expect("lazy static address should be constructible"); // just a dummy
-        static ref SAFE_INSTANCE_ADDR: Address = "b93d7fdd605fb64fdcc87f21590f950170719d47".parse().expect("lazy static address should be constructible"); // just a dummy
         static ref TICKET_PRICE_ORACLE_ADDR: Address = "11db4391bf45ef31a10ea4a1b5cb90f46cc72c7e".parse().expect("lazy static address should be constructible"); // just a dummy
         static ref WIN_PROB_ORACLE_ADDR: Address = "00db4391bf45ef31a10ea4a1b5cb90f46cc64c7e".parse().expect("lazy static address should be constructible"); // just a dummy
     }
@@ -1013,15 +849,10 @@ mod tests {
                 token: *TOKEN_ADDR,
                 safe_registry: *NODE_SAFE_REGISTRY_ADDR,
                 announcements: *ANNOUNCEMENTS_ADDR,
-                module_implementation: *SAFE_MANAGEMENT_MODULE_ADDR,
                 price_oracle: *TICKET_PRICE_ORACLE_ADDR,
                 win_prob_oracle: *WIN_PROB_ORACLE_ADDR,
                 stake_factory: Default::default(),
-                network_registry: Default::default(),
-                network_registry_proxy: Default::default(),
             }),
-            chain_key: SELF_CHAIN_KEY.clone(),
-            safe_address: *STAKE_ADDRESS,
             db,
             rpc_operations,
         }
@@ -2783,7 +2614,7 @@ mod tests {
     //         let win_prob_change_log = SerializableLog {
     //             address: handlers.addresses.win_prob_oracle,
     //             topics: vec![
-    //                 
+    //
     // hopr_bindings::hoprwinningprobabilityoracle::HoprWinningProbabilityOracle::WinProbUpdated::SIGNATURE_HASH.into(),
     //             ],
     //             data: encoded_data,

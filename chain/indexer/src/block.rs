@@ -6,7 +6,6 @@ use std::{
     },
 };
 
-use alloy::sol_types::SolEvent;
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::chain_events::SignificantChainEvent;
 use blokli_db_api::logs::BlokliDbLogOperations;
@@ -16,7 +15,6 @@ use futures::{
     future::AbortHandle,
     stream::{self},
 };
-use hopr_bindings::hoprtoken::HoprToken::{Approval, Transfer};
 use hopr_crypto_types::types::Hash;
 use hopr_primitive_types::prelude::*;
 use tracing::{debug, error, info, trace};
@@ -292,7 +290,6 @@ where
                             is_synced.clone(),
                             next_block_to_process,
                             tx.clone(),
-                            logs_handler.safe_address().into(),
                             logs_handler.contract_addresses_map().channels.into(),
                         )
                         .await;
@@ -415,7 +412,6 @@ where
     /// * `token` - Token-specific filters (Transfer, Approval events for safe)
     /// * `no_token` - Non-token contract filters for initial sync optimization
     fn generate_log_filters(logs_handler: &U) -> (FilterSet, Vec<(Address, Hash)>) {
-        let safe_address = logs_handler.safe_address();
         let addresses_no_token = logs_handler
             .contract_addresses()
             .into_iter()
@@ -439,35 +435,36 @@ where
         let filter_base = alloy::rpc::types::Filter::new()
             .address(filter_base_addresses)
             .event_signature(filter_base_topics);
-        let filter_token = alloy::rpc::types::Filter::new().address(alloy::primitives::Address::from(
+        let _filter_token = alloy::rpc::types::Filter::new().address(alloy::primitives::Address::from(
             logs_handler.contract_addresses_map().token,
         ));
 
-        let filter_transfer_to = filter_token
-            .clone()
-            .event_signature(Transfer::SIGNATURE_HASH)
-            .topic2(alloy::primitives::B256::from_slice(safe_address.to_bytes32().as_ref()));
+        // let filter_transfer_to = filter_token
+        //     .clone()
+        //     .event_signature(Transfer::SIGNATURE_HASH)
+        //     .topic2(alloy::primitives::B256::from_slice(safe_address.to_bytes32().as_ref()));
 
-        let filter_transfer_from = filter_token
-            .clone()
-            .event_signature(Transfer::SIGNATURE_HASH)
-            .topic1(alloy::primitives::B256::from_slice(safe_address.to_bytes32().as_ref()));
+        // let filter_transfer_from = filter_token
+        //     .clone()
+        //     .event_signature(Transfer::SIGNATURE_HASH)
+        //     .topic1(alloy::primitives::B256::from_slice(safe_address.to_bytes32().as_ref()));
 
-        let filter_approval = filter_token
-            .event_signature(Approval::SIGNATURE_HASH)
-            .topic1(alloy::primitives::B256::from_slice(safe_address.to_bytes32().as_ref()))
-            .topic2(alloy::primitives::B256::from_slice(
-                logs_handler.contract_addresses_map().channels.to_bytes32().as_ref(),
-            ));
+        // let filter_approval = filter_token
+        //     .event_signature(Approval::SIGNATURE_HASH)
+        //     .topic1(alloy::primitives::B256::from_slice(safe_address.to_bytes32().as_ref()))
+        //     .topic2(alloy::primitives::B256::from_slice(
+        //         logs_handler.contract_addresses_map().channels.to_bytes32().as_ref(),
+        //     ));
 
         let set = FilterSet {
             all: vec![
                 filter_base.clone(),
-                filter_transfer_from.clone(),
-                filter_transfer_to.clone(),
-                filter_approval.clone(),
+                // filter_transfer_from.clone(),
+                // filter_transfer_to.clone(),
+                // filter_approval.clone(),
             ],
-            token: vec![filter_transfer_from, filter_transfer_to, filter_approval],
+            // token: vec![filter_transfer_from, filter_transfer_to, filter_approval],
+            token: vec![],
             no_token: vec![filter_base],
         };
 
@@ -662,13 +659,12 @@ where
     async fn calculate_sync_process(
         current_block: u64,
         rpc: &T,
-        db: Db,
+        _db: Db,
         chain_head: Arc<AtomicU64>,
         is_synced: Arc<AtomicBool>,
         next_block_to_process: u64,
         mut tx: futures::channel::mpsc::Sender<()>,
-        safe_address: Option<Address>,
-        channels_address: Option<Address>,
+        _channels_address: Option<Address>,
     ) where
         T: HoprIndexerRpcOperations + 'static,
         Db: BlokliDbInfoOperations + Clone + Send + Sync + 'static,
@@ -712,34 +708,6 @@ where
             if current_block >= head {
                 info!("indexer sync completed successfully");
                 is_synced.store(true, Ordering::Relaxed);
-
-                if let Some(safe_address) = safe_address {
-                    info!("updating safe balance from chain after indexer sync completed");
-                    match rpc.get_hopr_balance(safe_address).await {
-                        Ok(balance) => {
-                            if let Err(error) = db.set_safe_hopr_balance(None, balance).await {
-                                error!(%error, "failed to update safe balance from chain after indexer sync completed");
-                            }
-                        }
-                        Err(error) => {
-                            error!(%error, "failed to fetch safe balance from chain after indexer sync completed");
-                        }
-                    }
-                }
-
-                if let Some((channels_address, safe_address)) = channels_address.zip(safe_address) {
-                    info!("updating safe allowance from chain after indexer sync completed");
-                    match rpc.get_hopr_allowance(safe_address, channels_address).await {
-                        Ok(allowance) => {
-                            if let Err(error) = db.set_safe_hopr_allowance(None, allowance).await {
-                                error!(%error, "failed to update safe allowance from chain after indexer sync completed");
-                            }
-                        }
-                        Err(error) => {
-                            error!(%error, "failed to fetch safe allowance from chain after indexer sync completed");
-                        }
-                    }
-                }
 
                 if let Err(error) = tx.try_send(()) {
                     error!(%error, "failed to notify about achieving indexer synchronization")
@@ -820,7 +788,6 @@ mod tests {
     use alloy::{
         dyn_abi::DynSolValue,
         primitives::{Address as AlloyAddress, B256},
-        sol_types::SolEvent,
     };
     use async_trait::async_trait;
     use blokli_chain_rpc::BlockWithLogs;
@@ -929,9 +896,6 @@ mod tests {
             .withf(move |x| x == &addr)
             .return_const(vec![B256::from_slice(Hash::create(&[b"my topic"]).as_ref())]);
         handlers
-            .expect_safe_address()
-            .return_const(Address::new(b"my safe address 1234"));
-        handlers
             .expect_contract_addresses_map()
             .return_const(ContractAddresses::default());
 
@@ -982,9 +946,6 @@ mod tests {
             .expect_contract_address_topics()
             .withf(move |x| x == &addr)
             .return_const(vec![B256::from_slice(Hash::create(&[b"my topic"]).as_ref())]);
-        handlers
-            .expect_safe_address()
-            .return_const(Address::new(b"my safe address 1234"));
         handlers
             .expect_contract_addresses_map()
             .return_const(ContractAddresses::default());
@@ -1052,9 +1013,6 @@ mod tests {
             .expect_contract_address_topics()
             .withf(move |x| x == &addr)
             .return_const(vec![B256::from_slice(Hash::create(&[b"my topic"]).as_ref())]);
-        handlers
-            .expect_safe_address()
-            .return_const(Address::new(b"my safe address 1234"));
         handlers
             .expect_contract_addresses_map()
             .return_const(ContractAddresses::default());
@@ -1158,9 +1116,6 @@ mod tests {
                 .withf(move |x| x == &addr)
                 .return_const(vec![B256::from_slice(Hash::create(&[b"my topic"]).as_ref())]);
             handlers
-                .expect_safe_address()
-                .return_const(Address::new(b"my safe address 1234"));
-            handlers
                 .expect_contract_addresses_map()
                 .return_const(ContractAddresses::default());
 
@@ -1246,9 +1201,6 @@ mod tests {
                 .withf(move |x| x == &addr)
                 .return_const(vec![B256::from_slice(Hash::create(&[b"my topic"]).as_ref())]);
             handlers
-                .expect_safe_address()
-                .return_const(Address::new(b"my safe address 1234"));
-            handlers
                 .expect_contract_addresses_map()
                 .return_const(ContractAddresses::default());
 
@@ -1286,9 +1238,6 @@ mod tests {
             .expect_contract_address_topics()
             .withf(move |x| x == &addr)
             .return_const(vec![B256::from_slice(Hash::create(&[b"my topic"]).as_ref())]);
-        handlers
-            .expect_safe_address()
-            .return_const(Address::new(b"my safe address 1234"));
         handlers
             .expect_contract_addresses_map()
             .return_const(ContractAddresses::default());
@@ -1418,9 +1367,6 @@ mod tests {
             .expect_contract_address_topics()
             .withf(move |x| x == &addr)
             .return_const(vec![B256::from_slice(Hash::create(&[b"my topic"]).as_ref())]);
-        handlers
-            .expect_safe_address()
-            .return_const(Address::new(b"my safe address 1234"));
         handlers
             .expect_contract_addresses_map()
             .return_const(ContractAddresses::default());

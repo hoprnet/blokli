@@ -5,7 +5,6 @@ use std::{
 };
 
 use blokli_db_entity::prelude::{Account, Announcement};
-use hopr_primitive_types::primitives::Address;
 use migration::{MigratorChainLogs, MigratorIndex, MigratorTrait};
 use sea_orm::{EntityTrait, SqlxSqliteConnector};
 use sqlx::{

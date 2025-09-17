@@ -13,8 +13,6 @@ use blokli_chain_types::ContractAddresses;
 use blokli_db_sql::db::{BlokliDb, BlokliDbConfig};
 use clap::Parser;
 use futures::TryStreamExt;
-use hopr_crypto_types::prelude::*;
-use hopr_primitive_types::prelude::*;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
 use validator::Validate;

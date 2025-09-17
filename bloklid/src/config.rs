@@ -49,7 +49,7 @@ pub struct ChainNetworkConfig {
 
 impl From<ChainNetworkConfig> for blokli_chain_api::ChainNetworkConfig {
     fn from(config: ChainNetworkConfig) -> Self {
-        blokli_chain_api::ChainNetworkConfig {
+        hopr_chain_config::ChainNetworkConfig {
             chain: blokli_chain_api::ChainConfig {
                 chain_id: config.chain.chain_id,
                 block_time: config.chain.block_time,

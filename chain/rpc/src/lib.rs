@@ -274,23 +274,11 @@ pub trait HoprRpcOperations {
     /// ticket price oracle.
     async fn get_minimum_network_ticket_price(&self) -> Result<HoprBalance>;
 
-    /// Retrieves the node's eligibility status
-    async fn get_eligibility_status(&self, address: Address) -> Result<bool>;
-
-    /// Retrieves information of the given node module's target.
-    async fn get_node_management_module_target_info(&self, target: Address) -> Result<Option<U256>>;
-
     /// Retrieves the safe address of the given node address from the registry.
     async fn get_safe_from_node_safe_registry(&self, node: Address) -> Result<Address>;
 
-    /// Retrieves the target address of the node module.
-    async fn get_module_target_address(&self) -> Result<Address>;
-
     /// Retrieves the notice period of channel closure from the Channels contract.
     async fn get_channel_closure_notice_period(&self) -> Result<Duration>;
-
-    /// Retrieves the on-chain status of node, safe, and module.
-    async fn check_node_safe_module_status(&self, node_address: Address) -> Result<NodeSafeModuleStatus>;
 
     /// Sends transaction to the RPC provider, does not await confirmation.
     async fn send_transaction(&self, tx: TransactionRequest) -> Result<PendingTransaction>;

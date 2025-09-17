@@ -2,7 +2,7 @@ use std::{marker::PhantomData, time::Duration};
 
 use alloy::{providers::PendingTransaction, rpc::types::TransactionRequest};
 use async_trait::async_trait;
-use blokli_chain_actions::{action_queue::TransactionExecutor, payload::PayloadGenerator};
+use blokli_chain_actions::action_queue::TransactionExecutor;
 use blokli_chain_rpc::{HoprRpcOperations, errors::RpcError};
 use futures::{FutureExt, future::Either, pin_mut};
 use hopr_async_runtime::prelude::sleep;
@@ -103,53 +103,49 @@ impl<Rpc: HoprRpcOperations + Send + Sync> EthereumClient<TransactionRequest> fo
 /// Implementation of [`TransactionExecutor`] using the given [`EthereumClient`] and corresponding
 /// [`PayloadGenerator`].
 #[derive(Clone, Debug)]
-pub struct EthereumTransactionExecutor<T, C, PGen>
+pub struct EthereumTransactionExecutor<T, C>
 where
     T: Into<TransactionRequest>,
     C: EthereumClient<T> + Clone,
-    PGen: PayloadGenerator<T> + Clone,
 {
-    client: C,
-    payload_generator: PGen,
+    _client: C,
     _data: PhantomData<T>,
 }
 
-impl<T, C, PGen> EthereumTransactionExecutor<T, C, PGen>
+impl<T, C> EthereumTransactionExecutor<T, C>
 where
     T: Into<TransactionRequest>,
     C: EthereumClient<T> + Clone,
-    PGen: PayloadGenerator<T> + Clone,
 {
-    pub fn new(client: C, payload_generator: PGen) -> Self {
+    pub fn new(client: C) -> Self {
         Self {
-            client,
-            payload_generator,
+            _client: client,
             _data: PhantomData,
         }
     }
 }
 
 #[async_trait]
-impl<T, C, PGen> TransactionExecutor for EthereumTransactionExecutor<T, C, PGen>
+impl<T, C> TransactionExecutor for EthereumTransactionExecutor<T, C>
 where
     T: Into<TransactionRequest> + Sync + Send,
     C: EthereumClient<T> + Clone + Sync + Send,
-    PGen: PayloadGenerator<T> + Clone + Sync + Send,
 {
     async fn withdraw<Cr: Currency + Send>(
         &self,
-        recipient: Address,
-        amount: Balance<Cr>,
+        _recipient: Address,
+        _amount: Balance<Cr>,
     ) -> blokli_chain_actions::errors::Result<Hash> {
-        let payload = self.payload_generator.transfer(recipient, amount)?;
-
         // Withdraw transaction is out-of-band from Indexer, so its confirmation
         // is awaited via polling.
-        Ok(self.client.post_transaction_and_await_confirmation(payload).await?)
+        // FIXME: implement for blokli
+        let hash = Hash::default();
+        Ok(hash)
     }
 
-    async fn register_safe(&self, safe_address: Address) -> blokli_chain_actions::errors::Result<Hash> {
-        let payload = self.payload_generator.register_safe_by_node(safe_address)?;
-        Ok(self.client.post_transaction(payload).await?)
+    async fn register_safe(&self, _safe_address: Address) -> blokli_chain_actions::errors::Result<Hash> {
+        // FIXME: implement for blokli
+        let hash = Hash::default();
+        Ok(hash)
     }
 }
