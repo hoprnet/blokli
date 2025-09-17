@@ -29,15 +29,6 @@ impl IndexerData {
     }
 }
 
-/// Contains information about node's safe.
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub struct SafeInfo {
-    /// Safe address
-    pub safe_address: Address,
-    /// Safe module address.
-    pub module_address: Address,
-}
-
 /// Enumerates different domain separators
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum DomainSeparator {

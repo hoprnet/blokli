@@ -229,54 +229,6 @@ impl BlokliDbInfoOperations for BlokliDb {
             .await
     }
 
-    async fn get_safe_info<'a>(&'a self, tx: OptTx<'a>) -> Result<Option<SafeInfo>> {
-        let myself = self.clone();
-        Ok(myself
-            .nest_transaction(tx)
-            .and_then(|op| {
-                op.perform(|tx| {
-                    Box::pin(async move {
-                        let info = node_info::Entity::find_by_id(SINGULAR_TABLE_FIXED_ID)
-                            .one(tx.as_ref())
-                            .await?
-                            .ok_or(MissingFixedTableEntry("node_info".into()))?;
-                        Ok::<_, DbSqlError>(info.safe_address.zip(info.module_address))
-                    })
-                })
-            })
-            .await
-            .and_then(|addrs| {
-                if let Some((safe_address, module_address)) = addrs {
-                    Ok(Some(SafeInfo {
-                        safe_address: safe_address.parse()?,
-                        module_address: module_address.parse()?,
-                    }))
-                } else {
-                    Ok(None)
-                }
-            })?)
-    }
-
-    async fn set_safe_info<'a>(&'a self, tx: OptTx<'a>, safe_info: SafeInfo) -> Result<()> {
-        self.nest_transaction(tx)
-            .await?
-            .perform(|tx| {
-                Box::pin(async move {
-                    node_info::ActiveModel {
-                        id: Set(SINGULAR_TABLE_FIXED_ID),
-                        safe_address: Set(Some(safe_info.safe_address.to_hex())),
-                        module_address: Set(Some(safe_info.module_address.to_hex())),
-                        ..Default::default()
-                    }
-                    .update(tx.as_ref()) // DB is primed in the migration, so only update is needed
-                    .await?;
-                    Ok::<_, DbSqlError>(())
-                })
-            })
-            .await?;
-        Ok(())
-    }
-
     async fn get_indexer_data<'a>(&'a self, tx: OptTx<'a>) -> Result<IndexerData> {
         let myself = self.clone();
         Ok(myself
@@ -523,23 +475,6 @@ mod tests {
 
         assert_eq!(data.ticket_price, Some(price));
         assert_eq!(data.minimum_incoming_ticket_winning_prob, 0.5);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_set_get_safe_info() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory().await?;
-
-        assert_eq!(None, db.get_safe_info(None).await?);
-
-        let safe_info = SafeInfo {
-            safe_address: *ADDR_1,
-            module_address: *ADDR_2,
-        };
-
-        db.set_safe_info(None, safe_info).await?;
-
-        assert_eq!(Some(safe_info), db.get_safe_info(None).await?);
         Ok(())
     }
 }

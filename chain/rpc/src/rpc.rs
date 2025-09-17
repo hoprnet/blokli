@@ -68,14 +68,6 @@ pub struct RpcOperationsConfig {
     ///
     /// Default contains empty (null) addresses.
     pub contract_addrs: ContractAddresses,
-    /// Address of the node's module.
-    ///
-    /// Defaults to null address.
-    pub module_address: Address,
-    /// Address of the node's safe contract.
-    ///
-    /// Defaults to null address.
-    pub safe_address: Address,
     /// Expected block time of the blockchain
     ///
     /// Defaults to 5 seconds
@@ -168,8 +160,6 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
                 provider.clone(),
                 use_dummy_nr.unwrap_or(cfg!(test)),
             )),
-            node_module: HoprNodeManagementModule::new(cfg.module_address.into(), provider.clone()),
-            node_safe: SafeSingleton::new(cfg.safe_address.into(), provider.clone()),
             cfg,
             provider: Arc::new(provider),
         })
@@ -381,35 +371,35 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
         }
     }
 
-    // Check on-chain status of, node, safe, and module
-    async fn check_node_safe_module_status(&self, node_address: Address) -> Result<NodeSafeModuleStatus> {
-        // 1) check if the node is already included into the module
-        let tx_1 = CallItemBuilder::new(self.node_module.isNode(node_address.into())).allow_failure(false);
-        // 2) if the module is enabled in the safe
-        let tx_2 =
-            CallItemBuilder::new(self.node_safe.isModuleEnabled(self.cfg.module_address.into())).allow_failure(false);
-        // 3) if the safe is the owner of the module
-        let tx_3 = CallItemBuilder::new(self.node_module.owner()).allow_failure(false);
-        let multicall = self.provider.multicall().add_call(tx_1).add_call(tx_2).add_call(tx_3);
-
-        let (node_in_module_inclusion, module_safe_enabling, safe_of_module_ownership) =
-            multicall.aggregate3_value().await.map_err(RpcError::MulticallError)?;
-        let is_node_included_in_module =
-            node_in_module_inclusion.map_err(|e| RpcError::MulticallFailure(e.idx, e.return_data.to_string()))?;
-        let is_module_enabled_in_safe =
-            module_safe_enabling.map_err(|e| RpcError::MulticallFailure(e.idx, e.return_data.to_string()))?;
-        let is_safe_owner_of_module = self.cfg.safe_address.eq(&safe_of_module_ownership
-            .map_err(|e| RpcError::MulticallFailure(e.idx, e.return_data.to_string()))?
-            .0
-            .0
-            .into());
-
-        Ok(NodeSafeModuleStatus {
-            is_node_included_in_module,
-            is_module_enabled_in_safe,
-            is_safe_owner_of_module,
-        })
-    }
+//     // Check on-chain status of, node, safe, and module
+//     async fn check_node_safe_module_status(&self, node_address: Address) -> Result<NodeSafeModuleStatus> {
+//         // 1) check if the node is already included into the module
+//         let tx_1 = CallItemBuilder::new(self.node_module.isNode(node_address.into())).allow_failure(false);
+//         // 2) if the module is enabled in the safe
+//         let tx_2 =
+//             CallItemBuilder::new(self.node_safe.isModuleEnabled(self.cfg.module_address.into())).allow_failure(false);
+//         // 3) if the safe is the owner of the module
+//         let tx_3 = CallItemBuilder::new(self.node_module.owner()).allow_failure(false);
+//         let multicall = self.provider.multicall().add_call(tx_1).add_call(tx_2).add_call(tx_3);
+// 
+//         let (node_in_module_inclusion, module_safe_enabling, safe_of_module_ownership) =
+//             multicall.aggregate3_value().await.map_err(RpcError::MulticallError)?;
+//         let is_node_included_in_module =
+//             node_in_module_inclusion.map_err(|e| RpcError::MulticallFailure(e.idx, e.return_data.to_string()))?;
+//         let is_module_enabled_in_safe =
+//             module_safe_enabling.map_err(|e| RpcError::MulticallFailure(e.idx, e.return_data.to_string()))?;
+//         let is_safe_owner_of_module = self.cfg.safe_address.eq(&safe_of_module_ownership
+//             .map_err(|e| RpcError::MulticallFailure(e.idx, e.return_data.to_string()))?
+//             .0
+//             .0
+//             .into());
+// 
+//         Ok(NodeSafeModuleStatus {
+//             is_node_included_in_module,
+//             is_module_enabled_in_safe,
+//             is_safe_owner_of_module,
+//         })
+//     }
 
     async fn send_transaction(&self, tx: TransactionRequest) -> Result<PendingTransaction> {
         let sent_tx = self.provider.send_transaction(tx).await?;
@@ -788,8 +778,6 @@ mod tests {
             expected_block_time,
             finality: 2,
             contract_addrs: ContractAddresses::from(&contract_instances),
-            module_address: module,
-            safe_address: safe,
             gas_oracle_url: None,
             ..RpcOperationsConfig::default()
         };
@@ -881,8 +869,6 @@ mod tests {
             expected_block_time,
             finality: 2,
             contract_addrs: ContractAddresses::from(&contract_instances),
-            module_address: module,
-            safe_address: safe,
             gas_oracle_url: None,
             ..RpcOperationsConfig::default()
         };
@@ -973,8 +959,6 @@ mod tests {
             expected_block_time,
             finality: 2,
             contract_addrs: ContractAddresses::from(&contract_instances),
-            module_address: module,
-            safe_address: safe,
             gas_oracle_url: None,
             ..RpcOperationsConfig::default()
         };
