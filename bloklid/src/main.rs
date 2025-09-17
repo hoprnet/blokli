@@ -13,6 +13,7 @@ use blokli_chain_types::ContractAddresses;
 use blokli_db_sql::db::{BlokliDb, BlokliDbConfig};
 use clap::Parser;
 use futures::TryStreamExt;
+use hopr_chain_config::ChainNetworkConfig;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
 use validator::Validate;
@@ -55,6 +56,27 @@ impl Args {
         .map_err(|e| ConfigError::Parse(e.to_string()))?;
 
         config.validate().map_err(ConfigError::Validation)?;
+
+        // coerce with protocol config
+        let chain_network_config = ChainNetworkConfig::new(
+            &config.network,
+            crate::constants::APP_VERSION_COERCED,
+            config.rpc_url.as_ref(),
+            config.max_rpc_requests_per_sec,
+            &mut config.protocols,
+        )
+        .map_err(|e| HoprLibError::GeneralError(format!("Failed to resolve blockchain environment: {e}")))?;
+
+        config.chain_network = chain_network_config;
+
+        let contract_addresses = ContractAddresses::from(&chain_network_config);
+        config.contracts = contract_addresses;
+
+        info!(
+            contract_addresses = ?contract_addresses,
+            "Resolved contract addresses",
+        );
+
         Ok(config)
     }
 }
@@ -93,21 +115,11 @@ async fn main() -> errors::Result<()> {
 
     // Initialize components
     let process_handles = {
-        // Extract all needed values from config before any await
-        let (database_path, chain_cfg, indexer_cfg, data_directory) = {
-            let cfg = config
-                .read()
-                .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
+        let cfg = config
+            .read()
+            .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
 
-            (
-                cfg.database_path.clone(),
-                cfg.chain.clone(),
-                cfg.indexer.clone(),
-                cfg.data_directory.clone(),
-            )
-        };
-
-        info!("Initializing database at: {}", database_path);
+        info!("Initializing database at: {}", cfg.database_path);
 
         // Initialize database
         let db_config = BlokliDbConfig {
@@ -115,45 +127,27 @@ async fn main() -> errors::Result<()> {
             force_create: false,
             log_slow_queries: Duration::from_secs(1),
         };
-        let db_path = Path::new(&database_path);
+        let db_path = Path::new(&cfg.database_path);
         let db = BlokliDb::new(db_path, db_config).await?;
 
-        info!("Connecting to RPC endpoint: {}", chain_cfg.chain.default_provider);
+        info!("Connecting to RPC endpoint: {}", cfg.chain_network.default_provider);
 
-        // Default contract addresses - should be configured properly
-        let contract_addresses = ContractAddresses {
-            token: Address::default(),
-            channels: Address::default(),
-            announcements: Address::default(),
-            network_registry: Address::default(),
-            network_registry_proxy: Address::default(),
-            safe_registry: Address::default(),
-            price_oracle: Address::default(),
-            win_prob_oracle: Address::default(),
-            stake_factory: Address::default(),
-            module_implementation: Address::default(),
-        };
+        // Use contract addresses from config
 
         // Configure indexer
         let indexer_config = blokli_chain_indexer::IndexerConfig {
-            start_block_number: indexer_cfg.start_block_number,
-            fast_sync: indexer_cfg.fast_sync,
-            enable_logs_snapshot: indexer_cfg.enable_logs_snapshot,
-            logs_snapshot_url: indexer_cfg.logs_snapshot_url,
-            data_directory,
+            start_block_number: cfg.indexer.start_block_number,
+            fast_sync: cfg.indexer.fast_sync,
+            enable_logs_snapshot: cfg.indexer.enable_logs_snapshot,
+            logs_snapshot_url: cfg.indexer.logs_snapshot_url,
+            data_directory: cfg.data_directory,
         };
 
         // Create channel for chain events
         let (tx_events, _rx_events) = async_channel::unbounded::<SignificantChainEvent>();
 
         // Create BlokliChain instance
-        let blokli_chain = BlokliChain::new(
-            db,
-            chain_cfg.into(), // Convert to the API's ChainNetworkConfig
-            contract_addresses,
-            indexer_config,
-            tx_events,
-        )?;
+        let blokli_chain = BlokliChain::new(db, cfg.chain_network, cfg.contracts, indexer_config, tx_events)?;
 
         info!("Starting BlokliChain processes");
 
