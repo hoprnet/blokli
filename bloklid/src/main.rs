@@ -7,33 +7,22 @@ use std::{
     time::Duration,
 };
 
+use alloy::{rpc::client::RpcClient, transports::http::Http};
 use async_signal::{Signal, Signals};
-use clap::Parser;
-use futures::TryStreamExt;
-use tracing::{error, info, warn};
-use tracing_subscriber::{EnvFilter, fmt};
-use validator::Validate;
-
-// Chain imports
-use blokli_chain_indexer::{
-    IndexerConfig,
-    block::Indexer,
-    handlers::ContractEventHandlers,
-};
+use blokli_chain_indexer::{block::Indexer, handlers::ContractEventHandlers};
 use blokli_chain_rpc::{
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
 };
 use blokli_chain_types::ContractAddresses;
-use alloy::rpc::client::RpcClient;
-use alloy::transports::http::Http;
-
-// Database imports
 use blokli_db_sql::db::{BlokliDb, BlokliDbConfig};
-
-// HOPR imports
+use clap::Parser;
+use futures::TryStreamExt;
 use hopr_crypto_types::prelude::*;
 use hopr_primitive_types::prelude::*;
+use tracing::{error, info, warn};
+use tracing_subscriber::{EnvFilter, fmt};
+use validator::Validate;
 
 use crate::{
     config::Config,
@@ -111,27 +100,40 @@ async fn main() -> errors::Result<()> {
 
     // Initialize components
     let (_chain_key, _db, _rpc_operations, indexer_handle) = {
-        let cfg = config.read().map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
-        
+        // Extract all needed values from config before any await
+        let (private_key, database_path, rpc_url_str, indexer_cfg, data_directory) = {
+            let cfg = config
+                .read()
+                .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
+
+            (
+                cfg.private_key.clone(),
+                cfg.database_path.clone(),
+                cfg.rpc_url.clone(),
+                cfg.indexer.clone(),
+                cfg.data_directory.clone(),
+            )
+        };
+
         // Parse private key
-        let private_key_bytes = hex::decode(cfg.private_key.trim_start_matches("0x"))
+        let private_key_bytes = hex::decode(private_key.trim_start_matches("0x"))
             .map_err(|e| BloklidError::Crypto(format!("Failed to decode private key: {}", e)))?;
         let chain_key = ChainKeypair::from_secret(&private_key_bytes)
             .map_err(|e| BloklidError::Crypto(format!("Failed to parse private key: {}", e)))?;
-        
-        info!("Initializing database at: {}", cfg.database_path);
-        
+
+        info!("Initializing database at: {}", database_path);
+
         // Initialize database
         let db_config = BlokliDbConfig {
             create_if_missing: true,
             force_create: false,
-            log_slow_queries: Duration::from_secs(5),
+            log_slow_queries: Duration::from_secs(1),
         };
-        let db_path = Path::new(&cfg.database_path);
+        let db_path = Path::new(&database_path);
         let db = BlokliDb::new(db_path, chain_key.clone(), db_config).await?;
-        
-        info!("Connecting to RPC endpoint: {}", cfg.rpc_url);
-        
+
+        info!("Connecting to RPC endpoint: {}", rpc_url_str);
+
         // Initialize RPC client
         let rpc_config = RpcOperationsConfig {
             chain_id: 100, // Gnosis chain
@@ -151,24 +153,19 @@ async fn main() -> errors::Result<()> {
             safe_address: chain_key.public().to_address(),
             ..Default::default()
         };
-        
-        let rpc_url = cfg.rpc_url.parse::<url::Url>()
+
+        let rpc_url = rpc_url_str
+            .parse::<url::Url>()
             .map_err(|e| BloklidError::Crypto(format!("Failed to parse RPC URL: {}", e)))?;
         let reqwest_client = ReqwestClient::new();
         let http = Http::<ReqwestClient>::with_client(reqwest_client.clone(), rpc_url);
         let rpc_client = RpcClient::new(http, true);
-        
-        let rpc_operations = RpcOperations::new(
-            rpc_client,
-            reqwest_client,
-            &chain_key,
-            rpc_config,
-            None
-        )?;
-        
+
+        let rpc_operations = RpcOperations::new(rpc_client, reqwest_client, &chain_key, rpc_config, None)?;
+
         // Create channel for chain events
         let (tx_events, _rx_events) = async_channel::unbounded();
-        
+
         // Initialize contract event handlers
         let contract_addresses = ContractAddresses {
             token: Address::default(),
@@ -182,7 +179,7 @@ async fn main() -> errors::Result<()> {
             stake_factory: Address::default(),
             module_implementation: Address::default(),
         };
-        
+
         let safe_address = chain_key.public().to_address();
         let handlers = ContractEventHandlers::new(
             contract_addresses,
@@ -191,31 +188,25 @@ async fn main() -> errors::Result<()> {
             db.clone(),
             rpc_operations.clone(),
         );
-        
+
         // Configure indexer
-        let indexer_config = IndexerConfig {
-            start_block_number: cfg.indexer.start_block_number,
-            fast_sync: cfg.indexer.fast_sync,
-            enable_logs_snapshot: cfg.indexer.enable_logs_snapshot,
-            logs_snapshot_url: cfg.indexer.logs_snapshot_url.clone(),
-            data_directory: cfg.data_directory.clone(),
+        let indexer_config = blokli_chain_indexer::IndexerConfig {
+            start_block_number: indexer_cfg.start_block_number,
+            fast_sync: indexer_cfg.fast_sync,
+            enable_logs_snapshot: indexer_cfg.enable_logs_snapshot,
+            logs_snapshot_url: indexer_cfg.logs_snapshot_url,
+            data_directory,
         };
-        
+
         info!("Starting indexer from block {}", indexer_config.start_block_number);
-        
+
         // Create and start indexer
-        let indexer = Indexer::new(
-            rpc_operations.clone(),
-            handlers,
-            db.clone(),
-            indexer_config,
-            tx_events,
-        );
-        
+        let indexer = Indexer::new(rpc_operations.clone(), handlers, db.clone(), indexer_config, tx_events);
+
         let indexer_handle = indexer.start().await?;
-        
+
         info!("Indexer started successfully");
-        
+
         (chain_key, db, rpc_operations, indexer_handle)
     };
 

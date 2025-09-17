@@ -471,7 +471,7 @@ where
                     }
                 };
 
-                if let Some(_) = maybe_channel {
+                if maybe_channel.is_some() {
                     Ok(None)
                 } else {
                     error!(%channel_id, "observed ticket redeem on a channel that we don't have in the DB");
@@ -707,8 +707,6 @@ where
                     %new_minimum_win_prob,
                     "minimum ticket winning probability updated"
                 );
-
-                ()
             }
             _ => {
                 // Ignore other events

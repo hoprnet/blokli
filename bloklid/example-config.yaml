@@ -2,24 +2,19 @@
 host: "0.0.0.0:3064"
 database_path: "data/bloklid.db"
 data_directory: "data"
-
 # Private key - replace with your actual private key
 # This is just a placeholder - never use this in production!
 private_key: "0x0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-
 # RPC endpoint for your blockchain node
 rpc_url: "http://localhost:8545"
-
 # Indexer configuration
 indexer:
   # Block number to start indexing from
   start_block_number: 0
-  
   # Enable fast sync for quicker initial synchronization
   fast_sync: true
-  
   # Enable downloading logs snapshot (if available)
   enable_logs_snapshot: false
-  
-  # URL to logs snapshot (optional)
-  # logs_snapshot_url: "https://example.com/logs-snapshot.tar.xz"
+
+# URL to logs snapshot (optional)
+# logs_snapshot_url: "https://example.com/logs-snapshot.tar.xz"
