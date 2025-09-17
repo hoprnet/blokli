@@ -8,10 +8,7 @@ fn default_db_path() -> String {
     "data/bloklid.db".to_string()
 }
 
-fn default_private_key() -> String {
-    // This is a placeholder - in production this should be loaded from environment or secure storage
-    "0x0000000000000000000000000000000000000000000000000000000000000000".to_string()
-}
+
 
 fn default_rpc_url() -> String {
     "http://localhost:8545".to_string()
@@ -37,10 +34,7 @@ pub struct Config {
     #[serde(default = "default_data_directory")]
     pub data_directory: String,
 
-    #[default(_code = "default_private_key()")]
-    #[serde(default = "default_private_key")]
-    #[validate(length(min = 66, max = 66))]
-    pub private_key: String,
+
 
     #[default(_code = "default_rpc_url()")]
     #[serde(default = "default_rpc_url")]

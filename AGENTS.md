@@ -12,7 +12,6 @@
 
 - `just build` - Build with runtime-tokio feature
 - `just test` - Run all tests
-- `just test-indexer` - Run indexer integration tests
 - `just test-package <name>` - Run tests for specific package
 - `just clippy` - Run linter
 - `just fmt` - Format code
@@ -44,7 +43,6 @@ Legacy cargo commands (prefer using `just` instead):
 
 - Tests in modules with `#[cfg(test)]`
 - Use `just test-package <package_name>` for specific package tests
-- Use `just test-indexer` to run integration tests
 - Use `just test-debug` for single-threaded test execution with output
 
 ## Development Workflow

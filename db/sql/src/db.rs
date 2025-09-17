@@ -5,7 +5,7 @@ use std::{
 };
 
 use blokli_db_entity::prelude::{Account, Announcement};
-use hopr_crypto_types::{keypairs::Keypair, prelude::ChainKeypair};
+
 use hopr_primitive_types::primitives::Address;
 use migration::{MigratorChainLogs, MigratorIndex, MigratorTrait};
 use sea_orm::{EntityTrait, SqlxSqliteConnector};
@@ -66,8 +66,6 @@ pub struct BlokliDb {
     pub(crate) index_db: DbConnection,
     pub(crate) logs_db: sea_orm::DatabaseConnection,
 
-    #[allow(dead_code)]
-    pub(crate) chain_key: ChainKeypair,
     pub(crate) me_onchain: Address,
     #[allow(dead_code)]
     pub(crate) cfg: BlokliDbConfig,
@@ -79,7 +77,7 @@ pub const SQL_DB_INDEX_FILE_NAME: &str = "hopr_index.db";
 pub const SQL_DB_LOGS_FILE_NAME: &str = "hopr_logs.db";
 
 impl BlokliDb {
-    pub async fn new(directory: &Path, chain_key: ChainKeypair, cfg: BlokliDbConfig) -> Result<Self> {
+    pub async fn new(directory: &Path, cfg: BlokliDbConfig) -> Result<Self> {
         cfg.validate()
             .map_err(|e| DbSqlError::Construction(format!("failed configuration validation: {e}")))?;
 
@@ -121,17 +119,16 @@ impl BlokliDb {
         .await?;
 
         #[cfg(feature = "sqlite")]
-        Self::new_sqlx_sqlite(chain_key, index, index_ro, logs, cfg).await
+        Self::new_sqlx_sqlite(index, index_ro, logs, cfg).await
     }
 
     #[cfg(feature = "sqlite")]
-    pub async fn new_in_memory(chain_key: ChainKeypair) -> Result<Self> {
+    pub async fn new_in_memory() -> Result<Self> {
         let index_db = SqlitePool::connect(":memory:")
             .await
             .map_err(|e| DbSqlError::Construction(e.to_string()))?;
 
         Self::new_sqlx_sqlite(
-            chain_key,
             index_db.clone(),
             index_db,
             SqlitePool::connect(":memory:")
@@ -144,7 +141,6 @@ impl BlokliDb {
 
     #[cfg(feature = "sqlite")]
     async fn new_sqlx_sqlite(
-        chain_key: ChainKeypair,
         index_db_pool: SqlitePool,
         index_db_ro_pool: SqlitePool,
         logs_db_pool: SqlitePool,
@@ -182,8 +178,7 @@ impl BlokliDb {
             })?;
 
         Ok(Self {
-            me_onchain: chain_key.public().to_address(),
-            chain_key,
+            me_onchain: Address::default(),
 
             index_db: DbConnection {
                 ro: index_db_ro,

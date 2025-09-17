@@ -101,25 +101,18 @@ async fn main() -> errors::Result<()> {
     // Initialize components
     let (_chain_key, _db, _rpc_operations, indexer_handle) = {
         // Extract all needed values from config before any await
-        let (private_key, database_path, rpc_url_str, indexer_cfg, data_directory) = {
+        let (database_path, rpc_url_str, indexer_cfg, data_directory) = {
             let cfg = config
                 .read()
                 .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
 
             (
-                cfg.private_key.clone(),
                 cfg.database_path.clone(),
                 cfg.rpc_url.clone(),
                 cfg.indexer.clone(),
                 cfg.data_directory.clone(),
             )
         };
-
-        // Parse private key
-        let private_key_bytes = hex::decode(private_key.trim_start_matches("0x"))
-            .map_err(|e| BloklidError::Crypto(format!("Failed to decode private key: {}", e)))?;
-        let chain_key = ChainKeypair::from_secret(&private_key_bytes)
-            .map_err(|e| BloklidError::Crypto(format!("Failed to parse private key: {}", e)))?;
 
         info!("Initializing database at: {}", database_path);
 
@@ -130,7 +123,7 @@ async fn main() -> errors::Result<()> {
             log_slow_queries: Duration::from_secs(1),
         };
         let db_path = Path::new(&database_path);
-        let db = BlokliDb::new(db_path, chain_key.clone(), db_config).await?;
+        let db = BlokliDb::new(db_path, db_config).await?;
 
         info!("Connecting to RPC endpoint: {}", rpc_url_str);
 
@@ -150,7 +143,7 @@ async fn main() -> errors::Result<()> {
                 module_implementation: Address::default(),
             },
             module_address: Address::default(),
-            safe_address: chain_key.public().to_address(),
+            safe_address: Address::default(),
             ..Default::default()
         };
 
@@ -161,6 +154,8 @@ async fn main() -> errors::Result<()> {
         let http = Http::<ReqwestClient>::with_client(reqwest_client.clone(), rpc_url);
         let rpc_client = RpcClient::new(http, true);
 
+        // Create a temporary chain key - this appears to be what needs to be made "obsolete"
+        let chain_key = ChainKeypair::random();
         let rpc_operations = RpcOperations::new(rpc_client, reqwest_client, &chain_key, rpc_config, None)?;
 
         // Create channel for chain events
