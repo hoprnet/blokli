@@ -42,23 +42,6 @@ use hopr_primitive_types::{
 };
 use tracing::{debug, error, info, warn};
 
-// Temporarily use our own config until hopr_chain_config is available
-#[derive(Debug, Clone)]
-pub struct ChainNetworkConfig {
-    pub chain: ChainConfig,
-    pub max_requests_per_sec: Option<u32>,
-    pub tx_polling_interval: u64,
-    pub confirmations: u32,
-    pub max_block_range: u64,
-}
-
-#[derive(Debug, Clone)]
-pub struct ChainConfig {
-    pub chain_id: u32,
-    pub block_time: u64,
-    pub default_provider: String,
-}
-
 use crate::errors::{BlokliChainError, Result};
 
 pub type DefaultHttpRequestor = blokli_chain_rpc::transport::ReqwestClient;
@@ -155,8 +138,6 @@ type ActionQueueType<T> = ActionQueue<
 /// in the future implementations.
 #[derive(Debug, Clone)]
 pub struct BlokliChain<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug> {
-    me_onchain: ChainKeypair,
-    safe_address: Address,
     contract_addresses: ContractAddresses,
     indexer_cfg: IndexerConfig,
     indexer_events_tx: async_channel::Sender<SignificantChainEvent>,
@@ -170,14 +151,9 @@ pub struct BlokliChain<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt
 impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static> BlokliChain<T> {
     #[allow(clippy::too_many_arguments)] // TODO: refactor this function into a reasonable group of components once fully rearchitected
     pub fn new(
-        me_onchain: ChainKeypair,
         db: T,
-        // --
         chain_config: ChainNetworkConfig,
-        module_address: Address,
-        // --
         contract_addresses: ContractAddresses,
-        safe_address: Address,
         indexer_cfg: IndexerConfig,
         indexer_events_tx: async_channel::Sender<SignificantChainEvent>,
     ) -> Result<Self> {
@@ -195,8 +171,6 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         let rpc_cfg = RpcOperationsConfig {
             chain_id: chain_config.chain.chain_id as u64,
             contract_addrs: contract_addresses,
-            module_address,
-            safe_address,
             expected_block_time: Duration::from_millis(chain_config.chain.block_time),
             tx_polling_interval: Duration::from_millis(chain_config.tx_polling_interval),
             finality: chain_config.confirmations,
@@ -222,13 +196,14 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
 
         // Build RPC operations
         let rpc_operations =
-            RpcOperations::new(rpc_client, requestor, &me_onchain, rpc_cfg, None).expect("failed to initialize RPC");
+            RpcOperations::new(rpc_client, requestor, rpc_cfg, None).expect("failed to initialize RPC");
 
         // Build the Ethereum Transaction Executor that uses RpcOperations as backend
-        let ethereum_tx_executor = EthereumTransactionExecutor::new(
-            RpcEthereumClient::new(rpc_operations.clone(), rpc_client_cfg),
-            SafePayloadGenerator::new(&me_onchain, contract_addresses, module_address),
-        );
+        // let ethereum_tx_executor = EthereumTransactionExecutor::new(
+        //     RpcEthereumClient::new(rpc_operations.clone(), rpc_client_cfg),
+        //     SafePayloadGenerator::new(contract_addresses),
+        // );
+        let ethereum_tx_executor::default();
 
         // Build the Action Queue
         let action_queue = ActionQueue::new(
@@ -242,11 +217,9 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         let action_sender = action_queue.new_sender();
 
         // Instantiate Chain Actions
-        let blokli_chain_actions = ChainActions::new(&me_onchain, db.clone(), action_sender);
+        let blokli_chain_actions = ChainActions::new(db.clone(), action_sender);
 
         Ok(Self {
-            me_onchain,
-            safe_address,
             contract_addresses,
             indexer_cfg,
             indexer_events_tx,
@@ -274,13 +247,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
             BlokliChainProcess::Indexer,
             Indexer::new(
                 self.rpc_operations.clone(),
-                ContractEventHandlers::new(
-                    self.contract_addresses,
-                    self.safe_address,
-                    self.me_onchain.clone(),
-                    self.db.clone(),
-                    self.rpc_operations.clone(),
-                ),
+                ContractEventHandlers::new(self.contract_addresses, self.db.clone(), self.rpc_operations.clone()),
                 self.db.clone(),
                 self.indexer_cfg.clone(),
                 self.indexer_events_tx.clone(),
@@ -289,10 +256,6 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
             .await?,
         );
         Ok(processes)
-    }
-
-    pub fn me_onchain(&self) -> Address {
-        self.me_onchain.public().to_address()
     }
 
     pub fn action_state(&self) -> Arc<IndexerActionTracker> {
@@ -351,33 +314,6 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         &self.rpc_operations
     }
 
-    /// Retrieves the balance of the node's on-chain account for the specified currency.
-    ///
-    /// This method queries the on-chain balance of the node's account for the given currency.
-    /// It supports querying balances for XDai and WxHOPR currencies. If the currency is unsupported,
-    /// an error is returned.
-    ///
-    /// # Returns
-    /// * `Result<Balance<C>>` - The balance of the node's account for the specified currency, or an error if the query
-    ///   fails.
-    pub async fn get_balance<C: Currency + Send>(&self) -> errors::Result<Balance<C>> {
-        let bal = if C::is::<XDai>() {
-            self.rpc_operations
-                .get_xdai_balance(self.me_onchain())
-                .await?
-                .to_be_bytes()
-        } else if C::is::<WxHOPR>() {
-            self.rpc_operations
-                .get_hopr_balance(self.me_onchain())
-                .await?
-                .to_be_bytes()
-        } else {
-            return Err(BlokliChainError::Api("unsupported currency".into()));
-        };
-
-        Ok(Balance::<C>::from(U256::from_be_bytes(bal)))
-    }
-
     /// Retrieves the balance of the specified address for the given currency.
     ///
     /// This method queries the on-chain balance of the provided address for the specified currency.
@@ -409,19 +345,15 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
     ///
     /// # Returns
     /// * `Result<HoprBalance>` - The current allowance amount, or an error if the query fails
-    pub async fn get_safe_hopr_allowance(&self) -> Result<HoprBalance> {
+    pub async fn get_safe_hopr_allowance(&self, safe_address: Address) -> Result<HoprBalance> {
         Ok(self
             .rpc_operations
-            .get_hopr_allowance(self.safe_address, self.contract_addresses.channels)
+            .get_hopr_allowance(safe_address, self.contract_addresses.channels)
             .await?)
     }
 
     pub async fn get_channel_closure_notice_period(&self) -> errors::Result<Duration> {
         Ok(self.rpc_operations.get_channel_closure_notice_period().await?)
-    }
-
-    pub async fn get_eligibility_status(&self) -> errors::Result<bool> {
-        Ok(self.rpc_operations.get_eligibility_status(self.me_onchain()).await?)
     }
 
     pub async fn get_minimum_winning_probability(&self) -> errors::Result<WinningProbability> {

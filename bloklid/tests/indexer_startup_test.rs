@@ -103,7 +103,7 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         force_create: false,
         log_slow_queries: Duration::from_secs(5),
     };
-    let db = BlokliDb::new(db_path, chain_key.clone(), db_config).await?;
+    let db = BlokliDb::new(db_config).await?;
 
     // Create mock RPC operations
     let mock_rpc = MockRpcOperations::new();
@@ -192,7 +192,7 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         force_create: false,
         log_slow_queries: Duration::from_secs(5),
     };
-    let db = BlokliDb::new(db_path, chain_key.clone(), db_config).await?;
+    let db = BlokliDb::new(db_config).await?;
 
     // Create mock RPC operations
     let mock_rpc = MockRpcOperations::new();
@@ -275,7 +275,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         force_create: false,
         log_slow_queries: Duration::from_secs(5),
     };
-    let db = BlokliDb::new(db_path, chain_key.clone(), db_config).await?;
+    let db = BlokliDb::new(db_config).await?;
 
     // Create a custom mock RPC that tracks the start block requested
     #[derive(Clone)]

@@ -110,7 +110,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_get_by_id() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         let channel_id = Hash::from(random_bytes());
 
@@ -128,7 +128,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_duplicates_should_not_insert() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
         let channel_id = Hash::from(random_bytes());
 
         db.upsert_corrupted_channel(None, channel_id)

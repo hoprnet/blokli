@@ -92,10 +92,6 @@ pub trait BlokliDbAccountOperations {
     where
         T: Into<ChainOrPacketKey> + Send + Sync;
 
-    /// Retrieves account entry about this node's account.
-    /// This a unique account in the database that must always be present.
-    async fn get_self_account<'a>(&'a self, tx: OptTx<'a>) -> Result<AccountEntry>;
-
     /// Retrieves entries of accounts with routable address announcements (if `public_only` is `true`)
     /// or about all accounts without routeable address announcements (if `public_only` is `false`).
     async fn get_accounts<'a>(&'a self, tx: OptTx<'a>, public_only: bool) -> Result<Vec<AccountEntry>>;
@@ -109,13 +105,13 @@ pub trait BlokliDbAccountOperations {
     /// If an account matching the given `key` (chain or off-chain key) does not exist, an
     /// error is returned.
     /// If such `multiaddr` has been already announced for the given account `key`, only
-    /// the `published_block` will be updated on that announcement.
+    /// the `published_at` will be updated on that announcement.
     async fn insert_announcement<'a, T>(
         &'a self,
         tx: OptTx<'a>,
         key: T,
         multiaddr: Multiaddr,
-        published_block: u32,
+        published_at: u32,
     ) -> Result<AccountEntry>
     where
         T: Into<ChainOrPacketKey> + Send + Sync;
@@ -194,12 +190,6 @@ impl BlokliDbAccountOperations for BlokliDb {
             .await
     }
 
-    async fn get_self_account<'a>(&'a self, tx: OptTx<'a>) -> Result<AccountEntry> {
-        self.get_account(tx, self.me_onchain)
-            .await?
-            .ok_or(DbSqlError::MissingAccount)
-    }
-
     async fn get_accounts<'a>(&'a self, tx: OptTx<'a>, public_only: bool) -> Result<Vec<AccountEntry>> {
         self.nest_transaction(tx)
             .await?
@@ -276,7 +266,7 @@ impl BlokliDbAccountOperations for BlokliDb {
         tx: OptTx<'a>,
         key: T,
         multiaddr: Multiaddr,
-        published_block: u32,
+        published_at: u32,
     ) -> Result<AccountEntry>
     where
         T: Into<ChainOrPacketKey> + Send + Sync,
@@ -299,7 +289,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                         std::str::from_utf8(&announcement.multiaddress_list).unwrap_or("") == multiaddr.to_string()
                     }) {
                         let mut existing_announcement = existing_announcements.remove(index).into_active_model();
-                        existing_announcement.published_block = Set(published_block as i32);
+                        existing_announcement.published_block = Set(published_at as i32);
                         let updated_announcement = existing_announcement.update(tx.as_ref()).await?;
 
                         // To maintain the sort order, insert at the original location
@@ -308,7 +298,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                         let new_announcement = announcement::ActiveModel {
                             account_id: Set(existing_account.id),
                             multiaddress_list: Set(multiaddr.to_string().into_bytes()),
-                            published_block: Set(published_block as i32),
+                            published_block: Set(published_at as i32),
                             ..Default::default()
                         }
                         .insert(tx.as_ref())
@@ -442,7 +432,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_account_announcement() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         let chain_1 = ChainKeypair::random().public().to_address();
         let packet_1 = *OffchainKeypair::random().public();
@@ -452,7 +442,7 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_block: 1,
+                published_at: 1,
                 entry_type: AccountType::NotAnnounced,
             },
         )
@@ -461,7 +451,7 @@ mod tests {
         let acc = db.get_account(None, chain_1).await?.expect("should contain account");
         assert_eq!(packet_1, acc.public_key, "pub keys must match");
         assert_eq!(AccountType::NotAnnounced, acc.entry_type.clone());
-        assert_eq!(1, acc.published_block);
+        assert_eq!(1, acc.published_at);
 
         let maddr: Multiaddr = "/ip4/1.2.3.4/tcp/8000".parse()?;
         let block = 100;
@@ -495,7 +485,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_should_allow_reannouncement() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         let chain_1 = ChainKeypair::random().public().to_address();
         let packet_1 = *OffchainKeypair::random().public();
@@ -505,7 +495,7 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_block: 1,
+                published_at: 1,
                 entry_type: AccountType::NotAnnounced,
             },
         )
@@ -536,7 +526,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_should_not_insert_account_announcement_to_nonexisting_account() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         let chain_1 = ChainKeypair::random().public().to_address();
 
@@ -554,7 +544,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_should_allow_duplicate_announcement_per_different_accounts() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         let chain_1 = ChainKeypair::random().public().to_address();
         let packet_1 = *OffchainKeypair::random().public();
@@ -564,7 +554,7 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_block: 1,
+                published_at: 1,
                 entry_type: AccountType::NotAnnounced,
             },
         )
@@ -578,7 +568,7 @@ mod tests {
             AccountEntry {
                 public_key: packet_2,
                 chain_addr: chain_2,
-                published_block: 2,
+                published_at: 2,
                 entry_type: AccountType::NotAnnounced,
             },
         )
@@ -605,7 +595,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_account() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         let packet_1 = *OffchainKeypair::random().public();
         let chain_1 = ChainKeypair::random().public().to_address();
@@ -614,7 +604,7 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_block: 1,
+                published_at: 1,
                 entry_type: AccountType::Announced {
                     multiaddr: "/ip4/1.2.3.4/tcp/1234".parse()?,
                     updated_block: 10,
@@ -634,7 +624,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_should_fail_to_delete_nonexistent_account() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         let chain_1 = ChainKeypair::random().public().to_address();
 
@@ -649,7 +639,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_should_not_fail_on_duplicate_account_insert() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         let chain_1 = ChainKeypair::random().public().to_address();
         let packet_1 = *OffchainKeypair::random().public();
@@ -659,7 +649,7 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_block: 1,
+                published_at: 1,
                 entry_type: AccountType::NotAnnounced,
             },
         )
@@ -670,7 +660,7 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_block: 1,
+                published_at: 1,
                 entry_type: AccountType::NotAnnounced,
             },
         )
@@ -681,14 +671,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_announcements() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         let packet_1 = *OffchainKeypair::random().public();
         let chain_1 = ChainKeypair::random().public().to_address();
         let mut entry = AccountEntry {
             public_key: packet_1,
             chain_addr: chain_1,
-            published_block: 1,
+            published_at: 1,
             entry_type: AccountType::Announced {
                 multiaddr: "/ip4/1.2.3.4/tcp/1234".parse()?,
                 updated_block: 10,
@@ -710,7 +700,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_should_fail_to_delete_nonexistent_account_announcements() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         let chain_1 = ChainKeypair::random().public().to_address();
 
@@ -725,7 +715,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_translate_key() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         let chain_1 = ChainKeypair::random().public().to_address();
         let packet_1 = *OffchainKeypair::random().public();
@@ -744,7 +734,7 @@ mod tests {
                             AccountEntry {
                                 public_key: packet_1,
                                 chain_addr: chain_1,
-                                published_block: 1,
+                                published_at: 1,
                                 entry_type: AccountType::NotAnnounced,
                             },
                         )
@@ -755,67 +745,7 @@ mod tests {
                             AccountEntry {
                                 public_key: packet_2,
                                 chain_addr: chain_2,
-                                published_block: 2,
-                                entry_type: AccountType::NotAnnounced,
-                            },
-                        )
-                        .await?;
-                    Ok::<(), DbSqlError>(())
-                })
-            })
-            .await?;
-
-        let a: Address = db
-            .translate_key(None, packet_1)
-            .await?
-            .context("must contain key")?
-            .try_into()?;
-
-        let b: OffchainPublicKey = db
-            .translate_key(None, chain_2)
-            .await?
-            .context("must contain key")?
-            .try_into()?;
-
-        assert_eq!(chain_1, a, "chain keys must match");
-        assert_eq!(packet_2, b, "chain keys must match");
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_translate_key() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
-
-        let chain_1 = ChainKeypair::random().public().to_address();
-        let packet_1 = *OffchainKeypair::random().public();
-
-        let chain_2 = ChainKeypair::random().public().to_address();
-        let packet_2 = *OffchainKeypair::random().public();
-
-        let db_clone = db.clone();
-        db.begin_transaction()
-            .await?
-            .perform(|tx| {
-                Box::pin(async move {
-                    db_clone
-                        .insert_account(
-                            tx.into(),
-                            AccountEntry {
-                                public_key: packet_1,
-                                chain_addr: chain_1,
-                                published_block: 1,
-                                entry_type: AccountType::NotAnnounced,
-                            },
-                        )
-                        .await?;
-                    db_clone
-                        .insert_account(
-                            tx.into(),
-                            AccountEntry {
-                                public_key: packet_2,
-                                chain_addr: chain_2,
-                                published_block: 2,
+                                published_at: 2,
                                 entry_type: AccountType::NotAnnounced,
                             },
                         )
@@ -845,7 +775,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get_accounts() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         let chain_1 = ChainKeypair::random().public().to_address();
         let chain_2 = ChainKeypair::random().public().to_address();
@@ -863,7 +793,7 @@ mod tests {
                                 public_key: *OffchainKeypair::random().public(),
                                 chain_addr: chain_1,
                                 entry_type: AccountType::NotAnnounced,
-                                published_block: 1,
+                                published_at: 1,
                             },
                         )
                         .await?;
@@ -877,7 +807,7 @@ mod tests {
                                     multiaddr: "/ip4/10.10.10.10/tcp/1234".parse().map_err(|_| DecodingError)?,
                                     updated_block: 10,
                                 },
-                                published_block: 2,
+                                published_at: 2,
                             },
                         )
                         .await?;
@@ -888,7 +818,7 @@ mod tests {
                                 public_key: *OffchainKeypair::random().public(),
                                 chain_addr: chain_3,
                                 entry_type: AccountType::NotAnnounced,
-                                published_block: 3,
+                                published_at: 3,
                             },
                         )
                         .await?;

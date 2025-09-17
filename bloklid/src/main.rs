@@ -122,11 +122,6 @@ async fn main() -> errors::Result<()> {
 
         info!("Connecting to RPC endpoint: {}", chain_cfg.chain.default_provider);
 
-        // Create a temporary chain key - this appears to be what needs to be made "obsolete"
-        let chain_key = ChainKeypair::random();
-        let safe_address = chain_key.public().to_address();
-        let module_address = safe_address; // For now, use the same address
-
         // Default contract addresses - should be configured properly
         let contract_addresses = ContractAddresses {
             token: Address::default(),
@@ -155,12 +150,9 @@ async fn main() -> errors::Result<()> {
 
         // Create BlokliChain instance
         let blokli_chain = BlokliChain::new(
-            chain_key,
             db,
             chain_cfg.into(), // Convert to the API's ChainNetworkConfig
-            module_address,
             contract_addresses,
-            safe_address,
             indexer_config,
             tx_events,
         )?;

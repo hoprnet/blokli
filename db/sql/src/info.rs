@@ -466,7 +466,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_get_balance() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         assert_eq!(
             HoprBalance::zero(),
@@ -487,7 +487,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_get_allowance() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         assert_eq!(
             HoprBalance::zero(),
@@ -509,7 +509,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_get_indexer_data() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         let data = db.get_indexer_data(None).await?;
         assert_eq!(data.ticket_price, None);
@@ -528,7 +528,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_set_get_safe_info() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         assert_eq!(None, db.get_safe_info(None).await?);
 

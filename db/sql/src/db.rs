@@ -65,7 +65,6 @@ pub struct BlokliDb {
     pub(crate) index_db: DbConnection,
     pub(crate) logs_db: sea_orm::DatabaseConnection,
 
-    pub(crate) me_onchain: Address,
     #[allow(dead_code)]
     pub(crate) cfg: BlokliDbConfig,
 }
@@ -177,8 +176,6 @@ impl BlokliDb {
             })?;
 
         Ok(Self {
-            me_onchain: Address::default(),
-
             index_db: DbConnection {
                 ro: index_db_ro,
                 rw: index_db_rw,
@@ -251,21 +248,13 @@ impl BlokliDbAllOperations for BlokliDb {}
 
 #[cfg(test)]
 mod tests {
-    use hopr_crypto_types::{
-        keypairs::{ChainKeypair, OffchainKeypair},
-        prelude::Keypair,
-    };
-    use hopr_primitive_types::sma::SingleSumSMA;
-    use libp2p_identity::PeerId;
-    use migration::{MigratorSQLite, MigratorSQLiteTrait, MigratorTrait};
-    use multiaddr::Multiaddr;
-    use rand::{Rng, distributions::Alphanumeric};
+    use migration::{MigratorChainLogs, MigratorIndex, MigratorTrait};
 
     use crate::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb}; // 0.8
 
     #[tokio::test]
     async fn test_basic_db_init() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         // NOTE: cfg-if this on Postgres to do only `Migrator::status(db.conn(Default::default)).await.expect("status
         // must be ok");`

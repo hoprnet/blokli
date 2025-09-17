@@ -94,14 +94,6 @@ pub trait BlokliDbChannelOperations {
         target: &Address,
     ) -> Result<Vec<ChannelEntry>>;
 
-    /// Fetches all channels that are `Incoming` to this node.
-    /// Shorthand for `get_channels_via(tx, ChannelDirection::Incoming, my_node)`
-    async fn get_incoming_channels<'a>(&'a self, tx: OptTx<'a>) -> Result<Vec<ChannelEntry>>;
-
-    /// Fetches all channels that are `Outgoing` from this node.
-    /// Shorthand for `get_channels_via(tx, ChannelDirection::Outgoing, my_node)`
-    async fn get_outgoing_channels<'a>(&'a self, tx: OptTx<'a>) -> Result<Vec<ChannelEntry>>;
-
     /// Retrieves all channels information from the DB.
     async fn get_all_channels<'a>(&'a self, tx: OptTx<'a>) -> Result<Vec<ChannelEntry>>;
 
@@ -244,16 +236,6 @@ impl BlokliDbChannelOperations for BlokliDb {
             .await
     }
 
-    async fn get_incoming_channels<'a>(&'a self, tx: OptTx<'a>) -> Result<Vec<ChannelEntry>> {
-        self.get_channels_via(tx, ChannelDirection::Incoming, &self.me_onchain)
-            .await
-    }
-
-    async fn get_outgoing_channels<'a>(&'a self, tx: OptTx<'a>) -> Result<Vec<ChannelEntry>> {
-        self.get_channels_via(tx, ChannelDirection::Outgoing, &self.me_onchain)
-            .await
-    }
-
     async fn get_all_channels<'a>(&'a self, tx: OptTx<'a>) -> Result<Vec<ChannelEntry>> {
         self.nest_transaction(tx)
             .await?
@@ -327,7 +309,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_get_by_id() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         let ce = ChannelEntry::new(
             Address::default(),
@@ -351,7 +333,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_insert_get_by_parties() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         let a = Address::from(random_bytes());
         let b = Address::from(random_bytes());
@@ -360,7 +342,7 @@ mod tests {
 
         db.upsert_channel(None, ce).await?;
         let from_db = db
-            .get_channel_by_parties(None, &a, &b, false)
+            .get_channel_by_parties(None, &a, &b)
             .await?
             .context("channel must be present")?;
 
@@ -371,7 +353,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_channel_get_for_destination_that_does_not_exist_returns_none() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         let from_db = db
             .get_channels_via(None, ChannelDirection::Incoming, &Address::default())
@@ -386,7 +368,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_channel_get_for_destination_that_exists_should_be_returned() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory(ChainKeypair::random()).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         let expected_destination = Address::default();
 
@@ -417,7 +399,7 @@ mod tests {
         let addr_1 = ckp.public().to_address();
         let addr_2 = ChainKeypair::random().public().to_address();
 
-        let db = BlokliDb::new_in_memory(ckp).await?;
+        let db = BlokliDb::new_in_memory().await?;
 
         let ce_1 = ChannelEntry::new(
             addr_1,
