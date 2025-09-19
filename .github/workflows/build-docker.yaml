@@ -1,0 +1,70 @@
+name: Build Docker
+env:
+  RUST_BACKTRACE: "1"
+  CARGO_TERM_COLOR: always
+permissions:
+  contents: read
+on:
+  workflow_call:
+    inputs:
+      source_branch:
+        required: true
+        type: string
+      version_type:
+        required: true
+        type: string
+
+concurrency:
+  group: ${{ github.ref }}-build-docker
+  cancel-in-progress: true
+
+jobs:
+  build-docker:
+    name: Docker
+    runs-on: self-hosted-hoprnet-bigger
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
+        with:
+          disable-sudo: true
+          egress-policy: audit
+
+      - name: Checkout hoprnet repository
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ inputs.source_branch }}
+
+      - name: Setup GCP
+        id: gcp
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@12c56020e16036982e6cc529848edeedfc705865 # master
+        with:
+          google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
+          login-artifact-registry: 'true'
+          install-sdk: 'false'
+
+      - name: Update version
+        id: options
+        run: |
+          current_version=$(grep -E '^version\s*=' bloklid/Cargo.toml | awk -F\" '{print $2}')
+          if [[ "${{ inputs.version_type }}" == "commit" ]]; then
+            bump_version=${current_version}+commit.$(git rev-parse --short HEAD)
+            echo "bump_version=${bump_version}" | tee -e $GITHUB_OUTPUT
+          elif [[ "${{ inputs.version_type }}" == "pr" ]]; then
+            bump_version=${current_version}+pr.${{ github.event.pull_request.number }}
+            echo "bump_version=${bump_version}" | tee -e $GITHUB_OUTPUT
+          elif [[ "${{ inputs.version_type }}" == "release" ]]; then
+            echo "bump_version=${current_version}" | tee -a $GITHUB_OUTPUT
+          else
+            echo "Invalid version type"
+            exit 1
+          fi
+          sed -i.bak -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" bloklid/Cargo.toml
+          cargo generate-lockfile
+          rm bloklid/Cargo.toml.bak
+          echo "DOCKER_TAG=${bump_version/+/-}" | tee -a $GITHUB_OUTPUT
+
+      - name: Build docker image
+        run: nix run -L .#bloklid-docker-build-and-upload
+        env:
+          GOOGLE_ACCESS_TOKEN: ${{ steps.gcp.outputs.access_token }}
+          IMAGE_TARGET: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ steps.options.outputs.DOCKER_TAG }}
