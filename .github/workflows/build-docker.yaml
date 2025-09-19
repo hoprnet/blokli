@@ -53,10 +53,10 @@ jobs:
           current_version=$(grep -E '^version\s*=' bloklid/Cargo.toml | awk -F\" '{print $2}')
           if [[ "${{ inputs.version_type }}" == "commit" ]]; then
             bump_version=${current_version}+commit.$(git rev-parse --short HEAD)
-            echo "bump_version=${bump_version}" | tee -e $GITHUB_OUTPUT
+            echo "bump_version=${bump_version}" | tee -a $GITHUB_OUTPUT
           elif [[ "${{ inputs.version_type }}" == "pr" ]]; then
             bump_version=${current_version}+pr.${{ github.event.pull_request.number }}
-            echo "bump_version=${bump_version}" | tee -e $GITHUB_OUTPUT
+            echo "bump_version=${bump_version}" | tee -a $GITHUB_OUTPUT
           elif [[ "${{ inputs.version_type }}" == "release" ]]; then
             echo "bump_version=${current_version}" | tee -a $GITHUB_OUTPUT
           else
