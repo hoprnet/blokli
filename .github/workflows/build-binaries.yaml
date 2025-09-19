@@ -108,7 +108,7 @@ jobs:
         run: |
           base_version=$(grep -E '^version\s*=' bloklid/Cargo.toml | awk -F\" '{print $2}')
           if [[ "${{ inputs.version_type }}" == "commit" ]]; then
-            bump_version=${base_version}-commit.$(git rev-parse --short HEAD)
+            bump_version=${base_version}+commit.$(git rev-parse --short HEAD)
             echo "binary_version=${bump_version}" | tee -a $GITHUB_OUTPUT
             if [ "${GITHUB_PR_LABEL_PUBLISH_COMMITS:-0}" == '1' ]; then
               echo "publish_type=artifact-registry" | tee -a $GITHUB_OUTPUT
@@ -116,7 +116,7 @@ jobs:
               echo "publish_type=workflow" | tee -a $GITHUB_OUTPUT
             fi
           elif [[ "${{ inputs.version_type }}" == "pr" ]]; then
-            bump_version=${base_version}-pr.${{ github.event.pull_request.number }}
+            bump_version=${base_version}+pr.${{ github.event.pull_request.number }}
             echo "binary_version=${bump_version}" | tee -a $GITHUB_OUTPUT
             echo "publish_type=artifact-registry" | tee -a $GITHUB_OUTPUT
           elif [[ "${{ inputs.version_type }}" == "release" ]]; then
@@ -128,12 +128,12 @@ jobs:
             exit 1
           fi
           sed -i.bak -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" bloklid/Cargo.toml
-          cargo generate-lockfile
+          nix develop --command cargo generate-lockfile
           rm bloklid/Cargo.toml.bak
 
       - name: Build binary ${{ steps.vars.outputs.architecture}}
         run: |
-          just build-release ${{ steps.vars.outputs.architecture}}
+          nix develop --command just build-release ${{ steps.vars.outputs.architecture}}
           if [[ "${{ inputs.version_type }}" == "commit" ]]; then
             mv ./result/bin/bloklid result/bin/bloklid-${{ steps.vars.outputs.architecture}}-${{ steps.version.outputs.binary_version }}
           else
