@@ -13,8 +13,16 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 jobs:
-  build:
+  build-docker:
     name: Build
+    uses: ./.github/workflows/build-docker.yaml
+    with:
+      source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
+      version_type: "commit"
+    secrets: inherit
+
+  checks:
+    name: Checks
     runs-on: self-hosted-hoprnet-bigger
     steps:
       - name: Harden Runner
@@ -25,3 +33,35 @@ jobs:
 
       - name: Checkout hoprnet repository
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+
+      - name: Check formatting
+        continue-on-error: true
+        run: just fmt
+
+      - name: Check linting
+        continue-on-error: true
+        run: just clippy
+
+      - name: Run unit tests
+        continue-on-error: true
+        run: just test
+
+
+  build-binaries:
+    strategy:
+      matrix:
+        binary:
+          - architecture: x86_64-linux
+            runner: self-hosted-hoprnet-bigger
+          - architecture: aarch64-darwin
+            runner: macos-15
+          - architecture: x86_64-darwin
+            runner: macos-13
+    name: Binary ${{ matrix.binary.architecture }}
+    uses: ./.github/workflows/build-binaries.yaml
+    with:
+      branch: ${{ github.event.pull_request.head.ref }}
+      runner: ${{ matrix.binary.runner }}
+      architecture: ${{ matrix.binary.architecture }}
+      version_type: "commit"
+    secrets: inherit
