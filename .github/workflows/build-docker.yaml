@@ -47,8 +47,9 @@ jobs:
           login-artifact-registry: 'true'
           install-sdk: 'false'
       - name: Update version
-        id: options
+        id: bump
         run: |
+          set -x
           current_version=$(grep -E '^version\s*=' bloklid/Cargo.toml | awk -F\" '{print $2}')
           if [[ "${{ inputs.version_type }}" == "commit" ]]; then
             bump_version=${current_version}+commit.$(git rev-parse --short HEAD)
@@ -70,4 +71,4 @@ jobs:
         run: nix run -L .#bloklid-docker-build-and-upload
         env:
           GOOGLE_ACCESS_TOKEN: ${{ steps.gcp.outputs.access_token }}
-          IMAGE_TARGET: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ steps.options.outputs.DOCKER_TAG }}
+          IMAGE_TARGET: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ steps.bump.outputs.DOCKER_TAG }}

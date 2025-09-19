@@ -69,7 +69,7 @@ jobs:
           gh release create v${release_version} --generate-notes
         env:
           GH_TOKEN: ${{ github.token }}
-      - name: Bump Version
+      - name: Update Version
         id: bump
         shell: bash
         run: |
