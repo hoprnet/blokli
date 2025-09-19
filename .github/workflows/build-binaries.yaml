@@ -106,6 +106,7 @@ jobs:
         if: inputs.version_type != ''
         id: version
         run: |
+          set -x
           base_version=$(grep -E '^version\s*=' bloklid/Cargo.toml | awk -F\" '{print $2}')
           if [[ "${{ inputs.version_type }}" == "commit" ]]; then
             bump_version=${base_version}+commit.$(git rev-parse --short HEAD)
