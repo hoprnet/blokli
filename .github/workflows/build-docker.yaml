@@ -13,11 +13,9 @@ on:
       version_type:
         required: true
         type: string
-
 concurrency:
   group: ${{ github.ref }}-build-docker
   cancel-in-progress: true
-
 jobs:
   build-docker:
     name: Docker
@@ -28,15 +26,12 @@ jobs:
         with:
           disable-sudo: true
           egress-policy: audit
-
       - name: Checkout hoprnet repository
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
           ref: ${{ inputs.source_branch }}
-
       - name: Install Nix
         uses: cachix/install-nix-action@7be5dee1421f63d07e71ce6e0a9f8a4b07c2a487 # v31
-
       - name: Use Nix Cache
         uses: cachix/cachix-action@0fc020193b5a1fa3ac4575aa3a7d3aa6a35435ad # v16
         with:
@@ -44,7 +39,6 @@ jobs:
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
         env:
           USER: runner
-
       - name: Setup GCP
         id: gcp
         uses: hoprnet/hopr-workflows/actions/setup-gcp@12c56020e16036982e6cc529848edeedfc705865 # master
@@ -52,7 +46,6 @@ jobs:
           google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
           login-artifact-registry: 'true'
           install-sdk: 'false'
-
       - name: Update version
         id: options
         run: |
@@ -70,10 +63,9 @@ jobs:
             exit 1
           fi
           sed -i.bak -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" bloklid/Cargo.toml
-          cargo generate-lockfile
+          nix develop --command cargo generate-lockfile
           rm bloklid/Cargo.toml.bak
           echo "DOCKER_TAG=${bump_version/+/-}" | tee -a $GITHUB_OUTPUT
-
       - name: Build docker image
         run: nix run -L .#bloklid-docker-build-and-upload
         env:

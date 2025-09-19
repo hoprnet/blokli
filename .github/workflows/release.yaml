@@ -15,7 +15,6 @@ concurrency:
   group: release
   cancel-in-progress: false
 jobs:
-
   build-docker:
     name: Build
     uses: ./.github/workflows/build-docker.yaml
@@ -23,7 +22,6 @@ jobs:
       source_branch: ${{ github.ref }}
       version_type: "release"
     secrets: inherit
-
   build-binaries:
     needs:
       - build-docker
@@ -44,7 +42,6 @@ jobs:
       architecture: ${{ matrix.binary.architecture }}
       version_type: "release"
     secrets: inherit
-
   release:
     name: Close release
     needs:
@@ -56,17 +53,14 @@ jobs:
         with:
           disable-sudo: true
           egress-policy: audit
-
       - name: Checkout hoprnet repository
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-
       - name: Setup GCP
         id: gcp
         uses: hoprnet/hopr-workflows/actions/setup-gcp@master
         with:
           google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
           install-sdk: "true"
-
       - name: Create release and publish binaries
         id: environment
         run: |
