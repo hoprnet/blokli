@@ -28,7 +28,8 @@ use crate::{
 #[derive(Debug, Parser)]
 #[command(
     name = "bloklid",
-    about = "Daemon for indexing HOPR on-chain events and executing HOPR-related on-chain transactions"
+    about = "Daemon for indexing HOPR on-chain events and executing HOPR-related on-chain transactions",
+    version = crate::constants::APP_VERSION_COERCED
 )]
 struct Args {
     /// Increase output verbosity (-v, -vv)
