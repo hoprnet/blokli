@@ -1,4 +1,5 @@
 mod config;
+mod constants;
 mod errors;
 
 use std::{
@@ -50,7 +51,7 @@ impl Args {
             return Ok(Config::default());
         }
 
-        let config: Config = serde_yaml::from_reader(std::fs::File::open(
+        let mut config: Config = serde_yaml::from_reader(std::fs::File::open(
             self.config.as_ref().ok_or(ConfigError::NoConfiguration)?,
         )?)
         .map_err(|e| ConfigError::Parse(e.to_string()))?;
@@ -61,15 +62,23 @@ impl Args {
         let chain_network_config = ChainNetworkConfig::new(
             &config.network,
             crate::constants::APP_VERSION_COERCED,
-            config.rpc_url.as_ref(),
-            config.max_rpc_requests_per_sec,
+            Some(&config.rpc_url),
+            Some(config.max_rpc_requests_per_sec),
             &mut config.protocols,
         )
-        .map_err(|e| HoprLibError::GeneralError(format!("Failed to resolve blockchain environment: {e}")))?;
+        .map_err(|e| BloklidError::NonSpecific(format!("Failed to resolve blockchain environment: {e}")))?;
 
-        config.chain_network = chain_network_config;
+        config.chain_network = Some(chain_network_config.clone());
 
-        let contract_addresses = ContractAddresses::from(&chain_network_config);
+        let contract_addresses = ContractAddresses {
+            token: chain_network_config.token,
+            channels: chain_network_config.channels,
+            announcements: chain_network_config.announcements,
+            safe_registry: chain_network_config.node_safe_registry,
+            price_oracle: chain_network_config.ticket_price_oracle,
+            win_prob_oracle: chain_network_config.winning_probability_oracle,
+            stake_factory: chain_network_config.node_stake_v2_factory,
+        };
         config.contracts = contract_addresses;
 
         info!(
@@ -115,11 +124,29 @@ async fn main() -> errors::Result<()> {
 
     // Initialize components
     let process_handles = {
-        let cfg = config
-            .read()
-            .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
+        let (database_path, chain_network, contracts, indexer_config) = {
+            let cfg = config
+                .read()
+                .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
 
-        info!("Initializing database at: {}", cfg.database_path);
+            let chain_network = cfg
+                .chain_network
+                .as_ref()
+                .ok_or_else(|| BloklidError::NonSpecific("Chain network not configured".into()))?
+                .clone();
+
+            let indexer_config = blokli_chain_indexer::IndexerConfig {
+                start_block_number: cfg.indexer.start_block_number,
+                fast_sync: cfg.indexer.fast_sync,
+                enable_logs_snapshot: cfg.indexer.enable_logs_snapshot,
+                logs_snapshot_url: cfg.indexer.logs_snapshot_url.clone(),
+                data_directory: cfg.data_directory.clone(),
+            };
+
+            (cfg.database_path.clone(), chain_network, cfg.contracts, indexer_config)
+        };
+
+        info!("Initializing database at: {}", database_path);
 
         // Initialize database
         let db_config = BlokliDbConfig {
@@ -127,27 +154,16 @@ async fn main() -> errors::Result<()> {
             force_create: false,
             log_slow_queries: Duration::from_secs(1),
         };
-        let db_path = Path::new(&cfg.database_path);
+        let db_path = Path::new(&database_path);
         let db = BlokliDb::new(db_path, db_config).await?;
 
-        info!("Connecting to RPC endpoint: {}", cfg.chain_network.default_provider);
-
-        // Use contract addresses from config
-
-        // Configure indexer
-        let indexer_config = blokli_chain_indexer::IndexerConfig {
-            start_block_number: cfg.indexer.start_block_number,
-            fast_sync: cfg.indexer.fast_sync,
-            enable_logs_snapshot: cfg.indexer.enable_logs_snapshot,
-            logs_snapshot_url: cfg.indexer.logs_snapshot_url,
-            data_directory: cfg.data_directory,
-        };
+        info!("Connecting to RPC endpoint: {}", chain_network.chain.default_provider);
 
         // Create channel for chain events
         let (tx_events, _rx_events) = async_channel::unbounded::<SignificantChainEvent>();
 
         // Create BlokliChain instance
-        let blokli_chain = BlokliChain::new(db, cfg.chain_network, cfg.contracts, indexer_config, tx_events)?;
+        let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, tx_events)?;
 
         info!("Starting BlokliChain processes");
 

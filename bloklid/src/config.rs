@@ -51,10 +51,12 @@ pub struct Config {
     #[serde(default)]
     pub indexer: IndexerConfig,
 
-    #[serde(default)]
-    pub chain_network: ChainNetworkConfig,
+    #[serde(skip)]
+    #[default(None)]
+    pub chain_network: Option<ChainNetworkConfig>,
 
-    #[serde(default)]
+    #[serde(skip)]
+    #[default(_code = "ContractAddresses::default()")]
     pub contracts: ContractAddresses,
 
     #[serde(default)]
