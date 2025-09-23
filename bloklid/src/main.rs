@@ -85,7 +85,18 @@ impl Args {
             Some(config.max_rpc_requests_per_sec),
             &mut config.protocols,
         )
-        .map_err(|e| BloklidError::NonSpecific(format!("Failed to resolve blockchain environment: {e}")))?;
+        .map_err(|e| {
+            // If this is a network-related error, include the list of supported networks
+            if e.contains("Could not find network") || e.contains("unsupported network error") {
+                let available_networks: Vec<String> = config.protocols.networks.keys().cloned().collect();
+                BloklidError::NonSpecific(format!(
+                    "Failed to resolve blockchain environment: {e}\n\nSupported networks: {}",
+                    available_networks.join(", ")
+                ))
+            } else {
+                BloklidError::NonSpecific(format!("Failed to resolve blockchain environment: {e}"))
+            }
+        })?;
 
         config.chain_network = Some(chain_network_config.clone());
 

@@ -10,8 +10,8 @@ database_path = "data/bloklid.db"
 # Directory for storing data files
 data_directory = "data"
 
-# Network identifier (e.g., "anvil-localhost", "goerli", "mainnet")
-network = "anvil-localhost"
+# Network identifier
+network = "dufour"
 
 # RPC endpoint URL for connecting to the blockchain
 rpc_url = "http://localhost:8545"
@@ -32,6 +32,3 @@ enable_logs_snapshot = false
 
 # URL to download logs snapshot from (optional)
 logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
-
-# Protocol configuration (will be populated by the daemon)
-[protocols]
