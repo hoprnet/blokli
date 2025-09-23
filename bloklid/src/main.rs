@@ -12,7 +12,7 @@ use async_signal::{Signal, Signals};
 use blokli_chain_api::{BlokliChain, SignificantChainEvent};
 use blokli_chain_types::ContractAddresses;
 use blokli_db_sql::db::{BlokliDb, BlokliDbConfig};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use futures::TryStreamExt;
 use hopr_chain_config::ChainNetworkConfig;
 use tracing::{error, info, warn};
@@ -32,12 +32,69 @@ use crate::{
 )]
 struct Args {
     /// Increase output verbosity (-v, -vv)
-    #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count)]
+    #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count, global = true)]
     verbose: u8,
 
     /// Optional path to a configuration file
-    #[arg(short = 'c', long = "config", value_name = "FILE")]
+    #[arg(short = 'c', long = "config", value_name = "FILE", global = true)]
     config: Option<PathBuf>,
+
+    /// Command to execute
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Generate a template configuration file
+    GenerateConfig {
+        /// Path where the configuration file should be created
+        #[arg(value_name = "FILE")]
+        output: PathBuf,
+    },
+}
+
+/// Generates a template configuration file with default values and comments
+fn generate_config_template() -> String {
+    r#"# Bloklid Configuration File
+# This is a template configuration file for the Bloklid daemon
+
+# Host address and port for the daemon to listen on
+host: "0.0.0.0:3064"
+
+# Path to the SQLite database file
+database_path: "data/bloklid.db"
+
+# Directory for storing data files
+data_directory: "data"
+
+# Network identifier (e.g., "anvil-localhost", "goerli", "mainnet")
+network: "anvil-localhost"
+
+# RPC endpoint URL for connecting to the blockchain
+rpc_url: "http://localhost:8545"
+
+# Maximum number of RPC requests per second (0 for unlimited)
+max_rpc_requests_per_sec: 0
+
+# Indexer configuration
+indexer:
+  # Block number to start indexing from (0 for genesis)
+  start_block_number: 0
+  
+  # Enable fast sync mode for initial synchronization
+  fast_sync: true
+  
+  # Enable downloading logs snapshot for faster initial sync
+  enable_logs_snapshot: false
+  
+  # URL to download logs snapshot from (optional)
+  # logs_snapshot_url: "https://example.com/snapshot.tar.gz"
+
+# Protocol configuration (will be populated by the daemon)
+protocols: {}
+"#
+    .to_string()
 }
 
 impl Args {
@@ -113,6 +170,33 @@ async fn main() -> errors::Result<()> {
         .compact()
         .init();
 
+    // Handle subcommands
+    if let Some(command) = args.command {
+        match command {
+            Command::GenerateConfig { output } => {
+                info!("Generating configuration template at: {}", output.display());
+
+                // Generate the template content
+                let template = generate_config_template();
+
+                // Create parent directories if they don't exist
+                if let Some(parent) = output.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        BloklidError::NonSpecific(format!("Failed to create parent directories: {}", e))
+                    })?;
+                }
+
+                // Write the template to the specified file
+                std::fs::write(&output, template)
+                    .map_err(|e| BloklidError::NonSpecific(format!("Failed to write configuration template: {}", e)))?;
+
+                info!("Configuration template successfully written to: {}", output.display());
+                return Ok(());
+            }
+        }
+    }
+
+    // Normal daemon operation
     info!(
         verbosity = args.verbose,
         config = args.config.as_ref().map(|p| p.display().to_string()).as_deref(),
