@@ -86,11 +86,18 @@ impl Args {
             &mut config.protocols,
         )
         .map_err(|e| {
-            // If this is a network-related error, include the list of supported networks
-            if e.contains("Could not find network") || e.contains("unsupported network error") {
-                let available_networks: Vec<String> = config.protocols.networks.keys().cloned().collect();
+            let available_networks: Vec<String> = config.protocols.networks.keys().cloned().collect();
+
+            if e.contains("Could not find network") {
                 BloklidError::NonSpecific(format!(
                     "Failed to resolve blockchain environment: {e}\n\nSupported networks: {}",
+                    available_networks.join(", ")
+                ))
+            } else if e.contains("unsupported network error") {
+                BloklidError::NonSpecific(format!(
+                    "Failed to resolve blockchain environment: {e}\n\nThis network exists but is not compatible with \
+                     version {} of bloklid.\nSupported networks: {}",
+                    crate::constants::APP_VERSION_COERCED,
                     available_networks.join(", ")
                 ))
             } else {
@@ -121,7 +128,14 @@ impl Args {
 }
 
 #[tokio::main]
-async fn main() -> errors::Result<()> {
+async fn main() {
+    if let Err(error) = run().await {
+        eprintln!("Error: {}", error);
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> errors::Result<()> {
     let args = Args::parse();
 
     // Initialize tracing subscriber. Precedence: RUST_LOG env > -v flag > default info

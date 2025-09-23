@@ -18,7 +18,7 @@ fn default_data_directory() -> String {
 }
 
 fn default_network() -> String {
-    "anvil-localhost".to_string()
+    "dufour".to_string()
 }
 
 #[serde_with::serde_as]
