@@ -55,47 +55,10 @@ enum Command {
     },
 }
 
-/// Generates a template configuration file with default values and comments
+/// Generates a template configuration file using the embedded example config
 fn generate_config_template() -> String {
-    r#"# Bloklid Configuration File
-# This is a template configuration file for the Bloklid daemon
-
-# Host address and port for the daemon to listen on
-host = "0.0.0.0:3064"
-
-# Path to the SQLite database file
-database_path = "data/bloklid.db"
-
-# Directory for storing data files
-data_directory = "data"
-
-# Network identifier (e.g., "anvil-localhost", "goerli", "mainnet")
-network = "anvil-localhost"
-
-# RPC endpoint URL for connecting to the blockchain
-rpc_url = "http://localhost:8545"
-
-# Maximum number of RPC requests per second (0 for unlimited)
-max_rpc_requests_per_sec = 0
-
-# Indexer configuration
-[indexer]
-# Block number to start indexing from (0 for genesis)
-start_block_number = 0
-
-# Enable fast sync mode for initial synchronization
-fast_sync = true
-
-# Enable downloading logs snapshot for faster initial sync
-enable_logs_snapshot = false
-
-# URL to download logs snapshot from (optional)
-# logs_snapshot_url = "https://example.com/snapshot.tar.gz"
-
-# Protocol configuration (will be populated by the daemon)
-[protocols]
-"#
-    .to_string()
+    // Embed the example config file at compile time
+    include_str!("../example-config.toml").to_string()
 }
 
 impl Args {
