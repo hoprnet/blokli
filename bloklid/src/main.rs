@@ -61,39 +61,39 @@ fn generate_config_template() -> String {
 # This is a template configuration file for the Bloklid daemon
 
 # Host address and port for the daemon to listen on
-host: "0.0.0.0:3064"
+host = "0.0.0.0:3064"
 
 # Path to the SQLite database file
-database_path: "data/bloklid.db"
+database_path = "data/bloklid.db"
 
 # Directory for storing data files
-data_directory: "data"
+data_directory = "data"
 
 # Network identifier (e.g., "anvil-localhost", "goerli", "mainnet")
-network: "anvil-localhost"
+network = "anvil-localhost"
 
 # RPC endpoint URL for connecting to the blockchain
-rpc_url: "http://localhost:8545"
+rpc_url = "http://localhost:8545"
 
 # Maximum number of RPC requests per second (0 for unlimited)
-max_rpc_requests_per_sec: 0
+max_rpc_requests_per_sec = 0
 
 # Indexer configuration
-indexer:
-  # Block number to start indexing from (0 for genesis)
-  start_block_number: 0
-  
-  # Enable fast sync mode for initial synchronization
-  fast_sync: true
-  
-  # Enable downloading logs snapshot for faster initial sync
-  enable_logs_snapshot: false
-  
-  # URL to download logs snapshot from (optional)
-  # logs_snapshot_url: "https://example.com/snapshot.tar.gz"
+[indexer]
+# Block number to start indexing from (0 for genesis)
+start_block_number = 0
+
+# Enable fast sync mode for initial synchronization
+fast_sync = true
+
+# Enable downloading logs snapshot for faster initial sync
+enable_logs_snapshot = false
+
+# URL to download logs snapshot from (optional)
+# logs_snapshot_url = "https://example.com/snapshot.tar.gz"
 
 # Protocol configuration (will be populated by the daemon)
-protocols: {}
+[protocols]
 "#
     .to_string()
 }
@@ -109,10 +109,8 @@ impl Args {
             return Ok(Config::default());
         }
 
-        let mut config: Config = serde_yaml::from_reader(std::fs::File::open(
-            self.config.as_ref().ok_or(ConfigError::NoConfiguration)?,
-        )?)
-        .map_err(|e| ConfigError::Parse(e.to_string()))?;
+        let config_content = std::fs::read_to_string(self.config.as_ref().ok_or(ConfigError::NoConfiguration)?)?;
+        let mut config: Config = toml::from_str(&config_content).map_err(|e| ConfigError::Parse(e.to_string()))?;
 
         config.validate().map_err(ConfigError::Validation)?;
 
