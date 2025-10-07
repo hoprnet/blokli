@@ -16,7 +16,7 @@ tokio        = { workspace = true }
 
 # TLS
 rustls         = { workspace = true }
-rustls-pemfile = "2.1"
+rustls-pemfile = { workspace = true }
 tokio-rustls   = { workspace = true }
 
 # Web framework

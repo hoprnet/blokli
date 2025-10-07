@@ -78,7 +78,7 @@ async fn graphql_subscription_handler(
         while let Some(response) = futures::StreamExt::next(&mut response_stream).await {
             match Event::default().json_data(response) {
                 Ok(event) => yield Ok(event),
-                Err(e) => yield Err(std::io::Error::new(std::io::ErrorKind::Other, e)),
+                Err(e) => yield Err(std::io::Error::other(e)),
             }
         }
     };
