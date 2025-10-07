@@ -1,0 +1,28 @@
+[package]
+description = "API interface specifying the desired implementation details of the BLOKLI database."
+edition     = "2021"
+homepage    = "https://hoprnet.org/"
+license     = "GPL-3.0-only"
+name        = "blokli-db-api"
+repository  = "https://github.com/hoprnet/blokli"
+version     = "0.1.0"
+
+[features]
+default = []
+
+[dependencies]
+async-trait     = { workspace = true }
+futures         = { workspace = true }
+libp2p-identity = { workspace = true }
+multiaddr       = { workspace = true }
+num_enum        = { workspace = true }
+strum           = { workspace = true }
+thiserror       = { workspace = true }
+tracing         = { workspace = true }
+
+hopr-crypto-packet   = { workspace = true }
+hopr-crypto-types    = { workspace = true }
+hopr-internal-types  = { workspace = true }
+hopr-network-types   = { workspace = true }
+hopr-platform        = { workspace = true }
+hopr-primitive-types = { workspace = true }

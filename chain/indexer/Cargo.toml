@@ -1,0 +1,76 @@
+[package]
+authors     = ["HOPR Association <tech@hoprnet.org>"]
+description = "Core-Ethereum-specific interaction with the backend database"
+edition     = "2021"
+homepage    = "https://hoprnet.org/"
+license     = "GPL-3.0"
+name        = "blokli-chain-indexer"
+repository  = "https://github.com/hoprnet/hoprnet"
+version     = "0.1.0"
+
+[lib]
+crate-type = ["rlib"]
+
+[features]
+default = []
+prometheus = [
+  "blokli-chain-rpc/prometheus",
+  "blokli-db-sql/prometheus",
+  "dep:hopr-metrics",
+]
+runtime-tokio = [
+  "blokli-chain-rpc/runtime-tokio",
+  "blokli-db-sql/runtime-tokio",
+  "hopr-async-runtime/runtime-tokio",
+]
+
+[dependencies]
+alloy = { workspace = true, default-features = false, features = [
+  "essentials",
+  "json-rpc",
+  "node-bindings",
+] }
+async-channel = { workspace = true }
+async-compression = { workspace = true, features = [
+  "futures-io",
+  "xz-parallel",
+] }
+async-lock = { workspace = true }
+async-tar = { workspace = true }
+async-trait = { workspace = true }
+backon = { workspace = true, features = ["futures-timer-sleep"] }
+futures = { workspace = true }
+futures-util = { workspace = true }
+lazy_static = { workspace = true }
+multiaddr = { workspace = true }
+reqwest = { workspace = true, features = ["brotli", "json", "stream", "zstd"] }
+smart-default = { workspace = true }
+sqlx = { workspace = true }
+sysinfo = { workspace = true }
+tempfile = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+
+blokli-chain-rpc     = { workspace = true }
+blokli-chain-types   = { workspace = true }
+blokli-db-api        = { workspace = true }
+blokli-db-entity     = { workspace = true }
+blokli-db-sql        = { workspace = true }
+hopr-async-runtime   = { workspace = true }
+hopr-bindings        = { workspace = true }
+hopr-crypto-types    = { workspace = true }
+hopr-internal-types  = { workspace = true }
+hopr-metrics         = { workspace = true, optional = true }
+hopr-primitive-types = { workspace = true }
+
+[dev-dependencies]
+anyhow          = { workspace = true }
+hex-literal     = { workspace = true }
+mockall         = { workspace = true }
+primitive-types = { workspace = true }
+test-log        = { workspace = true }
+tokio           = { workspace = true }
+
+blokli-chain-rpc   = { workspace = true, features = ["runtime-tokio"] }
+blokli-db-sql      = { workspace = true, features = ["runtime-tokio"] }
+hopr-crypto-random = { workspace = true }

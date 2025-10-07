@@ -1,23 +1,57 @@
 [package]
-name = "bloklid"
-version = "0.1.0"
+authors     = ["HOPR Association <tech@hoprnet.org>"]
 description = "Daemon for indexing HOPR on-chain events and executing HOPR-related on-chain transactions"
-authors = ["HOPR Association <tech@hoprnet.org>"]
-homepage = "https://hoprnet.org/"
-repository = "https://github.com/hoprnet/hoprnet"
-license = "GPL-3.0-only"
-edition = "2024"
+edition     = "2024"
+homepage    = "https://hoprnet.org/"
+license     = "GPL-3.0-only"
+name        = "bloklid"
+repository  = "https://github.com/hoprnet/hoprnet"
+version     = "0.1.0"
+
+[features]
+default = ["runtime-tokio"]
+runtime-tokio = [
+  "blokli-chain-api/runtime-tokio",
+  "blokli-chain-indexer/runtime-tokio",
+  "blokli-chain-rpc/runtime-tokio",
+  "blokli-db-sql/runtime-tokio",
+]
 
 [dependencies]
-async-signal = { workspace = true }
-clap = { workspace = true }
-futures = { workspace = true }
-serde = { workspace = true }
-serde_yaml = { workspace = true }
-serde_with = { workspace = true }
-smart-default = { workspace = true }
-tokio = { workspace = true }
-tracing = { workspace = true }
+alloy              = { workspace = true }
+async-channel      = { workspace = true }
+async-signal       = { workspace = true }
+clap               = { workspace = true }
+futures            = { workspace = true }
+hex                = { workspace = true }
+serde              = { workspace = true }
+serde_with         = { workspace = true }
+smart-default      = { workspace = true }
+thiserror          = { workspace = true }
+tokio              = { workspace = true }
+toml               = { workspace = true }
+tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
-thiserror = { workspace = true }
-validator = { workspace = true }
+url                = { workspace = true }
+validator          = { workspace = true }
+
+# Local dependencies
+blokli-chain-api     = { path = "../chain/api" }
+blokli-chain-indexer = { path = "../chain/indexer" }
+blokli-chain-rpc     = { path = "../chain/rpc" }
+blokli-chain-types   = { path = "../chain/types" }
+blokli-db-api        = { path = "../db/api" }
+blokli-db-sql        = { path = "../db/sql" }
+
+# HOPR dependencies
+hopr-chain-config    = { workspace = true }
+hopr-crypto-types    = { workspace = true }
+hopr-internal-types  = { workspace = true }
+hopr-primitive-types = { workspace = true }
+
+[dev-dependencies]
+anyhow      = { workspace = true }
+async-trait = { workspace = true }
+mockall     = { workspace = true }
+tempfile    = { workspace = true }
+tokio       = { workspace = true, features = ["full"] }
