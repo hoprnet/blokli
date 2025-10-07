@@ -16,14 +16,14 @@ members = [
 ]
 
 [workspace.dependencies]
-alloy = { version = "=1.0.31", default-features = false, features = [
+alloy = { version = "=1.0.37", default-features = false, features = [
   "contract",
   "essentials",
   "json-rpc",
   "k256",
   "node-bindings",
   "std",
-] } # pinned to 1.0.16 due to many breaking changes in patch releases
+] }
 anyhow = "1.0.99"
 async-channel = "2.5.0"
 async-compression = "0.4.30"

@@ -20,7 +20,6 @@ use blokli_chain_types::{ContractAddresses, ContractInstances};
 use hopr_crypto_types::prelude::Hash;
 use hopr_internal_types::prelude::{EncodedWinProb, WinningProbability};
 use hopr_primitive_types::prelude::*;
-use primitive_types::U256;
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 use url::Url;
@@ -157,31 +156,31 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
     }
 
     pub(crate) async fn get_xdai_balance(&self, address: Address) -> Result<XDaiBalance> {
-        Ok(XDaiBalance::from(U256::from_be_bytes(
+        Ok(XDaiBalance::from_be_bytes(
             self.provider.get_balance(address.into()).await?.to_be_bytes::<32>(),
-        )))
+        ))
     }
 
     pub(crate) async fn get_hopr_balance(&self, address: Address) -> Result<HoprBalance> {
-        Ok(HoprBalance::from(U256::from_be_bytes(
+        Ok(HoprBalance::from_be_bytes(
             self.contract_instances
                 .token
                 .balanceOf(address.into())
                 .call()
                 .await?
                 .to_be_bytes::<32>(),
-        )))
+        ))
     }
 
     pub(crate) async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> Result<HoprBalance> {
-        Ok(HoprBalance::from(U256::from_be_bytes(
+        Ok(HoprBalance::from_be_bytes(
             self.contract_instances
                 .token
                 .allowance(owner.into(), spender.into())
                 .call()
                 .await?
                 .to_be_bytes::<32>(),
-        )))
+        ))
     }
 }
 
@@ -215,13 +214,14 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
     }
 
     async fn get_minimum_network_ticket_price(&self) -> Result<HoprBalance> {
-        Ok(self
-            .contract_instances
-            .price_oracle
-            .currentTicketPrice()
-            .call()
-            .await
-            .map(|v| HoprBalance::from(U256::from_be_bytes(v.to_be_bytes::<32>())))?)
+        Ok(HoprBalance::from_be_bytes(
+            self.contract_instances
+                .price_oracle
+                .currentTicketPrice()
+                .call()
+                .await?
+                .to_be_bytes::<32>(),
+        ))
     }
 
     async fn get_safe_from_node_safe_registry(&self, node_address: Address) -> Result<Address> {
