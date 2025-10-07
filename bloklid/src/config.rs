@@ -65,9 +65,6 @@ pub struct Config {
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
 pub struct IndexerConfig {
-    #[default(0)]
-    pub start_block_number: u64,
-
     #[default(true)]
     pub fast_sync: bool,
 

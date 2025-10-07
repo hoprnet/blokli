@@ -21,9 +21,6 @@ max_rpc_requests_per_sec = 0
 
 # Indexer configuration
 [indexer]
-# Block number to start indexing from (0 for genesis)
-start_block_number = 0
-
 # Enable fast sync mode for initial synchronization
 fast_sync = true
 

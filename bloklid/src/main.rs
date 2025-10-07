@@ -206,7 +206,7 @@ async fn run() -> errors::Result<()> {
                 .clone();
 
             let indexer_config = blokli_chain_indexer::IndexerConfig {
-                start_block_number: cfg.indexer.start_block_number,
+                start_block_number: chain_network.channel_contract_deploy_block as u64,
                 fast_sync: cfg.indexer.fast_sync,
                 enable_logs_snapshot: cfg.indexer.enable_logs_snapshot,
                 logs_snapshot_url: cfg.indexer.logs_snapshot_url.clone(),

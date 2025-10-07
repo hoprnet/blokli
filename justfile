@@ -26,6 +26,10 @@ test-package package:
 test-debug:
     cargo test -F runtime-tokio -- --test-threads=1 --nocapture
 
+# Run local debug build against rotsee
+run-local-rotsee:
+    cargo run -p bloklid -- -c config.toml | tee rotsee.logs
+
 # Clean build artifacts
 clean:
     cargo clean

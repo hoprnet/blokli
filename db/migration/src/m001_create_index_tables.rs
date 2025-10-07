@@ -87,7 +87,6 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(ColumnDef::new(Announcement::AccountId).integer().not_null())
-                    .col(ColumnDef::new(Announcement::KeyBinding).binary_len(64).not_null())
                     .col(ColumnDef::new(Announcement::MultiaddressList).binary().not_null())
                     .col(
                         ColumnDef::new(Announcement::PublishedBlock)
@@ -252,7 +251,6 @@ enum Announcement {
     Table,
     Id,
     AccountId,
-    KeyBinding,
     MultiaddressList,
     PublishedBlock,
 }

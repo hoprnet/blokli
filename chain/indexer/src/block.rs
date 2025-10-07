@@ -6,6 +6,7 @@ use std::{
     },
 };
 
+use alloy::sol_types::SolEvent;
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::chain_events::SignificantChainEvent;
 use blokli_db_api::logs::BlokliDbLogOperations;
@@ -15,6 +16,7 @@ use futures::{
     future::AbortHandle,
     stream::{self},
 };
+use hopr_bindings::hoprtoken::HoprToken::{Approval, Transfer};
 use hopr_crypto_types::types::Hash;
 use hopr_primitive_types::prelude::*;
 use tracing::{debug, error, info, trace};
@@ -435,36 +437,22 @@ where
         let filter_base = alloy::rpc::types::Filter::new()
             .address(filter_base_addresses)
             .event_signature(filter_base_topics);
-        let _filter_token = alloy::rpc::types::Filter::new().address(alloy::primitives::Address::from(
+        let filter_token = alloy::rpc::types::Filter::new().address(alloy::primitives::Address::from(
             logs_handler.contract_addresses_map().token,
         ));
 
-        // let filter_transfer_to = filter_token
-        //     .clone()
-        //     .event_signature(Transfer::SIGNATURE_HASH)
-        //     .topic2(alloy::primitives::B256::from_slice(safe_address.to_bytes32().as_ref()));
+        let filter_token_transfer = filter_token.clone().event_signature(Transfer::SIGNATURE_HASH);
 
-        // let filter_transfer_from = filter_token
-        //     .clone()
-        //     .event_signature(Transfer::SIGNATURE_HASH)
-        //     .topic1(alloy::primitives::B256::from_slice(safe_address.to_bytes32().as_ref()));
-
-        // let filter_approval = filter_token
-        //     .event_signature(Approval::SIGNATURE_HASH)
-        //     .topic1(alloy::primitives::B256::from_slice(safe_address.to_bytes32().as_ref()))
-        //     .topic2(alloy::primitives::B256::from_slice(
-        //         logs_handler.contract_addresses_map().channels.to_bytes32().as_ref(),
-        //     ));
+        let filter_token_approval = filter_token.event_signature(Approval::SIGNATURE_HASH);
 
         let set = FilterSet {
             all: vec![
                 filter_base.clone(),
-                // filter_transfer_from.clone(),
-                // filter_transfer_to.clone(),
-                // filter_approval.clone(),
+                filter_token_transfer.clone(),
+                filter_token_approval.clone(),
             ],
             // token: vec![filter_transfer_from, filter_transfer_to, filter_approval],
-            token: vec![],
+            token: vec![filter_token_approval, filter_token_transfer],
             no_token: vec![filter_base],
         };
 
