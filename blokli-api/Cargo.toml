@@ -1,39 +1,44 @@
 [package]
-name = "blokli-api"
-version = "0.1.0"
+authors     = ["HOPR Association <tech@hoprnet.org>"]
 description = "GraphQL API server for HOPR blokli indexer"
-authors = ["HOPR Association <tech@hoprnet.org>"]
-homepage = "https://hoprnet.org/"
-repository = "https://github.com/hoprnet/hoprnet"
-license = "GPL-3.0-only"
-edition = "2024"
+edition     = "2024"
+homepage    = "https://hoprnet.org/"
+license     = "GPL-3.0-only"
+name        = "blokli-api"
+repository  = "https://github.com/hoprnet/hoprnet"
+version     = "0.1.0"
 
 [dependencies]
 # Async runtime
-tokio = { workspace = true }
-futures = { workspace = true }
 async-stream = { workspace = true }
+futures      = { workspace = true }
+tokio        = { workspace = true }
+
+# TLS
+rustls         = { workspace = true }
+rustls-pemfile = "2.1"
+tokio-rustls   = { workspace = true }
 
 # Web framework
-axum = { workspace = true }
+axum       = { workspace = true }
 axum-extra = { workspace = true }
-tower = { workspace = true }
+tower      = { workspace = true }
 tower-http = { workspace = true }
 
 # GraphQL
-async-graphql = { workspace = true }
+async-graphql      = { workspace = true }
 async-graphql-axum = { workspace = true }
 
 # Serialization
-serde = { workspace = true }
+serde      = { workspace = true }
 serde_json = { workspace = true }
 
 # Error handling
-anyhow = { workspace = true }
+anyhow    = { workspace = true }
 thiserror = { workspace = true }
 
 # Logging
-tracing = { workspace = true }
+tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 
 [dev-dependencies]

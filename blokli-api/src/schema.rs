@@ -48,13 +48,11 @@ impl SubscriptionRoot {
     /// Subscribe to new block events
     async fn new_blocks(&self) -> impl futures::Stream<Item = Block> {
         // TODO: Implement actual block subscription from indexer
-        futures::stream::iter(vec![
-            Block {
-                number: 1,
-                hash: "0x0000000000000000000000000000000000000000000000000000000000000000".to_string(),
-                timestamp: 0,
-            }
-        ])
+        futures::stream::iter(vec![Block {
+            number: 1,
+            hash: "0x0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+            timestamp: 0,
+        }])
     }
 }
 
@@ -71,6 +69,5 @@ pub struct Block {
 
 /// Build the GraphQL schema
 pub fn build_schema() -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
-    Schema::build(QueryRoot, MutationRoot, SubscriptionRoot)
-        .finish()
+    Schema::build(QueryRoot, MutationRoot, SubscriptionRoot).finish()
 }

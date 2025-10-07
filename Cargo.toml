@@ -3,6 +3,7 @@
 resolver = "2"
 
 members = [
+  "blokli-api",
   "bloklid",
   "chain/actions",
   "chain/api",
@@ -13,7 +14,6 @@ members = [
   "db/entity",
   "db/migration",
   "db/sql",
-  "blokli-api"
 ]
 
 [workspace.dependencies]
@@ -28,9 +28,9 @@ alloy = { version = "=1.0.37", default-features = false, features = [
 anyhow = "1.0.99"
 async-channel = "2.5.0"
 async-compression = "0.4.30"
-async-lock = "3.4.1"
 async-graphql = { version = "7.0.14", features = ["chrono", "dataloader"] }
 async-graphql-axum = "7.0.14"
+async-lock = "3.4.1"
 async-signal = "0.2.12"
 async-stream = "0.3.6"
 async-tar = "0.5.0"
@@ -87,6 +87,7 @@ rand = "0.9.2" # ignored in renovate, cannot be updated, dependencies reference 
 reqwest = { version = "0.12.23", features = ["json"] }
 ringbuffer = "0.16.0"
 rust-stream-ext-concurrent = "1.0.0"
+rustls = { version = "0.23", default-features = false, features = ["std"] }
 sea-orm = { version = "1.1.14", default-features = false, features = [
   "debug-print",
   "sqlx-sqlite",
@@ -130,10 +131,17 @@ tokio = { version = "1.47.1", features = [
   "time",
   "tracing",
 ] }
-toml = "0.8.19"
+tokio-rustls = { version = "0.26", default-features = false, features = [
+  "ring",
+] }
 tokio-test = "0.4"
+toml = "0.8.19"
 tower = { version = "0.5.2", default-features = false, features = ["util"] }
-tower-http = { version = "0.6.2", features = ["cors", "trace", "compression-gzip"] }
+tower-http = { version = "0.6.2", features = [
+  "compression-zstd",
+  "cors",
+  "trace",
+] }
 tracing = { version = "0.1.41" }
 tracing-subscriber = { version = "0.3.20", features = [
   "env-filter",

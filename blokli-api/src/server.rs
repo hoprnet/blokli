@@ -1,22 +1,27 @@
 //! Axum HTTP server configuration with GraphQL support
 
+use std::sync::Arc;
+
 use async_graphql::http::{GraphQLPlaygroundConfig, playground_source};
 use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
 use axum::{
-    extract::State,
-    response::{Html, IntoResponse, sse::{Event, KeepAlive, Sse}},
-    routing::get,
     Router,
+    extract::State,
+    response::{
+        Html, IntoResponse,
+        sse::{Event, KeepAlive, Sse},
+    },
+    routing::get,
 };
 use futures::stream::Stream;
-use std::sync::Arc;
 use tower_http::{
+    CompressionLevel,
+    compression::{CompressionLayer, predicate::SizeAbove},
     cors::CorsLayer,
     trace::TraceLayer,
-    compression::CompressionLayer,
 };
 
-use crate::schema::{build_schema, MutationRoot, QueryRoot, SubscriptionRoot};
+use crate::schema::{MutationRoot, QueryRoot, SubscriptionRoot, build_schema};
 
 /// Application state shared across handlers
 #[derive(Clone)]
@@ -27,7 +32,9 @@ pub struct AppState {
 /// Build the Axum application router
 pub fn build_app() -> Router {
     let schema = build_schema();
-    let app_state = AppState { schema: Arc::new(schema) };
+    let app_state = AppState {
+        schema: Arc::new(schema),
+    };
 
     Router::new()
         // GraphQL endpoint
@@ -37,24 +44,26 @@ pub fn build_app() -> Router {
         // Health check
         .route("/health", get(health_handler))
         .layer(CorsLayer::permissive())
-        .layer(CompressionLayer::new())
+        // Use zstd compression only with high quality, only for responses > 1KB
+        .layer(
+            CompressionLayer::new()
+                .zstd(true)
+                .quality(CompressionLevel::Best)
+                .compress_when(SizeAbove::new(1024)),
+        )
         .layer(TraceLayer::new_for_http())
         .with_state(app_state)
 }
 
 /// GraphQL query/mutation handler
-async fn graphql_handler(
-    State(state): State<AppState>,
-    req: GraphQLRequest,
-) -> GraphQLResponse {
+async fn graphql_handler(State(state): State<AppState>, req: GraphQLRequest) -> GraphQLResponse {
     state.schema.execute(req.into_inner()).await.into()
 }
 
 /// GraphQL Playground UI
 async fn graphql_playground() -> impl IntoResponse {
     Html(playground_source(
-        GraphQLPlaygroundConfig::new("/graphql")
-            .subscription_endpoint("/graphql/subscriptions")
+        GraphQLPlaygroundConfig::new("/graphql").subscription_endpoint("/graphql/subscriptions"),
     ))
 }
 

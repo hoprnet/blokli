@@ -43,7 +43,15 @@ Legacy cargo commands (prefer using `just` instead):
 
 - Tests in modules with `#[cfg(test)]`
 - Use `just test-package <package_name>` for specific package tests
-- Use `just test-debug` for single-threaded test execution with output
+- `just test-indexer` - Run indexer integration tests
+- `just test-package <name>` - Run tests for specific package
+
+Legacy cargo commands (prefer using `just` instead):
+
+- `cargo build -F runtime-tokio` - Build all workspace packages
+- `cargo test -F runtime-tokio` - Run all tests
+- `cargo test <test_name> -F runtime-tokio` - Run specific test
+- `cargo test --package <package_name> -F runtime-tokio` - Run tests for specific package
 
 ## Development Workflow
 
