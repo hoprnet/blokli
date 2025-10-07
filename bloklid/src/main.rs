@@ -78,9 +78,8 @@ impl Args {
         config.validate().map_err(ConfigError::Validation)?;
 
         // coerce with protocol config
-        let chain_network_config = ChainNetworkConfig::new(
+        let chain_network_config = ChainNetworkConfig::new_no_version_check(
             &config.network,
-            crate::constants::APP_VERSION_COERCED,
             Some(&config.rpc_url),
             Some(config.max_rpc_requests_per_sec),
             &mut config.protocols,
