@@ -41,16 +41,23 @@ let
     "LD_LIBRARY_PATH=${libPath}"
   ]
   ++ env;
-  sharedDockerArgs = {
+  # Use buildImage on macOS to avoid fakeroot issues
+  # buildLayeredImage requires fakeroot which doesn't work on recent macOS
+  buildImageArgs = {
     inherit name copyToRoot;
     tag = "latest";
-    # breaks binary reproducibility, but makes usage easier
     created = "now";
     config = { inherit Cmd Entrypoint Env; };
   };
-  # Use buildImage on macOS to avoid fakeroot issues
-  # buildLayeredImage requires fakeroot which doesn't work on recent macOS
-  dockerBuilder =
-    if pkgs.stdenv.isDarwin then pkgs.dockerTools.buildImage else pkgs.dockerTools.buildLayeredImage;
+  buildLayeredImageArgs = {
+    inherit name;
+    tag = "latest";
+    created = "now";
+    contents = copyToRoot;
+    config = { inherit Cmd Entrypoint Env; };
+  };
 in
-dockerBuilder sharedDockerArgs
+if pkgs.stdenv.isDarwin then
+  pkgs.dockerTools.buildImage buildImageArgs
+else
+  pkgs.dockerTools.buildLayeredImage buildLayeredImageArgs

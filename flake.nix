@@ -188,9 +188,15 @@
           };
 
           # Import Docker configurations
+          # Docker images need Linux packages, even when building on macOS
+          pkgsLinux = import nixpkgs {
+            system = "x86_64-linux";
+            inherit overlays;
+          };
           dockerBuilder = import ./nix/docker-builder.nix;
           bloklidDocker = import ./nix/docker/bloklid.nix {
-            inherit pkgs dockerBuilder;
+            pkgs = pkgsLinux;
+            inherit dockerBuilder;
             packages = bloklidPackages;
           };
 
