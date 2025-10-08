@@ -132,6 +132,10 @@ update:
 outdated:
     cargo outdated
 
+# Check for unused dependencies
+cargo-udeps:
+    nix develop .#experiment -c bash -c 'cargo udeps'
+
 # ============================================================================
 # Docker Compose Commands
 # ============================================================================

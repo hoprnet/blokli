@@ -11,8 +11,10 @@
   pkgsUnstable,
   config,
   crane,
+  rustToolchain ? null,
   pre-commit-check ? null,
   extraPackages ? [ ],
+  shellName ? "Development",
 }:
 
 let
@@ -25,14 +27,16 @@ let
     else
       buildPlatform.config;
 
-  # Use Rust toolchain from rust-toolchain.toml
-  rustToolchain =
+  # Use provided Rust toolchain or default from rust-toolchain.toml
+  defaultRustToolchain =
     (pkgs.pkgsBuildHost.rust-bin.fromRustupToolchainFile ../../rust-toolchain.toml).override
       {
         targets = [ cargoTarget ];
       };
 
-  craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
+  finalRustToolchain = if rustToolchain != null then rustToolchain else defaultRustToolchain;
+
+  craneLib = (crane.mkLib pkgs).overrideToolchain finalRustToolchain;
 
   # Platform-specific packages
   linuxPackages = pkgs.lib.optionals pkgs.stdenv.isLinux (
@@ -83,7 +87,13 @@ let
   # Pre-commit hooks if available
   preCommitHook = if pre-commit-check != null then pre-commit-check.shellHook else "";
 
-  shellHook = preCommitHook;
+  shellHook = ''
+    ${preCommitHook}
+    echo "🦀 ${shellName} Shell"
+    echo "   Rust version: $(rustc --version)"
+    echo "   Cargo version: $(cargo --version)"
+    echo ""
+  '';
 
   # mold is only supported on Linux, so falling back to lld on Darwin
   linker = if buildPlatform.isDarwin then "lld" else "mold";
