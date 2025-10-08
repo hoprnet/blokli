@@ -17,17 +17,23 @@ let
 
   # Base packages included in all Docker images
   # These provide essential runtime dependencies
-  contents =
-    with pkgs;
-    [
-      bash
-      cacert
-      coreutils
-      findutils
-      iana-etc
-      nettools
-    ]
-    ++ extraContents;
+  copyToRoot = pkgs.buildEnv {
+    name = "image-root";
+    paths =
+      with pkgs;
+      [
+        bash
+        cacert
+        coreutils
+        dnsutils
+        findutils
+        iana-etc
+        nettools
+        util-linux
+      ]
+      ++ extraContents;
+    pathsToLink = [ "/bin" ];
+  };
   Env = [
     "NO_COLOR=true" # suppress colored log output
     # "RUST_LOG=info"   # 'info' level is set by default with some spamming components set to override
@@ -35,11 +41,16 @@ let
     "LD_LIBRARY_PATH=${libPath}"
   ]
   ++ env;
+  sharedDockerArgs = {
+    inherit name copyToRoot;
+    tag = "latest";
+    # breaks binary reproducibility, but makes usage easier
+    created = "now";
+    config = { inherit Cmd Entrypoint Env; };
+  };
+  # Use buildImage on macOS to avoid fakeroot issues
+  # buildLayeredImage requires fakeroot which doesn't work on recent macOS
+  dockerBuilder =
+    if pkgs.stdenv.isDarwin then pkgs.dockerTools.buildImage else pkgs.dockerTools.buildLayeredImage;
 in
-pkgs.dockerTools.buildLayeredImage {
-  inherit name contents;
-  tag = "latest";
-  # breaks binary reproducibility, but makes usage easier
-  created = "now";
-  config = { inherit Cmd Entrypoint Env; };
-}
+dockerBuilder sharedDockerArgs
