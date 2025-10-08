@@ -12,6 +12,7 @@ pub mod tls;
 use axum::serve;
 use config::ApiConfig;
 use errors::ApiResult;
+use sea_orm::Database;
 use tokio::net::TcpListener;
 use tracing::info;
 
@@ -26,9 +27,14 @@ pub async fn start_server(config: ApiConfig) -> ApiResult<()> {
         .init();
 
     info!("Starting blokli API server on {}", config.bind_address);
+    info!("Connecting to database: {}", config.database_url);
+
+    // Connect to database
+    let db = Database::connect(&config.database_url).await?;
+    info!("Database connection established");
 
     // Build the application
-    let app = server::build_app();
+    let app = server::build_app(db).await?;
 
     // Create TCP listener
     let listener = TcpListener::bind(config.bind_address).await?;
@@ -39,10 +45,6 @@ pub async fn start_server(config: ApiConfig) -> ApiResult<()> {
     if config.playground_enabled {
         info!("GraphQL Playground: {}://{}/graphql", protocol, config.bind_address);
     }
-    info!(
-        "GraphQL Subscriptions (SSE): {}://{}/graphql/subscriptions",
-        protocol, config.bind_address
-    );
     info!("Health check: {}://{}/health", protocol, config.bind_address);
 
     // Start the server with TLS if configured

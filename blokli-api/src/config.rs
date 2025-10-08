@@ -15,6 +15,10 @@ pub struct ApiConfig {
     #[serde(default = "default_playground_enabled")]
     pub playground_enabled: bool,
 
+    /// Database URL
+    #[serde(default = "default_database_url")]
+    pub database_url: String,
+
     /// TLS configuration
     #[serde(default)]
     pub tls: Option<TlsConfig>,
@@ -35,6 +39,7 @@ impl Default for ApiConfig {
         Self {
             bind_address: default_bind_address(),
             playground_enabled: default_playground_enabled(),
+            database_url: default_database_url(),
             tls: None,
         }
     }
@@ -46,4 +51,8 @@ fn default_bind_address() -> SocketAddr {
 
 fn default_playground_enabled() -> bool {
     true
+}
+
+fn default_database_url() -> String {
+    std::env::var("DATABASE_URL").unwrap_or_else(|_| "postgres://user:pw@127.0.0.1/blokli".to_string())
 }

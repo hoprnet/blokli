@@ -28,6 +28,7 @@ tower-http = { workspace = true }
 # GraphQL
 async-graphql      = { workspace = true }
 async-graphql-axum = { workspace = true }
+seaography         = { workspace = true }
 
 # Serialization
 serde      = { workspace = true }
@@ -36,6 +37,12 @@ serde_json = { workspace = true }
 # Error handling
 anyhow    = { workspace = true }
 thiserror = { workspace = true }
+
+# Database
+sea-orm = { workspace = true }
+
+# Internal dependencies
+blokli-db-entity = { workspace = true }
 
 # Logging
 tracing            = { workspace = true }

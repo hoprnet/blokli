@@ -1,73 +1,53 @@
 //! GraphQL schema definitions for blokli API
 
-use async_graphql::*;
+use async_graphql::dynamic::*;
+use sea_orm::DatabaseConnection;
+use seaography::{Builder, BuilderContext};
 
-/// Root query type for the GraphQL API
-pub struct QueryRoot;
+/// Build the seaography-powered GraphQL schema with database connection
+///
+/// This creates a dynamic GraphQL schema with:
+/// - Auto-generated queries for all SeaORM entities
+/// - Auto-generated mutations
+/// - Custom health and version queries
+pub fn build_schema(db: DatabaseConnection) -> Result<Schema, Box<dyn std::error::Error>> {
+    // Create static builder context (required by seaography)
+    let context: &'static BuilderContext = Box::leak(Box::new(BuilderContext::default()));
 
-#[Object]
-impl QueryRoot {
-    /// Health check endpoint
-    async fn health(&self) -> &str {
-        "ok"
-    }
+    // Create seaography builder with database connection
+    let builder = Builder::new(context, db.clone());
 
-    /// Get API version
-    async fn version(&self) -> &str {
-        env!("CARGO_PKG_VERSION")
-    }
+    // Register all entities using the generated function
+    let mut builder = blokli_db_entity::codegen::register_entity_modules(builder);
 
-    /// Placeholder: Get information about indexed blocks
-    async fn blocks(&self, _limit: Option<i32>) -> Vec<Block> {
-        // TODO: Implement actual block querying from database
-        vec![Block {
-            number: 1,
-            hash: "0x0000000000000000000000000000000000000000000000000000000000000000".to_string(),
-            timestamp: 0,
-        }]
-    }
-}
+    // Add custom query fields before building schema
+    let health_field = Field::new(
+        "health",
+        TypeRef::named_nn(TypeRef::STRING),
+        |_ctx| {
+            FieldFuture::new(async move {
+                Ok(Some(FieldValue::value("ok")))
+            })
+        },
+    )
+    .description("Health check endpoint");
 
-/// Root mutation type for the GraphQL API
-pub struct MutationRoot;
+    let version_field = Field::new(
+        "version",
+        TypeRef::named_nn(TypeRef::STRING),
+        |_ctx| {
+            FieldFuture::new(async move {
+                Ok(Some(FieldValue::value(env!("CARGO_PKG_VERSION"))))
+            })
+        },
+    )
+    .description("API version");
 
-#[Object]
-impl MutationRoot {
-    /// Placeholder mutation
-    async fn placeholder(&self) -> bool {
-        // TODO: Implement actual mutations
-        true
-    }
-}
+    // Add fields directly to the query object
+    builder.query = builder.query.field(health_field).field(version_field);
 
-/// Root subscription type for the GraphQL API
-pub struct SubscriptionRoot;
+    // Build the schema
+    let schema = builder.schema_builder().finish()?;
 
-#[Subscription]
-impl SubscriptionRoot {
-    /// Subscribe to new block events
-    async fn new_blocks(&self) -> impl futures::Stream<Item = Block> {
-        // TODO: Implement actual block subscription from indexer
-        futures::stream::iter(vec![Block {
-            number: 1,
-            hash: "0x0000000000000000000000000000000000000000000000000000000000000000".to_string(),
-            timestamp: 0,
-        }])
-    }
-}
-
-/// Block information
-#[derive(Clone, Debug, SimpleObject)]
-pub struct Block {
-    /// Block number
-    pub number: u64,
-    /// Block hash
-    pub hash: String,
-    /// Block timestamp
-    pub timestamp: u64,
-}
-
-/// Build the GraphQL schema
-pub fn build_schema() -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
-    Schema::build(QueryRoot, MutationRoot, SubscriptionRoot).finish()
+    Ok(schema)
 }

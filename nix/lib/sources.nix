@@ -33,10 +33,6 @@ rec {
         (root + "/Cargo.lock")
         (root + "/README.md")
 
-        # Runtime data and configuration
-        (root + "/ethereum/contracts/contracts-addresses.json")
-        (root + "/bloklid/example_cfg.yaml")
-
         # Source files
         (fs.fileFilter (file: file.hasExt "rs") root)
         (fs.fileFilter (file: file.hasExt "toml") root)

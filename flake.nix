@@ -204,34 +204,34 @@
 
           # Rust toolchains
           stableToolchain =
-            (pkgs.pkgsBuildHost.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml).override {
-              targets = [
-                (
-                  if buildPlatform.config == "arm64-apple-darwin" then
-                    "aarch64-apple-darwin"
-                  else
-                    buildPlatform.config
-                )
-              ];
-            };
+            (pkgs.pkgsBuildHost.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml).override
+              {
+                targets = [
+                  (
+                    if buildPlatform.config == "arm64-apple-darwin" then
+                      "aarch64-apple-darwin"
+                    else
+                      buildPlatform.config
+                  )
+                ];
+              };
 
-          nightlyToolchain =
-            (pkgs.pkgsBuildHost.rust-bin.nightly.latest.default).override {
-              targets = [
-                (
-                  if buildPlatform.config == "arm64-apple-darwin" then
-                    "aarch64-apple-darwin"
-                  else
-                    buildPlatform.config
-                )
-              ];
-              extensions = [
-                "rust-src"
-                "rust-analyzer"
-                "clippy"
-                "rustfmt"
-              ];
-            };
+          nightlyToolchain = (pkgs.pkgsBuildHost.rust-bin.nightly.latest.default).override {
+            targets = [
+              (
+                if buildPlatform.config == "arm64-apple-darwin" then
+                  "aarch64-apple-darwin"
+                else
+                  buildPlatform.config
+              )
+            ];
+            extensions = [
+              "rust-src"
+              "rust-analyzer"
+              "clippy"
+              "rustfmt"
+            ];
+          };
 
           # Import shell configurations
           shells = {

@@ -9,6 +9,10 @@ pub enum ApiError {
     #[error("Failed to bind server: {0}")]
     BindError(#[from] std::io::Error),
 
+    /// Database error
+    #[error("Database error: {0}")]
+    DatabaseError(#[from] sea_orm::DbErr),
+
     /// Configuration error
     #[error("Configuration error: {0}")]
     ConfigError(String),
@@ -16,6 +20,10 @@ pub enum ApiError {
     /// Internal server error
     #[error("Internal server error: {0}")]
     InternalError(#[from] anyhow::Error),
+
+    /// Generic box error
+    #[error("Error: {0}")]
+    BoxError(#[from] Box<dyn std::error::Error>),
 }
 
 /// Result type alias for API operations

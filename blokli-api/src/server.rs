@@ -3,17 +3,17 @@
 use std::sync::Arc;
 
 use async_graphql::http::{GraphQLPlaygroundConfig, playground_source};
-use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
+use async_graphql::dynamic::Schema;
 use axum::{
     Router,
     extract::State,
-    response::{
-        Html, IntoResponse,
-        sse::{Event, KeepAlive, Sse},
-    },
+    http::StatusCode,
+    response::{Html, IntoResponse, Response},
     routing::get,
+    Json,
 };
-use futures::stream::Stream;
+use sea_orm::DatabaseConnection;
+use serde_json::Value;
 use tower_http::{
     CompressionLevel,
     compression::{CompressionLayer, predicate::SizeAbove},
@@ -21,26 +21,25 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::schema::{MutationRoot, QueryRoot, SubscriptionRoot, build_schema};
+use crate::schema::build_schema;
+use crate::errors::ApiResult;
 
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
-    pub schema: Arc<async_graphql::Schema<QueryRoot, MutationRoot, SubscriptionRoot>>,
+    pub schema: Arc<Schema>,
 }
 
 /// Build the Axum application router
-pub fn build_app() -> Router {
-    let schema = build_schema();
+pub async fn build_app(db: DatabaseConnection) -> ApiResult<Router> {
+    let schema = build_schema(db)?;
     let app_state = AppState {
         schema: Arc::new(schema),
     };
 
-    Router::new()
+    Ok(Router::new()
         // GraphQL endpoint
         .route("/graphql", get(graphql_playground).post(graphql_handler))
-        // GraphQL subscriptions via SSE
-        .route("/graphql/subscriptions", get(graphql_subscription_handler))
         // Health check
         .route("/health", get(health_handler))
         .layer(CorsLayer::permissive())
@@ -52,38 +51,42 @@ pub fn build_app() -> Router {
                 .compress_when(SizeAbove::new(1024)),
         )
         .layer(TraceLayer::new_for_http())
-        .with_state(app_state)
+        .with_state(app_state))
 }
 
 /// GraphQL query/mutation handler
-async fn graphql_handler(State(state): State<AppState>, req: GraphQLRequest) -> GraphQLResponse {
-    state.schema.execute(req.into_inner()).await.into()
+async fn graphql_handler(
+    State(state): State<AppState>,
+    Json(request): Json<Value>,
+) -> Response {
+    // Parse the GraphQL request
+    let request = match serde_json::from_value::<async_graphql::Request>(request) {
+        Ok(req) => req,
+        Err(e) => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({
+                    "errors": [{
+                        "message": format!("Invalid GraphQL request: {}", e)
+                    }]
+                })),
+            )
+                .into_response()
+        }
+    };
+
+    // Execute the request (schema.execute accepts Into<DynamicRequest>)
+    let response = state.schema.execute(request).await;
+
+    // Serialize and return the response
+    Json(serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({
+        "errors": [{"message": "Failed to serialize response"}]
+    }))).into_response()
 }
 
 /// GraphQL Playground UI
 async fn graphql_playground() -> impl IntoResponse {
-    Html(playground_source(
-        GraphQLPlaygroundConfig::new("/graphql").subscription_endpoint("/graphql/subscriptions"),
-    ))
-}
-
-/// GraphQL subscription handler using SSE
-async fn graphql_subscription_handler(
-    State(state): State<AppState>,
-    req: GraphQLRequest,
-) -> Sse<impl Stream<Item = Result<Event, std::io::Error>>> {
-    let schema = Arc::clone(&state.schema);
-    let stream = async_stream::stream! {
-        let mut response_stream = schema.execute_stream(req.into_inner());
-        while let Some(response) = futures::StreamExt::next(&mut response_stream).await {
-            match Event::default().json_data(response) {
-                Ok(event) => yield Ok(event),
-                Err(e) => yield Err(std::io::Error::other(e)),
-            }
-        }
-    };
-
-    Sse::new(stream).keep_alive(KeepAlive::default())
+    Html(playground_source(GraphQLPlaygroundConfig::new("/graphql")))
 }
 
 /// Health check endpoint
