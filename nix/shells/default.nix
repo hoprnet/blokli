@@ -8,6 +8,7 @@
 
 {
   pkgs,
+  pkgsUnstable,
   config,
   crane,
   pre-commit-check ? null,
@@ -25,9 +26,11 @@ let
       buildPlatform.config;
 
   # Use Rust toolchain from rust-toolchain.toml
-  rustToolchain = (pkgs.pkgsBuildHost.rust-bin.fromRustupToolchainFile ../../rust-toolchain.toml).override {
-    targets = [ cargoTarget ];
-  };
+  rustToolchain =
+    (pkgs.pkgsBuildHost.rust-bin.fromRustupToolchainFile ../../rust-toolchain.toml).override
+      {
+        targets = [ cargoTarget ];
+      };
 
   craneLib = (crane.mkLib pkgs).overrideToolchain rustToolchain;
 
@@ -41,43 +44,44 @@ let
   );
 
   # All packages in a single comprehensive environment
-  allPackages = with pkgs; [
-    # Core build tools
-    bash
-    coreutils
-    curl
-    findutils
-    gnumake
-    jq
-    just
-    llvmPackages.bintools
-    lsof
-    openssl
-    patchelf
-    pkg-config
-    time
-    which
-    help2man
+  allPackages =
+    with pkgs;
+    [
+      # Core build tools
+      bash
+      coreutils
+      curl
+      findutils
+      gnumake
+      jq
+      just
+      llvmPackages.bintools
+      lsof
+      openssl
+      patchelf
+      pkg-config
+      time
+      which
+      help2man
 
-    # Formatting tools
-    config.treefmt.build.wrapper
+      # Database tools
+      pkgsUnstable.postgresql_18 # PostgreSQL client (psql, pg_dump, etc.)
 
-    # CI/CD tools
-    lcov # Code coverage
-    skopeo # Container image tools
-    cargo-audit # Rust security auditing
-    dive # Docker layer analysis
-  ]
-  ++ (pkgs.lib.attrValues config.treefmt.build.programs)
-  ++ linuxPackages
-  ++ extraPackages;
+      # Formatting tools
+      config.treefmt.build.wrapper
+
+      # CI/CD tools
+      lcov # Code coverage
+      skopeo # Container image tools
+      cargo-audit # Rust security auditing
+      dive # Docker layer analysis
+    ]
+    ++ (pkgs.lib.attrValues config.treefmt.build.programs)
+    ++ linuxPackages
+    ++ extraPackages;
 
   # Pre-commit hooks if available
-  preCommitHook =
-    if pre-commit-check != null then
-      pre-commit-check.shellHook
-    else
-      "";
+  preCommitHook = if pre-commit-check != null then pre-commit-check.shellHook else "";
 
   shellHook = preCommitHook;
 

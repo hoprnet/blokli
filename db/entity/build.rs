@@ -1,13 +1,9 @@
 //! Creates a build specification for the ORM codegen.
 
-use std::{
-    env::{self, temp_dir},
-    path::Path,
-};
+use std::{env, path::Path};
 
 use anyhow::Context;
 use clap::Parser;
-use migration::MigrationTrait;
 use sea_orm::{ConnectOptions, Database};
 use sea_orm_cli::{Cli, Commands, run_generate_command};
 
@@ -28,33 +24,16 @@ where
             command,
             ..
         } => {
-            let connect_options: ConnectOptions =
-                ConnectOptions::new(database_url.unwrap_or("/tmp/sea_orm_cli.db".into()))
-                    .set_schema_search_path(database_schema.unwrap_or_else(|| "public".to_owned()))
-                    .to_owned();
-            let is_sqlite = connect_options.get_url().starts_with("sqlite");
+            let connect_options: ConnectOptions = ConnectOptions::new(
+                database_url.unwrap_or("postgresql://bloklid:bloklid@localhost:5432/bloklid_codegen".into()),
+            )
+            .set_schema_search_path(database_schema.unwrap_or_else(|| "public".to_owned()))
+            .to_owned();
             let db = &Database::connect(connect_options).await?;
 
-            if is_sqlite {
-                struct TempMigrator;
-
-                impl migration::MigratorTrait for TempMigrator {
-                    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-                        let mut migrations = migration::MigratorIndex::migrations();
-                        migrations.extend(migration::MigratorChainLogs::migrations());
-
-                        migrations
-                    }
-                }
-
-                sea_orm_migration::cli::run_migrate(TempMigrator {}, db, command, cli.verbose)
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e.to_string()))
-            } else {
-                sea_orm_migration::cli::run_migrate(migration::Migrator {}, db, command, cli.verbose)
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e.to_string()))
-            }
+            sea_orm_migration::cli::run_migrate(migration::Migrator {}, db, command, cli.verbose)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))
         }
     }
 }
@@ -76,36 +55,22 @@ fn main() -> anyhow::Result<()> {
     );
 
     let codegen_path = Path::new(&cargo_manifest_dir)
-        .join("src/codegen/sqlite")
+        .join("src/codegen/postgres")
         .into_os_string()
         .into_string()
         .map_err(|e| anyhow::anyhow!(e.to_str().unwrap_or("illegible error").to_string()))?;
 
-    let tmp_db = temp_dir().join("tmp_migration.db");
+    // Use PostgreSQL URL from environment or default to local instance
+    let database_url = env::var("DATABASE_URL")
+        .unwrap_or_else(|_| "postgresql://bloklid:bloklid@localhost:5432/bloklid_codegen".to_string());
 
-    let _ = std::fs::remove_file(
-        tmp_db
-            .clone()
-            .into_os_string()
-            .into_string()
-            .map_err(|e| anyhow::anyhow!(e.to_str().unwrap_or("illegible error").to_string()))?
-            .as_str(),
-    );
-
+    // Run migrations
     tokio::runtime::Runtime::new()?.block_on(execute_sea_orm_cli_command([
         "sea-orm-cli",
         "migrate",
         "refresh",
         "-u",
-        format!(
-            "sqlite://{}?mode=rwc",
-            tmp_db
-                .clone()
-                .into_os_string()
-                .into_string()
-                .map_err(|e| anyhow::anyhow!(e.to_str().unwrap_or("illegible error").to_string()))?
-        )
-        .as_str(),
+        &database_url,
         "-d",
         db_migration_package_path
             .clone()
@@ -115,6 +80,7 @@ fn main() -> anyhow::Result<()> {
             .as_str(),
     ]))?;
 
+    // Generate entities
     tokio::runtime::Runtime::new()?.block_on(execute_sea_orm_cli_command([
         "sea-orm-cli",
         "generate",
@@ -122,14 +88,7 @@ fn main() -> anyhow::Result<()> {
         "-o",
         &codegen_path,
         "-u",
-        format!(
-            "sqlite://{}?mode=rwc",
-            tmp_db
-                .into_os_string()
-                .into_string()
-                .map_err(|e| anyhow::anyhow!(e.to_str().unwrap_or("illegible error").to_string()))?
-        )
-        .as_str(),
+        &database_url,
     ]))?;
 
     Ok(())

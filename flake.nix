@@ -42,6 +42,7 @@
     flake-utils.url = "github:numtide/flake-utils";
     flake-parts.url = "github:hercules-ci/flake-parts";
     nixpkgs.url = "github:NixOS/nixpkgs/release-25.05";
+    nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # Rust toolchain and build system
     rust-overlay.url = "github:oxalica/rust-overlay/master";
@@ -63,6 +64,7 @@
     {
       self,
       nixpkgs,
+      nixpkgs-unstable,
       flake-utils,
       flake-parts,
       rust-overlay,
@@ -101,6 +103,10 @@
             (import rust-overlay)
           ];
           pkgs = import nixpkgs {
+            system = localSystem;
+            inherit overlays;
+          };
+          pkgsUnstable = import nixpkgs-unstable {
             system = localSystem;
             inherit overlays;
           };
@@ -199,7 +205,12 @@
           # Import unified shell configuration
           shells = {
             default = import ./nix/shells/default.nix {
-              inherit pkgs config crane;
+              inherit
+                pkgs
+                pkgsUnstable
+                config
+                crane
+                ;
               pre-commit-check = packages.pre-commit-check;
             };
           };

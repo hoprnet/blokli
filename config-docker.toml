@@ -6,12 +6,12 @@ host = "0.0.0.0:3064"
 
 # PostgreSQL database configuration
 [database]
-host = "postgres"
-port = 5432
-username = "bloklid"
-password = "bloklid_dev_password"
-database = "bloklid"
+database        = "bloklid"
+host            = "postgres"
 max_connections = 10
+password        = "bloklid_dev_password"
+port            = 5432
+username        = "bloklid"
 
 # Directory for storing data files
 data_directory = "/data"

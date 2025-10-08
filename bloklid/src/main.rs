@@ -3,7 +3,7 @@ mod constants;
 mod errors;
 
 use std::{
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -214,19 +214,22 @@ async fn run() -> errors::Result<()> {
                 data_directory: cfg.data_directory.clone(),
             };
 
-            (cfg.database_path.clone(), chain_network, cfg.contracts, indexer_config)
+            (cfg.database.to_url(), chain_network, cfg.contracts, indexer_config)
         };
 
-        info!("Initializing database at: {}", database_path);
+        info!("Initializing database with URL: {}", database_path);
 
         // Initialize database
         let db_config = BlokliDbConfig {
-            create_if_missing: true,
-            force_create: false,
+            max_connections: {
+                let cfg = config
+                    .read()
+                    .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
+                cfg.database.max_connections()
+            },
             log_slow_queries: Duration::from_secs(1),
         };
-        let db_path = Path::new(&database_path);
-        let db = BlokliDb::new(db_path, db_config).await?;
+        let db = BlokliDb::new(&database_path, db_config).await?;
 
         info!("Connecting to RPC endpoint: {}", chain_network.chain.default_provider);
 

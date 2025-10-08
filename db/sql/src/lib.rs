@@ -207,10 +207,7 @@ impl BlokliDbGeneralModelOperations for BlokliDb {
     /// With PostgreSQL, both Index and Logs use the same database connection.
     /// The `target_db` parameter is kept for API compatibility but ignored.
     async fn begin_transaction_in_db(&self, target_db: TargetDb) -> Result<OpenTransaction> {
-        Ok(OpenTransaction(
-            self.db.begin_with_config(None, None).await?,
-            target_db,
-        ))
+        Ok(OpenTransaction(self.db.begin_with_config(None, None).await?, target_db))
     }
 
     async fn import_logs_db(self, _src_dir: PathBuf) -> Result<()> {
@@ -222,8 +219,7 @@ impl BlokliDbGeneralModelOperations for BlokliDb {
         // 3. Use bulk INSERT statements
         // For now, return error indicating not implemented
         Err(DbSqlError::Construction(
-            "Snapshot import not yet implemented for PostgreSQL. \
-             Use pg_restore or SQL dump to import data."
+            "Snapshot import not yet implemented for PostgreSQL. Use pg_restore or SQL dump to import data."
                 .to_string(),
         ))
     }

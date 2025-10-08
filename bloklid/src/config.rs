@@ -32,9 +32,7 @@ fn default_network() -> String {
 #[serde(untagged)]
 pub enum DatabaseConfig {
     /// Simple connection URL format
-    Url {
-        url: String,
-    },
+    Url { url: String },
     /// Detailed connection parameters
     Detailed {
         host: String,

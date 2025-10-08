@@ -9,6 +9,6 @@ pub mod conversions;
 
 pub mod errors;
 
-#[cfg(feature = "sqlite")]
+// Export PostgreSQL entities by default
 #[cfg_attr(rustfmt, rustfmt_skip)]
-pub use codegen::sqlite::*;
+pub use codegen::postgres::*;
