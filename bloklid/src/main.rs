@@ -122,7 +122,7 @@ impl Args {
             "Resolved contract addresses",
         );
 
-        config.validate().map_err(|e| ConfigError::Validation(e))?;
+        config.validate().map_err(ConfigError::Validation)?;
         Ok(config)
     }
 }

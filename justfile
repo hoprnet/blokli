@@ -1,63 +1,50 @@
-# Shows available commands
+# ============================================================================
+# Default Command
+# ============================================================================
+
+# Show available commands
 default:
     @just --list
 
-# Check all code in workspace
-check:
-    cargo check --workspace
-
-# Build the project with runtime-tokio feature
-build:
-    cargo build -F runtime-tokio
-
-# Build in release mode
-build-release:
-    cargo build --release -F runtime-tokio
-
-# Run all tests with runtime-tokio feature
-test:
-    cargo test -F runtime-tokio
-
-# Run tests for a specific package
-test-package package:
-    cargo test -p {{package}} -F runtime-tokio
-
-# Run tests in single thread mode (useful for debugging)
-test-debug:
-    cargo test -F runtime-tokio -- --test-threads=1 --nocapture
-
-# Run local debug build against rotsee
-run-local-rotsee:
-    cargo run -p bloklid -- -c config.toml | tee rotsee.logs
-
-# Clean build artifacts
-clean:
-    cargo clean
+# ============================================================================
+# Quick Workflows
+# ============================================================================
 
 # Quick check - format, clippy, and check
 quick: fmt clippy check
 
-# Run bloklid daemon in release mode
-run-release:
-    cargo run --release --bin bloklid -F runtime-tokio
+# Development build and test cycle - format, check, and test
+dev: fmt check test
 
-# Generate documentation
-doc:
-    cargo doc --no-deps -F runtime-tokio --open
+# Watch for changes and run checks continuously
+watch:
+    cargo watch -x "check --workspace" -x "test -p bloklid"
 
-# Generate documentation for all dependencies
-doc-all:
-    cargo doc -F runtime-tokio --open
+# ============================================================================
+# Build Commands
+# ============================================================================
 
-# Build the project
+# Build all workspace packages in debug mode
 build:
     cargo build --workspace
 
-# Build in release mode
+# Build all workspace packages in release mode with full optimizations
 build-release:
     cargo build --workspace --release
 
-# Run all tests
+# Check all workspace code without building binaries
+check:
+    cargo check --workspace
+
+# Clean all build artifacts
+clean:
+    cargo clean
+
+# ============================================================================
+# Test Commands
+# ============================================================================
+
+# Run all tests in workspace
 test:
     cargo test --workspace
 
@@ -65,53 +52,82 @@ test:
 test-package package:
     cargo test -p {{package}}
 
-# Run tests in single thread mode (useful for debugging)
+# Run tests in single thread mode with output (useful for debugging)
 test-debug:
     cargo test --workspace -- --test-threads=1 --nocapture
 
-# Format code
+# ============================================================================
+# Code Quality
+# ============================================================================
+
+# Format all code with nix formatter
 fmt:
     nix fmt
 
-# Run clippy lints
+# Run clippy lints with warnings as errors
 clippy:
     cargo clippy --workspace -- -D warnings
 
-# Run clippy on all targets
+# Run clippy on all targets (lib, bin, tests, benches, examples)
 clippy-all:
     cargo clippy --workspace --all-targets -- -D warnings
 
-# Fix clippy warnings automatically
+# Automatically fix clippy warnings
 clippy-fix:
     cargo clippy --workspace --fix --allow-dirty --allow-staged
 
-# Development build and test cycle
-dev: fmt check test
+# ============================================================================
+# Run Commands - bloklid daemon
+# ============================================================================
 
-# Watch for changes and run checks
-watch:
-    cargo watch -x "check --workspace" -x "test -p bloklid"
-
-# Run bloklid daemon
+# Run bloklid daemon in debug mode with default configuration
 run:
     cargo run --bin bloklid
 
-# Run bloklid daemon with custom config
+# Run bloklid daemon with custom configuration file
 run-config config_path:
     cargo run --bin bloklid -- -c {{config_path}}
 
-# Run blokli-api server
+# Run bloklid daemon in release mode with full optimizations
+run-release:
+    cargo run --release --bin bloklid -F runtime-tokio
+
+# Run bloklid in debug mode against rotsee network with log output
+run-local-rotsee:
+    cargo run -p bloklid -- -c config.toml | tee rotsee.logs
+
+# ============================================================================
+# Run Commands - blokli-api server
+# ============================================================================
+
+# Run blokli-api server in debug mode
 run-api:
     cargo run --bin blokli-api
 
-# Run blokli-api server in release mode
+# Run blokli-api server in release mode with full optimizations
 run-api-release:
     cargo run --release --bin blokli-api
 
-# Update dependencies
+# ============================================================================
+# Documentation
+# ============================================================================
+
+# Generate and open documentation for workspace packages only
+doc:
+    cargo doc --no-deps -F runtime-tokio --open
+
+# Generate and open documentation including all dependencies
+doc-all:
+    cargo doc -F runtime-tokio --open
+
+# ============================================================================
+# Dependency Management
+# ============================================================================
+
+# Update all dependencies to latest compatible versions
 update:
     cargo update
 
-# Show outdated dependencies
+# Show outdated dependencies that have newer versions available
 outdated:
     cargo outdated
