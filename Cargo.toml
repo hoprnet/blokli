@@ -89,24 +89,25 @@ ringbuffer = "0.16.0"
 rust-stream-ext-concurrent = "1.0.0"
 rustls = { version = "0.23", default-features = false, features = ["std"] }
 rustls-pemfile = "2.1"
-sea-orm = { version = "1.1.14", default-features = false, features = [
+seaography = { version = "2.0.0-rc.2", features = [ "with-chrono" ] }
+sea-orm = { version = "2.0.0-rc.9", default-features = false, features = [
   "debug-print",
   "macros",
   "runtime-tokio-rustls",
   "sqlx-postgres",
   "with-chrono",
-  "with-json",
 ] }
-sea-orm-cli = { version = "1.1.14", default-features = false, features = [
+sea-orm-cli = { version = "2.0.0-rc.9", default-features = false, features = [
   "codegen",
+  "runtime-tokio-rustls"
 ] }
-sea-orm-migration = { version = "1.1.14", default-features = false, features = [
+sea-orm-migration = { version = "2.0.0-rc.9", default-features = false, features = [
   "cli",
   "sqlx-postgres",
   "with-chrono",
 ] }
-sea-query = { version = "0.32.7", default-features = false }
-sea-query-binder = { version = "0.7.0", default-features = false, features = [
+sea-query = { version = "1.0.0-rc.14", default-features = false }
+sea-query-binder = { version = "0.8.0-rc.7", default-features = false, features = [
   "sqlx-postgres",
   "with-chrono",
 ] }
@@ -116,14 +117,6 @@ serde_json = "1.0.143"
 serde_with = { version = "3.14.0" }
 serde_yaml = "0.9"
 smart-default = "0.7.1"
-sqlx = { version = "0.8.6", default-features = false, features = [
-  "macros",
-  "migrate",
-  "postgres",
-  "runtime-tokio",
-  "sqlite",
-  "tls-rustls",
-] }
 strum = { version = "0.27.2", features = ["derive"] }
 sysinfo = "0.37.0"
 tempfile = "3.22.0"

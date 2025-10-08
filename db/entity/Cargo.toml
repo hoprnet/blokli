@@ -21,18 +21,16 @@ anyhow  = { workspace = true }
 clap    = { workspace = true }
 futures = { workspace = true }
 # Override workspace sea-orm to add SQLite support for build script
-sea-orm = { version = "1.1.14", default-features = false, features = [
+sea-orm = { version = "2.0.0-rc.9", default-features = false, features = [
   "debug-print",
   "macros",
   "runtime-tokio-rustls",
   "sqlx-postgres",
   "sqlx-sqlite",
   "with-chrono",
-  "with-json",
-  "with-uuid",
 ] }
 sea-orm-cli = { workspace = true }
-sea-orm-migration = { version = "1.1.14", default-features = false, features = [
+sea-orm-migration = { version = "2.0.0-rc.9", default-features = false, features = [
   "cli",
   "sqlx-postgres",
   "sqlx-sqlite",
