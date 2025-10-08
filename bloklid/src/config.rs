@@ -5,8 +5,10 @@ fn default_host() -> std::net::SocketAddr {
     "0.0.0.0:3064".parse().unwrap()
 }
 
-fn default_db_path() -> String {
-    "data/bloklid.db".to_string()
+fn default_database() -> DatabaseConfig {
+    DatabaseConfig::Url {
+        url: "postgresql://bloklid:password@localhost:5432/bloklid".to_string(),
+    }
 }
 
 fn default_rpc_url() -> String {
@@ -21,6 +23,61 @@ fn default_network() -> String {
     "dufour".to_string()
 }
 
+/// PostgreSQL database configuration
+///
+/// Supports two formats:
+/// 1. Simple URL: `url = "postgresql://user:pass@host:port/database"`
+/// 2. Detailed components with individual fields
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(untagged)]
+pub enum DatabaseConfig {
+    /// Simple connection URL format
+    Url {
+        url: String,
+    },
+    /// Detailed connection parameters
+    Detailed {
+        host: String,
+        port: u16,
+        username: String,
+        password: String,
+        database: String,
+        #[serde(default = "default_max_connections")]
+        max_connections: u32,
+    },
+}
+
+fn default_max_connections() -> u32 {
+    10
+}
+
+impl DatabaseConfig {
+    /// Convert database configuration to PostgreSQL connection URL
+    pub fn to_url(&self) -> String {
+        match self {
+            DatabaseConfig::Url { url } => url.clone(),
+            DatabaseConfig::Detailed {
+                host,
+                port,
+                username,
+                password,
+                database,
+                ..
+            } => {
+                format!("postgresql://{}:{}@{}:{}/{}", username, password, host, port, database)
+            }
+        }
+    }
+
+    /// Get max_connections setting (if specified in Detailed format)
+    pub fn max_connections(&self) -> u32 {
+        match self {
+            DatabaseConfig::Url { .. } => default_max_connections(),
+            DatabaseConfig::Detailed { max_connections, .. } => *max_connections,
+        }
+    }
+}
+
 #[serde_with::serde_as]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault, validator::Validate)]
 pub struct Config {
@@ -29,9 +86,9 @@ pub struct Config {
     #[serde(default = "default_host")]
     pub host: std::net::SocketAddr,
 
-    #[default(_code = "default_db_path()")]
-    #[serde(default = "default_db_path")]
-    pub database_path: String,
+    #[default(_code = "default_database()")]
+    #[serde(default = "default_database")]
+    pub database: DatabaseConfig,
 
     #[default(_code = "default_data_directory()")]
     #[serde(default = "default_data_directory")]

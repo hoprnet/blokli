@@ -194,63 +194,38 @@ pub trait BlokliDbGeneralModelOperations {
 
 #[async_trait]
 impl BlokliDbGeneralModelOperations for BlokliDb {
-    /// Retrieves raw database connection to the given [DB](TargetDb).
-    fn conn(&self, target_db: TargetDb) -> &DatabaseConnection {
-        match target_db {
-            TargetDb::Index => self.index_db.read_only(), // TODO: no write access needed here, deserves better
-            // wrapping
-            TargetDb::Logs => &self.logs_db,
-        }
+    /// Retrieves raw database connection.
+    ///
+    /// With PostgreSQL, both Index and Logs target the same database connection.
+    /// The `target_db` parameter is kept for API compatibility but ignored.
+    fn conn(&self, _target_db: TargetDb) -> &DatabaseConnection {
+        &self.db
     }
 
-    /// Starts a new transaction in the given [DB](TargetDb).
+    /// Starts a new transaction.
+    ///
+    /// With PostgreSQL, both Index and Logs use the same database connection.
+    /// The `target_db` parameter is kept for API compatibility but ignored.
     async fn begin_transaction_in_db(&self, target_db: TargetDb) -> Result<OpenTransaction> {
-        match target_db {
-            TargetDb::Index => Ok(OpenTransaction(
-                self.index_db.read_write().begin_with_config(None, None).await?, /* TODO: cannot estimate intent,
-                                                                                  * must be readwrite */
-                target_db,
-            )),
-            TargetDb::Logs => Ok(OpenTransaction(
-                self.logs_db.begin_with_config(None, None).await?,
-                target_db,
-            )),
-        }
+        Ok(OpenTransaction(
+            self.db.begin_with_config(None, None).await?,
+            target_db,
+        ))
     }
 
-    async fn import_logs_db(self, src_dir: PathBuf) -> Result<()> {
-        let src_db_path = src_dir.join("hopr_logs.db");
-        if !src_db_path.exists() {
-            return Err(DbSqlError::Construction(format!(
-                "Source logs database file does not exist: {}",
-                src_db_path.display()
-            )));
-        }
-
-        let sql = format!(
-            r#"
-            ATTACH DATABASE '{}' AS source_logs;
-            BEGIN TRANSACTION;
-            DELETE FROM log;
-            DELETE FROM log_status;
-            DELETE FROM log_topic_info;
-            INSERT INTO log_topic_info SELECT * FROM source_logs.log_topic_info;
-            INSERT INTO log_status SELECT * FROM source_logs.log_status;
-            INSERT INTO log SELECT * FROM source_logs.log;
-            COMMIT;
-            DETACH DATABASE source_logs;
-        "#,
-            src_db_path.to_string_lossy().replace("'", "''")
-        );
-
-        let logs_conn = self.conn(TargetDb::Logs);
-
-        logs_conn
-            .execute_unprepared(sql.as_str())
-            .await
-            .map_err(|e| DbSqlError::Construction(format!("Failed to import logs data: {e}")))?;
-
-        Ok(())
+    async fn import_logs_db(self, _src_dir: PathBuf) -> Result<()> {
+        // TODO: Implement PostgreSQL-specific snapshot import
+        // PostgreSQL doesn't support SQLite's ATTACH DATABASE syntax
+        // Options:
+        // 1. Use pg_dump/pg_restore
+        // 2. Use COPY commands
+        // 3. Use bulk INSERT statements
+        // For now, return error indicating not implemented
+        Err(DbSqlError::Construction(
+            "Snapshot import not yet implemented for PostgreSQL. \
+             Use pg_restore or SQL dump to import data."
+                .to_string(),
+        ))
     }
 }
 

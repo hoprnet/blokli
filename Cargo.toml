@@ -91,7 +91,7 @@ rustls = { version = "0.23", default-features = false, features = ["std"] }
 rustls-pemfile = "2.1"
 sea-orm = { version = "1.1.14", default-features = false, features = [
   "debug-print",
-  "sqlx-sqlite",
+  "sqlx-postgres",
   "with-chrono",
   "with-json",
 ] }
@@ -100,12 +100,12 @@ sea-orm-cli = { version = "1.1.14", default-features = false, features = [
 ] }
 sea-orm-migration = { version = "1.1.14", default-features = false, features = [
   "cli",
-  "sqlx-sqlite",
+  "sqlx-postgres",
   "with-chrono",
 ] }
 sea-query = { version = "0.32.7", default-features = false }
 sea-query-binder = { version = "0.7.0", default-features = false, features = [
-  "sqlx-sqlite",
+  "sqlx-postgres",
   "with-chrono",
 ] }
 semver = "1.0.26"
@@ -117,7 +117,9 @@ smart-default = "0.7.1"
 sqlx = { version = "0.8.6", default-features = false, features = [
   "macros",
   "migrate",
-  "sqlite",
+  "postgres",
+  "runtime-tokio",
+  "tls-rustls",
 ] }
 strum = { version = "0.27.2", features = ["derive"] }
 sysinfo = "0.37.0"

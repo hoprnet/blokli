@@ -1,17 +1,8 @@
-use std::{
-    fs,
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::time::Duration;
 
 use blokli_db_entity::prelude::{Account, Announcement};
 use migration::{MigratorChainLogs, MigratorIndex, MigratorTrait};
-use sea_orm::{EntityTrait, SqlxSqliteConnector};
-use sqlx::{
-    ConnectOptions, SqlitePool,
-    pool::PoolOptions,
-    sqlite::{SqliteAutoVacuum, SqliteConnectOptions, SqliteJournalMode, SqliteSynchronous},
-};
+use sea_orm::{ConnectOptions, Database, EntityTrait};
 use tracing::log::LevelFilter;
 use validator::Validate;
 
@@ -23,143 +14,87 @@ use crate::{
 
 #[derive(Debug, Clone, PartialEq, Eq, smart_default::SmartDefault, validator::Validate)]
 pub struct BlokliDbConfig {
-    #[default(true)]
-    pub create_if_missing: bool,
-    #[default(false)]
-    pub force_create: bool,
+    #[default(10)]
+    pub max_connections: u32,
     #[default(Duration::from_secs(5))]
     pub log_slow_queries: Duration,
 }
 
-#[cfg(feature = "sqlite")]
-#[derive(Debug, Clone)]
-pub(crate) struct DbConnection {
-    ro: sea_orm::DatabaseConnection,
-    rw: sea_orm::DatabaseConnection,
-}
-
-#[cfg(feature = "sqlite")]
-impl DbConnection {
-    pub fn read_only(&self) -> &sea_orm::DatabaseConnection {
-        &self.ro
-    }
-
-    pub fn read_write(&self) -> &sea_orm::DatabaseConnection {
-        &self.rw
-    }
-}
-
 /// Main database handle for HOPR node operations.
 ///
-/// Manages multiple SQLite databases for different data domains to avoid
-/// locking conflicts and improve performance:
-///
-/// - **Index DB**: Blockchain indexing and contract data
-/// - **Logs DB**: Blockchain logs and processing status
+/// Manages a single PostgreSQL database connection for all data operations.
+/// All tables (accounts, channels, logs, etc.) are stored in the same database
+/// with the `public` schema.
 ///
 /// Supports database snapshot imports for fast synchronization via
 /// [`BlokliDbGeneralModelOperations::import_logs_db`].
 #[derive(Debug, Clone)]
 pub struct BlokliDb {
-    pub(crate) index_db: DbConnection,
-    pub(crate) logs_db: sea_orm::DatabaseConnection,
+    pub(crate) db: sea_orm::DatabaseConnection,
 
     #[allow(dead_code)]
     pub(crate) cfg: BlokliDbConfig,
 }
 
-/// Filename for the blockchain-indexing database.
-pub const SQL_DB_INDEX_FILE_NAME: &str = "hopr_index.db";
-/// Filename for the blockchain logs database (used in snapshots).
-pub const SQL_DB_LOGS_FILE_NAME: &str = "hopr_logs.db";
-
 impl BlokliDb {
-    pub async fn new(directory: &Path, cfg: BlokliDbConfig) -> Result<Self> {
+    /// Create a new database connection to PostgreSQL.
+    ///
+    /// # Arguments
+    ///
+    /// * `database_url` - PostgreSQL connection URL (e.g., "postgresql://user:pass@localhost:5432/bloklid")
+    /// * `cfg` - Database configuration including connection pool settings
+    ///
+    /// # Process
+    ///
+    /// 1. Validates configuration
+    /// 2. Establishes connection pool to PostgreSQL
+    /// 3. Runs migrations for both index and logs tables
+    /// 4. Initializes account KeyId mappings
+    ///
+    /// # Returns
+    ///
+    /// A configured `BlokliDb` instance ready for use
+    ///
+    /// # Errors
+    ///
+    /// Returns `DbSqlError` if:
+    /// - Configuration validation fails
+    /// - Cannot connect to PostgreSQL
+    /// - Migrations fail to apply
+    /// - Account initialization encounters errors
+    pub async fn new(database_url: &str, cfg: BlokliDbConfig) -> Result<Self> {
         cfg.validate()
             .map_err(|e| DbSqlError::Construction(format!("failed configuration validation: {e}")))?;
 
-        fs::create_dir_all(directory)
-            .map_err(|_e| DbSqlError::Construction(format!("cannot create main database directory {directory:?}")))?;
+        // Configure connection options
+        let mut opt = ConnectOptions::new(database_url.to_string());
+        opt.max_connections(cfg.max_connections)
+            .min_connections(1)
+            .connect_timeout(Duration::from_secs(8))
+            .idle_timeout(Duration::from_secs(300))
+            .max_lifetime(Duration::from_secs(1800))
+            .sqlx_logging(cfg.log_slow_queries.as_secs() > 0)
+            .sqlx_logging_level(LevelFilter::Warn);
 
-        let index = Self::create_pool(
-            cfg.clone(),
-            directory.to_path_buf(),
-            PoolOptions::new(),
-            Some(0),
-            Some(1),
-            false,
-            SQL_DB_INDEX_FILE_NAME,
-        )
-        .await?;
-
-        #[cfg(feature = "sqlite")]
-        let index_ro = Self::create_pool(
-            cfg.clone(),
-            directory.to_path_buf(),
-            PoolOptions::new(),
-            Some(0),
-            Some(30),
-            true,
-            SQL_DB_INDEX_FILE_NAME,
-        )
-        .await?;
-
-        let logs = Self::create_pool(
-            cfg.clone(),
-            directory.to_path_buf(),
-            PoolOptions::new(),
-            Some(0),
-            None,
-            false,
-            SQL_DB_LOGS_FILE_NAME,
-        )
-        .await?;
-
-        #[cfg(feature = "sqlite")]
-        Self::new_sqlx_sqlite(index, index_ro, logs, cfg).await
-    }
-
-    #[cfg(feature = "sqlite")]
-    pub async fn new_in_memory() -> Result<Self> {
-        let index_db = SqlitePool::connect(":memory:")
+        // Establish database connection
+        let db = Database::connect(opt)
             .await
-            .map_err(|e| DbSqlError::Construction(e.to_string()))?;
+            .map_err(|e| DbSqlError::Construction(format!("failed to connect to PostgreSQL: {e}")))?;
 
-        Self::new_sqlx_sqlite(
-            index_db.clone(),
-            index_db,
-            SqlitePool::connect(":memory:")
-                .await
-                .map_err(|e| DbSqlError::Construction(e.to_string()))?,
-            Default::default(),
-        )
-        .await
-    }
-
-    #[cfg(feature = "sqlite")]
-    async fn new_sqlx_sqlite(
-        index_db_pool: SqlitePool,
-        index_db_ro_pool: SqlitePool,
-        logs_db_pool: SqlitePool,
-        cfg: BlokliDbConfig,
-    ) -> Result<Self> {
-        let index_db_rw = SqlxSqliteConnector::from_sqlx_sqlite_pool(index_db_pool);
-        let index_db_ro = SqlxSqliteConnector::from_sqlx_sqlite_pool(index_db_ro_pool);
-
-        MigratorIndex::up(&index_db_rw, None)
+        // Run migrations for index tables
+        MigratorIndex::up(&db, None)
             .await
-            .map_err(|e| DbSqlError::Construction(format!("cannot apply database migration: {e}")))?;
+            .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
 
-        let logs_db = SqlxSqliteConnector::from_sqlx_sqlite_pool(logs_db_pool.clone());
-
-        MigratorChainLogs::up(&logs_db, None)
+        // Run migrations for logs tables
+        MigratorChainLogs::up(&db, None)
             .await
-            .map_err(|e| DbSqlError::Construction(format!("cannot apply database migration: {e}")))?;
+            .map_err(|e| DbSqlError::Construction(format!("cannot apply logs migrations: {e}")))?;
 
         // Initialize KeyId mapping for accounts
         Account::find()
             .find_with_related(Announcement)
-            .all(&index_db_rw)
+            .all(&db)
             .await?
             .into_iter()
             .try_for_each(|(a, b)| match model_to_account_entry(a, b) {
@@ -174,72 +109,26 @@ impl BlokliDb {
                 }
             })?;
 
-        Ok(Self {
-            index_db: DbConnection {
-                ro: index_db_ro,
-                rw: index_db_rw,
-            },
-            logs_db,
-            cfg,
-        })
+        Ok(Self { db, cfg })
     }
 
-    /// Default SQLite config values for all DBs with RW  (read-write) access.
-    fn common_connection_cfg_rw(cfg: BlokliDbConfig) -> SqliteConnectOptions {
-        SqliteConnectOptions::default()
-            .create_if_missing(cfg.create_if_missing)
-            .log_slow_statements(LevelFilter::Warn, cfg.log_slow_queries)
-            .log_statements(LevelFilter::Debug)
-            .journal_mode(SqliteJournalMode::Wal)
-            .synchronous(SqliteSynchronous::Normal)
-            .auto_vacuum(SqliteAutoVacuum::Full)
-            //.optimize_on_close(true, None) // Removed, because it causes optimization on each connection, due to min_connections being set to 0
-            .page_size(4096)
-            .pragma("cache_size", "-30000") // 32M
-            .pragma("busy_timeout", "1000") // 1000ms
-    }
-
-    /// Default SQLite config values for all DBs with RO (read-only) access.
-    fn common_connection_cfg_ro(cfg: BlokliDbConfig) -> SqliteConnectOptions {
-        SqliteConnectOptions::default()
-            .create_if_missing(cfg.create_if_missing)
-            .log_slow_statements(LevelFilter::Warn, cfg.log_slow_queries)
-            .log_statements(LevelFilter::Debug)
-            //.optimize_on_close(true, None) // Removed, because it causes optimization on each connection, due to min_connections being set to 0
-            .page_size(4096)
-            .pragma("cache_size", "-30000") // 32M
-            .pragma("busy_timeout", "1000") // 1000ms
-            .read_only(true)
-    }
-
-    pub async fn create_pool(
-        cfg: BlokliDbConfig,
-        directory: PathBuf,
-        mut options: PoolOptions<sqlx::Sqlite>,
-        min_conn: Option<u32>,
-        max_conn: Option<u32>,
-        read_only: bool,
-        path: &str,
-    ) -> Result<SqlitePool> {
-        if let Some(min_conn) = min_conn {
-            options = options.min_connections(min_conn);
-        }
-        if let Some(max_conn) = max_conn {
-            options = options.max_connections(max_conn);
-        }
-
-        let cfg = if read_only {
-            Self::common_connection_cfg_ro(cfg)
-        } else {
-            Self::common_connection_cfg_rw(cfg)
-        };
-
-        let pool = options
-            .connect_with(cfg.filename(directory.join(path)))
-            .await
-            .map_err(|e| DbSqlError::Construction(format!("failed to create {path} database: {e}")))?;
-
-        Ok(pool)
+    /// Create an in-memory PostgreSQL database for testing.
+    ///
+    /// **Note**: This requires a running PostgreSQL instance.
+    /// For true in-memory testing, use a test database that can be quickly created/dropped.
+    ///
+    /// # Returns
+    ///
+    /// A `BlokliDb` instance connected to a test database
+    ///
+    /// # Errors
+    ///
+    /// Returns `DbSqlError` if connection or initialization fails
+    pub async fn new_in_memory() -> Result<Self> {
+        // For PostgreSQL, we connect to a test database
+        // This requires PostgreSQL to be running
+        let database_url = "postgresql://bloklid:bloklid@localhost:5432/bloklid_test";
+        Self::new(database_url, Default::default()).await
     }
 }
 
@@ -249,14 +138,14 @@ impl BlokliDbAllOperations for BlokliDb {}
 mod tests {
     use migration::{MigratorChainLogs, MigratorIndex, MigratorTrait};
 
-    use crate::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb}; // 0.8
+    use crate::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 
     #[tokio::test]
+    #[ignore] // Requires PostgreSQL running
     async fn test_basic_db_init() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
 
-        // NOTE: cfg-if this on Postgres to do only `Migrator::status(db.conn(Default::default)).await.expect("status
-        // must be ok");`
+        // With PostgreSQL, both migrations are in the same database
         MigratorIndex::status(db.conn(TargetDb::Index)).await?;
         MigratorChainLogs::status(db.conn(TargetDb::Logs)).await?;
 
