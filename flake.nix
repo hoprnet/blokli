@@ -196,57 +196,10 @@
             inherit pkgs system flake-utils;
           };
 
-          # Import shell configurations
+          # Import unified shell configuration
           shells = {
-            default = import ./nix/shells/dev.nix {
-              inherit
-                pkgs
-                config
-                crane
-                ;
-              pre-commit-check = packages.pre-commit-check;
-              extraPackages = with pkgs; [
-                nfpm
-                envsubst
-              ];
-            };
-
-            ci = import ./nix/shells/ci.nix {
+            default = import ./nix/shells/default.nix {
               inherit pkgs config crane;
-            };
-
-            test = import ./nix/shells/test.nix {
-              inherit
-                pkgs
-                config
-                crane
-                ;
-            };
-
-            citest = import ./nix/shells/ci-test.nix {
-              inherit
-                pkgs
-                config
-                crane
-                ;
-              bloklid = bloklidPackages.bloklid-candidate;
-            };
-
-            citestdev = import ./nix/shells/ci-test.nix {
-              inherit
-                pkgs
-                config
-                crane
-                ;
-              bloklid = bloklidPackages.bloklid-dev;
-            };
-
-            docs = import ./nix/shells/docs.nix {
-              inherit
-                pkgs
-                config
-                crane
-                ;
               pre-commit-check = packages.pre-commit-check;
             };
           };
