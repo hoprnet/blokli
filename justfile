@@ -142,23 +142,23 @@ cargo-udeps:
 
 # Start PostgreSQL and bloklid with Docker Compose
 docker-up:
-    docker-compose up -d
+    docker-compose -f docker/docker-compose.yml up -d
 
 # Stop Docker Compose services
 docker-down:
-    docker-compose down
+    docker-compose -f docker/docker-compose.yml down
 
 # Stop and remove all data (WARNING: destroys database)
 docker-down-volumes:
-    docker-compose down -v
+    docker-compose -f docker/docker-compose.yml down -v
 
 # View Docker Compose logs (optionally specify service name)
 docker-logs service="":
     #!/usr/bin/env bash
     if [ -z "{{service}}" ]; then
-        docker-compose logs -f
+        docker-compose -f docker/docker-compose.yml logs -f
     else
-        docker-compose logs -f {{service}}
+        docker-compose -f docker/docker-compose.yml logs -f {{service}}
     fi
 
 # Build bloklid Docker image from Nix
@@ -168,31 +168,31 @@ docker-build:
 
 # Rebuild bloklid and restart Docker Compose
 docker-restart: docker-build
-    docker-compose down
-    docker-compose up -d
+    docker-compose -f docker/docker-compose.yml down
+    docker-compose -f docker/docker-compose.yml up -d
 
 # Connect to PostgreSQL database with psql
 docker-db:
-    docker-compose exec postgres psql -U bloklid -d bloklid
+    docker-compose -f docker/docker-compose.yml exec postgres psql -U bloklid -d bloklid
 
 # Reset database (WARNING: deletes all data)
 docker-db-reset:
-    docker-compose down -v
-    docker-compose up -d postgres
+    docker-compose -f docker/docker-compose.yml down -v
+    docker-compose -f docker/docker-compose.yml up -d postgres
     @echo "Waiting for PostgreSQL to be ready..."
     @sleep 5
-    docker-compose up -d bloklid
+    docker-compose -f docker/docker-compose.yml up -d bloklid
 
 # Show database tables
 docker-db-tables:
-    docker-compose exec postgres psql -U bloklid -d bloklid -c "\\dt"
+    docker-compose -f docker/docker-compose.yml exec postgres psql -U bloklid -d bloklid -c "\\dt"
 
 # Backup database to file
 docker-db-backup file="backup.sql":
-    docker-compose exec -T postgres pg_dump -U bloklid bloklid > {{file}}
+    docker-compose -f docker/docker-compose.yml exec -T postgres pg_dump -U bloklid bloklid > {{file}}
     @echo "Database backed up to {{file}}"
 
 # Restore database from file
 docker-db-restore file="backup.sql":
-    docker-compose exec -T postgres psql -U bloklid -d bloklid < {{file}}
+    docker-compose -f docker/docker-compose.yml exec -T postgres psql -U bloklid -d bloklid < {{file}}
     @echo "Database restored from {{file}}"
