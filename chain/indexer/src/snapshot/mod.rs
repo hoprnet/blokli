@@ -8,7 +8,7 @@
 //! - **HTTP/HTTPS Downloads**: Secure download with retry logic and progress tracking
 //! - **Local File Support**: Direct installation from local `file://` URLs
 //! - **Archive Extraction**: Safe tar.xz extraction with path traversal protection
-//! - **Database Validation**: SQLite integrity checks and content verification
+//! - **SQL Validation**: PostgreSQL SQL dump integrity and content verification
 //! - **Disk Space Management**: Cross-platform space validation before operations
 //! - **Comprehensive Errors**: Actionable error messages with recovery suggestions
 //!
@@ -130,9 +130,9 @@ impl SnapshotWorkflow {
         let extracted_files = self.extractor.extract_snapshot(&archive_path, &temp_dir).await?;
         debug!("Extracted snapshot files: {:?}", extracted_files);
 
-        // Validate extracted database
-        let db_path = temp_dir.join("hopr_logs.db");
-        let snapshot_info = self.validator.validate_snapshot(&db_path).await?;
+        // Validate extracted SQL dump
+        let sql_path = temp_dir.join("hopr_logs.sql");
+        let snapshot_info = self.validator.validate_snapshot(&sql_path).await?;
 
         // Install using the provided installer
         installer
@@ -289,10 +289,10 @@ mod tests {
 
         assert!(result.is_ok(), "TestSnapshotManager should handle file:// URLs");
         let info = result.unwrap();
-        assert_eq!(info.log_count, 2);
+        assert_eq!(info.log_count, Some(2));
 
-        // Verify the database file was installed
-        assert!(data_dir.join("hopr_logs.db").exists());
+        // Verify the SQL dump file was installed
+        assert!(data_dir.join("hopr_logs.sql").exists());
     }
 
     #[tokio::test]
@@ -315,10 +315,10 @@ mod tests {
         assert!(result.is_ok(), "TestSnapshotManager should handle complete workflow");
 
         let info = result.unwrap();
-        assert_eq!(info.log_count, 2);
+        assert_eq!(info.log_count, Some(2));
 
-        // Verify the database file exists in the data directory
-        assert!(data_dir.join("hopr_logs.db").exists());
+        // Verify the SQL dump file exists in the data directory
+        assert!(data_dir.join("hopr_logs.sql").exists());
 
         // Also test individual component access
         let downloader = manager.workflow.downloader;

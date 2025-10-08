@@ -18,7 +18,7 @@ use async_trait::async_trait;
 pub use blokli_db_api as api;
 use blokli_db_api::logs::BlokliDbLogOperations;
 use futures::future::BoxFuture;
-use sea_orm::{ConnectionTrait, TransactionTrait};
+use sea_orm::TransactionTrait;
 pub use sea_orm::{DatabaseConnection, DatabaseTransaction};
 
 use crate::{
@@ -210,18 +210,53 @@ impl BlokliDbGeneralModelOperations for BlokliDb {
         Ok(OpenTransaction(self.db.begin_with_config(None, None).await?, target_db))
     }
 
-    async fn import_logs_db(self, _src_dir: PathBuf) -> Result<()> {
-        // TODO: Implement PostgreSQL-specific snapshot import
-        // PostgreSQL doesn't support SQLite's ATTACH DATABASE syntax
-        // Options:
-        // 1. Use pg_dump/pg_restore
-        // 2. Use COPY commands
-        // 3. Use bulk INSERT statements
-        // For now, return error indicating not implemented
-        Err(DbSqlError::Construction(
-            "Snapshot import not yet implemented for PostgreSQL. Use pg_restore or SQL dump to import data."
-                .to_string(),
+    async fn import_logs_db(self, src_dir: PathBuf) -> Result<()> {
+        use sea_orm::{ConnectionTrait, Statement};
+
+        let sql_path = src_dir.join("hopr_logs.sql");
+
+        if !sql_path.exists() {
+            return Err(DbSqlError::Construction(format!(
+                "SQL dump file not found: {}",
+                sql_path.display()
+            )));
+        }
+
+        // Read the SQL dump file
+        let sql_content = std::fs::read_to_string(&sql_path)
+            .map_err(|e| DbSqlError::Construction(format!("Failed to read SQL dump file: {}", e)))?;
+
+        // Execute within a transaction for atomicity
+        let txn = self.db.begin().await?;
+
+        // Clear existing data from log tables
+        txn.execute(Statement::from_string(
+            sea_orm::DatabaseBackend::Postgres,
+            "TRUNCATE TABLE log, log_status, log_topic_info CASCADE".to_string(),
         ))
+        .await?;
+
+        // Execute the SQL dump
+        // Split on empty lines or statement terminators to handle multi-statement SQL
+        for statement in sql_content.split(';') {
+            let trimmed = statement.trim();
+            if trimmed.is_empty() || trimmed.starts_with("--") {
+                continue;
+            }
+
+            // Execute the statement
+            txn.execute(Statement::from_string(
+                sea_orm::DatabaseBackend::Postgres,
+                format!("{};", trimmed),
+            ))
+            .await
+            .map_err(|e| DbSqlError::Construction(format!("Failed to execute SQL statement: {}", e)))?;
+        }
+
+        // Commit the transaction
+        txn.commit().await?;
+
+        Ok(())
     }
 }
 

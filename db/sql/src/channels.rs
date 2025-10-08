@@ -264,7 +264,7 @@ impl BlokliDbChannelOperations for BlokliDb {
                         )))
                         .and(channel::Column::ClosureTime.gt(Utc::now()))),
             )
-            .stream(self.index_db.read_only())
+            .stream(&self.db)
             .await?
             .map_err(DbSqlError::from)
             .and_then(|m| async move { Ok(ChannelEntry::try_from(m)?) })

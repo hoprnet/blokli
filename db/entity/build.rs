@@ -24,11 +24,10 @@ where
             command,
             ..
         } => {
-            let connect_options: ConnectOptions = ConnectOptions::new(
-                database_url.unwrap_or("postgresql://bloklid:bloklid@localhost:5432/bloklid_codegen".into()),
-            )
-            .set_schema_search_path(database_schema.unwrap_or_else(|| "public".to_owned()))
-            .to_owned();
+            let url = database_url.unwrap_or("sqlite::memory:".into());
+            let connect_options: ConnectOptions = ConnectOptions::new(&url)
+                .set_schema_search_path(database_schema.unwrap_or_else(|| "public".to_owned()))
+                .to_owned();
             let db = &Database::connect(connect_options).await?;
 
             sea_orm_migration::cli::run_migrate(migration::Migrator {}, db, command, cli.verbose)
@@ -55,16 +54,26 @@ fn main() -> anyhow::Result<()> {
     );
 
     let codegen_path = Path::new(&cargo_manifest_dir)
-        .join("src/codegen/postgres")
+        .join("src/codegen")
         .into_os_string()
         .into_string()
         .map_err(|e| anyhow::anyhow!(e.to_str().unwrap_or("illegible error").to_string()))?;
 
-    // Use PostgreSQL URL from environment or default to local instance
-    let database_url = env::var("DATABASE_URL")
-        .unwrap_or_else(|_| "postgresql://bloklid:bloklid@localhost:5432/bloklid_codegen".to_string());
+    // Use temporary SQLite database for entity generation (no external dependencies needed)
+    // The generated entities work with PostgreSQL at runtime since SeaORM abstracts DB differences
+    let tmp_db = std::env::temp_dir().join("blokli_entity_codegen.db");
 
-    // Run migrations
+    // Clean up any existing temp database
+    let _ = std::fs::remove_file(&tmp_db);
+
+    let tmp_db_str = tmp_db
+        .into_os_string()
+        .into_string()
+        .map_err(|e| anyhow::anyhow!(e.to_str().unwrap_or("illegible error").to_string()))?;
+
+    let database_url = format!("sqlite://{}?mode=rwc", tmp_db_str);
+
+    // Run migrations on temporary SQLite database
     tokio::runtime::Runtime::new()?.block_on(execute_sea_orm_cli_command([
         "sea-orm-cli",
         "migrate",
@@ -80,7 +89,7 @@ fn main() -> anyhow::Result<()> {
             .as_str(),
     ]))?;
 
-    // Generate entities
+    // Generate entities from SQLite schema
     tokio::runtime::Runtime::new()?.block_on(execute_sea_orm_cli_command([
         "sea-orm-cli",
         "generate",
@@ -90,6 +99,9 @@ fn main() -> anyhow::Result<()> {
         "-u",
         &database_url,
     ]))?;
+
+    // Clean up temporary database
+    let _ = std::fs::remove_file(&tmp_db_str);
 
     Ok(())
 }
