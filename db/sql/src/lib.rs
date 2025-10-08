@@ -211,7 +211,7 @@ impl BlokliDbGeneralModelOperations for BlokliDb {
     }
 
     async fn import_logs_db(self, src_dir: PathBuf) -> Result<()> {
-        use sea_orm::{ConnectionTrait, Statement};
+        use sea_orm::ConnectionTrait;
 
         let sql_path = src_dir.join("hopr_logs.sql");
 
@@ -230,11 +230,8 @@ impl BlokliDbGeneralModelOperations for BlokliDb {
         let txn = self.db.begin().await?;
 
         // Clear existing data from log tables
-        txn.execute(Statement::from_string(
-            sea_orm::DatabaseBackend::Postgres,
-            "TRUNCATE TABLE log, log_status, log_topic_info CASCADE".to_string(),
-        ))
-        .await?;
+        txn.execute_unprepared("TRUNCATE TABLE log, log_status, log_topic_info CASCADE")
+            .await?;
 
         // Execute the SQL dump
         // Split on empty lines or statement terminators to handle multi-statement SQL
@@ -245,12 +242,10 @@ impl BlokliDbGeneralModelOperations for BlokliDb {
             }
 
             // Execute the statement
-            txn.execute(Statement::from_string(
-                sea_orm::DatabaseBackend::Postgres,
-                format!("{};", trimmed),
-            ))
-            .await
-            .map_err(|e| DbSqlError::Construction(format!("Failed to execute SQL statement: {}", e)))?;
+            let sql = format!("{};", trimmed);
+            txn.execute_unprepared(&sql)
+                .await
+                .map_err(|e| DbSqlError::Construction(format!("Failed to execute SQL statement: {}", e)))?;
         }
 
         // Commit the transaction

@@ -224,7 +224,7 @@ impl BlokliDbLogOperations for BlokliDb {
             .col_expr(log_status::Column::Processed, Expr::value(Value::Bool(Some(true))))
             .col_expr(
                 log_status::Column::ProcessedAt,
-                Expr::value(Value::ChronoDateTimeUtc(Some(now.into()))),
+                Expr::value(Value::ChronoDateTimeUtc(Some(now))),
             )
             .filter(log_status::Column::BlockNumber.gte(min_block_number.to_be_bytes().to_vec()))
             .apply_if(max_block_number, |q, v| {

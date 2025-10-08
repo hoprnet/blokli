@@ -89,7 +89,6 @@ ringbuffer = "0.16.0"
 rust-stream-ext-concurrent = "1.0.0"
 rustls = { version = "0.23", default-features = false, features = ["std"] }
 rustls-pemfile = "2.1"
-seaography = { version = "2.0.0-rc.2", features = [ "with-chrono" ] }
 sea-orm = { version = "2.0.0-rc.9", default-features = false, features = [
   "debug-print",
   "macros",
@@ -99,7 +98,7 @@ sea-orm = { version = "2.0.0-rc.9", default-features = false, features = [
 ] }
 sea-orm-cli = { version = "2.0.0-rc.9", default-features = false, features = [
   "codegen",
-  "runtime-tokio-rustls"
+  "runtime-tokio-rustls",
 ] }
 sea-orm-migration = { version = "2.0.0-rc.9", default-features = false, features = [
   "cli",
@@ -111,6 +110,7 @@ sea-query-binder = { version = "0.8.0-rc.7", default-features = false, features 
   "sqlx-postgres",
   "with-chrono",
 ] }
+seaography = { version = "2.0.0-rc.2", features = ["with-chrono"] }
 semver = "1.0.26"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.143"

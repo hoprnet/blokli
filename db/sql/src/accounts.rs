@@ -15,7 +15,7 @@ use sea_orm::{
     ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, ModelTrait, QueryFilter, QueryOrder, Related,
     Set, sea_query::Expr,
 };
-use sea_query::{Condition, IntoCondition, OnConflict};
+use sea_query::{Condition, OnConflict};
 use tracing::instrument;
 
 use crate::{
@@ -68,15 +68,11 @@ impl TryFrom<ChainOrPacketKey> for Address {
     }
 }
 
-impl IntoCondition for ChainOrPacketKey {
-    fn into_condition(self) -> Condition {
-        match self {
-            ChainOrPacketKey::ChainKey(chain_key) => {
-                account::Column::ChainKey.eq(chain_key.to_string()).into_condition()
-            }
-            ChainOrPacketKey::PacketKey(packet_key) => {
-                account::Column::PacketKey.eq(packet_key.to_string()).into_condition()
-            }
+impl From<ChainOrPacketKey> for Condition {
+    fn from(key: ChainOrPacketKey) -> Condition {
+        match key {
+            ChainOrPacketKey::ChainKey(chain_key) => account::Column::ChainKey.eq(chain_key.to_string()).into(),
+            ChainOrPacketKey::PacketKey(packet_key) => account::Column::PacketKey.eq(packet_key.to_string()).into(),
         }
     }
 }
