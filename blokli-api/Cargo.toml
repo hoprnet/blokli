@@ -48,5 +48,8 @@ blokli-db-entity = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 
+# CLI
+clap = { workspace = true }
+
 [dev-dependencies]
 tokio-test = { workspace = true }

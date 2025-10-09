@@ -96,6 +96,15 @@ run-release:
 run-local-rotsee:
     cargo run -p bloklid -- -c config.toml | tee rotsee.logs
 
+# Run bloklid daemon with SQLite database (local testing)
+run-sqlite:
+    cargo run --bin bloklid -- -c config-sqlite.toml
+
+# Clean SQLite database files (removes both index and logs databases)
+clean-sqlite:
+    rm -f data/bloklid-index.db data/bloklid-logs.db
+    @echo "SQLite databases removed"
+
 # ============================================================================
 # Run Commands - blokli-api server
 # ============================================================================
@@ -107,6 +116,14 @@ run-api:
 # Run blokli-api server in release mode with full optimizations
 run-api-release:
     cargo run --release --bin blokli-api
+
+# Export GraphQL schema to file (requires database URL)
+export-schema database_url output="schema.graphql":
+    cargo run --bin blokli-api -- export-schema -d {{database_url}} -o {{output}}
+
+# Export GraphQL schema using SQLite database
+export-schema-sqlite output="schema.graphql":
+    cargo run --bin blokli-api -- export-schema -d "sqlite://data/bloklid-index.db" -o {{output}}
 
 # ============================================================================
 # Documentation

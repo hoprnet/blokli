@@ -15,7 +15,11 @@ runtime-tokio = [
   "sea-orm/runtime-tokio",
   "sea-orm/runtime-tokio-rustls",
 ]
-sqlite = ["sea-query-binder/sqlx-sqlite", "sea-query/backend-sqlite"]
+sqlite = [
+  "sea-orm/sqlx-sqlite",
+  "sea-query-binder/sqlx-sqlite",
+  "sea-query/backend-sqlite",
+]
 traits = []
 
 [dependencies]

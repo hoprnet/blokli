@@ -22,33 +22,41 @@ pub struct BlokliDbConfig {
 
 /// Main database handle for HOPR node operations.
 ///
-/// Manages a single PostgreSQL database connection for all data operations.
-/// All tables (accounts, channels, logs, etc.) are stored in the same database
-/// with the `public` schema.
+/// For PostgreSQL: Uses a single database connection for all tables.
+/// For SQLite: Uses two separate database connections to avoid write lock contention:
+///   - `db`: Index database (accounts, channels, announcements, node_info, chain_info)
+///   - `logs_db`: Logs database (log, log_status, log_topic_info)
 ///
 /// Supports database snapshot imports for fast synchronization via
 /// [`BlokliDbGeneralModelOperations::import_logs_db`].
 #[derive(Debug, Clone)]
 pub struct BlokliDb {
+    /// Primary database connection (index tables for SQLite, all tables for PostgreSQL)
     pub(crate) db: sea_orm::DatabaseConnection,
+
+    /// Logs database connection (only used for SQLite, None for PostgreSQL)
+    pub(crate) logs_db: Option<sea_orm::DatabaseConnection>,
 
     #[allow(dead_code)]
     pub(crate) cfg: BlokliDbConfig,
 }
 
 impl BlokliDb {
-    /// Create a new database connection to PostgreSQL.
+    /// Create a new database connection (PostgreSQL or SQLite).
     ///
     /// # Arguments
     ///
-    /// * `database_url` - PostgreSQL connection URL (e.g., "postgresql://user:pass@localhost:5432/bloklid")
+    /// * `database_url` - Primary database connection URL (index database for SQLite):
+    ///   - PostgreSQL: "postgresql://user:pass@localhost:5432/bloklid"
+    ///   - SQLite: "sqlite:///path/to/index.db?mode=rwc" or "sqlite://:memory:?mode=rwc"
+    /// * `logs_database_url` - Logs database connection URL (only for SQLite, None for PostgreSQL)
     /// * `cfg` - Database configuration including connection pool settings
     ///
     /// # Process
     ///
     /// 1. Validates configuration
-    /// 2. Establishes connection pool to PostgreSQL
-    /// 3. Runs migrations for both index and logs tables
+    /// 2. Establishes connection pool(s) to database(s)
+    /// 3. Runs migrations for index and logs tables (on separate databases for SQLite)
     /// 4. Initializes account KeyId mappings
     ///
     /// # Returns
@@ -59,37 +67,86 @@ impl BlokliDb {
     ///
     /// Returns `DbSqlError` if:
     /// - Configuration validation fails
-    /// - Cannot connect to PostgreSQL
+    /// - Cannot connect to database
     /// - Migrations fail to apply
     /// - Account initialization encounters errors
-    pub async fn new(database_url: &str, cfg: BlokliDbConfig) -> Result<Self> {
+    pub async fn new(database_url: &str, logs_database_url: Option<&str>, cfg: BlokliDbConfig) -> Result<Self> {
         cfg.validate()
             .map_err(|e| DbSqlError::Construction(format!("failed configuration validation: {e}")))?;
 
-        // Configure connection options
-        let mut opt = ConnectOptions::new(database_url.to_string());
-        opt.max_connections(cfg.max_connections)
-            .min_connections(1)
-            .connect_timeout(Duration::from_secs(8))
-            .idle_timeout(Duration::from_secs(300))
-            .max_lifetime(Duration::from_secs(1800))
-            .sqlx_logging(cfg.log_slow_queries.as_secs() > 0)
-            .sqlx_logging_level(LevelFilter::Warn);
+        let is_sqlite = database_url.starts_with("sqlite://");
 
-        // Establish database connection
-        let db = Database::connect(opt)
-            .await
-            .map_err(|e| DbSqlError::Construction(format!("failed to connect to PostgreSQL: {e}")))?;
+        // Helper function to ensure parent directory exists for SQLite databases
+        let ensure_sqlite_dir = |url: &str| -> Result<()> {
+            if url.starts_with("sqlite://") && !url.contains(":memory:") {
+                let path_part = url
+                    .strip_prefix("sqlite://")
+                    .and_then(|s| s.split('?').next())
+                    .ok_or_else(|| DbSqlError::Construction("invalid SQLite URL format".to_string()))?;
 
-        // Run migrations for index tables
-        MigratorIndex::up(&db, None)
-            .await
-            .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
+                if let Some(parent) = std::path::Path::new(path_part).parent() {
+                    std::fs::create_dir_all(parent)
+                        .map_err(|e| DbSqlError::Construction(format!("failed to create database directory: {e}")))?;
+                }
+            }
+            Ok(())
+        };
 
-        // Run migrations for logs tables
-        MigratorChainLogs::up(&db, None)
+        // Ensure directories exist for database files
+        ensure_sqlite_dir(database_url)?;
+        if let Some(logs_url) = logs_database_url {
+            ensure_sqlite_dir(logs_url)?;
+        }
+
+        // Helper function to create connection options
+        let create_connection_opts = |url: &str| -> ConnectOptions {
+            let mut opt = ConnectOptions::new(url.to_string());
+            opt.max_connections(cfg.max_connections)
+                .min_connections(1)
+                .connect_timeout(Duration::from_secs(8))
+                .idle_timeout(Duration::from_secs(300))
+                .max_lifetime(Duration::from_secs(1800))
+                .sqlx_logging(cfg.log_slow_queries.as_secs() > 0)
+                .sqlx_logging_level(LevelFilter::Warn);
+            opt
+        };
+
+        // Establish primary database connection (index for SQLite, all tables for PostgreSQL)
+        let db = Database::connect(create_connection_opts(database_url))
             .await
-            .map_err(|e| DbSqlError::Construction(format!("cannot apply logs migrations: {e}")))?;
+            .map_err(|e| DbSqlError::Construction(format!("failed to connect to index database: {e}")))?;
+
+        // Establish logs database connection (only for SQLite)
+        let logs_db = if let Some(logs_url) = logs_database_url {
+            Some(
+                Database::connect(create_connection_opts(logs_url))
+                    .await
+                    .map_err(|e| DbSqlError::Construction(format!("failed to connect to logs database: {e}")))?,
+            )
+        } else {
+            None
+        };
+
+        // Apply migrations based on database backend
+        if is_sqlite && logs_db.is_some() {
+            // For SQLite with dual databases: run separate migrations on each database
+            MigratorIndex::up(&db, None)
+                .await
+                .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
+
+            MigratorChainLogs::up(logs_db.as_ref().unwrap(), None)
+                .await
+                .map_err(|e| DbSqlError::Construction(format!("cannot apply logs migrations: {e}")))?;
+        } else {
+            // For PostgreSQL (or legacy single-file SQLite): run all migrations on single database
+            MigratorIndex::up(&db, None)
+                .await
+                .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
+
+            MigratorChainLogs::up(&db, None)
+                .await
+                .map_err(|e| DbSqlError::Construction(format!("cannot apply logs migrations: {e}")))?;
+        }
 
         // Initialize KeyId mapping for accounts
         Account::find()
@@ -109,26 +166,34 @@ impl BlokliDb {
                 }
             })?;
 
-        Ok(Self { db, cfg })
+        Ok(Self { db, logs_db, cfg })
     }
 
-    /// Create an in-memory PostgreSQL database for testing.
+    /// Create an in-memory SQLite database for testing.
     ///
-    /// **Note**: This requires a running PostgreSQL instance.
-    /// For true in-memory testing, use a test database that can be quickly created/dropped.
+    /// Uses SQLite's in-memory mode for fast testing without requiring external database services.
+    /// Uses dual in-memory databases (one for index, one for logs) to match production behavior.
     ///
     /// # Returns
     ///
-    /// A `BlokliDb` instance connected to a test database
+    /// A `BlokliDb` instance connected to in-memory databases
     ///
     /// # Errors
     ///
     /// Returns `DbSqlError` if connection or initialization fails
     pub async fn new_in_memory() -> Result<Self> {
-        // For PostgreSQL, we connect to a test database
-        // This requires PostgreSQL to be running
-        let database_url = "postgresql://bloklid:bloklid@localhost:5432/bloklid_test";
-        Self::new(database_url, Default::default()).await
+        // Use SQLite in-memory databases for testing (dual databases like production)
+        let index_url = "sqlite://:memory:?mode=rwc";
+        let logs_url = "sqlite://:memory:?mode=rwc";
+        Self::new(index_url, Some(logs_url), Default::default()).await
+    }
+
+    /// Get the appropriate database connection for log-related operations.
+    ///
+    /// For SQLite with dual databases, returns the logs database connection.
+    /// For PostgreSQL or single-database mode, returns the primary database connection.
+    pub(crate) fn logs_db(&self) -> &sea_orm::DatabaseConnection {
+        self.logs_db.as_ref().unwrap_or(&self.db)
     }
 }
 
@@ -141,13 +206,12 @@ mod tests {
     use crate::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 
     #[tokio::test]
-    #[ignore] // Requires PostgreSQL running
     async fn test_basic_db_init() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
 
-        // With PostgreSQL, both migrations are in the same database
-        MigratorIndex::status(db.conn(TargetDb::Index)).await?;
-        MigratorChainLogs::status(db.conn(TargetDb::Logs)).await?;
+        // For SQLite, check the unified Migrator status
+        use migration::Migrator;
+        Migrator::status(db.conn(TargetDb::Index)).await?;
 
         Ok(())
     }

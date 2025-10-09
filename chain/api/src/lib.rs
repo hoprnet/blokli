@@ -87,6 +87,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         contract_addresses: ContractAddresses,
         indexer_cfg: IndexerConfig,
         indexer_events_tx: async_channel::Sender<SignificantChainEvent>,
+        rpc_url: String,
     ) -> Result<Self> {
         // TODO: extract this from the global config type
         let mut rpc_http_config = blokli_chain_rpc::HttpPostRequestorConfig::default();
@@ -117,7 +118,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
 
         // --- Configs done ---
 
-        let transport_client = build_transport_client(&chain_config.chain.default_provider)?;
+        let transport_client = build_transport_client(&rpc_url)?;
 
         let rpc_client = ClientBuilder::default()
             .layer(RetryBackoffLayer::new_with_policy(2, 100, 100, rpc_http_retry_policy))

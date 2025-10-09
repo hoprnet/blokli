@@ -15,6 +15,7 @@ use blokli_db_sql::db::{BlokliDb, BlokliDbConfig};
 use clap::{Parser, Subcommand};
 use futures::TryStreamExt;
 use hopr_chain_config::ChainNetworkConfig;
+use sea_orm::Database;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
 use validator::Validate;
@@ -194,8 +195,8 @@ async fn run() -> errors::Result<()> {
     let config = Arc::new(RwLock::new(args.load_config(true)?));
 
     // Initialize components
-    let process_handles = {
-        let (database_path, chain_network, contracts, indexer_config) = {
+    let (process_handles, api_handle) = {
+        let (database_path, logs_database_path, chain_network, contracts, indexer_config, rpc_url, api_config) = {
             let cfg = config
                 .read()
                 .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
@@ -214,10 +215,24 @@ async fn run() -> errors::Result<()> {
                 data_directory: cfg.data_directory.clone(),
             };
 
-            (cfg.database.to_url(), chain_network, cfg.contracts, indexer_config)
+            (
+                cfg.database.to_url(),
+                cfg.database.to_logs_url(),
+                chain_network,
+                cfg.contracts,
+                indexer_config,
+                cfg.rpc_url.clone(),
+                cfg.api.clone(),
+            )
         };
 
-        info!("Initializing database with URL: {}", database_path);
+        if let Some(logs_path) = &logs_database_path {
+            info!("Initializing dual-database setup:");
+            info!("  Index database: {}", database_path);
+            info!("  Logs database: {}", logs_path);
+        } else {
+            info!("Initializing single database: {}", database_path);
+        }
 
         // Initialize database
         let db_config = BlokliDbConfig {
@@ -229,15 +244,15 @@ async fn run() -> errors::Result<()> {
             },
             log_slow_queries: Duration::from_secs(1),
         };
-        let db = BlokliDb::new(&database_path, db_config).await?;
+        let db = BlokliDb::new(&database_path, logs_database_path.as_deref(), db_config).await?;
 
-        info!("Connecting to RPC endpoint: {}", chain_network.chain.default_provider);
+        info!("Connecting to RPC endpoint: {}", rpc_url);
 
         // Create channel for chain events
         let (tx_events, _rx_events) = async_channel::unbounded::<SignificantChainEvent>();
 
         // Create BlokliChain instance
-        let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, tx_events)?;
+        let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, tx_events, rpc_url)?;
 
         info!("Starting BlokliChain processes");
 
@@ -246,7 +261,45 @@ async fn run() -> errors::Result<()> {
 
         info!("BlokliChain started successfully");
 
-        process_handles
+        // Start API server if enabled
+        let api_handle = if api_config.enabled {
+            info!("Starting blokli-api server on {}", api_config.bind_address);
+
+            // Connect to database for API server
+            let api_db = Database::connect(&database_path)
+                .await
+                .map_err(|e| BloklidError::NonSpecific(format!("Failed to connect API database: {}", e)))?;
+
+            // Build API app
+            let api_app = blokli_api::server::build_app(api_db)
+                .await
+                .map_err(|e| BloklidError::NonSpecific(format!("Failed to build API app: {}", e)))?;
+
+            // Spawn API server as a background task
+            let handle = tokio::spawn(async move {
+                let listener = tokio::net::TcpListener::bind(api_config.bind_address)
+                    .await
+                    .expect("Failed to bind API server");
+
+                info!("API server listening on {}", api_config.bind_address);
+                if api_config.playground_enabled {
+                    info!(
+                        "GraphQL Playground available at http://{}/graphql",
+                        api_config.bind_address
+                    );
+                }
+
+                axum::serve(listener, api_app).await.expect("API server failed");
+            });
+
+            info!("API server started successfully");
+            Some(handle)
+        } else {
+            info!("API server disabled in configuration");
+            None
+        };
+
+        (process_handles, api_handle)
     };
 
     info!("daemon running; send SIGHUP to reload config, SIGINT/SIGTERM to stop");
@@ -283,6 +336,13 @@ async fn run() -> errors::Result<()> {
         handle.abort();
     }
     info!("All BlokliChain processes stopped");
+
+    // Stop API server if it was started
+    if let Some(handle) = api_handle {
+        info!("Stopping API server");
+        handle.abort();
+        info!("API server stopped");
+    }
 
     info!("bloklid stopped gracefully");
     Ok(())
