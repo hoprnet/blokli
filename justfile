@@ -117,6 +117,14 @@ run-api:
 run-api-release:
     cargo run --release --bin blokli-api
 
+# Export GraphQL schema to file (requires database URL)
+export-schema database_url output="schema.graphql":
+    cargo run --bin blokli-api -- export-schema -d {{database_url}} -o {{output}}
+
+# Export GraphQL schema using SQLite database
+export-schema-sqlite output="schema.graphql":
+    cargo run --bin blokli-api -- export-schema -d "sqlite://data/bloklid-index.db" -o {{output}}
+
 # ============================================================================
 # Documentation
 # ============================================================================

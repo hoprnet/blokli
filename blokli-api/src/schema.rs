@@ -39,3 +39,12 @@ pub fn build_schema(db: DatabaseConnection) -> Result<Schema, Box<dyn std::error
 
     Ok(schema)
 }
+
+/// Export the GraphQL schema to SDL (Schema Definition Language) format
+///
+/// This generates a string representation of the GraphQL schema that can be used
+/// for code generation, documentation, or schema validation tools.
+pub fn export_schema_sdl(db: DatabaseConnection) -> Result<String, Box<dyn std::error::Error>> {
+    let schema = build_schema(db)?;
+    Ok(schema.sdl())
+}

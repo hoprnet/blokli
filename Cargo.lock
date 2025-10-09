@@ -1666,6 +1666,7 @@ dependencies = [
  "axum",
  "axum-extra",
  "blokli-db-entity",
+ "clap",
  "futures",
  "rustls",
  "rustls-pemfile",
