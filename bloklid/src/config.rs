@@ -46,13 +46,32 @@ pub enum PostgreSqlConfig {
 }
 
 /// SQLite database configuration
+///
+/// SQLite uses two separate database files to avoid write lock contention:
+/// - Index database: Contains accounts, channels, announcements, node_info, chain_info
+/// - Logs database: Contains log, log_status, log_topic_info tables
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 pub struct SqliteConfig {
-    /// Path to the SQLite database file
+    /// Path to the index SQLite database file (accounts, channels, etc.)
     /// Use ":memory:" for in-memory database
-    pub path: String,
+    #[serde(default = "default_sqlite_index_path")]
+    pub index_path: String,
+
+    /// Path to the logs SQLite database file (log tables)
+    /// Use ":memory:" for in-memory database
+    #[serde(default = "default_sqlite_logs_path")]
+    pub logs_path: String,
+
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
+}
+
+fn default_sqlite_index_path() -> String {
+    "data/bloklid-index.db".to_string()
+}
+
+fn default_sqlite_logs_path() -> String {
+    "data/bloklid-logs.db".to_string()
 }
 
 /// Database configuration supporting both PostgreSQL and SQLite
@@ -71,6 +90,8 @@ fn default_max_connections() -> u32 {
 
 impl DatabaseConfig {
     /// Convert database configuration to connection URL
+    /// For PostgreSQL, returns the single database URL
+    /// For SQLite, returns the index database URL
     pub fn to_url(&self) -> String {
         match self {
             DatabaseConfig::PostgreSql(pg_config) => match pg_config {
@@ -87,8 +108,18 @@ impl DatabaseConfig {
                 }
             },
             DatabaseConfig::Sqlite(sqlite_config) => {
-                format!("sqlite://{}?mode=rwc", sqlite_config.path)
+                format!("sqlite://{}?mode=rwc", sqlite_config.index_path)
             }
+        }
+    }
+
+    /// Get logs database URL (only applicable for SQLite)
+    /// For PostgreSQL, returns None as it uses a single database
+    /// For SQLite, returns the logs database URL
+    pub fn to_logs_url(&self) -> Option<String> {
+        match self {
+            DatabaseConfig::PostgreSql(_) => None,
+            DatabaseConfig::Sqlite(sqlite_config) => Some(format!("sqlite://{}?mode=rwc", sqlite_config.logs_path)),
         }
     }
 

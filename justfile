@@ -100,10 +100,10 @@ run-local-rotsee:
 run-sqlite:
     cargo run --bin bloklid -- -c config-sqlite.toml
 
-# Clean SQLite database file (removes data/bloklid.db)
+# Clean SQLite database files (removes both index and logs databases)
 clean-sqlite:
-    rm -f data/bloklid.db
-    @echo "SQLite database removed"
+    rm -f data/bloklid-index.db data/bloklid-logs.db
+    @echo "SQLite databases removed"
 
 # ============================================================================
 # Run Commands - blokli-api server

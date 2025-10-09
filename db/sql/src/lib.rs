@@ -194,20 +194,24 @@ pub trait BlokliDbGeneralModelOperations {
 
 #[async_trait]
 impl BlokliDbGeneralModelOperations for BlokliDb {
-    /// Retrieves raw database connection.
+    /// Retrieves raw database connection for the specified target.
     ///
-    /// With PostgreSQL, both Index and Logs target the same database connection.
-    /// The `target_db` parameter is kept for API compatibility but ignored.
-    fn conn(&self, _target_db: TargetDb) -> &DatabaseConnection {
-        &self.db
+    /// For PostgreSQL: both Index and Logs use the same database connection.
+    /// For SQLite with dual databases: Index uses `db`, Logs uses `logs_db`.
+    fn conn(&self, target_db: TargetDb) -> &DatabaseConnection {
+        match target_db {
+            TargetDb::Index => &self.db,
+            TargetDb::Logs => self.logs_db(),
+        }
     }
 
-    /// Starts a new transaction.
+    /// Starts a new transaction on the appropriate database.
     ///
-    /// With PostgreSQL, both Index and Logs use the same database connection.
-    /// The `target_db` parameter is kept for API compatibility but ignored.
+    /// For PostgreSQL: both Index and Logs use the same database connection.
+    /// For SQLite with dual databases: uses the appropriate connection based on `target_db`.
     async fn begin_transaction_in_db(&self, target_db: TargetDb) -> Result<OpenTransaction> {
-        Ok(OpenTransaction(self.db.begin_with_config(None, None).await?, target_db))
+        let db_conn = self.conn(target_db);
+        Ok(OpenTransaction(db_conn.begin_with_config(None, None).await?, target_db))
     }
 
     async fn import_logs_db(self, src_dir: PathBuf) -> Result<()> {

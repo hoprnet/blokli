@@ -196,7 +196,7 @@ async fn run() -> errors::Result<()> {
 
     // Initialize components
     let (process_handles, api_handle) = {
-        let (database_path, chain_network, contracts, indexer_config, rpc_url, api_config) = {
+        let (database_path, logs_database_path, chain_network, contracts, indexer_config, rpc_url, api_config) = {
             let cfg = config
                 .read()
                 .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
@@ -217,6 +217,7 @@ async fn run() -> errors::Result<()> {
 
             (
                 cfg.database.to_url(),
+                cfg.database.to_logs_url(),
                 chain_network,
                 cfg.contracts,
                 indexer_config,
@@ -225,7 +226,13 @@ async fn run() -> errors::Result<()> {
             )
         };
 
-        info!("Initializing database with URL: {}", database_path);
+        if let Some(logs_path) = &logs_database_path {
+            info!("Initializing dual-database setup:");
+            info!("  Index database: {}", database_path);
+            info!("  Logs database: {}", logs_path);
+        } else {
+            info!("Initializing single database: {}", database_path);
+        }
 
         // Initialize database
         let db_config = BlokliDbConfig {
@@ -237,7 +244,7 @@ async fn run() -> errors::Result<()> {
             },
             log_slow_queries: Duration::from_secs(1),
         };
-        let db = BlokliDb::new(&database_path, db_config).await?;
+        let db = BlokliDb::new(&database_path, logs_database_path.as_deref(), db_config).await?;
 
         info!("Connecting to RPC endpoint: {}", rpc_url);
 
