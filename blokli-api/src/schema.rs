@@ -21,26 +21,14 @@ pub fn build_schema(db: DatabaseConnection) -> Result<Schema, Box<dyn std::error
     let mut builder = blokli_db_entity::codegen::register_entity_modules(builder);
 
     // Add custom query fields before building schema
-    let health_field = Field::new(
-        "health",
-        TypeRef::named_nn(TypeRef::STRING),
-        |_ctx| {
-            FieldFuture::new(async move {
-                Ok(Some(FieldValue::value("ok")))
-            })
-        },
-    )
+    let health_field = Field::new("health", TypeRef::named_nn(TypeRef::STRING), |_ctx| {
+        FieldFuture::new(async move { Ok(Some(FieldValue::value("ok"))) })
+    })
     .description("Health check endpoint");
 
-    let version_field = Field::new(
-        "version",
-        TypeRef::named_nn(TypeRef::STRING),
-        |_ctx| {
-            FieldFuture::new(async move {
-                Ok(Some(FieldValue::value(env!("CARGO_PKG_VERSION"))))
-            })
-        },
-    )
+    let version_field = Field::new("version", TypeRef::named_nn(TypeRef::STRING), |_ctx| {
+        FieldFuture::new(async move { Ok(Some(FieldValue::value(env!("CARGO_PKG_VERSION")))) })
+    })
     .description("API version");
 
     // Add fields directly to the query object

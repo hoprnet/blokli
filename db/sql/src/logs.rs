@@ -409,7 +409,20 @@ impl BlokliDbLogOperations for BlokliDb {
                                 .count(tx.as_ref())
                                 .await
                                 .map_err(|e| DbError::from(DbSqlError::from(e)))?;
+                            if log_topic_count == 0 {
+                                tracing::error!(
+                                    %addr,
+                                    %topic,
+                                    "Missing address/topic info in log topic info table"
+                                );
+                                return Err(DbError::InconsistentLogs);
+                            }
                             if log_topic_count != 1 {
+                                tracing::error!(
+                                    %addr,
+                                    %topic,
+                                    "More than one address/topic info in log topic info table"
+                                );
                                 return Err(DbError::InconsistentLogs);
                             }
                         }

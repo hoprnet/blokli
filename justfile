@@ -96,6 +96,15 @@ run-release:
 run-local-rotsee:
     cargo run -p bloklid -- -c config.toml | tee rotsee.logs
 
+# Run bloklid daemon with SQLite database (local testing)
+run-sqlite:
+    cargo run --bin bloklid -- -c config-sqlite.toml
+
+# Clean SQLite database file (removes data/bloklid.db)
+clean-sqlite:
+    rm -f data/bloklid.db
+    @echo "SQLite database removed"
+
 # ============================================================================
 # Run Commands - blokli-api server
 # ============================================================================

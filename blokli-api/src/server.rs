@@ -2,15 +2,16 @@
 
 use std::sync::Arc;
 
-use async_graphql::http::{GraphQLPlaygroundConfig, playground_source};
-use async_graphql::dynamic::Schema;
+use async_graphql::{
+    dynamic::Schema,
+    http::{GraphQLPlaygroundConfig, playground_source},
+};
 use axum::{
-    Router,
+    Json, Router,
     extract::State,
     http::StatusCode,
     response::{Html, IntoResponse, Response},
     routing::get,
-    Json,
 };
 use sea_orm::DatabaseConnection;
 use serde_json::Value;
@@ -21,8 +22,7 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::schema::build_schema;
-use crate::errors::ApiResult;
+use crate::{errors::ApiResult, schema::build_schema};
 
 /// Application state shared across handlers
 #[derive(Clone)]
@@ -55,10 +55,7 @@ pub async fn build_app(db: DatabaseConnection) -> ApiResult<Router> {
 }
 
 /// GraphQL query/mutation handler
-async fn graphql_handler(
-    State(state): State<AppState>,
-    Json(request): Json<Value>,
-) -> Response {
+async fn graphql_handler(State(state): State<AppState>, Json(request): Json<Value>) -> Response {
     // Parse the GraphQL request
     let request = match serde_json::from_value::<async_graphql::Request>(request) {
         Ok(req) => req,
@@ -71,7 +68,7 @@ async fn graphql_handler(
                     }]
                 })),
             )
-                .into_response()
+                .into_response();
         }
     };
 
@@ -79,9 +76,12 @@ async fn graphql_handler(
     let response = state.schema.execute(request).await;
 
     // Serialize and return the response
-    Json(serde_json::to_value(response).unwrap_or_else(|_| serde_json::json!({
-        "errors": [{"message": "Failed to serialize response"}]
-    }))).into_response()
+    Json(serde_json::to_value(response).unwrap_or_else(|_| {
+        serde_json::json!({
+            "errors": [{"message": "Failed to serialize response"}]
+        })
+    }))
+    .into_response()
 }
 
 /// GraphQL Playground UI
