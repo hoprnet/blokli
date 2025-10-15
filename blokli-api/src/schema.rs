@@ -7,9 +7,12 @@ use seaography::{Builder, BuilderContext};
 /// Build the seaography-powered GraphQL schema with database connection
 ///
 /// This creates a dynamic GraphQL schema with:
-/// - Auto-generated queries for all SeaORM entities
+/// - Auto-generated queries for public entities (account, announcement, channel)
 /// - Auto-generated mutations
 /// - Custom health and version queries
+///
+/// Note: Only public-facing entities are exposed. Internal entities like log_status,
+/// chain_info, and node_info are not accessible through the GraphQL API.
 pub fn build_schema(db: DatabaseConnection) -> Result<Schema, Box<dyn std::error::Error>> {
     // Create static builder context (required by seaography)
     let context: &'static BuilderContext = Box::leak(Box::new(BuilderContext::default()));
@@ -17,8 +20,8 @@ pub fn build_schema(db: DatabaseConnection) -> Result<Schema, Box<dyn std::error
     // Create seaography builder with database connection
     let builder = Builder::new(context, db.clone());
 
-    // Register all entities using the generated function
-    let mut builder = blokli_db_entity::codegen::register_entity_modules(builder);
+    // Register only public-facing entities
+    let mut builder = blokli_db_entity::register_public_entities(builder);
 
     // Add custom query fields before building schema
     let health_field = Field::new("health", TypeRef::named_nn(TypeRef::STRING), |_ctx| {
