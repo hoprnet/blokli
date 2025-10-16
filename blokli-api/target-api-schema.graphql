@@ -1,0 +1,102 @@
+"""
+Account information
+"""
+type Account {
+	id: Int!
+	chainKey: String!
+	packetKey: String!
+	accountHoprBalance: Float!
+	accountNativeBalance: Float!
+	safeAddress: String
+	safeHoprBalance: Float
+	safeNativeBalance: Float
+	multiAddresses: [String!]!
+}
+
+"""
+Payment channel between two nodes
+"""
+type Channel {
+	concreteChannelId: String!
+	source: String!
+	destination: String!
+	balance: String!
+	status: Int!
+	epoch: String!
+	ticketIndex: String!
+	closureTime: DateTime
+}
+
+"""
+Implement the DateTime<Utc> scalar
+
+The input/output is a string in RFC3339 format.
+"""
+scalar DateTime
+
+"""
+ISO 8601 combined date and time without timezone.
+
+# Examples
+
+* `2015-07-01T08:59:60.123`,
+"""
+scalar NaiveDateTime
+
+type QueryRoot {
+	"""
+	Retrieve all accounts from the database
+
+	Returns a complete list of all accounts. No filtering is available.
+	"""
+	accounts: [Account!]!
+	"""
+	Retrieve channels, optionally filtered by source and/or destination
+
+	If neither source nor destination is provided, returns all channels.
+	If source is provided, filters channels by source address.
+	If destination is provided, filters channels by destination address.
+	Both filters can be combined.
+	"""
+	channels(source: String, destination: String): [Channel!]!
+	"""
+	Retrieve HOPR token balance for a specific address
+
+	The address parameter is required. Returns None if no balance exists for the address.
+	"""
+	hoprBalance(address: String!): HoprBalance
+	"""
+	Retrieve native token balance for a specific address
+
+	The address parameter is required. Returns None if no balance exists for the address.
+	"""
+	nativeBalance(address: String!): NativeBalance
+	"""
+	Health check endpoint
+
+	Returns "ok" to indicate the service is running
+	"""
+	health: String!
+	"""
+	API version information
+
+	Returns the current version of the blokli-api package
+	"""
+	version: String!
+}
+
+"""
+Directs the executor to include this field or fragment only when the `if` argument is true.
+"""
+directive @include(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+"""
+Directs the executor to skip this field or fragment when the `if` argument is true.
+"""
+directive @skip(if: Boolean!) on FIELD | FRAGMENT_SPREAD | INLINE_FRAGMENT
+"""
+Provides a scalar specification URL for specifying the behavior of custom scalar types.
+"""
+directive @specifiedBy(url: String!) on SCALAR
+schema {
+	query: QueryRoot
+}
