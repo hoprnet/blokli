@@ -1,120 +1,101 @@
 erDiagram
-    %% ========================================
-    %% PUBLIC ENTITIES (Exposed via GraphQL API)
-    %% ========================================
-
     account {
         int id PK "Primary key"
-        string chain_key "Chain key"
-        string packet_key "Packet key"
-        int published_block "Published block number"
+        string(40) chain_key "Chain key (hex representation, NOT NULL)"
+        string(64) packet_key "Packet key (hex representation, NOT NULL)"
+        string(40) safe_address FK "Foreign key to hopr safe (hex representation)"
+        binary(8) published_block "Published block (NOT NULL)"
+        binary(8) published_tx_index "Published tx index (NOT NULL)"
+        binary(8) published_log_index "Published log index (NOT NULL)"
     }
 
     announcement {
         int id PK "Primary key"
-        int account_id FK "Foreign key to account"
-        binary multiaddress_list "Multiaddress list (Binary)"
-        int published_block "Published block number"
+        int account_id FK "Foreign key to account (NOT NULL)"
+        string multiaddress "Multiaddress (NOT NULL)"
+        binary(8) published_block "Published block (NOT NULL)"
+        binary(8) published_tx_index "Published tx index (NOT NULL)"
+        binary(8) published_log_index "Published log index (NOT NULL)"
     }
 
     channel {
         int id PK "Primary key"
-        string concrete_channel_id UK "Unique channel identifier"
-        string source "Source address"
-        string destination "Destination address"
-        binary balance "Channel balance (Binary 12 bytes)"
-        int status "Channel status"
-        binary epoch "Epoch (Binary 8 bytes)"
-        binary ticket_index "Ticket index (Binary 8 bytes)"
-        datetime closure_time "Optional closure timestamp"
-        bool corrupted_state "Corrupted state flag"
+        string(64) concrete_channel_id UK "Unique channel identifier (hex representation, NOT NULL)"
+        string(40) source "Source address (hex representation, NOT NULL)"
+        string(40) destination "Destination address (hex representation, NOT NULL)"
+        binary(12) balance "Channel balance (NOT NULL)"
+        int status "Channel status (NOT NULL)"
+        binary(8) epoch "Epoch (NOT NULL, default is 1)"
+        binary(8) ticket_index "Ticket index (NOT NULL, default is 0)"
+        datetime closure_time "Closure timestamp"
+        bool corrupted_state "Corrupted state flag (NOT NULL, default is false)"
     }
 
     hopr_balance {
         int id PK "Primary key"
-        string address UK "Unique address"
-        binary balance "HOPR token balance (Binary 12 bytes)"
-        binary last_changed_block "Last changed block (Binary 8 bytes)"
-        binary last_changed_tx_index "Last changed tx index (Binary 8 bytes)"
-        binary last_changed_log_index "Last changed log index (Binary 8 bytes)"
-        datetime updated_at "Last update timestamp"
+        string(40) address UK "Unique address (hex representation, NOT NULL)"
+        binary(12) balance "wxHOPR token balance (NOT NULL)"
+        binary(8) last_changed_block "Last changed block (NOT NULL)"
+        binary(8) last_changed_tx_index "Last changed tx index (NOT NULL)"
+        binary(8) last_changed_log_index "Last changed log index (NOT NULL)"
     }
 
     native_balance {
         int id PK "Primary key"
-        string address UK "Unique address"
-        binary balance "Native balance (Binary 12 bytes)"
-        binary last_changed_block "Last changed block (Binary 8 bytes)"
-        binary last_changed_tx_index "Last changed tx index (Binary 8 bytes)"
-        binary last_changed_log_index "Last changed log index (Binary 8 bytes)"
-        datetime updated_at "Last update timestamp"
+        string(40) address UK "Unique address (hex representation, NOT NULL)"
+        binary(12) balance "Native token balance (NOT NULL)"
+        binary(8) last_changed_block "Last changed block (NOT NULL)"
+        binary(8) last_changed_tx_index "Last changed tx index (NOT NULL)"
+        binary(8) last_changed_log_index "Last changed log index (NOT NULL)"
     }
-
-    %% ========================================
-    %% INTERNAL ENTITIES (Not exposed via API)
-    %% ========================================
 
     chain_info {
         int id PK "Primary key"
-        int last_indexed_block "Last indexed block"
-        binary ticket_price "Ticket price (Binary 12 bytes)"
-        binary channels_dst "Channels destination (Binary 32 bytes)"
-        binary ledger_dst "Ledger destination (Binary 32 bytes)"
-        binary safe_registry_dst "Safe registry destination (Binary 32 bytes)"
-        binary chain_checksum "Chain checksum (Binary 32 bytes)"
-        int pre_checksum_block "Pre-checksum block"
+        binary(8) last_indexed_block "Last indexed block"
+        binary(12) ticket_price "Ticket price"
+        binary(32) channels_dst "Channels destination"
+        binary(32) ledger_dst "Ledger destination"
+        binary(32) safe_registry_dst "Safe registry destination"
         float min_incoming_ticket_win_prob "Min incoming ticket win probability"
     }
 
-    node_info {
-        int id PK "Primary key"
-        binary safe_balance "Safe balance (Binary 12 bytes)"
-        binary safe_allowance "Safe allowance (Binary 12 bytes)"
-        string safe_address "Safe address"
-        string module_address "Module address"
-    }
-
     log {
-        binary transaction_index PK "Transaction index (Binary 8 bytes)"
-        binary log_index PK "Log index (Binary 8 bytes)"
-        binary block_number PK "Block number (Binary 8 bytes)"
-        binary block_hash "Block hash (Binary 32 bytes)"
-        binary transaction_hash "Transaction hash (Binary 32 bytes)"
-        binary address "Address (Binary 20 bytes)"
-        binary topics "Topics (Binary)"
-        binary data "Data (Binary)"
-        bool removed "Removed flag"
+        int id PK "Primary key"
+        int log_status_id FK "Foreign key to log status"
+        binary(8) tx_index UK "Transaction index (NOT NULL)"
+        binary(8) log_index UK "Log index (NOT NULL)"
+        binary(8) block_number UK "Block number (NOT NULL)"
+        binary(32) block_hash "Block hash (hex representation, NOT NULL)"
+        binary(32) transaction_hash "Transaction hash (hex representation, NOT NULL)"
+        binary(20) address "Address (NOT NULL)"
+        binary topics "Topics (NOT NULL)"
+        binary data "Data (NOT NULL)"
+        bool removed "Removed flag (default is false)"
     }
 
     log_status {
-        binary transaction_index PK "Transaction index (Binary 8 bytes)"
-        binary log_index PK "Log index (Binary 8 bytes)"
-        binary block_number PK "Block number (Binary 8 bytes)"
-        bool processed "Processed flag"
+        int id PK "Primary key"
+        int log_id FK "Foreign key to log (NOT NULL)"
+        binary(8) tx_index UK "Transaction index (NOT NULL)"
+        binary(8) log_index UK "Log index (NOT NULL)"
+        binary(8) block_number UK "Block number (NOT NULL)"
+        bool processed "Processed flag (default is false)"
         datetime processed_at "Processing timestamp"
-        binary checksum "Checksum (Binary 32 bytes)"
+        binary(32) checksum "Checksum"
     }
 
     log_topic_info {
         int id PK "Primary key"
-        string address "Contract address"
-        string topic "Event topic"
+        string(40) address "Contract address (hex representation, NOT NULL)"
+        string(64) topic "topic (NOT NULL)"
     }
 
     hopr_safe_contract {
         int id PK "Primary key"
-        string address UK "Unique contract address"
-        binary deployed_block "Deployed block (Binary 8 bytes)"
-        binary deployed_tx_index "Deployed tx index (Binary 8 bytes)"
-        binary deployed_log_index "Deployed log index (Binary 8 bytes)"
-        datetime created_at "Creation timestamp"
-    }
-
-    corrupted_channel {
-        int id PK "Primary key"
-        string concrete_channel_id "Channel identifier"
-        string source "Source address"
-        string destination "Destination address"
+        string(40) address UK "Unique contract address (hex representation, NOT NULL)"
+        binary(8) deployed_block "Deployed block (hex representation, NOT NULL)"
+        binary(8) deployed_tx_index "Deployed tx index (hex representation, NOT NULL)"
+        binary(8) deployed_log_index "Deployed log index (hex representation, NOT NULL)"
     }
 
     %% ========================================
@@ -122,4 +103,8 @@ erDiagram
     %% ========================================
 
     account ||--o{ announcement : "has many"
+    account ||--o| hopr_balance : "has 0 or 1"
+    account ||--o| native_balance : "has 0 or 1"
+    account ||--o{ channel : "has many"
+    account ||--o| hopr_safe_contract : "has 0 or 1"
     log_status ||--|| log : "has one"
