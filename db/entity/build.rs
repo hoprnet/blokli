@@ -44,6 +44,7 @@ fn main() -> anyhow::Result<()> {
         .context("should have a parent dir")?
         .join("migration");
 
+    // Tell cargo to rerun if migrations change
     println!(
         "cargo:rerun-if-changed={}",
         db_migration_package_path.join("src").to_string_lossy()
@@ -53,11 +54,30 @@ fn main() -> anyhow::Result<()> {
         db_migration_package_path.join("Cargo.toml").to_str().unwrap()
     );
 
-    let codegen_path = Path::new(&cargo_manifest_dir)
-        .join("src/codegen")
+    // Always rerun if build.rs itself changes - this ensures we can check for missing files
+    println!("cargo:rerun-if-changed=build.rs");
+
+    let codegen_dir = Path::new(&cargo_manifest_dir).join("src/codegen");
+    let codegen_path = codegen_dir
+        .clone()
         .into_os_string()
         .into_string()
         .map_err(|e| anyhow::anyhow!(e.to_str().unwrap_or("illegible error").to_string()))?;
+
+    // Watch the codegen output directory - if it or its contents are deleted, rerun
+    // Note: We must do this BEFORE checking if it exists, so cargo tracks it
+    println!("cargo:rerun-if-changed={}", codegen_path);
+
+    // Check if entity files exist - if not, we must regenerate
+    let needs_generation = !codegen_dir.exists()
+        || codegen_dir
+            .read_dir()
+            .map(|entries| entries.count() == 0)
+            .unwrap_or(true);
+
+    if needs_generation {
+        println!("cargo:warning=Entity files missing or empty, regenerating...");
+    }
 
     // Use temporary SQLite database for entity generation (no external dependencies needed)
     // The generated entities work with PostgreSQL at runtime since SeaORM abstracts DB differences

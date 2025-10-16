@@ -16,6 +16,10 @@ sqlite  = ["sea-orm-migration/sqlx-sqlite"]
 name = "migration"
 path = "src/lib.rs"
 
+[[bin]]
+name = "migration"
+path = "src/main.rs"
+
 [dependencies]
 sea-orm-migration = { workspace = true }
 tokio             = { workspace = true }

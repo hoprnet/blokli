@@ -123,7 +123,16 @@ export-schema database_url output="schema.graphql":
 
 # Export GraphQL schema using SQLite database
 export-schema-sqlite output="schema.graphql":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Create data directory if it doesn't exist
+    mkdir -p data
+    # Run migrations to create/update the database schema
+    # Note: ?mode=rwc allows SQLite to create the database file if it doesn't exist
+    cargo run --bin migration -- up -u "sqlite://data/bloklid-index.db?mode=rwc"
+    # Export the GraphQL schema
     cargo run --bin blokli-api -- export-schema -d "sqlite://data/bloklid-index.db" -o {{output}}
+    echo "GraphQL schema exported to {{output}}"
 
 # ============================================================================
 # Documentation
