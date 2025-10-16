@@ -1,3 +1,6 @@
+"""
+Blockchain and HOPR network information
+"""
 type ChainInfo {
 	"Current block number of the blockchain"
 	blockNumber: Int!
@@ -5,7 +8,7 @@ type ChainInfo {
 	chainId: Int!
 	"Current HOPR token price in wxHOPR"
 	ticketPrice: Float!
-	"Current Minimum ticket winning probability"
+	"Current minimum ticket winning probability (decimal value between 0.0 and 1.0)"
 	minTicketWinningProbability: Float!
 }
 
@@ -16,13 +19,24 @@ enum Token {
 	NATIVE
 }
 
-type Balance {
-	"Unique account on-chain address in hexadecimal format"
+"""
+HOPR token balance information for a specific address
+"""
+type HoprBalance {
+	"Address holding the HOPR token balance"
 	address: String!
-	"Token balance associated with the on-chain address"
-	value: Float!
-	"Type of token (HOPR or Native)"
-	token: Token!
+	"HOPR token balance"
+	balance: Float!
+}
+
+"""
+Native token balance information for a specific address
+"""
+type NativeBalance {
+	"Address holding the native token balance"
+	address: String!
+	"Native token balance"
+	balance: Float!
 }
 
 """
@@ -69,9 +83,9 @@ type Channel {
 	source: String!
 	"On-chain address of the destination node in hexadecimal format"
 	destination: String!
-	"Total amount of tokens allocated to the channel"
+	"Total amount of HOPR tokens allocated to the channel"
 	balance: Float!
-	"State of the channel"
+	"Current state of the channel (OPEN, PENDINGTOCLOSE, or CLOSED)"
 	status: ChannelStatus!
 	"Current epoch of the channel"
 	epoch: Int!
@@ -80,22 +94,6 @@ type Channel {
 	"Seconds until the channel is closed once closure is initiated"
 	closureTime: Int!
 }
-
-"""
-Implement the DateTime<Utc> scalar
-
-The input/output is a string in RFC3339 format.
-"""
-scalar DateTime
-
-"""
-ISO 8601 combined date and time without timezone.
-
-# Examples
-
-* `2015-07-01T08:59:60.123`,
-"""
-scalar NaiveDateTime
 
 type QueryRoot {
 	"""
@@ -110,21 +108,32 @@ type QueryRoot {
 	If neither source nor destination is provided, returns all channels.
 	If source is provided, filters channels by source address.
 	If destination is provided, filters channels by destination address.
-	Both filters can be combined.
+	Both filters can be combined to find specific channels.
 	"""
-	channels(source: String, destination: String): [Channel!]!
+	channels(
+		"Filter by source node address (hexadecimal format)"
+		source: String,
+		"Filter by destination node address (hexadecimal format)"
+		destination: String
+	): [Channel!]!
 	"""
 	Retrieve HOPR token balance for a specific address
 
-	The address parameter is required. Returns None if no balance exists for the address.
+	Returns None if no balance exists for the address.
 	"""
-	hoprBalance(address: String!): HoprBalance
+	hoprBalance(
+		"On-chain address to query (hexadecimal format)"
+		address: String!
+	): HoprBalance
 	"""
 	Retrieve native token balance for a specific address
 
-	The address parameter is required. Returns None if no balance exists for the address.
+	Returns None if no balance exists for the address.
 	"""
-	nativeBalance(address: String!): NativeBalance
+	nativeBalance(
+		"On-chain address to query (hexadecimal format)"
+		address: String!
+	): NativeBalance
 	"""
 	Health check endpoint
 
@@ -144,41 +153,42 @@ type QueryRoot {
 	chainInfo: ChainInfo!
 }
 
-type ChannelUpdate {
-	"Unique identifier for the payment channel in hexadecimal format"
-	concreteChannelId: String!
-	"On-chain address of the source node in hexadecimal format"
-	source: String!
-	"On-chain address of the destination node in hexadecimal format"
-	destination: String!
-	"Total amount of tokens allocated to the channel"
-	balance: Float!
-	"State of the channel"
-	status: ChannelStatus!
-	"Current epoch of the channel"
-	epoch: Int!
-	"Latest ticket index used in the channel"
-	ticketIndex: Int!
-	"Seconds until the channel is closed once closure is initiated"
-	closureTime: Int!
-}
-
 type SubscriptionRoot {
 	"""
-	Subscribe to real-time updates of native and hopr balances
-	Provides updates whenever there is a change in the native and HOPR token balance for an account.
+	Subscribe to real-time updates of native balances for a specific address
+
+	Provides updates whenever there is a change in the native token balance for the specified account.
+	Updates are sent immediately when balance changes occur on-chain.
 	"""
-	balanceUpdated(address: String!): Balance!
+	nativeBalanceUpdated(
+		"On-chain address to monitor for balance changes (hexadecimal format)"
+		address: String!
+	): NativeBalance!
+
+	"""
+	Subscribe to real-time updates of HOPR balances for a specific address
+
+	Provides updates whenever there is a change in the HOPR token balance for the specified account.
+	Updates are sent immediately when balance changes occur on-chain.
+	"""
+	hoprBalanceUpdated(
+		"On-chain address to monitor for balance changes (hexadecimal format)"
+		address: String!
+	): HoprBalance!
 
 	"""
 	Subscribe to real-time updates of payment channels
-	Provides updates whenever there is a change in the state of a payment channel, including opening and closing a channel.
+
+	Provides updates whenever there is a change in the state of any payment channel,
+	including channel opening, balance updates, status changes, and channel closure.
 	"""
 	channelUpdated: Channel!
 
 	"""
 	Subscribe to real-time updates of account information
-	Provides updates whenever there is a change in account information, including balances and multiaddresses.
+
+	Provides updates whenever there is a change in account information, including
+	balance changes, Safe address linking, and multiaddress announcements.
 	"""
 	accountUpdated: Account!
 }
