@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_graphql::{
-    dynamic::Schema,
+    EmptyMutation, EmptySubscription, Schema,
     http::{GraphQLPlaygroundConfig, playground_source},
 };
 use axum::{
@@ -22,17 +22,17 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::{errors::ApiResult, schema::build_schema};
+use crate::{errors::ApiResult, query::QueryRoot, schema::build_schema};
 
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
-    pub schema: Arc<Schema>,
+    pub schema: Arc<Schema<QueryRoot, EmptyMutation, EmptySubscription>>,
 }
 
 /// Build the Axum application router
 pub async fn build_app(db: DatabaseConnection) -> ApiResult<Router> {
-    let schema = build_schema(db)?;
+    let schema = build_schema(db);
     let app_state = AppState {
         schema: Arc::new(schema),
     };

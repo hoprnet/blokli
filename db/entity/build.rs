@@ -118,7 +118,6 @@ fn main() -> anyhow::Result<()> {
         &codegen_path,
         "-u",
         &database_url,
-        "--seaography",
     ]))?;
 
     // Clean up temporary database

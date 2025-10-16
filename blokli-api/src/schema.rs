@@ -1,53 +1,31 @@
-//! GraphQL schema definitions for blokli API
+//! GraphQL schema builder for blokli API
 
-use async_graphql::dynamic::*;
+use async_graphql::{EmptyMutation, EmptySubscription, Schema};
 use sea_orm::DatabaseConnection;
-use seaography::{Builder, BuilderContext};
 
-/// Build the seaography-powered GraphQL schema with database connection
+use crate::query::QueryRoot;
+
+/// Build the async-graphql schema with database connection
 ///
-/// This creates a dynamic GraphQL schema with:
-/// - Auto-generated queries for public entities (account, announcement, channel)
-/// - Auto-generated mutations
-/// - Custom health and version queries
+/// This creates a GraphQL schema with:
+/// - Read-only queries for public entities (account, announcement, channel, balances)
+/// - No mutations (EmptyMutation)
+/// - No subscriptions (EmptySubscription)
 ///
-/// Note: Only public-facing entities are exposed. Internal entities like log_status,
-/// chain_info, and node_info are not accessible through the GraphQL API.
-pub fn build_schema(db: DatabaseConnection) -> Result<Schema, Box<dyn std::error::Error>> {
-    // Create static builder context (required by seaography)
-    let context: &'static BuilderContext = Box::leak(Box::new(BuilderContext::default()));
-
-    // Create seaography builder with database connection
-    let builder = Builder::new(context, db.clone());
-
-    // Register only public-facing entities
-    let mut builder = blokli_db_entity::register_public_entities(builder);
-
-    // Add custom query fields before building schema
-    let health_field = Field::new("health", TypeRef::named_nn(TypeRef::STRING), |_ctx| {
-        FieldFuture::new(async move { Ok(Some(FieldValue::value("ok"))) })
-    })
-    .description("Health check endpoint");
-
-    let version_field = Field::new("version", TypeRef::named_nn(TypeRef::STRING), |_ctx| {
-        FieldFuture::new(async move { Ok(Some(FieldValue::value(env!("CARGO_PKG_VERSION")))) })
-    })
-    .description("API version");
-
-    // Add fields directly to the query object
-    builder.query = builder.query.field(health_field).field(version_field);
-
-    // Build the schema
-    let schema = builder.schema_builder().finish()?;
-
-    Ok(schema)
+/// The schema is configured with:
+/// - Database connection injected as context data
+/// - Query-only access pattern
+pub fn build_schema(db: DatabaseConnection) -> Schema<QueryRoot, EmptyMutation, EmptySubscription> {
+    Schema::build(QueryRoot, EmptyMutation, EmptySubscription)
+        .data(db)
+        .finish()
 }
 
 /// Export the GraphQL schema to SDL (Schema Definition Language) format
 ///
 /// This generates a string representation of the GraphQL schema that can be used
 /// for code generation, documentation, or schema validation tools.
-pub fn export_schema_sdl(db: DatabaseConnection) -> Result<String, Box<dyn std::error::Error>> {
-    let schema = build_schema(db)?;
-    Ok(schema.sdl())
+pub fn export_schema_sdl(db: DatabaseConnection) -> String {
+    let schema = build_schema(db);
+    schema.sdl()
 }

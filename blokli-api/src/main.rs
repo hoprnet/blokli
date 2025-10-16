@@ -45,7 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let db = Database::connect(&database_url).await?;
 
                 // Generate schema SDL
-                let schema_sdl = export_schema_sdl(db)?;
+                let schema_sdl = export_schema_sdl(db);
 
                 // Write to file or stdout
                 if let Some(output_path) = output {

@@ -5,9 +5,11 @@
 
 pub mod config;
 pub mod errors;
+pub mod query;
 pub mod schema;
 pub mod server;
 pub mod tls;
+pub mod types;
 
 use axum::serve;
 use config::ApiConfig;

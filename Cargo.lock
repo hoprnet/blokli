@@ -1129,7 +1129,6 @@ dependencies = [
  "num-traits",
  "pin-project-lite",
  "regex",
- "rust_decimal",
  "serde",
  "serde_json",
  "serde_urlencoded",
@@ -1523,7 +1522,6 @@ dependencies = [
  "num-bigint",
  "num-integer",
  "num-traits",
- "serde",
 ]
 
 [[package]]
@@ -1666,12 +1664,13 @@ dependencies = [
  "axum",
  "axum-extra",
  "blokli-db-entity",
+ "chrono",
  "clap",
  "futures",
+ "hex",
  "rustls",
  "rustls-pemfile",
  "sea-orm",
- "seaography",
  "serde",
  "serde_json",
  "thiserror 2.0.17",
@@ -1888,7 +1887,6 @@ dependencies = [
  "sea-orm",
  "sea-orm-cli",
  "sea-orm-migration",
- "seaography",
  "thiserror 2.0.17",
  "tokio",
 ]
@@ -4113,15 +4111,6 @@ dependencies = [
 
 [[package]]
 name = "itertools"
-version = "0.12.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ba291022dbbd398a455acf126c1e341954079855bc60dfdda641363bd6922569"
-dependencies = [
- "either",
-]
-
-[[package]]
-name = "itertools"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "413ee7dfc52ee1a4949ceeb7dbc8a33f2d6c088194d9f922fb8318faf1f01186"
@@ -4996,15 +4985,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "pgvector"
-version = "0.4.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc58e2d255979a31caa7cabfa7aac654af0354220719ab7a68520ae7a91e8c0b"
-dependencies = [
- "serde",
-]
-
-[[package]]
 name = "pin-project"
 version = "1.1.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5656,17 +5636,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "rust_decimal"
-version = "1.38.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c8975fc98059f365204d635119cf9c5a60ae67b841ed49b5422a9a7e56cdfac0"
-dependencies = [
- "arrayvec",
- "num-traits",
- "serde",
-]
-
-[[package]]
 name = "rustc-demangle"
 version = "0.1.26"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5851,26 +5820,20 @@ checksum = "a5f6630c76b8485b923b13dfce133ce6f8158d9a1dcbc8443b6f5de4952962e5"
 dependencies = [
  "async-stream",
  "async-trait",
- "bigdecimal",
  "chrono",
  "derive_more",
  "futures-util",
  "log",
  "ouroboros",
- "pgvector",
- "rust_decimal",
  "sea-orm-macros",
  "sea-query",
  "sea-query-sqlx",
  "serde",
- "serde_json",
  "sqlx",
  "strum 0.27.2",
  "thiserror 2.0.17",
- "time",
  "tracing",
  "url",
- "uuid",
 ]
 
 [[package]]
@@ -5914,7 +5877,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7bbde8c00319d452714377c1842b4ee3ec7d2eb2b3bd022f7515f6637598c135"
 dependencies = [
  "heck 0.5.0",
- "proc-macro-crate",
  "proc-macro2",
  "quote",
  "sea-bae",
@@ -5948,7 +5910,6 @@ dependencies = [
  "inherent",
  "ordered-float",
  "sea-query-derive",
- "serde_json",
 ]
 
 [[package]]
@@ -5984,7 +5945,6 @@ checksum = "68873fa1776b4c25a26e7679f8ee22332978c721168ec1b0b32b6583d5a9381d"
 dependencies = [
  "chrono",
  "sea-query",
- "serde_json",
  "sqlx",
 ]
 
@@ -6008,37 +5968,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "debdc8729c37fdbf88472f97fd470393089f997a909e535ff67c544d18cfccf0"
 dependencies = [
  "heck 0.4.1",
- "proc-macro2",
- "quote",
- "syn 2.0.106",
-]
-
-[[package]]
-name = "seaography"
-version = "2.0.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9baded7dad9d4976b3862975bd993d2ecd4dc314b711a90564dab0565b3f323a"
-dependencies = [
- "async-graphql",
- "fnv",
- "heck 0.4.1",
- "itertools 0.12.1",
- "lazy_static",
- "sea-orm",
- "seaography-macros",
- "serde",
- "serde_json",
- "thiserror 1.0.69",
-]
-
-[[package]]
-name = "seaography-macros"
-version = "2.0.0-rc.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "92fbc21e00ecd57704173055cf8b9e6bd372da4d0280a949ff07be7eaf901b75"
-dependencies = [
- "darling 0.21.3",
- "heck 0.5.0",
  "proc-macro2",
  "quote",
  "syn 2.0.106",
@@ -7487,7 +7416,6 @@ checksum = "2f87b8aa10b915a06587d0dec516c282ff295b475d94abf425d62b57710070a2"
 dependencies = [
  "getrandom 0.3.3",
  "js-sys",
- "serde",
  "wasm-bindgen",
 ]
 
