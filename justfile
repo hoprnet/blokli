@@ -50,7 +50,7 @@ test:
 
 # Run tests for a specific package
 test-package package:
-    cargo test -p {{package}}
+    cargo test -p {{ package }}
 
 # Run tests in single thread mode with output (useful for debugging)
 test-debug:
@@ -86,7 +86,7 @@ run:
 
 # Run bloklid daemon with custom configuration file
 run-config config_path:
-    cargo run --bin bloklid -- -c {{config_path}}
+    cargo run --bin bloklid -- -c {{ config_path }}
 
 # Run bloklid daemon in release mode with full optimizations
 run-release:
@@ -119,7 +119,7 @@ run-api-release:
 
 # Export GraphQL schema to file (requires database URL)
 export-schema database_url output="schema.graphql":
-    cargo run --bin blokli-api -- export-schema -d {{database_url}} -o {{output}}
+    cargo run --bin blokli-api -- export-schema -d {{ database_url }} -o {{ output }}
 
 # Export GraphQL schema using SQLite database
 export-schema-sqlite output="schema.graphql":
@@ -131,8 +131,8 @@ export-schema-sqlite output="schema.graphql":
     # Note: ?mode=rwc allows SQLite to create the database file if it doesn't exist
     cargo run --bin migration -- up -u "sqlite://data/bloklid-index.db?mode=rwc"
     # Export the GraphQL schema
-    cargo run --bin blokli-api -- export-schema -d "sqlite://data/bloklid-index.db" -o {{output}}
-    echo "GraphQL schema exported to {{output}}"
+    cargo run --bin blokli-api -- export-schema -d "sqlite://data/bloklid-index.db" -o {{ output }}
+    echo "GraphQL schema exported to {{ output }}"
 
 # ============================================================================
 # Documentation
@@ -181,10 +181,10 @@ docker-down-volumes:
 # View Docker Compose logs (optionally specify service name)
 docker-logs service="":
     #!/usr/bin/env bash
-    if [ -z "{{service}}" ]; then
+    if [ -z "{{ service }}" ]; then
         docker-compose -f docker/docker-compose.yml logs -f
     else
-        docker-compose -f docker/docker-compose.yml logs -f {{service}}
+        docker-compose -f docker/docker-compose.yml logs -f {{ service }}
     fi
 
 # Build bloklid Docker image from Nix
@@ -215,10 +215,17 @@ docker-db-tables:
 
 # Backup database to file
 docker-db-backup file="backup.sql":
-    docker-compose -f docker/docker-compose.yml exec -T postgres pg_dump -U bloklid bloklid > {{file}}
-    @echo "Database backed up to {{file}}"
+    docker-compose -f docker/docker-compose.yml exec -T postgres pg_dump -U bloklid bloklid > {{ file }}
+    @echo "Database backed up to {{ file }}"
 
 # Restore database from file
 docker-db-restore file="backup.sql":
-    docker-compose -f docker/docker-compose.yml exec -T postgres psql -U bloklid -d bloklid < {{file}}
-    @echo "Database restored from {{file}}"
+    docker-compose -f docker/docker-compose.yml exec -T postgres psql -U bloklid -d bloklid < {{ file }}
+    @echo "Database restored from {{ file }}"
+
+# Generate SVG for target db schema
+generate-target-db-schema-svg:
+    docker run --rm -u $(id -u):$(id -g) -v ./db/entity:/data \
+      ghcr.io/mermaid-js/mermaid-cli/mermaid-cli \
+      -i target-db-schema.mmd -o target-db-schema.svg
+    @echo "SVG stored at ./db/entity/target-db-schema.svg"

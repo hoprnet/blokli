@@ -1,0 +1,125 @@
+erDiagram
+    %% ========================================
+    %% PUBLIC ENTITIES (Exposed via GraphQL API)
+    %% ========================================
+
+    account {
+        int id PK "Primary key"
+        string chain_key "Chain key"
+        string packet_key "Packet key"
+        int published_block "Published block number"
+    }
+
+    announcement {
+        int id PK "Primary key"
+        int account_id FK "Foreign key to account"
+        binary multiaddress_list "Multiaddress list (Binary)"
+        int published_block "Published block number"
+    }
+
+    channel {
+        int id PK "Primary key"
+        string concrete_channel_id UK "Unique channel identifier"
+        string source "Source address"
+        string destination "Destination address"
+        binary balance "Channel balance (Binary 12 bytes)"
+        int status "Channel status"
+        binary epoch "Epoch (Binary 8 bytes)"
+        binary ticket_index "Ticket index (Binary 8 bytes)"
+        datetime closure_time "Optional closure timestamp"
+        bool corrupted_state "Corrupted state flag"
+    }
+
+    hopr_balance {
+        int id PK "Primary key"
+        string address UK "Unique address"
+        binary balance "HOPR token balance (Binary 12 bytes)"
+        binary last_changed_block "Last changed block (Binary 8 bytes)"
+        binary last_changed_tx_index "Last changed tx index (Binary 8 bytes)"
+        binary last_changed_log_index "Last changed log index (Binary 8 bytes)"
+        datetime updated_at "Last update timestamp"
+    }
+
+    native_balance {
+        int id PK "Primary key"
+        string address UK "Unique address"
+        binary balance "Native balance (Binary 12 bytes)"
+        binary last_changed_block "Last changed block (Binary 8 bytes)"
+        binary last_changed_tx_index "Last changed tx index (Binary 8 bytes)"
+        binary last_changed_log_index "Last changed log index (Binary 8 bytes)"
+        datetime updated_at "Last update timestamp"
+    }
+
+    %% ========================================
+    %% INTERNAL ENTITIES (Not exposed via API)
+    %% ========================================
+
+    chain_info {
+        int id PK "Primary key"
+        int last_indexed_block "Last indexed block"
+        binary ticket_price "Ticket price (Binary 12 bytes)"
+        binary channels_dst "Channels destination (Binary 32 bytes)"
+        binary ledger_dst "Ledger destination (Binary 32 bytes)"
+        binary safe_registry_dst "Safe registry destination (Binary 32 bytes)"
+        binary chain_checksum "Chain checksum (Binary 32 bytes)"
+        int pre_checksum_block "Pre-checksum block"
+        float min_incoming_ticket_win_prob "Min incoming ticket win probability"
+    }
+
+    node_info {
+        int id PK "Primary key"
+        binary safe_balance "Safe balance (Binary 12 bytes)"
+        binary safe_allowance "Safe allowance (Binary 12 bytes)"
+        string safe_address "Safe address"
+        string module_address "Module address"
+    }
+
+    log {
+        binary transaction_index PK "Transaction index (Binary 8 bytes)"
+        binary log_index PK "Log index (Binary 8 bytes)"
+        binary block_number PK "Block number (Binary 8 bytes)"
+        binary block_hash "Block hash (Binary 32 bytes)"
+        binary transaction_hash "Transaction hash (Binary 32 bytes)"
+        binary address "Address (Binary 20 bytes)"
+        binary topics "Topics (Binary)"
+        binary data "Data (Binary)"
+        bool removed "Removed flag"
+    }
+
+    log_status {
+        binary transaction_index PK "Transaction index (Binary 8 bytes)"
+        binary log_index PK "Log index (Binary 8 bytes)"
+        binary block_number PK "Block number (Binary 8 bytes)"
+        bool processed "Processed flag"
+        datetime processed_at "Processing timestamp"
+        binary checksum "Checksum (Binary 32 bytes)"
+    }
+
+    log_topic_info {
+        int id PK "Primary key"
+        string address "Contract address"
+        string topic "Event topic"
+    }
+
+    hopr_safe_contract {
+        int id PK "Primary key"
+        string address UK "Unique contract address"
+        binary deployed_block "Deployed block (Binary 8 bytes)"
+        binary deployed_tx_index "Deployed tx index (Binary 8 bytes)"
+        binary deployed_log_index "Deployed log index (Binary 8 bytes)"
+        datetime created_at "Creation timestamp"
+    }
+
+    corrupted_channel {
+        int id PK "Primary key"
+        string concrete_channel_id "Channel identifier"
+        string source "Source address"
+        string destination "Destination address"
+    }
+
+    %% ========================================
+    %% RELATIONSHIPS
+    %% ========================================
+
+    account ||--o{ announcement : "has many"
+    log_status ||--|| log : "has one"
