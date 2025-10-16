@@ -142,15 +142,12 @@ pub(crate) fn model_to_account_entry(
     Ok(AccountEntry {
         public_key: OffchainPublicKey::from_hex(&account.packet_key)?,
         chain_addr: account.chain_key.parse()?,
-        published_at: account.published_block as u32,
+        published_at: u64::from_be_bytes(account.published_block.as_slice().try_into().unwrap()) as u32,
         entry_type: match announcement {
             None => AccountType::NotAnnounced,
             Some(a) => AccountType::Announced {
-                multiaddr: std::str::from_utf8(&a.multiaddress_list)
-                    .map_err(|e| GeneralError::ParseError(e.to_string()))?
-                    .parse()
-                    .map_err(|_| DbSqlError::DecodingError)?,
-                updated_block: a.published_block as u32,
+                multiaddr: a.multiaddress.parse().map_err(|_| DbSqlError::DecodingError)?,
+                updated_block: u64::from_be_bytes(a.published_block.as_slice().try_into().unwrap()) as u32,
             },
         },
     })
@@ -194,7 +191,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                     Account::find()
                         .find_with_related(Announcement)
                         .filter(if public_only {
-                            announcement::Column::MultiaddressList.ne("")
+                            announcement::Column::Multiaddress.ne("")
                         } else {
                             Expr::value(1)
                         })
@@ -218,7 +215,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                     match account::Entity::insert(account::ActiveModel {
                         chain_key: Set(account.chain_addr.to_hex()),
                         packet_key: Set(account.public_key.to_hex()),
-                        published_block: Set(account.published_at as i32),
+                        published_block: Set((account.published_at as u64).to_be_bytes().to_vec()),
                         ..Default::default()
                     })
                     .on_conflict(
@@ -281,11 +278,13 @@ impl BlokliDbAccountOperations for BlokliDb {
                         .pop()
                         .ok_or(MissingAccount)?;
 
-                    if let Some((index, _)) = existing_announcements.iter().enumerate().find(|(_, announcement)| {
-                        std::str::from_utf8(&announcement.multiaddress_list).unwrap_or("") == multiaddr.to_string()
-                    }) {
+                    if let Some((index, _)) = existing_announcements
+                        .iter()
+                        .enumerate()
+                        .find(|(_, announcement)| announcement.multiaddress == multiaddr.to_string())
+                    {
                         let mut existing_announcement = existing_announcements.remove(index).into_active_model();
-                        existing_announcement.published_block = Set(published_at as i32);
+                        existing_announcement.published_block = Set((published_at as u64).to_be_bytes().to_vec());
                         let updated_announcement = existing_announcement.update(tx.as_ref()).await?;
 
                         // To maintain the sort order, insert at the original location
@@ -293,8 +292,8 @@ impl BlokliDbAccountOperations for BlokliDb {
                     } else {
                         let new_announcement = announcement::ActiveModel {
                             account_id: Set(existing_account.id),
-                            multiaddress_list: Set(multiaddr.to_string().into_bytes()),
-                            published_block: Set(published_at as i32),
+                            multiaddress: Set(multiaddr.to_string()),
+                            published_block: Set((published_at as u64).to_be_bytes().to_vec()),
                             ..Default::default()
                         }
                         .insert(tx.as_ref())

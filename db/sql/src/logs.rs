@@ -54,7 +54,7 @@ impl BlokliDbLogOperations for BlokliDb {
                         let log_status_query = LogStatus::insert(status_model).on_conflict(
                             OnConflict::columns([
                                 log_status::Column::LogIndex,
-                                log_status::Column::TransactionIndex,
+                                log_status::Column::TxIndex,
                                 log_status::Column::BlockNumber,
                             ])
                             .do_nothing()
@@ -63,7 +63,7 @@ impl BlokliDbLogOperations for BlokliDb {
                         let log_query = Log::insert(model).on_conflict(
                             OnConflict::columns([
                                 log::Column::LogIndex,
-                                log::Column::TransactionIndex,
+                                log::Column::TxIndex,
                                 log::Column::BlockNumber,
                             ])
                             .do_nothing()
@@ -107,7 +107,7 @@ impl BlokliDbLogOperations for BlokliDb {
 
         let query = Log::find()
             .filter(log::Column::BlockNumber.eq(bn_enc))
-            .filter(log::Column::TransactionIndex.eq(tx_index_enc))
+            .filter(log::Column::TxIndex.eq(tx_index_enc))
             .filter(log::Column::LogIndex.eq(log_index_enc))
             .find_also_related(LogStatus);
 
@@ -142,7 +142,7 @@ impl BlokliDbLogOperations for BlokliDb {
                 q.filter(log::Column::BlockNumber.lt(v.to_be_bytes().to_vec()))
             })
             .order_by_asc(log::Column::BlockNumber)
-            .order_by_asc(log::Column::TransactionIndex)
+            .order_by_asc(log::Column::TxIndex)
             .order_by_asc(log::Column::LogIndex);
 
         match query.all(self.conn(TargetDb::Logs)).await {
@@ -171,7 +171,7 @@ impl BlokliDbLogOperations for BlokliDb {
         Log::find()
             .select_only()
             .column(log::Column::BlockNumber)
-            .column(log::Column::TransactionIndex)
+            .column(log::Column::TxIndex)
             .column(log::Column::LogIndex)
             .filter(log::Column::BlockNumber.gte(min_block_number.to_be_bytes().to_vec()))
             .apply_if(max_block_number, |q, v| {
@@ -284,7 +284,7 @@ impl BlokliDbLogOperations for BlokliDb {
         let query = LogStatus::find()
             .filter(log_status::Column::Checksum.is_not_null())
             .order_by_desc(log_status::Column::BlockNumber)
-            .order_by_desc(log_status::Column::TransactionIndex)
+            .order_by_desc(log_status::Column::TxIndex)
             .order_by_desc(log_status::Column::LogIndex)
             .find_also_related(Log);
 
@@ -309,7 +309,7 @@ impl BlokliDbLogOperations for BlokliDb {
                     let mut last_checksum = LogStatus::find()
                         .filter(log_status::Column::Checksum.is_not_null())
                         .order_by_desc(log_status::Column::BlockNumber)
-                        .order_by_desc(log_status::Column::TransactionIndex)
+                        .order_by_desc(log_status::Column::TxIndex)
                         .order_by_desc(log_status::Column::LogIndex)
                         .one(tx.as_ref())
                         .await
@@ -321,7 +321,7 @@ impl BlokliDbLogOperations for BlokliDb {
                     let query = LogStatus::find()
                         .filter(log_status::Column::Checksum.is_null())
                         .order_by_asc(log_status::Column::BlockNumber)
-                        .order_by_asc(log_status::Column::TransactionIndex)
+                        .order_by_asc(log_status::Column::TxIndex)
                         .order_by_asc(log_status::Column::LogIndex)
                         .find_also_related(Log);
 
@@ -378,7 +378,7 @@ impl BlokliDbLogOperations for BlokliDb {
                     let log_count = Log::find()
                         .select_only()
                         .column(log::Column::BlockNumber)
-                        .column(log::Column::TransactionIndex)
+                        .column(log::Column::TxIndex)
                         .column(log::Column::LogIndex)
                         .count(tx.as_ref())
                         .await

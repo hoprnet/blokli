@@ -68,7 +68,25 @@ impl MigrationTrait for Migration {
                     )
                     .col(ColumnDef::new(Account::ChainKey).string_len(40).not_null())
                     .col(ColumnDef::new(Account::PacketKey).string_len(64).not_null())
-                    .col(ColumnDef::new(Account::PublishedBlock).unsigned().not_null().default(0))
+                    .col(ColumnDef::new(Account::SafeAddress).string_len(40).null())
+                    .col(
+                        ColumnDef::new(Account::PublishedBlock)
+                            .binary_len(8)
+                            .not_null()
+                            .default(vec![0u8; 8]),
+                    )
+                    .col(
+                        ColumnDef::new(Account::PublishedTxIndex)
+                            .binary_len(8)
+                            .not_null()
+                            .default(vec![0u8; 8]),
+                    )
+                    .col(
+                        ColumnDef::new(Account::PublishedLogIndex)
+                            .binary_len(8)
+                            .not_null()
+                            .default(vec![0u8; 8]),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -87,12 +105,24 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(ColumnDef::new(Announcement::AccountId).integer().not_null())
-                    .col(ColumnDef::new(Announcement::MultiaddressList).binary().not_null())
+                    .col(ColumnDef::new(Announcement::Multiaddress).text().not_null())
                     .col(
                         ColumnDef::new(Announcement::PublishedBlock)
-                            .unsigned()
+                            .binary_len(8)
                             .not_null()
-                            .default(0),
+                            .default(vec![0u8; 8]),
+                    )
+                    .col(
+                        ColumnDef::new(Announcement::PublishedTxIndex)
+                            .binary_len(8)
+                            .not_null()
+                            .default(vec![0u8; 8]),
+                    )
+                    .col(
+                        ColumnDef::new(Announcement::PublishedLogIndex)
+                            .binary_len(8)
+                            .not_null()
+                            .default(vec![0u8; 8]),
                     )
                     .foreign_key(
                         ForeignKey::create()
@@ -152,21 +182,14 @@ impl MigrationTrait for Migration {
                     )
                     .col(
                         ColumnDef::new(ChainInfo::LastIndexedBlock)
-                            .integer()
-                            .unsigned()
+                            .binary_len(8)
                             .not_null()
-                            .default(0),
+                            .default(vec![0u8; 8]),
                     )
                     .col(ColumnDef::new(ChainInfo::TicketPrice).binary_len(12).null())
                     .col(ColumnDef::new(ChainInfo::ChannelsDST).binary_len(32).null())
                     .col(ColumnDef::new(ChainInfo::LedgerDST).binary_len(32).null())
                     .col(ColumnDef::new(ChainInfo::SafeRegistryDST).binary_len(32).null())
-                    .col(
-                        ColumnDef::new(ChainInfo::ChainChecksum)
-                            .binary_len(32)
-                            .default(vec![0u8; 32]),
-                    )
-                    .col(ColumnDef::new(ChainInfo::PreChecksumBlock).unsigned().null())
                     .col(
                         ColumnDef::new(ChainInfo::MinIncomingTicketWinProb)
                             .float()
@@ -175,37 +198,10 @@ impl MigrationTrait for Migration {
                     )
                     .to_owned(),
             )
-            .await?;
-
-        // Create CorruptedChannel table
-        manager
-            .create_table(
-                Table::create()
-                    .table(CorruptedChannel::Table)
-                    .if_not_exists()
-                    .col(
-                        ColumnDef::new(CorruptedChannel::Id)
-                            .integer()
-                            .not_null()
-                            .auto_increment()
-                            .primary_key(),
-                    )
-                    .col(
-                        ColumnDef::new(CorruptedChannel::ConcreteChannelId)
-                            .string_len(64)
-                            .not_null(),
-                    )
-                    .col(ColumnDef::new(CorruptedChannel::Source).string_len(40).not_null())
-                    .col(ColumnDef::new(CorruptedChannel::Destination).string_len(40).not_null())
-                    .to_owned(),
-            )
             .await
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        manager
-            .drop_table(Table::drop().table(CorruptedChannel::Table).to_owned())
-            .await?;
         manager
             .drop_table(Table::drop().table(ChainInfo::Table).to_owned())
             .await?;
@@ -243,7 +239,10 @@ enum Account {
     Id,
     ChainKey,
     PacketKey,
+    SafeAddress,
     PublishedBlock,
+    PublishedTxIndex,
+    PublishedLogIndex,
 }
 
 #[derive(DeriveIden)]
@@ -251,8 +250,10 @@ enum Announcement {
     Table,
     Id,
     AccountId,
-    MultiaddressList,
+    Multiaddress,
     PublishedBlock,
+    PublishedTxIndex,
+    PublishedLogIndex,
 }
 
 #[derive(DeriveIden)]
@@ -274,16 +275,5 @@ enum ChainInfo {
     ChannelsDST,
     LedgerDST,
     SafeRegistryDST,
-    ChainChecksum,
-    PreChecksumBlock,
     MinIncomingTicketWinProb,
-}
-
-#[derive(DeriveIden)]
-enum CorruptedChannel {
-    Table,
-    Id,
-    ConcreteChannelId,
-    Source,
-    Destination,
 }

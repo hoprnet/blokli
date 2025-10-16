@@ -6,7 +6,8 @@
 
 pub mod accounts;
 pub mod channels;
-pub mod corrupted_channels;
+// TODO: Refactor to use channel.corrupted_state field
+// pub mod corrupted_channels;
 pub mod db;
 pub mod errors;
 pub mod info;
@@ -24,7 +25,7 @@ pub use sea_orm::{DatabaseConnection, DatabaseTransaction};
 use crate::{
     accounts::BlokliDbAccountOperations,
     channels::BlokliDbChannelOperations,
-    corrupted_channels::BlokliDbCorruptedChannelOperations,
+    // corrupted_channels::BlokliDbCorruptedChannelOperations,
     db::BlokliDb,
     errors::{DbSqlError, Result},
     info::BlokliDbInfoOperations,
@@ -264,7 +265,7 @@ pub trait BlokliDbAllOperations:
     BlokliDbGeneralModelOperations
     + BlokliDbAccountOperations
     + BlokliDbChannelOperations
-    + BlokliDbCorruptedChannelOperations
+    // + BlokliDbCorruptedChannelOperations
     + BlokliDbInfoOperations
     + BlokliDbLogOperations
 {
@@ -275,5 +276,5 @@ pub mod prelude {
     pub use blokli_db_api::logs::*;
 
     pub use super::*;
-    pub use crate::{accounts::*, channels::*, corrupted_channels::*, db::*, errors::*, info::*};
+    pub use crate::{accounts::*, channels::*, /* corrupted_channels::*, */ db::*, errors::*, info::*};
 }

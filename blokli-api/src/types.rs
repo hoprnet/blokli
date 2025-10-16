@@ -1,7 +1,7 @@
 //! GraphQL type definitions for HOPR blokli API
 
 use async_graphql::SimpleObject;
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{DateTime, Utc};
 
 /// Account information containing chain and packet keys
 #[derive(SimpleObject, Clone, Debug)]
@@ -9,7 +9,8 @@ pub struct Account {
     pub id: i32,
     pub chain_key: String,
     pub packet_key: String,
-    pub published_block: i32,
+    /// Published block as hex string
+    pub published_block: String,
 }
 
 impl From<blokli_db_entity::account::Model> for Account {
@@ -18,7 +19,7 @@ impl From<blokli_db_entity::account::Model> for Account {
             id: model.id,
             chain_key: model.chain_key,
             packet_key: model.packet_key,
-            published_block: model.published_block,
+            published_block: hex::encode(&model.published_block),
         }
     }
 }
@@ -28,9 +29,10 @@ impl From<blokli_db_entity::account::Model> for Account {
 pub struct Announcement {
     pub id: i32,
     pub account_id: i32,
-    /// Multiaddress list encoded as hex string
-    pub multiaddress_list: String,
-    pub published_block: i32,
+    /// Multiaddress for the node
+    pub multiaddress: String,
+    /// Published block as hex string
+    pub published_block: String,
 }
 
 impl From<blokli_db_entity::announcement::Model> for Announcement {
@@ -38,8 +40,8 @@ impl From<blokli_db_entity::announcement::Model> for Announcement {
         Self {
             id: model.id,
             account_id: model.account_id,
-            multiaddress_list: hex::encode(&model.multiaddress_list),
-            published_block: model.published_block,
+            multiaddress: model.multiaddress,
+            published_block: hex::encode(&model.published_block),
         }
     }
 }
@@ -94,10 +96,12 @@ pub struct HoprBalance {
     pub address: String,
     /// Token balance as decimal string
     pub balance: String,
-    pub last_changed_block: Option<String>,
-    pub last_changed_tx_index: Option<String>,
-    pub last_changed_log_index: Option<String>,
-    pub updated_at: Option<NaiveDateTime>,
+    /// Last changed block as hex string
+    pub last_changed_block: String,
+    /// Last changed transaction index as hex string
+    pub last_changed_tx_index: String,
+    /// Last changed log index as hex string
+    pub last_changed_log_index: String,
 }
 
 impl From<blokli_db_entity::hopr_balance::Model> for HoprBalance {
@@ -114,10 +118,9 @@ impl From<blokli_db_entity::hopr_balance::Model> for HoprBalance {
         Self {
             address: model.address,
             balance: balance_str,
-            last_changed_block: model.last_changed_block.map(|b| hex::encode(&b)),
-            last_changed_tx_index: model.last_changed_tx_index.map(|b| hex::encode(&b)),
-            last_changed_log_index: model.last_changed_log_index.map(|b| hex::encode(&b)),
-            updated_at: model.updated_at,
+            last_changed_block: hex::encode(&model.last_changed_block),
+            last_changed_tx_index: hex::encode(&model.last_changed_tx_index),
+            last_changed_log_index: hex::encode(&model.last_changed_log_index),
         }
     }
 }
@@ -128,10 +131,12 @@ pub struct NativeBalance {
     pub address: String,
     /// Native balance as decimal string
     pub balance: String,
-    pub last_changed_block: Option<String>,
-    pub last_changed_tx_index: Option<String>,
-    pub last_changed_log_index: Option<String>,
-    pub updated_at: Option<NaiveDateTime>,
+    /// Last changed block as hex string
+    pub last_changed_block: String,
+    /// Last changed transaction index as hex string
+    pub last_changed_tx_index: String,
+    /// Last changed log index as hex string
+    pub last_changed_log_index: String,
 }
 
 impl From<blokli_db_entity::native_balance::Model> for NativeBalance {
@@ -148,10 +153,9 @@ impl From<blokli_db_entity::native_balance::Model> for NativeBalance {
         Self {
             address: model.address,
             balance: balance_str,
-            last_changed_block: model.last_changed_block.map(|b| hex::encode(&b)),
-            last_changed_tx_index: model.last_changed_tx_index.map(|b| hex::encode(&b)),
-            last_changed_log_index: model.last_changed_log_index.map(|b| hex::encode(&b)),
-            updated_at: model.updated_at,
+            last_changed_block: hex::encode(&model.last_changed_block),
+            last_changed_tx_index: hex::encode(&model.last_changed_tx_index),
+            last_changed_log_index: hex::encode(&model.last_changed_log_index),
         }
     }
 }

@@ -31,10 +31,24 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(vec![0u8; 12]),
                     )
-                    .col(ColumnDef::new(HoprBalance::LastChangedBlock).binary_len(8).null())
-                    .col(ColumnDef::new(HoprBalance::LastChangedTxIndex).binary_len(8).null())
-                    .col(ColumnDef::new(HoprBalance::LastChangedLogIndex).binary_len(8).null())
-                    .col(ColumnDef::new(HoprBalance::UpdatedAt).date_time().null())
+                    .col(
+                        ColumnDef::new(HoprBalance::LastChangedBlock)
+                            .binary_len(8)
+                            .not_null()
+                            .default(vec![0u8; 8]),
+                    )
+                    .col(
+                        ColumnDef::new(HoprBalance::LastChangedTxIndex)
+                            .binary_len(8)
+                            .not_null()
+                            .default(vec![0u8; 8]),
+                    )
+                    .col(
+                        ColumnDef::new(HoprBalance::LastChangedLogIndex)
+                            .binary_len(8)
+                            .not_null()
+                            .default(vec![0u8; 8]),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -64,10 +78,24 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(vec![0u8; 12]),
                     )
-                    .col(ColumnDef::new(NativeBalance::LastChangedBlock).binary_len(8).null())
-                    .col(ColumnDef::new(NativeBalance::LastChangedTxIndex).binary_len(8).null())
-                    .col(ColumnDef::new(NativeBalance::LastChangedLogIndex).binary_len(8).null())
-                    .col(ColumnDef::new(NativeBalance::UpdatedAt).date_time().null())
+                    .col(
+                        ColumnDef::new(NativeBalance::LastChangedBlock)
+                            .binary_len(8)
+                            .not_null()
+                            .default(vec![0u8; 8]),
+                    )
+                    .col(
+                        ColumnDef::new(NativeBalance::LastChangedTxIndex)
+                            .binary_len(8)
+                            .not_null()
+                            .default(vec![0u8; 8]),
+                    )
+                    .col(
+                        ColumnDef::new(NativeBalance::LastChangedLogIndex)
+                            .binary_len(8)
+                            .not_null()
+                            .default(vec![0u8; 8]),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -102,7 +130,6 @@ impl MigrationTrait for Migration {
                             .binary_len(8)
                             .not_null(),
                     )
-                    .col(ColumnDef::new(HoprSafeContract::CreatedAt).date_time().null())
                     .to_owned(),
             )
             .await
@@ -130,7 +157,6 @@ enum HoprBalance {
     LastChangedBlock,
     LastChangedTxIndex,
     LastChangedLogIndex,
-    UpdatedAt,
 }
 
 #[derive(DeriveIden)]
@@ -142,7 +168,6 @@ enum NativeBalance {
     LastChangedBlock,
     LastChangedTxIndex,
     LastChangedLogIndex,
-    UpdatedAt,
 }
 
 #[derive(DeriveIden)]
@@ -153,5 +178,4 @@ enum HoprSafeContract {
     DeployedBlock,
     DeployedTxIndex,
     DeployedLogIndex,
-    CreatedAt,
 }

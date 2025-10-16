@@ -33,7 +33,8 @@ use hopr_async_runtime::spawn_as_abortable;
 use hopr_chain_config::ChainNetworkConfig;
 pub use hopr_internal_types::channels::ChannelEntry;
 use hopr_internal_types::{
-    account::AccountEntry, channels::CorruptedChannelEntry, prelude::ChannelDirection, tickets::WinningProbability,
+    account::AccountEntry, // channels::CorruptedChannelEntry,
+    prelude::ChannelDirection, tickets::WinningProbability,
 };
 use hopr_primitive_types::{
     prelude::{Address, Balance, Currency, HoprBalance, U256, WxHOPR, XDai},
@@ -223,9 +224,10 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         Ok(self.db.get_all_channels(None).await?)
     }
 
-    pub async fn corrupted_channels(&self) -> errors::Result<Vec<CorruptedChannelEntry>> {
-        Ok(self.db.get_all_corrupted_channels(None).await?)
-    }
+    // TODO: Refactor to use channel.corrupted_state field
+    // pub async fn corrupted_channels(&self) -> errors::Result<Vec<CorruptedChannelEntry>> {
+    //     Ok(self.db.get_all_corrupted_channels(None).await?)
+    // }
 
     pub async fn ticket_price(&self) -> errors::Result<Option<HoprBalance>> {
         Ok(self.db.get_indexer_data(None).await?.ticket_price)
