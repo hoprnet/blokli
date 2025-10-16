@@ -1,30 +1,84 @@
+type ChainInfo {
+	"Current block number of the blockchain"
+	blockNumber: Int!
+	"Chain ID of the connected blockchain network"
+	chainId: Int!
+	"Current HOPR token price in wxHOPR"
+	ticketPrice: Float!
+	"Current Minimum ticket winning probability"
+	minTicketWinningProbability: Float!
+}
+
+enum Token {
+	"HOPR token"
+	HOPR
+	"Native token"
+	NATIVE
+}
+
+type Balance {
+	"Unique account on-chain address in hexadecimal format"
+	address: String!
+	"Token balance associated with the on-chain address"
+	value: Float!
+	"Type of token (HOPR or Native)"
+	token: Token!
+}
+
 """
-Account information
+Account information containing balances and multiaddresses
 """
 type Account {
-	id: Int!
+	"Unique account on-chain address in hexadecimal format"
 	chainKey: String!
+	"Unique account packet key in peer id format"
 	packetKey: String!
+	"wxHOPR balance associated with the on-chain address"
 	accountHoprBalance: Float!
+	"Native balance associated with the on-chain address"
 	accountNativeBalance: Float!
+	"HOPR Safe contract address to which the account is linked"
 	safeAddress: String
+	"wxHOPR balance associated with the linked Safe contract address"
 	safeHoprBalance: Float
+	"Native balance associated with the linked Safe contract address"
 	safeNativeBalance: Float
+	"List of multiaddresses associated with the packet key"
 	multiAddresses: [String!]!
+}
+
+"""
+Status of a payment channel
+"""
+enum ChannelStatus {
+	"Channel is open and operational"
+	OPEN
+	"Channel is in the process of closing"
+	PENDINGTOCLOSE
+	"Channel has been closed"
+	CLOSED
 }
 
 """
 Payment channel between two nodes
 """
 type Channel {
+	"Unique identifier for the payment channel in hexadecimal format"
 	concreteChannelId: String!
+	"On-chain address of the source node in hexadecimal format"
 	source: String!
+	"On-chain address of the destination node in hexadecimal format"
 	destination: String!
-	balance: String!
-	status: Int!
-	epoch: String!
-	ticketIndex: String!
-	closureTime: DateTime
+	"Total amount of tokens allocated to the channel"
+	balance: Float!
+	"State of the channel"
+	status: ChannelStatus!
+	"Current epoch of the channel"
+	epoch: Int!
+	"Latest ticket index used in the channel"
+	ticketIndex: Int!
+	"Seconds until the channel is closed once closure is initiated"
+	closureTime: Int!
 }
 
 """
@@ -83,8 +137,53 @@ type QueryRoot {
 	Returns the current version of the blokli-api package
 	"""
 	version: String!
+
+	"""
+	Retrieve chain information
+	"""
+	chainInfo: ChainInfo!
+}
+
+type ChannelUpdate {
+	"Unique identifier for the payment channel in hexadecimal format"
+	concreteChannelId: String!
+	"On-chain address of the source node in hexadecimal format"
+	source: String!
+	"On-chain address of the destination node in hexadecimal format"
+	destination: String!
+	"Total amount of tokens allocated to the channel"
+	balance: Float!
+	"State of the channel"
+	status: ChannelStatus!
+	"Current epoch of the channel"
+	epoch: Int!
+	"Latest ticket index used in the channel"
+	ticketIndex: Int!
+	"Seconds until the channel is closed once closure is initiated"
+	closureTime: Int!
+}
+
+type SubscriptionRoot {
+	"""
+	Subscribe to real-time updates of native and hopr balances
+	Provides updates whenever there is a change in the native and HOPR token balance for an account.
+	"""
+	balanceUpdated(address: String!): Balance!
+
+	"""
+	Subscribe to real-time updates of payment channels
+	Provides updates whenever there is a change in the state of a payment channel, including opening and closing a channel.
+	"""
+	channelUpdated: Channel!
+
+	"""
+	Subscribe to real-time updates of account information
+	Provides updates whenever there is a change in account information, including balances and multiaddresses.
+	"""
+	accountUpdated: Account!
 }
 
 schema {
 	query: QueryRoot
+	subscription: SubscriptionRoot
 }
