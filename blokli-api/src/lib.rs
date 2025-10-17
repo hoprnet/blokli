@@ -8,6 +8,7 @@ pub mod errors;
 pub mod query;
 pub mod schema;
 pub mod server;
+pub mod subscription;
 pub mod tls;
 pub mod types;
 

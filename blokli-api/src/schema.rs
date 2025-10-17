@@ -1,22 +1,22 @@
 //! GraphQL schema builder for blokli API
 
-use async_graphql::{EmptyMutation, EmptySubscription, Schema};
+use async_graphql::{EmptyMutation, Schema};
 use sea_orm::DatabaseConnection;
 
-use crate::query::QueryRoot;
+use crate::{query::QueryRoot, subscription::SubscriptionRoot};
 
 /// Build the async-graphql schema with database connection
 ///
 /// This creates a GraphQL schema with:
 /// - Read-only queries for public entities (account, announcement, channel, balances)
 /// - No mutations (EmptyMutation)
-/// - No subscriptions (EmptySubscription)
+/// - Real-time subscriptions for balance and channel updates
 ///
 /// The schema is configured with:
 /// - Database connection injected as context data
-/// - Query-only access pattern
-pub fn build_schema(db: DatabaseConnection) -> Schema<QueryRoot, EmptyMutation, EmptySubscription> {
-    Schema::build(QueryRoot, EmptyMutation, EmptySubscription)
+/// - Query and subscription access patterns
+pub fn build_schema(db: DatabaseConnection) -> Schema<QueryRoot, EmptyMutation, SubscriptionRoot> {
+    Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot)
         .data(db)
         .finish()
 }

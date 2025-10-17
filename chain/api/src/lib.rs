@@ -34,7 +34,8 @@ use hopr_chain_config::ChainNetworkConfig;
 pub use hopr_internal_types::channels::ChannelEntry;
 use hopr_internal_types::{
     account::AccountEntry, // channels::CorruptedChannelEntry,
-    prelude::ChannelDirection, tickets::WinningProbability,
+    prelude::ChannelDirection,
+    tickets::WinningProbability,
 };
 use hopr_primitive_types::{
     prelude::{Address, Balance, Currency, HoprBalance, U256, WxHOPR, XDai},

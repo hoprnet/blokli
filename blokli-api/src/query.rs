@@ -12,7 +12,7 @@ pub struct QueryRoot;
 impl QueryRoot {
     /// Retrieve all accounts from the database
     ///
-    /// Returns a complete list of all accounts with aggregated balance and multiaddress information.
+    /// Returns a complete list of all accounts. No filtering is available.
     async fn accounts(&self, ctx: &Context<'_>) -> Result<Vec<Account>> {
         let db = ctx.data::<DatabaseConnection>()?;
 
@@ -117,12 +117,12 @@ impl QueryRoot {
     /// If neither source nor destination is provided, returns all channels.
     /// If source is provided, filters channels by source address.
     /// If destination is provided, filters channels by destination address.
-    /// Both filters can be combined.
+    /// Both filters can be combined to find specific channels.
     async fn channels(
         &self,
         ctx: &Context<'_>,
-        source: Option<String>,
-        destination: Option<String>,
+        #[graphql(desc = "Filter by source node address (hexadecimal format)")] source: Option<String>,
+        #[graphql(desc = "Filter by destination node address (hexadecimal format)")] destination: Option<String>,
     ) -> Result<Vec<Channel>> {
         let db = ctx.data::<DatabaseConnection>()?;
 
@@ -145,9 +145,13 @@ impl QueryRoot {
 
     /// Retrieve HOPR token balance for a specific address
     ///
-    /// The address parameter is required. Returns None if no balance exists for the address.
+    /// Returns None if no balance exists for the address.
     #[graphql(name = "hoprBalance")]
-    async fn hopr_balance(&self, ctx: &Context<'_>, address: String) -> Result<Option<HoprBalance>> {
+    async fn hopr_balance(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "On-chain address to query (hexadecimal format)")] address: String,
+    ) -> Result<Option<HoprBalance>> {
         let db = ctx.data::<DatabaseConnection>()?;
 
         let balance = blokli_db_entity::hopr_balance::Entity::find()
@@ -160,9 +164,13 @@ impl QueryRoot {
 
     /// Retrieve native token balance for a specific address
     ///
-    /// The address parameter is required. Returns None if no balance exists for the address.
+    /// Returns None if no balance exists for the address.
     #[graphql(name = "nativeBalance")]
-    async fn native_balance(&self, ctx: &Context<'_>, address: String) -> Result<Option<NativeBalance>> {
+    async fn native_balance(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "On-chain address to query (hexadecimal format)")] address: String,
+    ) -> Result<Option<NativeBalance>> {
         let db = ctx.data::<DatabaseConnection>()?;
 
         let balance = blokli_db_entity::native_balance::Entity::find()
@@ -174,9 +182,6 @@ impl QueryRoot {
     }
 
     /// Retrieve chain information
-    ///
-    /// Returns current blockchain state including block number, chain ID, ticket price, and minimum winning
-    /// probability.
     #[graphql(name = "chainInfo")]
     async fn chain_info(&self, ctx: &Context<'_>) -> Result<ChainInfo> {
         let db = ctx.data::<DatabaseConnection>()?;

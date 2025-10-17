@@ -30,6 +30,22 @@
 - **Formatting**: Use `cargo fmt` - 4 spaces, no trailing commas in single-line
 - **Types**: Prefer explicit types, use `prelude` modules for common imports
 
+## Design
+
+### GraphQL API
+
+- The target schema is defined in `blokli-api/target-api-schema.graphql`
+- Ensure any changes in code are made in accordance with the schema
+- The actual schema can be generated using `just export-schema-sqlite` and will be stored in `schema.graphql`. It can be used to verify the generated schema matches the target schema.
+
+### Database
+
+- The target database schema is defined in `db/entity/target-db-schema.mmd`
+- Ensure any changes in code are made in accordance with the schema
+- The database code and internal entities should use the same attribute names as
+  defined in the database target schema to minimize mapping code and avoid
+  confusion.
+
 ## Architecture
 
 ### Workspace Structure

@@ -3,16 +3,20 @@
 use std::sync::Arc;
 
 use async_graphql::{
-    EmptyMutation, EmptySubscription, Schema,
+    EmptyMutation, Schema,
     http::{GraphQLPlaygroundConfig, playground_source},
 };
 use axum::{
     Json, Router,
     extract::State,
-    http::StatusCode,
-    response::{Html, IntoResponse, Response},
+    http::{HeaderMap, StatusCode},
+    response::{
+        Html, IntoResponse, Response,
+        sse::{Event, Sse},
+    },
     routing::get,
 };
+use futures::stream::StreamExt;
 use sea_orm::DatabaseConnection;
 use serde_json::Value;
 use tower_http::{
@@ -22,12 +26,12 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::{errors::ApiResult, query::QueryRoot, schema::build_schema};
+use crate::{errors::ApiResult, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot};
 
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
-    pub schema: Arc<Schema<QueryRoot, EmptyMutation, EmptySubscription>>,
+    pub schema: Arc<Schema<QueryRoot, EmptyMutation, SubscriptionRoot>>,
 }
 
 /// Build the Axum application router
@@ -38,7 +42,7 @@ pub async fn build_app(db: DatabaseConnection) -> ApiResult<Router> {
     };
 
     Ok(Router::new()
-        // GraphQL endpoint
+        // GraphQL endpoint (queries, mutations, and SSE subscriptions)
         .route("/graphql", get(graphql_playground).post(graphql_handler))
         // Health check
         .route("/health", get(health_handler))
@@ -54,8 +58,8 @@ pub async fn build_app(db: DatabaseConnection) -> ApiResult<Router> {
         .with_state(app_state))
 }
 
-/// GraphQL query/mutation handler
-async fn graphql_handler(State(state): State<AppState>, Json(request): Json<Value>) -> Response {
+/// GraphQL query/mutation/subscription handler
+async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json(request): Json<Value>) -> Response {
     // Parse the GraphQL request
     let request = match serde_json::from_value::<async_graphql::Request>(request) {
         Ok(req) => req,
@@ -72,7 +76,38 @@ async fn graphql_handler(State(state): State<AppState>, Json(request): Json<Valu
         }
     };
 
-    // Execute the request (schema.execute accepts Into<DynamicRequest>)
+    // Check if client accepts SSE (for subscriptions)
+    let accepts_sse = headers
+        .get("accept")
+        .and_then(|v| v.to_str().ok())
+        .map(|v| v.contains("text/event-stream"))
+        .unwrap_or(false);
+
+    // Check if the request is a subscription
+    let is_subscription = request.query.trim_start().starts_with("subscription");
+
+    // Handle subscription requests via SSE
+    if accepts_sse && is_subscription {
+        use std::pin::Pin;
+
+        use async_stream::stream;
+        use futures::stream::Stream;
+
+        let schema = state.schema.clone();
+        let sse_stream: Pin<Box<dyn Stream<Item = Result<Event, std::convert::Infallible>> + Send>> =
+            Box::pin(stream! {
+                let mut response_stream = schema.as_ref().execute_stream(request);
+                while let Some(response) = response_stream.next().await {
+                    let json = serde_json::to_string(&response)
+                        .unwrap_or_else(|_| r#"{"errors":[{"message":"Failed to serialize response"}]}"#.to_string());
+                    yield Ok::<_, std::convert::Infallible>(Event::default().data(json));
+                }
+            });
+
+        return Sse::new(sse_stream).into_response();
+    }
+
+    // Execute regular query/mutation
     let response = state.schema.execute(request).await;
 
     // Serialize and return the response

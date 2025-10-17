@@ -36,3 +36,4 @@ vendor/cargo/.DS_Store
 result
 /.direnv
 /.pre-commit-config.yaml
+/schema.graphql

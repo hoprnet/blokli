@@ -49,7 +49,7 @@ pub struct Balance {
     pub token: Token,
 }
 
-/// Chain information
+/// Blockchain and HOPR network information
 #[derive(SimpleObject, Clone, Debug)]
 pub struct ChainInfo {
     /// Current block number of the blockchain
@@ -61,7 +61,7 @@ pub struct ChainInfo {
     /// Current HOPR token price in wxHOPR
     #[graphql(name = "ticketPrice")]
     pub ticket_price: f64,
-    /// Current Minimum ticket winning probability
+    /// Current minimum ticket winning probability (decimal value between 0.0 and 1.0)
     #[graphql(name = "minTicketWinningProbability")]
     pub min_ticket_winning_probability: f64,
 }
@@ -127,9 +127,9 @@ pub struct Channel {
     pub source: String,
     /// On-chain address of the destination node in hexadecimal format
     pub destination: String,
-    /// Total amount of tokens allocated to the channel
+    /// Total amount of HOPR tokens allocated to the channel
     pub balance: f64,
-    /// State of the channel
+    /// Current state of the channel (OPEN, PENDINGTOCLOSE, or CLOSED)
     pub status: ChannelStatus,
     /// Current epoch of the channel
     pub epoch: i32,
@@ -191,72 +191,56 @@ impl From<blokli_db_entity::channel::Model> for Channel {
     }
 }
 
-/// HOPR token (wxHOPR) balance for an address
+/// HOPR token balance information for a specific address
 #[derive(SimpleObject, Clone, Debug)]
 pub struct HoprBalance {
+    /// Address holding the HOPR token balance
     pub address: String,
-    /// Token balance as decimal string
-    pub balance: String,
-    /// Last changed block as hex string
-    pub last_changed_block: String,
-    /// Last changed transaction index as hex string
-    pub last_changed_tx_index: String,
-    /// Last changed log index as hex string
-    pub last_changed_log_index: String,
+    /// HOPR token balance
+    pub balance: f64,
 }
 
 impl From<blokli_db_entity::hopr_balance::Model> for HoprBalance {
     fn from(model: blokli_db_entity::hopr_balance::Model) -> Self {
-        // Convert 12-byte balance to u128 for decimal representation
-        let balance_str = if model.balance.len() == 12 {
+        // Convert 12-byte balance to f64
+        let balance = if model.balance.len() == 12 {
             let mut bytes = [0u8; 16];
             bytes[4..].copy_from_slice(&model.balance);
-            u128::from_be_bytes(bytes).to_string()
+            u128::from_be_bytes(bytes) as f64
         } else {
-            hex::encode(&model.balance)
+            0.0
         };
 
         Self {
             address: model.address,
-            balance: balance_str,
-            last_changed_block: hex::encode(&model.last_changed_block),
-            last_changed_tx_index: hex::encode(&model.last_changed_tx_index),
-            last_changed_log_index: hex::encode(&model.last_changed_log_index),
+            balance,
         }
     }
 }
 
-/// Native token (xDai) balance for an address
+/// Native token balance information for a specific address
 #[derive(SimpleObject, Clone, Debug)]
 pub struct NativeBalance {
+    /// Address holding the native token balance
     pub address: String,
-    /// Native balance as decimal string
-    pub balance: String,
-    /// Last changed block as hex string
-    pub last_changed_block: String,
-    /// Last changed transaction index as hex string
-    pub last_changed_tx_index: String,
-    /// Last changed log index as hex string
-    pub last_changed_log_index: String,
+    /// Native token balance
+    pub balance: f64,
 }
 
 impl From<blokli_db_entity::native_balance::Model> for NativeBalance {
     fn from(model: blokli_db_entity::native_balance::Model) -> Self {
-        // Convert 12-byte balance to u128 for decimal representation
-        let balance_str = if model.balance.len() == 12 {
+        // Convert 12-byte balance to f64
+        let balance = if model.balance.len() == 12 {
             let mut bytes = [0u8; 16];
             bytes[4..].copy_from_slice(&model.balance);
-            u128::from_be_bytes(bytes).to_string()
+            u128::from_be_bytes(bytes) as f64
         } else {
-            hex::encode(&model.balance)
+            0.0
         };
 
         Self {
             address: model.address,
-            balance: balance_str,
-            last_changed_block: hex::encode(&model.last_changed_block),
-            last_changed_tx_index: hex::encode(&model.last_changed_tx_index),
-            last_changed_log_index: hex::encode(&model.last_changed_log_index),
+            balance,
         }
     }
 }
