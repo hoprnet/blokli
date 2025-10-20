@@ -10,6 +10,11 @@ Examples:
 scalar TokenValueString
 
 """
+ISO 8601 datetime string (e.g., "2024-01-15T10:30:00Z")
+"""
+scalar DateTime
+
+"""
 Blockchain and HOPR network information
 """
 type ChainInfo {
@@ -104,8 +109,8 @@ type Channel {
 	epoch: Int!
 	"Latest ticket index used in the channel"
 	ticketIndex: Int!
-	"Seconds until the channel is closed once closure is initiated"
-	closureTime: Int!
+	"Timestamp when the channel closure was initiated (null if no closure initiated)"
+	closureTime: DateTime
 }
 
 """

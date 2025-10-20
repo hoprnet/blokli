@@ -150,9 +150,9 @@ pub struct Channel {
     /// Latest ticket index used in the channel
     #[graphql(name = "ticketIndex")]
     pub ticket_index: i32,
-    /// Seconds until the channel is closed once closure is initiated
+    /// Timestamp when the channel closure was initiated (null if no closure initiated)
     #[graphql(name = "closureTime")]
-    pub closure_time: i32,
+    pub closure_time: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 impl From<blokli_db_entity::channel::Model> for Channel {
@@ -163,16 +163,6 @@ impl From<blokli_db_entity::channel::Model> for Channel {
         let epoch = bytes_to_u64(&model.epoch) as i32;
         let ticket_index = bytes_to_u64(&model.ticket_index) as i32;
 
-        // Convert closure_time to seconds until close (0 if None or already closed)
-        let closure_time = model
-            .closure_time
-            .map(|ct| {
-                let now = chrono::Utc::now();
-                let diff = ct - now;
-                diff.num_seconds().max(0) as i32
-            })
-            .unwrap_or(0);
-
         Self {
             concrete_channel_id: model.concrete_channel_id,
             source: model.source,
@@ -181,7 +171,7 @@ impl From<blokli_db_entity::channel::Model> for Channel {
             status: ChannelStatus::from(model.status),
             epoch,
             ticket_index,
-            closure_time,
+            closure_time: model.closure_time,
         }
     }
 }
