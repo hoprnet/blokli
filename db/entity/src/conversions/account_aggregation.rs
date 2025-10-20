@@ -98,11 +98,13 @@ pub async fn fetch_accounts_with_balances(db: &DatabaseConnection) -> Result<Vec
         .map(|account| {
             let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
 
+            // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
             let account_hopr_balance = hopr_balance_map
                 .get(&account.chain_key)
                 .cloned()
                 .unwrap_or_else(|| hopr_primitive_types::prelude::HoprBalance::zero().to_string());
 
+            // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
             let account_native_balance = native_balance_map
                 .get(&account.chain_key)
                 .cloned()
@@ -220,11 +222,13 @@ pub async fn fetch_accounts_with_balances_for_addresses(
         .map(|account| {
             let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
 
+            // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
             let account_hopr_balance = hopr_balance_map
                 .get(&account.chain_key)
                 .cloned()
                 .unwrap_or_else(|| hopr_primitive_types::prelude::HoprBalance::zero().to_string());
 
+            // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
             let account_native_balance = native_balance_map
                 .get(&account.chain_key)
                 .cloned()
@@ -341,11 +345,13 @@ pub async fn fetch_accounts_by_keyids(
         .map(|account| {
             let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
 
+            // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
             let account_hopr_balance = hopr_balance_map
                 .get(&account.chain_key)
                 .cloned()
                 .unwrap_or_else(|| hopr_primitive_types::prelude::HoprBalance::zero().to_string());
 
+            // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
             let account_native_balance = native_balance_map
                 .get(&account.chain_key)
                 .cloned()

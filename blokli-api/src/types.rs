@@ -86,9 +86,13 @@ pub struct Account {
     #[graphql(name = "packetKey")]
     pub packet_key: String,
     /// wxHOPR balance associated with the on-chain address
+    ///
+    /// Returns zero balance if no balance record exists in the database.
     #[graphql(name = "accountHoprBalance")]
     pub account_hopr_balance: TokenValueString,
     /// Native balance associated with the on-chain address
+    ///
+    /// Returns zero balance if no balance record exists in the database.
     #[graphql(name = "accountNativeBalance")]
     pub account_native_balance: TokenValueString,
     /// HOPR Safe contract address to which the account is linked

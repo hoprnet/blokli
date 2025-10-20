@@ -60,9 +60,9 @@ type Account {
 	chainKey: String!
 	"Unique account packet key in peer id format"
 	packetKey: String!
-	"wxHOPR balance associated with the on-chain address"
+	"wxHOPR balance associated with the on-chain address (returns zero if no balance record exists)"
 	accountHoprBalance: TokenValueString!
-	"Native balance associated with the on-chain address"
+	"Native balance associated with the on-chain address (returns zero if no balance record exists)"
 	accountNativeBalance: TokenValueString!
 	"HOPR Safe contract address to which the account is linked"
 	safeAddress: String
