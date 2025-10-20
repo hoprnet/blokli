@@ -102,13 +102,13 @@ pub async fn fetch_accounts_with_balances(db: &DatabaseConnection) -> Result<Vec
             let account_hopr_balance = hopr_balance_map
                 .get(&account.chain_key)
                 .cloned()
-                .unwrap_or_else(|| hopr_primitive_types::prelude::HoprBalance::zero().to_string());
+                .unwrap_or_else(|| hopr_balance_to_string(&[]));
 
             // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
             let account_native_balance = native_balance_map
                 .get(&account.chain_key)
                 .cloned()
-                .unwrap_or_else(|| hopr_primitive_types::prelude::XDaiBalance::zero().to_string());
+                .unwrap_or_else(|| native_balance_to_string(&[]));
 
             let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr) = account.safe_address {
                 (
@@ -226,13 +226,13 @@ pub async fn fetch_accounts_with_balances_for_addresses(
             let account_hopr_balance = hopr_balance_map
                 .get(&account.chain_key)
                 .cloned()
-                .unwrap_or_else(|| hopr_primitive_types::prelude::HoprBalance::zero().to_string());
+                .unwrap_or_else(|| hopr_balance_to_string(&[]));
 
             // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
             let account_native_balance = native_balance_map
                 .get(&account.chain_key)
                 .cloned()
-                .unwrap_or_else(|| hopr_primitive_types::prelude::XDaiBalance::zero().to_string());
+                .unwrap_or_else(|| native_balance_to_string(&[]));
 
             let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr) = account.safe_address {
                 (
@@ -349,13 +349,13 @@ pub async fn fetch_accounts_by_keyids(
             let account_hopr_balance = hopr_balance_map
                 .get(&account.chain_key)
                 .cloned()
-                .unwrap_or_else(|| hopr_primitive_types::prelude::HoprBalance::zero().to_string());
+                .unwrap_or_else(|| hopr_balance_to_string(&[]));
 
             // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
             let account_native_balance = native_balance_map
                 .get(&account.chain_key)
                 .cloned()
-                .unwrap_or_else(|| hopr_primitive_types::prelude::XDaiBalance::zero().to_string());
+                .unwrap_or_else(|| native_balance_to_string(&[]));
 
             let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr) = account.safe_address {
                 (
