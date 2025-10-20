@@ -335,7 +335,7 @@ impl BlokliDbLogOperations for BlokliDb {
                                 let log_hash = Hash::create(&[
                                     log_entry.block_hash.as_slice(),
                                     log_entry.transaction_hash.as_slice(),
-                                    log_entry.log_index.as_slice(),
+                                    &(log_entry.log_index as u64).to_be_bytes(),
                                 ]);
 
                                 let next_checksum = Hash::create(&[last_checksum.as_ref(), log_hash.as_ref()]);
@@ -392,7 +392,7 @@ impl BlokliDbLogOperations for BlokliDb {
                         // Prime the DB with the values
                         LogTopicInfo::insert_many(contract_address_topics.into_iter().map(|(addr, topic)| {
                             log_topic_info::ActiveModel {
-                                address: Set(addr.to_string()),
+                                address: Set(addr.as_ref().to_vec()),
                                 topic: Set(topic.to_string()),
                                 ..Default::default()
                             }
@@ -404,7 +404,7 @@ impl BlokliDbLogOperations for BlokliDb {
                         // Check that all contract addresses and topics are in the DB
                         for (addr, topic) in contract_address_topics {
                             let log_topic_count = LogTopicInfo::find()
-                                .filter(log_topic_info::Column::Address.eq(addr.to_string()))
+                                .filter(log_topic_info::Column::Address.eq(addr.as_ref().to_vec()))
                                 .filter(log_topic_info::Column::Topic.eq(topic.to_string()))
                                 .count(tx.as_ref())
                                 .await

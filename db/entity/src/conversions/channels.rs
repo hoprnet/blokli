@@ -70,8 +70,8 @@ impl From<ChannelEntry> for channel::ActiveModel {
             source: Set(0),      // TODO: Need to lookup/create account for value.source address
             destination: Set(0), // TODO: Need to lookup/create account for value.destination address
             balance: Set(value.balance.amount().to_be_bytes().into()),
-            epoch: Set(value.channel_epoch.to_be_bytes().into()),
-            ticket_index: Set(value.ticket_index.to_be_bytes().into()),
+            epoch: Set(value.channel_epoch.as_u64() as i64),
+            ticket_index: Set(value.ticket_index.as_u64() as i64),
             ..Default::default()
         };
         ret.set_status(value.status);

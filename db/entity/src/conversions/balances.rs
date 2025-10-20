@@ -2,6 +2,33 @@
 
 use hopr_primitive_types::prelude::{Balance, Currency, HoprBalance, IntoEndian, XDaiBalance};
 
+/// Convert binary address (20 bytes) to hex string (without 0x prefix)
+///
+/// # Arguments
+/// * `address` - A slice containing the 20-byte address
+///
+/// # Returns
+/// * `String` - The address as a hexadecimal string (40 characters), or empty string if invalid
+pub fn address_to_string(address: &[u8]) -> String {
+    if address.len() == 20 {
+        hex::encode(address)
+    } else {
+        String::new()
+    }
+}
+
+/// Convert hex string address to binary (20 bytes)
+///
+/// # Arguments
+/// * `address` - A hex string (with or without 0x prefix)
+///
+/// # Returns
+/// * `Vec<u8>` - The address as 20 bytes, or empty vector if invalid
+pub fn string_to_address(address: &str) -> Vec<u8> {
+    let addr = address.strip_prefix("0x").unwrap_or(address);
+    hex::decode(addr).unwrap_or_default()
+}
+
 /// Convert a 12-byte balance representation to f64
 ///
 /// This function converts the 12-byte big-endian balance stored in the database

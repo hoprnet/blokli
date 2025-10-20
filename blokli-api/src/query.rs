@@ -65,6 +65,7 @@ impl QueryRoot {
         #[graphql(desc = "Filter by packet key (peer ID format)")] packet_key: Option<String>,
         #[graphql(desc = "Filter by chain key (hexadecimal format)")] chain_key: Option<String>,
     ) -> Result<i32> {
+        use blokli_db_entity::conversions::balances::string_to_address;
         use sea_orm::PaginatorTrait;
 
         let db = ctx.data::<DatabaseConnection>()?;
@@ -81,7 +82,9 @@ impl QueryRoot {
         }
 
         if let Some(ck) = chain_key {
-            query = query.filter(blokli_db_entity::account::Column::ChainKey.eq(ck));
+            // Convert hex string address to binary for database query
+            let binary_chain_key = string_to_address(&ck);
+            query = query.filter(blokli_db_entity::account::Column::ChainKey.eq(binary_chain_key));
         }
 
         // Get count efficiently using SeaORM's paginator
@@ -185,13 +188,18 @@ impl QueryRoot {
         ctx: &Context<'_>,
         #[graphql(desc = "On-chain address to query (hexadecimal format)")] address: String,
     ) -> Result<Option<HoprBalance>> {
+        use blokli_db_entity::conversions::balances::string_to_address;
+
         // Validate address format
         validate_eth_address(&address)?;
 
         let db = ctx.data::<DatabaseConnection>()?;
 
+        // Convert hex string address to binary for database query
+        let binary_address = string_to_address(&address);
+
         let balance = blokli_db_entity::hopr_balance::Entity::find()
-            .filter(blokli_db_entity::hopr_balance::Column::Address.eq(address))
+            .filter(blokli_db_entity::hopr_balance::Column::Address.eq(binary_address))
             .one(db)
             .await?;
 
@@ -207,13 +215,18 @@ impl QueryRoot {
         ctx: &Context<'_>,
         #[graphql(desc = "On-chain address to query (hexadecimal format)")] address: String,
     ) -> Result<Option<NativeBalance>> {
+        use blokli_db_entity::conversions::balances::string_to_address;
+
         // Validate address format
         validate_eth_address(&address)?;
 
         let db = ctx.data::<DatabaseConnection>()?;
 
+        // Convert hex string address to binary for database query
+        let binary_address = string_to_address(&address);
+
         let balance = blokli_db_entity::native_balance::Entity::find()
-            .filter(blokli_db_entity::native_balance::Column::Address.eq(address))
+            .filter(blokli_db_entity::native_balance::Column::Address.eq(binary_address))
             .one(db)
             .await?;
 
@@ -241,13 +254,8 @@ impl QueryRoot {
             .map(|bytes| TokenValueString(hopr_balance_to_string(bytes)))
             .unwrap_or_else(|| TokenValueString(hopr_balance_to_string(&[])));
 
-        // Convert last_indexed_block from 8-byte binary to u64, then to i32
-        let block_number = if chain_info.last_indexed_block.len() == 8 {
-            let bytes: [u8; 8] = chain_info.last_indexed_block.as_slice().try_into().unwrap_or([0u8; 8]);
-            u64::from_be_bytes(bytes) as i32
-        } else {
-            0
-        };
+        // Convert last_indexed_block from i64 to i32
+        let block_number = chain_info.last_indexed_block as i32;
 
         Ok(ChainInfo {
             block_number,

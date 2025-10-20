@@ -5,7 +5,9 @@ use std::time::Duration;
 use async_graphql::{Context, Result, Subscription};
 use async_stream::stream;
 use blokli_api_types::{Account, Channel, HoprBalance, NativeBalance, TokenValueString};
-use blokli_db_entity::conversions::balances::{hopr_balance_to_string, native_balance_to_string};
+use blokli_db_entity::conversions::balances::{
+    address_to_string, hopr_balance_to_string, native_balance_to_string, string_to_address,
+};
 use futures::Stream;
 use sea_orm::DatabaseConnection;
 use tokio::time::sleep;
@@ -142,8 +144,11 @@ impl SubscriptionRoot {
     ) -> Result<Option<NativeBalance>, sea_orm::DbErr> {
         use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
+        // Convert hex string address to binary for database query
+        let binary_address = string_to_address(address);
+
         let balance = blokli_db_entity::native_balance::Entity::find()
-            .filter(blokli_db_entity::native_balance::Column::Address.eq(address))
+            .filter(blokli_db_entity::native_balance::Column::Address.eq(binary_address))
             .one(db)
             .await?;
 
@@ -153,8 +158,11 @@ impl SubscriptionRoot {
     async fn fetch_hopr_balance(db: &DatabaseConnection, address: &str) -> Result<Option<HoprBalance>, sea_orm::DbErr> {
         use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
+        // Convert hex string address to binary for database query
+        let binary_address = string_to_address(address);
+
         let balance = blokli_db_entity::hopr_balance::Entity::find()
-            .filter(blokli_db_entity::hopr_balance::Column::Address.eq(address))
+            .filter(blokli_db_entity::hopr_balance::Column::Address.eq(binary_address))
             .one(db)
             .await?;
 
@@ -209,7 +217,9 @@ impl SubscriptionRoot {
         }
 
         if let Some(ck) = chain_key {
-            query = query.filter(blokli_db_entity::account::Column::ChainKey.eq(ck));
+            // Convert hex string address to binary for database query
+            let binary_chain_key = string_to_address(&ck);
+            query = query.filter(blokli_db_entity::account::Column::ChainKey.eq(binary_chain_key));
         }
 
         let accounts = query.all(db).await?;
@@ -228,7 +238,7 @@ impl SubscriptionRoot {
             // Fetch HOPR balance for account's chain_key
             // Returns zero balance if no balance record exists (hopr_balance_to_string(&[]) returns "0")
             let hopr_balance_value = blokli_db_entity::hopr_balance::Entity::find()
-                .filter(blokli_db_entity::hopr_balance::Column::Address.eq(&account_model.chain_key))
+                .filter(blokli_db_entity::hopr_balance::Column::Address.eq(account_model.chain_key.clone()))
                 .one(db)
                 .await?
                 .map(|b| hopr_balance_to_string(&b.balance))
@@ -237,22 +247,26 @@ impl SubscriptionRoot {
             // Fetch Native balance for account's chain_key
             // Returns zero balance if no balance record exists (native_balance_to_string(&[]) returns "0")
             let native_balance_value = blokli_db_entity::native_balance::Entity::find()
-                .filter(blokli_db_entity::native_balance::Column::Address.eq(&account_model.chain_key))
+                .filter(blokli_db_entity::native_balance::Column::Address.eq(account_model.chain_key.clone()))
                 .one(db)
                 .await?
                 .map(|b| native_balance_to_string(&b.balance))
                 .unwrap_or_else(|| native_balance_to_string(&[]));
 
+            // Convert addresses to hex strings for GraphQL response
+            let chain_key_str = address_to_string(&account_model.chain_key);
+            let safe_address_str = account_model.safe_address.as_ref().map(|addr| address_to_string(addr));
+
             // Fetch safe balances if safe_address exists
             let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr) = account_model.safe_address {
                 let safe_hopr = blokli_db_entity::hopr_balance::Entity::find()
-                    .filter(blokli_db_entity::hopr_balance::Column::Address.eq(safe_addr))
+                    .filter(blokli_db_entity::hopr_balance::Column::Address.eq(safe_addr.clone()))
                     .one(db)
                     .await?
                     .map(|b| hopr_balance_to_string(&b.balance));
 
                 let safe_native = blokli_db_entity::native_balance::Entity::find()
-                    .filter(blokli_db_entity::native_balance::Column::Address.eq(safe_addr))
+                    .filter(blokli_db_entity::native_balance::Column::Address.eq(safe_addr.clone()))
                     .one(db)
                     .await?
                     .map(|b| native_balance_to_string(&b.balance));
@@ -264,11 +278,11 @@ impl SubscriptionRoot {
 
             result.push(Account {
                 keyid: account_model.id,
-                chain_key: account_model.chain_key,
+                chain_key: chain_key_str,
                 packet_key: account_model.packet_key,
                 account_hopr_balance: TokenValueString(hopr_balance_value),
                 account_native_balance: TokenValueString(native_balance_value),
-                safe_address: account_model.safe_address,
+                safe_address: safe_address_str,
                 safe_hopr_balance: safe_hopr_balance.map(TokenValueString),
                 safe_native_balance: safe_native_balance.map(TokenValueString),
                 multi_addresses,

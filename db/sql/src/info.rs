@@ -356,8 +356,7 @@ impl BlokliDbInfoOperations for BlokliDb {
                         .await?
                         .ok_or(DbSqlError::MissingFixedTableEntry("chain_info".into()))
                         .map(|m| IndexerStateInfo {
-                            latest_block_number: u64::from_be_bytes(m.last_indexed_block.as_slice().try_into().unwrap())
-                                as u32,
+                            latest_block_number: m.last_indexed_block as u32,
                             ..Default::default()
                         })
                 })
@@ -375,8 +374,7 @@ impl BlokliDbInfoOperations for BlokliDb {
                         .await?
                         .ok_or(MissingFixedTableEntry("chain_info".into()))?;
 
-                    let current_last_indexed_block =
-                        u64::from_be_bytes(model.last_indexed_block.as_slice().try_into().unwrap()) as u32;
+                    let current_last_indexed_block = model.last_indexed_block as u32;
 
                     let mut active_model = model.into_active_model();
 
@@ -386,7 +384,7 @@ impl BlokliDbInfoOperations for BlokliDb {
                         "update block"
                     );
 
-                    active_model.last_indexed_block = Set((block_num as u64).to_be_bytes().to_vec());
+                    active_model.last_indexed_block = Set(block_num as i64);
                     active_model.update(tx.as_ref()).await?;
 
                     Ok::<_, DbSqlError>(())

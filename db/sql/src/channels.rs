@@ -44,13 +44,13 @@ impl ChannelEditor {
 
     /// Change the ticket index.
     pub fn change_ticket_index(mut self, index: impl Into<U256>) -> Self {
-        self.model.ticket_index = Set(index.into().to_be_bytes().to_vec());
+        self.model.ticket_index = Set(index.into().as_u64() as i64);
         self
     }
 
     /// Change the channel epoch.
     pub fn change_epoch(mut self, epoch: impl Into<U256>) -> Self {
-        self.model.epoch = Set(epoch.into().to_be_bytes().to_vec());
+        self.model.epoch = Set(epoch.into().as_u64() as i64);
         self
     }
 
