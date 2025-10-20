@@ -60,6 +60,7 @@ impl Predicate for NotSse {
 #[derive(Clone)]
 pub struct AppState {
     pub schema: Arc<Schema<QueryRoot, EmptyMutation, SubscriptionRoot>>,
+    pub playground_enabled: bool,
 }
 
 /// Build the Axum application router
@@ -67,6 +68,7 @@ pub async fn build_app(db: DatabaseConnection, config: ApiConfig) -> ApiResult<R
     let schema = build_schema(db, config.chain_id);
     let app_state = AppState {
         schema: Arc::new(schema),
+        playground_enabled: config.playground_enabled,
     };
 
     // Configure CORS based on allowed origins
@@ -103,7 +105,7 @@ pub async fn build_app(db: DatabaseConnection, config: ApiConfig) -> ApiResult<R
         .layer(
             CompressionLayer::new()
                 .zstd(true)
-                .quality(CompressionLevel::Best)
+                .quality(CompressionLevel::Default)
                 .compress_when(
                     // Compression requires: size > 1KB AND not SSE
                     SizeAbove::new(1024).and(NotSse),
@@ -174,9 +176,17 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
     .into_response()
 }
 
-/// GraphQL Playground UI
-async fn graphql_playground() -> impl IntoResponse {
-    Html(playground_source(GraphQLPlaygroundConfig::new("/graphql")))
+/// GraphQL Playground UI (only enabled if playground_enabled config is true)
+async fn graphql_playground(State(state): State<AppState>) -> impl IntoResponse {
+    if state.playground_enabled {
+        Html(playground_source(GraphQLPlaygroundConfig::new("/graphql"))).into_response()
+    } else {
+        (
+            StatusCode::NOT_FOUND,
+            "GraphQL Playground is disabled. Use POST /graphql for queries.",
+        )
+            .into_response()
+    }
 }
 
 /// Health check endpoint

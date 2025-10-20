@@ -18,7 +18,7 @@ use sea_orm::{
     query::QueryTrait,
     sea_query::{Expr, OnConflict, Value},
 };
-use tracing::{error, trace, warn};
+use tracing::{error, trace};
 
 use crate::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, errors::DbSqlError};
 
@@ -49,47 +49,103 @@ impl BlokliDbLogOperations for BlokliDb {
                 Box::pin(async move {
                     let results = stream::iter(logs).then(|log| async {
                         let log_id = log.to_string();
-                        let model = log::ActiveModel::from(log.clone());
-                        let status_model = log_status::ActiveModel::from(log);
-                        let log_status_query = LogStatus::insert(status_model).on_conflict(
-                            OnConflict::columns([
-                                log_status::Column::LogIndex,
-                                log_status::Column::TxIndex,
-                                log_status::Column::BlockNumber,
-                            ])
-                            .do_nothing()
-                            .to_owned(),
-                        );
-                        let log_query = Log::insert(model).on_conflict(
-                            OnConflict::columns([
-                                log::Column::LogIndex,
-                                log::Column::TxIndex,
-                                log::Column::BlockNumber,
-                            ])
-                            .do_nothing()
-                            .to_owned(),
-                        );
 
-                        match log_status_query.exec(tx.as_ref()).await {
-                            Ok(_) => match log_query.exec(tx.as_ref()).await {
-                                Ok(_) => Ok(()),
-                                Err(DbErr::RecordNotInserted) => {
-                                    warn!(log_id, "log already in the DB");
-                                    Err(DbError::General(format!("log already exists in the DB: {log_id}")))
+                        // First, try to insert the Log and get its ID
+                        let log_model = log::ActiveModel::from(log.clone());
+                        let log_result = Log::insert(log_model)
+                            .on_conflict(
+                                OnConflict::columns([
+                                    log::Column::LogIndex,
+                                    log::Column::TxIndex,
+                                    log::Column::BlockNumber,
+                                ])
+                                .do_nothing()
+                                .to_owned(),
+                            )
+                            .exec(tx.as_ref())
+                            .await;
+
+                        match log_result {
+                            Ok(insert_result) => {
+                                // Log was inserted successfully, now insert LogStatus with the log_id
+                                let mut status_model = log_status::ActiveModel::from(log);
+                                status_model.log_id = Set(insert_result.last_insert_id);
+
+                                match LogStatus::insert(status_model)
+                                    .on_conflict(
+                                        OnConflict::columns([
+                                            log_status::Column::LogIndex,
+                                            log_status::Column::TxIndex,
+                                            log_status::Column::BlockNumber,
+                                        ])
+                                        .do_nothing()
+                                        .to_owned(),
+                                    )
+                                    .exec(tx.as_ref())
+                                    .await
+                                {
+                                    Ok(_) => Ok(()),
+                                    Err(DbErr::RecordNotInserted) => {
+                                        // LogStatus already exists - idempotent success
+                                        trace!(log_id, "log status already in the DB");
+                                        Ok(())
+                                    }
+                                    Err(e) => {
+                                        error!(%log_id, "Failed to insert log status into db: {:?}", e);
+                                        Err(DbError::General(e.to_string()))
+                                    }
                                 }
-                                Err(e) => {
-                                    error!("Failed to insert log into db: {:?}", e);
-                                    Err(DbError::General(e.to_string()))
-                                }
-                            },
+                            }
                             Err(DbErr::RecordNotInserted) => {
-                                warn!(log_id, "log already in the DB");
-                                Err(DbError::General(format!(
-                                    "log status already exists in the DB: {log_id}"
-                                )))
+                                // Log already exists, need to find it to get its ID for LogStatus
+                                match Log::find()
+                                    .filter(log::Column::BlockNumber.eq(log.block_number as i64))
+                                    .filter(log::Column::TxIndex.eq(log.tx_index as i64))
+                                    .filter(log::Column::LogIndex.eq(log.log_index as i64))
+                                    .one(tx.as_ref())
+                                    .await
+                                {
+                                    Ok(Some(existing_log)) => {
+                                        // Found existing log, try to insert LogStatus with its ID
+                                        let mut status_model = log_status::ActiveModel::from(log);
+                                        status_model.log_id = Set(existing_log.id);
+
+                                        match LogStatus::insert(status_model)
+                                            .on_conflict(
+                                                OnConflict::columns([
+                                                    log_status::Column::LogIndex,
+                                                    log_status::Column::TxIndex,
+                                                    log_status::Column::BlockNumber,
+                                                ])
+                                                .do_nothing()
+                                                .to_owned(),
+                                            )
+                                            .exec(tx.as_ref())
+                                            .await
+                                        {
+                                            Ok(_) | Err(DbErr::RecordNotInserted) => {
+                                                // Both Log and LogStatus exist - idempotent success
+                                                trace!(log_id, "log already in the DB");
+                                                Ok(())
+                                            }
+                                            Err(e) => {
+                                                error!(%log_id, "Failed to insert log status into db: {:?}", e);
+                                                Err(DbError::General(e.to_string()))
+                                            }
+                                        }
+                                    }
+                                    Ok(None) => {
+                                        error!(%log_id, "Log not found after RecordNotInserted error");
+                                        Err(DbError::General(format!("Log not found: {log_id}")))
+                                    }
+                                    Err(e) => {
+                                        error!(%log_id, "Failed to find existing log: {:?}", e);
+                                        Err(DbError::General(e.to_string()))
+                                    }
+                                }
                             }
                             Err(e) => {
-                                error!(%log_id, "Failed to insert log status into db: {:?}", e);
+                                error!("Failed to insert log into db: {:?}", e);
                                 Err(DbError::General(e.to_string()))
                             }
                         }
@@ -146,17 +202,17 @@ impl BlokliDbLogOperations for BlokliDb {
             .order_by_asc(log::Column::LogIndex);
 
         match query.all(self.conn(TargetDb::Logs)).await {
-            Ok(logs) => Ok(logs
+            Ok(logs) => logs
                 .into_iter()
                 .map(|(log, status)| {
                     if let Some(status) = status {
-                        create_log(log, status).unwrap()
+                        create_log(log, status).map_err(DbError::from)
                     } else {
                         error!("Missing log status for log in db: {:?}", log);
-                        SerializableLog::try_from(log).unwrap()
+                        Err(DbError::MissingLogStatus)
                     }
                 })
-                .collect()),
+                .collect::<Result<Vec<_>>>(),
             Err(e) => {
                 error!("Failed to get logs from db: {:?}", e);
                 Err(DbError::from(DbSqlError::from(e)))
@@ -571,9 +627,8 @@ mod tests {
 
         db.store_log(log.clone()).await.unwrap();
 
-        db.store_log(log.clone())
-            .await
-            .expect_err("Expected error due to duplicate log insertion");
+        // Idempotent: storing the same log again should succeed
+        db.store_log(log.clone()).await.unwrap();
 
         let logs = db.get_logs(None, None).await.unwrap();
 
