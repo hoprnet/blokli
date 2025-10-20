@@ -62,9 +62,9 @@ erDiagram
     log {
         int id PK "Primary key"
         int log_status_id FK "Foreign key to log status"
-        binary(8) tx_index UK "Transaction index (NOT NULL)"
-        binary(8) log_index UK "Log index (NOT NULL)"
-        binary(8) block_number UK "Block number (NOT NULL)"
+        binary(8) tx_index "Transaction index (NOT NULL)"
+        binary(8) log_index "Log index (NOT NULL)"
+        binary(8) block_number "Block number (NOT NULL)"
         binary(32) block_hash "Block hash (hex representation, NOT NULL)"
         binary(32) transaction_hash "Transaction hash (hex representation, NOT NULL)"
         binary(20) address "Address (NOT NULL)"
@@ -72,17 +72,19 @@ erDiagram
         binary data "Data (NOT NULL)"
         bool removed "Removed flag (default is false)"
     }
+    %% Composite unique constraint: UNIQUE(block_number, tx_index, log_index)
 
     log_status {
         int id PK "Primary key"
         int log_id FK "Foreign key to log (NOT NULL)"
-        binary(8) tx_index UK "Transaction index (NOT NULL)"
-        binary(8) log_index UK "Log index (NOT NULL)"
-        binary(8) block_number UK "Block number (NOT NULL)"
+        binary(8) tx_index "Transaction index (NOT NULL)"
+        binary(8) log_index "Log index (NOT NULL)"
+        binary(8) block_number "Block number (NOT NULL)"
         bool processed "Processed flag (default is false)"
         datetime processed_at "Processing timestamp"
         binary(32) checksum "Checksum"
     }
+    %% Composite unique constraint: UNIQUE(block_number, tx_index, log_index)
 
     log_topic_info {
         int id PK "Primary key"
