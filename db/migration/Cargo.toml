@@ -8,10 +8,17 @@ publish     = false
 repository  = "https://github.com/hoprnet/blokli"
 version     = "0.1.0"
 
+[features]
+default = ["sqlite"]
+sqlite  = ["sea-orm-migration/sqlx-sqlite"]
 
 [lib]
 name = "migration"
 path = "src/lib.rs"
+
+[[bin]]
+name = "migration"
+path = "src/main.rs"
 
 [dependencies]
 sea-orm-migration = { workspace = true }

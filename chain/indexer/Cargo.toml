@@ -45,7 +45,6 @@ lazy_static = { workspace = true }
 multiaddr = { workspace = true }
 reqwest = { workspace = true, features = ["brotli", "json", "stream", "zstd"] }
 smart-default = { workspace = true }
-sqlx = { workspace = true }
 sysinfo = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }

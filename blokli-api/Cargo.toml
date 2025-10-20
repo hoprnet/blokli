@@ -1,0 +1,58 @@
+[package]
+authors     = ["HOPR Association <tech@hoprnet.org>"]
+description = "GraphQL API server for HOPR blokli indexer"
+edition     = "2024"
+homepage    = "https://hoprnet.org/"
+license     = "GPL-3.0-only"
+name        = "blokli-api"
+repository  = "https://github.com/hoprnet/hoprnet"
+version     = "0.1.0"
+
+[dependencies]
+# Async runtime
+async-stream = { workspace = true }
+futures      = { workspace = true }
+tokio        = { workspace = true }
+
+# TLS
+rustls         = { workspace = true }
+rustls-pemfile = { workspace = true }
+tokio-rustls   = { workspace = true }
+
+# Web framework
+axum       = { workspace = true }
+axum-extra = { workspace = true }
+tower      = { workspace = true }
+tower-http = { workspace = true }
+
+# GraphQL
+async-graphql      = { workspace = true }
+async-graphql-axum = { workspace = true }
+
+# Serialization
+serde      = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+anyhow    = { workspace = true }
+thiserror = { workspace = true }
+
+# Database
+sea-orm = { workspace = true }
+
+# Encoding
+chrono = { workspace = true }
+hex    = { workspace = true }
+
+# Internal dependencies
+blokli-db-entity = { workspace = true }
+
+# Logging
+tracing            = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# CLI
+clap = { workspace = true }
+
+[dev-dependencies]
+tokio-test = { workspace = true }

@@ -1,0 +1,43 @@
+services:
+  postgres:
+    image: postgres:18-alpine
+    container_name: bloklid-postgres
+    environment:
+      POSTGRES_USER: bloklid
+      POSTGRES_PASSWORD: bloklid_dev_password
+      POSTGRES_DB: bloklid
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bloklid"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - bloklid-network
+  bloklid:
+    image: bloklid:latest # Built from: nix build .#bloklid-docker && docker load < result
+    container_name: bloklid
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      RUST_LOG: info,blokli_chain_indexer=debug
+    volumes:
+      - ./config-docker.toml:/config.toml:ro
+      - bloklid_data:/data
+    ports:
+      - "3064:3064"
+    command: ["-c", "/config.toml"]
+    networks:
+      - bloklid-network
+    restart: unless-stopped
+volumes:
+  postgres_data:
+  bloklid_data:
+networks:
+  bloklid-network:
+    driver: bridge

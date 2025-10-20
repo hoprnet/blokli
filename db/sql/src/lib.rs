@@ -6,7 +6,8 @@
 
 pub mod accounts;
 pub mod channels;
-pub mod corrupted_channels;
+// TODO: Refactor to use channel.corrupted_state field
+// pub mod corrupted_channels;
 pub mod db;
 pub mod errors;
 pub mod info;
@@ -18,13 +19,13 @@ use async_trait::async_trait;
 pub use blokli_db_api as api;
 use blokli_db_api::logs::BlokliDbLogOperations;
 use futures::future::BoxFuture;
-use sea_orm::{ConnectionTrait, TransactionTrait};
+use sea_orm::TransactionTrait;
 pub use sea_orm::{DatabaseConnection, DatabaseTransaction};
 
 use crate::{
     accounts::BlokliDbAccountOperations,
     channels::BlokliDbChannelOperations,
-    corrupted_channels::BlokliDbCorruptedChannelOperations,
+    // corrupted_channels::BlokliDbCorruptedChannelOperations,
     db::BlokliDb,
     errors::{DbSqlError, Result},
     info::BlokliDbInfoOperations,
@@ -194,61 +195,66 @@ pub trait BlokliDbGeneralModelOperations {
 
 #[async_trait]
 impl BlokliDbGeneralModelOperations for BlokliDb {
-    /// Retrieves raw database connection to the given [DB](TargetDb).
+    /// Retrieves raw database connection for the specified target.
+    ///
+    /// For PostgreSQL: both Index and Logs use the same database connection.
+    /// For SQLite with dual databases: Index uses `db`, Logs uses `logs_db`.
     fn conn(&self, target_db: TargetDb) -> &DatabaseConnection {
         match target_db {
-            TargetDb::Index => self.index_db.read_only(), // TODO: no write access needed here, deserves better
-            // wrapping
-            TargetDb::Logs => &self.logs_db,
+            TargetDb::Index => &self.db,
+            TargetDb::Logs => self.logs_db(),
         }
     }
 
-    /// Starts a new transaction in the given [DB](TargetDb).
+    /// Starts a new transaction on the appropriate database.
+    ///
+    /// For PostgreSQL: both Index and Logs use the same database connection.
+    /// For SQLite with dual databases: uses the appropriate connection based on `target_db`.
     async fn begin_transaction_in_db(&self, target_db: TargetDb) -> Result<OpenTransaction> {
-        match target_db {
-            TargetDb::Index => Ok(OpenTransaction(
-                self.index_db.read_write().begin_with_config(None, None).await?, /* TODO: cannot estimate intent,
-                                                                                  * must be readwrite */
-                target_db,
-            )),
-            TargetDb::Logs => Ok(OpenTransaction(
-                self.logs_db.begin_with_config(None, None).await?,
-                target_db,
-            )),
-        }
+        let db_conn = self.conn(target_db);
+        Ok(OpenTransaction(db_conn.begin_with_config(None, None).await?, target_db))
     }
 
     async fn import_logs_db(self, src_dir: PathBuf) -> Result<()> {
-        let src_db_path = src_dir.join("hopr_logs.db");
-        if !src_db_path.exists() {
+        use sea_orm::ConnectionTrait;
+
+        let sql_path = src_dir.join("hopr_logs.sql");
+
+        if !sql_path.exists() {
             return Err(DbSqlError::Construction(format!(
-                "Source logs database file does not exist: {}",
-                src_db_path.display()
+                "SQL dump file not found: {}",
+                sql_path.display()
             )));
         }
 
-        let sql = format!(
-            r#"
-            ATTACH DATABASE '{}' AS source_logs;
-            BEGIN TRANSACTION;
-            DELETE FROM log;
-            DELETE FROM log_status;
-            DELETE FROM log_topic_info;
-            INSERT INTO log_topic_info SELECT * FROM source_logs.log_topic_info;
-            INSERT INTO log_status SELECT * FROM source_logs.log_status;
-            INSERT INTO log SELECT * FROM source_logs.log;
-            COMMIT;
-            DETACH DATABASE source_logs;
-        "#,
-            src_db_path.to_string_lossy().replace("'", "''")
-        );
+        // Read the SQL dump file
+        let sql_content = std::fs::read_to_string(&sql_path)
+            .map_err(|e| DbSqlError::Construction(format!("Failed to read SQL dump file: {}", e)))?;
 
-        let logs_conn = self.conn(TargetDb::Logs);
+        // Execute within a transaction for atomicity
+        let txn = self.db.begin().await?;
 
-        logs_conn
-            .execute_unprepared(sql.as_str())
-            .await
-            .map_err(|e| DbSqlError::Construction(format!("Failed to import logs data: {e}")))?;
+        // Clear existing data from log tables
+        txn.execute_unprepared("TRUNCATE TABLE log, log_status, log_topic_info CASCADE")
+            .await?;
+
+        // Execute the SQL dump
+        // Split on empty lines or statement terminators to handle multi-statement SQL
+        for statement in sql_content.split(';') {
+            let trimmed = statement.trim();
+            if trimmed.is_empty() || trimmed.starts_with("--") {
+                continue;
+            }
+
+            // Execute the statement
+            let sql = format!("{};", trimmed);
+            txn.execute_unprepared(&sql)
+                .await
+                .map_err(|e| DbSqlError::Construction(format!("Failed to execute SQL statement: {}", e)))?;
+        }
+
+        // Commit the transaction
+        txn.commit().await?;
 
         Ok(())
     }
@@ -259,7 +265,7 @@ pub trait BlokliDbAllOperations:
     BlokliDbGeneralModelOperations
     + BlokliDbAccountOperations
     + BlokliDbChannelOperations
-    + BlokliDbCorruptedChannelOperations
+    // + BlokliDbCorruptedChannelOperations
     + BlokliDbInfoOperations
     + BlokliDbLogOperations
 {
@@ -270,5 +276,5 @@ pub mod prelude {
     pub use blokli_db_api::logs::*;
 
     pub use super::*;
-    pub use crate::{accounts::*, channels::*, corrupted_channels::*, db::*, errors::*, info::*};
+    pub use crate::{accounts::*, channels::*, /* corrupted_channels::*, */ db::*, errors::*, info::*};
 }

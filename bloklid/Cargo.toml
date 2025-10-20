@@ -21,11 +21,14 @@ runtime-tokio = [
 alloy              = { workspace = true }
 async-channel      = { workspace = true }
 async-signal       = { workspace = true }
+axum               = { workspace = true }
 clap               = { workspace = true }
 futures            = { workspace = true }
 hex                = { workspace = true }
+sea-orm            = { workspace = true }
 serde              = { workspace = true }
 serde_with         = { workspace = true }
+serde_yaml         = { workspace = true }
 smart-default      = { workspace = true }
 thiserror          = { workspace = true }
 tokio              = { workspace = true }
@@ -36,6 +39,7 @@ url                = { workspace = true }
 validator          = { workspace = true }
 
 # Local dependencies
+blokli-api           = { path = "../blokli-api" }
 blokli-chain-api     = { path = "../chain/api" }
 blokli-chain-indexer = { path = "../chain/indexer" }
 blokli-chain-rpc     = { path = "../chain/rpc" }
@@ -54,4 +58,6 @@ anyhow      = { workspace = true }
 async-trait = { workspace = true }
 mockall     = { workspace = true }
 tempfile    = { workspace = true }
+thiserror   = { workspace = true }
 tokio       = { workspace = true, features = ["full"] }
+validator   = { workspace = true }

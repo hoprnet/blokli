@@ -12,7 +12,7 @@ impl From<SerializableLog> for log::ActiveModel {
             data: Set(value.data),
             block_number: Set(value.block_number.to_be_bytes().to_vec()),
             transaction_hash: Set(value.tx_hash.to_vec()),
-            transaction_index: Set(value.tx_index.to_be_bytes().to_vec()),
+            tx_index: Set(value.tx_index.to_be_bytes().to_vec()),
             block_hash: Set(value.block_hash.to_vec()),
             log_index: Set(value.log_index.to_be_bytes().to_vec()),
             removed: Set(value.removed),
@@ -48,7 +48,7 @@ impl TryFrom<log::Model> for SerializableLog {
             data: value.data,
             block_number: U256::from_be_bytes(value.block_number).as_u64(),
             tx_hash,
-            tx_index: U256::from_be_bytes(value.transaction_index).as_u64(),
+            tx_index: U256::from_be_bytes(value.tx_index).as_u64(),
             block_hash,
             log_index: U256::from_be_bytes(value.log_index).as_u64(),
             removed: value.removed,
@@ -69,11 +69,12 @@ impl From<SerializableLog> for log_status::ActiveModel {
 
         log_status::ActiveModel {
             block_number: Set(value.block_number.to_be_bytes().to_vec()),
-            transaction_index: Set(value.tx_index.to_be_bytes().to_vec()),
+            tx_index: Set(value.tx_index.to_be_bytes().to_vec()),
             log_index: Set(value.log_index.to_be_bytes().to_vec()),
             processed: Set(processed),
             processed_at: Set(processed_at),
             checksum: Set(checksum),
+            ..Default::default()
         }
     }
 }
