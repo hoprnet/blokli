@@ -1,4 +1,7 @@
 //! GraphQL type definitions for HOPR blokli API
+//!
+//! This crate contains pure GraphQL type definitions that can be reused
+//! by clients without depending on the full API server implementation.
 
 use async_graphql::{Enum, NewType, SimpleObject};
 
@@ -120,17 +123,6 @@ pub struct Announcement {
     pub published_block: String,
 }
 
-impl From<blokli_db_entity::announcement::Model> for Announcement {
-    fn from(model: blokli_db_entity::announcement::Model) -> Self {
-        Self {
-            id: model.id,
-            account_id: model.account_id,
-            multiaddress: model.multiaddress,
-            published_block: hex::encode(&model.published_block),
-        }
-    }
-}
-
 /// Payment channel between two nodes
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Channel {
@@ -155,27 +147,6 @@ pub struct Channel {
     pub closure_time: Option<chrono::DateTime<chrono::Utc>>,
 }
 
-impl From<blokli_db_entity::channel::Model> for Channel {
-    fn from(model: blokli_db_entity::channel::Model) -> Self {
-        use blokli_db_entity::conversions::balances::{bytes_to_u64, hopr_balance_to_string};
-
-        let balance = TokenValueString(hopr_balance_to_string(&model.balance));
-        let epoch = bytes_to_u64(&model.epoch) as i32;
-        let ticket_index = bytes_to_u64(&model.ticket_index) as i32;
-
-        Self {
-            concrete_channel_id: model.concrete_channel_id,
-            source: model.source,
-            destination: model.destination,
-            balance,
-            status: ChannelStatus::from(model.status),
-            epoch,
-            ticket_index,
-            closure_time: model.closure_time,
-        }
-    }
-}
-
 /// Graph of opened payment channels with associated accounts
 #[derive(SimpleObject, Clone, Debug)]
 pub struct OpenedChannelsGraph {
@@ -194,17 +165,6 @@ pub struct HoprBalance {
     pub balance: TokenValueString,
 }
 
-impl From<blokli_db_entity::hopr_balance::Model> for HoprBalance {
-    fn from(model: blokli_db_entity::hopr_balance::Model) -> Self {
-        use blokli_db_entity::conversions::balances::balance_to_string;
-
-        Self {
-            address: model.address,
-            balance: TokenValueString(balance_to_string(&model.balance)),
-        }
-    }
-}
-
 /// Native token balance information for a specific address
 #[derive(SimpleObject, Clone, Debug)]
 pub struct NativeBalance {
@@ -212,15 +172,4 @@ pub struct NativeBalance {
     pub address: String,
     /// Native token balance
     pub balance: TokenValueString,
-}
-
-impl From<blokli_db_entity::native_balance::Model> for NativeBalance {
-    fn from(model: blokli_db_entity::native_balance::Model) -> Self {
-        use blokli_db_entity::conversions::balances::balance_to_string;
-
-        Self {
-            address: model.address,
-            balance: TokenValueString(balance_to_string(&model.balance)),
-        }
-    }
 }

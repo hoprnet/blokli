@@ -4,12 +4,13 @@ use std::time::Duration;
 
 use async_graphql::{Context, Result, Subscription};
 use async_stream::stream;
+use blokli_api_types::{Account, Channel, HoprBalance, NativeBalance, TokenValueString};
 use blokli_db_entity::conversions::balances::{hopr_balance_to_string, native_balance_to_string};
 use futures::Stream;
 use sea_orm::DatabaseConnection;
 use tokio::time::sleep;
 
-use crate::types::{Account, Channel, HoprBalance, NativeBalance, TokenValueString};
+use crate::conversions::{channel_from_model, hopr_balance_from_model, native_balance_from_model};
 
 /// Root subscription object for the GraphQL API
 pub struct SubscriptionRoot;
@@ -139,7 +140,7 @@ impl SubscriptionRoot {
             .one(db)
             .await?;
 
-        Ok(balance.map(NativeBalance::from))
+        Ok(balance.map(native_balance_from_model))
     }
 
     async fn fetch_hopr_balance(db: &DatabaseConnection, address: &str) -> Result<Option<HoprBalance>, sea_orm::DbErr> {
@@ -150,7 +151,7 @@ impl SubscriptionRoot {
             .one(db)
             .await?;
 
-        Ok(balance.map(HoprBalance::from))
+        Ok(balance.map(hopr_balance_from_model))
     }
 
     async fn fetch_all_channels(db: &DatabaseConnection) -> Result<Vec<Channel>, sea_orm::DbErr> {
@@ -158,7 +159,7 @@ impl SubscriptionRoot {
 
         let channels = blokli_db_entity::channel::Entity::find().all(db).await?;
 
-        Ok(channels.into_iter().map(Channel::from).collect())
+        Ok(channels.into_iter().map(channel_from_model).collect())
     }
 
     async fn fetch_filtered_accounts(

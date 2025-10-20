@@ -1,10 +1,13 @@
 //! GraphQL query root and resolver implementations
 
 use async_graphql::{Context, Object, Result};
+use blokli_api_types::{
+    Account, ChainInfo, Channel, HoprBalance, NativeBalance, OpenedChannelsGraph, TokenValueString,
+};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::{
-    types::{Account, ChainInfo, Channel, HoprBalance, NativeBalance, OpenedChannelsGraph, TokenValueString},
+    conversions::{channel_from_model, hopr_balance_from_model, native_balance_from_model},
     validation::validate_eth_address,
 };
 
@@ -106,7 +109,7 @@ impl QueryRoot {
             .await?;
 
         // Convert to GraphQL Channel type
-        let channels: Vec<Channel> = channel_models.iter().map(|m| Channel::from(m.clone())).collect();
+        let channels: Vec<Channel> = channel_models.iter().map(|m| channel_from_model(m.clone())).collect();
 
         // 2. Collect unique keyids from source and destination
         let mut keyids = HashSet::new();
@@ -166,7 +169,7 @@ impl QueryRoot {
 
         let channels = query.all(db).await?;
 
-        Ok(channels.into_iter().map(Channel::from).collect())
+        Ok(channels.into_iter().map(channel_from_model).collect())
     }
 
     /// Retrieve HOPR token balance for a specific address
@@ -188,7 +191,7 @@ impl QueryRoot {
             .one(db)
             .await?;
 
-        Ok(balance.map(HoprBalance::from))
+        Ok(balance.map(hopr_balance_from_model))
     }
 
     /// Retrieve native token balance for a specific address
@@ -210,7 +213,7 @@ impl QueryRoot {
             .one(db)
             .await?;
 
-        Ok(balance.map(NativeBalance::from))
+        Ok(balance.map(native_balance_from_model))
     }
 
     /// Retrieve chain information

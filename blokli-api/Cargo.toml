@@ -45,6 +45,7 @@ chrono = { workspace = true }
 hex    = { workspace = true }
 
 # Internal dependencies
+blokli-api-types = { workspace = true }
 blokli-db-entity = { workspace = true }
 
 # Logging

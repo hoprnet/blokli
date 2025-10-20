@@ -4,13 +4,13 @@
 //! supporting HTTP/2 and Server-Sent Events (SSE) for subscriptions.
 
 pub mod config;
+pub mod conversions;
 pub mod errors;
 pub mod query;
 pub mod schema;
 pub mod server;
 pub mod subscription;
 pub mod tls;
-pub mod types;
 pub mod validation;
 
 use axum::serve;
