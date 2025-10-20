@@ -225,7 +225,7 @@ docker-db-restore file="backup.sql":
 
 # Generate SVG for target db schema
 generate-target-db-schema-svg:
-    docker run --rm -u $(id -u):$(id -g) -v ./db/entity:/data \
+    docker run --rm -u $(id -u):$(id -g) -v ./design:/data \
       ghcr.io/mermaid-js/mermaid-cli/mermaid-cli \
       -i target-db-schema.mmd -o target-db-schema.svg
-    @echo "SVG stored at ./db/entity/target-db-schema.svg"
+    @echo "SVG stored at ./design/target-db-schema.svg"
