@@ -27,6 +27,10 @@ enum Command {
         #[arg(short = 'd', long = "database-url", env = "DATABASE_URL")]
         database_url: String,
 
+        /// Chain ID for the blockchain network
+        #[arg(short = 'i', long = "chain-id", env = "CHAIN_ID", default_value = "100")]
+        chain_id: u64,
+
         /// Output file path (defaults to stdout if not specified)
         #[arg(short = 'o', long = "output", value_name = "FILE")]
         output: Option<PathBuf>,
@@ -40,12 +44,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Handle subcommands
     if let Some(command) = args.command {
         match command {
-            Command::ExportSchema { database_url, output } => {
+            Command::ExportSchema {
+                database_url,
+                chain_id,
+                output,
+            } => {
                 // Connect to database
                 let db = Database::connect(&database_url).await?;
 
                 // Generate schema SDL
-                let schema_sdl = export_schema_sdl(db);
+                let schema_sdl = export_schema_sdl(db, chain_id);
 
                 // Write to file or stdout
                 if let Some(output_path) = output {

@@ -1,0 +1,139 @@
+//! Account aggregation utilities with optimized batch loading
+
+use std::collections::HashMap;
+
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+
+use super::balances::balance_to_f64;
+use crate::codegen::{account, announcement, hopr_balance, native_balance};
+
+/// Aggregated account data with all related information
+#[derive(Debug, Clone)]
+pub struct AggregatedAccount {
+    pub chain_key: String,
+    pub packet_key: String,
+    pub account_hopr_balance: f64,
+    pub account_native_balance: f64,
+    pub safe_address: Option<String>,
+    pub safe_hopr_balance: Option<f64>,
+    pub safe_native_balance: Option<f64>,
+    pub multi_addresses: Vec<String>,
+}
+
+/// Fetch all accounts with their related data using optimized batch loading
+///
+/// This function eliminates N+1 queries by:
+/// 1. Fetching all accounts in one query
+/// 2. Batch loading all announcements for those accounts
+/// 3. Batch loading all balances (HOPR and native) for all relevant addresses
+/// 4. Aggregating the data in memory
+///
+/// Instead of 1 + (N * 5) queries, this uses only 4 queries total.
+///
+/// # Arguments
+/// * `db` - Database connection
+///
+/// # Returns
+/// * `Result<Vec<AggregatedAccount>, sea_orm::DbErr>` - List of aggregated accounts
+pub async fn fetch_accounts_with_balances(db: &DatabaseConnection) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr> {
+    // 1. Fetch all accounts (1 query)
+    let accounts = account::Entity::find().all(db).await?;
+
+    if accounts.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Collect all account IDs and addresses
+    let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
+    let mut all_addresses: Vec<String> = accounts.iter().map(|a| a.chain_key.clone()).collect();
+
+    // Add safe addresses if they exist
+    for account in &accounts {
+        if let Some(ref safe_addr) = account.safe_address {
+            all_addresses.push(safe_addr.clone());
+        }
+    }
+
+    // 2. Batch fetch all announcements (1 query)
+    let announcements = announcement::Entity::find()
+        .filter(announcement::Column::AccountId.is_in(account_ids))
+        .all(db)
+        .await?;
+
+    // Group announcements by account_id
+    let mut announcements_by_account: HashMap<i32, Vec<String>> = HashMap::new();
+    for ann in announcements {
+        announcements_by_account
+            .entry(ann.account_id)
+            .or_default()
+            .push(ann.multiaddress);
+    }
+
+    // 3. Batch fetch all HOPR balances (1 query)
+    let hopr_balances = hopr_balance::Entity::find()
+        .filter(hopr_balance::Column::Address.is_in(all_addresses.clone()))
+        .all(db)
+        .await?;
+
+    let hopr_balance_map: HashMap<String, f64> = hopr_balances
+        .into_iter()
+        .map(|b| (b.address.clone(), balance_to_f64(&b.balance)))
+        .collect();
+
+    // 4. Batch fetch all native balances (1 query)
+    let native_balances = native_balance::Entity::find()
+        .filter(native_balance::Column::Address.is_in(all_addresses))
+        .all(db)
+        .await?;
+
+    let native_balance_map: HashMap<String, f64> = native_balances
+        .into_iter()
+        .map(|b| (b.address.clone(), balance_to_f64(&b.balance)))
+        .collect();
+
+    // 5. Aggregate all data
+    let result = accounts
+        .into_iter()
+        .map(|account| {
+            let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
+
+            let account_hopr_balance = hopr_balance_map.get(&account.chain_key).copied().unwrap_or(0.0);
+
+            let account_native_balance = native_balance_map.get(&account.chain_key).copied().unwrap_or(0.0);
+
+            let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr) = account.safe_address {
+                (
+                    hopr_balance_map.get(safe_addr).copied(),
+                    native_balance_map.get(safe_addr).copied(),
+                )
+            } else {
+                (None, None)
+            };
+
+            AggregatedAccount {
+                chain_key: account.chain_key,
+                packet_key: account.packet_key,
+                account_hopr_balance,
+                account_native_balance,
+                safe_address: account.safe_address,
+                safe_hopr_balance,
+                safe_native_balance,
+                multi_addresses,
+            }
+        })
+        .collect();
+
+    Ok(result)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Note: These tests would require a test database setup
+    // For now, we just ensure the module compiles
+    #[test]
+    fn test_module_compiles() {
+        assert!(true);
+    }
+}

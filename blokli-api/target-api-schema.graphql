@@ -1,4 +1,9 @@
 """
+	
+"""
+scalar TokenValueString
+
+"""
 Blockchain and HOPR network information
 """
 type ChainInfo {
@@ -6,8 +11,8 @@ type ChainInfo {
 	blockNumber: Int!
 	"Chain ID of the connected blockchain network"
 	chainId: Int!
-	"Current HOPR token price in wxHOPR"
-	ticketPrice: Float!
+	"Current HOPR token price"
+	ticketPrice: TokenValueString!
 	"Current minimum ticket winning probability (decimal value between 0.0 and 1.0)"
 	minTicketWinningProbability: Float!
 }
@@ -26,7 +31,7 @@ type HoprBalance {
 	"Address holding the HOPR token balance"
 	address: String!
 	"HOPR token balance"
-	balance: Float!
+	balance: TokenValueString!
 }
 
 """
@@ -36,7 +41,7 @@ type NativeBalance {
 	"Address holding the native token balance"
 	address: String!
 	"Native token balance"
-	balance: Float!
+	balance: TokenValueString!
 }
 
 """
@@ -48,15 +53,15 @@ type Account {
 	"Unique account packet key in peer id format"
 	packetKey: String!
 	"wxHOPR balance associated with the on-chain address"
-	accountHoprBalance: Float!
+	accountHoprBalance: TokenValueString!
 	"Native balance associated with the on-chain address"
-	accountNativeBalance: Float!
+	accountNativeBalance: TokenValueString!
 	"HOPR Safe contract address to which the account is linked"
 	safeAddress: String
 	"wxHOPR balance associated with the linked Safe contract address"
-	safeHoprBalance: Float
+	safeHoprBalance: TokenValueString
 	"Native balance associated with the linked Safe contract address"
-	safeNativeBalance: Float
+	safeNativeBalance: TokenValueString
 	"List of multiaddresses associated with the packet key"
 	multiAddresses: [String!]!
 }
@@ -84,7 +89,7 @@ type Channel {
 	"On-chain address of the destination node in hexadecimal format"
 	destination: String!
 	"Total amount of HOPR tokens allocated to the channel"
-	balance: Float!
+	balance: TokenValueString!
 	"Current state of the channel (OPEN, PENDINGTOCLOSE, or CLOSED)"
 	status: ChannelStatus!
 	"Current epoch of the channel"
@@ -116,6 +121,9 @@ type QueryRoot {
 		"Filter by destination node address (hexadecimal format)"
 		destination: String
 	): [Channel!]!
+
+	openedChannelsGraph()
+
 	"""
 	Retrieve HOPR token balance for a specific address
 

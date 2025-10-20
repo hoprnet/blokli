@@ -143,30 +143,11 @@ pub struct Channel {
 
 impl From<blokli_db_entity::channel::Model> for Channel {
     fn from(model: blokli_db_entity::channel::Model) -> Self {
-        // Convert 12-byte balance to u128 and then to f64
-        let balance = if model.balance.len() == 12 {
-            let mut bytes = [0u8; 16];
-            bytes[4..].copy_from_slice(&model.balance);
-            u128::from_be_bytes(bytes) as f64
-        } else {
-            0.0
-        };
+        use blokli_db_entity::conversions::balances::{balance_to_f64, bytes_to_u64};
 
-        // Convert 8-byte epoch to u64 and then to i32
-        let epoch = if model.epoch.len() == 8 {
-            let bytes: [u8; 8] = model.epoch.as_slice().try_into().unwrap_or([0u8; 8]);
-            u64::from_be_bytes(bytes) as i32
-        } else {
-            0
-        };
-
-        // Convert 8-byte ticket_index to u64 and then to i32
-        let ticket_index = if model.ticket_index.len() == 8 {
-            let bytes: [u8; 8] = model.ticket_index.as_slice().try_into().unwrap_or([0u8; 8]);
-            u64::from_be_bytes(bytes) as i32
-        } else {
-            0
-        };
+        let balance = balance_to_f64(&model.balance);
+        let epoch = bytes_to_u64(&model.epoch) as i32;
+        let ticket_index = bytes_to_u64(&model.ticket_index) as i32;
 
         // Convert closure_time to seconds until close (0 if None or already closed)
         let closure_time = model
@@ -202,18 +183,11 @@ pub struct HoprBalance {
 
 impl From<blokli_db_entity::hopr_balance::Model> for HoprBalance {
     fn from(model: blokli_db_entity::hopr_balance::Model) -> Self {
-        // Convert 12-byte balance to f64
-        let balance = if model.balance.len() == 12 {
-            let mut bytes = [0u8; 16];
-            bytes[4..].copy_from_slice(&model.balance);
-            u128::from_be_bytes(bytes) as f64
-        } else {
-            0.0
-        };
+        use blokli_db_entity::conversions::balances::balance_to_f64;
 
         Self {
             address: model.address,
-            balance,
+            balance: balance_to_f64(&model.balance),
         }
     }
 }
@@ -229,18 +203,11 @@ pub struct NativeBalance {
 
 impl From<blokli_db_entity::native_balance::Model> for NativeBalance {
     fn from(model: blokli_db_entity::native_balance::Model) -> Self {
-        // Convert 12-byte balance to f64
-        let balance = if model.balance.len() == 12 {
-            let mut bytes = [0u8; 16];
-            bytes[4..].copy_from_slice(&model.balance);
-            u128::from_be_bytes(bytes) as f64
-        } else {
-            0.0
-        };
+        use blokli_db_entity::conversions::balances::balance_to_f64;
 
         Self {
             address: model.address,
-            balance,
+            balance: balance_to_f64(&model.balance),
         }
     }
 }

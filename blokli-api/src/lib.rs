@@ -11,6 +11,7 @@ pub mod server;
 pub mod subscription;
 pub mod tls;
 pub mod types;
+pub mod validation;
 
 use axum::serve;
 use config::ApiConfig;
@@ -37,7 +38,7 @@ pub async fn start_server(config: ApiConfig) -> ApiResult<()> {
     info!("Database connection established");
 
     // Build the application
-    let app = server::build_app(db).await?;
+    let app = server::build_app(db, config.clone()).await?;
 
     // Create TCP listener
     let listener = TcpListener::bind(config.bind_address).await?;

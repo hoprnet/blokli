@@ -9,7 +9,7 @@ use async_graphql::{
 use axum::{
     Json, Router,
     extract::State,
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{
         Html, IntoResponse, Response,
         sse::{Event, Sse},
@@ -26,7 +26,9 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use crate::{errors::ApiResult, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot};
+use crate::{
+    config::ApiConfig, errors::ApiResult, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot,
+};
 
 /// Application state shared across handlers
 #[derive(Clone)]
@@ -35,10 +37,33 @@ pub struct AppState {
 }
 
 /// Build the Axum application router
-pub async fn build_app(db: DatabaseConnection) -> ApiResult<Router> {
-    let schema = build_schema(db);
+pub async fn build_app(db: DatabaseConnection, config: ApiConfig) -> ApiResult<Router> {
+    let schema = build_schema(db, config.chain_id);
     let app_state = AppState {
         schema: Arc::new(schema),
+    };
+
+    // Configure CORS based on allowed origins
+    let cors_layer = if config.cors_allowed_origins.contains(&"*".to_string()) {
+        // Permissive CORS for development
+        CorsLayer::permissive()
+    } else {
+        // Restrictive CORS with specific origins
+        let allowed_origins: Vec<_> = config
+            .cors_allowed_origins
+            .iter()
+            .filter_map(|origin| origin.parse::<axum::http::HeaderValue>().ok())
+            .collect();
+
+        CorsLayer::new()
+            .allow_origin(allowed_origins)
+            .allow_methods([
+                axum::http::Method::GET,
+                axum::http::Method::POST,
+                axum::http::Method::OPTIONS,
+            ])
+            .allow_headers([header::CONTENT_TYPE, header::ACCEPT, header::AUTHORIZATION])
+            .allow_credentials(true)
     };
 
     Ok(Router::new()
@@ -46,7 +71,7 @@ pub async fn build_app(db: DatabaseConnection) -> ApiResult<Router> {
         .route("/graphql", get(graphql_playground).post(graphql_handler))
         // Health check
         .route("/health", get(health_handler))
-        .layer(CorsLayer::permissive())
+        .layer(cors_layer)
         // Use zstd compression only with high quality, only for responses > 1KB
         .layer(
             CompressionLayer::new()

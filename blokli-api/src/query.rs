@@ -3,7 +3,10 @@
 use async_graphql::{Context, Object, Result};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
-use crate::types::{Account, ChainInfo, Channel, HoprBalance, NativeBalance};
+use crate::{
+    types::{Account, ChainInfo, Channel, HoprBalance, NativeBalance},
+    validation::validate_eth_address,
+};
 
 /// Root query object for the GraphQL API
 pub struct QueryRoot;
@@ -14,100 +17,27 @@ impl QueryRoot {
     ///
     /// Returns a complete list of all accounts. No filtering is available.
     async fn accounts(&self, ctx: &Context<'_>) -> Result<Vec<Account>> {
+        use blokli_db_entity::conversions::account_aggregation::fetch_accounts_with_balances;
+
         let db = ctx.data::<DatabaseConnection>()?;
 
-        // Fetch all accounts
-        let accounts = blokli_db_entity::account::Entity::find().all(db).await?;
+        // Fetch all accounts with optimized batch loading (4 queries instead of 1 + N*5)
+        let aggregated_accounts = fetch_accounts_with_balances(db).await?;
 
-        let mut result = Vec::new();
-
-        for account_model in accounts {
-            // Fetch announcements for this account
-            let announcements = blokli_db_entity::announcement::Entity::find()
-                .filter(blokli_db_entity::announcement::Column::AccountId.eq(account_model.id))
-                .all(db)
-                .await?;
-
-            let multi_addresses: Vec<String> = announcements.into_iter().map(|a| a.multiaddress).collect();
-
-            // Fetch HOPR balance for account's chain_key
-            let hopr_balance_value = blokli_db_entity::hopr_balance::Entity::find()
-                .filter(blokli_db_entity::hopr_balance::Column::Address.eq(&account_model.chain_key))
-                .one(db)
-                .await?
-                .map(|b| {
-                    if b.balance.len() == 12 {
-                        let mut bytes = [0u8; 16];
-                        bytes[4..].copy_from_slice(&b.balance);
-                        u128::from_be_bytes(bytes) as f64
-                    } else {
-                        0.0
-                    }
-                })
-                .unwrap_or(0.0);
-
-            // Fetch Native balance for account's chain_key
-            let native_balance_value = blokli_db_entity::native_balance::Entity::find()
-                .filter(blokli_db_entity::native_balance::Column::Address.eq(&account_model.chain_key))
-                .one(db)
-                .await?
-                .map(|b| {
-                    if b.balance.len() == 12 {
-                        let mut bytes = [0u8; 16];
-                        bytes[4..].copy_from_slice(&b.balance);
-                        u128::from_be_bytes(bytes) as f64
-                    } else {
-                        0.0
-                    }
-                })
-                .unwrap_or(0.0);
-
-            // Fetch safe balances if safe_address exists
-            let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr) = account_model.safe_address {
-                let safe_hopr = blokli_db_entity::hopr_balance::Entity::find()
-                    .filter(blokli_db_entity::hopr_balance::Column::Address.eq(safe_addr))
-                    .one(db)
-                    .await?
-                    .map(|b| {
-                        if b.balance.len() == 12 {
-                            let mut bytes = [0u8; 16];
-                            bytes[4..].copy_from_slice(&b.balance);
-                            u128::from_be_bytes(bytes) as f64
-                        } else {
-                            0.0
-                        }
-                    });
-
-                let safe_native = blokli_db_entity::native_balance::Entity::find()
-                    .filter(blokli_db_entity::native_balance::Column::Address.eq(safe_addr))
-                    .one(db)
-                    .await?
-                    .map(|b| {
-                        if b.balance.len() == 12 {
-                            let mut bytes = [0u8; 16];
-                            bytes[4..].copy_from_slice(&b.balance);
-                            u128::from_be_bytes(bytes) as f64
-                        } else {
-                            0.0
-                        }
-                    });
-
-                (safe_hopr, safe_native)
-            } else {
-                (None, None)
-            };
-
-            result.push(Account {
-                chain_key: account_model.chain_key,
-                packet_key: account_model.packet_key,
-                account_hopr_balance: hopr_balance_value,
-                account_native_balance: native_balance_value,
-                safe_address: account_model.safe_address,
-                safe_hopr_balance,
-                safe_native_balance,
-                multi_addresses,
-            });
-        }
+        // Convert to GraphQL Account type
+        let result = aggregated_accounts
+            .into_iter()
+            .map(|agg| Account {
+                chain_key: agg.chain_key,
+                packet_key: agg.packet_key,
+                account_hopr_balance: agg.account_hopr_balance,
+                account_native_balance: agg.account_native_balance,
+                safe_address: agg.safe_address,
+                safe_hopr_balance: agg.safe_hopr_balance,
+                safe_native_balance: agg.safe_native_balance,
+                multi_addresses: agg.multi_addresses,
+            })
+            .collect();
 
         Ok(result)
     }
@@ -152,6 +82,9 @@ impl QueryRoot {
         ctx: &Context<'_>,
         #[graphql(desc = "On-chain address to query (hexadecimal format)")] address: String,
     ) -> Result<Option<HoprBalance>> {
+        // Validate address format
+        validate_eth_address(&address)?;
+
         let db = ctx.data::<DatabaseConnection>()?;
 
         let balance = blokli_db_entity::hopr_balance::Entity::find()
@@ -171,6 +104,9 @@ impl QueryRoot {
         ctx: &Context<'_>,
         #[graphql(desc = "On-chain address to query (hexadecimal format)")] address: String,
     ) -> Result<Option<NativeBalance>> {
+        // Validate address format
+        validate_eth_address(&address)?;
+
         let db = ctx.data::<DatabaseConnection>()?;
 
         let balance = blokli_db_entity::native_balance::Entity::find()
@@ -184,7 +120,10 @@ impl QueryRoot {
     /// Retrieve chain information
     #[graphql(name = "chainInfo")]
     async fn chain_info(&self, ctx: &Context<'_>) -> Result<ChainInfo> {
+        use blokli_db_entity::conversions::balances::balance_to_f64;
+
         let db = ctx.data::<DatabaseConnection>()?;
+        let chain_id = ctx.data::<u64>()?;
 
         // Fetch chain_info from database (assuming single row with id=1)
         let chain_info = blokli_db_entity::chain_info::Entity::find_by_id(1)
@@ -196,20 +135,20 @@ impl QueryRoot {
         let ticket_price = chain_info
             .ticket_price
             .as_ref()
-            .and_then(|bytes| {
-                if bytes.len() == 12 {
-                    let mut price_bytes = [0u8; 16];
-                    price_bytes[4..].copy_from_slice(bytes);
-                    Some(u128::from_be_bytes(price_bytes) as f64)
-                } else {
-                    None
-                }
-            })
+            .map(|bytes| balance_to_f64(bytes))
             .unwrap_or(0.0);
 
+        // Convert last_indexed_block from 8-byte binary to u64, then to i32
+        let block_number = if chain_info.last_indexed_block.len() == 8 {
+            let bytes: [u8; 8] = chain_info.last_indexed_block.as_slice().try_into().unwrap_or([0u8; 8]);
+            u64::from_be_bytes(bytes) as i32
+        } else {
+            0
+        };
+
         Ok(ChainInfo {
-            block_number: 0, // TODO: Get from indexer state or RPC
-            chain_id: 0,     // TODO: Get from chain config or RPC
+            block_number,
+            chain_id: *chain_id as i32,
             ticket_price,
             min_ticket_winning_probability: chain_info.min_incoming_ticket_win_prob as f64,
         })
