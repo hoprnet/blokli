@@ -28,6 +28,7 @@ impl QueryRoot {
         let result = aggregated_accounts
             .into_iter()
             .map(|agg| Account {
+                keyid: agg.keyid,
                 chain_key: agg.chain_key,
                 packet_key: agg.packet_key,
                 account_hopr_balance: TokenValueString(agg.account_hopr_balance),
@@ -50,7 +51,7 @@ impl QueryRoot {
     async fn opened_channels_graph(&self, ctx: &Context<'_>) -> Result<OpenedChannelsGraph> {
         use std::collections::HashSet;
 
-        use blokli_db_entity::conversions::account_aggregation::fetch_accounts_with_balances_for_addresses;
+        use blokli_db_entity::conversions::account_aggregation::fetch_accounts_by_keyids;
 
         let db = ctx.data::<DatabaseConnection>()?;
 
@@ -63,21 +64,22 @@ impl QueryRoot {
         // Convert to GraphQL Channel type
         let channels: Vec<Channel> = channel_models.iter().map(|m| Channel::from(m.clone())).collect();
 
-        // 2. Collect unique addresses from source and destination
-        let mut addresses = HashSet::new();
+        // 2. Collect unique keyids from source and destination
+        let mut keyids = HashSet::new();
         for channel in &channel_models {
-            addresses.insert(channel.source.clone());
-            addresses.insert(channel.destination.clone());
+            keyids.insert(channel.source);
+            keyids.insert(channel.destination);
         }
 
-        // 3. Fetch accounts for those addresses with optimized batch loading
-        let address_vec: Vec<String> = addresses.into_iter().collect();
-        let aggregated_accounts = fetch_accounts_with_balances_for_addresses(db, address_vec).await?;
+        // 3. Fetch accounts for those keyids with optimized batch loading
+        let keyid_vec: Vec<i32> = keyids.into_iter().collect();
+        let aggregated_accounts = fetch_accounts_by_keyids(db, keyid_vec).await?;
 
         // Convert to GraphQL Account type
         let accounts = aggregated_accounts
             .into_iter()
             .map(|agg| Account {
+                keyid: agg.keyid,
                 chain_key: agg.chain_key,
                 packet_key: agg.packet_key,
                 account_hopr_balance: TokenValueString(agg.account_hopr_balance),

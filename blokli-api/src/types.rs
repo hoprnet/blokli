@@ -77,6 +77,8 @@ pub struct ChainInfo {
 /// Account information containing balances and multiaddresses
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Account {
+    /// Unique identifier for the account
+    pub keyid: i32,
     /// Unique account on-chain address in hexadecimal format
     #[graphql(name = "chainKey")]
     pub chain_key: String,
@@ -131,10 +133,10 @@ pub struct Channel {
     /// Unique identifier for the payment channel in hexadecimal format
     #[graphql(name = "concreteChannelId")]
     pub concrete_channel_id: String,
-    /// On-chain address of the source node in hexadecimal format
-    pub source: String,
-    /// On-chain address of the destination node in hexadecimal format
-    pub destination: String,
+    /// Account keyid of the source node
+    pub source: i32,
+    /// Account keyid of the destination node
+    pub destination: i32,
     /// Total amount of HOPR tokens allocated to the channel
     pub balance: TokenValueString,
     /// Current state of the channel (OPEN, PENDINGTOCLOSE, or CLOSED)

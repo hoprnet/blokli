@@ -1,8 +1,5 @@
 use hopr_internal_types::{channels::ChannelStatus, prelude::ChannelEntry};
-use hopr_primitive_types::{
-    balance::HoprBalance,
-    prelude::{IntoEndian, ToHex, U256},
-};
+use hopr_primitive_types::prelude::{IntoEndian, ToHex};
 use sea_orm::Set;
 
 use crate::{channel, errors::DbEntityError};
@@ -44,14 +41,12 @@ impl TryFrom<&channel::Model> for ChannelStatus {
 impl TryFrom<&channel::Model> for ChannelEntry {
     type Error = DbEntityError;
 
-    fn try_from(value: &channel::Model) -> Result<Self, Self::Error> {
-        Ok(ChannelEntry::new(
-            value.source.parse()?,
-            value.destination.parse()?,
-            HoprBalance::from(U256::from_be_bytes(&value.balance)),
-            U256::from_be_bytes(&value.ticket_index),
-            value.try_into()?,
-            U256::from_be_bytes(&value.epoch),
+    fn try_from(_value: &channel::Model) -> Result<Self, Self::Error> {
+        // TODO: After schema change to use foreign keys, this conversion requires
+        // database access to look up account addresses from keyids.
+        // This needs to be refactored to use a separate function that takes a database connection.
+        Err(DbEntityError::Conversion(
+            "ChannelEntry conversion from database model requires account lookup - use fetch function instead".into(),
         ))
     }
 }
@@ -66,10 +61,14 @@ impl TryFrom<channel::Model> for ChannelEntry {
 
 impl From<ChannelEntry> for channel::ActiveModel {
     fn from(value: ChannelEntry) -> Self {
+        // TODO: After schema change to use foreign keys, this conversion requires
+        // database access to look up or create accounts and get their keyids.
+        // This needs to be refactored to use a separate function that takes a database connection.
+        // For now, using placeholder values that will cause database constraint violations.
         let mut ret = channel::ActiveModel {
             concrete_channel_id: Set(value.get_id().to_hex()),
-            source: Set(value.source.to_hex()),
-            destination: Set(value.destination.to_hex()),
+            source: Set(0),      // TODO: Need to lookup/create account for value.source address
+            destination: Set(0), // TODO: Need to lookup/create account for value.destination address
             balance: Set(value.balance.amount().to_be_bytes().into()),
             epoch: Set(value.channel_epoch.to_be_bytes().into()),
             ticket_index: Set(value.ticket_index.to_be_bytes().into()),

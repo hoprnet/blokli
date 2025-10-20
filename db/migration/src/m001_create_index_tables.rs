@@ -7,53 +7,7 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Create Channel table
-        manager
-            .create_table(
-                Table::create()
-                    .table(Channel::Table)
-                    .if_not_exists()
-                    .col(
-                        ColumnDef::new(Channel::Id)
-                            .integer()
-                            .not_null()
-                            .auto_increment()
-                            .primary_key(),
-                    )
-                    .col(
-                        ColumnDef::new(Channel::ConcreteChannelId)
-                            .string_len(64)
-                            .not_null()
-                            .unique_key(),
-                    )
-                    .col(ColumnDef::new(Channel::Source).string_len(40).not_null())
-                    .col(ColumnDef::new(Channel::Destination).string_len(40).not_null())
-                    .col(ColumnDef::new(Channel::Balance).binary_len(12).not_null())
-                    .col(ColumnDef::new(Channel::Status).tiny_unsigned().not_null())
-                    .col(
-                        ColumnDef::new(Channel::Epoch)
-                            .binary_len(8)
-                            .not_null()
-                            .default(U256::one().to_be_bytes().to_vec()),
-                    )
-                    .col(
-                        ColumnDef::new(Channel::TicketIndex)
-                            .binary_len(8)
-                            .not_null()
-                            .default(U256::zero().to_be_bytes().to_vec()),
-                    )
-                    .col(ColumnDef::new(Channel::ClosureTime).timestamp().null())
-                    .col(
-                        ColumnDef::new(Channel::CorruptedState)
-                            .boolean()
-                            .not_null()
-                            .default(false),
-                    )
-                    .to_owned(),
-            )
-            .await?;
-
-        // Create Account table
+        // Create Account table (must be created before Channel due to FK constraint)
         manager
             .create_table(
                 Table::create()
@@ -86,6 +40,68 @@ impl MigrationTrait for Migration {
                             .binary_len(8)
                             .not_null()
                             .default(vec![0u8; 8]),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        // Create Channel table
+        manager
+            .create_table(
+                Table::create()
+                    .table(Channel::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(Channel::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(Channel::ConcreteChannelId)
+                            .string_len(64)
+                            .not_null()
+                            .unique_key(),
+                    )
+                    .col(ColumnDef::new(Channel::Source).integer().not_null())
+                    .col(ColumnDef::new(Channel::Destination).integer().not_null())
+                    .col(ColumnDef::new(Channel::Balance).binary_len(12).not_null())
+                    .col(ColumnDef::new(Channel::Status).tiny_unsigned().not_null())
+                    .col(
+                        ColumnDef::new(Channel::Epoch)
+                            .binary_len(8)
+                            .not_null()
+                            .default(U256::one().to_be_bytes().to_vec()),
+                    )
+                    .col(
+                        ColumnDef::new(Channel::TicketIndex)
+                            .binary_len(8)
+                            .not_null()
+                            .default(U256::zero().to_be_bytes().to_vec()),
+                    )
+                    .col(ColumnDef::new(Channel::ClosureTime).timestamp().null())
+                    .col(
+                        ColumnDef::new(Channel::CorruptedState)
+                            .boolean()
+                            .not_null()
+                            .default(false),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .name("fk_channel_source_account_id")
+                            .from(Channel::Table, Channel::Source)
+                            .to(Account::Table, Account::Id)
+                            .on_delete(ForeignKeyAction::Cascade)
+                            .on_update(ForeignKeyAction::Cascade),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .name("fk_channel_destination_account_id")
+                            .from(Channel::Table, Channel::Destination)
+                            .to(Account::Table, Account::Id)
+                            .on_delete(ForeignKeyAction::Cascade)
+                            .on_update(ForeignKeyAction::Cascade),
                     )
                     .to_owned(),
             )
@@ -211,10 +227,11 @@ impl MigrationTrait for Migration {
         manager
             .drop_table(Table::drop().table(Announcement::Table).to_owned())
             .await?;
+        // Drop Channel before Account due to FK constraint
         manager
-            .drop_table(Table::drop().table(Account::Table).to_owned())
+            .drop_table(Table::drop().table(Channel::Table).to_owned())
             .await?;
-        manager.drop_table(Table::drop().table(Channel::Table).to_owned()).await
+        manager.drop_table(Table::drop().table(Account::Table).to_owned()).await
     }
 }
 

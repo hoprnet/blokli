@@ -206,6 +206,7 @@ impl SubscriptionRoot {
             };
 
             result.push(Account {
+                keyid: account_model.id,
                 chain_key: account_model.chain_key,
                 packet_key: account_model.packet_key,
                 account_hopr_balance: TokenValueString(hopr_balance_value),

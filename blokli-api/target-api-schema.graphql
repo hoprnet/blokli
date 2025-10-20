@@ -54,6 +54,8 @@ type NativeBalance {
 Account information containing balances and multiaddresses
 """
 type Account {
+	"Unique identifier for the account"
+	keyid: Int!
 	"Unique account on-chain address in hexadecimal format"
 	chainKey: String!
 	"Unique account packet key in peer id format"
@@ -90,10 +92,10 @@ Payment channel between two nodes
 type Channel {
 	"Unique identifier for the payment channel in hexadecimal format"
 	concreteChannelId: String!
-	"On-chain address of the source node in hexadecimal format"
-	source: String!
-	"On-chain address of the destination node in hexadecimal format"
-	destination: String!
+	"Account keyid of the source node"
+	source: Int!
+	"Account keyid of the destination node"
+	destination: Int!
 	"Total amount of HOPR tokens allocated to the channel"
 	balance: TokenValueString!
 	"Current state of the channel (OPEN, PENDINGTOCLOSE, or CLOSED)"
