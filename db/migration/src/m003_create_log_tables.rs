@@ -21,7 +21,6 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(Log::LogStatusId).integer().null())
                     .col(ColumnDef::new(Log::TxIndex).not_null().binary_len(8))
                     .col(ColumnDef::new(Log::LogIndex).not_null().binary_len(8))
                     .col(ColumnDef::new(Log::BlockNumber).not_null().binary_len(8))
@@ -130,7 +129,6 @@ impl MigrationTrait for Migration {
 enum Log {
     Table,
     Id,
-    LogStatusId,
     // address from which this log originated.
     Address,
     // Array of 0 to 4 32 Bytes DATA of indexed log arguments. The first topic is the
