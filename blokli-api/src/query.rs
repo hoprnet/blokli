@@ -13,16 +13,23 @@ pub struct QueryRoot;
 
 #[Object]
 impl QueryRoot {
-    /// Retrieve all accounts from the database
+    /// Retrieve accounts from the database, optionally filtered
     ///
-    /// Returns a complete list of all accounts. No filtering is available.
-    async fn accounts(&self, ctx: &Context<'_>) -> Result<Vec<Account>> {
-        use blokli_db_entity::conversions::account_aggregation::fetch_accounts_with_balances;
+    /// If no filters are provided, returns all accounts.
+    /// Filters can be combined to narrow results.
+    async fn accounts(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Filter by account keyid")] keyid: Option<i32>,
+        #[graphql(desc = "Filter by packet key (peer ID format)")] packet_key: Option<String>,
+        #[graphql(desc = "Filter by chain key (hexadecimal format)")] chain_key: Option<String>,
+    ) -> Result<Vec<Account>> {
+        use blokli_db_entity::conversions::account_aggregation::fetch_accounts_with_filters;
 
         let db = ctx.data::<DatabaseConnection>()?;
 
-        // Fetch all accounts with optimized batch loading (4 queries instead of 1 + N*5)
-        let aggregated_accounts = fetch_accounts_with_balances(db).await?;
+        // Fetch accounts with optional filters using optimized batch loading (4 queries)
+        let aggregated_accounts = fetch_accounts_with_filters(db, keyid, packet_key, chain_key).await?;
 
         // Convert to GraphQL Account type
         let result = aggregated_accounts
@@ -41,6 +48,43 @@ impl QueryRoot {
             .collect();
 
         Ok(result)
+    }
+
+    /// Count accounts matching optional filters
+    ///
+    /// If no filters are provided, returns total account count.
+    /// Filters can be combined to narrow results.
+    #[graphql(name = "accountCount")]
+    async fn account_count(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Filter by account keyid")] keyid: Option<i32>,
+        #[graphql(desc = "Filter by packet key (peer ID format)")] packet_key: Option<String>,
+        #[graphql(desc = "Filter by chain key (hexadecimal format)")] chain_key: Option<String>,
+    ) -> Result<i32> {
+        use sea_orm::PaginatorTrait;
+
+        let db = ctx.data::<DatabaseConnection>()?;
+
+        // Build query with filters
+        let mut query = blokli_db_entity::account::Entity::find();
+
+        if let Some(id) = keyid {
+            query = query.filter(blokli_db_entity::account::Column::Id.eq(id));
+        }
+
+        if let Some(pk) = packet_key {
+            query = query.filter(blokli_db_entity::account::Column::PacketKey.eq(pk));
+        }
+
+        if let Some(ck) = chain_key {
+            query = query.filter(blokli_db_entity::account::Column::ChainKey.eq(ck));
+        }
+
+        // Get count efficiently using SeaORM's paginator
+        let count = query.count(db).await? as i32;
+
+        Ok(count)
     }
 
     /// Retrieve the opened channels graph

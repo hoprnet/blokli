@@ -98,8 +98,15 @@ impl SubscriptionRoot {
     ///
     /// Provides updates whenever there is a change in account information, including
     /// balance changes, Safe address linking, and multiaddress announcements.
+    /// Optional filters can be applied to only receive updates for specific accounts.
     #[graphql(name = "accountUpdated")]
-    async fn account_updated(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = Account>> {
+    async fn account_updated(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Filter by account keyid")] keyid: Option<i32>,
+        #[graphql(desc = "Filter by packet key (peer ID format)")] packet_key: Option<String>,
+        #[graphql(desc = "Filter by chain key (hexadecimal format)")] chain_key: Option<String>,
+    ) -> Result<impl Stream<Item = Account>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
 
         Ok(stream! {
@@ -108,8 +115,8 @@ impl SubscriptionRoot {
                 // For now, poll the database periodically
                 sleep(Duration::from_secs(1)).await;
 
-                // Query the latest accounts
-                if let Ok(accounts) = Self::fetch_all_accounts(&db).await {
+                // Query the latest accounts with filters
+                if let Ok(accounts) = Self::fetch_filtered_accounts(&db, keyid, packet_key.clone(), chain_key.clone()).await {
                     for account in accounts {
                         yield account;
                     }
@@ -154,10 +161,30 @@ impl SubscriptionRoot {
         Ok(channels.into_iter().map(Channel::from).collect())
     }
 
-    async fn fetch_all_accounts(db: &DatabaseConnection) -> Result<Vec<Account>, sea_orm::DbErr> {
+    async fn fetch_filtered_accounts(
+        db: &DatabaseConnection,
+        keyid: Option<i32>,
+        packet_key: Option<String>,
+        chain_key: Option<String>,
+    ) -> Result<Vec<Account>, sea_orm::DbErr> {
         use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
-        let accounts = blokli_db_entity::account::Entity::find().all(db).await?;
+        // Build query with filters
+        let mut query = blokli_db_entity::account::Entity::find();
+
+        if let Some(id) = keyid {
+            query = query.filter(blokli_db_entity::account::Column::Id.eq(id));
+        }
+
+        if let Some(pk) = packet_key {
+            query = query.filter(blokli_db_entity::account::Column::PacketKey.eq(pk));
+        }
+
+        if let Some(ck) = chain_key {
+            query = query.filter(blokli_db_entity::account::Column::ChainKey.eq(ck));
+        }
+
+        let accounts = query.all(db).await?;
 
         let mut result = Vec::new();
 

@@ -102,13 +102,13 @@ pub async fn fetch_accounts_with_balances(db: &DatabaseConnection) -> Result<Vec
             let account_hopr_balance = hopr_balance_map
                 .get(&account.chain_key)
                 .cloned()
-                .unwrap_or_else(|| hopr_primitive_types::prelude::HoprBalance::zero().to_string());
+                .unwrap_or_else(|| hopr_balance_to_string(&[]));
 
             // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
             let account_native_balance = native_balance_map
                 .get(&account.chain_key)
                 .cloned()
-                .unwrap_or_else(|| hopr_primitive_types::prelude::XDaiBalance::zero().to_string());
+                .unwrap_or_else(|| native_balance_to_string(&[]));
 
             let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr) = account.safe_address {
                 (
@@ -226,13 +226,13 @@ pub async fn fetch_accounts_with_balances_for_addresses(
             let account_hopr_balance = hopr_balance_map
                 .get(&account.chain_key)
                 .cloned()
-                .unwrap_or_else(|| hopr_primitive_types::prelude::HoprBalance::zero().to_string());
+                .unwrap_or_else(|| hopr_balance_to_string(&[]));
 
             // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
             let account_native_balance = native_balance_map
                 .get(&account.chain_key)
                 .cloned()
-                .unwrap_or_else(|| hopr_primitive_types::prelude::XDaiBalance::zero().to_string());
+                .unwrap_or_else(|| native_balance_to_string(&[]));
 
             let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr) = account.safe_address {
                 (
@@ -349,13 +349,147 @@ pub async fn fetch_accounts_by_keyids(
             let account_hopr_balance = hopr_balance_map
                 .get(&account.chain_key)
                 .cloned()
-                .unwrap_or_else(|| hopr_primitive_types::prelude::HoprBalance::zero().to_string());
+                .unwrap_or_else(|| hopr_balance_to_string(&[]));
 
             // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
             let account_native_balance = native_balance_map
                 .get(&account.chain_key)
                 .cloned()
-                .unwrap_or_else(|| hopr_primitive_types::prelude::XDaiBalance::zero().to_string());
+                .unwrap_or_else(|| native_balance_to_string(&[]));
+
+            let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr) = account.safe_address {
+                (
+                    hopr_balance_map.get(safe_addr).cloned(),
+                    native_balance_map.get(safe_addr).cloned(),
+                )
+            } else {
+                (None, None)
+            };
+
+            AggregatedAccount {
+                keyid: account.id,
+                chain_key: account.chain_key,
+                packet_key: account.packet_key,
+                account_hopr_balance,
+                account_native_balance,
+                safe_address: account.safe_address,
+                safe_hopr_balance,
+                safe_native_balance,
+                multi_addresses,
+            }
+        })
+        .collect();
+
+    Ok(result)
+}
+
+/// Fetch accounts with optional filters using optimized batch loading
+///
+/// This function allows filtering accounts by keyid, packet_key, and/or chain_key.
+/// Multiple filters can be combined. If no filters are provided, returns all accounts.
+///
+/// Uses the same optimized batch loading approach: 4 queries total instead of N+1.
+///
+/// # Arguments
+/// * `db` - Database connection
+/// * `keyid` - Optional filter by account ID (keyid)
+/// * `packet_key` - Optional filter by packet key
+/// * `chain_key` - Optional filter by chain key
+///
+/// # Returns
+/// * `Result<Vec<AggregatedAccount>, sea_orm::DbErr>` - List of aggregated accounts matching the filters
+pub async fn fetch_accounts_with_filters(
+    db: &DatabaseConnection,
+    keyid: Option<i32>,
+    packet_key: Option<String>,
+    chain_key: Option<String>,
+) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr> {
+    // 1. Build query with filters (1 query)
+    let mut query = account::Entity::find();
+
+    if let Some(id) = keyid {
+        query = query.filter(account::Column::Id.eq(id));
+    }
+
+    if let Some(pk) = packet_key {
+        query = query.filter(account::Column::PacketKey.eq(pk));
+    }
+
+    if let Some(ck) = chain_key {
+        query = query.filter(account::Column::ChainKey.eq(ck));
+    }
+
+    let accounts = query.all(db).await?;
+
+    if accounts.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    // Collect all account IDs and addresses
+    let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
+    let mut all_addresses: Vec<String> = accounts.iter().map(|a| a.chain_key.clone()).collect();
+
+    // Add safe addresses if they exist
+    for account in &accounts {
+        if let Some(ref safe_addr) = account.safe_address {
+            all_addresses.push(safe_addr.clone());
+        }
+    }
+
+    // 2. Batch fetch all announcements (1 query)
+    let announcements = announcement::Entity::find()
+        .filter(announcement::Column::AccountId.is_in(account_ids))
+        .all(db)
+        .await?;
+
+    // Group announcements by account_id
+    let mut announcements_by_account: HashMap<i32, Vec<String>> = HashMap::new();
+    for ann in announcements {
+        announcements_by_account
+            .entry(ann.account_id)
+            .or_default()
+            .push(ann.multiaddress);
+    }
+
+    // 3. Batch fetch all HOPR balances (1 query)
+    let hopr_balances = hopr_balance::Entity::find()
+        .filter(hopr_balance::Column::Address.is_in(all_addresses.clone()))
+        .all(db)
+        .await?;
+
+    let hopr_balance_map: HashMap<String, String> = hopr_balances
+        .into_iter()
+        .map(|b| (b.address.clone(), hopr_balance_to_string(&b.balance)))
+        .collect();
+
+    // 4. Batch fetch all native balances (1 query)
+    let native_balances = native_balance::Entity::find()
+        .filter(native_balance::Column::Address.is_in(all_addresses))
+        .all(db)
+        .await?;
+
+    let native_balance_map: HashMap<String, String> = native_balances
+        .into_iter()
+        .map(|b| (b.address.clone(), native_balance_to_string(&b.balance)))
+        .collect();
+
+    // 5. Aggregate all data
+    let result = accounts
+        .into_iter()
+        .map(|account| {
+            let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
+
+            // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
+            let account_hopr_balance = hopr_balance_map
+                .get(&account.chain_key)
+                .cloned()
+                .unwrap_or_else(|| hopr_balance_to_string(&[]));
+
+            // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
+            let account_native_balance = native_balance_map
+                .get(&account.chain_key)
+                .cloned()
+                .unwrap_or_else(|| native_balance_to_string(&[]));
 
             let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr) = account.safe_address {
                 (

@@ -125,11 +125,33 @@ type OpenedChannelsGraph {
 
 type QueryRoot {
 	"""
-	Retrieve all accounts from the database
+	Retrieve accounts from the database, optionally filtered
 
-	Returns a complete list of all accounts. No filtering is available.
+	If no filters are provided, returns all accounts.
+	Filters can be combined to narrow results.
 	"""
-	accounts: [Account!]!
+	accounts(
+		"Filter by account keyid"
+		keyid: Int,
+		"Filter by packet key (peer ID format)"
+		packetKey: String,
+		"Filter by chain key (hexadecimal format)"
+		chainKey: String
+	): [Account!]!
+	"""
+	Count accounts matching optional filters
+
+	If no filters are provided, returns total account count.
+	Filters can be combined to narrow results.
+	"""
+	accountCount(
+		"Filter by account keyid"
+		keyid: Int,
+		"Filter by packet key (peer ID format)"
+		packetKey: String,
+		"Filter by chain key (hexadecimal format)"
+		chainKey: String
+	): Int!
 	"""
 	Retrieve channels, optionally filtered by source and/or destination
 
@@ -226,8 +248,16 @@ type SubscriptionRoot {
 
 	Provides updates whenever there is a change in account information, including
 	balance changes, Safe address linking, and multiaddress announcements.
+	Optional filters can be applied to only receive updates for specific accounts.
 	"""
-	accountUpdated: Account!
+	accountUpdated(
+		"Filter by account keyid"
+		keyid: Int,
+		"Filter by packet key (peer ID format)"
+		packetKey: String,
+		"Filter by chain key (hexadecimal format)"
+		chainKey: String
+	): Account!
 }
 
 schema {
