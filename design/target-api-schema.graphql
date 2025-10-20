@@ -133,16 +133,16 @@ type QueryRoot {
 	"""
 	Retrieve channels, optionally filtered by source and/or destination
 
-	If neither source nor destination is provided, returns all channels.
-	If source is provided, filters channels by source address.
-	If destination is provided, filters channels by destination address.
+	If neither sourceKeyId nor destinationKeyId is provided, returns all channels.
+	If sourceKeyId is provided, filters channels by source account keyid.
+	If destinationKeyId is provided, filters channels by destination account keyid.
 	Both filters can be combined to find specific channels.
 	"""
 	channels(
-		"Filter by source node address (hexadecimal format)"
-		source: String,
-		"Filter by destination node address (hexadecimal format)"
-		destination: String
+		"Filter by source node keyid"
+		sourceKeyId: Int,
+		"Filter by destination node keyid"
+		destinationKeyId: Int
 	): [Channel!]!
 
 	"""

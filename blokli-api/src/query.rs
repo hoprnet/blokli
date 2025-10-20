@@ -96,28 +96,28 @@ impl QueryRoot {
 
     /// Retrieve channels, optionally filtered by source and/or destination
     ///
-    /// If neither source nor destination is provided, returns all channels.
-    /// If source is provided, filters channels by source address.
-    /// If destination is provided, filters channels by destination address.
+    /// If neither sourceKeyId nor destinationKeyId is provided, returns all channels.
+    /// If sourceKeyId is provided, filters channels by source account keyid.
+    /// If destinationKeyId is provided, filters channels by destination account keyid.
     /// Both filters can be combined to find specific channels.
     async fn channels(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Filter by source node address (hexadecimal format)")] source: Option<String>,
-        #[graphql(desc = "Filter by destination node address (hexadecimal format)")] destination: Option<String>,
+        #[graphql(desc = "Filter by source node keyid")] source_key_id: Option<i32>,
+        #[graphql(desc = "Filter by destination node keyid")] destination_key_id: Option<i32>,
     ) -> Result<Vec<Channel>> {
         let db = ctx.data::<DatabaseConnection>()?;
 
         let mut query = blokli_db_entity::channel::Entity::find();
 
         // Apply source filter if provided
-        if let Some(src) = source {
-            query = query.filter(blokli_db_entity::channel::Column::Source.eq(src));
+        if let Some(src_keyid) = source_key_id {
+            query = query.filter(blokli_db_entity::channel::Column::Source.eq(src_keyid));
         }
 
         // Apply destination filter if provided
-        if let Some(dst) = destination {
-            query = query.filter(blokli_db_entity::channel::Column::Destination.eq(dst));
+        if let Some(dst_keyid) = destination_key_id {
+            query = query.filter(blokli_db_entity::channel::Column::Destination.eq(dst_keyid));
         }
 
         let channels = query.all(db).await?;
