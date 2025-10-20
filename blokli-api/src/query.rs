@@ -4,7 +4,7 @@ use async_graphql::{Context, Object, Result};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::{
-    types::{Account, ChainInfo, Channel, HoprBalance, NativeBalance, TokenValueString},
+    types::{Account, ChainInfo, Channel, HoprBalance, NativeBalance, OpenedChannelsGraph, TokenValueString},
     validation::validate_eth_address,
 };
 
@@ -44,11 +44,52 @@ impl QueryRoot {
 
     /// Retrieve the opened channels graph
     ///
-    /// TODO: Return type not specified in schema - needs proper implementation
+    /// Returns all open channels along with the accounts that participate in those channels.
+    /// This provides a complete view of the active payment channel network.
     #[graphql(name = "openedChannelsGraph")]
-    async fn opened_channels_graph(&self, _ctx: &Context<'_>) -> Result<Option<String>> {
-        // Placeholder implementation - return type undefined in schema
-        Ok(None)
+    async fn opened_channels_graph(&self, ctx: &Context<'_>) -> Result<OpenedChannelsGraph> {
+        use std::collections::HashSet;
+
+        use blokli_db_entity::conversions::account_aggregation::fetch_accounts_with_balances_for_addresses;
+
+        let db = ctx.data::<DatabaseConnection>()?;
+
+        // 1. Fetch all OPEN channels (status = 1)
+        let channel_models = blokli_db_entity::channel::Entity::find()
+            .filter(blokli_db_entity::channel::Column::Status.eq(1))
+            .all(db)
+            .await?;
+
+        // Convert to GraphQL Channel type
+        let channels: Vec<Channel> = channel_models.iter().map(|m| Channel::from(m.clone())).collect();
+
+        // 2. Collect unique addresses from source and destination
+        let mut addresses = HashSet::new();
+        for channel in &channel_models {
+            addresses.insert(channel.source.clone());
+            addresses.insert(channel.destination.clone());
+        }
+
+        // 3. Fetch accounts for those addresses with optimized batch loading
+        let address_vec: Vec<String> = addresses.into_iter().collect();
+        let aggregated_accounts = fetch_accounts_with_balances_for_addresses(db, address_vec).await?;
+
+        // Convert to GraphQL Account type
+        let accounts = aggregated_accounts
+            .into_iter()
+            .map(|agg| Account {
+                chain_key: agg.chain_key,
+                packet_key: agg.packet_key,
+                account_hopr_balance: TokenValueString(agg.account_hopr_balance),
+                account_native_balance: TokenValueString(agg.account_native_balance),
+                safe_address: agg.safe_address,
+                safe_hopr_balance: agg.safe_hopr_balance.map(TokenValueString),
+                safe_native_balance: agg.safe_native_balance.map(TokenValueString),
+                multi_addresses: agg.multi_addresses,
+            })
+            .collect();
+
+        Ok(OpenedChannelsGraph { channels, accounts })
     }
 
     /// Retrieve channels, optionally filtered by source and/or destination

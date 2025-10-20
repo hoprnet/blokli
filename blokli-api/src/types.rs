@@ -180,6 +180,15 @@ impl From<blokli_db_entity::channel::Model> for Channel {
     }
 }
 
+/// Graph of opened payment channels with associated accounts
+#[derive(SimpleObject, Clone, Debug)]
+pub struct OpenedChannelsGraph {
+    /// List of all open payment channels
+    pub channels: Vec<Channel>,
+    /// List of accounts referenced by the open channels (source and destination nodes)
+    pub accounts: Vec<Account>,
+}
+
 /// HOPR token balance information for a specific address
 #[derive(SimpleObject, Clone, Debug)]
 pub struct HoprBalance {

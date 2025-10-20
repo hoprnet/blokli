@@ -106,6 +106,16 @@ type Channel {
 	closureTime: Int!
 }
 
+"""
+Graph of opened payment channels with associated accounts
+"""
+type OpenedChannelsGraph {
+	"List of all open payment channels"
+	channels: [Channel!]!
+	"List of accounts referenced by the open channels (source and destination nodes)"
+	accounts: [Account!]!
+}
+
 type QueryRoot {
 	"""
 	Retrieve all accounts from the database
@@ -128,7 +138,13 @@ type QueryRoot {
 		destination: String
 	): [Channel!]!
 
-	openedChannelsGraph()
+	"""
+	Retrieve the opened channels graph
+
+	Returns all open channels along with the accounts that participate in those channels.
+	This provides a complete view of the active payment channel network.
+	"""
+	openedChannelsGraph: OpenedChannelsGraph!
 
 	"""
 	Retrieve HOPR token balance for a specific address
