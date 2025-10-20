@@ -171,6 +171,7 @@ impl SubscriptionRoot {
             let multi_addresses: Vec<String> = announcements.into_iter().map(|a| a.multiaddress).collect();
 
             // Fetch HOPR balance for account's chain_key
+            // Returns zero balance if no balance record exists (hopr_balance_to_string(&[]) returns "0")
             let hopr_balance_value = blokli_db_entity::hopr_balance::Entity::find()
                 .filter(blokli_db_entity::hopr_balance::Column::Address.eq(&account_model.chain_key))
                 .one(db)
@@ -179,6 +180,7 @@ impl SubscriptionRoot {
                 .unwrap_or_else(|| hopr_balance_to_string(&[]));
 
             // Fetch Native balance for account's chain_key
+            // Returns zero balance if no balance record exists (native_balance_to_string(&[]) returns "0")
             let native_balance_value = blokli_db_entity::native_balance::Entity::find()
                 .filter(blokli_db_entity::native_balance::Column::Address.eq(&account_model.chain_key))
                 .one(db)
