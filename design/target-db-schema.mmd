@@ -61,7 +61,6 @@ erDiagram
 
     log {
         int id PK "Primary key"
-        int log_status_id FK "Foreign key to log status"
         binary(8) tx_index "Transaction index (NOT NULL)"
         binary(8) log_index "Log index (NOT NULL)"
         binary(8) block_number "Block number (NOT NULL)"
@@ -110,4 +109,4 @@ erDiagram
     account ||--o{ channel : "source of many"
     account ||--o{ channel : "destination of many"
     account ||--o| hopr_safe_contract : "has 0 or 1"
-    log_status ||--|| log : "has one"
+    log ||--o| log_status : "has 0 or 1"
