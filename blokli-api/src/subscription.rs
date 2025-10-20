@@ -75,8 +75,15 @@ impl SubscriptionRoot {
     ///
     /// Provides updates whenever there is a change in the state of any payment channel,
     /// including channel opening, balance updates, status changes, and channel closure.
+    /// Optional filters can be applied to only receive updates for specific channels.
     #[graphql(name = "channelUpdated")]
-    async fn channel_updated(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = Channel>> {
+    async fn channel_updated(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Filter by source node keyid")] source_key_id: Option<i32>,
+        #[graphql(desc = "Filter by destination node keyid")] destination_key_id: Option<i32>,
+        #[graphql(desc = "Filter by concrete channel ID (hexadecimal format)")] concrete_channel_id: Option<String>,
+    ) -> Result<impl Stream<Item = Channel>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
 
         Ok(stream! {
@@ -85,8 +92,8 @@ impl SubscriptionRoot {
                 // For now, poll the database periodically
                 sleep(Duration::from_secs(1)).await;
 
-                // Query the latest channels
-                if let Ok(channels) = Self::fetch_all_channels(&db).await {
+                // Query the latest channels with filters
+                if let Ok(channels) = Self::fetch_filtered_channels(&db, source_key_id, destination_key_id, concrete_channel_id.clone()).await {
                     for channel in channels {
                         yield channel;
                     }
@@ -154,10 +161,30 @@ impl SubscriptionRoot {
         Ok(balance.map(hopr_balance_from_model))
     }
 
-    async fn fetch_all_channels(db: &DatabaseConnection) -> Result<Vec<Channel>, sea_orm::DbErr> {
-        use sea_orm::EntityTrait;
+    async fn fetch_filtered_channels(
+        db: &DatabaseConnection,
+        source_key_id: Option<i32>,
+        destination_key_id: Option<i32>,
+        concrete_channel_id: Option<String>,
+    ) -> Result<Vec<Channel>, sea_orm::DbErr> {
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
-        let channels = blokli_db_entity::channel::Entity::find().all(db).await?;
+        // Build query with filters
+        let mut query = blokli_db_entity::channel::Entity::find();
+
+        if let Some(src_keyid) = source_key_id {
+            query = query.filter(blokli_db_entity::channel::Column::Source.eq(src_keyid));
+        }
+
+        if let Some(dst_keyid) = destination_key_id {
+            query = query.filter(blokli_db_entity::channel::Column::Destination.eq(dst_keyid));
+        }
+
+        if let Some(channel_id) = concrete_channel_id {
+            query = query.filter(blokli_db_entity::channel::Column::ConcreteChannelId.eq(channel_id));
+        }
+
+        let channels = query.all(db).await?;
 
         Ok(channels.into_iter().map(channel_from_model).collect())
     }

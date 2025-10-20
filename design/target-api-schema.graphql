@@ -153,18 +153,18 @@ type QueryRoot {
 		chainKey: String
 	): Int!
 	"""
-	Retrieve channels, optionally filtered by source and/or destination
+	Retrieve channels, optionally filtered
 
-	If neither source nor destination is provided, returns all channels.
-	If source is provided, filters channels by source address.
-	If destination is provided, filters channels by destination address.
-	Both filters can be combined to find specific channels.
+	If no filters are provided, returns all channels.
+	Filters can be combined to narrow results.
 	"""
 	channels(
-		"Filter by source node address (hexadecimal format)"
-		source: String,
-		"Filter by destination node address (hexadecimal format)"
-		destination: String
+		"Filter by source node keyid"
+		sourceKeyId: Int,
+		"Filter by destination node keyid"
+		destinationKeyId: Int,
+		"Filter by concrete channel ID (hexadecimal format)"
+		concreteChannelId: String
 	): [Channel!]!
 
 	"""
@@ -240,8 +240,16 @@ type SubscriptionRoot {
 
 	Provides updates whenever there is a change in the state of any payment channel,
 	including channel opening, balance updates, status changes, and channel closure.
+	Optional filters can be applied to only receive updates for specific channels.
 	"""
-	channelUpdated: Channel!
+	channelUpdated(
+		"Filter by source node keyid"
+		sourceKeyId: Int,
+		"Filter by destination node keyid"
+		destinationKeyId: Int,
+		"Filter by concrete channel ID (hexadecimal format)"
+		concreteChannelId: String
+	): Channel!
 
 	"""
 	Subscribe to real-time updates of account information

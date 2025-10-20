@@ -141,30 +141,34 @@ impl QueryRoot {
         Ok(OpenedChannelsGraph { channels, accounts })
     }
 
-    /// Retrieve channels, optionally filtered by source and/or destination
+    /// Retrieve channels, optionally filtered
     ///
-    /// If neither source nor destination is provided, returns all channels.
-    /// If source is provided, filters channels by source address.
-    /// If destination is provided, filters channels by destination address.
-    /// Both filters can be combined to find specific channels.
+    /// If no filters are provided, returns all channels.
+    /// Filters can be combined to narrow results.
     async fn channels(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Filter by source node address (hexadecimal format)")] source: Option<String>,
-        #[graphql(desc = "Filter by destination node address (hexadecimal format)")] destination: Option<String>,
+        #[graphql(desc = "Filter by source node keyid")] source_key_id: Option<i32>,
+        #[graphql(desc = "Filter by destination node keyid")] destination_key_id: Option<i32>,
+        #[graphql(desc = "Filter by concrete channel ID (hexadecimal format)")] concrete_channel_id: Option<String>,
     ) -> Result<Vec<Channel>> {
         let db = ctx.data::<DatabaseConnection>()?;
 
         let mut query = blokli_db_entity::channel::Entity::find();
 
         // Apply source filter if provided
-        if let Some(src) = source {
-            query = query.filter(blokli_db_entity::channel::Column::Source.eq(src));
+        if let Some(src_keyid) = source_key_id {
+            query = query.filter(blokli_db_entity::channel::Column::Source.eq(src_keyid));
         }
 
         // Apply destination filter if provided
-        if let Some(dst) = destination {
-            query = query.filter(blokli_db_entity::channel::Column::Destination.eq(dst));
+        if let Some(dst_keyid) = destination_key_id {
+            query = query.filter(blokli_db_entity::channel::Column::Destination.eq(dst_keyid));
+        }
+
+        // Apply concrete channel ID filter if provided
+        if let Some(channel_id) = concrete_channel_id {
+            query = query.filter(blokli_db_entity::channel::Column::ConcreteChannelId.eq(channel_id));
         }
 
         let channels = query.all(db).await?;
