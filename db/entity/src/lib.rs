@@ -3,12 +3,12 @@
 #![allow(clippy::all)]
 
 #[cfg_attr(rustfmt, rustfmt_skip)]
-mod codegen;
+pub mod codegen;
 
 pub mod conversions;
 
 pub mod errors;
 
-#[cfg(feature = "sqlite")]
+// Re-export codegen entities
 #[cfg_attr(rustfmt, rustfmt_skip)]
-pub use codegen::sqlite::*;
+pub use codegen::*;

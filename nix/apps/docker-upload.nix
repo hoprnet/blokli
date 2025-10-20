@@ -78,8 +78,9 @@ rec {
       )
 
       # Upload the image to the registry using skopeo
+      # Pipe through gzip for faster compression before upload
       echo "Uploading image to registry: $IMAGE_TARGET"
-      if ! ${pkgs.skopeo}/bin/skopeo "''${skopeo_args[@]}"; then
+      if ! ${pkgs.gzip}/bin/gzip --fast < "$OCI_ARCHIVE" | ${pkgs.skopeo}/bin/skopeo "''${skopeo_args[@]}"; then
         echo "ERROR: Failed to upload image to registry" >&2
         exit 3
       fi

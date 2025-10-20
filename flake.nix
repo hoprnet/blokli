@@ -42,6 +42,7 @@
     flake-utils.url = "github:numtide/flake-utils";
     flake-parts.url = "github:hercules-ci/flake-parts";
     nixpkgs.url = "github:NixOS/nixpkgs/release-25.05";
+    nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # Rust toolchain and build system
     rust-overlay.url = "github:oxalica/rust-overlay/master";
@@ -63,6 +64,7 @@
     {
       self,
       nixpkgs,
+      nixpkgs-unstable,
       flake-utils,
       flake-parts,
       rust-overlay,
@@ -101,6 +103,10 @@
             (import rust-overlay)
           ];
           pkgs = import nixpkgs {
+            system = localSystem;
+            inherit overlays;
+          };
+          pkgsUnstable = import nixpkgs-unstable {
             system = localSystem;
             inherit overlays;
           };
@@ -182,9 +188,15 @@
           };
 
           # Import Docker configurations
+          # Docker images need Linux packages, even when building on macOS
+          pkgsLinux = import nixpkgs {
+            system = "x86_64-linux";
+            inherit overlays;
+          };
           dockerBuilder = import ./nix/docker-builder.nix;
           bloklidDocker = import ./nix/docker/bloklid.nix {
-            inherit pkgs dockerBuilder;
+            pkgs = pkgsLinux;
+            inherit dockerBuilder;
             packages = bloklidPackages;
           };
 
@@ -196,58 +208,61 @@
             inherit pkgs system flake-utils;
           };
 
+          # Rust toolchains
+          stableToolchain =
+            (pkgs.pkgsBuildHost.rust-bin.fromRustupToolchainFile ./rust-toolchain.toml).override
+              {
+                targets = [
+                  (
+                    if buildPlatform.config == "arm64-apple-darwin" then
+                      "aarch64-apple-darwin"
+                    else
+                      buildPlatform.config
+                  )
+                ];
+              };
+
+          nightlyToolchain = (pkgs.pkgsBuildHost.rust-bin.nightly.latest.default).override {
+            targets = [
+              (
+                if buildPlatform.config == "arm64-apple-darwin" then
+                  "aarch64-apple-darwin"
+                else
+                  buildPlatform.config
+              )
+            ];
+            extensions = [
+              "rust-src"
+              "rust-analyzer"
+              "clippy"
+              "rustfmt"
+            ];
+          };
+
           # Import shell configurations
           shells = {
-            default = import ./nix/shells/dev.nix {
+            default = import ./nix/shells/default.nix {
               inherit
                 pkgs
+                pkgsUnstable
                 config
                 crane
                 ;
+              rustToolchain = stableToolchain;
               pre-commit-check = packages.pre-commit-check;
-              extraPackages = with pkgs; [
-                nfpm
-                envsubst
-              ];
+              shellName = "Development";
             };
 
-            ci = import ./nix/shells/ci.nix {
-              inherit pkgs config crane;
-            };
-
-            test = import ./nix/shells/test.nix {
+            experiment = import ./nix/shells/default.nix {
               inherit
                 pkgs
+                pkgsUnstable
                 config
                 crane
                 ;
-            };
-
-            citest = import ./nix/shells/ci-test.nix {
-              inherit
-                pkgs
-                config
-                crane
-                ;
-              bloklid = bloklidPackages.bloklid-candidate;
-            };
-
-            citestdev = import ./nix/shells/ci-test.nix {
-              inherit
-                pkgs
-                config
-                crane
-                ;
-              bloklid = bloklidPackages.bloklid-dev;
-            };
-
-            docs = import ./nix/shells/docs.nix {
-              inherit
-                pkgs
-                config
-                crane
-                ;
+              rustToolchain = nightlyToolchain;
               pre-commit-check = packages.pre-commit-check;
+              shellName = "Experimental Nightly";
             };
           };
 

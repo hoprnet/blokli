@@ -20,8 +20,6 @@ target
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-.direnv/
-
 /.cargo/
 /.cargo/bin
 /.cargo/.package-cache
@@ -36,4 +34,6 @@ vendor/cargo/.DS_Store
 
 # nix generated files
 result
-.pre-commit-config.yaml
+/.direnv
+/.pre-commit-config.yaml
+/schema.graphql

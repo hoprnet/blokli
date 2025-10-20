@@ -1,13 +1,9 @@
 //! Creates a build specification for the ORM codegen.
 
-use std::{
-    env::{self, temp_dir},
-    path::Path,
-};
+use std::{env, path::Path};
 
 use anyhow::Context;
 use clap::Parser;
-use migration::MigrationTrait;
 use sea_orm::{ConnectOptions, Database};
 use sea_orm_cli::{Cli, Commands, run_generate_command};
 
@@ -28,33 +24,15 @@ where
             command,
             ..
         } => {
-            let connect_options: ConnectOptions =
-                ConnectOptions::new(database_url.unwrap_or("/tmp/sea_orm_cli.db".into()))
-                    .set_schema_search_path(database_schema.unwrap_or_else(|| "public".to_owned()))
-                    .to_owned();
-            let is_sqlite = connect_options.get_url().starts_with("sqlite");
+            let url = database_url.unwrap_or("sqlite::memory:".into());
+            let connect_options: ConnectOptions = ConnectOptions::new(&url)
+                .set_schema_search_path(database_schema.unwrap_or_else(|| "public".to_owned()))
+                .to_owned();
             let db = &Database::connect(connect_options).await?;
 
-            if is_sqlite {
-                struct TempMigrator;
-
-                impl migration::MigratorTrait for TempMigrator {
-                    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-                        let mut migrations = migration::MigratorIndex::migrations();
-                        migrations.extend(migration::MigratorChainLogs::migrations());
-
-                        migrations
-                    }
-                }
-
-                sea_orm_migration::cli::run_migrate(TempMigrator {}, db, command, cli.verbose)
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e.to_string()))
-            } else {
-                sea_orm_migration::cli::run_migrate(migration::Migrator {}, db, command, cli.verbose)
-                    .await
-                    .map_err(|e| anyhow::anyhow!(e.to_string()))
-            }
+            sea_orm_migration::cli::run_migrate(migration::Migrator {}, db, command, cli.verbose)
+                .await
+                .map_err(|e| anyhow::anyhow!(e.to_string()))
         }
     }
 }
@@ -66,6 +44,7 @@ fn main() -> anyhow::Result<()> {
         .context("should have a parent dir")?
         .join("migration");
 
+    // Tell cargo to rerun if migrations change
     println!(
         "cargo:rerun-if-changed={}",
         db_migration_package_path.join("src").to_string_lossy()
@@ -75,37 +54,52 @@ fn main() -> anyhow::Result<()> {
         db_migration_package_path.join("Cargo.toml").to_str().unwrap()
     );
 
-    let codegen_path = Path::new(&cargo_manifest_dir)
-        .join("src/codegen/sqlite")
+    // Always rerun if build.rs itself changes - this ensures we can check for missing files
+    println!("cargo:rerun-if-changed=build.rs");
+
+    let codegen_dir = Path::new(&cargo_manifest_dir).join("src/codegen");
+    let codegen_path = codegen_dir
+        .clone()
         .into_os_string()
         .into_string()
         .map_err(|e| anyhow::anyhow!(e.to_str().unwrap_or("illegible error").to_string()))?;
 
-    let tmp_db = temp_dir().join("tmp_migration.db");
+    // Watch the codegen output directory - if it or its contents are deleted, rerun
+    // Note: We must do this BEFORE checking if it exists, so cargo tracks it
+    println!("cargo:rerun-if-changed={}", codegen_path);
 
-    let _ = std::fs::remove_file(
-        tmp_db
-            .clone()
-            .into_os_string()
-            .into_string()
-            .map_err(|e| anyhow::anyhow!(e.to_str().unwrap_or("illegible error").to_string()))?
-            .as_str(),
-    );
+    // Check if entity files exist - if not, we must regenerate
+    let needs_generation = !codegen_dir.exists()
+        || codegen_dir
+            .read_dir()
+            .map(|entries| entries.count() == 0)
+            .unwrap_or(true);
 
+    if needs_generation {
+        println!("cargo:warning=Entity files missing or empty, regenerating...");
+    }
+
+    // Use temporary SQLite database for entity generation (no external dependencies needed)
+    // The generated entities work with PostgreSQL at runtime since SeaORM abstracts DB differences
+    let tmp_db = std::env::temp_dir().join("blokli_entity_codegen.db");
+
+    // Clean up any existing temp database
+    let _ = std::fs::remove_file(&tmp_db);
+
+    let tmp_db_str = tmp_db
+        .into_os_string()
+        .into_string()
+        .map_err(|e| anyhow::anyhow!(e.to_str().unwrap_or("illegible error").to_string()))?;
+
+    let database_url = format!("sqlite://{}?mode=rwc", tmp_db_str);
+
+    // Run migrations on temporary SQLite database
     tokio::runtime::Runtime::new()?.block_on(execute_sea_orm_cli_command([
         "sea-orm-cli",
         "migrate",
         "refresh",
         "-u",
-        format!(
-            "sqlite://{}?mode=rwc",
-            tmp_db
-                .clone()
-                .into_os_string()
-                .into_string()
-                .map_err(|e| anyhow::anyhow!(e.to_str().unwrap_or("illegible error").to_string()))?
-        )
-        .as_str(),
+        &database_url,
         "-d",
         db_migration_package_path
             .clone()
@@ -115,6 +109,7 @@ fn main() -> anyhow::Result<()> {
             .as_str(),
     ]))?;
 
+    // Generate entities from SQLite schema
     tokio::runtime::Runtime::new()?.block_on(execute_sea_orm_cli_command([
         "sea-orm-cli",
         "generate",
@@ -122,15 +117,11 @@ fn main() -> anyhow::Result<()> {
         "-o",
         &codegen_path,
         "-u",
-        format!(
-            "sqlite://{}?mode=rwc",
-            tmp_db
-                .into_os_string()
-                .into_string()
-                .map_err(|e| anyhow::anyhow!(e.to_str().unwrap_or("illegible error").to_string()))?
-        )
-        .as_str(),
+        &database_url,
     ]))?;
+
+    // Clean up temporary database
+    let _ = std::fs::remove_file(&tmp_db_str);
 
     Ok(())
 }

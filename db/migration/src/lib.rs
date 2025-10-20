@@ -6,6 +6,7 @@ mod m002_create_index_indices;
 mod m003_create_log_tables;
 mod m004_create_log_indices;
 mod m005_seed_initial_data;
+mod m006_create_balance_and_safe_tables;
 
 #[derive(PartialEq)]
 pub enum BackendType {
@@ -26,6 +27,7 @@ impl MigratorTrait for Migrator {
             Box::new(m003_create_log_tables::Migration),
             Box::new(m004_create_log_indices::Migration),
             Box::new(m005_seed_initial_data::Migration),
+            Box::new(m006_create_balance_and_safe_tables::Migration),
         ]
     }
 }
@@ -44,6 +46,7 @@ impl MigratorTrait for MigratorIndex {
             Box::new(m001_create_index_tables::Migration),
             Box::new(m002_create_index_indices::Migration),
             Box::new(m005_seed_initial_data::Migration),
+            Box::new(m006_create_balance_and_safe_tables::Migration),
         ]
     }
 }

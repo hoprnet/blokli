@@ -12,40 +12,17 @@ impl MigrationTrait for Migration {
         manager
             .create_table(
                 Table::create()
-                    .table(LogStatus::Table)
-                    .if_not_exists()
-                    .primary_key(
-                        Index::create()
-                            .name("pk_log_status")
-                            .table(LogStatus::Table)
-                            .col(LogStatus::BlockNumber)
-                            .col(LogStatus::TransactionIndex)
-                            .col(LogStatus::LogIndex),
-                    )
-                    .col(ColumnDef::new(LogStatus::TransactionIndex).not_null().binary_len(8))
-                    .col(ColumnDef::new(LogStatus::LogIndex).not_null().binary_len(8))
-                    .col(ColumnDef::new(LogStatus::BlockNumber).not_null().binary_len(8))
-                    .col(ColumnDef::new(LogStatus::Processed).boolean().not_null().default(false))
-                    .col(ColumnDef::new(LogStatus::ProcessedAt).date_time())
-                    .col(ColumnDef::new(LogStatus::Checksum).binary_len(32))
-                    .to_owned(),
-            )
-            .await?;
-
-        manager
-            .create_table(
-                Table::create()
                     .table(Log::Table)
                     .if_not_exists()
-                    .primary_key(
-                        Index::create()
-                            .name("pk_log")
-                            .table(Log::Table)
-                            .col(Log::BlockNumber)
-                            .col(Log::TransactionIndex)
-                            .col(Log::LogIndex),
+                    .col(
+                        ColumnDef::new(Log::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
                     )
-                    .col(ColumnDef::new(Log::TransactionIndex).not_null().binary_len(8))
+                    .col(ColumnDef::new(Log::LogStatusId).integer().null())
+                    .col(ColumnDef::new(Log::TxIndex).not_null().binary_len(8))
                     .col(ColumnDef::new(Log::LogIndex).not_null().binary_len(8))
                     .col(ColumnDef::new(Log::BlockNumber).not_null().binary_len(8))
                     .col(ColumnDef::new(Log::BlockHash).binary_len(32).not_null())
@@ -54,17 +31,65 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Log::Topics).binary().not_null())
                     .col(ColumnDef::new(Log::Data).binary().not_null())
                     .col(ColumnDef::new(Log::Removed).boolean().not_null().default(false))
+                    .to_owned(),
+            )
+            .await?;
+
+        // Add unique constraint on composite key (tx_index, log_index, block_number)
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_log_composite")
+                    .table(Log::Table)
+                    .col(Log::BlockNumber)
+                    .col(Log::TxIndex)
+                    .col(Log::LogIndex)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(LogStatus::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(LogStatus::Id)
+                            .integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(LogStatus::LogId).integer().not_null())
+                    .col(ColumnDef::new(LogStatus::TxIndex).not_null().binary_len(8))
+                    .col(ColumnDef::new(LogStatus::LogIndex).not_null().binary_len(8))
+                    .col(ColumnDef::new(LogStatus::BlockNumber).not_null().binary_len(8))
+                    .col(ColumnDef::new(LogStatus::Processed).boolean().not_null().default(false))
+                    .col(ColumnDef::new(LogStatus::ProcessedAt).date_time())
+                    .col(ColumnDef::new(LogStatus::Checksum).binary_len(32))
                     .foreign_key(
                         ForeignKey::create()
-                            .name("fk_log_status_log")
-                            .from(Log::Table, (Log::BlockNumber, Log::TransactionIndex, Log::LogIndex))
-                            .to(
-                                LogStatus::Table,
-                                (LogStatus::BlockNumber, LogStatus::TransactionIndex, LogStatus::LogIndex),
-                            )
+                            .name("fk_log_status_log_id")
+                            .from(LogStatus::Table, LogStatus::LogId)
+                            .to(Log::Table, Log::Id)
                             .on_delete(ForeignKeyAction::Cascade)
                             .on_update(ForeignKeyAction::Cascade),
                     )
+                    .to_owned(),
+            )
+            .await?;
+
+        // Add unique constraint on composite key (tx_index, log_index, block_number)
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_log_status_composite")
+                    .table(LogStatus::Table)
+                    .col(LogStatus::BlockNumber)
+                    .col(LogStatus::TxIndex)
+                    .col(LogStatus::LogIndex)
+                    .unique()
                     .to_owned(),
             )
             .await?;
@@ -93,10 +118,10 @@ impl MigrationTrait for Migration {
         manager
             .drop_table(Table::drop().table(LogTopicInfo::Table).to_owned())
             .await?;
-        manager.drop_table(Table::drop().table(Log::Table).to_owned()).await?;
         manager
             .drop_table(Table::drop().table(LogStatus::Table).to_owned())
-            .await
+            .await?;
+        manager.drop_table(Table::drop().table(Log::Table).to_owned()).await
     }
 }
 
@@ -104,6 +129,8 @@ impl MigrationTrait for Migration {
 #[derive(DeriveIden)]
 enum Log {
     Table,
+    Id,
+    LogStatusId,
     // address from which this log originated.
     Address,
     // Array of 0 to 4 32 Bytes DATA of indexed log arguments. The first topic is the
@@ -117,7 +144,7 @@ enum Log {
     // hash of the transaction this log was created from. null when it's a pending log.
     TransactionHash,
     // integer of the transaction's index position this log was created from. null when it's a pending log.
-    TransactionIndex,
+    TxIndex,
     // hash of the block where this log was in. null when its pending. null when its pending log.
     BlockHash,
     // integer of the log index position in the block. null when its pending log.
@@ -129,9 +156,11 @@ enum Log {
 #[derive(DeriveIden)]
 enum LogStatus {
     Table,
+    Id,
+    LogId,
     // Values to identify the log.
     BlockNumber,
-    TransactionIndex,
+    TxIndex,
     LogIndex,
     // Indicates whether the log has been processed.
     Processed,

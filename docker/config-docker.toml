@@ -1,0 +1,38 @@
+# Docker Compose configuration for bloklid
+# This configuration is used when running bloklid in Docker with PostgreSQL
+
+# Host address and port for the daemon to listen on
+host = "0.0.0.0:3064"
+
+# PostgreSQL database configuration
+[database]
+database        = "bloklid"
+host            = "postgres"
+max_connections = 10
+password        = "bloklid_dev_password"
+port            = 5432
+username        = "bloklid"
+
+# Directory for storing data files
+data_directory = "/data"
+
+# Network identifier (change this based on your target network)
+network = "rotsee"
+
+# RPC endpoint URL for connecting to the blockchain
+# Update this to point to your actual RPC endpoint
+rpc_url = "https://gnosis-chain-two.rpc.rank1.co"
+
+# Maximum number of RPC requests per second (0 for unlimited)
+max_rpc_requests_per_sec = 0
+
+# Indexer configuration
+[indexer]
+# Enable fast sync mode for initial synchronization
+fast_sync = true
+
+# Enable downloading logs snapshot for faster initial sync
+enable_logs_snapshot = false
+
+# URL to download logs snapshot from (optional)
+# logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
