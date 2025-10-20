@@ -9,7 +9,7 @@ members = [
   "chain/api",
   "chain/indexer",
   "chain/rpc",
-  "chain/types",
+  "chain/types", "client",
   "db/api",
   "db/entity",
   "db/migration",
@@ -50,8 +50,10 @@ blokli-db-migration = { path = "db/migration" }
 blokli-db-sql = { path = "db/sql" }
 chrono = "0.4.42"
 clap = { version = "4.5.47", features = ["derive", "env", "string"] }
+cynic = "3.12.0"
 dashmap = "6.1.0"
 env_logger = "0.11.8"
+eventsource-client = "0.15.1"
 futures = "0.3.31"
 futures-timer = "3.0.3"
 futures-util = "0.3.31"
@@ -71,6 +73,7 @@ hopr-path = { git = "https://github.com/hoprnet/hoprnet" }
 hopr-platform = { git = "https://github.com/hoprnet/hoprnet" }
 hopr-primitive-types = { git = "https://github.com/hoprnet/hoprnet" }
 http = "1.3.1"
+hyper = "1.7.0"
 lazy_static = "1.5.0"
 libp2p-identity = { version = "0.2.12", features = [
   "ed25519",
