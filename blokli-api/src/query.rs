@@ -4,7 +4,7 @@ use async_graphql::{Context, Object, Result};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::{
-    types::{Account, ChainInfo, Channel, HoprBalance, NativeBalance},
+    types::{Account, ChainInfo, Channel, HoprBalance, NativeBalance, TokenValueString},
     validation::validate_eth_address,
 };
 
@@ -30,16 +30,25 @@ impl QueryRoot {
             .map(|agg| Account {
                 chain_key: agg.chain_key,
                 packet_key: agg.packet_key,
-                account_hopr_balance: agg.account_hopr_balance,
-                account_native_balance: agg.account_native_balance,
+                account_hopr_balance: TokenValueString(agg.account_hopr_balance),
+                account_native_balance: TokenValueString(agg.account_native_balance),
                 safe_address: agg.safe_address,
-                safe_hopr_balance: agg.safe_hopr_balance,
-                safe_native_balance: agg.safe_native_balance,
+                safe_hopr_balance: agg.safe_hopr_balance.map(TokenValueString),
+                safe_native_balance: agg.safe_native_balance.map(TokenValueString),
                 multi_addresses: agg.multi_addresses,
             })
             .collect();
 
         Ok(result)
+    }
+
+    /// Retrieve the opened channels graph
+    ///
+    /// TODO: Return type not specified in schema - needs proper implementation
+    #[graphql(name = "openedChannelsGraph")]
+    async fn opened_channels_graph(&self, _ctx: &Context<'_>) -> Result<Option<String>> {
+        // Placeholder implementation - return type undefined in schema
+        Ok(None)
     }
 
     /// Retrieve channels, optionally filtered by source and/or destination
@@ -120,7 +129,7 @@ impl QueryRoot {
     /// Retrieve chain information
     #[graphql(name = "chainInfo")]
     async fn chain_info(&self, ctx: &Context<'_>) -> Result<ChainInfo> {
-        use blokli_db_entity::conversions::balances::balance_to_f64;
+        use blokli_db_entity::conversions::balances::hopr_balance_to_string;
 
         let db = ctx.data::<DatabaseConnection>()?;
         let chain_id = ctx.data::<u64>()?;
@@ -131,12 +140,12 @@ impl QueryRoot {
             .await?
             .ok_or_else(|| async_graphql::Error::new("Chain info not found"))?;
 
-        // Convert ticket_price from 12-byte binary to f64
+        // Convert ticket_price from 12-byte binary to human-readable string
         let ticket_price = chain_info
             .ticket_price
             .as_ref()
-            .map(|bytes| balance_to_f64(bytes))
-            .unwrap_or(0.0);
+            .map(|bytes| TokenValueString(hopr_balance_to_string(bytes)))
+            .unwrap_or_else(|| TokenValueString(hopr_balance_to_string(&[])));
 
         // Convert last_indexed_block from 8-byte binary to u64, then to i32
         let block_number = if chain_info.last_indexed_block.len() == 8 {

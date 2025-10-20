@@ -4,11 +4,12 @@ use std::time::Duration;
 
 use async_graphql::{Context, Result, Subscription};
 use async_stream::stream;
+use blokli_db_entity::conversions::balances::{hopr_balance_to_string, native_balance_to_string};
 use futures::Stream;
 use sea_orm::DatabaseConnection;
 use tokio::time::sleep;
 
-use crate::types::{Account, Channel, HoprBalance, NativeBalance};
+use crate::types::{Account, Channel, HoprBalance, NativeBalance, TokenValueString};
 
 /// Root subscription object for the GraphQL API
 pub struct SubscriptionRoot;
@@ -174,32 +175,16 @@ impl SubscriptionRoot {
                 .filter(blokli_db_entity::hopr_balance::Column::Address.eq(&account_model.chain_key))
                 .one(db)
                 .await?
-                .map(|b| {
-                    if b.balance.len() == 12 {
-                        let mut bytes = [0u8; 16];
-                        bytes[4..].copy_from_slice(&b.balance);
-                        u128::from_be_bytes(bytes) as f64
-                    } else {
-                        0.0
-                    }
-                })
-                .unwrap_or(0.0);
+                .map(|b| hopr_balance_to_string(&b.balance))
+                .unwrap_or_else(|| hopr_balance_to_string(&[]));
 
             // Fetch Native balance for account's chain_key
             let native_balance_value = blokli_db_entity::native_balance::Entity::find()
                 .filter(blokli_db_entity::native_balance::Column::Address.eq(&account_model.chain_key))
                 .one(db)
                 .await?
-                .map(|b| {
-                    if b.balance.len() == 12 {
-                        let mut bytes = [0u8; 16];
-                        bytes[4..].copy_from_slice(&b.balance);
-                        u128::from_be_bytes(bytes) as f64
-                    } else {
-                        0.0
-                    }
-                })
-                .unwrap_or(0.0);
+                .map(|b| native_balance_to_string(&b.balance))
+                .unwrap_or_else(|| native_balance_to_string(&[]));
 
             // Fetch safe balances if safe_address exists
             let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr) = account_model.safe_address {
@@ -207,29 +192,13 @@ impl SubscriptionRoot {
                     .filter(blokli_db_entity::hopr_balance::Column::Address.eq(safe_addr))
                     .one(db)
                     .await?
-                    .map(|b| {
-                        if b.balance.len() == 12 {
-                            let mut bytes = [0u8; 16];
-                            bytes[4..].copy_from_slice(&b.balance);
-                            u128::from_be_bytes(bytes) as f64
-                        } else {
-                            0.0
-                        }
-                    });
+                    .map(|b| hopr_balance_to_string(&b.balance));
 
                 let safe_native = blokli_db_entity::native_balance::Entity::find()
                     .filter(blokli_db_entity::native_balance::Column::Address.eq(safe_addr))
                     .one(db)
                     .await?
-                    .map(|b| {
-                        if b.balance.len() == 12 {
-                            let mut bytes = [0u8; 16];
-                            bytes[4..].copy_from_slice(&b.balance);
-                            u128::from_be_bytes(bytes) as f64
-                        } else {
-                            0.0
-                        }
-                    });
+                    .map(|b| native_balance_to_string(&b.balance));
 
                 (safe_hopr, safe_native)
             } else {
@@ -239,11 +208,11 @@ impl SubscriptionRoot {
             result.push(Account {
                 chain_key: account_model.chain_key,
                 packet_key: account_model.packet_key,
-                account_hopr_balance: hopr_balance_value,
-                account_native_balance: native_balance_value,
+                account_hopr_balance: TokenValueString(hopr_balance_value),
+                account_native_balance: TokenValueString(native_balance_value),
                 safe_address: account_model.safe_address,
-                safe_hopr_balance,
-                safe_native_balance,
+                safe_hopr_balance: safe_hopr_balance.map(TokenValueString),
+                safe_native_balance: safe_native_balance.map(TokenValueString),
                 multi_addresses,
             });
         }

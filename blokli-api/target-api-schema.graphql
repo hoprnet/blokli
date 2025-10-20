@@ -1,5 +1,11 @@
 """
-	
+Human-readable token representation.
+Format: value [wei] token
+Examples:
+  10 wei wxHOPR
+	10 wxHOPR
+	10.1 wxHOPR
+	.1 wxHOPR
 """
 scalar TokenValueString
 

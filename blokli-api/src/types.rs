@@ -1,6 +1,14 @@
 //! GraphQL type definitions for HOPR blokli API
 
-use async_graphql::{Enum, SimpleObject};
+use async_graphql::{Enum, NewType, SimpleObject};
+
+/// Token value represented as a string to maintain precision
+///
+/// This scalar type represents token amounts as decimal strings to avoid
+/// floating-point precision issues. Values are typically represented in
+/// the token's base unit (e.g., wei for native tokens, smallest unit for HOPR).
+#[derive(Debug, Clone, NewType)]
+pub struct TokenValueString(pub String);
 
 /// Status of a payment channel
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
@@ -58,9 +66,9 @@ pub struct ChainInfo {
     /// Chain ID of the connected blockchain network
     #[graphql(name = "chainId")]
     pub chain_id: i32,
-    /// Current HOPR token price in wxHOPR
+    /// Current HOPR token price
     #[graphql(name = "ticketPrice")]
-    pub ticket_price: f64,
+    pub ticket_price: TokenValueString,
     /// Current minimum ticket winning probability (decimal value between 0.0 and 1.0)
     #[graphql(name = "minTicketWinningProbability")]
     pub min_ticket_winning_probability: f64,
@@ -77,19 +85,19 @@ pub struct Account {
     pub packet_key: String,
     /// wxHOPR balance associated with the on-chain address
     #[graphql(name = "accountHoprBalance")]
-    pub account_hopr_balance: f64,
+    pub account_hopr_balance: TokenValueString,
     /// Native balance associated with the on-chain address
     #[graphql(name = "accountNativeBalance")]
-    pub account_native_balance: f64,
+    pub account_native_balance: TokenValueString,
     /// HOPR Safe contract address to which the account is linked
     #[graphql(name = "safeAddress")]
     pub safe_address: Option<String>,
     /// wxHOPR balance associated with the linked Safe contract address
     #[graphql(name = "safeHoprBalance")]
-    pub safe_hopr_balance: Option<f64>,
+    pub safe_hopr_balance: Option<TokenValueString>,
     /// Native balance associated with the linked Safe contract address
     #[graphql(name = "safeNativeBalance")]
-    pub safe_native_balance: Option<f64>,
+    pub safe_native_balance: Option<TokenValueString>,
     /// List of multiaddresses associated with the packet key
     #[graphql(name = "multiAddresses")]
     pub multi_addresses: Vec<String>,
@@ -128,7 +136,7 @@ pub struct Channel {
     /// On-chain address of the destination node in hexadecimal format
     pub destination: String,
     /// Total amount of HOPR tokens allocated to the channel
-    pub balance: f64,
+    pub balance: TokenValueString,
     /// Current state of the channel (OPEN, PENDINGTOCLOSE, or CLOSED)
     pub status: ChannelStatus,
     /// Current epoch of the channel
@@ -143,9 +151,9 @@ pub struct Channel {
 
 impl From<blokli_db_entity::channel::Model> for Channel {
     fn from(model: blokli_db_entity::channel::Model) -> Self {
-        use blokli_db_entity::conversions::balances::{balance_to_f64, bytes_to_u64};
+        use blokli_db_entity::conversions::balances::{bytes_to_u64, hopr_balance_to_string};
 
-        let balance = balance_to_f64(&model.balance);
+        let balance = TokenValueString(hopr_balance_to_string(&model.balance));
         let epoch = bytes_to_u64(&model.epoch) as i32;
         let ticket_index = bytes_to_u64(&model.ticket_index) as i32;
 
@@ -178,16 +186,16 @@ pub struct HoprBalance {
     /// Address holding the HOPR token balance
     pub address: String,
     /// HOPR token balance
-    pub balance: f64,
+    pub balance: TokenValueString,
 }
 
 impl From<blokli_db_entity::hopr_balance::Model> for HoprBalance {
     fn from(model: blokli_db_entity::hopr_balance::Model) -> Self {
-        use blokli_db_entity::conversions::balances::balance_to_f64;
+        use blokli_db_entity::conversions::balances::balance_to_string;
 
         Self {
             address: model.address,
-            balance: balance_to_f64(&model.balance),
+            balance: TokenValueString(balance_to_string(&model.balance)),
         }
     }
 }
@@ -198,16 +206,16 @@ pub struct NativeBalance {
     /// Address holding the native token balance
     pub address: String,
     /// Native token balance
-    pub balance: f64,
+    pub balance: TokenValueString,
 }
 
 impl From<blokli_db_entity::native_balance::Model> for NativeBalance {
     fn from(model: blokli_db_entity::native_balance::Model) -> Self {
-        use blokli_db_entity::conversions::balances::balance_to_f64;
+        use blokli_db_entity::conversions::balances::balance_to_string;
 
         Self {
             address: model.address,
-            balance: balance_to_f64(&model.balance),
+            balance: TokenValueString(balance_to_string(&model.balance)),
         }
     }
 }

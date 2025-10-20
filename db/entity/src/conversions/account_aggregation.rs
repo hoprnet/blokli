@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
-use super::balances::balance_to_f64;
+use super::balances::{hopr_balance_to_string, native_balance_to_string};
 use crate::codegen::{account, announcement, hopr_balance, native_balance};
 
 /// Aggregated account data with all related information
@@ -12,11 +12,11 @@ use crate::codegen::{account, announcement, hopr_balance, native_balance};
 pub struct AggregatedAccount {
     pub chain_key: String,
     pub packet_key: String,
-    pub account_hopr_balance: f64,
-    pub account_native_balance: f64,
+    pub account_hopr_balance: String,
+    pub account_native_balance: String,
     pub safe_address: Option<String>,
-    pub safe_hopr_balance: Option<f64>,
-    pub safe_native_balance: Option<f64>,
+    pub safe_hopr_balance: Option<String>,
+    pub safe_native_balance: Option<String>,
     pub multi_addresses: Vec<String>,
 }
 
@@ -75,9 +75,9 @@ pub async fn fetch_accounts_with_balances(db: &DatabaseConnection) -> Result<Vec
         .all(db)
         .await?;
 
-    let hopr_balance_map: HashMap<String, f64> = hopr_balances
+    let hopr_balance_map: HashMap<String, String> = hopr_balances
         .into_iter()
-        .map(|b| (b.address.clone(), balance_to_f64(&b.balance)))
+        .map(|b| (b.address.clone(), hopr_balance_to_string(&b.balance)))
         .collect();
 
     // 4. Batch fetch all native balances (1 query)
@@ -86,9 +86,9 @@ pub async fn fetch_accounts_with_balances(db: &DatabaseConnection) -> Result<Vec
         .all(db)
         .await?;
 
-    let native_balance_map: HashMap<String, f64> = native_balances
+    let native_balance_map: HashMap<String, String> = native_balances
         .into_iter()
-        .map(|b| (b.address.clone(), balance_to_f64(&b.balance)))
+        .map(|b| (b.address.clone(), native_balance_to_string(&b.balance)))
         .collect();
 
     // 5. Aggregate all data
@@ -97,14 +97,20 @@ pub async fn fetch_accounts_with_balances(db: &DatabaseConnection) -> Result<Vec
         .map(|account| {
             let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
 
-            let account_hopr_balance = hopr_balance_map.get(&account.chain_key).copied().unwrap_or(0.0);
+            let account_hopr_balance = hopr_balance_map
+                .get(&account.chain_key)
+                .cloned()
+                .unwrap_or_else(|| hopr_primitive_types::prelude::HoprBalance::zero().to_string());
 
-            let account_native_balance = native_balance_map.get(&account.chain_key).copied().unwrap_or(0.0);
+            let account_native_balance = native_balance_map
+                .get(&account.chain_key)
+                .cloned()
+                .unwrap_or_else(|| hopr_primitive_types::prelude::XDaiBalance::zero().to_string());
 
             let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr) = account.safe_address {
                 (
-                    hopr_balance_map.get(safe_addr).copied(),
-                    native_balance_map.get(safe_addr).copied(),
+                    hopr_balance_map.get(safe_addr).cloned(),
+                    native_balance_map.get(safe_addr).cloned(),
                 )
             } else {
                 (None, None)
