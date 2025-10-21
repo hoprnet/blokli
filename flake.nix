@@ -162,11 +162,12 @@
               inherit pre-commit system config;
             };
 
-            # Man pages - import as individual packages
-            bloklid-man =
-              (pkgs.callPackage ./nix/man-pages.nix {
-                bloklid = bloklidPackages.bloklid-dev;
-              }).bloklid-man;
+            # Man pages
+            bloklid-man = nixLib.mkManPage {
+              pname = "bloklid";
+              binary = bloklidPackages.bloklid-dev;
+              description = "BLOKLID node executable";
+            };
           };
 
           # Import Docker configurations
