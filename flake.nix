@@ -1,17 +1,12 @@
 # flake.nix - HOPR blokli Nix flake configuration
 #
-# This is the main entry point for the Nix flake. It combines modular components
-# from the nix/ directory to provide a complete build and development environment.
+# This is the main entry point for the Nix flake. It uses the HOPR nix-lib
+# for reusable Rust build functions and formatting configuration.
 #
 # Structure:
-# - nix/inputs.nix: External dependency definitions
-# - nix/lib/: Utility functions and builders
 # - nix/packages/: Package definitions (bloklid)
-# - nix/docker/: Docker image configurations
-# - nix/shells/: Development shell environments
-# - nix/apps/: Executable scripts and utilities
 # - nix/checks.nix: CI/CD quality checks
-# - nix/treefmt.nix: Code formatting configuration
+# - nix-lib (external): Rust builders, Docker images, treefmt, and utilities
 
 {
   description = "HOPR blokli - the companion indexer and chain operator for the HOPR network";
