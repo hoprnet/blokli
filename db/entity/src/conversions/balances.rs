@@ -2,6 +2,71 @@
 
 use hopr_primitive_types::prelude::{Balance, Currency, HoprBalance, IntoEndian, XDaiBalance};
 
+/// Convert binary address (20 bytes) to hex string (without 0x prefix)
+///
+/// # Arguments
+/// * `address` - A slice containing the 20-byte address
+///
+/// # Returns
+/// * `String` - The address as a hexadecimal string (40 characters), or empty string if invalid
+///
+/// # Note
+/// This function returns an empty string for invalid addresses. For error handling, use `try_address_to_string`
+/// instead.
+pub fn address_to_string(address: &[u8]) -> String {
+    try_address_to_string(address).unwrap_or_default()
+}
+
+/// Convert binary address (20 bytes) to hex string (without 0x prefix), with validation
+///
+/// # Arguments
+/// * `address` - A slice containing the 20-byte address
+///
+/// # Returns
+/// * `Ok(String)` - The address as a hexadecimal string (40 characters)
+/// * `Err(&'static str)` - Error message if the address is not exactly 20 bytes
+pub fn try_address_to_string(address: &[u8]) -> Result<String, &'static str> {
+    if address.len() == 20 {
+        Ok(hex::encode(address))
+    } else {
+        Err("address must be exactly 20 bytes")
+    }
+}
+
+/// Convert hex string address to binary (20 bytes)
+///
+/// # Arguments
+/// * `address` - A hex string (with or without 0x prefix)
+///
+/// # Returns
+/// * `Vec<u8>` - The address as 20 bytes, or empty vector if invalid
+///
+/// # Note
+/// This function returns an empty vector for invalid addresses. For error handling, use `try_string_to_address`
+/// instead.
+pub fn string_to_address(address: &str) -> Vec<u8> {
+    try_string_to_address(address)
+        .map(|arr| arr.to_vec())
+        .unwrap_or_default()
+}
+
+/// Convert hex string address to binary (20 bytes), with validation
+///
+/// # Arguments
+/// * `address` - A hex string (with or without 0x prefix)
+///
+/// # Returns
+/// * `Ok([u8; 20])` - The address as a 20-byte array
+/// * `Err(String)` - Error message if the address is invalid
+pub fn try_string_to_address(address: &str) -> Result<[u8; 20], String> {
+    let addr = address.strip_prefix("0x").unwrap_or(address);
+    let bytes = hex::decode(addr).map_err(|e| format!("invalid hex: {}", e))?;
+    let len = bytes.len();
+    bytes
+        .try_into()
+        .map_err(|_| format!("address must be 20 bytes, got {}", len))
+}
+
 /// Convert a 12-byte balance representation to f64
 ///
 /// This function converts the 12-byte big-endian balance stored in the database

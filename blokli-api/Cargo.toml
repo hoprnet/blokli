@@ -8,6 +8,13 @@ name        = "blokli-api"
 repository  = "https://github.com/hoprnet/hoprnet"
 version     = "0.1.0"
 
+[lints]
+workspace = true
+
+[features]
+default       = ["runtime-tokio"]
+runtime-tokio = []
+
 [dependencies]
 # Async runtime
 async-stream = { workspace = true }
@@ -45,6 +52,7 @@ chrono = { workspace = true }
 hex    = { workspace = true }
 
 # Internal dependencies
+blokli-api-types = { workspace = true }
 blokli-db-entity = { workspace = true }
 
 # Logging

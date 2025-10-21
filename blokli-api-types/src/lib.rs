@@ -1,6 +1,9 @@
 //! GraphQL type definitions for HOPR blokli API
+//!
+//! This crate contains pure GraphQL type definitions that can be reused
+//! by clients without depending on the full API server implementation.
 
-use async_graphql::{Enum, NewType, SimpleObject};
+use async_graphql::{Enum, NewType, Scalar, ScalarType, SimpleObject, Value};
 
 /// Token value represented as a string to maintain precision
 ///
@@ -9,6 +12,38 @@ use async_graphql::{Enum, NewType, SimpleObject};
 /// the token's base unit (e.g., wei for native tokens, smallest unit for HOPR).
 #[derive(Debug, Clone, NewType)]
 pub struct TokenValueString(pub String);
+
+/// Unsigned 64-bit integer scalar type
+///
+/// This scalar type represents u64 values as strings in GraphQL to avoid
+/// JavaScript's Number precision loss (JS Number is only safe up to 2^53-1).
+/// The maximum value is 18,446,744,073,709,551,615.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UInt64(pub u64);
+
+#[Scalar]
+impl ScalarType for UInt64 {
+    fn parse(value: Value) -> async_graphql::InputValueResult<Self> {
+        match value {
+            Value::String(s) => {
+                let n = s.parse::<u64>().map_err(|e| format!("Invalid UInt64: {}", e))?;
+                Ok(UInt64(n))
+            }
+            Value::Number(n) => {
+                if let Some(n) = n.as_u64() {
+                    Ok(UInt64(n))
+                } else {
+                    Err("UInt64 must be a positive integer".into())
+                }
+            }
+            _ => Err("UInt64 must be a string or number".into()),
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        Value::String(self.0.to_string())
+    }
+}
 
 /// Status of a payment channel
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
@@ -120,17 +155,6 @@ pub struct Announcement {
     pub published_block: String,
 }
 
-impl From<blokli_db_entity::announcement::Model> for Announcement {
-    fn from(model: blokli_db_entity::announcement::Model) -> Self {
-        Self {
-            id: model.id,
-            account_id: model.account_id,
-            multiaddress: model.multiaddress,
-            published_block: hex::encode(&model.published_block),
-        }
-    }
-}
-
 /// Payment channel between two nodes
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Channel {
@@ -145,35 +169,14 @@ pub struct Channel {
     pub balance: TokenValueString,
     /// Current state of the channel (OPEN, PENDINGTOCLOSE, or CLOSED)
     pub status: ChannelStatus,
-    /// Current epoch of the channel
+    /// Current epoch of the channel (uint24)
     pub epoch: i32,
-    /// Latest ticket index used in the channel
+    /// Latest ticket index used in the channel (uint48, max: 281474976710655)
     #[graphql(name = "ticketIndex")]
-    pub ticket_index: i32,
+    pub ticket_index: UInt64,
     /// Timestamp when the channel closure was initiated (null if no closure initiated)
     #[graphql(name = "closureTime")]
     pub closure_time: Option<chrono::DateTime<chrono::Utc>>,
-}
-
-impl From<blokli_db_entity::channel::Model> for Channel {
-    fn from(model: blokli_db_entity::channel::Model) -> Self {
-        use blokli_db_entity::conversions::balances::{bytes_to_u64, hopr_balance_to_string};
-
-        let balance = TokenValueString(hopr_balance_to_string(&model.balance));
-        let epoch = bytes_to_u64(&model.epoch) as i32;
-        let ticket_index = bytes_to_u64(&model.ticket_index) as i32;
-
-        Self {
-            concrete_channel_id: model.concrete_channel_id,
-            source: model.source,
-            destination: model.destination,
-            balance,
-            status: ChannelStatus::from(model.status),
-            epoch,
-            ticket_index,
-            closure_time: model.closure_time,
-        }
-    }
 }
 
 /// Graph of opened payment channels with associated accounts
@@ -194,17 +197,6 @@ pub struct HoprBalance {
     pub balance: TokenValueString,
 }
 
-impl From<blokli_db_entity::hopr_balance::Model> for HoprBalance {
-    fn from(model: blokli_db_entity::hopr_balance::Model) -> Self {
-        use blokli_db_entity::conversions::balances::balance_to_string;
-
-        Self {
-            address: model.address,
-            balance: TokenValueString(balance_to_string(&model.balance)),
-        }
-    }
-}
-
 /// Native token balance information for a specific address
 #[derive(SimpleObject, Clone, Debug)]
 pub struct NativeBalance {
@@ -212,15 +204,4 @@ pub struct NativeBalance {
     pub address: String,
     /// Native token balance
     pub balance: TokenValueString,
-}
-
-impl From<blokli_db_entity::native_balance::Model> for NativeBalance {
-    fn from(model: blokli_db_entity::native_balance::Model) -> Self {
-        use blokli_db_entity::conversions::balances::balance_to_string;
-
-        Self {
-            address: model.address,
-            balance: TokenValueString(balance_to_string(&model.balance)),
-        }
-    }
 }
