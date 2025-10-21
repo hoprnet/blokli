@@ -1,3 +1,6 @@
+// Allow casts for block numbers stored as i64, converted to u32 (checked elsewhere)
+#![allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+
 use async_trait::async_trait;
 use blokli_db_entity::{
     account, announcement,
@@ -6,10 +9,7 @@ use blokli_db_entity::{
 use futures::TryFutureExt;
 use hopr_crypto_types::prelude::OffchainPublicKey;
 use hopr_internal_types::{account::AccountType, prelude::AccountEntry};
-use hopr_primitive_types::{
-    errors::GeneralError,
-    prelude::{Address, ToHex},
-};
+use hopr_primitive_types::{errors::GeneralError, prelude::Address, traits::ToHex};
 use multiaddr::Multiaddr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, ModelTrait, QueryFilter, QueryOrder, Related,
@@ -71,8 +71,8 @@ impl TryFrom<ChainOrPacketKey> for Address {
 impl From<ChainOrPacketKey> for Condition {
     fn from(key: ChainOrPacketKey) -> Condition {
         match key {
-            ChainOrPacketKey::ChainKey(chain_key) => account::Column::ChainKey.eq(chain_key.to_string()).into(),
-            ChainOrPacketKey::PacketKey(packet_key) => account::Column::PacketKey.eq(packet_key.to_string()).into(),
+            ChainOrPacketKey::ChainKey(chain_key) => account::Column::ChainKey.eq(chain_key.as_ref().to_vec()).into(),
+            ChainOrPacketKey::PacketKey(packet_key) => account::Column::PacketKey.eq(packet_key.to_hex()).into(),
         }
     }
 }
@@ -139,15 +139,18 @@ pub(crate) fn model_to_account_entry(
     // Currently, we always take only the most recent announcement
     let announcement = announcements.first();
 
+    // Convert Vec<u8> (20 bytes) to Address
+    let chain_addr = Address::try_from(account.chain_key.as_slice())?;
+
     Ok(AccountEntry {
         public_key: OffchainPublicKey::from_hex(&account.packet_key)?,
-        chain_addr: account.chain_key.parse()?,
-        published_at: u64::from_be_bytes(account.published_block.as_slice().try_into().unwrap()) as u32,
+        chain_addr,
+        published_at: account.published_block as u32,
         entry_type: match announcement {
             None => AccountType::NotAnnounced,
             Some(a) => AccountType::Announced {
                 multiaddr: a.multiaddress.parse().map_err(|_| DbSqlError::DecodingError)?,
-                updated_block: u64::from_be_bytes(a.published_block.as_slice().try_into().unwrap()) as u32,
+                updated_block: a.published_block as u32,
             },
         },
     })
@@ -213,9 +216,9 @@ impl BlokliDbAccountOperations for BlokliDb {
             .perform(|tx| {
                 Box::pin(async move {
                     match account::Entity::insert(account::ActiveModel {
-                        chain_key: Set(account.chain_addr.to_hex()),
+                        chain_key: Set(account.chain_addr.as_ref().to_vec()),
                         packet_key: Set(account.public_key.to_hex()),
-                        published_block: Set((account.published_at as u64).to_be_bytes().to_vec()),
+                        published_block: Set(account.published_at as i64),
                         ..Default::default()
                     })
                     .on_conflict(
@@ -284,7 +287,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                         .find(|(_, announcement)| announcement.multiaddress == multiaddr.to_string())
                     {
                         let mut existing_announcement = existing_announcements.remove(index).into_active_model();
-                        existing_announcement.published_block = Set((published_at as u64).to_be_bytes().to_vec());
+                        existing_announcement.published_block = Set(published_at as i64);
                         let updated_announcement = existing_announcement.update(tx.as_ref()).await?;
 
                         // To maintain the sort order, insert at the original location
@@ -293,7 +296,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                         let new_announcement = announcement::ActiveModel {
                             account_id: Set(existing_account.id),
                             multiaddress: Set(multiaddr.to_string()),
-                            published_block: Set((published_at as u64).to_be_bytes().to_vec()),
+                            published_block: Set(published_at as i64),
                             ..Default::default()
                         }
                         .insert(tx.as_ref())
@@ -377,7 +380,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                     op.perform(|tx| {
                         Box::pin(async move {
                             let maybe_model = Account::find()
-                                .filter(account::Column::ChainKey.eq(chain_key.to_string()))
+                                .filter(account::Column::ChainKey.eq(chain_key.as_ref().to_vec()))
                                 .one(tx.as_ref())
                                 .await?;
                             if let Some(m) = maybe_model {
@@ -396,11 +399,12 @@ impl BlokliDbAccountOperations for BlokliDb {
                     op.perform(|tx| {
                         Box::pin(async move {
                             let maybe_model = Account::find()
-                                .filter(account::Column::PacketKey.eq(packet_key.to_string()))
+                                .filter(account::Column::PacketKey.eq(packet_key.to_hex()))
                                 .one(tx.as_ref())
                                 .await?;
                             if let Some(m) = maybe_model {
-                                Ok(Some(Address::from_hex(&m.chain_key)?))
+                                // Convert Vec<u8> (20 bytes) to Address
+                                Ok(Some(Address::try_from(m.chain_key.as_slice())?))
                             } else {
                                 Ok(None)
                             }

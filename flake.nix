@@ -1,17 +1,12 @@
 # flake.nix - HOPR blokli Nix flake configuration
 #
-# This is the main entry point for the Nix flake. It combines modular components
-# from the nix/ directory to provide a complete build and development environment.
+# This is the main entry point for the Nix flake. It uses the HOPR nix-lib
+# for reusable Rust build functions and formatting configuration.
 #
 # Structure:
-# - nix/inputs.nix: External dependency definitions
-# - nix/lib/: Utility functions and builders
 # - nix/packages/: Package definitions (bloklid)
-# - nix/docker/: Docker image configurations
-# - nix/shells/: Development shell environments
-# - nix/apps/: Executable scripts and utilities
 # - nix/checks.nix: CI/CD quality checks
-# - nix/treefmt.nix: Code formatting configuration
+# - nix-lib (external): Rust builders, Docker images, treefmt, and utilities
 
 {
   description = "HOPR blokli - the companion indexer and chain operator for the HOPR network";
@@ -21,13 +16,9 @@
   # INPUTS REFERENCE:
   #
   # Core Nix ecosystem dependencies:
-  # - flake-utils: Provides utility functions for working with flakes across multiple systems
   # - flake-parts: Modular flake framework for better organization
   # - nixpkgs: The main Nix package repository (using release 25.05 for stability)
-  #
-  # Rust toolchain and build system:
-  # - rust-overlay: Provides up-to-date Rust toolchains with cross-compilation support
-  # - crane: Incremental Rust build system for Nix with excellent caching
+  # - nix-lib: HOPR Nix library with reusable Rust build functions
   #
   # Development tools and quality assurance:
   # - pre-commit: Git hooks for code quality enforcement
@@ -39,25 +30,28 @@
   # This is achieved through the "follows" directive below.
   inputs = {
     # Core Nix ecosystem dependencies
-    flake-utils.url = "github:numtide/flake-utils";
     flake-parts.url = "github:hercules-ci/flake-parts";
     nixpkgs.url = "github:NixOS/nixpkgs/release-25.05";
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    # Rust toolchain and build system
-    rust-overlay.url = "github:oxalica/rust-overlay/master";
-    crane.url = "github:ipetkov/crane/v0.21.0";
+    # HOPR Nix Library (provides flake-utils and reusable build functions)
+    nix-lib.url = "github:hoprnet/nix-lib";
+
+    # Rust build system
+    crane.url = "github:ipetkov/crane";
+    rust-overlay.url = "github:oxalica/rust-overlay";
 
     # Development tools and quality assurance
     pre-commit.url = "github:cachix/git-hooks.nix";
-    treefmt-nix.url = "github:numtide/treefmt-nix";
     flake-root.url = "github:srid/flake-root";
 
     # Input dependency optimization
     flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
     pre-commit.inputs.nixpkgs.follows = "nixpkgs";
+    nix-lib.inputs.nixpkgs.follows = "nixpkgs";
+    nix-lib.inputs.crane.follows = "crane";
+    nix-lib.inputs.rust-overlay.follows = "rust-overlay";
     rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
-    treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -65,17 +59,17 @@
       self,
       nixpkgs,
       nixpkgs-unstable,
-      flake-utils,
       flake-parts,
-      rust-overlay,
+      nix-lib,
       crane,
+      rust-overlay,
       pre-commit,
       ...
     }@inputs:
     flake-parts.lib.mkFlake { inherit inputs; } {
       # Import flake modules for additional functionality
       imports = [
-        inputs.treefmt-nix.flakeModule
+        inputs.nix-lib.flakeModules.default
         inputs.flake-root.flakeModule
       ];
 
@@ -95,26 +89,22 @@
           # Filesystem utilities for source filtering
           fs = lib.fileset;
 
-          # System configuration
-          localSystem = system;
-
-          # Nixpkgs with overlays for Rust
-          overlays = [
-            (import rust-overlay)
-          ];
+          # Nixpkgs with rust-overlay
+          overlays = [ rust-overlay.overlays.default ];
           pkgs = import nixpkgs {
-            system = localSystem;
-            inherit overlays;
+            inherit system overlays;
           };
           pkgsUnstable = import nixpkgs-unstable {
-            system = localSystem;
-            inherit overlays;
+            inherit system overlays;
           };
 
           # Platform information
           buildPlatform = pkgs.stdenv.buildPlatform;
 
-          # Crane library for Rust builds
+          # Import nix-lib for this system
+          nixLib = nix-lib.lib.${system};
+
+          # Crane library for Rust builds (for crate info extraction)
           craneLib = (crane.mkLib pkgs).overrideToolchain (p: p.rust-bin.stable.latest.default);
 
           # bloklid crate information
@@ -129,35 +119,26 @@
             );
           };
 
-          # Import library modules
-          sourcesLib = import ./nix/lib/sources.nix { inherit lib; };
-          rustBuildersLib = import ./nix/lib/rust-builders.nix {
-            inherit
-              nixpkgs
-              rust-overlay
-              crane
-              localSystem
-              ;
-          };
-
-          # Create source trees for different build contexts
+          # Create source trees for different build contexts using nix-lib
           sources = {
-            main = sourcesLib.mkSrc {
+            main = nixLib.mkSrc {
               root = ./.;
               inherit fs;
             };
-            test = sourcesLib.mkTestSrc {
+            test = nixLib.mkTestSrc {
               root = ./.;
               inherit fs;
             };
-            deps = sourcesLib.mkDepsSrc {
+            deps = nixLib.mkDepsSrc {
               root = ./.;
               inherit fs;
             };
           };
 
-          # Create all Rust builders for cross-compilation
-          builders = rustBuildersLib.mkAllBuilders { };
+          # Create all Rust builders for cross-compilation using nix-lib
+          builders = nixLib.mkRustBuilders {
+            rustToolchainFile = ./rust-toolchain.toml;
+          };
 
           # Import package definitions
           bloklidPackages = import ./nix/packages/bloklid.nix {
@@ -168,6 +149,7 @@
               bloklidCrateInfo
               rev
               buildPlatform
+              nixLib
               ;
           };
 
@@ -180,11 +162,12 @@
               inherit pre-commit system config;
             };
 
-            # Man pages - import as individual packages
-            bloklid-man =
-              (pkgs.callPackage ./nix/man-pages.nix {
-                bloklid = bloklidPackages.bloklid-dev;
-              }).bloklid-man;
+            # Man pages
+            bloklid-man = nixLib.mkManPage {
+              pname = "bloklid";
+              binary = bloklidPackages.bloklid-dev;
+              description = "BLOKLID node executable";
+            };
           };
 
           # Import Docker configurations
@@ -193,19 +176,37 @@
             system = "x86_64-linux";
             inherit overlays;
           };
-          dockerBuilder = import ./nix/docker-builder.nix;
-          bloklidDocker = import ./nix/docker/bloklid.nix {
-            pkgs = pkgsLinux;
-            inherit dockerBuilder;
-            packages = bloklidPackages;
+
+          # Docker images using nix-lib
+          bloklidDocker = {
+            bloklid-docker = nixLib.mkDockerImage {
+              name = "bloklid";
+              Entrypoint = [ "${bloklidPackages.bloklid-x86_64-linux}/bin/bloklid" ];
+              pkgsLinux = pkgsLinux;
+            };
+            bloklid-dev-docker = nixLib.mkDockerImage {
+              name = "bloklid-dev";
+              Entrypoint = [ "${bloklidPackages.bloklid-x86_64-linux-dev}/bin/bloklid" ];
+              pkgsLinux = pkgsLinux;
+            };
+            bloklid-profile-docker = nixLib.mkDockerImage {
+              name = "bloklid-profile";
+              Entrypoint = [ "${bloklidPackages.bloklid-x86_64-linux-profile}/bin/bloklid" ];
+              pkgsLinux = pkgsLinux;
+            };
           };
 
-          # Import application definitions
-          dockerUploadLib = import ./nix/apps/docker-upload.nix {
-            inherit pkgs flake-utils;
+          # Application definitions using nix-lib
+          dockerUploadApps = {
+            bloklid-docker-build-and-upload = nixLib.mkDockerUploadApp bloklidDocker.bloklid-docker;
+            bloklid-dev-docker-build-and-upload = nixLib.mkDockerUploadApp bloklidDocker.bloklid-dev-docker;
+            bloklid-profile-docker-build-and-upload = nixLib.mkDockerUploadApp bloklidDocker.bloklid-profile-docker;
           };
-          utilities = import ./nix/apps/utilities.nix {
-            inherit pkgs system flake-utils;
+
+          utilityApps = {
+            update-github-labels = nixLib.mkUpdateGithubLabelsApp;
+            audit = nixLib.mkAuditApp;
+            check = nixLib.mkCheckApp { inherit system; };
           };
 
           # Rust toolchains
@@ -239,30 +240,26 @@
             ];
           };
 
-          # Import shell configurations
+          # Development shells using nix-lib
           shells = {
-            default = import ./nix/shells/default.nix {
-              inherit
-                pkgs
-                pkgsUnstable
-                config
-                crane
-                ;
+            default = nixLib.mkDevShell {
               rustToolchain = stableToolchain;
-              pre-commit-check = packages.pre-commit-check;
               shellName = "Development";
+              treefmtWrapper = config.treefmt.build.wrapper;
+              treefmtPrograms = pkgs.lib.attrValues config.treefmt.build.programs;
+              includePostgres = true;
+              postgresPackage = pkgsUnstable.postgresql_18;
+              shellHook = packages.pre-commit-check.shellHook;
             };
 
-            experiment = import ./nix/shells/default.nix {
-              inherit
-                pkgs
-                pkgsUnstable
-                config
-                crane
-                ;
+            experiment = nixLib.mkDevShell {
               rustToolchain = nightlyToolchain;
-              pre-commit-check = packages.pre-commit-check;
               shellName = "Experimental Nightly";
+              treefmtWrapper = config.treefmt.build.wrapper;
+              treefmtPrograms = pkgs.lib.attrValues config.treefmt.build.programs;
+              includePostgres = true;
+              postgresPackage = pkgsUnstable.postgresql_18;
+              shellHook = packages.pre-commit-check.shellHook;
             };
           };
 
@@ -271,33 +268,44 @@
             inherit pkgs bloklidCrateInfo;
             packages = bloklidPackages;
           };
-
-          # Import treefmt configuration
-          treefmtConfig = import ./nix/treefmt.nix {
-            inherit config pkgs;
-          };
         in
         {
-          # Configure treefmt
-          treefmt = treefmtConfig;
+          # Configure treefmt using nix-lib options
+          nix-lib.treefmt = {
+            globalExcludes = [
+              # Generated code - don't format to avoid churn
+              "db/entity/src/codegen/*"
+
+              # External configuration
+              "deploy/compose/grafana/config.monitoring"
+              "deploy/nfpm/nfpm.yaml"
+              ".github/workflows/build-binaries.yaml"
+
+              # Documentation and test data
+              "docs/*"
+
+              # Other specific files
+              "bloklid/.dockerignore"
+              "tests/pytest.ini"
+            ];
+            extraFormatters = {
+              settings.formatter.shfmt.includes = [
+                "*.sh"
+                "deploy/compose/.env.sample"
+                "deploy/compose/.env-secrets.sample"
+              ];
+              settings.formatter.yamlfmt.includes = [
+                ".github/labeler.yml"
+                ".github/workflows/*.yaml"
+              ];
+            };
+          };
 
           # Export checks for CI
           inherit checks;
 
-          # Export applications
-          apps = {
-            # Docker upload scripts
-            bloklid-docker-build-and-upload = dockerUploadLib.mkDockerUploadApp bloklidDocker.bloklid-docker;
-            bloklid-dev-docker-build-and-upload = dockerUploadLib.mkDockerUploadApp bloklidDocker.bloklid-dev-docker;
-            bloklid-profile-docker-build-and-upload = dockerUploadLib.mkDockerUploadApp bloklidDocker.bloklid-profile-docker;
-
-            # Utility scripts
-            inherit (utilities)
-              update-github-labels
-              audit
-              check
-              ;
-          };
+          # Export applications using nix-lib
+          apps = dockerUploadApps // utilityApps;
 
           # Export packages
           packages = packages // {
@@ -311,8 +319,7 @@
           # Export development shells
           devShells = shells;
 
-          # Export formatter
-          formatter = config.treefmt.build.wrapper;
+          # Formatter is automatically exported by nix-lib.flakeModules.default
         };
 
       # Supported systems for building

@@ -7,6 +7,9 @@ name        = "blokli-db-entity"
 repository  = "https://github.com/hoprnet/blokli"
 version     = "0.1.0"
 
+[lints]
+workspace = true
+
 [features]
 default = ["sqlite"]
 runtime-tokio = [
@@ -42,6 +45,7 @@ blokli-db-migration = { workspace = true }
 
 [dependencies]
 chrono    = { workspace = true }
+hex       = { workspace = true }
 sea-orm   = { workspace = true }
 thiserror = { workspace = true }
 tokio     = { workspace = true }

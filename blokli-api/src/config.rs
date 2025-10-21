@@ -57,11 +57,11 @@ impl Default for ApiConfig {
 }
 
 fn default_bind_address() -> SocketAddr {
-    "0.0.0.0:8080".parse().unwrap()
+    "127.0.0.1:8080".parse().unwrap()
 }
 
 fn default_playground_enabled() -> bool {
-    true
+    false
 }
 
 fn default_database_url() -> String {

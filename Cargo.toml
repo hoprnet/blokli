@@ -4,6 +4,7 @@ resolver = "2"
 
 members = [
   "blokli-api",
+  "blokli-api-types",
   "bloklid",
   "chain/actions",
   "chain/api",
@@ -39,6 +40,7 @@ axum = { version = "0.8.4", features = ["http2", "ws"] }
 axum-extra = { version = "0.10.1", features = ["query"] }
 backon = { version = "1.5.2", default-features = false }
 bincode = "2.0.1"
+blokli-api-types = { path = "blokli-api-types" }
 blokli-chain-actions = { path = "chain/actions" }
 blokli-chain-api = { path = "chain/api" }
 blokli-chain-indexer = { path = "chain/indexer" }
@@ -178,3 +180,10 @@ lto           = "fat"
 opt-level     = 3
 panic         = "abort"
 strip         = true
+
+# Workspace-level lints to prevent common issues
+[workspace.lints.clippy]
+# Prevent lossy numeric casts that can cause data corruption
+cast_possible_truncation = "deny"
+cast_possible_wrap       = "deny"
+cast_sign_loss           = "deny"

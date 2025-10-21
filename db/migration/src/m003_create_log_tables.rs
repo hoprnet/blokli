@@ -21,10 +21,9 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(Log::LogStatusId).integer().null())
-                    .col(ColumnDef::new(Log::TxIndex).not_null().binary_len(8))
-                    .col(ColumnDef::new(Log::LogIndex).not_null().binary_len(8))
-                    .col(ColumnDef::new(Log::BlockNumber).not_null().binary_len(8))
+                    .col(ColumnDef::new(Log::TxIndex).not_null().big_integer())
+                    .col(ColumnDef::new(Log::LogIndex).not_null().big_integer())
+                    .col(ColumnDef::new(Log::BlockNumber).not_null().big_integer())
                     .col(ColumnDef::new(Log::BlockHash).binary_len(32).not_null())
                     .col(ColumnDef::new(Log::TransactionHash).binary_len(32).not_null())
                     .col(ColumnDef::new(Log::Address).binary_len(20).not_null())
@@ -62,9 +61,9 @@ impl MigrationTrait for Migration {
                             .primary_key(),
                     )
                     .col(ColumnDef::new(LogStatus::LogId).integer().not_null())
-                    .col(ColumnDef::new(LogStatus::TxIndex).not_null().binary_len(8))
-                    .col(ColumnDef::new(LogStatus::LogIndex).not_null().binary_len(8))
-                    .col(ColumnDef::new(LogStatus::BlockNumber).not_null().binary_len(8))
+                    .col(ColumnDef::new(LogStatus::TxIndex).not_null().big_integer())
+                    .col(ColumnDef::new(LogStatus::LogIndex).not_null().big_integer())
+                    .col(ColumnDef::new(LogStatus::BlockNumber).not_null().big_integer())
                     .col(ColumnDef::new(LogStatus::Processed).boolean().not_null().default(false))
                     .col(ColumnDef::new(LogStatus::ProcessedAt).date_time())
                     .col(ColumnDef::new(LogStatus::Checksum).binary_len(32))
@@ -107,7 +106,7 @@ impl MigrationTrait for Migration {
                             .integer()
                             .auto_increment(),
                     )
-                    .col(ColumnDef::new(LogTopicInfo::Address).string_len(40).not_null())
+                    .col(ColumnDef::new(LogTopicInfo::Address).binary_len(20).not_null())
                     .col(ColumnDef::new(LogTopicInfo::Topic).string_len(64).not_null())
                     .to_owned(),
             )
@@ -130,7 +129,6 @@ impl MigrationTrait for Migration {
 enum Log {
     Table,
     Id,
-    LogStatusId,
     // address from which this log originated.
     Address,
     // Array of 0 to 4 32 Bytes DATA of indexed log arguments. The first topic is the

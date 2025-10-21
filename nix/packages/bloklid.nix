@@ -10,6 +10,7 @@
   bloklidCrateInfo,
   rev,
   buildPlatform,
+  nixLib,
 }:
 
 let
@@ -25,12 +26,12 @@ let
 in
 {
   # Development builds - for local testing and debugging
-  bloklid = builders.local.callPackage ../rust-package.nix (mkbloklidBuildArgs {
+  bloklid = builders.local.callPackage nixLib.mkRustPackage (mkbloklidBuildArgs {
     src = sources.main;
     depsSrc = sources.deps;
   });
 
-  bloklid-dev = builders.local.callPackage ../rust-package.nix (
+  bloklid-dev = builders.local.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
@@ -42,19 +43,19 @@ in
 
   # Production builds - optimized for deployment
   # x86_64 Linux builds with static linking for maximum portability
-  bloklid-x86_64-linux = builders.x86_64-linux.callPackage ../rust-package.nix (mkbloklidBuildArgs {
+  bloklid-x86_64-linux = builders.x86_64-linux.callPackage nixLib.mkRustPackage (mkbloklidBuildArgs {
     src = sources.main;
     depsSrc = sources.deps;
   });
 
-  bloklid-x86_64-linux-profile = builders.x86_64-linux.callPackage ../rust-package.nix (
+  bloklid-x86_64-linux-profile = builders.x86_64-linux.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
     })
   );
 
-  bloklid-x86_64-linux-dev = builders.x86_64-linux.callPackage ../rust-package.nix (
+  bloklid-x86_64-linux-dev = builders.x86_64-linux.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
@@ -65,12 +66,14 @@ in
   );
 
   # ARM64 Linux builds for ARM servers and devices
-  bloklid-aarch64-linux = builders.aarch64-linux.callPackage ../rust-package.nix (mkbloklidBuildArgs {
-    src = sources.main;
-    depsSrc = sources.deps;
-  });
+  bloklid-aarch64-linux =
+    builders.aarch64-linux.callPackage nixLib.mkRustPackage
+      (mkbloklidBuildArgs {
+        src = sources.main;
+        depsSrc = sources.deps;
+      });
 
-  bloklid-aarch64-linux-profile = builders.aarch64-linux.callPackage ../rust-package.nix (
+  bloklid-aarch64-linux-profile = builders.aarch64-linux.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
@@ -79,12 +82,14 @@ in
 
   # macOS builds - require building from Darwin systems
   # x86_64 macOS (Intel Macs)
-  bloklid-x86_64-darwin = builders.x86_64-darwin.callPackage ../rust-package.nix (mkbloklidBuildArgs {
-    src = sources.main;
-    depsSrc = sources.deps;
-  });
+  bloklid-x86_64-darwin =
+    builders.x86_64-darwin.callPackage nixLib.mkRustPackage
+      (mkbloklidBuildArgs {
+        src = sources.main;
+        depsSrc = sources.deps;
+      });
 
-  bloklid-x86_64-darwin-profile = builders.x86_64-darwin.callPackage ../rust-package.nix (
+  bloklid-x86_64-darwin-profile = builders.x86_64-darwin.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
@@ -93,13 +98,13 @@ in
 
   # ARM64 macOS (Apple Silicon)
   bloklid-aarch64-darwin =
-    builders.aarch64-darwin.callPackage ../rust-package.nix
+    builders.aarch64-darwin.callPackage nixLib.mkRustPackage
       (mkbloklidBuildArgs {
         src = sources.main;
         depsSrc = sources.deps;
       });
 
-  bloklid-aarch64-darwin-profile = builders.aarch64-darwin.callPackage ../rust-package.nix (
+  bloklid-aarch64-darwin-profile = builders.aarch64-darwin.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
@@ -107,7 +112,7 @@ in
   );
 
   # Test and quality assurance builds
-  bloklid-test = builders.local.callPackage ../rust-package.nix (
+  bloklid-test = builders.local.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.test;
       depsSrc = sources.deps;
@@ -117,7 +122,7 @@ in
     }
   );
 
-  bloklid-test-nightly = builders.localNightly.callPackage ../rust-package.nix (
+  bloklid-test-nightly = builders.localNightly.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.test;
       depsSrc = sources.deps;
@@ -128,7 +133,7 @@ in
     }
   );
 
-  bloklid-clippy = builders.local.callPackage ../rust-package.nix (
+  bloklid-clippy = builders.local.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
@@ -138,7 +143,7 @@ in
     }
   );
 
-  bloklid-bench = builders.local.callPackage ../rust-package.nix (
+  bloklid-bench = builders.local.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
@@ -152,7 +157,7 @@ in
   # Builds as static binary on Linux x86_64 for better test coverage
   bloklid-candidate =
     if buildPlatform.isLinux && buildPlatform.isx86_64 then
-      builders.x86_64-linux.callPackage ../rust-package.nix (
+      builders.x86_64-linux.callPackage nixLib.mkRustPackage (
         (mkbloklidBuildArgs {
           src = sources.main;
           depsSrc = sources.deps;
@@ -162,7 +167,7 @@ in
         }
       )
     else
-      builders.local.callPackage ../rust-package.nix (
+      builders.local.callPackage nixLib.mkRustPackage (
         (mkbloklidBuildArgs {
           src = sources.main;
           depsSrc = sources.deps;
@@ -173,7 +178,7 @@ in
       );
 
   # Documentation build using nightly Rust for unstable doc features
-  bloklid-docs = builders.localNightly.callPackage ../rust-package.nix (
+  bloklid-docs = builders.localNightly.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;

@@ -1,4 +1,4 @@
-use sea_orm_migration::prelude::*;
+use sea_orm_migration::cli;
 
 #[tokio::main]
 async fn main() {

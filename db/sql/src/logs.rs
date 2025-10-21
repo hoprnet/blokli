@@ -1,3 +1,6 @@
+// Allow casts for blockchain indices - u64 block/tx/log indices fit safely in i64
+#![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+
 use async_trait::async_trait;
 use blokli_db_api::{
     errors::{DbError, Result},
@@ -10,7 +13,7 @@ use blokli_db_entity::{
 };
 use futures::{StreamExt, stream};
 use hopr_crypto_types::prelude::Hash;
-use hopr_primitive_types::prelude::{Address, DateTime, IntoEndian, SerializableLog, ToHex, U256, Utc};
+use hopr_primitive_types::prelude::{Address, DateTime, SerializableLog, ToHex, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, FromQueryResult, IntoActiveModel, PaginatorTrait, QueryFilter,
     QueryOrder, QuerySelect,
@@ -18,13 +21,13 @@ use sea_orm::{
     query::QueryTrait,
     sea_query::{Expr, OnConflict, Value},
 };
-use tracing::{error, trace, warn};
+use tracing::{error, trace};
 
 use crate::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, errors::DbSqlError};
 
 #[derive(FromQueryResult)]
 struct BlockNumber {
-    block_number: Vec<u8>,
+    block_number: i64,
 }
 
 #[async_trait]
@@ -49,47 +52,103 @@ impl BlokliDbLogOperations for BlokliDb {
                 Box::pin(async move {
                     let results = stream::iter(logs).then(|log| async {
                         let log_id = log.to_string();
-                        let model = log::ActiveModel::from(log.clone());
-                        let status_model = log_status::ActiveModel::from(log);
-                        let log_status_query = LogStatus::insert(status_model).on_conflict(
-                            OnConflict::columns([
-                                log_status::Column::LogIndex,
-                                log_status::Column::TxIndex,
-                                log_status::Column::BlockNumber,
-                            ])
-                            .do_nothing()
-                            .to_owned(),
-                        );
-                        let log_query = Log::insert(model).on_conflict(
-                            OnConflict::columns([
-                                log::Column::LogIndex,
-                                log::Column::TxIndex,
-                                log::Column::BlockNumber,
-                            ])
-                            .do_nothing()
-                            .to_owned(),
-                        );
 
-                        match log_status_query.exec(tx.as_ref()).await {
-                            Ok(_) => match log_query.exec(tx.as_ref()).await {
-                                Ok(_) => Ok(()),
-                                Err(DbErr::RecordNotInserted) => {
-                                    warn!(log_id, "log already in the DB");
-                                    Err(DbError::General(format!("log already exists in the DB: {log_id}")))
+                        // First, try to insert the Log and get its ID
+                        let log_model = log::ActiveModel::from(log.clone());
+                        let log_result = Log::insert(log_model)
+                            .on_conflict(
+                                OnConflict::columns([
+                                    log::Column::LogIndex,
+                                    log::Column::TxIndex,
+                                    log::Column::BlockNumber,
+                                ])
+                                .do_nothing()
+                                .to_owned(),
+                            )
+                            .exec(tx.as_ref())
+                            .await;
+
+                        match log_result {
+                            Ok(insert_result) => {
+                                // Log was inserted successfully, now insert LogStatus with the log_id
+                                let mut status_model = log_status::ActiveModel::from(log);
+                                status_model.log_id = Set(insert_result.last_insert_id);
+
+                                match LogStatus::insert(status_model)
+                                    .on_conflict(
+                                        OnConflict::columns([
+                                            log_status::Column::LogIndex,
+                                            log_status::Column::TxIndex,
+                                            log_status::Column::BlockNumber,
+                                        ])
+                                        .do_nothing()
+                                        .to_owned(),
+                                    )
+                                    .exec(tx.as_ref())
+                                    .await
+                                {
+                                    Ok(_) => Ok(()),
+                                    Err(DbErr::RecordNotInserted) => {
+                                        // LogStatus already exists - idempotent success
+                                        trace!(log_id, "log status already in the DB");
+                                        Ok(())
+                                    }
+                                    Err(e) => {
+                                        error!(%log_id, "Failed to insert log status into db: {:?}", e);
+                                        Err(DbError::General(e.to_string()))
+                                    }
                                 }
-                                Err(e) => {
-                                    error!("Failed to insert log into db: {:?}", e);
-                                    Err(DbError::General(e.to_string()))
-                                }
-                            },
+                            }
                             Err(DbErr::RecordNotInserted) => {
-                                warn!(log_id, "log already in the DB");
-                                Err(DbError::General(format!(
-                                    "log status already exists in the DB: {log_id}"
-                                )))
+                                // Log already exists, need to find it to get its ID for LogStatus
+                                match Log::find()
+                                    .filter(log::Column::BlockNumber.eq(log.block_number as i64))
+                                    .filter(log::Column::TxIndex.eq(log.tx_index as i64))
+                                    .filter(log::Column::LogIndex.eq(log.log_index as i64))
+                                    .one(tx.as_ref())
+                                    .await
+                                {
+                                    Ok(Some(existing_log)) => {
+                                        // Found existing log, try to insert LogStatus with its ID
+                                        let mut status_model = log_status::ActiveModel::from(log);
+                                        status_model.log_id = Set(existing_log.id);
+
+                                        match LogStatus::insert(status_model)
+                                            .on_conflict(
+                                                OnConflict::columns([
+                                                    log_status::Column::LogIndex,
+                                                    log_status::Column::TxIndex,
+                                                    log_status::Column::BlockNumber,
+                                                ])
+                                                .do_nothing()
+                                                .to_owned(),
+                                            )
+                                            .exec(tx.as_ref())
+                                            .await
+                                        {
+                                            Ok(_) | Err(DbErr::RecordNotInserted) => {
+                                                // Both Log and LogStatus exist - idempotent success
+                                                trace!(log_id, "log already in the DB");
+                                                Ok(())
+                                            }
+                                            Err(e) => {
+                                                error!(%log_id, "Failed to insert log status into db: {:?}", e);
+                                                Err(DbError::General(e.to_string()))
+                                            }
+                                        }
+                                    }
+                                    Ok(None) => {
+                                        error!(%log_id, "Log not found after RecordNotInserted error");
+                                        Err(DbError::General(format!("Log not found: {log_id}")))
+                                    }
+                                    Err(e) => {
+                                        error!(%log_id, "Failed to find existing log: {:?}", e);
+                                        Err(DbError::General(e.to_string()))
+                                    }
+                                }
                             }
                             Err(e) => {
-                                error!(%log_id, "Failed to insert log status into db: {:?}", e);
+                                error!("Failed to insert log into db: {:?}", e);
                                 Err(DbError::General(e.to_string()))
                             }
                         }
@@ -101,14 +160,10 @@ impl BlokliDbLogOperations for BlokliDb {
     }
 
     async fn get_log(&self, block_number: u64, tx_index: u64, log_index: u64) -> Result<SerializableLog> {
-        let bn_enc = block_number.to_be_bytes().to_vec();
-        let tx_index_enc = tx_index.to_be_bytes().to_vec();
-        let log_index_enc = log_index.to_be_bytes().to_vec();
-
         let query = Log::find()
-            .filter(log::Column::BlockNumber.eq(bn_enc))
-            .filter(log::Column::TxIndex.eq(tx_index_enc))
-            .filter(log::Column::LogIndex.eq(log_index_enc))
+            .filter(log::Column::BlockNumber.eq(block_number as i64))
+            .filter(log::Column::TxIndex.eq(tx_index as i64))
+            .filter(log::Column::LogIndex.eq(log_index as i64))
             .find_also_related(LogStatus);
 
         match query.all(self.conn(TargetDb::Logs)).await {
@@ -137,26 +192,24 @@ impl BlokliDbLogOperations for BlokliDb {
 
         let query = Log::find()
             .find_also_related(LogStatus)
-            .filter(log::Column::BlockNumber.gte(min_block_number.to_be_bytes().to_vec()))
-            .apply_if(max_block_number, |q, v| {
-                q.filter(log::Column::BlockNumber.lt(v.to_be_bytes().to_vec()))
-            })
+            .filter(log::Column::BlockNumber.gte(min_block_number as i64))
+            .apply_if(max_block_number, |q, v| q.filter(log::Column::BlockNumber.lt(v as i64)))
             .order_by_asc(log::Column::BlockNumber)
             .order_by_asc(log::Column::TxIndex)
             .order_by_asc(log::Column::LogIndex);
 
         match query.all(self.conn(TargetDb::Logs)).await {
-            Ok(logs) => Ok(logs
+            Ok(logs) => logs
                 .into_iter()
                 .map(|(log, status)| {
                     if let Some(status) = status {
-                        create_log(log, status).unwrap()
+                        create_log(log, status).map_err(DbError::from)
                     } else {
                         error!("Missing log status for log in db: {:?}", log);
-                        SerializableLog::try_from(log).unwrap()
+                        Err(DbError::MissingLogStatus)
                     }
                 })
-                .collect()),
+                .collect::<Result<Vec<_>>>(),
             Err(e) => {
                 error!("Failed to get logs from db: {:?}", e);
                 Err(DbError::from(DbSqlError::from(e)))
@@ -173,10 +226,8 @@ impl BlokliDbLogOperations for BlokliDb {
             .column(log::Column::BlockNumber)
             .column(log::Column::TxIndex)
             .column(log::Column::LogIndex)
-            .filter(log::Column::BlockNumber.gte(min_block_number.to_be_bytes().to_vec()))
-            .apply_if(max_block_number, |q, v| {
-                q.filter(log::Column::BlockNumber.lt(v.to_be_bytes().to_vec()))
-            })
+            .filter(log::Column::BlockNumber.gte(min_block_number as i64))
+            .apply_if(max_block_number, |q, v| q.filter(log::Column::BlockNumber.lt(v as i64)))
             .count(self.conn(TargetDb::Logs))
             .await
             .map_err(|e| DbSqlError::from(e).into())
@@ -195,20 +246,16 @@ impl BlokliDbLogOperations for BlokliDb {
             .select_only()
             .column(log_status::Column::BlockNumber)
             .distinct()
-            .filter(log_status::Column::BlockNumber.gte(min_block_number.to_be_bytes().to_vec()))
+            .filter(log_status::Column::BlockNumber.gte(min_block_number as i64))
             .apply_if(max_block_number, |q, v| {
-                q.filter(log_status::Column::BlockNumber.lt(v.to_be_bytes().to_vec()))
+                q.filter(log_status::Column::BlockNumber.lt(v as i64))
             })
             .apply_if(processed, |q, v| q.filter(log_status::Column::Processed.eq(v)))
             .order_by_asc(log_status::Column::BlockNumber)
             .into_model::<BlockNumber>()
             .all(self.conn(TargetDb::Logs))
             .await
-            .map(|res| {
-                res.into_iter()
-                    .map(|b| U256::from_be_bytes(b.block_number).as_u64())
-                    .collect()
-            })
+            .map(|res| res.into_iter().map(|b| b.block_number as u64).collect())
             .map_err(|e| {
                 error!("Failed to get logs block numbers from db: {:?}", e);
                 DbError::from(DbSqlError::from(e))
@@ -226,9 +273,9 @@ impl BlokliDbLogOperations for BlokliDb {
                 log_status::Column::ProcessedAt,
                 Expr::value(Value::ChronoDateTimeUtc(Some(now))),
             )
-            .filter(log_status::Column::BlockNumber.gte(min_block_number.to_be_bytes().to_vec()))
+            .filter(log_status::Column::BlockNumber.gte(min_block_number as i64))
             .apply_if(max_block_number, |q, v| {
-                q.filter(log_status::Column::BlockNumber.lt(v.to_be_bytes().to_vec()))
+                q.filter(log_status::Column::BlockNumber.lt(v as i64))
             });
 
         match query.exec(self.conn(TargetDb::Logs)).await {
@@ -269,9 +316,9 @@ impl BlokliDbLogOperations for BlokliDb {
                 log_status::Column::ProcessedAt,
                 Expr::value(Value::ChronoDateTimeUtc(None)),
             )
-            .filter(log_status::Column::BlockNumber.gte(min_block_number.to_be_bytes().to_vec()))
+            .filter(log_status::Column::BlockNumber.gte(min_block_number as i64))
             .apply_if(max_block_number, |q, v| {
-                q.filter(log_status::Column::BlockNumber.lt(v.to_be_bytes().to_vec()))
+                q.filter(log_status::Column::BlockNumber.lt(v as i64))
             });
 
         match query.exec(self.conn(TargetDb::Logs)).await {
@@ -335,7 +382,7 @@ impl BlokliDbLogOperations for BlokliDb {
                                 let log_hash = Hash::create(&[
                                     log_entry.block_hash.as_slice(),
                                     log_entry.transaction_hash.as_slice(),
-                                    log_entry.log_index.as_slice(),
+                                    &(log_entry.log_index as u64).to_be_bytes(),
                                 ]);
 
                                 let next_checksum = Hash::create(&[last_checksum.as_ref(), log_hash.as_ref()]);
@@ -392,7 +439,7 @@ impl BlokliDbLogOperations for BlokliDb {
                         // Prime the DB with the values
                         LogTopicInfo::insert_many(contract_address_topics.into_iter().map(|(addr, topic)| {
                             log_topic_info::ActiveModel {
-                                address: Set(addr.to_string()),
+                                address: Set(addr.as_ref().to_vec()),
                                 topic: Set(topic.to_string()),
                                 ..Default::default()
                             }
@@ -404,7 +451,7 @@ impl BlokliDbLogOperations for BlokliDb {
                         // Check that all contract addresses and topics are in the DB
                         for (addr, topic) in contract_address_topics {
                             let log_topic_count = LogTopicInfo::find()
-                                .filter(log_topic_info::Column::Address.eq(addr.to_string()))
+                                .filter(log_topic_info::Column::Address.eq(addr.as_ref().to_vec()))
                                 .filter(log_topic_info::Column::Topic.eq(topic.to_string()))
                                 .count(tx.as_ref())
                                 .await
@@ -571,9 +618,8 @@ mod tests {
 
         db.store_log(log.clone()).await.unwrap();
 
-        db.store_log(log.clone())
-            .await
-            .expect_err("Expected error due to duplicate log insertion");
+        // Idempotent: storing the same log again should succeed
+        db.store_log(log.clone()).await.unwrap();
 
         let logs = db.get_logs(None, None).await.unwrap();
 
