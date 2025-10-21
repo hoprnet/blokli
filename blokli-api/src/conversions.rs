@@ -4,9 +4,6 @@
 //! models into GraphQL types. These conversions are kept separate from
 //! the type definitions to avoid requiring API clients to depend on database entities.
 
-// Allow casts with documented safety guarantees (epoch clamping, chain_id fits)
-#![allow(clippy::cast_possible_truncation)]
-
 use blokli_api_types::{Announcement, Channel, ChannelStatus, HoprBalance, NativeBalance, TokenValueString, UInt64};
 
 /// Convert database announcement model to GraphQL type
@@ -27,6 +24,7 @@ pub fn channel_from_model(model: blokli_db_entity::channel::Model) -> Channel {
 
     // epoch is uint24 in Solidity (max 16,777,215), safe cast to i32
     // In practice, epoch should never exceed i32::MAX, but clamp for safety
+    #[allow(clippy::cast_possible_truncation)]
     let epoch = model.epoch.clamp(0, i32::MAX as i64) as i32;
 
     // ticket_index is uint48 in Solidity (max 281,474,976,710,655), fits in u64

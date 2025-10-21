@@ -1,8 +1,5 @@
 //! GraphQL query root and resolver implementations
 
-// Allow casts with validation (try_from with error handling)
-#![allow(clippy::cast_possible_truncation)]
-
 use async_graphql::{Context, Object, Result};
 use blokli_api_types::{
     Account, ChainInfo, Channel, HoprBalance, NativeBalance, OpenedChannelsGraph, TokenValueString,
@@ -277,11 +274,19 @@ impl QueryRoot {
             ))
         })?;
 
+        // Convert chain_id from u64 to i32 with validation
+        let chain_id_i32 = i32::try_from(*chain_id)
+            .map_err(|_| async_graphql::Error::new(format!("chain ID {} exceeds i32::MAX", chain_id)))?;
+
+        // f32 -> f64 is widening, always safe
+        #[allow(clippy::cast_lossless)]
+        let min_ticket_winning_probability = chain_info.min_incoming_ticket_win_prob as f64;
+
         Ok(ChainInfo {
             block_number,
-            chain_id: *chain_id as i32,
+            chain_id: chain_id_i32,
             ticket_price,
-            min_ticket_winning_probability: chain_info.min_incoming_ticket_win_prob as f64,
+            min_ticket_winning_probability,
         })
     }
 
