@@ -40,18 +40,16 @@
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # HOPR Nix Library (provides rust-overlay, crane, flake-utils)
-    nix-lib.url = "git+file:../nix-lib";
+    nix-lib.url = "github:hoprnet/nix-lib";
 
     # Development tools and quality assurance
     pre-commit.url = "github:cachix/git-hooks.nix";
-    treefmt-nix.url = "github:numtide/treefmt-nix";
     flake-root.url = "github:srid/flake-root";
 
     # Input dependency optimization
     flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
     pre-commit.inputs.nixpkgs.follows = "nixpkgs";
     nix-lib.inputs.nixpkgs.follows = "nixpkgs";
-    treefmt-nix.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -67,7 +65,7 @@
     flake-parts.lib.mkFlake { inherit inputs; } {
       # Import flake modules for additional functionality
       imports = [
-        inputs.treefmt-nix.flakeModule
+        inputs.nix-lib.flakeModules.default
         inputs.flake-root.flakeModule
       ];
 
@@ -130,7 +128,6 @@
             test = nixLib.mkTestSrc {
               root = ./.;
               inherit fs;
-              extraFiles = [ (./. + "/bloklid/example_cfg.yaml") ];
             };
             deps = nixLib.mkDepsSrc {
               root = ./.;
@@ -152,6 +149,7 @@
               bloklidCrateInfo
               rev
               buildPlatform
+              nixLib
               ;
           };
 
@@ -269,10 +267,10 @@
             inherit pkgs bloklidCrateInfo;
             packages = bloklidPackages;
           };
-
-          # Treefmt configuration using nix-lib
-          treefmtConfig = nixLib.mkTreefmtConfig {
-            inherit config;
+        in
+        {
+          # Configure treefmt using nix-lib options
+          nix-lib.treefmt = {
             globalExcludes = [
               # Generated code - don't format to avoid churn
               "db/entity/src/codegen/*"
@@ -301,10 +299,6 @@
               ];
             };
           };
-        in
-        {
-          # Configure treefmt
-          treefmt = treefmtConfig;
 
           # Export checks for CI
           inherit checks;
@@ -324,8 +318,7 @@
           # Export development shells
           devShells = shells;
 
-          # Export formatter
-          formatter = config.treefmt.build.wrapper;
+          # Formatter is automatically exported by nix-lib.flakeModules.default
         };
 
       # Supported systems for building
