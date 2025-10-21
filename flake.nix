@@ -34,8 +34,12 @@
     nixpkgs.url = "github:NixOS/nixpkgs/release-25.05";
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
 
-    # HOPR Nix Library (provides rust-overlay, crane, flake-utils)
+    # HOPR Nix Library (provides flake-utils and reusable build functions)
     nix-lib.url = "github:hoprnet/nix-lib";
+
+    # Rust build system
+    crane.url = "github:ipetkov/crane";
+    rust-overlay.url = "github:oxalica/rust-overlay";
 
     # Development tools and quality assurance
     pre-commit.url = "github:cachix/git-hooks.nix";
@@ -45,6 +49,9 @@
     flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
     pre-commit.inputs.nixpkgs.follows = "nixpkgs";
     nix-lib.inputs.nixpkgs.follows = "nixpkgs";
+    nix-lib.inputs.crane.follows = "crane";
+    nix-lib.inputs.rust-overlay.follows = "rust-overlay";
+    rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -54,6 +61,8 @@
       nixpkgs-unstable,
       flake-parts,
       nix-lib,
+      crane,
+      rust-overlay,
       pre-commit,
       ...
     }@inputs:
@@ -80,10 +89,8 @@
           # Filesystem utilities for source filtering
           fs = lib.fileset;
 
-          # Nixpkgs with rust-overlay (from nix-lib)
-          overlays = [
-            (import nix-lib.inputs.rust-overlay)
-          ];
+          # Nixpkgs with rust-overlay
+          overlays = [ rust-overlay.overlays.default ];
           pkgs = import nixpkgs {
             inherit system overlays;
           };
@@ -98,9 +105,7 @@
           nixLib = nix-lib.lib.${system};
 
           # Crane library for Rust builds (for crate info extraction)
-          craneLib = (nix-lib.inputs.crane.mkLib pkgs).overrideToolchain (
-            p: p.rust-bin.stable.latest.default
-          );
+          craneLib = (crane.mkLib pkgs).overrideToolchain (p: p.rust-bin.stable.latest.default);
 
           # bloklid crate information
           bloklidCrateInfoOriginal = craneLib.crateNameFromCargoToml {
