@@ -32,6 +32,11 @@ impl QueryRoot {
     ) -> Result<Vec<Account>> {
         use blokli_db_entity::conversions::account_aggregation::fetch_accounts_with_filters;
 
+        // Validate chain_key before DB access
+        if let Some(ref ck) = chain_key {
+            validate_eth_address(ck)?;
+        }
+
         let db = ctx.data::<DatabaseConnection>()?;
 
         // Fetch accounts with optional filters using optimized batch loading (4 queries)
@@ -70,6 +75,11 @@ impl QueryRoot {
     ) -> Result<i32> {
         use blokli_db_entity::conversions::balances::string_to_address;
         use sea_orm::PaginatorTrait;
+
+        // Validate chain_key before DB access
+        if let Some(ref ck) = chain_key {
+            validate_eth_address(ck)?;
+        }
 
         let db = ctx.data::<DatabaseConnection>()?;
 

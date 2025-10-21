@@ -15,6 +15,13 @@ ISO 8601 datetime string (e.g., "2024-01-15T10:30:00Z")
 scalar DateTime
 
 """
+Unsigned 64-bit integer represented as a string to avoid JavaScript precision loss.
+Used for values that exceed the 32-bit signed integer range of GraphQL Int.
+Maximum value: 18446744073709551615
+"""
+scalar UInt64
+
+"""
 Blockchain and HOPR network information
 """
 type ChainInfo {
@@ -105,10 +112,10 @@ type Channel {
 	balance: TokenValueString!
 	"Current state of the channel (OPEN, PENDINGTOCLOSE, or CLOSED)"
 	status: ChannelStatus!
-	"Current epoch of the channel"
+	"Current epoch of the channel (uint24)"
 	epoch: Int!
-	"Latest ticket index used in the channel"
-	ticketIndex: Int!
+	"Latest ticket index used in the channel (uint48, max: 281474976710655)"
+	ticketIndex: UInt64!
 	"Timestamp when the channel closure was initiated (null if no closure initiated)"
 	closureTime: DateTime
 }
