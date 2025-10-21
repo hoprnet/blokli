@@ -1,0 +1,24 @@
+[package]
+name = "blokli-client"
+version = "0.1.0"
+edition = "2024"
+description = "Client connector to Blokli"
+homepage = "https://hoprnet.org/"
+repository = "https://github.com/hoprnet/hoprnet"
+license = "GPL-3.0-only"
+
+[dependencies]
+cynic = { workspace = true }
+eventsource-client = { workspace = true }
+futures = { workspace = true }
+hyper = { workspace = true, features = ["client", "http2"]}
+smart-default = { workspace = true }
+thiserror = { workspace = true }
+url = { workspace = true }
+
+
+[build-dependencies]
+cynic-codegen = { version = "3" }
+
+[dev-dependencies]
+insta = "1"
