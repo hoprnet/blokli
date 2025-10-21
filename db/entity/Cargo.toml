@@ -7,6 +7,9 @@ name        = "blokli-db-entity"
 repository  = "https://github.com/hoprnet/blokli"
 version     = "0.1.0"
 
+[lints]
+workspace = true
+
 [features]
 default = ["sqlite"]
 runtime-tokio = [

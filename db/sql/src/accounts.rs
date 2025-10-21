@@ -1,3 +1,6 @@
+// Allow casts for block numbers stored as i64, converted to u32 (checked elsewhere)
+#![allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
+
 use async_trait::async_trait;
 use blokli_db_entity::{
     account, announcement,

@@ -1,3 +1,6 @@
+// Allow casts for blockchain indices that never exceed i64::MAX in practice
+#![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+
 use hopr_crypto_types::types::Hash;
 use hopr_primitive_types::prelude::{Address, SerializableLog, ToHex};
 use sea_orm::Set;

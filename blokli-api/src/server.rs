@@ -105,6 +105,7 @@ pub async fn build_app(db: DatabaseConnection, config: ApiConfig) -> ApiResult<R
         .layer(
             CompressionLayer::new()
                 .zstd(true)
+                // Use balanced compression to not use too much CPU
                 .quality(CompressionLevel::Default)
                 .compress_when(
                     // Compression requires: size > 1KB AND not SSE

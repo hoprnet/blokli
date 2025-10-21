@@ -1,5 +1,8 @@
 //! GraphQL query root and resolver implementations
 
+// Allow casts with validation (try_from with error handling)
+#![allow(clippy::cast_possible_truncation)]
+
 use async_graphql::{Context, Object, Result};
 use blokli_api_types::{
     Account, ChainInfo, Channel, HoprBalance, NativeBalance, OpenedChannelsGraph, TokenValueString,
@@ -88,7 +91,9 @@ impl QueryRoot {
         }
 
         // Get count efficiently using SeaORM's paginator
-        let count = query.count(db).await? as i32;
+        let count_u64 = query.count(db).await?;
+        // If count exceeds i32::MAX, clamp to i32::MAX (GraphQL Int type limitation)
+        let count = i32::try_from(count_u64).unwrap_or(i32::MAX);
 
         Ok(count)
     }
@@ -254,8 +259,13 @@ impl QueryRoot {
             .map(|bytes| TokenValueString(hopr_balance_to_string(bytes)))
             .unwrap_or_else(|| TokenValueString(hopr_balance_to_string(&[])));
 
-        // Convert last_indexed_block from i64 to i32
-        let block_number = chain_info.last_indexed_block as i32;
+        // Convert last_indexed_block from i64 to i32 with validation
+        let block_number = i32::try_from(chain_info.last_indexed_block).map_err(|_| {
+            async_graphql::Error::new(format!(
+                "block number {} exceeds i32::MAX",
+                chain_info.last_indexed_block
+            ))
+        })?;
 
         Ok(ChainInfo {
             block_number,

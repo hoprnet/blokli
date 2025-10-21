@@ -8,6 +8,9 @@ name        = "blokli-api"
 repository  = "https://github.com/hoprnet/hoprnet"
 version     = "0.1.0"
 
+[lints]
+workspace = true
+
 [features]
 default       = ["runtime-tokio"]
 runtime-tokio = []

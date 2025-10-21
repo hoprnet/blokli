@@ -177,3 +177,10 @@ lto           = "fat"
 opt-level     = 3
 panic         = "abort"
 strip         = true
+
+# Workspace-level lints to prevent common issues
+[workspace.lints.clippy]
+# Prevent lossy numeric casts that can cause data corruption
+cast_possible_truncation = "deny"
+cast_possible_wrap       = "deny"
+cast_sign_loss           = "deny"

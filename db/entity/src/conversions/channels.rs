@@ -1,3 +1,8 @@
+// Allow casts for Solidity types that fit safely in i64:
+// - epoch is uint24 (max 16,777,215)
+// - ticket_index is uint48 (max 281,474,976,710,655)
+#![allow(clippy::cast_possible_wrap)]
+
 use hopr_internal_types::{channels::ChannelStatus, prelude::ChannelEntry};
 use hopr_primitive_types::prelude::{IntoEndian, ToHex};
 use sea_orm::Set;
@@ -70,7 +75,9 @@ impl From<ChannelEntry> for channel::ActiveModel {
             source: Set(0),      // TODO: Need to lookup/create account for value.source address
             destination: Set(0), // TODO: Need to lookup/create account for value.destination address
             balance: Set(value.balance.amount().to_be_bytes().into()),
+            // epoch is uint24 in Solidity, always fits in i64
             epoch: Set(value.channel_epoch.as_u64() as i64),
+            // ticket_index is uint48 in Solidity, always fits in i64
             ticket_index: Set(value.ticket_index.as_u64() as i64),
             ..Default::default()
         };

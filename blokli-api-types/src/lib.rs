@@ -3,7 +3,7 @@
 //! This crate contains pure GraphQL type definitions that can be reused
 //! by clients without depending on the full API server implementation.
 
-use async_graphql::{Enum, NewType, SimpleObject};
+use async_graphql::{Enum, NewType, Scalar, ScalarType, SimpleObject, Value};
 
 /// Token value represented as a string to maintain precision
 ///
@@ -12,6 +12,38 @@ use async_graphql::{Enum, NewType, SimpleObject};
 /// the token's base unit (e.g., wei for native tokens, smallest unit for HOPR).
 #[derive(Debug, Clone, NewType)]
 pub struct TokenValueString(pub String);
+
+/// Unsigned 64-bit integer scalar type
+///
+/// This scalar type represents u64 values as strings in GraphQL to avoid
+/// JavaScript's Number precision loss (JS Number is only safe up to 2^53-1).
+/// The maximum value is 18,446,744,073,709,551,615.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UInt64(pub u64);
+
+#[Scalar]
+impl ScalarType for UInt64 {
+    fn parse(value: Value) -> async_graphql::InputValueResult<Self> {
+        match value {
+            Value::String(s) => {
+                let n = s.parse::<u64>().map_err(|e| format!("Invalid UInt64: {}", e))?;
+                Ok(UInt64(n))
+            }
+            Value::Number(n) => {
+                if let Some(n) = n.as_u64() {
+                    Ok(UInt64(n))
+                } else {
+                    Err("UInt64 must be a positive integer".into())
+                }
+            }
+            _ => Err("UInt64 must be a string or number".into()),
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        Value::String(self.0.to_string())
+    }
+}
 
 /// Status of a payment channel
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
@@ -137,11 +169,11 @@ pub struct Channel {
     pub balance: TokenValueString,
     /// Current state of the channel (OPEN, PENDINGTOCLOSE, or CLOSED)
     pub status: ChannelStatus,
-    /// Current epoch of the channel
+    /// Current epoch of the channel (uint24)
     pub epoch: i32,
-    /// Latest ticket index used in the channel
+    /// Latest ticket index used in the channel (uint48, max: 281474976710655)
     #[graphql(name = "ticketIndex")]
-    pub ticket_index: i32,
+    pub ticket_index: UInt64,
     /// Timestamp when the channel closure was initiated (null if no closure initiated)
     #[graphql(name = "closureTime")]
     pub closure_time: Option<chrono::DateTime<chrono::Utc>>,

@@ -1,3 +1,6 @@
+// Allow casts for Solidity uint24/uint48 that fit safely in i64
+#![allow(clippy::cast_possible_wrap)]
+
 use async_trait::async_trait;
 use blokli_db_entity::{channel, conversions::channels::ChannelStatusUpdate, prelude::Channel};
 use chrono::Utc;
@@ -43,12 +46,14 @@ impl ChannelEditor {
     }
 
     /// Change the ticket index.
+    /// Note: ticket_index is uint48 in Solidity, always fits in i64
     pub fn change_ticket_index(mut self, index: impl Into<U256>) -> Self {
         self.model.ticket_index = Set(index.into().as_u64() as i64);
         self
     }
 
     /// Change the channel epoch.
+    /// Note: epoch is uint24 in Solidity, always fits in i64
     pub fn change_epoch(mut self, epoch: impl Into<U256>) -> Self {
         self.model.epoch = Set(epoch.into().as_u64() as i64);
         self

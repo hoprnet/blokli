@@ -1,3 +1,6 @@
+// Allow casts for blockchain indices - u64 block/tx/log indices fit safely in i64
+#![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+
 use async_trait::async_trait;
 use blokli_db_api::{
     errors::{DbError, Result},
@@ -10,7 +13,7 @@ use blokli_db_entity::{
 };
 use futures::{StreamExt, stream};
 use hopr_crypto_types::prelude::Hash;
-use hopr_primitive_types::prelude::{Address, DateTime, IntoEndian, SerializableLog, ToHex, U256, Utc};
+use hopr_primitive_types::prelude::{Address, DateTime, SerializableLog, ToHex, Utc};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, FromQueryResult, IntoActiveModel, PaginatorTrait, QueryFilter,
     QueryOrder, QuerySelect,
@@ -24,7 +27,7 @@ use crate::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, errors::DbSq
 
 #[derive(FromQueryResult)]
 struct BlockNumber {
-    block_number: Vec<u8>,
+    block_number: i64,
 }
 
 #[async_trait]
@@ -157,14 +160,10 @@ impl BlokliDbLogOperations for BlokliDb {
     }
 
     async fn get_log(&self, block_number: u64, tx_index: u64, log_index: u64) -> Result<SerializableLog> {
-        let bn_enc = block_number.to_be_bytes().to_vec();
-        let tx_index_enc = tx_index.to_be_bytes().to_vec();
-        let log_index_enc = log_index.to_be_bytes().to_vec();
-
         let query = Log::find()
-            .filter(log::Column::BlockNumber.eq(bn_enc))
-            .filter(log::Column::TxIndex.eq(tx_index_enc))
-            .filter(log::Column::LogIndex.eq(log_index_enc))
+            .filter(log::Column::BlockNumber.eq(block_number as i64))
+            .filter(log::Column::TxIndex.eq(tx_index as i64))
+            .filter(log::Column::LogIndex.eq(log_index as i64))
             .find_also_related(LogStatus);
 
         match query.all(self.conn(TargetDb::Logs)).await {
@@ -193,10 +192,8 @@ impl BlokliDbLogOperations for BlokliDb {
 
         let query = Log::find()
             .find_also_related(LogStatus)
-            .filter(log::Column::BlockNumber.gte(min_block_number.to_be_bytes().to_vec()))
-            .apply_if(max_block_number, |q, v| {
-                q.filter(log::Column::BlockNumber.lt(v.to_be_bytes().to_vec()))
-            })
+            .filter(log::Column::BlockNumber.gte(min_block_number as i64))
+            .apply_if(max_block_number, |q, v| q.filter(log::Column::BlockNumber.lt(v as i64)))
             .order_by_asc(log::Column::BlockNumber)
             .order_by_asc(log::Column::TxIndex)
             .order_by_asc(log::Column::LogIndex);
@@ -229,10 +226,8 @@ impl BlokliDbLogOperations for BlokliDb {
             .column(log::Column::BlockNumber)
             .column(log::Column::TxIndex)
             .column(log::Column::LogIndex)
-            .filter(log::Column::BlockNumber.gte(min_block_number.to_be_bytes().to_vec()))
-            .apply_if(max_block_number, |q, v| {
-                q.filter(log::Column::BlockNumber.lt(v.to_be_bytes().to_vec()))
-            })
+            .filter(log::Column::BlockNumber.gte(min_block_number as i64))
+            .apply_if(max_block_number, |q, v| q.filter(log::Column::BlockNumber.lt(v as i64)))
             .count(self.conn(TargetDb::Logs))
             .await
             .map_err(|e| DbSqlError::from(e).into())
@@ -251,20 +246,16 @@ impl BlokliDbLogOperations for BlokliDb {
             .select_only()
             .column(log_status::Column::BlockNumber)
             .distinct()
-            .filter(log_status::Column::BlockNumber.gte(min_block_number.to_be_bytes().to_vec()))
+            .filter(log_status::Column::BlockNumber.gte(min_block_number as i64))
             .apply_if(max_block_number, |q, v| {
-                q.filter(log_status::Column::BlockNumber.lt(v.to_be_bytes().to_vec()))
+                q.filter(log_status::Column::BlockNumber.lt(v as i64))
             })
             .apply_if(processed, |q, v| q.filter(log_status::Column::Processed.eq(v)))
             .order_by_asc(log_status::Column::BlockNumber)
             .into_model::<BlockNumber>()
             .all(self.conn(TargetDb::Logs))
             .await
-            .map(|res| {
-                res.into_iter()
-                    .map(|b| U256::from_be_bytes(b.block_number).as_u64())
-                    .collect()
-            })
+            .map(|res| res.into_iter().map(|b| b.block_number as u64).collect())
             .map_err(|e| {
                 error!("Failed to get logs block numbers from db: {:?}", e);
                 DbError::from(DbSqlError::from(e))
@@ -282,9 +273,9 @@ impl BlokliDbLogOperations for BlokliDb {
                 log_status::Column::ProcessedAt,
                 Expr::value(Value::ChronoDateTimeUtc(Some(now))),
             )
-            .filter(log_status::Column::BlockNumber.gte(min_block_number.to_be_bytes().to_vec()))
+            .filter(log_status::Column::BlockNumber.gte(min_block_number as i64))
             .apply_if(max_block_number, |q, v| {
-                q.filter(log_status::Column::BlockNumber.lt(v.to_be_bytes().to_vec()))
+                q.filter(log_status::Column::BlockNumber.lt(v as i64))
             });
 
         match query.exec(self.conn(TargetDb::Logs)).await {
@@ -325,9 +316,9 @@ impl BlokliDbLogOperations for BlokliDb {
                 log_status::Column::ProcessedAt,
                 Expr::value(Value::ChronoDateTimeUtc(None)),
             )
-            .filter(log_status::Column::BlockNumber.gte(min_block_number.to_be_bytes().to_vec()))
+            .filter(log_status::Column::BlockNumber.gte(min_block_number as i64))
             .apply_if(max_block_number, |q, v| {
-                q.filter(log_status::Column::BlockNumber.lt(v.to_be_bytes().to_vec()))
+                q.filter(log_status::Column::BlockNumber.lt(v as i64))
             });
 
         match query.exec(self.conn(TargetDb::Logs)).await {

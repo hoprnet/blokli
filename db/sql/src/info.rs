@@ -1,3 +1,6 @@
+// Allow casts for u32 block numbers and f64→f32 precision loss (acceptable for probabilities)
+#![allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
+
 use async_trait::async_trait;
 use blokli_db_api::info::{DomainSeparator, IndexerData};
 use blokli_db_entity::{
@@ -355,9 +358,17 @@ impl BlokliDbInfoOperations for BlokliDb {
                         .one(tx.as_ref())
                         .await?
                         .ok_or(DbSqlError::MissingFixedTableEntry("chain_info".into()))
-                        .map(|m| IndexerStateInfo {
-                            latest_block_number: m.last_indexed_block as u32,
-                            ..Default::default()
+                        .and_then(|m| {
+                            let block_number = u32::try_from(m.last_indexed_block).map_err(|_| {
+                                DbSqlError::InvalidData(format!(
+                                    "last_indexed_block {} exceeds u32::MAX",
+                                    m.last_indexed_block
+                                ))
+                            })?;
+                            Ok(IndexerStateInfo {
+                                latest_block_number: block_number,
+                                ..Default::default()
+                            })
                         })
                 })
             })
@@ -374,7 +385,12 @@ impl BlokliDbInfoOperations for BlokliDb {
                         .await?
                         .ok_or(MissingFixedTableEntry("chain_info".into()))?;
 
-                    let current_last_indexed_block = model.last_indexed_block as u32;
+                    let current_last_indexed_block = u32::try_from(model.last_indexed_block).map_err(|_| {
+                        DbSqlError::InvalidData(format!(
+                            "last_indexed_block {} exceeds u32::MAX",
+                            model.last_indexed_block
+                        ))
+                    })?;
 
                     let mut active_model = model.into_active_model();
 
