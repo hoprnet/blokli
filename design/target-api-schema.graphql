@@ -15,6 +15,13 @@ ISO 8601 datetime string (e.g., "2024-01-15T10:30:00Z")
 scalar DateTime
 
 """
+Unsigned 64-bit integer represented as a string to avoid JavaScript precision loss.
+Used for values that exceed the 32-bit signed integer range of GraphQL Int.
+Maximum value: 18446744073709551615
+"""
+scalar UInt64
+
+"""
 Blockchain and HOPR network information
 """
 type ChainInfo {
@@ -105,10 +112,10 @@ type Channel {
 	balance: TokenValueString!
 	"Current state of the channel (OPEN, PENDINGTOCLOSE, or CLOSED)"
 	status: ChannelStatus!
-	"Current epoch of the channel"
+	"Current epoch of the channel (uint24)"
 	epoch: Int!
-	"Latest ticket index used in the channel"
-	ticketIndex: Int!
+	"Latest ticket index used in the channel (uint48, max: 281474976710655)"
+	ticketIndex: UInt64!
 	"Timestamp when the channel closure was initiated (null if no closure initiated)"
 	closureTime: DateTime
 }
@@ -125,24 +132,46 @@ type OpenedChannelsGraph {
 
 type QueryRoot {
 	"""
-	Retrieve all accounts from the database
+	Retrieve accounts from the database, optionally filtered
 
-	Returns a complete list of all accounts. No filtering is available.
+	If no filters are provided, returns all accounts.
+	Filters can be combined to narrow results.
 	"""
-	accounts: [Account!]!
+	accounts(
+		"Filter by account keyid"
+		keyid: Int,
+		"Filter by packet key (peer ID format)"
+		packetKey: String,
+		"Filter by chain key (hexadecimal format)"
+		chainKey: String
+	): [Account!]!
 	"""
-	Retrieve channels, optionally filtered by source and/or destination
+	Count accounts matching optional filters
 
-	If neither source nor destination is provided, returns all channels.
-	If source is provided, filters channels by source address.
-	If destination is provided, filters channels by destination address.
-	Both filters can be combined to find specific channels.
+	If no filters are provided, returns total account count.
+	Filters can be combined to narrow results.
+	"""
+	accountCount(
+		"Filter by account keyid"
+		keyid: Int,
+		"Filter by packet key (peer ID format)"
+		packetKey: String,
+		"Filter by chain key (hexadecimal format)"
+		chainKey: String
+	): Int!
+	"""
+	Retrieve channels, optionally filtered
+
+	If no filters are provided, returns all channels.
+	Filters can be combined to narrow results.
 	"""
 	channels(
-		"Filter by source node address (hexadecimal format)"
-		source: String,
-		"Filter by destination node address (hexadecimal format)"
-		destination: String
+		"Filter by source node keyid"
+		sourceKeyId: Int,
+		"Filter by destination node keyid"
+		destinationKeyId: Int,
+		"Filter by concrete channel ID (hexadecimal format)"
+		concreteChannelId: String
 	): [Channel!]!
 
 	"""
@@ -218,16 +247,32 @@ type SubscriptionRoot {
 
 	Provides updates whenever there is a change in the state of any payment channel,
 	including channel opening, balance updates, status changes, and channel closure.
+	Optional filters can be applied to only receive updates for specific channels.
 	"""
-	channelUpdated: Channel!
+	channelUpdated(
+		"Filter by source node keyid"
+		sourceKeyId: Int,
+		"Filter by destination node keyid"
+		destinationKeyId: Int,
+		"Filter by concrete channel ID (hexadecimal format)"
+		concreteChannelId: String
+	): Channel!
 
 	"""
 	Subscribe to real-time updates of account information
 
 	Provides updates whenever there is a change in account information, including
 	balance changes, Safe address linking, and multiaddress announcements.
+	Optional filters can be applied to only receive updates for specific accounts.
 	"""
-	accountUpdated: Account!
+	accountUpdated(
+		"Filter by account keyid"
+		keyid: Int,
+		"Filter by packet key (peer ID format)"
+		packetKey: String,
+		"Filter by chain key (hexadecimal format)"
+		chainKey: String
+	): Account!
 }
 
 schema {

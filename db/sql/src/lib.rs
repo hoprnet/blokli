@@ -125,30 +125,30 @@ pub trait BlokliDbGeneralModelOperations {
     /// Import logs database from a snapshot directory.
     ///
     /// Replaces all data in the current logs database with data from a snapshot's
-    /// `hopr_logs.db` file. This is used for fast synchronization during node startup.
+    /// `hopr_logs.sql` file. This is used for fast synchronization during node startup.
     ///
     /// # Process
     ///
-    /// 1. Attaches the source database from the snapshot directory
-    /// 2. Clears existing data from all logs-related tables
-    /// 3. Copies all data from the snapshot database
-    /// 4. Detaches the source database
+    /// 1. Reads the SQL dump file from the snapshot directory
+    /// 2. Clears existing data from all logs-related tables (TRUNCATE CASCADE)
+    /// 3. Executes all SQL statements from the dump file
+    /// 4. Commits the transaction
     ///
     /// All operations are performed within a single transaction for atomicity.
     ///
     /// # Arguments
     ///
-    /// * `src_dir` - Directory containing the extracted snapshot with `hopr_logs.db`
+    /// * `src_dir` - Directory containing the extracted snapshot with `hopr_logs.sql`
     ///
     /// # Returns
     ///
     /// `Ok(())` on successful import, or [`DbSqlError::Construction`] if the source
-    /// database doesn't exist or the import operation fails.
+    /// SQL dump file doesn't exist or the import operation fails.
     ///
     /// # Errors
     ///
-    /// - Returns error if `hopr_logs.db` is not found in the source directory
-    /// - Returns error if SQLite ATTACH, data transfer, or DETACH operations fail
+    /// - Returns error if `hopr_logs.sql` is not found in the source directory
+    /// - Returns error if reading or executing SQL statements fails
     /// - All database errors are wrapped in [`DbSqlError::Construction`]
     ///
     /// # Example

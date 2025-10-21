@@ -5,12 +5,11 @@ use async_graphql::Error;
 /// Validate an Ethereum address format
 ///
 /// Ensures the address:
-/// - Starts with "0x" prefix
-/// - Has exactly 42 characters (0x + 40 hex digits)
+/// - Contains exactly 40 hex characters (20 bytes) after optional "0x" prefix
 /// - Contains only valid hexadecimal characters
 ///
 /// # Arguments
-/// * `address` - The address string to validate
+/// * `address` - The address string to validate (with or without 0x prefix)
 ///
 /// # Returns
 /// * `Result<(), Error>` - Ok if valid, Error with message if invalid
@@ -19,21 +18,17 @@ pub fn validate_eth_address(address: &str) -> Result<(), Error> {
         return Err(Error::new("Address cannot be empty"));
     }
 
-    if !address.starts_with("0x") {
-        return Err(Error::new("Invalid address format: must start with '0x' prefix"));
-    }
+    let hex_part = address.strip_prefix("0x").unwrap_or(address);
 
-    if address.len() != 42 {
+    if hex_part.len() != 40 {
         return Err(Error::new(format!(
-            "Invalid address length: expected 42 characters, got {}",
-            address.len()
+            "Invalid address: must be 40 hex characters (20 bytes), got {} characters",
+            hex_part.len()
         )));
     }
 
-    if !address[2..].chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(Error::new(
-            "Invalid address format: contains non-hexadecimal characters",
-        ));
+    if !hex_part.chars().all(|c| c.is_ascii_hexdigit()) {
+        return Err(Error::new("Invalid address: contains non-hexadecimal characters"));
     }
 
     Ok(())
@@ -70,9 +65,9 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_no_prefix() {
+    fn test_valid_no_prefix() {
         let addr = "1234567890123456789012345678901234567890";
-        assert!(validate_eth_address(addr).is_err());
+        assert!(validate_eth_address(addr).is_ok());
     }
 
     #[test]
@@ -103,5 +98,11 @@ mod tests {
         let addr = "0xAbCdEf1234567890123456789012345678901234";
         let normalized = validate_and_normalize_address(addr).unwrap();
         assert_eq!(normalized, "0xabcdef1234567890123456789012345678901234");
+    }
+
+    #[test]
+    fn test_validate_eth_address_without_prefix() {
+        let addr = "1234567890123456789012345678901234567890";
+        assert!(validate_eth_address(addr).is_ok());
     }
 }

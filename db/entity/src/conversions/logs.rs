@@ -1,5 +1,8 @@
+// Allow casts for blockchain indices that never exceed i64::MAX in practice
+#![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
+
 use hopr_crypto_types::types::Hash;
-use hopr_primitive_types::prelude::{Address, IntoEndian, SerializableLog, ToHex, U256};
+use hopr_primitive_types::prelude::{Address, SerializableLog, ToHex};
 use sea_orm::Set;
 
 use crate::{errors::DbEntityError, log, log_status};
@@ -10,11 +13,11 @@ impl From<SerializableLog> for log::ActiveModel {
             address: Set(value.address.as_ref().to_vec()),
             topics: Set(value.topics.into_iter().flatten().collect()),
             data: Set(value.data),
-            block_number: Set(value.block_number.to_be_bytes().to_vec()),
+            block_number: Set(value.block_number as i64),
             transaction_hash: Set(value.tx_hash.to_vec()),
-            tx_index: Set(value.tx_index.to_be_bytes().to_vec()),
+            tx_index: Set(value.tx_index as i64),
             block_hash: Set(value.block_hash.to_vec()),
-            log_index: Set(value.log_index.to_be_bytes().to_vec()),
+            log_index: Set(value.log_index as i64),
             removed: Set(value.removed),
             ..Default::default()
         }
@@ -46,11 +49,11 @@ impl TryFrom<log::Model> for SerializableLog {
             address,
             topics,
             data: value.data,
-            block_number: U256::from_be_bytes(value.block_number).as_u64(),
+            block_number: value.block_number as u64,
             tx_hash,
-            tx_index: U256::from_be_bytes(value.tx_index).as_u64(),
+            tx_index: value.tx_index as u64,
             block_hash,
-            log_index: U256::from_be_bytes(value.log_index).as_u64(),
+            log_index: value.log_index as u64,
             removed: value.removed,
             ..Default::default()
         };
@@ -68,9 +71,9 @@ impl From<SerializableLog> for log_status::ActiveModel {
             .map(|c| Hash::from_hex(&c).expect("Invalid checksum").as_ref().to_vec());
 
         log_status::ActiveModel {
-            block_number: Set(value.block_number.to_be_bytes().to_vec()),
-            tx_index: Set(value.tx_index.to_be_bytes().to_vec()),
-            log_index: Set(value.log_index.to_be_bytes().to_vec()),
+            block_number: Set(value.block_number as i64),
+            tx_index: Set(value.tx_index as i64),
+            log_index: Set(value.log_index as i64),
             processed: Set(processed),
             processed_at: Set(processed_at),
             checksum: Set(checksum),

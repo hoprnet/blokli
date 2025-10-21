@@ -1,4 +1,3 @@
-use hopr_primitive_types::prelude::*;
 use sea_orm_migration::prelude::*;
 
 #[derive(DeriveMigrationName)]
@@ -20,26 +19,26 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(Account::ChainKey).string_len(40).not_null())
+                    .col(ColumnDef::new(Account::ChainKey).binary_len(20).not_null())
                     .col(ColumnDef::new(Account::PacketKey).string_len(64).not_null())
-                    .col(ColumnDef::new(Account::SafeAddress).string_len(40).null())
+                    .col(ColumnDef::new(Account::SafeAddress).binary_len(20).null())
                     .col(
                         ColumnDef::new(Account::PublishedBlock)
-                            .binary_len(8)
+                            .big_integer()
                             .not_null()
-                            .default(vec![0u8; 8]),
+                            .default(0),
                     )
                     .col(
                         ColumnDef::new(Account::PublishedTxIndex)
-                            .binary_len(8)
+                            .big_integer()
                             .not_null()
-                            .default(vec![0u8; 8]),
+                            .default(0),
                     )
                     .col(
                         ColumnDef::new(Account::PublishedLogIndex)
-                            .binary_len(8)
+                            .big_integer()
                             .not_null()
-                            .default(vec![0u8; 8]),
+                            .default(0),
                     )
                     .to_owned(),
             )
@@ -68,18 +67,8 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Channel::Destination).integer().not_null())
                     .col(ColumnDef::new(Channel::Balance).binary_len(12).not_null())
                     .col(ColumnDef::new(Channel::Status).tiny_unsigned().not_null())
-                    .col(
-                        ColumnDef::new(Channel::Epoch)
-                            .binary_len(8)
-                            .not_null()
-                            .default(U256::one().to_be_bytes().to_vec()),
-                    )
-                    .col(
-                        ColumnDef::new(Channel::TicketIndex)
-                            .binary_len(8)
-                            .not_null()
-                            .default(U256::zero().to_be_bytes().to_vec()),
-                    )
+                    .col(ColumnDef::new(Channel::Epoch).big_integer().not_null().default(1))
+                    .col(ColumnDef::new(Channel::TicketIndex).big_integer().not_null().default(0))
                     .col(ColumnDef::new(Channel::ClosureTime).timestamp().null())
                     .col(
                         ColumnDef::new(Channel::CorruptedState)
@@ -124,21 +113,21 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Announcement::Multiaddress).text().not_null())
                     .col(
                         ColumnDef::new(Announcement::PublishedBlock)
-                            .binary_len(8)
+                            .big_integer()
                             .not_null()
-                            .default(vec![0u8; 8]),
+                            .default(0),
                     )
                     .col(
                         ColumnDef::new(Announcement::PublishedTxIndex)
-                            .binary_len(8)
+                            .big_integer()
                             .not_null()
-                            .default(vec![0u8; 8]),
+                            .default(0),
                     )
                     .col(
                         ColumnDef::new(Announcement::PublishedLogIndex)
-                            .binary_len(8)
+                            .big_integer()
                             .not_null()
-                            .default(vec![0u8; 8]),
+                            .default(0),
                     )
                     .foreign_key(
                         ForeignKey::create()
@@ -177,8 +166,8 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(vec![0u8; 12]),
                     )
-                    .col(ColumnDef::new(NodeInfo::SafeAddress).string_len(40).null())
-                    .col(ColumnDef::new(NodeInfo::ModuleAddress).string_len(40).null())
+                    .col(ColumnDef::new(NodeInfo::SafeAddress).binary_len(20).null())
+                    .col(ColumnDef::new(NodeInfo::ModuleAddress).binary_len(20).null())
                     .to_owned(),
             )
             .await?;
@@ -198,9 +187,9 @@ impl MigrationTrait for Migration {
                     )
                     .col(
                         ColumnDef::new(ChainInfo::LastIndexedBlock)
-                            .binary_len(8)
+                            .big_integer()
                             .not_null()
-                            .default(vec![0u8; 8]),
+                            .default(0),
                     )
                     .col(ColumnDef::new(ChainInfo::TicketPrice).binary_len(12).null())
                     .col(ColumnDef::new(ChainInfo::ChannelsDST).binary_len(32).null())

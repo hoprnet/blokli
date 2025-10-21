@@ -21,7 +21,7 @@ impl MigrationTrait for Migration {
                     )
                     .col(
                         ColumnDef::new(HoprBalance::Address)
-                            .string_len(40)
+                            .binary_len(20)
                             .not_null()
                             .unique_key(),
                     )
@@ -33,21 +33,21 @@ impl MigrationTrait for Migration {
                     )
                     .col(
                         ColumnDef::new(HoprBalance::LastChangedBlock)
-                            .binary_len(8)
+                            .big_integer()
                             .not_null()
-                            .default(vec![0u8; 8]),
+                            .default(0),
                     )
                     .col(
                         ColumnDef::new(HoprBalance::LastChangedTxIndex)
-                            .binary_len(8)
+                            .big_integer()
                             .not_null()
-                            .default(vec![0u8; 8]),
+                            .default(0),
                     )
                     .col(
                         ColumnDef::new(HoprBalance::LastChangedLogIndex)
-                            .binary_len(8)
+                            .big_integer()
                             .not_null()
-                            .default(vec![0u8; 8]),
+                            .default(0),
                     )
                     .to_owned(),
             )
@@ -68,7 +68,7 @@ impl MigrationTrait for Migration {
                     )
                     .col(
                         ColumnDef::new(NativeBalance::Address)
-                            .string_len(40)
+                            .binary_len(20)
                             .not_null()
                             .unique_key(),
                     )
@@ -80,21 +80,21 @@ impl MigrationTrait for Migration {
                     )
                     .col(
                         ColumnDef::new(NativeBalance::LastChangedBlock)
-                            .binary_len(8)
+                            .big_integer()
                             .not_null()
-                            .default(vec![0u8; 8]),
+                            .default(0),
                     )
                     .col(
                         ColumnDef::new(NativeBalance::LastChangedTxIndex)
-                            .binary_len(8)
+                            .big_integer()
                             .not_null()
-                            .default(vec![0u8; 8]),
+                            .default(0),
                     )
                     .col(
                         ColumnDef::new(NativeBalance::LastChangedLogIndex)
-                            .binary_len(8)
+                            .big_integer()
                             .not_null()
-                            .default(vec![0u8; 8]),
+                            .default(0),
                     )
                     .to_owned(),
             )
@@ -115,19 +115,19 @@ impl MigrationTrait for Migration {
                     )
                     .col(
                         ColumnDef::new(HoprSafeContract::Address)
-                            .string_len(40)
+                            .binary_len(20)
                             .not_null()
                             .unique_key(),
                     )
-                    .col(ColumnDef::new(HoprSafeContract::DeployedBlock).binary_len(8).not_null())
+                    .col(ColumnDef::new(HoprSafeContract::DeployedBlock).big_integer().not_null())
                     .col(
                         ColumnDef::new(HoprSafeContract::DeployedTxIndex)
-                            .binary_len(8)
+                            .big_integer()
                             .not_null(),
                     )
                     .col(
                         ColumnDef::new(HoprSafeContract::DeployedLogIndex)
-                            .binary_len(8)
+                            .big_integer()
                             .not_null(),
                     )
                     .to_owned(),

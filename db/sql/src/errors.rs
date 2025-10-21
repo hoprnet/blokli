@@ -47,6 +47,9 @@ pub enum DbSqlError {
     #[error("ack validation error: {0}")]
     AcknowledgementValidationError(String),
 
+    #[error("invalid data: {0}")]
+    InvalidData(String),
+
     #[error(transparent)]
     BackendError(#[from] sea_orm::DbErr),
 

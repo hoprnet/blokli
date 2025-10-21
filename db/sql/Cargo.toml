@@ -7,6 +7,9 @@ name        = "blokli-db-sql"
 repository  = "https://github.com/hoprnet/blokli"
 version     = "0.1.0"
 
+[lints]
+workspace = true
+
 [features]
 default = ["sqlite", "traits"]
 prometheus = ["dep:hopr-metrics", "dep:lazy_static"]
