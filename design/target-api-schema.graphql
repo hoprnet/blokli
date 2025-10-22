@@ -33,6 +33,14 @@ type ChainInfo {
 	ticketPrice: TokenValueString!
 	"Current minimum ticket winning probability (decimal value between 0.0 and 1.0)"
 	minTicketWinningProbability: Float!
+	"Channel smart contract domain separator (hex string)"
+	channelDst: String
+	"Ledger smart contract domain separator (hex string)"
+	ledgerDst: String
+	"Safe Registry smart contract domain separator (hex string)"
+	safeRegistryDst: String
+	"Channel closure grace period in seconds"
+	channelClosureGracePeriod: UInt64
 }
 
 enum Token {

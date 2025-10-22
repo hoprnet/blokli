@@ -282,11 +282,35 @@ impl QueryRoot {
         #[allow(clippy::cast_lossless)]
         let min_ticket_winning_probability = chain_info.min_incoming_ticket_win_prob as f64;
 
+        // Convert domain separators from binary to hex strings
+        let channel_dst = chain_info
+            .channels_dst
+            .as_ref()
+            .map(|bytes| format!("0x{}", hex::encode(bytes)));
+
+        let ledger_dst = chain_info
+            .ledger_dst
+            .as_ref()
+            .map(|bytes| format!("0x{}", hex::encode(bytes)));
+
+        let safe_registry_dst = chain_info
+            .safe_registry_dst
+            .as_ref()
+            .map(|bytes| format!("0x{}", hex::encode(bytes)));
+
+        // Channel closure grace period - for now it will be None until the migration and indexer populate it
+        // TODO: This will be populated once the indexer stores the value from the chain
+        let channel_closure_grace_period = None; // Will be: chain_info.channel_closure_grace_period
+
         Ok(ChainInfo {
             block_number,
             chain_id: chain_id_i32,
             ticket_price,
             min_ticket_winning_probability,
+            channel_dst,
+            ledger_dst,
+            safe_registry_dst,
+            channel_closure_grace_period,
         })
     }
 

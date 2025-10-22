@@ -107,6 +107,18 @@ pub struct ChainInfo {
     /// Current minimum ticket winning probability (decimal value between 0.0 and 1.0)
     #[graphql(name = "minTicketWinningProbability")]
     pub min_ticket_winning_probability: f64,
+    /// Channel smart contract domain separator (hex string)
+    #[graphql(name = "channelDst")]
+    pub channel_dst: Option<String>,
+    /// Ledger smart contract domain separator (hex string)
+    #[graphql(name = "ledgerDst")]
+    pub ledger_dst: Option<String>,
+    /// Safe Registry smart contract domain separator (hex string)
+    #[graphql(name = "safeRegistryDst")]
+    pub safe_registry_dst: Option<String>,
+    /// Channel closure grace period in seconds
+    #[graphql(name = "channelClosureGracePeriod")]
+    pub channel_closure_grace_period: Option<i64>,
 }
 
 /// Account information containing balances and multiaddresses

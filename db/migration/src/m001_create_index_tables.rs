@@ -282,4 +282,5 @@ enum ChainInfo {
     LedgerDST,
     SafeRegistryDST,
     MinIncomingTicketWinProb,
+    ChannelClosureGracePeriod,
 }
