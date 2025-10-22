@@ -1,5 +1,4 @@
 use crate::errors;
-use futures::stream::BoxStream;
 
 mod queries;
 pub mod types {
@@ -33,8 +32,8 @@ pub(crate) type Result<T> = std::result::Result<T, errors::BlokliClientError>;
 #[async_trait::async_trait]
 pub trait BlokliQueryClient {
     async fn count_accounts(&self, selector: AccountSelector) -> Result<u32>;
-    async fn query_accounts<'a>(&'a self, selector: AccountSelector) -> Result<BoxStream<'a, types::Account>>;
-    async fn query_channels<'a>(&'a self, selector: ChannelSelector) -> Result<BoxStream<'a, types::Channel>>;
+    async fn query_accounts<'a>(&'a self, selector: AccountSelector) -> Result<Vec<types::Account>>;
+    async fn query_channels<'a>(&'a self, selector: ChannelSelector) -> Result<Vec<types::Channel>>;
     async fn query_chain_info(&self) -> Result<types::ChainInfo>;
     async fn query_version(&self) -> Result<String>;
     async fn query_health(&self) -> Result<String>;

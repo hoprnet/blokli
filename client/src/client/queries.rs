@@ -1,6 +1,4 @@
 use cynic::{GraphQlResponse, QueryBuilder};
-use futures::StreamExt;
-use futures::stream::BoxStream;
 
 use super::BlokliClient;
 use crate::api::{types::*, *};
@@ -36,24 +34,22 @@ impl BlokliQueryClient for BlokliClient {
             .map(|data| data.account_count as u32)
     }
 
-    async fn query_accounts<'a>(&'a self, selector: AccountSelector) -> Result<BoxStream<'a, Account>> {
+    async fn query_accounts<'a>(&'a self, selector: AccountSelector) -> Result<Vec<Account>> {
         let resp = self
             .build_query(QueryAccounts::build(AccountVariables::from(selector)))?
             .await?;
 
-        let accounts = response_to_data(resp).map(|data| data.map(|data| data.accounts).unwrap_or_default())?;
-
-        Ok(futures::stream::iter(accounts).boxed())
+        response_to_data(resp)
+            .map(|data| data.map(|data| data.accounts).unwrap_or_default())
     }
 
-    async fn query_channels<'a>(&'a self, selector: ChannelSelector) -> Result<BoxStream<'a, Channel>> {
+    async fn query_channels<'a>(&'a self, selector: ChannelSelector) -> Result<Vec<Channel>> {
         let resp = self
             .build_query(QueryChannels::build(ChannelsVariables::from(selector)))?
             .await?;
 
-        let channels = response_to_data(resp).map(|data| data.map(|data| data.channels).unwrap_or_default())?;
-
-        Ok(futures::stream::iter(channels).boxed())
+        response_to_data(resp)
+            .map(|data| data.map(|data| data.channels).unwrap_or_default())
     }
 
     async fn query_chain_info(&self) -> Result<ChainInfo> {
