@@ -31,8 +31,16 @@ type ChainInfo {
   blockNumber: Int!
   "Chain ID of the connected blockchain network"
   chainId: Int!
+  "Channel closure grace period in seconds"
+  channelClosureGracePeriod: UInt64
+  "Channel smart contract domain separator (hex string)"
+  channelDst: String
+  "Ledger smart contract domain separator (hex string)"
+  ledgerDst: String
   "Current minimum ticket winning probability (decimal value between 0.0 and 1.0)"
   minTicketWinningProbability: Float!
+  "Safe Registry smart contract domain separator (hex string)"
+  safeRegistryDst: String
   "Current HOPR token price"
   ticketPrice: TokenValueString!
 }

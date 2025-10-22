@@ -3,7 +3,7 @@
 //! This crate contains pure GraphQL type definitions that can be reused
 //! by clients without depending on the full API server implementation.
 
-use async_graphql::{Enum, NewType, Scalar, ScalarType, SimpleObject, Value};
+use async_graphql::{Enum, InputValueError, NewType, Scalar, ScalarType, SimpleObject, Value};
 
 /// Token value represented as a string to maintain precision
 ///
@@ -12,6 +12,39 @@ use async_graphql::{Enum, NewType, Scalar, ScalarType, SimpleObject, Value};
 /// the token's base unit (e.g., wei for native tokens, smallest unit for HOPR).
 #[derive(Debug, Clone, NewType)]
 pub struct TokenValueString(pub String);
+
+/// 32-byte hexadecimal string scalar type (with optional 0x prefix)
+///
+/// This scalar type represents 32-byte values as hexadecimal strings.
+/// Accepts strings with or without "0x" prefix, validates length to be exactly 64 hex characters.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Hex32(pub String);
+
+#[Scalar]
+impl ScalarType for Hex32 {
+    fn parse(value: Value) -> async_graphql::InputValueResult<Self> {
+        match value {
+            Value::String(s) => {
+                let hex_str = s.strip_prefix("0x").unwrap_or(&s);
+                if hex_str.len() != 64 {
+                    return Err(InputValueError::custom(format!(
+                        "Hex32 must be 64 hex characters (got {})",
+                        hex_str.len()
+                    )));
+                }
+                if !hex_str.chars().all(|c| c.is_ascii_hexdigit()) {
+                    return Err(InputValueError::custom("Hex32 must contain only hex characters"));
+                }
+                Ok(Hex32(s))
+            }
+            _ => Err(InputValueError::custom("Hex32 must be a string")),
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        Value::String(self.0.clone())
+    }
+}
 
 /// Unsigned 64-bit integer scalar type
 ///
@@ -107,6 +140,18 @@ pub struct ChainInfo {
     /// Current minimum ticket winning probability (decimal value between 0.0 and 1.0)
     #[graphql(name = "minTicketWinningProbability")]
     pub min_ticket_winning_probability: f64,
+    /// Channel smart contract domain separator (hex string)
+    #[graphql(name = "channelDst")]
+    pub channel_dst: Option<Hex32>,
+    /// Ledger smart contract domain separator (hex string)
+    #[graphql(name = "ledgerDst")]
+    pub ledger_dst: Option<Hex32>,
+    /// Safe Registry smart contract domain separator (hex string)
+    #[graphql(name = "safeRegistryDst")]
+    pub safe_registry_dst: Option<Hex32>,
+    /// Channel closure grace period in seconds
+    #[graphql(name = "channelClosureGracePeriod")]
+    pub channel_closure_grace_period: Option<u64>,
 }
 
 /// Account information containing balances and multiaddresses
