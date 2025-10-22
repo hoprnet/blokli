@@ -1,5 +1,5 @@
-use super::schema;
 use super::TokenValueString;
+use super::schema;
 
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "QueryRoot")]

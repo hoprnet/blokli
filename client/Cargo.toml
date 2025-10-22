@@ -9,12 +9,14 @@ license = "GPL-3.0-only"
 
 [dependencies]
 async-trait = { workspace = true }
-cynic = { workspace = true }
+cynic = { workspace = true, features = ["http-reqwest"] }
 eventsource-client = { workspace = true }
 futures = { workspace = true }
-hyper = { workspace = true, features = ["client", "http2"]}
+reqwest = { workspace = true }
+serde_json = { workspace = true }
 smart-default = { workspace = true }
 thiserror = { workspace = true }
+tracing = { workspace = true }
 url = { workspace = true }
 
 

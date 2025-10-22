@@ -1883,10 +1883,12 @@ dependencies = [
  "cynic-codegen",
  "eventsource-client",
  "futures",
- "hyper 1.7.0",
  "insta",
+ "reqwest",
+ "serde_json",
  "smart-default",
  "thiserror 2.0.17",
+ "tracing",
  "url",
 ]
 
@@ -2510,7 +2512,9 @@ checksum = "8b215a2d2bebcbbd3bd005b59f5b1b7dc5eb07343d64db80ec23aff9e7e1a2e2"
 dependencies = [
  "cynic-proc-macros",
  "ref-cast",
+ "reqwest",
  "serde",
+ "serde_json",
  "static_assertions",
  "thiserror 1.0.69",
 ]
