@@ -1,18 +1,285 @@
+schema {
+  query: QueryRoot
+  subscription: SubscriptionRoot
+}
+
+"""Account information containing balances and multiaddresses"""
+type Account {
+  "The wxHOPR balance associated with the on-chain address (returns zero if no balance record exists)"
+  accountHoprBalance: TokenValueString!
+  "Native balance associated with the on-chain address (returns zero if no balance record exists)"
+  accountNativeBalance: TokenValueString!
+  "Unique account on-chain address in hexadecimal format"
+  chainKey: String!
+  "Unique identifier for the account"
+  keyid: Int!
+  "List of multiaddresses associated with the packet key"
+  multiAddresses: [String!]!
+  "Unique account packet key in peer id format"
+  packetKey: String!
+  "HOPR Safe contract address to which the account is linked"
+  safeAddress: String
+  "The wxHOPR balance associated with the linked Safe contract address"
+  safeHoprBalance: TokenValueString
+  "Native balance associated with the linked Safe contract address"
+  safeNativeBalance: TokenValueString
+}
+
+"""Blockchain and HOPR network information"""
+type ChainInfo {
+  "Current block number of the blockchain"
+  blockNumber: Int!
+  "Chain ID of the connected blockchain network"
+  chainId: Int!
+  "Channel closure grace period in seconds"
+  channelClosureGracePeriod: UInt64
+  "Channel smart contract domain separator (hex string)"
+  channelDst: String
+  "Ledger smart contract domain separator (hex string)"
+  ledgerDst: String
+  "Current minimum ticket winning probability (decimal value between 0.0 and 1.0)"
+  minTicketWinningProbability: Float!
+  "Safe Registry smart contract domain separator (hex string)"
+  safeRegistryDst: String
+  "Current HOPR token price"
+  ticketPrice: TokenValueString!
+}
+
+"""Payment channel between two nodes"""
+type Channel {
+  "Total amount of HOPR tokens allocated to the channel"
+  balance: TokenValueString!
+  "Timestamp when the channel closure was initiated (null if no closure initiated)"
+  closureTime: DateTime
+  "Unique identifier for the payment channel in hexadecimal format"
+  concreteChannelId: String!
+  "Account keyid of the destination node"
+  destination: Int!
+  "Current epoch of the channel (uint24)"
+  epoch: Int!
+  "Account keyid of the source node"
+  source: Int!
+  "Current state of the channel (OPEN, PENDINGTOCLOSE, or CLOSED)"
+  status: ChannelStatus!
+  "Latest ticket index used in the channel (uint48, max: 281474976710655)"
+  ticketIndex: UInt64!
+}
+
+"""Status of a payment channel"""
+enum ChannelStatus {
+  "Channel has been closed"
+  CLOSED
+  "Channel is open and operational"
+  OPEN
+  "Channel is in the process of closing"
+  PENDINGTOCLOSE
+}
+
+"""ISO 8601 datetime string (e.g., "2024-01-15T10:30:00Z")"""
+scalar DateTime
+
+"""HOPR token balance information for a specific address"""
+type HoprBalance {
+  "Address holding the HOPR token balance"
+  address: String!
+  "HOPR token balance"
+  balance: TokenValueString!
+}
+
+"""Native token balance information for a specific address"""
+type NativeBalance {
+  "Address holding the native token balance"
+  address: String!
+  "Native token balance"
+  balance: TokenValueString!
+}
+
+"""Graph of opened payment channels with associated accounts"""
+type OpenedChannelsGraph {
+  "List of accounts referenced by the open channels (source and destination nodes)"
+  accounts: [Account!]!
+  "List of all open payment channels"
+  channels: [Channel!]!
+}
+
+"""Root query type providing read-only access to indexed blockchain data"""
+type QueryRoot {
+  """
+  Count accounts matching optional filters
+  
+  If no filters are provided, returns total account count.
+  Filters can be combined to narrow results.
+  """
+  accountCount(
+    "Filter by chain key (hexadecimal format)"
+    chainKey: String
+    "Filter by account keyid"
+    keyid: Int
+    "Filter by packet key (peer ID format)"
+    packetKey: String
+  ): Int!
+  """
+  Retrieve accounts from the database with required filtering
+  
+  **At least one filter parameter must be provided** (keyid, packetKey, or chainKey).
+  Returns an error if no filters are specified to prevent excessive data retrieval.
+  
+  Filters can be combined to narrow results further.
+  
+  Example: accounts(keyid: 1) or accounts(chainKey: "0x1234...")
+  """
+  accounts(
+    "Filter by chain key (hexadecimal format)"
+    chainKey: String
+    "Filter by account keyid"
+    keyid: Int
+    "Filter by packet key (peer ID format)"
+    packetKey: String
+  ): [Account!]!
+  """Retrieve chain information"""
+  chainInfo: ChainInfo!
+  """
+  Count channels matching optional filters
+  
+  If no filters are provided, returns total channels count.
+  Filters can be combined to narrow results.
+  """
+  channelCount(
+    "Filter by concrete channel ID (hexadecimal format)"
+    concreteChannelId: String
+    "Filter by destination node keyid"
+    destinationKeyId: Int
+    "Filter by source node keyid"
+    sourceKeyId: Int
+    "Filter by channel status"
+    status: ChannelStatus
+  ): Int!
+  """
+  Retrieve channels with required filtering
+  
+  **At least one identity filter must be provided** (sourceKeyId, destinationKeyId, or concreteChannelId).
+  The status filter is optional and can be used in combination with identity filters.
+  Returns an error if no identity filters are specified to prevent excessive data retrieval.
+  
+  Filters can be combined to narrow results further.
+  
+  Example: channels(sourceKeyId: 1) or channels(sourceKeyId: 1, status: OPEN)
+  """
+  channels(
+    "Filter by concrete channel ID (hexadecimal format)"
+    concreteChannelId: String
+    "Filter by destination node keyid"
+    destinationKeyId: Int
+    "Filter by source node keyid"
+    sourceKeyId: Int
+    "Filter by channel status (optional, combine with identity filters)"
+    status: ChannelStatus
+  ): [Channel!]!
+  """
+  Health check endpoint
+  
+  Returns "ok" to indicate the service is running
+  """
+  health: String!
+  """
+  Retrieve HOPR token balance for a specific address
+  
+  Returns None if no balance exists for the address.
+  """
+  hoprBalance(
+    "On-chain address to query (hexadecimal format)"
+    address: String!
+  ): HoprBalance
+  """
+  Retrieve native token balance for a specific address
+  
+  Returns None if no balance exists for the address.
+  """
+  nativeBalance(
+    "On-chain address to query (hexadecimal format)"
+    address: String!
+  ): NativeBalance
+  """
+  API version information
+  
+  Returns the current version of the blokli-api package
+  """
+  version: String!
+}
+
+"""Root subscription type providing real-time updates via Server-Sent Events (SSE)"""
+type SubscriptionRoot {
+  """
+  Subscribe to real-time updates of account information
+  
+  Provides updates whenever there is a change in account information, including
+  balance changes, Safe address linking, and multiaddress announcements.
+  Optional filters can be applied to only receive updates for specific accounts.
+  """
+  accountUpdated(
+    "Filter by chain key (hexadecimal format)"
+    chainKey: String
+    "Filter by account keyid"
+    keyid: Int
+    "Filter by packet key (peer ID format)"
+    packetKey: String
+  ): Account!
+  """
+  Subscribe to real-time updates of payment channels
+  
+  Provides updates whenever there is a change in the state of any payment channel,
+  including channel opening, balance updates, status changes, and channel closure.
+  Optional filters can be applied to only receive updates for specific channels.
+  """
+  channelUpdated(
+    "Filter by concrete channel ID (hexadecimal format)"
+    concreteChannelId: String
+    "Filter by destination node keyid"
+    destinationKeyId: Int
+    "Filter by source node keyid"
+    sourceKeyId: Int
+    "Filter by channel status"
+    status: ChannelStatus
+  ): Channel!
+  """
+  Subscribe to real-time updates of HOPR balances for a specific address
+  
+  Provides updates whenever there is a change in the HOPR token balance for the specified account.
+  Updates are sent immediately when balance changes occur on-chain.
+  """
+  hoprBalanceUpdated(
+    "On-chain address to monitor for balance changes (hexadecimal format)"
+    address: String!
+  ): HoprBalance!
+  """
+  Subscribe to real-time updates of native balances for a specific address
+  
+  Provides updates whenever there is a change in the native token balance for the specified account.
+  Updates are sent immediately when balance changes occur on-chain.
+  """
+  nativeBalanceUpdated(
+    "On-chain address to monitor for balance changes (hexadecimal format)"
+    address: String!
+  ): NativeBalance!
+  """
+  Subscribe to a full stream of existing channels and channel updates.
+  
+  Provides channel information on all open channels along with the accounts that participate in those channels.
+  This provides a complete view of the active payment channel network.
+  """
+  openedChannelGraphUpdated: OpenedChannelsGraph!
+}
+
 """
 Human-readable token representation.
 Format: value [wei] token
 Examples:
   10 wei wxHOPR
-	10 wxHOPR
-	10.1 wxHOPR
-	.1 wxHOPR
+  10 wxHOPR
+  10.1 wxHOPR
+  .1 wxHOPR
 """
 scalar TokenValueString
-
-"""
-ISO 8601 datetime string (e.g., "2024-01-15T10:30:00Z")
-"""
-scalar DateTime
 
 """
 Unsigned 64-bit integer represented as a string to avoid JavaScript precision loss.
@@ -20,270 +287,3 @@ Used for values that exceed the 32-bit signed integer range of GraphQL Int.
 Maximum value: 18446744073709551615
 """
 scalar UInt64
-
-"""
-Blockchain and HOPR network information
-"""
-type ChainInfo {
-	"Current block number of the blockchain"
-	blockNumber: Int!
-	"Chain ID of the connected blockchain network"
-	chainId: Int!
-	"Current HOPR token price"
-	ticketPrice: TokenValueString!
-	"Current minimum ticket winning probability (decimal value between 0.0 and 1.0)"
-	minTicketWinningProbability: Float!
-	"Channel smart contract domain separator (hex string)"
-	channelDst: String
-	"Ledger smart contract domain separator (hex string)"
-	ledgerDst: String
-	"Safe Registry smart contract domain separator (hex string)"
-	safeRegistryDst: String
-	"Channel closure grace period in seconds"
-	channelClosureGracePeriod: UInt64
-}
-
-enum Token {
-	"HOPR token"
-	HOPR
-	"Native token"
-	NATIVE
-}
-
-"""
-HOPR token balance information for a specific address
-"""
-type HoprBalance {
-	"Address holding the HOPR token balance"
-	address: String!
-	"HOPR token balance"
-	balance: TokenValueString!
-}
-
-"""
-Native token balance information for a specific address
-"""
-type NativeBalance {
-	"Address holding the native token balance"
-	address: String!
-	"Native token balance"
-	balance: TokenValueString!
-}
-
-"""
-Account information containing balances and multiaddresses
-"""
-type Account {
-	"Unique identifier for the account"
-	keyid: Int!
-	"Unique account on-chain address in hexadecimal format"
-	chainKey: String!
-	"Unique account packet key in peer id format"
-	packetKey: String!
-	"wxHOPR balance associated with the on-chain address (returns zero if no balance record exists)"
-	accountHoprBalance: TokenValueString!
-	"Native balance associated with the on-chain address (returns zero if no balance record exists)"
-	accountNativeBalance: TokenValueString!
-	"HOPR Safe contract address to which the account is linked"
-	safeAddress: String
-	"wxHOPR balance associated with the linked Safe contract address"
-	safeHoprBalance: TokenValueString
-	"Native balance associated with the linked Safe contract address"
-	safeNativeBalance: TokenValueString
-	"List of multiaddresses associated with the packet key"
-	multiAddresses: [String!]!
-}
-
-"""
-Status of a payment channel
-"""
-enum ChannelStatus {
-	"Channel is open and operational"
-	OPEN
-	"Channel is in the process of closing"
-	PENDINGTOCLOSE
-	"Channel has been closed"
-	CLOSED
-}
-
-"""
-Payment channel between two nodes
-"""
-type Channel {
-	"Unique identifier for the payment channel in hexadecimal format"
-	concreteChannelId: String!
-	"Account keyid of the source node"
-	source: Int!
-	"Account keyid of the destination node"
-	destination: Int!
-	"Total amount of HOPR tokens allocated to the channel"
-	balance: TokenValueString!
-	"Current state of the channel (OPEN, PENDINGTOCLOSE, or CLOSED)"
-	status: ChannelStatus!
-	"Current epoch of the channel (uint24)"
-	epoch: Int!
-	"Latest ticket index used in the channel (uint48, max: 281474976710655)"
-	ticketIndex: UInt64!
-	"Timestamp when the channel closure was initiated (null if no closure initiated)"
-	closureTime: DateTime
-}
-
-"""
-Graph of opened payment channels with associated accounts
-"""
-type OpenedChannelsGraph {
-	"List of all open payment channels"
-	channels: [Channel!]!
-	"List of accounts referenced by the open channels (source and destination nodes)"
-	accounts: [Account!]!
-}
-
-type QueryRoot {
-	"""
-	Retrieve accounts from the database, optionally filtered
-
-	If no filters are provided, returns all accounts.
-	Filters can be combined to narrow results.
-	"""
-	accounts(
-		"Filter by account keyid"
-		keyid: Int,
-		"Filter by packet key (peer ID format)"
-		packetKey: String,
-		"Filter by chain key (hexadecimal format)"
-		chainKey: String
-	): [Account!]!
-	"""
-	Count accounts matching optional filters
-
-	If no filters are provided, returns total account count.
-	Filters can be combined to narrow results.
-	"""
-	accountCount(
-		"Filter by account keyid"
-		keyid: Int,
-		"Filter by packet key (peer ID format)"
-		packetKey: String,
-		"Filter by chain key (hexadecimal format)"
-		chainKey: String
-	): Int!
-	"""
-	Retrieve channels, optionally filtered
-
-	If no filters are provided, returns all channels.
-	Filters can be combined to narrow results.
-	"""
-	channels(
-		"Filter by source node keyid"
-		sourceKeyId: Int,
-		"Filter by destination node keyid"
-		destinationKeyId: Int,
-		"Filter by concrete channel ID (hexadecimal format)"
-		concreteChannelId: String
-	): [Channel!]!
-
-	"""
-	Retrieve the opened channels graph
-
-	Returns all open channels along with the accounts that participate in those channels.
-	This provides a complete view of the active payment channel network.
-	"""
-	openedChannelsGraph: OpenedChannelsGraph!
-
-	"""
-	Retrieve HOPR token balance for a specific address
-
-	Returns None if no balance exists for the address.
-	"""
-	hoprBalance(
-		"On-chain address to query (hexadecimal format)"
-		address: String!
-	): HoprBalance
-	"""
-	Retrieve native token balance for a specific address
-
-	Returns None if no balance exists for the address.
-	"""
-	nativeBalance(
-		"On-chain address to query (hexadecimal format)"
-		address: String!
-	): NativeBalance
-	"""
-	Health check endpoint
-
-	Returns "ok" to indicate the service is running
-	"""
-	health: String!
-	"""
-	API version information
-
-	Returns the current version of the blokli-api package
-	"""
-	version: String!
-
-	"""
-	Retrieve chain information
-	"""
-	chainInfo: ChainInfo!
-}
-
-type SubscriptionRoot {
-	"""
-	Subscribe to real-time updates of native balances for a specific address
-
-	Provides updates whenever there is a change in the native token balance for the specified account.
-	Updates are sent immediately when balance changes occur on-chain.
-	"""
-	nativeBalanceUpdated(
-		"On-chain address to monitor for balance changes (hexadecimal format)"
-		address: String!
-	): NativeBalance!
-
-	"""
-	Subscribe to real-time updates of HOPR balances for a specific address
-
-	Provides updates whenever there is a change in the HOPR token balance for the specified account.
-	Updates are sent immediately when balance changes occur on-chain.
-	"""
-	hoprBalanceUpdated(
-		"On-chain address to monitor for balance changes (hexadecimal format)"
-		address: String!
-	): HoprBalance!
-
-	"""
-	Subscribe to real-time updates of payment channels
-
-	Provides updates whenever there is a change in the state of any payment channel,
-	including channel opening, balance updates, status changes, and channel closure.
-	Optional filters can be applied to only receive updates for specific channels.
-	"""
-	channelUpdated(
-		"Filter by source node keyid"
-		sourceKeyId: Int,
-		"Filter by destination node keyid"
-		destinationKeyId: Int,
-		"Filter by concrete channel ID (hexadecimal format)"
-		concreteChannelId: String
-	): Channel!
-
-	"""
-	Subscribe to real-time updates of account information
-
-	Provides updates whenever there is a change in account information, including
-	balance changes, Safe address linking, and multiaddress announcements.
-	Optional filters can be applied to only receive updates for specific accounts.
-	"""
-	accountUpdated(
-		"Filter by account keyid"
-		keyid: Int,
-		"Filter by packet key (peer ID format)"
-		packetKey: String,
-		"Filter by chain key (hexadecimal format)"
-		chainKey: String
-	): Account!
-}
-
-schema {
-	query: QueryRoot
-	subscription: SubscriptionRoot
-}

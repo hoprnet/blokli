@@ -287,6 +287,9 @@
               # Other specific files
               "bloklid/.dockerignore"
               "tests/pytest.ini"
+
+              # Generated GraphQL schema (formatted separately)
+              "schema.graphql"
             ];
             extraFormatters = {
               settings.formatter.shfmt.includes = [
@@ -298,6 +301,34 @@
                 ".github/labeler.yml"
                 ".github/workflows/*.yaml"
               ];
+              # GraphQL formatter
+              settings.formatter.format-graphql = {
+                command = pkgs.writeShellApplication {
+                  name = "format-graphql";
+                  runtimeInputs = [
+                    pkgs.nodejs
+                    pkgs.nodePackages.npm
+                  ];
+                  text = ''
+                    npx --yes format-graphql --write=true "$@"
+                  '';
+                };
+                includes = [ "design/*.graphql" ];
+              };
+              # GraphQL linter
+              settings.formatter.graphql-schema-linter = {
+                command = pkgs.writeShellApplication {
+                  name = "graphql-schema-linter";
+                  runtimeInputs = [
+                    pkgs.nodejs
+                    pkgs.nodePackages.npm
+                  ];
+                  text = ''
+                    npx --yes graphql-schema-linter "$@"
+                  '';
+                };
+                includes = [ "design/*.graphql" ];
+              };
             };
           };
 
