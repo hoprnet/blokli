@@ -99,8 +99,10 @@ impl QueryRoot {
 
         // Get count efficiently using SeaORM's paginator
         let count_u64 = query.count(db).await?;
-        // If count exceeds i32::MAX, clamp to i32::MAX (GraphQL Int type limitation)
-        let count = i32::try_from(count_u64).unwrap_or(i32::MAX);
+        // Convert to i32, returning an error if count exceeds i32::MAX
+        let count = i32::try_from(count_u64).map_err(|_| {
+            async_graphql::Error::new(format!("Account count {} exceeds i32::MAX (2,147,483,647)", count_u64))
+        })?;
 
         Ok(count)
     }
@@ -192,7 +194,10 @@ impl QueryRoot {
         }
 
         let count_u64 = query.count(db).await?;
-        let count = i32::try_from(count_u64).unwrap_or(i32::MAX);
+        // Convert to i32, returning an error if count exceeds i32::MAX
+        let count = i32::try_from(count_u64).map_err(|_| {
+            async_graphql::Error::new(format!("Channel count {} exceeds i32::MAX (2,147,483,647)", count_u64))
+        })?;
 
         Ok(count)
     }
