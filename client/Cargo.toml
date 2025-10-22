@@ -8,6 +8,7 @@ repository = "https://github.com/hoprnet/hoprnet"
 license = "GPL-3.0-only"
 
 [dependencies]
+async-trait = { workspace = true }
 cynic = { workspace = true }
 eventsource-client = { workspace = true }
 futures = { workspace = true }
