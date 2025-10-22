@@ -11,7 +11,7 @@ use crate::{
     validation::validate_eth_address,
 };
 
-/// Root query object for the GraphQL API
+/// Root query type providing read-only access to indexed blockchain data
 pub struct QueryRoot;
 
 #[Object]
@@ -156,6 +156,52 @@ impl QueryRoot {
         Ok(OpenedChannelsGraph { channels, accounts })
     }
 
+    /// Count channels matching optional filters
+    ///
+    /// If no filters are provided, returns total channels count.
+    /// Filters can be combined to narrow results.
+    #[graphql(name = "channelCount")]
+    async fn channel_count(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Filter by source node keyid")] source_key_id: Option<i32>,
+        #[graphql(desc = "Filter by destination node keyid")] destination_key_id: Option<i32>,
+        #[graphql(desc = "Filter by concrete channel ID (hexadecimal format)")] concrete_channel_id: Option<String>,
+        #[graphql(desc = "Filter by channel status")] status: Option<blokli_api_types::ChannelStatus>,
+    ) -> Result<i32> {
+        use sea_orm::PaginatorTrait;
+
+        let db = ctx.data::<DatabaseConnection>()?;
+
+        let mut query = blokli_db_entity::channel::Entity::find();
+
+        if let Some(src_keyid) = source_key_id {
+            query = query.filter(blokli_db_entity::channel::Column::Source.eq(src_keyid));
+        }
+
+        if let Some(dst_keyid) = destination_key_id {
+            query = query.filter(blokli_db_entity::channel::Column::Destination.eq(dst_keyid));
+        }
+
+        if let Some(channel_id) = concrete_channel_id {
+            query = query.filter(blokli_db_entity::channel::Column::ConcreteChannelId.eq(channel_id));
+        }
+
+        if let Some(status_filter) = status {
+            let status_value = match status_filter {
+                blokli_api_types::ChannelStatus::Open => 1,
+                blokli_api_types::ChannelStatus::PendingToClose => 2,
+                blokli_api_types::ChannelStatus::Closed => 3,
+            };
+            query = query.filter(blokli_db_entity::channel::Column::Status.eq(status_value));
+        }
+
+        let count_u64 = query.count(db).await?;
+        let count = i32::try_from(count_u64).unwrap_or(i32::MAX);
+
+        Ok(count)
+    }
+
     /// Retrieve channels, optionally filtered
     ///
     /// If no filters are provided, returns all channels.
@@ -166,6 +212,7 @@ impl QueryRoot {
         #[graphql(desc = "Filter by source node keyid")] source_key_id: Option<i32>,
         #[graphql(desc = "Filter by destination node keyid")] destination_key_id: Option<i32>,
         #[graphql(desc = "Filter by concrete channel ID (hexadecimal format)")] concrete_channel_id: Option<String>,
+        #[graphql(desc = "Filter by channel status")] status: Option<blokli_api_types::ChannelStatus>,
     ) -> Result<Vec<Channel>> {
         let db = ctx.data::<DatabaseConnection>()?;
 
@@ -184,6 +231,16 @@ impl QueryRoot {
         // Apply concrete channel ID filter if provided
         if let Some(channel_id) = concrete_channel_id {
             query = query.filter(blokli_db_entity::channel::Column::ConcreteChannelId.eq(channel_id));
+        }
+
+        // Apply status filter if provided
+        if let Some(status_filter) = status {
+            let status_value = match status_filter {
+                blokli_api_types::ChannelStatus::Open => 1,
+                blokli_api_types::ChannelStatus::PendingToClose => 2,
+                blokli_api_types::ChannelStatus::Closed => 3,
+            };
+            query = query.filter(blokli_db_entity::channel::Column::Status.eq(status_value));
         }
 
         let channels = query.all(db).await?;
