@@ -9,6 +9,11 @@ use crate::{
     validation::validate_eth_address,
 };
 
+/// Helper function to convert binary domain separator to Hex32 format
+fn bytes_to_hex32(bytes: &[u8]) -> Hex32 {
+    Hex32(format!("0x{}", hex::encode(bytes)))
+}
+
 /// Root query type providing read-only access to indexed blockchain data
 pub struct QueryRoot;
 
@@ -310,23 +315,22 @@ impl QueryRoot {
         let min_ticket_winning_probability = chain_info.min_incoming_ticket_win_prob as f64;
 
         // Convert domain separators from binary to hex strings
-        let channel_dst = chain_info
-            .channels_dst
-            .as_ref()
-            .map(|bytes| Hex32(format!("0x{}", hex::encode(bytes))));
+        let channel_dst = chain_info.channels_dst.as_ref().map(|b| bytes_to_hex32(b));
+        let ledger_dst = chain_info.ledger_dst.as_ref().map(|b| bytes_to_hex32(b));
+        let safe_registry_dst = chain_info.safe_registry_dst.as_ref().map(|b| bytes_to_hex32(b));
 
-        let ledger_dst = chain_info
-            .ledger_dst
-            .as_ref()
-            .map(|bytes| Hex32(format!("0x{}", hex::encode(bytes))));
-
-        let safe_registry_dst = chain_info
-            .safe_registry_dst
-            .as_ref()
-            .map(|bytes| Hex32(format!("0x{}", hex::encode(bytes))));
-
-        // Channel closure grace period from database (will be None until indexer populates it)
-        let channel_closure_grace_period = None; // TODO: Get from chain_info model when field is available
+        // Convert channel closure grace period from i64 to u64 with validation
+        let channel_closure_grace_period = chain_info
+            .channel_closure_grace_period
+            .map(|period| {
+                u64::try_from(period).map_err(|_| {
+                    async_graphql::Error::new(format!(
+                        "channel_closure_grace_period must be non-negative, got {}",
+                        period
+                    ))
+                })
+            })
+            .transpose()?;
 
         Ok(ChainInfo {
             block_number,
