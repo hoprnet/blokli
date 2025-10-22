@@ -7,7 +7,7 @@
     "enum-values-sorted-alphabetically",
     "fields-have-descriptions",
     "input-object-values-have-descriptions",
-    "types-have-descriptions"
+    "types-have-descriptions",
     "descriptions-are-capitalized",
     "enum-values-all-caps",
     "fields-are-camel-cased",
