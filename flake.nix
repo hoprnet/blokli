@@ -305,7 +305,10 @@
               settings.formatter.format-graphql = {
                 command = pkgs.writeShellApplication {
                   name = "format-graphql";
-                  runtimeInputs = [ pkgs.nodePackages.npm ];
+                  runtimeInputs = [
+                    pkgs.nodejs
+                    pkgs.nodePackages.npm
+                  ];
                   text = ''
                     npx --yes format-graphql --write=true "$@"
                   '';
@@ -316,7 +319,10 @@
               settings.formatter.graphql-schema-linter = {
                 command = pkgs.writeShellApplication {
                   name = "graphql-schema-linter";
-                  runtimeInputs = [ pkgs.nodePackages.npm ];
+                  runtimeInputs = [
+                    pkgs.nodejs
+                    pkgs.nodePackages.npm
+                  ];
                   text = ''
                     npx --yes graphql-schema-linter "$@"
                   '';
