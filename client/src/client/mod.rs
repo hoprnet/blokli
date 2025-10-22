@@ -19,20 +19,10 @@ impl BlokliClient {
         }
     }
 
-    pub async fn query_channels() {
-        todo!()
-    }
-
-    pub async query_channel(id: &)
-
     fn build_subscription_client(&self) -> Result<impl eventsource_client::Client, BlokliClientError> {
         Ok(eventsource_client::ClientBuilder::for_url(self.cfg.url.join("graphql")?.as_str())?
             .connect_timeout(self.cfg.timeout)
             .build())
-    }
-
-    pub async fn subscribe_channels(&self) -> Result<impl futures::Stream<Item = queries::Channel> + Send, BlokliClientError> {
-
     }
 
 }

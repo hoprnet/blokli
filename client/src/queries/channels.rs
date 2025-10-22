@@ -3,7 +3,7 @@ use super::{ChannelStatus, DateTime, TokenValueString, Uint64};
 
 // Channel query
 #[derive(cynic::QueryVariables)]
-struct ChannelsVariables {
+pub struct ChannelsVariables {
     concrete_channel_id: Option<String>,
     destination_key_id: Option<i32>,
     source_key_id: Option<i32>,

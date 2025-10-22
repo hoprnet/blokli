@@ -6,20 +6,6 @@ pub mod info;
 pub(crate) mod schema {}
 
 // https://generator.cynic-rs.dev/
-
-#[derive(cynic::QueryFragment, Debug)]
-#[cynic(graphql_type = "QueryRoot")]
-pub struct QueryFullGraph {
-    pub opened_channels_graph: OpenedChannelsGraph,
-}
-
-#[derive(cynic::QueryFragment, Debug)]
-pub struct OpenedChannelsGraph {
-    pub accounts: Vec<accounts::Account>,
-    pub channels: Vec<channels::Channel>,
-}
-
-
 #[derive(cynic::Enum, Clone, Copy, Debug)]
 pub enum ChannelStatus {
     Open,
