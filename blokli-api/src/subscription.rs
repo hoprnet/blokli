@@ -12,7 +12,9 @@ use futures::Stream;
 use sea_orm::DatabaseConnection;
 use tokio::time::sleep;
 
-use crate::conversions::{channel_from_model, hopr_balance_from_model, native_balance_from_model};
+use crate::conversions::{
+    channel_from_model, channel_status_to_i8, hopr_balance_from_model, native_balance_from_model,
+};
 
 /// Root subscription type providing real-time updates via Server-Sent Events (SSE)
 pub struct SubscriptionRoot;
@@ -217,12 +219,7 @@ impl SubscriptionRoot {
         }
 
         if let Some(status_filter) = status {
-            let status_value = match status_filter {
-                blokli_api_types::ChannelStatus::Open => 1,
-                blokli_api_types::ChannelStatus::PendingToClose => 2,
-                blokli_api_types::ChannelStatus::Closed => 3,
-            };
-            query = query.filter(blokli_db_entity::channel::Column::Status.eq(status_value));
+            query = query.filter(blokli_db_entity::channel::Column::Status.eq(channel_status_to_i8(status_filter)));
         }
 
         let channels = query.all(db).await?;

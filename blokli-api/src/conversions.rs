@@ -6,6 +6,21 @@
 
 use blokli_api_types::{Announcement, Channel, ChannelStatus, HoprBalance, NativeBalance, TokenValueString, UInt64};
 
+/// Convert ChannelStatus enum to database integer representation
+///
+/// This conversion is used when filtering channels by status in database queries.
+/// The mapping is:
+/// - Open -> 1
+/// - PendingToClose -> 2
+/// - Closed -> 3
+pub fn channel_status_to_i8(status: ChannelStatus) -> i8 {
+    match status {
+        ChannelStatus::Open => 1,
+        ChannelStatus::PendingToClose => 2,
+        ChannelStatus::Closed => 3,
+    }
+}
+
 /// Convert database announcement model to GraphQL type
 pub fn announcement_from_model(model: blokli_db_entity::announcement::Model) -> Announcement {
     Announcement {

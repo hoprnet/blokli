@@ -7,7 +7,7 @@ use blokli_api_types::{
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::{
-    conversions::{channel_from_model, hopr_balance_from_model, native_balance_from_model},
+    conversions::{channel_from_model, channel_status_to_i8, hopr_balance_from_model, native_balance_from_model},
     validation::validate_eth_address,
 };
 
@@ -188,12 +188,7 @@ impl QueryRoot {
         }
 
         if let Some(status_filter) = status {
-            let status_value = match status_filter {
-                blokli_api_types::ChannelStatus::Open => 1,
-                blokli_api_types::ChannelStatus::PendingToClose => 2,
-                blokli_api_types::ChannelStatus::Closed => 3,
-            };
-            query = query.filter(blokli_db_entity::channel::Column::Status.eq(status_value));
+            query = query.filter(blokli_db_entity::channel::Column::Status.eq(channel_status_to_i8(status_filter)));
         }
 
         let count_u64 = query.count(db).await?;
@@ -235,12 +230,7 @@ impl QueryRoot {
 
         // Apply status filter if provided
         if let Some(status_filter) = status {
-            let status_value = match status_filter {
-                blokli_api_types::ChannelStatus::Open => 1,
-                blokli_api_types::ChannelStatus::PendingToClose => 2,
-                blokli_api_types::ChannelStatus::Closed => 3,
-            };
-            query = query.filter(blokli_db_entity::channel::Column::Status.eq(status_value));
+            query = query.filter(blokli_db_entity::channel::Column::Status.eq(channel_status_to_i8(status_filter)));
         }
 
         let channels = query.all(db).await?;
