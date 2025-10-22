@@ -298,9 +298,8 @@ impl QueryRoot {
             .as_ref()
             .map(|bytes| format!("0x{}", hex::encode(bytes)));
 
-        // Channel closure grace period - for now it will be None until the migration and indexer populate it
-        // TODO: This will be populated once the indexer stores the value from the chain
-        let channel_closure_grace_period = None; // Will be: chain_info.channel_closure_grace_period
+        // Channel closure grace period from database (will be None until indexer populates it)
+        let channel_closure_grace_period = None; // TODO: Get from chain_info model when field is available
 
         Ok(ChainInfo {
             block_number,
