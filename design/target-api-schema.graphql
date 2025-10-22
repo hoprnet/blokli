@@ -111,10 +111,14 @@ type QueryRoot {
     packetKey: String
   ): Int!
   """
-  Retrieve accounts from the database, optionally filtered
+  Retrieve accounts from the database with required filtering
   
-  If no filters are provided, returns all accounts.
-  Filters can be combined to narrow results.
+  **At least one filter parameter must be provided** (keyid, packetKey, or chainKey).
+  Returns an error if no filters are specified to prevent excessive data retrieval.
+  
+  Filters can be combined to narrow results further.
+  
+  Example: accounts(keyid: 1) or accounts(chainKey: "0x1234...")
   """
   accounts(
     "Filter by chain key (hexadecimal format)"
@@ -143,10 +147,15 @@ type QueryRoot {
     status: ChannelStatus
   ): Int!
   """
-  Retrieve channels, optionally filtered
+  Retrieve channels with required filtering
   
-  If no filters are provided, returns all channels.
-  Filters can be combined to narrow results.
+  **At least one identity filter must be provided** (sourceKeyId, destinationKeyId, or concreteChannelId).
+  The status filter is optional and can be used in combination with identity filters.
+  Returns an error if no identity filters are specified to prevent excessive data retrieval.
+  
+  Filters can be combined to narrow results further.
+  
+  Example: channels(sourceKeyId: 1) or channels(sourceKeyId: 1, status: OPEN)
   """
   channels(
     "Filter by concrete channel ID (hexadecimal format)"
@@ -155,7 +164,7 @@ type QueryRoot {
     destinationKeyId: Int
     "Filter by source node keyid"
     sourceKeyId: Int
-    "Filter by channel status"
+    "Filter by channel status (optional, combine with identity filters)"
     status: ChannelStatus
   ): [Channel!]!
   """
@@ -182,13 +191,6 @@ type QueryRoot {
     "On-chain address to query (hexadecimal format)"
     address: String!
   ): NativeBalance
-  """
-  Retrieve the opened channels graph
-  
-  Returns all open channels along with the accounts that participate in those channels.
-  This provides a complete view of the active payment channel network.
-  """
-  openedChannelsGraph: OpenedChannelsGraph!
   """
   API version information
   
