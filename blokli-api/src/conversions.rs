@@ -10,14 +10,14 @@ use blokli_api_types::{Announcement, Channel, ChannelStatus, HoprBalance, Native
 ///
 /// This conversion is used when filtering channels by status in database queries.
 /// The mapping is:
+/// - Closed -> 0
 /// - Open -> 1
 /// - PendingToClose -> 2
-/// - Closed -> 3
 pub fn channel_status_to_i8(status: ChannelStatus) -> i8 {
     match status {
+        ChannelStatus::Closed => 0,
         ChannelStatus::Open => 1,
         ChannelStatus::PendingToClose => 2,
-        ChannelStatus::Closed => 3,
     }
 }
 
@@ -76,5 +76,35 @@ pub fn native_balance_from_model(model: blokli_db_entity::native_balance::Model)
     NativeBalance {
         address: address_to_string(&model.address),
         balance: TokenValueString(balance_to_string(&model.balance)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_channel_status_to_i8_mapping() {
+        // Verify database encoding matches: 0=Closed, 1=Open, 2=PendingToClose
+        assert_eq!(channel_status_to_i8(ChannelStatus::Closed), 0);
+        assert_eq!(channel_status_to_i8(ChannelStatus::Open), 1);
+        assert_eq!(channel_status_to_i8(ChannelStatus::PendingToClose), 2);
+    }
+
+    #[test]
+    fn test_channel_status_round_trip() {
+        // Verify bidirectional conversion consistency
+        assert_eq!(
+            ChannelStatus::from(channel_status_to_i8(ChannelStatus::Closed)),
+            ChannelStatus::Closed
+        );
+        assert_eq!(
+            ChannelStatus::from(channel_status_to_i8(ChannelStatus::Open)),
+            ChannelStatus::Open
+        );
+        assert_eq!(
+            ChannelStatus::from(channel_status_to_i8(ChannelStatus::PendingToClose)),
+            ChannelStatus::PendingToClose
+        );
     }
 }

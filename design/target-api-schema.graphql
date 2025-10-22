@@ -5,7 +5,7 @@ schema {
 
 """Account information containing balances and multiaddresses"""
 type Account {
-  "wxHOPR balance associated with the on-chain address (returns zero if no balance record exists)"
+  "The wxHOPR balance associated with the on-chain address (returns zero if no balance record exists)"
   accountHoprBalance: TokenValueString!
   "Native balance associated with the on-chain address (returns zero if no balance record exists)"
   accountNativeBalance: TokenValueString!
@@ -19,7 +19,7 @@ type Account {
   packetKey: String!
   "HOPR Safe contract address to which the account is linked"
   safeAddress: String
-  "wxHOPR balance associated with the linked Safe contract address"
+  "The wxHOPR balance associated with the linked Safe contract address"
   safeHoprBalance: TokenValueString
   "Native balance associated with the linked Safe contract address"
   safeNativeBalance: TokenValueString
