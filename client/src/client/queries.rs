@@ -4,9 +4,9 @@ use futures::stream::BoxStream;
 
 use super::BlokliClient;
 use crate::api::{types::*, *};
-use crate::errors::{BlokliClientError, BlokliClientErrorKind};
+use crate::errors::BlokliClientErrorKind;
 
-fn response_to_data<Q>(response: GraphQlResponse<Q>) -> Result<Option<Q>, BlokliClientError> {
+fn response_to_data<Q>(response: GraphQlResponse<Q>) -> Result<Option<Q>> {
     match (response.data, response.errors) {
         (Some(data), None) => Ok(Some(data)),
         (Some(data), Some(errors)) => {
@@ -26,7 +26,7 @@ fn response_to_data<Q>(response: GraphQlResponse<Q>) -> Result<Option<Q>, Blokli
 
 #[async_trait::async_trait]
 impl BlokliQueryClient for BlokliClient {
-    async fn count_accounts(&self, selector: AccountSelector) -> Result<u32, BlokliClientError> {
+    async fn count_accounts(&self, selector: AccountSelector) -> Result<u32> {
         let resp = self
             .build_query(QueryAccountCount::build(AccountVariables::from(selector)))?
             .await?;
@@ -36,10 +36,7 @@ impl BlokliQueryClient for BlokliClient {
             .map(|data| data.account_count as u32)
     }
 
-    async fn query_accounts<'a>(
-        &'a self,
-        selector: AccountSelector,
-    ) -> Result<BoxStream<'a, Account>, BlokliClientError> {
+    async fn query_accounts<'a>(&'a self, selector: AccountSelector) -> Result<BoxStream<'a, Account>> {
         let resp = self
             .build_query(QueryAccounts::build(AccountVariables::from(selector)))?
             .await?;
@@ -49,10 +46,7 @@ impl BlokliQueryClient for BlokliClient {
         Ok(futures::stream::iter(accounts).boxed())
     }
 
-    async fn query_channels<'a>(
-        &'a self,
-        selector: ChannelSelector,
-    ) -> Result<BoxStream<'a, Channel>, BlokliClientError> {
+    async fn query_channels<'a>(&'a self, selector: ChannelSelector) -> Result<BoxStream<'a, Channel>> {
         let resp = self
             .build_query(QueryChannels::build(ChannelsVariables::from(selector)))?
             .await?;
@@ -62,7 +56,7 @@ impl BlokliQueryClient for BlokliClient {
         Ok(futures::stream::iter(channels).boxed())
     }
 
-    async fn query_chain_info(&self) -> Result<ChainInfo, BlokliClientError> {
+    async fn query_chain_info(&self) -> Result<ChainInfo> {
         let resp = self.build_query(QueryChainInfo::build(()))?.await?;
 
         response_to_data(resp)
@@ -70,7 +64,7 @@ impl BlokliQueryClient for BlokliClient {
             .map(|data| data.chain_info)
     }
 
-    async fn query_version(&self) -> Result<String, BlokliClientError> {
+    async fn query_version(&self) -> Result<String> {
         let resp = self.build_query(QueryVersion::build(()))?.await?;
 
         response_to_data(resp)
@@ -78,7 +72,7 @@ impl BlokliQueryClient for BlokliClient {
             .map(|data| data.version)
     }
 
-    async fn query_health(&self) -> Result<String, BlokliClientError> {
+    async fn query_health(&self) -> Result<String> {
         let resp = self.build_query(QueryHealth::build(()))?.await?;
 
         response_to_data(resp)
