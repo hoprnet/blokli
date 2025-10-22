@@ -1,0 +1,26 @@
+{
+  "rules": [
+    "arguments-have-descriptions",
+    "defined-types-are-used",
+    "deprecations-have-a-reason",
+    "enum-values-have-descriptions",
+    "enum-values-sorted-alphabetically",
+    "fields-have-descriptions",
+    "input-object-values-have-descriptions",
+    "types-have-descriptions",
+    "descriptions-are-capitalized",
+    "enum-values-all-caps",
+    "fields-are-camel-cased",
+    "input-object-fields-sorted-alphabetically",
+    "input-object-values-are-camel-cased",
+    "interface-fields-sorted-alphabetically",
+    "type-fields-sorted-alphabetically",
+    "types-are-capitalized"
+  ],
+  "schemaPaths": ["design/*.graphql"],
+  "rulesOptions": {
+    "enum-values-sorted-alphabetically": {
+      "sortOrder": "lexicographical"
+    }
+  }
+}
