@@ -1,7 +1,7 @@
 //! GraphQL query root and resolver implementations
 
 use async_graphql::{Context, Object, Result};
-use blokli_api_types::{Account, ChainInfo, Channel, HoprBalance, NativeBalance, TokenValueString};
+use blokli_api_types::{Account, ChainInfo, Channel, Hex32, HoprBalance, NativeBalance, TokenValueString};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::{
@@ -313,17 +313,17 @@ impl QueryRoot {
         let channel_dst = chain_info
             .channels_dst
             .as_ref()
-            .map(|bytes| format!("0x{}", hex::encode(bytes)));
+            .map(|bytes| Hex32(format!("0x{}", hex::encode(bytes))));
 
         let ledger_dst = chain_info
             .ledger_dst
             .as_ref()
-            .map(|bytes| format!("0x{}", hex::encode(bytes)));
+            .map(|bytes| Hex32(format!("0x{}", hex::encode(bytes))));
 
         let safe_registry_dst = chain_info
             .safe_registry_dst
             .as_ref()
-            .map(|bytes| format!("0x{}", hex::encode(bytes)));
+            .map(|bytes| Hex32(format!("0x{}", hex::encode(bytes))));
 
         // Channel closure grace period from database (will be None until indexer populates it)
         let channel_closure_grace_period = None; // TODO: Get from chain_info model when field is available

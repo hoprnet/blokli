@@ -267,7 +267,9 @@ impl BlokliDbInfoOperations for BlokliDb {
                             ticket_price: model.ticket_price.map(HoprBalance::from_be_bytes),
                             minimum_incoming_ticket_winning_prob: (model.min_incoming_ticket_win_prob as f64)
                                 .try_into()?,
-                            channel_closure_grace_period: model.channel_closure_grace_period.map(|p| p as u64),
+                            channel_closure_grace_period: model
+                                .channel_closure_grace_period
+                                .and_then(|p| u64::try_from(p).ok()),
                         })
                     })
                 })

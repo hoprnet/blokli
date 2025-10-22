@@ -273,6 +273,7 @@ enum NodeInfo {
 }
 
 #[derive(DeriveIden)]
+#[allow(dead_code)]
 enum ChainInfo {
     Table,
     Id,
