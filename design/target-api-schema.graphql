@@ -3,9 +3,9 @@ Human-readable token representation.
 Format: value [wei] token
 Examples:
   10 wei wxHOPR
-	10 wxHOPR
-	10.1 wxHOPR
-	.1 wxHOPR
+  10 wxHOPR
+  10.1 wxHOPR
+  .1 wxHOPR
 """
 scalar TokenValueString
 
@@ -35,10 +35,13 @@ type ChainInfo {
 	minTicketWinningProbability: Float!
 }
 
+"""
+Token types supported by the HOPR network
+"""
 enum Token {
-	"HOPR token"
+	"HOPR token (wxHOPR)"
 	HOPR
-	"Native token"
+	"Native blockchain token (e.g., xDAI on Gnosis Chain)"
 	NATIVE
 }
 
@@ -172,7 +175,26 @@ type QueryRoot {
 		destinationKeyId: Int,
 		"Filter by concrete channel ID (hexadecimal format)"
 		concreteChannelId: String
+		"Filter by channel status"
+		status: ChannelStatus
 	): [Channel!]!
+	"""
+	Count channels matching optional filters
+
+	If no filters are provided, returns total channels count.
+	Filters can be combined to narrow results.
+	"""
+	channelCount(
+		"Filter by source node keyid"
+		sourceKeyId: Int,
+		"Filter by destination node keyid"
+		destinationKeyId: Int,
+		"Filter by concrete channel ID (hexadecimal format)"
+		concreteChannelId: String,
+		"Filter by channel status"
+		status: ChannelStatus
+	): Int!
+
 
 	"""
 	Retrieve the opened channels graph
@@ -255,8 +277,18 @@ type SubscriptionRoot {
 		"Filter by destination node keyid"
 		destinationKeyId: Int,
 		"Filter by concrete channel ID (hexadecimal format)"
-		concreteChannelId: String
+		concreteChannelId: String,
+		"Filter by channel status"
+		status: ChannelStatus
 	): Channel!
+
+	"""
+	Subscribe to a full stream of existing channels and channel updates.
+
+	Provides channel information on all open channels along with the accounts that participate in those channels.
+	This provides a complete view of the active payment channel network.
+	"""
+	openedChannelGraphUpdated: OpenedChannelsGraph!
 
 	"""
 	Subscribe to real-time updates of account information
