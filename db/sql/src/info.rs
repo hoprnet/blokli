@@ -357,13 +357,20 @@ impl BlokliDbInfoOperations for BlokliDb {
     }
 
     async fn set_channel_closure_grace_period<'a>(&'a self, tx: OptTx<'a>, period_seconds: u64) -> Result<()> {
+        let period_i64 = i64::try_from(period_seconds).map_err(|_| {
+            DbSqlError::InvalidData(format!(
+                "channel_closure_grace_period {} exceeds i64::MAX",
+                period_seconds
+            ))
+        })?;
+
         self.nest_transaction(tx)
             .await?
             .perform(|tx| {
                 Box::pin(async move {
                     chain_info::ActiveModel {
                         id: Set(SINGULAR_TABLE_FIXED_ID),
-                        channel_closure_grace_period: Set(Some(period_seconds as i64)),
+                        channel_closure_grace_period: Set(Some(period_i64)),
                         ..Default::default()
                     }
                     .update(tx.as_ref())
