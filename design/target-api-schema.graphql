@@ -19,10 +19,8 @@ type Account {
   packetKey: String!
   "HOPR Safe contract address to which the account is linked"
   safeAddress: String
-  "The wxHOPR balance associated with the linked Safe contract address"
-  safeHoprBalance: TokenValueString
-  "Native balance associated with the linked Safe contract address"
-  safeNativeBalance: TokenValueString
+   "HOPR Safe contract address transaction count"
+  safeTransactionCount: UInt64 
 }
 
 """Blockchain and HOPR network information"""
@@ -241,26 +239,6 @@ type SubscriptionRoot {
     "Filter by channel status"
     status: ChannelStatus
   ): Channel!
-  """
-  Subscribe to real-time updates of HOPR balances for a specific address
-  
-  Provides updates whenever there is a change in the HOPR token balance for the specified account.
-  Updates are sent immediately when balance changes occur on-chain.
-  """
-  hoprBalanceUpdated(
-    "On-chain address to monitor for balance changes (hexadecimal format)"
-    address: String!
-  ): HoprBalance!
-  """
-  Subscribe to real-time updates of native balances for a specific address
-  
-  Provides updates whenever there is a change in the native token balance for the specified account.
-  Updates are sent immediately when balance changes occur on-chain.
-  """
-  nativeBalanceUpdated(
-    "On-chain address to monitor for balance changes (hexadecimal format)"
-    address: String!
-  ): NativeBalance!
   """
   Subscribe to a full stream of existing channels and channel updates.
   
