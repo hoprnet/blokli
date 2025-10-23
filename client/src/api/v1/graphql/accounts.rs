@@ -1,6 +1,7 @@
-use super::TokenValueString;
 use super::schema;
+use super::{CountResult, MissingFilterError, QueryFailedError, Uint64};
 use crate::api::v1::AccountSelector;
+use crate::errors::{BlokliClientError, ErrorKind};
 use hex::ToHex;
 
 #[derive(cynic::QueryVariables, Default)]
@@ -38,7 +39,7 @@ impl From<Option<AccountSelector>> for AccountVariables {
 #[cynic(graphql_type = "QueryRoot", variables = "AccountVariables")]
 pub struct QueryAccounts {
     #[arguments(keyid: $keyid, packetKey: $packet_key, chainKey: $chain_key)]
-    pub accounts: Vec<Account>,
+    pub accounts: AccountsResult,
 }
 
 #[derive(cynic::QueryFragment, Debug)]
@@ -49,68 +50,43 @@ pub struct SubscribeAccounts {
 }
 
 #[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "QueryRoot", variables = "AccountVariables")]
+pub struct QueryAccountCount {
+    pub account_count: CountResult,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+pub struct AccountsList {
+    pub __typename: String,
+    pub accounts: Vec<Account>,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
 pub struct Account {
-    pub account_hopr_balance: TokenValueString,
-    pub account_native_balance: TokenValueString,
     pub chain_key: String,
     pub keyid: i32,
     pub multi_addresses: Vec<String>,
     pub packet_key: String,
     pub safe_address: Option<String>,
-    pub safe_hopr_balance: Option<TokenValueString>,
-    pub safe_native_balance: Option<TokenValueString>,
+    pub safe_transaction_count: Option<Uint64>,
 }
 
-// Account count query
-#[derive(cynic::QueryFragment, Debug)]
-#[cynic(graphql_type = "QueryRoot", variables = "AccountVariables")]
-pub struct QueryAccountCount {
-    #[arguments(keyid: $keyid, packetKey: $packet_key, chainKey: $chain_key)]
-    pub account_count: i32,
+#[derive(cynic::InlineFragments, Debug)]
+pub enum AccountsResult {
+    AccountsList(AccountsList),
+    MissingFilterError(MissingFilterError),
+    QueryFailedError(QueryFailedError),
+    #[cynic(fallback)]
+    Unknown,
 }
 
-// HOPR balance query
-#[derive(cynic::QueryVariables)]
-pub struct BalanceVariables {
-    pub address: String,
-}
-
-#[derive(cynic::QueryFragment, Debug)]
-#[cynic(graphql_type = "QueryRoot", variables = "BalanceVariables")]
-pub struct QueryAccountHoprBalance {
-    #[arguments(address: $address)]
-    pub hopr_balance: Option<HoprBalance>,
-}
-
-#[derive(cynic::QueryFragment, Debug)]
-#[cynic(graphql_type = "SubscriptionRoot", variables = "BalanceVariables")]
-pub struct SubscribeAccountHoprBalance {
-    #[arguments(address: $address)]
-    pub hopr_balance_updated: Option<HoprBalance>,
-}
-
-#[derive(cynic::QueryFragment, Debug)]
-pub struct HoprBalance {
-    pub address: String,
-    pub balance: TokenValueString,
-}
-
-#[derive(cynic::QueryFragment, Debug)]
-#[cynic(graphql_type = "QueryRoot", variables = "BalanceVariables")]
-pub struct QueryAccountNativeBalance {
-    #[arguments(address: $address)]
-    pub native_balance: Option<NativeBalance>,
-}
-
-#[derive(cynic::QueryFragment, Debug)]
-#[cynic(graphql_type = "SubscriptionRoot", variables = "BalanceVariables")]
-pub struct SubscribeAccountNativeBalance {
-    #[arguments(address: $address)]
-    pub native_balance_updated: Option<NativeBalance>,
-}
-
-#[derive(cynic::QueryFragment, Debug)]
-pub struct NativeBalance {
-    pub address: String,
-    pub balance: TokenValueString,
+impl From<AccountsResult> for Result<Vec<Account>, BlokliClientError> {
+    fn from(value: AccountsResult) -> Self {
+        match value {
+            AccountsResult::AccountsList(list) => Ok(list.accounts),
+            AccountsResult::MissingFilterError(e) => Err(e.into()),
+            AccountsResult::QueryFailedError(e) => Err(e.into()),
+            AccountsResult::Unknown => Err(ErrorKind::NoData.into()),
+        }
+    }
 }

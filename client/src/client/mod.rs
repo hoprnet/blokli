@@ -46,6 +46,19 @@ impl BlokliClient {
         Ok(base.join("graphql").map_err(ErrorKind::from)?)
     }
 
+    fn build_reqwest_client(&self) -> Result<reqwest::Client, BlokliClientError> {
+        Ok(reqwest::Client::builder()
+            .timeout(self.cfg.timeout)
+            .brotli(true)
+            .gzip(true)
+            .zstd(true)
+            .deflate(true)
+            .user_agent(format!("blokli-client/{}-{}", env!("CARGO_PKG_VERSION"), VERSION))
+            .redirect(reqwest::redirect::Policy::limited(REDIRECT_LIMIT))
+            .build()
+            .map_err(ErrorKind::from)?)
+    }
+
     fn build_subscription_stream<Q, V>(
         &self,
         op: cynic::StreamingOperation<Q, V>,
@@ -98,21 +111,30 @@ impl BlokliClient {
     {
         use cynic::http::ReqwestExt;
 
-        let client = reqwest::Client::builder()
-            .timeout(self.cfg.timeout)
-            .brotli(true)
-            .gzip(true)
-            .zstd(true)
-            .deflate(true)
-            .user_agent(format!("blokli-client/{}-{}", env!("CARGO_PKG_VERSION"), VERSION))
-            .redirect(reqwest::redirect::Policy::limited(REDIRECT_LIMIT))
-            .build()
-            .map_err(ErrorKind::from)?;
+        let client = self.build_reqwest_client()?;
 
         Ok(client
             .post(self.graphql_url()?)
             .run_graphql(op)
             .into_future()
             .map_err(|e| ErrorKind::from(e).into()))
+    }
+}
+
+pub(crate) fn response_to_data<Q>(response: GraphQlResponse<Q>) -> crate::api::Result<Option<Q>> {
+    match (response.data, response.errors) {
+        (Some(data), None) => Ok(Some(data)),
+        (Some(data), Some(errors)) => {
+            tracing::error!(?errors, "operation succeeded but errors were encountered");
+            Ok(Some(data))
+        }
+        (None, Some(errors)) => {
+            if !errors.is_empty() {
+                Err(ErrorKind::GraphQLError(errors.first().cloned().unwrap()).into())
+            } else {
+                Ok(None)
+            }
+        }
+        (None, None) => Ok(None),
     }
 }

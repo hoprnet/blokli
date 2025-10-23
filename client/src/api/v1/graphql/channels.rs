@@ -1,5 +1,5 @@
 use super::schema;
-use super::{ChannelStatus, DateTime, TokenValueString, Uint64};
+use super::{ChannelStatus, CountResult, DateTime, MissingFilterError, QueryFailedError, TokenValueString, Uint64};
 use crate::api::v1::ChannelSelector;
 use hex::ToHex;
 
@@ -44,7 +44,7 @@ impl From<Option<ChannelSelector>> for ChannelsVariables {
 #[cynic(graphql_type = "QueryRoot", variables = "ChannelsVariables")]
 pub struct QueryChannels {
     #[arguments(concreteChannelId: $concrete_channel_id, destinationKeyId: $destination_key_id, sourceKeyId: $source_key_id)]
-    pub channels: Vec<Channel>,
+    pub channels: ChannelsResult,
 }
 
 #[derive(cynic::QueryFragment, Debug)]
@@ -52,6 +52,19 @@ pub struct QueryChannels {
 pub struct SubscribeChannels {
     #[arguments(concreteChannelId: $concrete_channel_id, destinationKeyId: $destination_key_id, sourceKeyId: $source_key_id)]
     pub channel_updated: Channel,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "QueryRoot", variables = "ChannelsVariables")]
+pub struct QueryChannelCount {
+    #[arguments(concreteChannelId: $concrete_channel_id, destinationKeyId: $destination_key_id, sourceKeyId: $source_key_id)]
+    pub channel_count: CountResult,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+pub struct ChannelsList {
+    pub __typename: String,
+    pub channels: Vec<Channel>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]
@@ -64,4 +77,24 @@ pub struct Channel {
     pub source: i32,
     pub status: ChannelStatus,
     pub ticket_index: Uint64,
+}
+
+#[derive(cynic::InlineFragments, Debug)]
+pub enum ChannelsResult {
+    ChannelsList(ChannelsList),
+    MissingFilterError(MissingFilterError),
+    QueryFailedError(QueryFailedError),
+    #[cynic(fallback)]
+    Unknown,
+}
+
+impl From<ChannelsResult> for Result<Vec<Channel>, crate::errors::BlokliClientError> {
+    fn from(value: ChannelsResult) -> Self {
+        match value {
+            ChannelsResult::ChannelsList(list) => Ok(list.channels),
+            ChannelsResult::MissingFilterError(e) => Err(e.into()),
+            ChannelsResult::QueryFailedError(e) => Err(e.into()),
+            ChannelsResult::Unknown => Err(crate::errors::ErrorKind::NoData.into()),
+        }
+    }
 }

@@ -25,8 +25,16 @@ impl std::error::Error for BlokliClientError {
 /// Error kinds for the Blokli client.
 #[derive(Debug, thiserror::Error)]
 pub enum ErrorKind {
-    #[error("no data returned from server unexpectedly")]
+    #[error("no data returned from blokli unexpectedly")]
     NoData,
+    #[error("blokli: {kind} ({code}): {message}")]
+    BlokliError {
+        kind: &'static str,
+        code: String,
+        message: String,
+    },
+    #[error("data returned from blokli was unparseable")]
+    ParseError,
     #[error(transparent)]
     Subscription(#[from] eventsource_client::Error),
     #[error(transparent)]

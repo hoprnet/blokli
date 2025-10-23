@@ -2,20 +2,24 @@ mod graphql;
 pub mod types {
     pub use super::graphql::{
         TokenValueString,
-        accounts::{Account, HoprBalance, NativeBalance},
+        accounts::Account,
+        balances::{HoprBalance, NativeBalance},
         channels::Channel,
         info::ChainInfo,
+        txs::{Transaction, TransactionStatus},
     };
 }
 
 pub(crate) mod internal {
     pub use super::graphql::{
-        accounts::{
-            AccountVariables, BalanceVariables, QueryAccountCount, QueryAccountHoprBalance, QueryAccountNativeBalance,
-            QueryAccounts, SubscribeAccountHoprBalance, SubscribeAccountNativeBalance, SubscribeAccounts,
-        },
-        channels::{ChannelsVariables, QueryChannels, SubscribeChannels},
+        accounts::{AccountVariables, QueryAccountCount, QueryAccounts, SubscribeAccounts},
+        balances::{BalanceVariables, QueryHoprBalance, QueryNativeBalance},
+        channels::{ChannelsVariables, QueryChannelCount, QueryChannels, SubscribeChannels},
         info::{QueryChainInfo, QueryHealth, QueryVersion},
+        txs::{
+            ConfirmTransactionVariables, MutateConfirmTransaction, MutateSendTransaction, MutateTrackTransaction,
+            QueryTransaction, SendTransactionVariables, SubscribeTransaction, TransactionsVariables,
+        },
     };
 }
 
@@ -24,6 +28,7 @@ pub type PacketKey = [u8; 32];
 pub type ChannelId = [u8; 32];
 pub type TxReceipt = [u8; 32];
 pub type KeyId = u32;
+pub type TxId = String;
 
 /// Allows selecting [Accounts](types::Account) by their key id, address or packet key.
 #[derive(Debug, Clone)]
@@ -62,8 +67,11 @@ pub trait BlokliQueryClient {
     async fn query_native_balance(&self, address: &ChainAddress) -> Result<types::NativeBalance>;
     /// Queries the token balance of the given account.
     async fn query_token_balance(&self, address: &ChainAddress) -> Result<types::HoprBalance>;
+    /// Counts the number of accounts matching the given selector.
+    async fn count_channels(&self, selector: ChannelSelector) -> Result<u32>;
     /// Queries the channels matching the given selector.
     async fn query_channels(&self, selector: ChannelSelector) -> Result<Vec<types::Channel>>;
+    async fn query_transaction_status(&self, tx_id: TxId) -> Result<types::Transaction>;
     /// Queries the chain info.
     async fn query_chain_info(&self) -> Result<types::ChainInfo>;
     /// Queries the version of the Blokli API.
@@ -74,16 +82,6 @@ pub trait BlokliQueryClient {
 
 /// Trait defining subscriptions to Blokli API.
 pub trait BlokliSubscriptionClient {
-    /// Subscribes to native balance updates for the given account address.
-    fn subscribe_native_balance(
-        &self,
-        address: &ChainAddress,
-    ) -> Result<impl futures::Stream<Item = Result<types::NativeBalance>>>;
-    /// Subscribes to token balance updates for the given account address
-    fn subscribe_token_balance(
-        &self,
-        address: &ChainAddress,
-    ) -> Result<impl futures::Stream<Item = Result<types::HoprBalance>>>;
     /// Subscribes to channel updates optionally matching the given [`selector`](ChannelSelector).
     ///
     /// If no selector is given, subscribes to all channel updates.
@@ -98,6 +96,12 @@ pub trait BlokliSubscriptionClient {
         &self,
         selector: Option<AccountSelector>,
     ) -> Result<impl futures::Stream<Item = Result<types::Account>>>;
+
+    /// Subscribes to transaction status changes given the `tx_id` previously returned
+    /// by [`BlokliTransactionClient::submit_tracked_transaction`].
+    ///
+    /// The stream ends after the [`TransactionStatus::Confirmed`](types::TransactionStatus::Confirmed) status has been reached.
+    fn subscribe_transaction(&self, tx_id: TxId) -> Result<impl futures::Stream<Item = Result<types::Transaction>>>;
 }
 
 /// Trait defining Blokli API for signed transaction submission to the chain.
@@ -107,7 +111,7 @@ pub trait BlokliTransactionClient {
     async fn submit_signed_transaction(&self, signed_tx: &[u8]) -> Result<TxReceipt>;
     /// Submits a signed transaction to the chain and returns an ID that can be used to track the transaction
     /// status via subscription or query.
-    async fn submit_tracked_transaction(&self, signed_tx: &[u8]) -> Result<(TxReceipt, u64)>;
+    async fn submit_tracked_transaction(&self, signed_tx: &[u8]) -> Result<TxId>;
     /// Submits a signed transaction to the chain and waits for the given number of confirmations.
     async fn submit_and_confirm_transaction(&self, signed_tx: &[u8], num_confirmations: usize) -> Result<TxReceipt>;
 }

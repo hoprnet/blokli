@@ -1,27 +1,9 @@
-use cynic::{GraphQlResponse, QueryBuilder};
+use cynic::QueryBuilder;
 use hex::ToHex;
 
-use super::BlokliClient;
+use super::{BlokliClient, response_to_data};
 use crate::api::{internal::*, types::*, *};
-use crate::errors::ErrorKind;
-
-fn response_to_data<Q>(response: GraphQlResponse<Q>) -> Result<Option<Q>> {
-    match (response.data, response.errors) {
-        (Some(data), None) => Ok(Some(data)),
-        (Some(data), Some(errors)) => {
-            tracing::error!(?errors, "operation succeeded but errors were encountered");
-            Ok(Some(data))
-        }
-        (None, Some(errors)) => {
-            if !errors.is_empty() {
-                Err(ErrorKind::GraphQLError(errors.first().cloned().unwrap()).into())
-            } else {
-                Ok(None)
-            }
-        }
-        (None, None) => Ok(None),
-    }
-}
+use crate::errors::{BlokliClientError, ErrorKind};
 
 #[async_trait::async_trait]
 impl BlokliQueryClient for BlokliClient {
@@ -31,9 +13,11 @@ impl BlokliQueryClient for BlokliClient {
             .build_query(QueryAccountCount::build(AccountVariables::from(selector)))?
             .await?;
 
-        response_to_data(resp)
-            .and_then(|data| data.ok_or(ErrorKind::NoData.into()))
-            .map(|data| data.account_count as u32)
+        response_to_data(resp).and_then(|data| {
+            data.ok_or::<BlokliClientError>(ErrorKind::NoData.into())?
+                .account_count
+                .into()
+        })
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
@@ -42,29 +26,53 @@ impl BlokliQueryClient for BlokliClient {
             .build_query(QueryAccounts::build(AccountVariables::from(selector)))?
             .await?;
 
-        response_to_data(resp).map(|data| data.map(|data| data.accounts).unwrap_or_default())
+        response_to_data(resp).and_then(|data| {
+            data.ok_or::<BlokliClientError>(ErrorKind::NoData.into())?
+                .accounts
+                .into()
+        })
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(address = hex::encode(address)))]
     async fn query_native_balance(&self, address: &ChainAddress) -> Result<NativeBalance> {
         let resp = self
-            .build_query(QueryAccountNativeBalance::build(BalanceVariables {
+            .build_query(QueryNativeBalance::build(BalanceVariables {
                 address: address.encode_hex(),
             }))?
             .await?;
 
-        response_to_data(resp).and_then(|data| data.and_then(|v| v.native_balance).ok_or(ErrorKind::NoData.into()))
+        response_to_data(resp)?
+            .ok_or::<BlokliClientError>(ErrorKind::NoData.into())?
+            .native_balance
+            .ok_or::<BlokliClientError>(ErrorKind::NoData.into())
+            .and_then(|res| res.into())
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(address = hex::encode(address)))]
     async fn query_token_balance(&self, address: &ChainAddress) -> Result<HoprBalance> {
         let resp = self
-            .build_query(QueryAccountHoprBalance::build(BalanceVariables {
+            .build_query(QueryHoprBalance::build(BalanceVariables {
                 address: address.encode_hex(),
             }))?
             .await?;
 
-        response_to_data(resp).and_then(|data| data.and_then(|v| v.hopr_balance).ok_or(ErrorKind::NoData.into()))
+        response_to_data(resp)?
+            .ok_or::<BlokliClientError>(ErrorKind::NoData.into())?
+            .hopr_balance
+            .ok_or::<BlokliClientError>(ErrorKind::NoData.into())
+            .and_then(|res| res.into())
+    }
+
+    async fn count_channels(&self, selector: ChannelSelector) -> Result<u32> {
+        let resp = self
+            .build_query(QueryChannelCount::build(ChannelsVariables::from(selector)))?
+            .await?;
+
+        response_to_data(resp).and_then(|data| {
+            data.ok_or::<BlokliClientError>(ErrorKind::NoData.into())?
+                .channel_count
+                .into()
+        })
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
@@ -73,16 +81,34 @@ impl BlokliQueryClient for BlokliClient {
             .build_query(QueryChannels::build(ChannelsVariables::from(selector)))?
             .await?;
 
-        response_to_data(resp).map(|data| data.map(|data| data.channels).unwrap_or_default())
+        response_to_data(resp).and_then(|data| {
+            data.ok_or::<BlokliClientError>(ErrorKind::NoData.into())?
+                .channels
+                .into()
+        })
+    }
+
+    async fn query_transaction_status(&self, tx_id: TxId) -> Result<Transaction> {
+        let resp = self
+            .build_query(QueryTransaction::build(TransactionsVariables { id: tx_id.into() }))?
+            .await?;
+
+        response_to_data(resp)?
+            .ok_or::<BlokliClientError>(ErrorKind::NoData.into())?
+            .transaction
+            .ok_or::<BlokliClientError>(ErrorKind::NoData.into())?
+            .into()
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn query_chain_info(&self) -> Result<ChainInfo> {
         let resp = self.build_query(QueryChainInfo::build(()))?.await?;
 
-        response_to_data(resp)
-            .and_then(|data| data.ok_or(ErrorKind::NoData.into()))
-            .map(|data| data.chain_info)
+        response_to_data(resp).and_then(|data| {
+            data.ok_or::<BlokliClientError>(ErrorKind::NoData.into())?
+                .chain_info
+                .into()
+        })
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
