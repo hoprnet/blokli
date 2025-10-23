@@ -24,6 +24,7 @@ fn response_to_data<Q>(response: GraphQlResponse<Q>) -> Result<Option<Q>> {
 
 #[async_trait::async_trait]
 impl BlokliQueryClient for BlokliClient {
+    #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
     async fn count_accounts(&self, selector: AccountSelector) -> Result<u32> {
         let resp = self
             .build_query(QueryAccountCount::build(AccountVariables::from(selector)))?
@@ -34,6 +35,7 @@ impl BlokliQueryClient for BlokliClient {
             .map(|data| data.account_count as u32)
     }
 
+    #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
     async fn query_accounts(&self, selector: AccountSelector) -> Result<Vec<Account>> {
         let resp = self
             .build_query(QueryAccounts::build(AccountVariables::from(selector)))?
@@ -42,6 +44,7 @@ impl BlokliQueryClient for BlokliClient {
         response_to_data(resp).map(|data| data.map(|data| data.accounts).unwrap_or_default())
     }
 
+    #[tracing::instrument(level = "debug", skip(self), fields(address = hex::encode(address)))]
     async fn query_native_balance(&self, address: &ChainAddress) -> Result<NativeBalance> {
         let resp = self
             .build_query(QueryAccountNativeBalance::build(BalanceVariables {
@@ -52,6 +55,7 @@ impl BlokliQueryClient for BlokliClient {
         response_to_data(resp).and_then(|data| data.and_then(|v| v.native_balance).ok_or(ErrorKind::NoData.into()))
     }
 
+    #[tracing::instrument(level = "debug", skip(self), fields(address = hex::encode(address)))]
     async fn query_token_balance(&self, address: &ChainAddress) -> Result<HoprBalance> {
         let resp = self
             .build_query(QueryAccountHoprBalance::build(BalanceVariables {
@@ -62,6 +66,7 @@ impl BlokliQueryClient for BlokliClient {
         response_to_data(resp).and_then(|data| data.and_then(|v| v.hopr_balance).ok_or(ErrorKind::NoData.into()))
     }
 
+    #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
     async fn query_channels(&self, selector: ChannelSelector) -> Result<Vec<Channel>> {
         let resp = self
             .build_query(QueryChannels::build(ChannelsVariables::from(selector)))?
@@ -70,6 +75,7 @@ impl BlokliQueryClient for BlokliClient {
         response_to_data(resp).map(|data| data.map(|data| data.channels).unwrap_or_default())
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn query_chain_info(&self) -> Result<ChainInfo> {
         let resp = self.build_query(QueryChainInfo::build(()))?.await?;
 
@@ -78,6 +84,7 @@ impl BlokliQueryClient for BlokliClient {
             .map(|data| data.chain_info)
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn query_version(&self) -> Result<String> {
         let resp = self.build_query(QueryVersion::build(()))?.await?;
 
@@ -86,6 +93,7 @@ impl BlokliQueryClient for BlokliClient {
             .map(|data| data.version)
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn query_health(&self) -> Result<String> {
         let resp = self.build_query(QueryHealth::build(()))?.await?;
 

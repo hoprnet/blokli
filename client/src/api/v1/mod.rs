@@ -26,12 +26,14 @@ pub type PacketKey = [u8; 32];
 pub type ChannelId = [u8; 32];
 pub type KeyId = u32;
 
+#[derive(Debug, Clone)]
 pub enum AccountSelector {
     KeyId(KeyId),
     Address(ChainAddress),
     PacketKey(PacketKey),
 }
 
+#[derive(Debug, Clone)]
 pub enum ChannelSelector {
     ChannelId(ChannelId),
     DestinationKeyId(KeyId),

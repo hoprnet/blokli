@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 description = "Client connector to Blokli"
 homepage = "https://hoprnet.org/"
-repository = "https://github.com/hoprnet/hoprnet"
+repository = "https://github.com/hoprnet/blokli"
 license = "GPL-3.0-only"
 
 [dependencies]
@@ -13,7 +13,7 @@ cynic = { workspace = true, features = ["http-reqwest"] }
 eventsource-client = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
-reqwest = { workspace = true }
+reqwest = { workspace = true, features = ["brotli", "deflate", "gzip", "json", "zstd"] }
 serde_json = { workspace = true }
 smart-default = { workspace = true }
 thiserror = { workspace = true }

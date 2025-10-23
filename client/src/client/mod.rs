@@ -1,28 +1,34 @@
 mod queries;
 mod subscriptions;
 
-use crate::errors::{BlokliClientError, ErrorKind};
 use cynic::GraphQlResponse;
 use futures::{TryFutureExt, TryStreamExt};
 use url::Url;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+use crate::{
+    api::API_VERSION,
+    errors::{BlokliClientError, ErrorKind},
+};
+
+#[derive(Clone, Debug, PartialEq, Eq, smart_default::SmartDefault)]
 pub struct BlokliClientConfig {
-    pub url: Url,
+    #[default(std::time::Duration::from_secs(10))]
     pub timeout: std::time::Duration,
 }
 
+#[derive(Clone, Debug)]
 pub struct BlokliClient {
+    base_url: Url,
     cfg: BlokliClientConfig,
 }
 
 impl BlokliClient {
-    pub fn new(cfg: BlokliClientConfig) -> Self {
-        Self { cfg }
+    pub fn new(base_url: Url, cfg: BlokliClientConfig) -> Self {
+        Self { base_url, cfg }
     }
 
-    fn base_url(&self) -> Result<Url, BlokliClientError> {
-        Ok(self.cfg.url.join("graphql").map_err(ErrorKind::from)?)
+    fn graphql_url(&self) -> Result<Url, BlokliClientError> {
+        Ok(self.base_url.join("graphql").map_err(ErrorKind::from)?)
     }
 
     fn build_subscription_stream<Q, V>(
@@ -34,10 +40,11 @@ impl BlokliClient {
         V: cynic::QueryVariables + cynic::serde::Serialize,
     {
         use eventsource_client::Client;
-        let client = eventsource_client::ClientBuilder::for_url(self.base_url()?.as_str())
+        let client = eventsource_client::ClientBuilder::for_url(self.graphql_url()?.as_str())
             .map_err(ErrorKind::from)?
             .connect_timeout(self.cfg.timeout)
             .body(serde_json::to_string(&op).map_err(ErrorKind::from)?)
+            .redirect_limit(3)
             .build();
 
         Ok(client
@@ -71,10 +78,19 @@ impl BlokliClient {
     {
         use cynic::http::ReqwestExt;
 
-        let client = reqwest::Client::builder().build().map_err(ErrorKind::from)?;
+        let client = reqwest::Client::builder()
+            .timeout(self.cfg.timeout)
+            .brotli(true)
+            .gzip(true)
+            .zstd(true)
+            .deflate(true)
+            .user_agent(format!("blokli-client/{}-{}", env!("CARGO_PKG_VERSION"), API_VERSION))
+            .redirect(reqwest::redirect::Policy::limited(3))
+            .build()
+            .map_err(ErrorKind::from)?;
 
         Ok(client
-            .post(self.base_url()?)
+            .post(self.graphql_url()?)
             .run_graphql(op)
             .into_future()
             .map_err(|e| ErrorKind::from(e).into()))

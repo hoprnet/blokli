@@ -6,6 +6,7 @@ use super::BlokliClient;
 use crate::api::{internal::*, types::*, *};
 
 impl BlokliSubscriptionClient for BlokliClient {
+    #[tracing::instrument(level = "debug", skip(self), fields(address = hex::encode(address)))]
     fn subscribe_native_balance(&self, address: &ChainAddress) -> Result<impl Stream<Item = Result<NativeBalance>>> {
         Ok(self
             .build_subscription_stream(SubscribeAccountNativeBalance::build(BalanceVariables {
@@ -14,6 +15,7 @@ impl BlokliSubscriptionClient for BlokliClient {
             .try_filter_map(|item| futures::future::ok(item.native_balance_updated)))
     }
 
+    #[tracing::instrument(level = "debug", skip(self), fields(address = hex::encode(address)))]
     fn subscribe_token_balance(&self, address: &ChainAddress) -> Result<impl Stream<Item = Result<HoprBalance>>> {
         Ok(self
             .build_subscription_stream(SubscribeAccountHoprBalance::build(BalanceVariables {
@@ -22,12 +24,14 @@ impl BlokliSubscriptionClient for BlokliClient {
             .try_filter_map(|item| futures::future::ok(item.hopr_balance_updated)))
     }
 
+    #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
     fn subscribe_channels(&self, selector: Option<ChannelSelector>) -> Result<impl Stream<Item = Result<Channel>>> {
         Ok(self
             .build_subscription_stream(SubscribeChannels::build(ChannelsVariables::from(selector)))?
             .try_filter_map(|item| futures::future::ok(Some(item.channel_updated))))
     }
 
+    #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
     fn subscribe_accounts(&self, selector: Option<AccountSelector>) -> Result<impl Stream<Item = Result<Account>>> {
         Ok(self
             .build_subscription_stream(SubscribeAccounts::build(AccountVariables::from(selector)))?

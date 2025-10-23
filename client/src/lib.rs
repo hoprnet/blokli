@@ -1,5 +1,5 @@
 pub mod api;
 mod client;
-mod errors;
+pub mod errors;
 
-pub use client::BlokliClient;
+pub use client::{BlokliClient, BlokliClientConfig};

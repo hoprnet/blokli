@@ -6,6 +6,7 @@ pub mod info;
 pub(crate) mod schema {}
 
 // https://generator.cynic-rs.dev/
+
 #[derive(cynic::Enum, Clone, Copy, Debug)]
 pub enum ChannelStatus {
     Open,
