@@ -16,6 +16,8 @@ pub struct IndexerData {
     pub ticket_price: Option<HoprBalance>,
     /// Minimum winning probability
     pub minimum_incoming_ticket_winning_prob: WinningProbability,
+    /// Channel closure grace period in seconds
+    pub channel_closure_grace_period: Option<u64>,
 }
 
 impl IndexerData {
