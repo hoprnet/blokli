@@ -5,6 +5,7 @@ pub mod types {
         accounts::Account,
         balances::{HoprBalance, NativeBalance},
         channels::Channel,
+        graph::OpenedChannelsGraphEntry,
         info::ChainInfo,
         txs::{Transaction, TransactionStatus},
     };
@@ -15,6 +16,7 @@ pub(crate) mod internal {
         accounts::{AccountVariables, QueryAccountCount, QueryAccounts, SubscribeAccounts},
         balances::{BalanceVariables, QueryHoprBalance, QueryNativeBalance},
         channels::{ChannelsVariables, QueryChannelCount, QueryChannels, SubscribeChannels},
+        graph::SubscribeGraph,
         info::{QueryChainInfo, QueryHealth, QueryVersion},
         txs::{
             ConfirmTransactionVariables, MutateConfirmTransaction, MutateSendTransaction, MutateTrackTransaction,
@@ -96,7 +98,8 @@ pub trait BlokliSubscriptionClient {
         &self,
         selector: Option<AccountSelector>,
     ) -> Result<impl futures::Stream<Item = Result<types::Account>>>;
-
+    /// Subscribes to updates of the entire channel graph.
+    fn subscribe_graph(&self) -> Result<impl futures::Stream<Item = Result<types::OpenedChannelsGraphEntry>>>;
     /// Subscribes to transaction status changes given the `tx_id` previously returned
     /// by [`BlokliTransactionClient::submit_tracked_transaction`].
     ///

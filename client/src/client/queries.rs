@@ -13,11 +13,7 @@ impl BlokliQueryClient for BlokliClient {
             .build_query(QueryAccountCount::build(AccountVariables::from(selector)))?
             .await?;
 
-        response_to_data(resp).and_then(|data| {
-            data.ok_or::<BlokliClientError>(ErrorKind::NoData.into())?
-                .account_count
-                .into()
-        })
+        response_to_data(resp)?.account_count.into()
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
@@ -26,11 +22,7 @@ impl BlokliQueryClient for BlokliClient {
             .build_query(QueryAccounts::build(AccountVariables::from(selector)))?
             .await?;
 
-        response_to_data(resp).and_then(|data| {
-            data.ok_or::<BlokliClientError>(ErrorKind::NoData.into())?
-                .accounts
-                .into()
-        })
+        response_to_data(resp)?.accounts.into()
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(address = hex::encode(address)))]
@@ -42,7 +34,6 @@ impl BlokliQueryClient for BlokliClient {
             .await?;
 
         response_to_data(resp)?
-            .ok_or::<BlokliClientError>(ErrorKind::NoData.into())?
             .native_balance
             .ok_or::<BlokliClientError>(ErrorKind::NoData.into())
             .and_then(|res| res.into())
@@ -57,22 +48,18 @@ impl BlokliQueryClient for BlokliClient {
             .await?;
 
         response_to_data(resp)?
-            .ok_or::<BlokliClientError>(ErrorKind::NoData.into())?
             .hopr_balance
             .ok_or::<BlokliClientError>(ErrorKind::NoData.into())
             .and_then(|res| res.into())
     }
 
+    #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
     async fn count_channels(&self, selector: ChannelSelector) -> Result<u32> {
         let resp = self
             .build_query(QueryChannelCount::build(ChannelsVariables::from(selector)))?
             .await?;
 
-        response_to_data(resp).and_then(|data| {
-            data.ok_or::<BlokliClientError>(ErrorKind::NoData.into())?
-                .channel_count
-                .into()
-        })
+        response_to_data(resp)?.channel_count.into()
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
@@ -81,20 +68,16 @@ impl BlokliQueryClient for BlokliClient {
             .build_query(QueryChannels::build(ChannelsVariables::from(selector)))?
             .await?;
 
-        response_to_data(resp).and_then(|data| {
-            data.ok_or::<BlokliClientError>(ErrorKind::NoData.into())?
-                .channels
-                .into()
-        })
+        response_to_data(resp)?.channels.into()
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
     async fn query_transaction_status(&self, tx_id: TxId) -> Result<Transaction> {
         let resp = self
             .build_query(QueryTransaction::build(TransactionsVariables { id: tx_id.into() }))?
             .await?;
 
         response_to_data(resp)?
-            .ok_or::<BlokliClientError>(ErrorKind::NoData.into())?
             .transaction
             .ok_or::<BlokliClientError>(ErrorKind::NoData.into())?
             .into()
@@ -104,28 +87,20 @@ impl BlokliQueryClient for BlokliClient {
     async fn query_chain_info(&self) -> Result<ChainInfo> {
         let resp = self.build_query(QueryChainInfo::build(()))?.await?;
 
-        response_to_data(resp).and_then(|data| {
-            data.ok_or::<BlokliClientError>(ErrorKind::NoData.into())?
-                .chain_info
-                .into()
-        })
+        response_to_data(resp)?.chain_info.into()
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn query_version(&self) -> Result<String> {
         let resp = self.build_query(QueryVersion::build(()))?.await?;
 
-        response_to_data(resp)
-            .and_then(|data| data.ok_or(ErrorKind::NoData.into()))
-            .map(|data| data.version)
+        response_to_data(resp).map(|data| data.version)
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn query_health(&self) -> Result<String> {
         let resp = self.build_query(QueryHealth::build(()))?.await?;
 
-        response_to_data(resp)
-            .and_then(|data| data.ok_or(ErrorKind::NoData.into()))
-            .map(|data| data.health)
+        response_to_data(resp).map(|data| data.health)
     }
 }

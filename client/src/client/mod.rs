@@ -121,20 +121,20 @@ impl BlokliClient {
     }
 }
 
-pub(crate) fn response_to_data<Q>(response: GraphQlResponse<Q>) -> crate::api::Result<Option<Q>> {
+pub(crate) fn response_to_data<Q>(response: GraphQlResponse<Q>) -> crate::api::Result<Q> {
     match (response.data, response.errors) {
-        (Some(data), None) => Ok(Some(data)),
+        (Some(data), None) => Ok(data),
         (Some(data), Some(errors)) => {
             tracing::error!(?errors, "operation succeeded but errors were encountered");
-            Ok(Some(data))
+            Ok(data)
         }
         (None, Some(errors)) => {
             if !errors.is_empty() {
                 Err(ErrorKind::GraphQLError(errors.first().cloned().unwrap()).into())
             } else {
-                Ok(None)
+                Err(ErrorKind::NoData.into())
             }
         }
-        (None, None) => Ok(None),
+        (None, None) => Err(ErrorKind::NoData.into()),
     }
 }

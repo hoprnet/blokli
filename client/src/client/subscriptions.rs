@@ -19,6 +19,14 @@ impl BlokliSubscriptionClient for BlokliClient {
             .try_filter_map(|item| futures::future::ok(Some(item.account_updated))))
     }
 
+    #[tracing::instrument(level = "debug", skip(self))]
+    fn subscribe_graph(&self) -> Result<impl Stream<Item = Result<OpenedChannelsGraphEntry>>> {
+        Ok(self
+            .build_subscription_stream(SubscribeGraph::build(()))?
+            .try_filter_map(|item| futures::future::ok(Some(item.opened_channel_graph_updated))))
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
     fn subscribe_transaction(&self, tx_id: TxId) -> Result<impl Stream<Item = Result<Transaction>>> {
         let mut was_confirmed = false;
         Ok(self

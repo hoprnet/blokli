@@ -25,4 +25,7 @@ url = { workspace = true }
 cynic-codegen = { version = "3" }
 
 [dev-dependencies]
+anyhow = { workspace = true }
+httpmock = { version = "0.8.2", features = ["record"] }
 insta = "1"
+tokio = { workspace = true }

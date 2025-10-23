@@ -3,6 +3,7 @@ use crate::errors::ErrorKind;
 pub mod accounts;
 pub mod balances;
 pub mod channels;
+pub mod graph;
 pub mod info;
 pub mod txs;
 
