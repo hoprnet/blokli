@@ -1883,6 +1883,7 @@ dependencies = [
  "cynic-codegen",
  "eventsource-client",
  "futures",
+ "hex",
  "insta",
  "reqwest",
  "serde_json",

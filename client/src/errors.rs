@@ -1,10 +1,10 @@
 use cynic::http::CynicReqwestError;
 
 #[derive(Debug)]
-pub struct BlokliClientError(Box<BlokliClientErrorKind>);
+pub struct BlokliClientError(Box<ErrorKind>);
 
-impl From<BlokliClientErrorKind> for BlokliClientError {
-    fn from(kind: BlokliClientErrorKind) -> Self {
+impl From<ErrorKind> for BlokliClientError {
+    fn from(kind: ErrorKind) -> Self {
         Self(Box::new(kind))
     }
 }
@@ -22,7 +22,7 @@ impl std::error::Error for BlokliClientError {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum BlokliClientErrorKind {
+pub enum ErrorKind {
     #[error("no data returned from server unexpectedly")]
     NoData,
     #[error(transparent)]

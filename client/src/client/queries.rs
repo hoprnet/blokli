@@ -1,8 +1,8 @@
-use cynic::{GraphQlResponse, QueryBuilder};
-
 use super::BlokliClient;
-use crate::api::{types::*, *};
-use crate::errors::BlokliClientErrorKind;
+use crate::api::{internal::*, types::*, *};
+use crate::errors::ErrorKind;
+use cynic::{GraphQlResponse, QueryBuilder};
+use hex::ToHex;
 
 fn response_to_data<Q>(response: GraphQlResponse<Q>) -> Result<Option<Q>> {
     match (response.data, response.errors) {
@@ -13,7 +13,7 @@ fn response_to_data<Q>(response: GraphQlResponse<Q>) -> Result<Option<Q>> {
         }
         (None, Some(errors)) => {
             if !errors.is_empty() {
-                Err(BlokliClientErrorKind::GraphQLError(errors.first().cloned().unwrap()).into())
+                Err(ErrorKind::GraphQLError(errors.first().cloned().unwrap()).into())
             } else {
                 Ok(None)
             }
@@ -30,33 +30,51 @@ impl BlokliQueryClient for BlokliClient {
             .await?;
 
         response_to_data(resp)
-            .and_then(|data| data.ok_or(BlokliClientErrorKind::NoData.into()))
+            .and_then(|data| data.ok_or(ErrorKind::NoData.into()))
             .map(|data| data.account_count as u32)
     }
 
-    async fn query_accounts<'a>(&'a self, selector: AccountSelector) -> Result<Vec<Account>> {
+    async fn query_accounts(&self, selector: AccountSelector) -> Result<Vec<Account>> {
         let resp = self
             .build_query(QueryAccounts::build(AccountVariables::from(selector)))?
             .await?;
 
-        response_to_data(resp)
-            .map(|data| data.map(|data| data.accounts).unwrap_or_default())
+        response_to_data(resp).map(|data| data.map(|data| data.accounts).unwrap_or_default())
     }
 
-    async fn query_channels<'a>(&'a self, selector: ChannelSelector) -> Result<Vec<Channel>> {
+    async fn query_native_balance(&self, address: &ChainAddress) -> Result<NativeBalance> {
+        let resp = self
+            .build_query(QueryAccountNativeBalance::build(BalanceVariables {
+                address: address.encode_hex(),
+            }))?
+            .await?;
+
+        response_to_data(resp).and_then(|data| data.and_then(|v| v.native_balance).ok_or(ErrorKind::NoData.into()))
+    }
+
+    async fn query_token_balance(&self, address: &ChainAddress) -> Result<HoprBalance> {
+        let resp = self
+            .build_query(QueryAccountHoprBalance::build(BalanceVariables {
+                address: address.encode_hex(),
+            }))?
+            .await?;
+
+        response_to_data(resp).and_then(|data| data.and_then(|v| v.hopr_balance).ok_or(ErrorKind::NoData.into()))
+    }
+
+    async fn query_channels(&self, selector: ChannelSelector) -> Result<Vec<Channel>> {
         let resp = self
             .build_query(QueryChannels::build(ChannelsVariables::from(selector)))?
             .await?;
 
-        response_to_data(resp)
-            .map(|data| data.map(|data| data.channels).unwrap_or_default())
+        response_to_data(resp).map(|data| data.map(|data| data.channels).unwrap_or_default())
     }
 
     async fn query_chain_info(&self) -> Result<ChainInfo> {
         let resp = self.build_query(QueryChainInfo::build(()))?.await?;
 
         response_to_data(resp)
-            .and_then(|data| data.ok_or(BlokliClientErrorKind::NoData.into()))
+            .and_then(|data| data.ok_or(ErrorKind::NoData.into()))
             .map(|data| data.chain_info)
     }
 
@@ -64,7 +82,7 @@ impl BlokliQueryClient for BlokliClient {
         let resp = self.build_query(QueryVersion::build(()))?.await?;
 
         response_to_data(resp)
-            .and_then(|data| data.ok_or(BlokliClientErrorKind::NoData.into()))
+            .and_then(|data| data.ok_or(ErrorKind::NoData.into()))
             .map(|data| data.version)
     }
 
@@ -72,7 +90,7 @@ impl BlokliQueryClient for BlokliClient {
         let resp = self.build_query(QueryHealth::build(()))?.await?;
 
         response_to_data(resp)
-            .and_then(|data| data.ok_or(BlokliClientErrorKind::NoData.into()))
+            .and_then(|data| data.ok_or(ErrorKind::NoData.into()))
             .map(|data| data.health)
     }
 }

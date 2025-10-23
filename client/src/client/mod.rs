@@ -1,7 +1,7 @@
 mod queries;
 mod subscriptions;
 
-use crate::errors::{BlokliClientError, BlokliClientErrorKind};
+use crate::errors::{BlokliClientError, ErrorKind};
 use cynic::GraphQlResponse;
 use futures::{TryFutureExt, TryStreamExt};
 use url::Url;
@@ -22,7 +22,7 @@ impl BlokliClient {
     }
 
     fn base_url(&self) -> Result<Url, BlokliClientError> {
-        Ok(self.cfg.url.join("graphql").map_err(BlokliClientErrorKind::from)?)
+        Ok(self.cfg.url.join("graphql").map_err(ErrorKind::from)?)
     }
 
     fn build_subscription_stream<Q, V>(
@@ -35,19 +35,19 @@ impl BlokliClient {
     {
         use eventsource_client::Client;
         let client = eventsource_client::ClientBuilder::for_url(self.base_url()?.as_str())
-            .map_err(BlokliClientErrorKind::from)?
+            .map_err(ErrorKind::from)?
             .connect_timeout(self.cfg.timeout)
-            .body(serde_json::to_string(&op).map_err(BlokliClientErrorKind::from)?)
+            .body(serde_json::to_string(&op).map_err(ErrorKind::from)?)
             .build();
 
         Ok(client
             .stream()
-            .map_err(BlokliClientErrorKind::from)
+            .map_err(ErrorKind::from)
             .try_filter_map(move |item| {
                 futures::future::ready(match item {
                     eventsource_client::SSE::Event(event) => serde_json::from_str::<Q>(&event.data)
                         .map(|f| Some(f))
-                        .map_err(BlokliClientErrorKind::from),
+                        .map_err(ErrorKind::from),
                     eventsource_client::SSE::Comment(comment) => {
                         tracing::debug!(comment, "SSE comment");
                         Ok(None)
@@ -71,14 +71,12 @@ impl BlokliClient {
     {
         use cynic::http::ReqwestExt;
 
-        let client = reqwest::Client::builder()
-            .build()
-            .map_err(BlokliClientErrorKind::from)?;
+        let client = reqwest::Client::builder().build().map_err(ErrorKind::from)?;
 
         Ok(client
             .post(self.base_url()?)
             .run_graphql(op)
             .into_future()
-            .map_err(|e| BlokliClientErrorKind::from(e).into()))
+            .map_err(|e| ErrorKind::from(e).into()))
     }
 }

@@ -1,8 +1,8 @@
 use super::TokenValueString;
 use super::schema;
 use crate::api::v1::AccountSelector;
+use hex::ToHex;
 
-// Account queries
 #[derive(cynic::QueryVariables, Default)]
 pub struct AccountVariables {
     pub keyid: Option<i32>,
@@ -14,15 +14,15 @@ impl From<AccountSelector> for AccountVariables {
     fn from(value: AccountSelector) -> Self {
         match value {
             AccountSelector::KeyId(keyid) => AccountVariables {
-                keyid: Some(keyid),
+                keyid: Some(keyid as i32),
                 ..Default::default()
             },
             AccountSelector::Address(address) => AccountVariables {
-                chain_key: Some(address),
+                chain_key: Some(address.encode_hex()),
                 ..Default::default()
             },
             AccountSelector::PacketKey(address) => AccountVariables {
-                packet_key: Some(address),
+                packet_key: Some(address.encode_hex()),
                 ..Default::default()
             },
         }
@@ -94,8 +94,6 @@ pub struct HoprBalance {
     pub address: String,
     pub balance: TokenValueString,
 }
-
-// Native balance query
 
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "QueryRoot", variables = "BalanceVariables")]

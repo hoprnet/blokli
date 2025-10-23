@@ -1,8 +1,8 @@
 use super::schema;
 use super::{ChannelStatus, DateTime, TokenValueString, Uint64};
 use crate::api::v1::ChannelSelector;
+use hex::ToHex;
 
-// Channel query
 #[derive(cynic::QueryVariables, Default)]
 pub struct ChannelsVariables {
     pub concrete_channel_id: Option<String>,
@@ -14,20 +14,20 @@ impl From<ChannelSelector> for ChannelsVariables {
     fn from(value: ChannelSelector) -> Self {
         match value {
             ChannelSelector::ChannelId(id) => ChannelsVariables {
-                concrete_channel_id: Some(id),
+                concrete_channel_id: Some(id.encode_hex()),
                 ..Default::default()
             },
             ChannelSelector::DestinationKeyId(dst) => ChannelsVariables {
-                destination_key_id: Some(dst),
+                destination_key_id: Some(dst as i32),
                 ..Default::default()
             },
             ChannelSelector::SourceKeyId(src) => ChannelsVariables {
-                source_key_id: Some(src),
+                source_key_id: Some(src as i32),
                 ..Default::default()
             },
             ChannelSelector::SourceAndDestinationKeyIds(src, dst) => ChannelsVariables {
-                destination_key_id: Some(src),
-                source_key_id: Some(dst),
+                destination_key_id: Some(dst as i32),
+                source_key_id: Some(src as i32),
                 ..Default::default()
             },
         }
