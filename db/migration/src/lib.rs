@@ -8,6 +8,7 @@ mod m004_create_log_indices;
 mod m005_seed_initial_data;
 mod m006_create_balance_and_safe_tables;
 mod m007_create_performance_indices;
+mod m008_add_channel_closure_grace_period;
 
 #[derive(PartialEq)]
 pub enum BackendType {
@@ -30,6 +31,7 @@ impl MigratorTrait for Migrator {
             Box::new(m005_seed_initial_data::Migration),
             Box::new(m006_create_balance_and_safe_tables::Migration),
             Box::new(m007_create_performance_indices::Migration),
+            Box::new(m008_add_channel_closure_grace_period::Migration),
         ]
     }
 }
@@ -50,6 +52,7 @@ impl MigratorTrait for MigratorIndex {
             Box::new(m005_seed_initial_data::Migration),
             Box::new(m006_create_balance_and_safe_tables::Migration),
             Box::new(m007_create_performance_indices::Migration),
+            Box::new(m008_add_channel_closure_grace_period::Migration),
         ]
     }
 }

@@ -98,6 +98,10 @@ pub trait BlokliDbInfoOperations {
     /// To retrieve the stored ticket price, use [`BlokliDbInfoOperations::get_indexer_data`],
     async fn update_ticket_price<'a>(&'a self, tx: OptTx<'a>, price: HoprBalance) -> Result<()>;
 
+    /// Sets the channel closure grace period in seconds.
+    /// To retrieve the stored grace period, use [`BlokliDbInfoOperations::get_indexer_data`],
+    async fn set_channel_closure_grace_period<'a>(&'a self, tx: OptTx<'a>, period_seconds: u64) -> Result<()>;
+
     /// Gets the indexer state info.
     async fn get_indexer_state_info<'a>(&'a self, tx: OptTx<'a>) -> Result<IndexerStateInfo>;
 
@@ -263,6 +267,9 @@ impl BlokliDbInfoOperations for BlokliDb {
                             ticket_price: model.ticket_price.map(HoprBalance::from_be_bytes),
                             minimum_incoming_ticket_winning_prob: (model.min_incoming_ticket_win_prob as f64)
                                 .try_into()?,
+                            channel_closure_grace_period: model
+                                .channel_closure_grace_period
+                                .and_then(|p| u64::try_from(p).ok()),
                         })
                     })
                 })
@@ -336,6 +343,34 @@ impl BlokliDbInfoOperations for BlokliDb {
                     chain_info::ActiveModel {
                         id: Set(SINGULAR_TABLE_FIXED_ID),
                         ticket_price: Set(Some(price.to_be_bytes().into())),
+                        ..Default::default()
+                    }
+                    .update(tx.as_ref())
+                    .await?;
+
+                    Ok::<(), DbSqlError>(())
+                })
+            })
+            .await?;
+
+        Ok(())
+    }
+
+    async fn set_channel_closure_grace_period<'a>(&'a self, tx: OptTx<'a>, period_seconds: u64) -> Result<()> {
+        let period_i64 = i64::try_from(period_seconds).map_err(|_| {
+            DbSqlError::InvalidData(format!(
+                "channel_closure_grace_period {} exceeds i64::MAX",
+                period_seconds
+            ))
+        })?;
+
+        self.nest_transaction(tx)
+            .await?
+            .perform(|tx| {
+                Box::pin(async move {
+                    chain_info::ActiveModel {
+                        id: Set(SINGULAR_TABLE_FIXED_ID),
+                        channel_closure_grace_period: Set(Some(period_i64)),
                         ..Default::default()
                     }
                     .update(tx.as_ref())
@@ -482,6 +517,22 @@ mod tests {
 
         assert_eq!(data.ticket_price, Some(price));
         assert_eq!(data.minimum_incoming_ticket_winning_prob, 0.5);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_set_get_channel_closure_grace_period() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let data = db.get_indexer_data(None).await?;
+        assert_eq!(data.channel_closure_grace_period, None);
+
+        let grace_period = 86400u64; // 24 hours in seconds
+        db.set_channel_closure_grace_period(None, grace_period).await?;
+
+        let data = db.get_indexer_data(None).await?;
+        assert_eq!(data.channel_closure_grace_period, Some(grace_period));
+
         Ok(())
     }
 }

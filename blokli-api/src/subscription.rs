@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use async_graphql::{Context, Result, Subscription};
 use async_stream::stream;
-use blokli_api_types::{Account, Channel, HoprBalance, NativeBalance, TokenValueString};
+use blokli_api_types::{Account, Channel, HoprBalance, NativeBalance, OpenedChannelsGraph, TokenValueString};
 use blokli_db_entity::conversions::balances::{
     address_to_string, hopr_balance_to_string, native_balance_to_string, string_to_address,
 };
@@ -12,9 +12,11 @@ use futures::Stream;
 use sea_orm::DatabaseConnection;
 use tokio::time::sleep;
 
-use crate::conversions::{channel_from_model, hopr_balance_from_model, native_balance_from_model};
+use crate::conversions::{
+    channel_from_model, channel_status_to_i8, hopr_balance_from_model, native_balance_from_model,
+};
 
-/// Root subscription object for the GraphQL API
+/// Root subscription type providing real-time updates via Server-Sent Events (SSE)
 pub struct SubscriptionRoot;
 
 #[Subscription]
@@ -85,6 +87,7 @@ impl SubscriptionRoot {
         #[graphql(desc = "Filter by source node keyid")] source_key_id: Option<i32>,
         #[graphql(desc = "Filter by destination node keyid")] destination_key_id: Option<i32>,
         #[graphql(desc = "Filter by concrete channel ID (hexadecimal format)")] concrete_channel_id: Option<String>,
+        #[graphql(desc = "Filter by channel status")] status: Option<blokli_api_types::ChannelStatus>,
     ) -> Result<impl Stream<Item = Channel>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
 
@@ -95,10 +98,32 @@ impl SubscriptionRoot {
                 sleep(Duration::from_secs(1)).await;
 
                 // Query the latest channels with filters
-                if let Ok(channels) = Self::fetch_filtered_channels(&db, source_key_id, destination_key_id, concrete_channel_id.clone()).await {
+                if let Ok(channels) = Self::fetch_filtered_channels(&db, source_key_id, destination_key_id, concrete_channel_id.clone(), status).await {
                     for channel in channels {
                         yield channel;
                     }
+                }
+            }
+        })
+    }
+
+    /// Subscribe to a full stream of existing channels and channel updates.
+    ///
+    /// Provides channel information on all open channels along with the accounts that participate in those channels.
+    /// This provides a complete view of the active payment channel network.
+    #[graphql(name = "openedChannelGraphUpdated")]
+    async fn opened_channel_graph_updated(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = OpenedChannelsGraph>> {
+        let db = ctx.data::<DatabaseConnection>()?.clone();
+
+        Ok(stream! {
+            loop {
+                // TODO: Replace with actual database change notifications
+                // For now, poll the database periodically
+                sleep(Duration::from_secs(1)).await;
+
+                // Query the opened channels graph
+                if let Ok(graph) = Self::fetch_opened_channels_graph(&db).await {
+                    yield graph;
                 }
             }
         })
@@ -174,6 +199,7 @@ impl SubscriptionRoot {
         source_key_id: Option<i32>,
         destination_key_id: Option<i32>,
         concrete_channel_id: Option<String>,
+        status: Option<blokli_api_types::ChannelStatus>,
     ) -> Result<Vec<Channel>, sea_orm::DbErr> {
         use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
@@ -190,6 +216,10 @@ impl SubscriptionRoot {
 
         if let Some(channel_id) = concrete_channel_id {
             query = query.filter(blokli_db_entity::channel::Column::ConcreteChannelId.eq(channel_id));
+        }
+
+        if let Some(status_filter) = status {
+            query = query.filter(blokli_db_entity::channel::Column::Status.eq(channel_status_to_i8(status_filter)));
         }
 
         let channels = query.all(db).await?;
@@ -290,5 +320,50 @@ impl SubscriptionRoot {
         }
 
         Ok(result)
+    }
+
+    async fn fetch_opened_channels_graph(db: &DatabaseConnection) -> Result<OpenedChannelsGraph, sea_orm::DbErr> {
+        use std::collections::HashSet;
+
+        use blokli_db_entity::conversions::account_aggregation::fetch_accounts_by_keyids;
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+        // 1. Fetch all OPEN channels (status = 1)
+        let channel_models = blokli_db_entity::channel::Entity::find()
+            .filter(blokli_db_entity::channel::Column::Status.eq(1))
+            .all(db)
+            .await?;
+
+        // Convert to GraphQL Channel type
+        let channels: Vec<Channel> = channel_models.iter().map(|m| channel_from_model(m.clone())).collect();
+
+        // 2. Collect unique keyids from source and destination
+        let mut keyids = HashSet::new();
+        for channel in &channel_models {
+            keyids.insert(channel.source);
+            keyids.insert(channel.destination);
+        }
+
+        // 3. Fetch accounts for those keyids with optimized batch loading
+        let keyid_vec: Vec<i32> = keyids.into_iter().collect();
+        let aggregated_accounts = fetch_accounts_by_keyids(db, keyid_vec).await?;
+
+        // Convert to GraphQL Account type
+        let accounts = aggregated_accounts
+            .into_iter()
+            .map(|agg| Account {
+                keyid: agg.keyid,
+                chain_key: agg.chain_key,
+                packet_key: agg.packet_key,
+                account_hopr_balance: TokenValueString(agg.account_hopr_balance),
+                account_native_balance: TokenValueString(agg.account_native_balance),
+                safe_address: agg.safe_address,
+                safe_hopr_balance: agg.safe_hopr_balance.map(TokenValueString),
+                safe_native_balance: agg.safe_native_balance.map(TokenValueString),
+                multi_addresses: agg.multi_addresses,
+            })
+            .collect();
+
+        Ok(OpenedChannelsGraph { channels, accounts })
     }
 }
