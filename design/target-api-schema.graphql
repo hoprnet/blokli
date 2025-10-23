@@ -1,9 +1,56 @@
 schema {
   query: QueryRoot
+  mutation: MutationRoot
   subscription: SubscriptionRoot
 }
 
-"""Account information containing balances and multiaddresses"""
+"""
+Account information containing balances and multiaddresses
+
+**Querying Safe Balances:**
+If an account has a linked Safe contract (safeAddress is not null), you must make
+separate requests to query the Safe's balances. GraphQL does not support using the
+result of one query as input to another within the same request.
+
+Client-side pattern:
+1. Query the account to get safeAddress
+2. If safeAddress exists, make a second request with that address
+
+Example (two separate requests):
+```graphql
+# Request 1: Get account information
+query GetAccount {
+  accounts(keyid: 1) {
+    ... on AccountsList {
+      accounts {
+        keyid
+        chainKey
+        safeAddress
+        accountHoprBalance
+        accountNativeBalance
+      }
+    }
+  }
+}
+
+# Request 2: Use safeAddress from first response
+query GetSafeBalances($safeAddress: String!) {
+  hoprBalance(address: $safeAddress) {
+    ... on HoprBalance {
+      address
+      balance
+    }
+  }
+
+  nativeBalance(address: $safeAddress) {
+    ... on NativeBalance {
+      address
+      balance
+    }
+  }
+}
+```
+"""
 type Account {
   "The wxHOPR balance associated with the on-chain address (returns zero if no balance record exists)"
   accountHoprBalance: TokenValueString!
@@ -17,13 +64,20 @@ type Account {
   multiAddresses: [String!]!
   "Unique account packet key in peer id format"
   packetKey: String!
-  "HOPR Safe contract address to which the account is linked"
+  "HOPR Safe contract address to which the account is linked (null if no Safe is linked)"
   safeAddress: String
-  "The wxHOPR balance associated with the linked Safe contract address"
-  safeHoprBalance: TokenValueString
-  "Native balance associated with the linked Safe contract address"
-  safeNativeBalance: TokenValueString
+  "HOPR Safe contract address transaction count"
+  safeTransactionCount: UInt64
 }
+
+"""Success response for accounts query"""
+type AccountsList {
+  "List of accounts"
+  accounts: [Account!]!
+}
+
+"""Result type for accounts list query"""
+union AccountsResult = AccountsList | MissingFilterError | QueryFailedError
 
 """Blockchain and HOPR network information"""
 type ChainInfo {
@@ -45,6 +99,9 @@ type ChainInfo {
   ticketPrice: TokenValueString!
 }
 
+"""Result type for chain info queries"""
+union ChainInfoResult = ChainInfo | QueryFailedError
+
 """Payment channel between two nodes"""
 type Channel {
   "Total amount of HOPR tokens allocated to the channel"
@@ -65,6 +122,15 @@ type Channel {
   ticketIndex: UInt64!
 }
 
+"""Success response for channels query"""
+type ChannelsList {
+  "List of channels"
+  channels: [Channel!]!
+}
+
+"""Result type for channels list query"""
+union ChannelsResult = ChannelsList | MissingFilterError | QueryFailedError
+
 """Status of a payment channel"""
 enum ChannelStatus {
   "Channel has been closed"
@@ -75,8 +141,42 @@ enum ChannelStatus {
   PENDINGTOCLOSE
 }
 
+"""Target contract not in allowlist"""
+type ContractNotAllowedError {
+  "Error code"
+  code: String!
+  "Contract address that was rejected"
+  contractAddress: String!
+  "Human-readable error message"
+  message: String!
+}
+
+"""Success response for count queries"""
+type Count {
+  "Count value"
+  count: Int!
+}
+
+"""Result type for count queries"""
+union CountResult = Count | MissingFilterError | QueryFailedError
+
 """ISO 8601 datetime string (e.g., "2024-01-15T10:30:00Z")"""
 scalar DateTime
+
+"""Function selector not allowed"""
+type FunctionNotAllowedError {
+  "Error code"
+  code: String!
+  "Contract address"
+  contractAddress: String!
+  "Function selector that was rejected"
+  functionSelector: String!
+  "Human-readable error message"
+  message: String!
+}
+
+"""32-byte value as 64-character hexadecimal string (with or without 0x prefix)"""
+scalar Hex32
 
 """HOPR token balance information for a specific address"""
 type HoprBalance {
@@ -84,6 +184,77 @@ type HoprBalance {
   address: String!
   "HOPR token balance"
   balance: TokenValueString!
+}
+
+"""Result type for HOPR balance queries"""
+union HoprBalanceResult = HoprBalance | InvalidAddressError | QueryFailedError
+
+"""Address format is invalid"""
+type InvalidAddressError {
+  "The invalid address that was provided"
+  address: String!
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+}
+
+"""Transaction ID format is invalid"""
+type InvalidTransactionIdError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+  "The invalid transaction ID that was provided"
+  transactionId: String!
+}
+
+"""Required filter parameter(s) not provided"""
+type MissingFilterError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+}
+
+"""Root mutation type providing transaction submission capabilities"""
+type MutationRoot {
+  """
+  Submit a transaction with fire-and-forget mode
+  
+  Validates the pre-signed raw transaction data and submits it to the chain.
+  Returns the transaction hash immediately after submission.
+  Does not wait for confirmation and does not track transaction status in database.
+  Use this mode for maximum performance when you don't need confirmation tracking.
+  """
+  sendTransaction(
+    "Transaction data to submit"
+    input: TransactionInput!
+  ): SendTransactionResult!
+  """
+  Submit a transaction asynchronously
+  
+  Validates the pre-signed raw transaction data and submits it to the chain immediately.
+  Returns the transaction ID that can be used to query status later.
+  Does not wait for on-chain confirmation. Background monitor tracks confirmation.
+  """
+  sendTransactionAsync(
+    "Transaction data to submit"
+    input: TransactionInput!
+  ): SendTransactionAsyncResult!
+  """
+  Submit a transaction synchronously
+  
+  Validates the pre-signed raw transaction data, submits it to the chain, and waits for
+  the specified number of confirmations (default: 8 blocks) before returning.
+  Transaction is persisted to database and can be queried later.
+  """
+  sendTransactionSync(
+    "Number of block confirmations to wait for (default: 8, max: 64)"
+    confirmations: Int
+    "Transaction data to submit"
+    input: TransactionInput!
+  ): SendTransactionSyncResult!
 }
 
 """Native token balance information for a specific address"""
@@ -94,12 +265,41 @@ type NativeBalance {
   balance: TokenValueString!
 }
 
-"""Graph of opened payment channels with associated accounts"""
-type OpenedChannelsGraph {
-  "List of accounts referenced by the open channels (source and destination nodes)"
-  accounts: [Account!]!
-  "List of all open payment channels"
-  channels: [Channel!]!
+"""Result type for native balance queries"""
+union NativeBalanceResult = NativeBalance | InvalidAddressError | QueryFailedError
+
+"""
+A single edge in the opened payment channels graph
+
+Represents one channel with its associated source and destination accounts.
+This is a directed edge: source → destination. If channels exist in both
+directions (A→B and B→A), these are emitted as separate entries.
+
+**Structure:**
+- Each entry contains exactly one channel with its source and destination accounts
+- If multiple channels exist between the same account pair, each is emitted as a separate entry
+- The channel is always open (closed channels are not included)
+
+**Usage in subscriptions:**
+The `openedChannelGraphUpdated` subscription streams these entries one at a time.
+Clients must accumulate entries to build the complete channel graph.
+An entry is emitted whenever that specific channel is updated.
+"""
+type OpenedChannelsGraphEntry {
+  "The open payment channel from source to destination"
+  channel: Channel!
+  "Destination account (recipient end of the directed edge)"
+  destination: Account!
+  "Source account (sender end of the directed edge)"
+  source: Account!
+}
+
+"""Database or internal query error"""
+type QueryFailedError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
 }
 
 """Root query type providing read-only access to indexed blockchain data"""
@@ -109,6 +309,7 @@ type QueryRoot {
   
   If no filters are provided, returns total account count.
   Filters can be combined to narrow results.
+  Returns Error if query fails.
   """
   accountCount(
     "Filter by chain key (hexadecimal format)"
@@ -117,12 +318,12 @@ type QueryRoot {
     keyid: Int
     "Filter by packet key (peer ID format)"
     packetKey: String
-  ): Int!
+  ): CountResult!
   """
   Retrieve accounts from the database with required filtering
   
   **At least one filter parameter must be provided** (keyid, packetKey, or chainKey).
-  Returns an error if no filters are specified to prevent excessive data retrieval.
+  Returns Error with code MISSING_REQUIRED_FILTER if no filters are specified.
   
   Filters can be combined to narrow results further.
   
@@ -135,14 +336,15 @@ type QueryRoot {
     keyid: Int
     "Filter by packet key (peer ID format)"
     packetKey: String
-  ): [Account!]!
+  ): AccountsResult!
   """Retrieve chain information"""
-  chainInfo: ChainInfo!
+  chainInfo: ChainInfoResult!
   """
   Count channels matching optional filters
   
   If no filters are provided, returns total channels count.
   Filters can be combined to narrow results.
+  Returns Error if query fails.
   """
   channelCount(
     "Filter by concrete channel ID (hexadecimal format)"
@@ -153,13 +355,13 @@ type QueryRoot {
     sourceKeyId: Int
     "Filter by channel status"
     status: ChannelStatus
-  ): Int!
+  ): CountResult!
   """
   Retrieve channels with required filtering
   
   **At least one identity filter must be provided** (sourceKeyId, destinationKeyId, or concreteChannelId).
   The status filter is optional and can be used in combination with identity filters.
-  Returns an error if no identity filters are specified to prevent excessive data retrieval.
+  Returns Error with code MISSING_REQUIRED_FILTER if no identity filters are specified.
   
   Filters can be combined to narrow results further.
   
@@ -174,7 +376,7 @@ type QueryRoot {
     sourceKeyId: Int
     "Filter by channel status (optional, combine with identity filters)"
     status: ChannelStatus
-  ): [Channel!]!
+  ): ChannelsResult!
   """
   Health check endpoint
   
@@ -184,21 +386,95 @@ type QueryRoot {
   """
   Retrieve HOPR token balance for a specific address
   
+  This query can be used to get balances for any on-chain address, including:
+  - Account chain keys (Account.chainKey)
+  - Safe contract addresses (Account.safeAddress)
+  - Any other Ethereum-compatible address
+  
+  Returns Error with code INVALID_ADDRESS if address format is invalid.
+  Returns Error with code QUERY_FAILED if database query fails.
   Returns None if no balance exists for the address.
+  
+  Example (querying a Safe balance requires two separate requests):
+  ```graphql
+  # Request 1: Get the account's Safe address
+  query GetAccount {
+    accounts(keyid: 1) {
+      ... on AccountsList {
+        accounts {
+          safeAddress
+        }
+      }
+    }
+  }
+  
+  # Request 2: Query the Safe's HOPR balance using address from first response
+  query GetSafeHoprBalance($safeAddress: String!) {
+    hoprBalance(address: $safeAddress) {
+      ... on HoprBalance {
+        address
+        balance
+      }
+    }
+  }
+  ```
   """
   hoprBalance(
     "On-chain address to query (hexadecimal format)"
     address: String!
-  ): HoprBalance
+  ): HoprBalanceResult
   """
   Retrieve native token balance for a specific address
   
+  This query can be used to get balances for any on-chain address, including:
+  - Account chain keys (Account.chainKey)
+  - Safe contract addresses (Account.safeAddress)
+  - Any other Ethereum-compatible address
+  
+  Returns Error with code INVALID_ADDRESS if address format is invalid.
+  Returns Error with code QUERY_FAILED if database query fails.
   Returns None if no balance exists for the address.
+  
+  Example (querying a Safe balance requires two separate requests):
+  ```graphql
+  # Request 1: Get the account's Safe address
+  query GetAccount {
+    accounts(keyid: 1) {
+      ... on AccountsList {
+        accounts {
+          safeAddress
+        }
+      }
+    }
+  }
+  
+  # Request 2: Query the Safe's native balance using address from first response
+  query GetSafeNativeBalance($safeAddress: String!) {
+    nativeBalance(address: $safeAddress) {
+      ... on NativeBalance {
+        address
+        balance
+      }
+    }
+  }
+  ```
   """
   nativeBalance(
     "On-chain address to query (hexadecimal format)"
     address: String!
-  ): NativeBalance
+  ): NativeBalanceResult
+  """
+  Retrieve transaction status by ID
+  
+  Returns the current status of a previously submitted transaction.
+  Returns Error with code INVALID_TRANSACTION_ID if ID format is invalid.
+  Returns Error with code QUERY_FAILED if database query fails.
+  Returns None if transaction ID is not found.
+  """
+  transaction(
+    "Transaction ID to query (UUID)"
+    id: ID!
+  ): TransactionResult
   """
   API version information
   
@@ -206,6 +482,29 @@ type QueryRoot {
   """
   version: String!
 }
+
+"""RPC or blockchain error during transaction submission"""
+type RpcError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+}
+
+"""Result type for asynchronous transaction submission"""
+union SendTransactionAsyncResult = Transaction | ContractNotAllowedError | FunctionNotAllowedError | RpcError
+
+"""Result type for fire-and-forget transaction submission"""
+union SendTransactionResult = SendTransactionSuccess | ContractNotAllowedError | FunctionNotAllowedError | RpcError
+
+"""Success response for fire-and-forget transaction submission"""
+type SendTransactionSuccess {
+  "Transaction hash after successful submission"
+  transactionHash: Hex32!
+}
+
+"""Result type for synchronous transaction submission"""
+union SendTransactionSyncResult = Transaction | ContractNotAllowedError | FunctionNotAllowedError | RpcError | TimeoutError
 
 """Root subscription type providing real-time updates via Server-Sent Events (SSE)"""
 type SubscriptionRoot {
@@ -242,32 +541,52 @@ type SubscriptionRoot {
     status: ChannelStatus
   ): Channel!
   """
-  Subscribe to real-time updates of HOPR balances for a specific address
+  Subscribe to the opened payment channels graph with real-time updates
   
-  Provides updates whenever there is a change in the HOPR token balance for the specified account.
-  Updates are sent immediately when balance changes occur on-chain.
-  """
-  hoprBalanceUpdated(
-    "On-chain address to monitor for balance changes (hexadecimal format)"
-    address: String!
-  ): HoprBalance!
-  """
-  Subscribe to real-time updates of native balances for a specific address
+  **Streaming Behavior:**
+  - Emits one OpenedChannelsGraphEntry per open channel
+  - Each entry contains a single channel with its source and destination accounts
+  - On subscription start, emits all existing open channels as separate entries
+  - Subsequently, emits updates when any channel changes
   
-  Provides updates whenever there is a change in the native token balance for the specified account.
-  Updates are sent immediately when balance changes occur on-chain.
-  """
-  nativeBalanceUpdated(
-    "On-chain address to monitor for balance changes (hexadecimal format)"
-    address: String!
-  ): NativeBalance!
-  """
-  Subscribe to a full stream of existing channels and channel updates.
+  **Building the Graph:**
+  Clients receive entries incrementally (one per channel) and should accumulate
+  them to build the complete network topology. The full graph is the union of all entries.
   
-  Provides channel information on all open channels along with the accounts that participate in those channels.
-  This provides a complete view of the active payment channel network.
+  **Update Triggers:**
+  An entry is re-emitted for a channel when:
+  - The channel's status changes (e.g., OPEN → PENDINGTOCLOSE)
+  - The channel's balance changes
+  - The channel closes (no longer emitted)
+  - A new channel opens (new entry emitted)
+  
+  **Example:**
+  If the network has three open channels: channelA (A→B), channelB (B→A), channelC (A→C),
+  the subscription emits three separate OpenedChannelsGraphEntry objects, each containing
+  one channel with its source and destination accounts.
+  
+  **Note:** This is a directed graph. Bidirectional communication requires
+  channels in both directions, each emitted as a separate entry.
   """
-  openedChannelGraphUpdated: OpenedChannelsGraph!
+  openedChannelGraphUpdated: OpenedChannelsGraphEntry!
+  """
+  Subscribe to real-time updates of a specific transaction
+  
+  Provides updates whenever the status of the specified transaction changes,
+  including validation, submission, confirmation, revert, and failure events.
+  """
+  transactionUpdated(
+    "Transaction ID to monitor (UUID)"
+    id: ID!
+  ): Transaction!
+}
+
+"""Operation timed out"""
+type TimeoutError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
 }
 
 """
@@ -280,6 +599,45 @@ Examples:
   .1 wxHOPR
 """
 scalar TokenValueString
+
+"""Transaction submission result"""
+type Transaction {
+  "Unique identifier for the transaction (UUID)"
+  id: ID!
+  "Current status of the transaction"
+  status: TransactionStatus!
+  "Timestamp when transaction was submitted"
+  submittedAt: DateTime!
+  "Transaction hash (available after submission)"
+  transactionHash: Hex32
+}
+
+"""Input for transaction submission"""
+input TransactionInput {
+  "Raw signed transaction data in hexadecimal format (with or without 0x prefix)"
+  rawTransaction: String!
+}
+
+"""Result type for transaction operations"""
+union TransactionResult = Transaction | InvalidTransactionIdError
+
+"""Status of a submitted transaction"""
+enum TransactionStatus {
+  "Transaction has been confirmed on-chain with success"
+  CONFIRMED
+  "Transaction is pending submission to the chain"
+  PENDING
+  "Transaction was included on-chain but reverted (receipt.status = 0)"
+  REVERTED
+  "Transaction submission failed"
+  SUBMISSION_FAILED
+  "Transaction has been submitted and is awaiting confirmation"
+  SUBMITTED
+  "Transaction was not mined within timeout window"
+  TIMEOUT
+  "Transaction validation failed"
+  VALIDATION_FAILED
+}
 
 """
 Unsigned 64-bit integer represented as a string to avoid JavaScript precision loss.
