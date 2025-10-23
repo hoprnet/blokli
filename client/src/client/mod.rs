@@ -39,7 +39,11 @@ impl BlokliClient {
     }
 
     fn graphql_url(&self) -> Result<Url, BlokliClientError> {
-        Ok(self.base_url.join("graphql").map_err(ErrorKind::from)?)
+        let mut base = self.base_url.clone();
+        if !base.path().ends_with('/') {
+            base.set_path(&format!("{}/", base.path()));
+        }
+        Ok(base.join("graphql").map_err(ErrorKind::from)?)
     }
 
     fn build_subscription_stream<Q, V>(
@@ -54,6 +58,10 @@ impl BlokliClient {
         let client = eventsource_client::ClientBuilder::for_url(self.graphql_url()?.as_str())
             .map_err(ErrorKind::from)?
             .connect_timeout(self.cfg.timeout)
+            .header("Accept", "text/event-stream")
+            .map_err(ErrorKind::from)?
+            .header("Content-Type", "application/json")
+            .map_err(ErrorKind::from)?
             .method("GET".into())
             .body(serde_json::to_string(&op).map_err(ErrorKind::from)?)
             .redirect_limit(REDIRECT_LIMIT as u32)

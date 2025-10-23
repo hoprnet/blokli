@@ -9,8 +9,11 @@ pub(crate) mod schema {}
 
 #[derive(cynic::Enum, Clone, Copy, Debug)]
 pub enum ChannelStatus {
+    #[cynic(rename = "OPEN")]
     Open,
-    Pendingtoclose,
+    #[cynic(rename = "PENDINGTOCLOSE")]
+    PendingToClose,
+    #[cynic(rename = "CLOSED")]
     Closed,
 }
 

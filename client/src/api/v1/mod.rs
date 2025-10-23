@@ -41,9 +41,9 @@ pub enum AccountSelector {
 pub enum ChannelSelector {
     /// Select a channel by its channel id.
     ChannelId(ChannelId),
-    /// Select channels by its source key id.
-    DestinationKeyId(KeyId),
     /// Select channels by its destination key id.
+    DestinationKeyId(KeyId),
+    /// Select channels by its source key id.
     SourceKeyId(KeyId),
     /// Select channels by both source and destination key id.
     SourceAndDestinationKeyIds(KeyId, KeyId),
