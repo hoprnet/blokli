@@ -4,7 +4,53 @@ schema {
   subscription: SubscriptionRoot
 }
 
-"""Account information containing balances and multiaddresses"""
+"""
+Account information containing balances and multiaddresses
+
+**Querying Safe Balances:**
+If an account has a linked Safe contract (safeAddress is not null), you must make
+separate requests to query the Safe's balances. GraphQL does not support using the
+result of one query as input to another within the same request.
+
+Client-side pattern:
+1. Query the account to get safeAddress
+2. If safeAddress exists, make a second request with that address
+
+Example (two separate requests):
+```graphql
+# Request 1: Get account information
+query GetAccount {
+  accounts(keyid: 1) {
+    ... on AccountsList {
+      accounts {
+        keyid
+        chainKey
+        safeAddress
+        accountHoprBalance
+        accountNativeBalance
+      }
+    }
+  }
+}
+
+# Request 2: Use safeAddress from first response
+query GetSafeBalances($safeAddress: String!) {
+  hoprBalance(address: $safeAddress) {
+    ... on HoprBalance {
+      address
+      balance
+    }
+  }
+
+  nativeBalance(address: $safeAddress) {
+    ... on NativeBalance {
+      address
+      balance
+    }
+  }
+}
+```
+"""
 type Account {
   "The wxHOPR balance associated with the on-chain address (returns zero if no balance record exists)"
   accountHoprBalance: TokenValueString!
@@ -18,7 +64,7 @@ type Account {
   multiAddresses: [String!]!
   "Unique account packet key in peer id format"
   packetKey: String!
-  "HOPR Safe contract address to which the account is linked"
+  "HOPR Safe contract address to which the account is linked (null if no Safe is linked)"
   safeAddress: String
   "HOPR Safe contract address transaction count"
   safeTransactionCount: UInt64
@@ -222,13 +268,29 @@ type NativeBalance {
 """Result type for native balance queries"""
 union NativeBalanceResult = NativeBalance | InvalidAddressError | QueryFailedError
 
-"""Graph entry of opened payment channels with associated accounts"""
+"""
+A single edge in the opened payment channels graph
+
+Represents one channel with its associated source and destination accounts.
+This is a directed edge: source → destination. If channels exist in both
+directions (A→B and B→A), these are emitted as separate entries.
+
+**Structure:**
+- Each entry contains exactly one channel with its source and destination accounts
+- If multiple channels exist between the same account pair, each is emitted as a separate entry
+- The channel is always open (closed channels are not included)
+
+**Usage in subscriptions:**
+The `openedChannelGraphUpdated` subscription streams these entries one at a time.
+Clients must accumulate entries to build the complete channel graph.
+An entry is emitted whenever that specific channel is updated.
+"""
 type OpenedChannelsGraphEntry {
-  "List of all open payment channels"
-  channels: [Channel!]!
-  "Destination account for the channels"
+  "The open payment channel from source to destination"
+  channel: Channel!
+  "Destination account (recipient end of the directed edge)"
   destination: Account!
-  "Source account for the channels"
+  "Source account (sender end of the directed edge)"
   source: Account!
 }
 
@@ -324,9 +386,38 @@ type QueryRoot {
   """
   Retrieve HOPR token balance for a specific address
   
+  This query can be used to get balances for any on-chain address, including:
+  - Account chain keys (Account.chainKey)
+  - Safe contract addresses (Account.safeAddress)
+  - Any other Ethereum-compatible address
+  
   Returns Error with code INVALID_ADDRESS if address format is invalid.
   Returns Error with code QUERY_FAILED if database query fails.
   Returns None if no balance exists for the address.
+  
+  Example (querying a Safe balance requires two separate requests):
+  ```graphql
+  # Request 1: Get the account's Safe address
+  query GetAccount {
+    accounts(keyid: 1) {
+      ... on AccountsList {
+        accounts {
+          safeAddress
+        }
+      }
+    }
+  }
+  
+  # Request 2: Query the Safe's HOPR balance using address from first response
+  query GetSafeHoprBalance($safeAddress: String!) {
+    hoprBalance(address: $safeAddress) {
+      ... on HoprBalance {
+        address
+        balance
+      }
+    }
+  }
+  ```
   """
   hoprBalance(
     "On-chain address to query (hexadecimal format)"
@@ -335,9 +426,38 @@ type QueryRoot {
   """
   Retrieve native token balance for a specific address
   
+  This query can be used to get balances for any on-chain address, including:
+  - Account chain keys (Account.chainKey)
+  - Safe contract addresses (Account.safeAddress)
+  - Any other Ethereum-compatible address
+  
   Returns Error with code INVALID_ADDRESS if address format is invalid.
   Returns Error with code QUERY_FAILED if database query fails.
   Returns None if no balance exists for the address.
+  
+  Example (querying a Safe balance requires two separate requests):
+  ```graphql
+  # Request 1: Get the account's Safe address
+  query GetAccount {
+    accounts(keyid: 1) {
+      ... on AccountsList {
+        accounts {
+          safeAddress
+        }
+      }
+    }
+  }
+  
+  # Request 2: Query the Safe's native balance using address from first response
+  query GetSafeNativeBalance($safeAddress: String!) {
+    nativeBalance(address: $safeAddress) {
+      ... on NativeBalance {
+        address
+        balance
+      }
+    }
+  }
+  ```
   """
   nativeBalance(
     "On-chain address to query (hexadecimal format)"
@@ -421,10 +541,32 @@ type SubscriptionRoot {
     status: ChannelStatus
   ): Channel!
   """
-  Subscribe to a full stream of existing channels and channel updates.
+  Subscribe to the opened payment channels graph with real-time updates
   
-  Provides channel information on all open channels along with the accounts that participate in those channels.
-  This provides a complete view of the active payment channel network.
+  **Streaming Behavior:**
+  - Emits one OpenedChannelsGraphEntry per open channel
+  - Each entry contains a single channel with its source and destination accounts
+  - On subscription start, emits all existing open channels as separate entries
+  - Subsequently, emits updates when any channel changes
+  
+  **Building the Graph:**
+  Clients receive entries incrementally (one per channel) and should accumulate
+  them to build the complete network topology. The full graph is the union of all entries.
+  
+  **Update Triggers:**
+  An entry is re-emitted for a channel when:
+  - The channel's status changes (e.g., OPEN → PENDINGTOCLOSE)
+  - The channel's balance changes
+  - The channel closes (no longer emitted)
+  - A new channel opens (new entry emitted)
+  
+  **Example:**
+  If the network has three open channels: channelA (A→B), channelB (B→A), channelC (A→C),
+  the subscription emits three separate OpenedChannelsGraphEntry objects, each containing
+  one channel with its source and destination accounts.
+  
+  **Note:** This is a directed graph. Bidirectional communication requires
+  channels in both directions, each emitted as a separate entry.
   """
   openedChannelGraphUpdated: OpenedChannelsGraphEntry!
   """
