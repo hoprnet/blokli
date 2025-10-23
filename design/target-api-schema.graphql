@@ -320,7 +320,7 @@ type QueryRoot {
     packetKey: String
   ): CountResult!
   """
-  MissingFilterError | Retrieve accounts from the database with required filtering
+  Retrieve accounts from the database with required filtering
   
   **At least one filter parameter must be provided** (keyid, packetKey, or chainKey).
   Returns Error with code MISSING_REQUIRED_FILTER if no filters are specified.

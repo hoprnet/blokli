@@ -1,7 +1,7 @@
 erDiagram
     account {
-        int keyid PK "Custom incremental unique identifier, Primary key"
-        binary(20) chain_key "Chain key (40-character hex string in bytes, NOT NULL)"
+        bigint keyid PK "Custom incremental unique identifier, Primary key"
+        binary(20) chain_key UK "Chain key (40-character hex string in bytes, UNIQUE, NOT NULL)"
         binary(32) packet_key "Packet key (NOT NULL)"
         binary(20) safe_address FK "key to hopr safe (40-character hex string in bytes)"
         binary(8) published_block "Published block (original u64 stored in bytes to preserve precision, NOT NULL)"
@@ -11,7 +11,7 @@ erDiagram
 
     announcement {
         int id PK "Primary key"
-        int account_keyid FK "Foreign key to account keyid (NOT NULL)"
+        bigint account_keyid FK "Foreign key to account keyid (NOT NULL)"
         string multiaddress "Multiaddress (NOT NULL)"
         binary(8) published_block "Published block (original u64 stored in bytes to preserve precision, NOT NULL)"
         binary(8) published_tx_index "Published tx index (original u64 stored in bytes to preserve precision, NOT NULL)"
@@ -21,12 +21,12 @@ erDiagram
     channel {
         int id PK "Primary key"
         binary(32) concrete_channel_id UK "Unique channel identifier (64-character hex string in bytes, NOT NULL)"
-        int source FK "Source account ID (Foreign key to account keyid, NOT NULL)"
-        int destination FK "Destination account ID (Foreign key to account keyid, NOT NULL)"
+        bigint source_account_keyid FK "Source account (Foreign key to account.keyid, NOT NULL)"
+        bigint destination_account_keyid FK "Destination account (Foreign key to account.keyid, NOT NULL)"
         binary(12) balance "Channel balance (original u96 stored in bytes to preserve precision, NOT NULL)"
         int status "Channel status (NOT NULL)"
-        bigint epoch "Epoch (original u24, NOT NULL, default is 1)"
-        bigint ticket_index "Ticket index (original u48, NOT NULL, default is 0)"
+        binary(3) epoch "Epoch (original u24 stored in bytes to preserve precision, NOT NULL, default is 1)"
+        binary(6) ticket_index "Ticket index (original u48 stored in bytes to preserve precision, NOT NULL, default is 0)"
         datetime closure_time "Closure timestamp"
         bool corrupted_state "Corrupted state flag (NOT NULL, default is false)"
     }
@@ -34,6 +34,7 @@ erDiagram
     hopr_balance {
         int id PK "Primary key"
         binary(20) address UK "Unique address (40-character hex string in bytes, NOT NULL)"
+        bigint account_keyid FK UK "Foreign key to account.keyid (UNIQUE, enforces 0..1)"
         binary(32) balance "wxHOPR token balance (original u256 stored in bytes to preserve precision, NOT NULL)"
         binary(8) last_changed_block "Last changed block (original u64 stored in bytes to preserve precision, NOT NULL)"
         binary(8) last_changed_tx_index "Last changed tx index (original u64 stored in bytes to preserve precision, NOT NULL)"
@@ -43,6 +44,7 @@ erDiagram
     native_balance {
         int id PK "Primary key"
         binary(20) address UK "Unique address (40-character hex string in bytes, NOT NULL)"
+        bigint account_keyid FK UK "Foreign key to account.keyid (UNIQUE, enforces 0..1)"
         binary(32) balance "Native token balance (original u256 stored in bytes to preserve precision, NOT NULL)"
         binary(8) last_changed_block "Last changed block (original u64 stored in bytes to preserve precision, NOT NULL)"
         binary(8) last_changed_tx_index "Last changed tx index (original u64 stored in bytes to preserve precision, NOT NULL)"
@@ -67,28 +69,24 @@ erDiagram
         binary(32) block_hash "Block hash (NOT NULL)"
         binary(32) transaction_hash "Transaction hash (NOT NULL)"
         binary(20) address "Address (40-character hex string in bytes, NOT NULL)"
-        binary topics "Topics (NOT NULL)"
-        binary data "Data (NOT NULL)"
+        binary(32)[] topics "Topics (array of 0..4 items, each 32 bytes; NOT NULL)"
+        binary data "Data (variable length bytes, NOT NULL)"
         bool removed "Removed flag (default is false)"
     }
-    %% Composite unique constraint: UNIQUE(block_number, tx_index, log_index)
+    %% Composite unique constraint: UNIQUE(block, tx_index, log_index)
 
     log_status {
         int id PK "Primary key"
-        int log_id FK "Foreign key to log (NOT NULL)"
-        binary(8) block "block number (original u64 stored in bytes to preserve precision, NOT NULL)"
-        binary(8) tx_index "tx index (original u64 stored in bytes to preserve precision, NOT NULL)"
-        binary(8) log_index "log index (original u64 stored in bytes to preserve precision, NOT NULL)"
+        int log_id FK UK "Foreign key to log (UNIQUE, enforces 1:0..1, NOT NULL)"
         bool processed "Processed flag (default is false)"
         datetime processed_at "Processing timestamp"
         binary(32) checksum "Checksum"
     }
-    %% Composite unique constraint: UNIQUE(block_number, tx_index, log_index)
 
     log_topic_info {
         int id PK "Primary key"
         binary(20) address "Address (40-character hex string in bytes, NOT NULL)"
-        string(64) topic "topic (NOT NULL)"
+        binary(32) topic "Topic hash (32 bytes; NOT NULL)"
     }
 
     hopr_safe_contract {
