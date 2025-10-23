@@ -153,14 +153,6 @@ type InvalidAddressError {
   message: String!
 }
 
-"""Generic input validation error"""
-type InvalidInputError {
-  "Error code"
-  code: String!
-  "Human-readable error message"
-  message: String!
-}
-
 """Transaction ID format is invalid"""
 type InvalidTransactionIdError {
   "Error code"
@@ -234,13 +226,11 @@ union NativeBalanceResult = NativeBalance | InvalidAddressError | QueryFailedErr
 type OpenedChannelsGraphEntry {
   "List of all open payment channels"
   channels: [Channel!]!
+  "Destination account for the channels"
   destination: Account!
-  "List of accounts referenced by the open channels (source and destination nodes)"
+  "Source account for the channels"
   source: Account!
 }
-
-"""Result type for opened channels graph query"""
-union OpenedChannelsGraphResult = OpenedChannelsGraphEntry | QueryFailedError
 
 """Database or internal query error"""
 type QueryFailedError {
@@ -373,16 +363,6 @@ type QueryRoot {
   version: String!
 }
 
-"""Too many requests"""
-type RateLimitExceededError {
-  "Error code"
-  code: String!
-  "Human-readable error message"
-  message: String!
-  "Retry after seconds"
-  retryAfter: Int
-}
-
 """RPC or blockchain error during transaction submission"""
 type RpcError {
   "Error code"
@@ -404,7 +384,7 @@ type SendTransactionSuccess {
 }
 
 """Result type for synchronous transaction submission"""
-union SendTransactionSyncResult = Transaction | InvalidHexFormatError | InvalidRlpEncodingError | InvalidSignatureError | InvalidChainIdError | TransactionTooLargeError | ContractNotAllowedError | FunctionNotAllowedError | ParameterViolationError | RpcError | TimeoutError | RateLimitExceededError | UnauthorizedError
+union SendTransactionSyncResult = Transaction | ContractNotAllowedError | FunctionNotAllowedError | RpcError | TimeoutError
 
 """Root subscription type providing real-time updates via Server-Sent Events (SSE)"""
 type SubscriptionRoot {
@@ -446,7 +426,7 @@ type SubscriptionRoot {
   Provides channel information on all open channels along with the accounts that participate in those channels.
   This provides a complete view of the active payment channel network.
   """
-  openedChannelGraphUpdated: OpenedChannelsGraph!
+  openedChannelGraphUpdated: OpenedChannelsGraphEntry!
   """
   Subscribe to real-time updates of a specific transaction
   
