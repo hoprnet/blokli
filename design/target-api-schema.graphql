@@ -1,5 +1,6 @@
 schema {
   query: QueryRoot
+  mutation: MutationRoot
   subscription: SubscriptionRoot
 }
 
@@ -19,8 +20,8 @@ type Account {
   packetKey: String!
   "HOPR Safe contract address to which the account is linked"
   safeAddress: String
-   "HOPR Safe contract address transaction count"
-  safeTransactionCount: UInt64 
+  "HOPR Safe contract address transaction count"
+  safeTransactionCount: UInt64
 }
 
 """Blockchain and HOPR network information"""
@@ -76,12 +77,320 @@ enum ChannelStatus {
 """ISO 8601 datetime string (e.g., "2024-01-15T10:30:00Z")"""
 scalar DateTime
 
+"""Required filter parameter(s) not provided"""
+type MissingFilterError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+}
+
+"""Address format is invalid"""
+type InvalidAddressError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+  "The invalid address that was provided"
+  address: String!
+}
+
+"""Generic input validation error"""
+type InvalidInputError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+}
+
+"""Transaction ID format is invalid"""
+type InvalidTransactionIdError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+  "The invalid transaction ID that was provided"
+  transactionId: String!
+}
+
+"""Database or internal query error"""
+type QueryFailedError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+}
+
+"""Hexadecimal string format is invalid"""
+type InvalidHexFormatError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+  "The invalid hex string that was provided"
+  value: String!
+}
+
+"""RLP transaction encoding is invalid"""
+type InvalidRlpEncodingError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+}
+
+"""Transaction signature is invalid"""
+type InvalidSignatureError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+}
+
+"""Transaction chain ID does not match"""
+type InvalidChainIdError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+  "Expected chain ID"
+  expected: Int!
+  "Provided chain ID"
+  provided: Int!
+}
+
+"""Transaction exceeds size limit"""
+type TransactionTooLargeError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+  "Maximum allowed size in bytes"
+  maxSize: Int!
+  "Actual size in bytes"
+  actualSize: Int!
+}
+
+"""Target contract not in allowlist"""
+type ContractNotAllowedError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+  "Contract address that was rejected"
+  contractAddress: String!
+}
+
+"""Function selector not allowed"""
+type FunctionNotAllowedError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+  "Contract address"
+  contractAddress: String!
+  "Function selector that was rejected"
+  functionSelector: String!
+}
+
+"""Transaction parameters violate constraints"""
+type ParameterViolationError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+}
+
+"""Failed to submit transaction to blockchain"""
+type SubmissionFailedError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+}
+
+"""Transaction nonce already used"""
+type NonceTooLowError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+}
+
+"""Insufficient balance for transaction"""
+type InsufficientFundsError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+}
+
+"""Transaction gas limit too low"""
+type GasTooLowError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+}
+
+"""Transaction already in mempool"""
+type AlreadyKnownError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+}
+
+"""Operation timed out"""
+type TimeoutError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+}
+
+"""Too many requests"""
+type RateLimitExceededError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+  "Retry after seconds"
+  retryAfter: Int
+}
+
+"""Authentication required or invalid"""
+type UnauthorizedError {
+  "Error code"
+  code: String!
+  "Human-readable error message"
+  message: String!
+}
+
 """HOPR token balance information for a specific address"""
 type HoprBalance {
   "Address holding the HOPR token balance"
   address: String!
   "HOPR token balance"
   balance: TokenValueString!
+}
+
+"""Result type for transaction operations"""
+union TransactionResult = Transaction | InvalidTransactionIdError | InvalidHexFormatError | QueryFailedError
+
+"""Result type for HOPR balance queries"""
+union HoprBalanceResult = HoprBalance | InvalidAddressError | QueryFailedError
+
+"""Result type for native balance queries"""
+union NativeBalanceResult = NativeBalance | InvalidAddressError | QueryFailedError
+
+"""Result type for chain info queries"""
+union ChainInfoResult = ChainInfo | QueryFailedError
+
+"""Result type for fire-and-forget transaction submission"""
+union SendTransactionResult = SendTransactionSuccess | InvalidHexFormatError | InvalidRlpEncodingError | InvalidSignatureError | InvalidChainIdError | TransactionTooLargeError | ContractNotAllowedError | FunctionNotAllowedError | ParameterViolationError | SubmissionFailedError | NonceTooLowError | InsufficientFundsError | GasTooLowError | AlreadyKnownError | RateLimitExceededError | UnauthorizedError
+
+"""Success response for fire-and-forget transaction submission"""
+type SendTransactionSuccess {
+  "Transaction hash after successful submission"
+  transactionHash: String!
+}
+
+"""Result type for accounts list query"""
+union AccountsResult = AccountsList | MissingFilterError | QueryFailedError
+
+"""Success response for accounts query"""
+type AccountsList {
+  "List of accounts"
+  accounts: [Account!]!
+}
+
+"""Result type for channels list query"""
+union ChannelsResult = ChannelsList | MissingFilterError | QueryFailedError
+
+"""Success response for channels query"""
+type ChannelsList {
+  "List of channels"
+  channels: [Channel!]!
+}
+
+"""Result type for opened channels graph query"""
+union OpenedChannelsGraphResult = OpenedChannelsGraph | QueryFailedError
+
+"""Result type for count queries"""
+union CountResult = Count | QueryFailedError
+
+"""Success response for count queries"""
+type Count {
+  "Count value"
+  count: Int!
+}
+
+"""Root mutation type providing transaction submission capabilities"""
+type MutationRoot {
+  """
+  Submit a transaction with fire-and-forget mode
+  
+  Validates the pre-signed raw transaction data and submits it to the chain.
+  Returns the transaction hash immediately after submission.
+  Does not wait for confirmation and does not track transaction status in database.
+  Use this mode for maximum performance when you don't need confirmation tracking.
+  
+  Validation errors: INVALID_HEX_FORMAT, INVALID_RLP_ENCODING, INVALID_SIGNATURE,
+  INVALID_CHAIN_ID, TRANSACTION_TOO_LARGE, CONTRACT_NOT_ALLOWED, FUNCTION_NOT_ALLOWED,
+  PARAMETER_VIOLATION
+  
+  Submission errors: SUBMISSION_FAILED, NONCE_TOO_LOW, INSUFFICIENT_FUNDS, GAS_TOO_LOW,
+  ALREADY_KNOWN
+  
+  Other errors: RATE_LIMIT_EXCEEDED, UNAUTHORIZED
+  """
+  sendTransaction(
+    "Transaction data to submit"
+    input: TransactionInput!
+  ): SendTransactionResult!
+  """
+  Submit a transaction asynchronously
+  
+  Validates the pre-signed raw transaction data and submits it to the chain immediately.
+  Returns the transaction ID that can be used to query status later.
+  Does not wait for on-chain confirmation. Background monitor tracks confirmation.
+  
+  Validation errors: INVALID_HEX_FORMAT, INVALID_RLP_ENCODING, INVALID_SIGNATURE,
+  INVALID_CHAIN_ID, TRANSACTION_TOO_LARGE, CONTRACT_NOT_ALLOWED, FUNCTION_NOT_ALLOWED,
+  PARAMETER_VIOLATION
+  
+  Submission errors: SUBMISSION_FAILED, NONCE_TOO_LOW, INSUFFICIENT_FUNDS, GAS_TOO_LOW,
+  ALREADY_KNOWN
+  
+  Other errors: RATE_LIMIT_EXCEEDED, UNAUTHORIZED
+  """
+  sendTransactionAsync(
+    "Transaction data to submit"
+    input: TransactionInput!
+  ): Transaction | InvalidHexFormatError | InvalidRlpEncodingError | InvalidSignatureError | InvalidChainIdError | TransactionTooLargeError | ContractNotAllowedError | FunctionNotAllowedError | ParameterViolationError | SubmissionFailedError | NonceTooLowError | InsufficientFundsError | GasTooLowError | AlreadyKnownError | RateLimitExceededError | UnauthorizedError
+  """
+  Submit a transaction synchronously
+  
+  Validates the pre-signed raw transaction data, submits it to the chain, and waits for
+  the specified number of confirmations (default: 8 blocks) before returning.
+  Transaction is persisted to database and can be queried later.
+  
+  Validation errors: INVALID_HEX_FORMAT, INVALID_RLP_ENCODING, INVALID_SIGNATURE,
+  INVALID_CHAIN_ID, TRANSACTION_TOO_LARGE, CONTRACT_NOT_ALLOWED, FUNCTION_NOT_ALLOWED,
+  PARAMETER_VIOLATION
+  
+  Submission errors: SUBMISSION_FAILED, NONCE_TOO_LOW, INSUFFICIENT_FUNDS, GAS_TOO_LOW,
+  ALREADY_KNOWN, TIMEOUT
+  
+  Other errors: RATE_LIMIT_EXCEEDED, UNAUTHORIZED
+  """
+  sendTransactionSync(
+    "Transaction data to submit"
+    input: TransactionInput!
+    "Number of block confirmations to wait for (default: 8, max: 64)"
+    confirmations: Int
+  ): Transaction | InvalidHexFormatError | InvalidRlpEncodingError | InvalidSignatureError | InvalidChainIdError | TransactionTooLargeError | ContractNotAllowedError | FunctionNotAllowedError | ParameterViolationError | SubmissionFailedError | NonceTooLowError | InsufficientFundsError | GasTooLowError | AlreadyKnownError | TimeoutError | RateLimitExceededError | UnauthorizedError
 }
 
 """Native token balance information for a specific address"""
@@ -107,6 +416,7 @@ type QueryRoot {
   
   If no filters are provided, returns total account count.
   Filters can be combined to narrow results.
+  Returns Error if query fails.
   """
   accountCount(
     "Filter by chain key (hexadecimal format)"
@@ -115,12 +425,12 @@ type QueryRoot {
     keyid: Int
     "Filter by packet key (peer ID format)"
     packetKey: String
-  ): Int!
+  ): CountResult!
   """
   Retrieve accounts from the database with required filtering
   
   **At least one filter parameter must be provided** (keyid, packetKey, or chainKey).
-  Returns an error if no filters are specified to prevent excessive data retrieval.
+  Returns Error with code MISSING_REQUIRED_FILTER if no filters are specified.
   
   Filters can be combined to narrow results further.
   
@@ -133,14 +443,15 @@ type QueryRoot {
     keyid: Int
     "Filter by packet key (peer ID format)"
     packetKey: String
-  ): [Account!]!
+  ): AccountsResult!
   """Retrieve chain information"""
-  chainInfo: ChainInfo!
+  chainInfo: ChainInfoResult!
   """
   Count channels matching optional filters
   
   If no filters are provided, returns total channels count.
   Filters can be combined to narrow results.
+  Returns Error if query fails.
   """
   channelCount(
     "Filter by concrete channel ID (hexadecimal format)"
@@ -151,13 +462,13 @@ type QueryRoot {
     sourceKeyId: Int
     "Filter by channel status"
     status: ChannelStatus
-  ): Int!
+  ): CountResult!
   """
   Retrieve channels with required filtering
   
   **At least one identity filter must be provided** (sourceKeyId, destinationKeyId, or concreteChannelId).
   The status filter is optional and can be used in combination with identity filters.
-  Returns an error if no identity filters are specified to prevent excessive data retrieval.
+  Returns Error with code MISSING_REQUIRED_FILTER if no identity filters are specified.
   
   Filters can be combined to narrow results further.
   
@@ -172,7 +483,7 @@ type QueryRoot {
     sourceKeyId: Int
     "Filter by channel status (optional, combine with identity filters)"
     status: ChannelStatus
-  ): [Channel!]!
+  ): ChannelsResult!
   """
   Health check endpoint
   
@@ -182,21 +493,49 @@ type QueryRoot {
   """
   Retrieve HOPR token balance for a specific address
   
+  Returns Error with code INVALID_ADDRESS if address format is invalid.
+  Returns Error with code QUERY_FAILED if database query fails.
   Returns None if no balance exists for the address.
   """
   hoprBalance(
     "On-chain address to query (hexadecimal format)"
     address: String!
-  ): HoprBalance
+  ): HoprBalanceResult
   """
   Retrieve native token balance for a specific address
   
+  Returns Error with code INVALID_ADDRESS if address format is invalid.
+  Returns Error with code QUERY_FAILED if database query fails.
   Returns None if no balance exists for the address.
   """
   nativeBalance(
     "On-chain address to query (hexadecimal format)"
     address: String!
-  ): NativeBalance
+  ): NativeBalanceResult
+  """
+  Retrieve transaction status by ID
+  
+  Returns the current status of a previously submitted transaction.
+  Returns Error with code INVALID_TRANSACTION_ID if ID format is invalid.
+  Returns Error with code QUERY_FAILED if database query fails.
+  Returns None if transaction ID is not found.
+  """
+  transaction(
+    "Transaction ID to query (UUID)"
+    id: ID!
+  ): TransactionResult
+  """
+  Retrieve transaction status by transaction hash
+  
+  Returns the current status of a previously submitted transaction.
+  Returns Error with code INVALID_HEX_FORMAT if hash format is invalid.
+  Returns Error with code QUERY_FAILED if database query fails.
+  Returns None if transaction hash is not found.
+  """
+  transactionByHash(
+    "Transaction hash to query (hexadecimal format)"
+    transactionHash: String!
+  ): TransactionResult
   """
   API version information
   
@@ -246,6 +585,16 @@ type SubscriptionRoot {
   This provides a complete view of the active payment channel network.
   """
   openedChannelGraphUpdated: OpenedChannelsGraph!
+  """
+  Subscribe to real-time updates of a specific transaction
+  
+  Provides updates whenever the status of the specified transaction changes,
+  including validation, submission, confirmation, revert, and failure events.
+  """
+  transactionUpdated(
+    "Transaction ID to monitor (UUID)"
+    id: ID!
+  ): Transaction!
 }
 
 """
@@ -258,6 +607,54 @@ Examples:
   .1 wxHOPR
 """
 scalar TokenValueString
+
+"""Transaction submission result"""
+type Transaction {
+  "Block hash where transaction was confirmed (null if not yet confirmed)"
+  blockHash: String
+  "Block number where transaction was confirmed (null if not yet confirmed)"
+  blockNumber: Int
+  "Number of block confirmations required for this transaction"
+  confirmations: Int!
+  "Timestamp when transaction was confirmed (null if not yet confirmed)"
+  confirmedAt: DateTime
+  "Error code for programmatic error handling (null if no error)"
+  errorCode: String
+  "Error message if validation or submission failed (null if no error)"
+  errorMessage: String
+  "Unique identifier for the transaction (UUID)"
+  id: ID!
+  "Current status of the transaction"
+  status: TransactionStatus!
+  "Timestamp when transaction was submitted"
+  submittedAt: DateTime!
+  "Transaction hash (available after submission)"
+  transactionHash: String
+}
+
+"""Input for transaction submission"""
+input TransactionInput {
+  "Raw signed transaction data in hexadecimal format (with or without 0x prefix)"
+  rawTransaction: String!
+}
+
+"""Status of a submitted transaction"""
+enum TransactionStatus {
+  "Transaction has been confirmed on-chain with success"
+  CONFIRMED
+  "Transaction is pending submission to the chain"
+  PENDING
+  "Transaction was included on-chain but reverted (receipt.status = 0)"
+  REVERTED
+  "Transaction submission failed"
+  SUBMISSION_FAILED
+  "Transaction has been submitted and is awaiting confirmation"
+  SUBMITTED
+  "Transaction was not mined within timeout window"
+  TIMEOUT
+  "Transaction validation failed"
+  VALIDATION_FAILED
+}
 
 """
 Unsigned 64-bit integer represented as a string to avoid JavaScript precision loss.
