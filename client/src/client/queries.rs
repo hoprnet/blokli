@@ -1,8 +1,9 @@
+use cynic::{GraphQlResponse, QueryBuilder};
+use hex::ToHex;
+
 use super::BlokliClient;
 use crate::api::{internal::*, types::*, *};
 use crate::errors::ErrorKind;
-use cynic::{GraphQlResponse, QueryBuilder};
-use hex::ToHex;
 
 fn response_to_data<Q>(response: GraphQlResponse<Q>) -> Result<Option<Q>> {
     match (response.data, response.errors) {

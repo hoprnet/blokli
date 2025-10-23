@@ -1,26 +1,37 @@
 mod queries;
 mod subscriptions;
+mod transactions;
 
 use cynic::GraphQlResponse;
 use futures::{TryFutureExt, TryStreamExt};
 use url::Url;
 
 use crate::{
-    api::API_VERSION,
+    api::VERSION,
     errors::{BlokliClientError, ErrorKind},
 };
 
+/// Configuration for the [`BlokliClient`].
 #[derive(Clone, Debug, PartialEq, Eq, smart_default::SmartDefault)]
 pub struct BlokliClientConfig {
+    /// General timeout for all requests.
     #[default(std::time::Duration::from_secs(10))]
     pub timeout: std::time::Duration,
 }
 
+/// Client implementation of the Blokli API.
+///
+/// The client implements the following Blokli API traits:
+/// - [`BlokliQueryClient`](api::BlokliQueryClient)
+/// - [`BlokliSubscriptionClient`](api::BlokliSubscriptionClient).
+/// - [`BlokliTransactionClient`](api::BlokliTransactionClient)
 #[derive(Clone, Debug)]
 pub struct BlokliClient {
     base_url: Url,
     cfg: BlokliClientConfig,
 }
+
+const REDIRECT_LIMIT: usize = 3;
 
 impl BlokliClient {
     pub fn new(base_url: Url, cfg: BlokliClientConfig) -> Self {
@@ -43,8 +54,9 @@ impl BlokliClient {
         let client = eventsource_client::ClientBuilder::for_url(self.graphql_url()?.as_str())
             .map_err(ErrorKind::from)?
             .connect_timeout(self.cfg.timeout)
+            .method("GET".into())
             .body(serde_json::to_string(&op).map_err(ErrorKind::from)?)
-            .redirect_limit(3)
+            .redirect_limit(REDIRECT_LIMIT as u32)
             .build();
 
         Ok(client
@@ -84,8 +96,8 @@ impl BlokliClient {
             .gzip(true)
             .zstd(true)
             .deflate(true)
-            .user_agent(format!("blokli-client/{}-{}", env!("CARGO_PKG_VERSION"), API_VERSION))
-            .redirect(reqwest::redirect::Policy::limited(3))
+            .user_agent(format!("blokli-client/{}-{}", env!("CARGO_PKG_VERSION"), VERSION))
+            .redirect(reqwest::redirect::Policy::limited(REDIRECT_LIMIT))
             .build()
             .map_err(ErrorKind::from)?;
 

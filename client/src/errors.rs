@@ -1,5 +1,6 @@
 use cynic::http::CynicReqwestError;
 
+/// Error type for the Blokli client.
 #[derive(Debug)]
 pub struct BlokliClientError(Box<ErrorKind>);
 
@@ -21,6 +22,7 @@ impl std::error::Error for BlokliClientError {
     }
 }
 
+/// Error kinds for the Blokli client.
 #[derive(Debug, thiserror::Error)]
 pub enum ErrorKind {
     #[error("no data returned from server unexpectedly")]
