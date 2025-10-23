@@ -2,7 +2,6 @@ use cynic::SubscriptionBuilder;
 use futures::{Stream, TryStreamExt};
 
 use super::BlokliClient;
-use crate::api::v1::TxId;
 use crate::api::{internal::*, types::*, *};
 
 impl BlokliSubscriptionClient for BlokliClient {
