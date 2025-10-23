@@ -33,14 +33,6 @@ type AccountsList {
 """Result type for accounts list query"""
 union AccountsResult = AccountsList | MissingFilterError | QueryFailedError
 
-"""Transaction already in mempool"""
-type AlreadyKnownError {
-  "Error code"
-  code: String!
-  "Human-readable error message"
-  message: String!
-}
-
 """Blockchain and HOPR network information"""
 type ChainInfo {
   "Current block number of the blockchain"
@@ -137,13 +129,8 @@ type FunctionNotAllowedError {
   message: String!
 }
 
-"""Transaction gas limit too low"""
-type GasTooLowError {
-  "Error code"
-  code: String!
-  "Human-readable error message"
-  message: String!
-}
+"""32-byte value as 64-character hexadecimal string (with or without 0x prefix)"""
+scalar Hex32
 
 """HOPR token balance information for a specific address"""
 type HoprBalance {
@@ -156,14 +143,6 @@ type HoprBalance {
 """Result type for HOPR balance queries"""
 union HoprBalanceResult = HoprBalance | InvalidAddressError | QueryFailedError
 
-"""Insufficient balance for transaction"""
-type InsufficientFundsError {
-  "Error code"
-  code: String!
-  "Human-readable error message"
-  message: String!
-}
-
 """Address format is invalid"""
 type InvalidAddressError {
   "The invalid address that was provided"
@@ -174,46 +153,8 @@ type InvalidAddressError {
   message: String!
 }
 
-"""Transaction chain ID does not match"""
-type InvalidChainIdError {
-  "Error code"
-  code: String!
-  "Expected chain ID"
-  expected: Int!
-  "Human-readable error message"
-  message: String!
-  "Provided chain ID"
-  provided: Int!
-}
-
-"""Hexadecimal string format is invalid"""
-type InvalidHexFormatError {
-  "Error code"
-  code: String!
-  "Human-readable error message"
-  message: String!
-  "The invalid hex string that was provided"
-  value: String!
-}
-
 """Generic input validation error"""
 type InvalidInputError {
-  "Error code"
-  code: String!
-  "Human-readable error message"
-  message: String!
-}
-
-"""RLP transaction encoding is invalid"""
-type InvalidRlpEncodingError {
-  "Error code"
-  code: String!
-  "Human-readable error message"
-  message: String!
-}
-
-"""Transaction signature is invalid"""
-type InvalidSignatureError {
   "Error code"
   code: String!
   "Human-readable error message"
@@ -242,7 +183,7 @@ type MissingFilterError {
 type MutationRoot {
   """
   Submit a transaction with fire-and-forget mode
-
+  
   Validates the pre-signed raw transaction data and submits it to the chain.
   Returns the transaction hash immediately after submission.
   Does not wait for confirmation and does not track transaction status in database.
@@ -254,7 +195,7 @@ type MutationRoot {
   ): SendTransactionResult!
   """
   Submit a transaction asynchronously
-
+  
   Validates the pre-signed raw transaction data and submits it to the chain immediately.
   Returns the transaction ID that can be used to query status later.
   Does not wait for on-chain confirmation. Background monitor tracks confirmation.
@@ -265,7 +206,7 @@ type MutationRoot {
   ): SendTransactionAsyncResult!
   """
   Submit a transaction synchronously
-
+  
   Validates the pre-signed raw transaction data, submits it to the chain, and waits for
   the specified number of confirmations (default: 8 blocks) before returning.
   Transaction is persisted to database and can be queried later.
@@ -289,32 +230,17 @@ type NativeBalance {
 """Result type for native balance queries"""
 union NativeBalanceResult = NativeBalance | InvalidAddressError | QueryFailedError
 
-"""Transaction nonce already used"""
-type NonceTooLowError {
-  "Error code"
-  code: String!
-  "Human-readable error message"
-  message: String!
-}
-
-"""Graph of opened payment channels with associated accounts"""
-type OpenedChannelsGraph {
-  "List of accounts referenced by the open channels (source and destination nodes)"
-  accounts: [Account!]!
+"""Graph entry of opened payment channels with associated accounts"""
+type OpenedChannelsGraphEntry {
   "List of all open payment channels"
   channels: [Channel!]!
+  destination: Account!
+  "List of accounts referenced by the open channels (source and destination nodes)"
+  source: Account!
 }
 
 """Result type for opened channels graph query"""
-union OpenedChannelsGraphResult = OpenedChannelsGraph | QueryFailedError
-
-"""Transaction parameters violate constraints"""
-type ParameterViolationError {
-  "Error code"
-  code: String!
-  "Human-readable error message"
-  message: String!
-}
+union OpenedChannelsGraphResult = OpenedChannelsGraphEntry | QueryFailedError
 
 """Database or internal query error"""
 type QueryFailedError {
@@ -440,18 +366,6 @@ type QueryRoot {
     id: ID!
   ): TransactionResult
   """
-  Retrieve transaction status by transaction hash
-  
-  Returns the current status of a previously submitted transaction.
-  Returns Error with code INVALID_HEX_FORMAT if hash format is invalid.
-  Returns Error with code QUERY_FAILED if database query fails.
-  Returns None if transaction hash is not found.
-  """
-  transactionByHash(
-    "Transaction hash to query (hexadecimal format)"
-    transactionHash: String!
-  ): TransactionResult
-  """
   API version information
   
   Returns the current version of the blokli-api package
@@ -469,28 +383,28 @@ type RateLimitExceededError {
   retryAfter: Int
 }
 
-"""Result type for asynchronous transaction submission"""
-union SendTransactionAsyncResult = Transaction | InvalidHexFormatError | InvalidRlpEncodingError | InvalidSignatureError | InvalidChainIdError | TransactionTooLargeError | ContractNotAllowedError | FunctionNotAllowedError | ParameterViolationError | SubmissionFailedError | NonceTooLowError | InsufficientFundsError | GasTooLowError | AlreadyKnownError | RateLimitExceededError | UnauthorizedError
-
-"""Result type for fire-and-forget transaction submission"""
-union SendTransactionResult = SendTransactionSuccess | InvalidHexFormatError | InvalidRlpEncodingError | InvalidSignatureError | InvalidChainIdError | TransactionTooLargeError | ContractNotAllowedError | FunctionNotAllowedError | ParameterViolationError | SubmissionFailedError | NonceTooLowError | InsufficientFundsError | GasTooLowError | AlreadyKnownError | RateLimitExceededError | UnauthorizedError
-
-"""Success response for fire-and-forget transaction submission"""
-type SendTransactionSuccess {
-  "Transaction hash after successful submission"
-  transactionHash: String!
-}
-
-"""Result type for synchronous transaction submission"""
-union SendTransactionSyncResult = Transaction | InvalidHexFormatError | InvalidRlpEncodingError | InvalidSignatureError | InvalidChainIdError | TransactionTooLargeError | ContractNotAllowedError | FunctionNotAllowedError | ParameterViolationError | SubmissionFailedError | NonceTooLowError | InsufficientFundsError | GasTooLowError | AlreadyKnownError | TimeoutError | RateLimitExceededError | UnauthorizedError
-
-"""Failed to submit transaction to blockchain"""
-type SubmissionFailedError {
+"""RPC or blockchain error during transaction submission"""
+type RpcError {
   "Error code"
   code: String!
   "Human-readable error message"
   message: String!
 }
+
+"""Result type for asynchronous transaction submission"""
+union SendTransactionAsyncResult = Transaction | ContractNotAllowedError | FunctionNotAllowedError | RpcError
+
+"""Result type for fire-and-forget transaction submission"""
+union SendTransactionResult = SendTransactionSuccess | ContractNotAllowedError | FunctionNotAllowedError | RpcError
+
+"""Success response for fire-and-forget transaction submission"""
+type SendTransactionSuccess {
+  "Transaction hash after successful submission"
+  transactionHash: Hex32!
+}
+
+"""Result type for synchronous transaction submission"""
+union SendTransactionSyncResult = Transaction | InvalidHexFormatError | InvalidRlpEncodingError | InvalidSignatureError | InvalidChainIdError | TransactionTooLargeError | ContractNotAllowedError | FunctionNotAllowedError | ParameterViolationError | RpcError | TimeoutError | RateLimitExceededError | UnauthorizedError
 
 """Root subscription type providing real-time updates via Server-Sent Events (SSE)"""
 type SubscriptionRoot {
@@ -566,18 +480,6 @@ scalar TokenValueString
 
 """Transaction submission result"""
 type Transaction {
-  "Block hash where transaction was confirmed (null if not yet confirmed)"
-  blockHash: String
-  "Block number where transaction was confirmed (null if not yet confirmed)"
-  blockNumber: Int
-  "Number of block confirmations required for this transaction"
-  confirmations: Int!
-  "Timestamp when transaction was confirmed (null if not yet confirmed)"
-  confirmedAt: DateTime
-  "Error code for programmatic error handling (null if no error)"
-  errorCode: String
-  "Error message if validation or submission failed (null if no error)"
-  errorMessage: String
   "Unique identifier for the transaction (UUID)"
   id: ID!
   "Current status of the transaction"
@@ -585,7 +487,7 @@ type Transaction {
   "Timestamp when transaction was submitted"
   submittedAt: DateTime!
   "Transaction hash (available after submission)"
-  transactionHash: String
+  transactionHash: Hex32
 }
 
 """Input for transaction submission"""
@@ -595,7 +497,7 @@ input TransactionInput {
 }
 
 """Result type for transaction operations"""
-union TransactionResult = Transaction | InvalidTransactionIdError | InvalidHexFormatError | QueryFailedError
+union TransactionResult = Transaction | InvalidTransactionIdError
 
 """Status of a submitted transaction"""
 enum TransactionStatus {
@@ -615,29 +517,9 @@ enum TransactionStatus {
   VALIDATION_FAILED
 }
 
-"""Transaction exceeds size limit"""
-type TransactionTooLargeError {
-  "Actual size in bytes"
-  actualSize: Int!
-  "Error code"
-  code: String!
-  "Maximum allowed size in bytes"
-  maxSize: Int!
-  "Human-readable error message"
-  message: String!
-}
-
 """
 Unsigned 64-bit integer represented as a string to avoid JavaScript precision loss.
 Used for values that exceed the 32-bit signed integer range of GraphQL Int.
 Maximum value: 18446744073709551615
 """
 scalar UInt64
-
-"""Authentication required or invalid"""
-type UnauthorizedError {
-  "Error code"
-  code: String!
-  "Human-readable error message"
-  message: String!
-}
