@@ -1,0 +1,31 @@
+[package]
+name = "blokli-client"
+version = "0.1.0"
+edition = "2024"
+description = "Client connector to Blokli"
+homepage = "https://hoprnet.org/"
+repository = "https://github.com/hoprnet/blokli"
+license = "GPL-3.0-only"
+
+[dependencies]
+async-trait = { workspace = true }
+cynic = { workspace = true, features = ["http-reqwest"] }
+eventsource-client = { workspace = true }
+futures = { workspace = true }
+hex = { workspace = true }
+reqwest = { workspace = true, features = ["brotli", "deflate", "gzip", "json", "zstd"] }
+serde_json = { workspace = true }
+smart-default = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+url = { workspace = true }
+
+
+[build-dependencies]
+cynic-codegen = { version = "3" }
+
+[dev-dependencies]
+anyhow = { workspace = true }
+httpmock = { version = "0.8.2", features = ["record"] }
+insta = "1"
+tokio = { workspace = true }
