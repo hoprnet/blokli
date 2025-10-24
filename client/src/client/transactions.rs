@@ -7,7 +7,7 @@ use crate::errors::ErrorKind;
 
 #[async_trait::async_trait]
 impl BlokliTransactionClient for BlokliClient {
-    async fn submit_signed_transaction(&self, signed_tx: &[u8]) -> Result<TxReceipt> {
+    async fn submit_transaction(&self, signed_tx: &[u8]) -> Result<TxReceipt> {
         let resp = self
             .build_query(MutateSendTransaction::build(SendTransactionVariables {
                 raw_transaction: signed_tx.encode_hex(),
@@ -17,7 +17,7 @@ impl BlokliTransactionClient for BlokliClient {
         response_to_data(resp)?.send_transaction.into()
     }
 
-    async fn submit_tracked_transaction(&self, signed_tx: &[u8]) -> Result<TxId> {
+    async fn submit_and_track_transaction(&self, signed_tx: &[u8]) -> Result<TxId> {
         let resp = self
             .build_query(MutateTrackTransaction::build(SendTransactionVariables {
                 raw_transaction: signed_tx.encode_hex(),
