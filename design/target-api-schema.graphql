@@ -422,7 +422,7 @@ type QueryRoot {
   hoprBalance(
     "On-chain address to query (hexadecimal format)"
     address: String!
-  ): HoprBalanceResult
+  ): HoprBalanceResult!
   """
   Retrieve native token balance for a specific address
   
@@ -462,7 +462,7 @@ type QueryRoot {
   nativeBalance(
     "On-chain address to query (hexadecimal format)"
     address: String!
-  ): NativeBalanceResult
+  ): NativeBalanceResult!
   """
   Retrieve transaction status by ID
   
