@@ -36,7 +36,7 @@ impl BlokliSubscriptionClient for BlokliClient {
                 if was_confirmed {
                     futures::future::ok(false)
                 } else {
-                    was_confirmed = item.status != TransactionStatus::Confirmed;
+                    was_confirmed = item.status == TransactionStatus::Confirmed;
                     futures::future::ok(true)
                 }
             }))

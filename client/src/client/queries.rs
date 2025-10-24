@@ -33,10 +33,7 @@ impl BlokliQueryClient for BlokliClient {
             }))?
             .await?;
 
-        response_to_data(resp)?
-            .native_balance
-            .ok_or::<BlokliClientError>(ErrorKind::NoData.into())
-            .and_then(|res| res.into())
+        response_to_data(resp)?.native_balance.into()
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(address = hex::encode(address)))]
@@ -47,10 +44,7 @@ impl BlokliQueryClient for BlokliClient {
             }))?
             .await?;
 
-        response_to_data(resp)?
-            .hopr_balance
-            .ok_or::<BlokliClientError>(ErrorKind::NoData.into())
-            .and_then(|res| res.into())
+        response_to_data(resp)?.hopr_balance.into()
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]

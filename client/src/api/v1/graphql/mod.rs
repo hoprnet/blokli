@@ -12,7 +12,7 @@ pub(crate) mod schema {}
 
 // https://generator.cynic-rs.dev/
 
-#[derive(cynic::Enum, Clone, Copy, Debug)]
+#[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChannelStatus {
     #[cynic(rename = "OPEN")]
     Open,

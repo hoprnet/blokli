@@ -12,14 +12,14 @@ pub struct BalanceVariables {
 #[cynic(graphql_type = "QueryRoot", variables = "BalanceVariables")]
 pub struct QueryHoprBalance {
     #[arguments(address: $address)]
-    pub hopr_balance: Option<HoprBalanceResult>,
+    pub hopr_balance: HoprBalanceResult,
 }
 
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "QueryRoot", variables = "BalanceVariables")]
 pub struct QueryNativeBalance {
     #[arguments(address: $address)]
-    pub native_balance: Option<NativeBalanceResult>,
+    pub native_balance: NativeBalanceResult,
 }
 
 #[derive(cynic::InlineFragments, Debug)]

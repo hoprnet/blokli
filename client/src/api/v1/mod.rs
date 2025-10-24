@@ -1,7 +1,7 @@
 mod graphql;
 pub mod types {
     pub use super::graphql::{
-        TokenValueString,
+        ChannelStatus, TokenValueString,
         accounts::Account,
         balances::{HoprBalance, NativeBalance},
         channels::Channel,
@@ -32,7 +32,7 @@ pub type TxReceipt = [u8; 32];
 pub type KeyId = u32;
 pub type TxId = String;
 
-/// Allows selecting [Accounts](types::Account) by their key id, address or packet key.
+/// Allows selecting [`Accounts`](types::Account) by their key id, address or packet key.
 #[derive(Debug, Clone)]
 pub enum AccountSelector {
     /// Select an account by its key id.
@@ -43,9 +43,18 @@ pub enum AccountSelector {
     PacketKey(PacketKey),
 }
 
-/// Allows selecting [Channels](types::Channel) by their channel id, source or destination key id.
+/// Allows selecting [`Channels`](types::Channel) based on a [`ChannelFilter`] and optionally a [`ChannelStatus`].
 #[derive(Debug, Clone)]
-pub enum ChannelSelector {
+pub struct ChannelSelector {
+    /// Filter for the selected channels.
+    pub filter: ChannelFilter,
+    /// Optional status filter for the selected channels.
+    pub status: Option<types::ChannelStatus>,
+}
+
+/// Allows filtering [`Channels`](types::Channel) by their channel id, source and/or destination key id.
+#[derive(Debug, Clone)]
+pub enum ChannelFilter {
     /// Select a channel by its channel id.
     ChannelId(ChannelId),
     /// Select channels by its destination key id.
@@ -69,7 +78,7 @@ pub trait BlokliQueryClient {
     async fn query_native_balance(&self, address: &ChainAddress) -> Result<types::NativeBalance>;
     /// Queries the token balance of the given account.
     async fn query_token_balance(&self, address: &ChainAddress) -> Result<types::HoprBalance>;
-    /// Counts the number of accounts matching the given selector.
+    /// Counts the number of channels matching the given selector.
     async fn count_channels(&self, selector: ChannelSelector) -> Result<u32>;
     /// Queries the channels matching the given selector.
     async fn query_channels(&self, selector: ChannelSelector) -> Result<Vec<types::Channel>>;

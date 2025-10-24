@@ -52,6 +52,7 @@ pub struct SubscribeAccounts {
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "QueryRoot", variables = "AccountVariables")]
 pub struct QueryAccountCount {
+    #[arguments(keyid: $keyid, packetKey: $packet_key, chainKey: $chain_key)]
     pub account_count: CountResult,
 }
 
