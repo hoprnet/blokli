@@ -250,3 +250,10 @@ pub struct NativeBalance {
     /// Native token balance
     pub balance: TokenValueString,
 }
+
+/// Safe HOPR token allowance information
+#[derive(SimpleObject, Clone, Debug)]
+pub struct SafeAllowance {
+    /// HOPR token allowance granted by the safe to the channels contract
+    pub allowance: TokenValueString,
+}

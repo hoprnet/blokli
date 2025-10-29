@@ -1,7 +1,7 @@
 //! GraphQL query root and resolver implementations
 
 use async_graphql::{Context, Object, Result};
-use blokli_api_types::{Account, ChainInfo, Channel, Hex32, HoprBalance, NativeBalance, TokenValueString};
+use blokli_api_types::{Account, ChainInfo, Channel, Hex32, HoprBalance, NativeBalance, SafeAllowance, TokenValueString};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::{
@@ -273,6 +273,28 @@ impl QueryRoot {
             .await?;
 
         Ok(balance.map(native_balance_from_model))
+    }
+
+    /// Retrieve safe HOPR token allowance
+    ///
+    /// Returns the current allowance granted by the safe contract to the channels contract.
+    /// This value represents how much of the safe's HOPR tokens can be used by the channels contract.
+    #[graphql(name = "safeAllowance")]
+    async fn safe_allowance(&self, ctx: &Context<'_>) -> Result<SafeAllowance> {
+        use blokli_db_entity::conversions::balances::hopr_balance_to_string;
+
+        let db = ctx.data::<DatabaseConnection>()?;
+
+        // Fetch safe allowance from node_info table (singleton with id=1)
+        let node_info = blokli_db_entity::node_info::Entity::find_by_id(1)
+            .one(db)
+            .await?
+            .ok_or_else(|| async_graphql::Error::new("Node info not found"))?;
+
+        // Convert safe_allowance from 12-byte binary to human-readable string
+        let allowance = TokenValueString(hopr_balance_to_string(&node_info.safe_allowance));
+
+        Ok(SafeAllowance { allowance })
     }
 
     /// Retrieve chain information
