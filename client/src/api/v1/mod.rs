@@ -106,7 +106,7 @@ pub trait BlokliSubscriptionClient {
     fn subscribe_accounts(
         &self,
         selector: Option<AccountSelector>,
-    ) -> Result<impl futures::Stream<Item = Result<types::Account>>>;
+    ) -> Result<impl futures::Stream<Item = Result<types::Account>> + Send>;
     /// Subscribes to updates of the entire channel graph.
     fn subscribe_graph(&self) -> Result<impl futures::Stream<Item = Result<types::OpenedChannelsGraphEntry>> + Send>;
     /// Subscribes to transaction status changes given the `tx_id` previously returned
