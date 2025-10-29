@@ -99,7 +99,7 @@ pub trait BlokliSubscriptionClient {
     fn subscribe_channels(
         &self,
         selector: Option<ChannelSelector>,
-    ) -> Result<impl futures::Stream<Item = Result<types::Channel>>>;
+    ) -> Result<impl futures::Stream<Item = Result<types::Channel>> + Send>;
     /// Subscribes to account updates optionally matching the given [`selector`](AccountSelector).
     ///
     /// If no selector is given, subscribes to all account updates.
@@ -108,12 +108,15 @@ pub trait BlokliSubscriptionClient {
         selector: Option<AccountSelector>,
     ) -> Result<impl futures::Stream<Item = Result<types::Account>>>;
     /// Subscribes to updates of the entire channel graph.
-    fn subscribe_graph(&self) -> Result<impl futures::Stream<Item = Result<types::OpenedChannelsGraphEntry>>>;
+    fn subscribe_graph(&self) -> Result<impl futures::Stream<Item = Result<types::OpenedChannelsGraphEntry>> + Send>;
     /// Subscribes to transaction status changes given the `tx_id` previously returned
     /// by [`BlokliTransactionClient::submit_and_track_transaction`].
     ///
     /// The stream ends after the [`TransactionStatus::Confirmed`](types::TransactionStatus::Confirmed) status has been reached.
-    fn subscribe_transaction(&self, tx_id: TxId) -> Result<impl futures::Stream<Item = Result<types::Transaction>>>;
+    fn subscribe_transaction(
+        &self,
+        tx_id: TxId,
+    ) -> Result<impl futures::Stream<Item = Result<types::Transaction>> + Send>;
 }
 
 /// Trait defining Blokli API for signed transaction submission to the chain.
