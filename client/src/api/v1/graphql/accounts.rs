@@ -62,7 +62,7 @@ pub struct AccountsList {
     pub accounts: Vec<Account>,
 }
 
-#[derive(cynic::QueryFragment, Debug)]
+#[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct Account {
     pub chain_key: String,
     pub keyid: i32,

@@ -72,7 +72,7 @@ pub struct ChannelsList {
     pub channels: Vec<Channel>,
 }
 
-#[derive(cynic::QueryFragment, Debug)]
+#[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct Channel {
     pub balance: TokenValueString,
     pub closure_time: Option<DateTime>,

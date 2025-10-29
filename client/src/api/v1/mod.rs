@@ -110,7 +110,7 @@ pub trait BlokliSubscriptionClient {
     /// Subscribes to updates of the entire channel graph.
     fn subscribe_graph(&self) -> Result<impl futures::Stream<Item = Result<types::OpenedChannelsGraphEntry>> + Send>;
     /// Subscribes to transaction status changes given the `tx_id` previously returned
-    /// by [`BlokliTransactionClient::submit_tracked_transaction`].
+    /// by [`BlokliTransactionClient::submit_and_track_transaction`].
     ///
     /// The stream ends after the [`TransactionStatus::Confirmed`](types::TransactionStatus::Confirmed) status has been reached.
     fn subscribe_transaction(
@@ -123,10 +123,10 @@ pub trait BlokliSubscriptionClient {
 #[async_trait::async_trait]
 pub trait BlokliTransactionClient {
     /// Submits a signed transaction to the chain without waiting for confirmation.
-    async fn submit_signed_transaction(&self, signed_tx: &[u8]) -> Result<TxReceipt>;
+    async fn submit_transaction(&self, signed_tx: &[u8]) -> Result<TxReceipt>;
     /// Submits a signed transaction to the chain and returns an ID that can be used to track the transaction
     /// status via subscription or query.
-    async fn submit_tracked_transaction(&self, signed_tx: &[u8]) -> Result<TxId>;
+    async fn submit_and_track_transaction(&self, signed_tx: &[u8]) -> Result<TxId>;
     /// Submits a signed transaction to the chain and waits for the given number of confirmations.
     async fn submit_and_confirm_transaction(&self, signed_tx: &[u8], num_confirmations: usize) -> Result<TxReceipt>;
 }

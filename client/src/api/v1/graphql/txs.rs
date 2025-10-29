@@ -54,7 +54,7 @@ pub struct MutateSendTransaction {
     pub send_transaction: SendTransactionResult,
 }
 
-#[derive(cynic::QueryFragment, Debug)]
+#[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct Transaction {
     pub id: cynic::Id,
     pub status: TransactionStatus,

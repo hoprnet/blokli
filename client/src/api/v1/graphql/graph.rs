@@ -6,7 +6,7 @@ pub struct SubscribeGraph {
     pub opened_channel_graph_updated: OpenedChannelsGraphEntry,
 }
 
-#[derive(cynic::QueryFragment, Debug)]
+#[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct OpenedChannelsGraphEntry {
     pub channel: Channel,
     pub destination: Account,

@@ -8,7 +8,7 @@ pub struct QueryChainInfo {
     pub chain_info: ChainInfoResult,
 }
 
-#[derive(cynic::QueryFragment, Debug)]
+#[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct ChainInfo {
     pub channel_closure_grace_period: Option<Uint64>,
     pub channel_dst: Option<String>,
