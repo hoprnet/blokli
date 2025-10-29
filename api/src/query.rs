@@ -1,7 +1,9 @@
 //! GraphQL query root and resolver implementations
 
 use async_graphql::{Context, Object, Result};
-use blokli_api_types::{Account, ChainInfo, Channel, Hex32, HoprBalance, NativeBalance, SafeAllowance, TokenValueString};
+use blokli_api_types::{
+    Account, ChainInfo, Channel, Hex32, HoprBalance, NativeBalance, SafeAllowance, TokenValueString,
+};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::{
