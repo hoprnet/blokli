@@ -1,3 +1,5 @@
+use crate::api::types::Transaction;
+
 mod graphql;
 pub mod types {
     pub use super::graphql::{
@@ -109,15 +111,6 @@ pub trait BlokliSubscriptionClient {
     ) -> Result<impl futures::Stream<Item = Result<types::Account>> + Send>;
     /// Subscribes to updates of the entire channel graph.
     fn subscribe_graph(&self) -> Result<impl futures::Stream<Item = Result<types::OpenedChannelsGraphEntry>> + Send>;
-    /// Subscribes to transaction status changes given the `tx_id` previously returned
-    /// by [`BlokliTransactionClient::submit_and_track_transaction`].
-    ///
-    /// The stream ends after the [`TransactionStatus::Confirmed`](types::TransactionStatus::Confirmed) status has been
-    /// reached.
-    fn subscribe_transaction(
-        &self,
-        tx_id: TxId,
-    ) -> Result<impl futures::Stream<Item = Result<types::Transaction>> + Send>;
 }
 
 /// Trait defining Blokli API for signed transaction submission to the chain.
@@ -130,4 +123,7 @@ pub trait BlokliTransactionClient {
     async fn submit_and_track_transaction(&self, signed_tx: &[u8]) -> Result<TxId>;
     /// Submits a signed transaction to the chain and waits for the given number of confirmations.
     async fn submit_and_confirm_transaction(&self, signed_tx: &[u8], num_confirmations: usize) -> Result<TxReceipt>;
+    /// Tracks the transaction given the `tx_id` previously returned
+    /// by [`submit_and_track_transaction`](BlokliTransactionClient::submit_and_track_transaction) until it is confirmed or [fails](crate::errors::TrackingErrorKind).
+    async fn track_transaction(&self, tx_id: TxId, client_timeout: std::time::Duration) -> Result<Transaction>;
 }
