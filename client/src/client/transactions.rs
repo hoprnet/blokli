@@ -66,12 +66,10 @@ impl BlokliTransactionClient for BlokliClient {
                     }
                 })
             })
-            .try_collect::<Vec<Transaction>>()
+            .try_next()
             .timeout(futures_time::time::Duration::from(client_timeout))
             .await
             .map_err(|_| ErrorKind::Timeout)??
-            .first()
-            .cloned()
             .ok_or(ErrorKind::NoData.into())
     }
 }
