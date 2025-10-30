@@ -12,6 +12,7 @@ async-trait = { workspace = true }
 cynic = { workspace = true, features = ["http-reqwest"] }
 eventsource-client = { workspace = true }
 futures = { workspace = true }
+futures-time = { workspace = true }
 hex = { workspace = true }
 reqwest = { workspace = true, features = [
   "brotli",
