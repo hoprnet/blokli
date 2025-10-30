@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(cargo check:*)",
+      "Bash(cargo:*)",
+      "Bash(just:*)",
+      "Bash(grep:*)",
+      "Bash(find:*)",
+      "Bash(sed:*)",
+      "Read(/home/rbt/.cargo/git/checkouts/hoprnet-9b36f8012495d76a/cff7543/hopr/chain-config/src/**)",
+      "Read(/home/rbt/.cargo/git/checkouts/hoprnet-9b36f8012495d76a/cff7543/hopr/chain-config/src/**)",
+      "Read(/home/rbt/.cargo/git/checkouts/hoprnet-9b36f8012495d76a/cff7543/hopr/chain-config/**)",
+      "Read(/home/rbt/.cargo/git/checkouts/hoprnet-9b36f8012495d76a/cff7543/hopr/chain-config/src/**)",
+      "Read(/home/rbt/.cargo/git/checkouts/hoprnet-9b36f8012495d76a/cff7543/hopr/chain-config/src/**)",
+      "Read(/home/rbt/.cargo/git/checkouts/hoprnet-9b36f8012495d76a/cff7543/hopr/chain-config/src/**)",
+      "Read(/home/rbt/.cargo/git/checkouts/hoprnet-9b36f8012495d76a/cff7543/hopr/chain-config/src/**)",
+      "Read(/home/rbt/.cargo/git/checkouts/hoprnet-9b36f8012495d76a/cff7543/hopr/chain-config/src/**)",
+      "Bash(./target/debug/bloklid:*)",
+      "Read(/tmp/**)",
+      "Bash(python3:*)",
+      "Bash(echo \"Exit code: $?\")",
+      "Bash(timeout:*)",
+      "Bash(/dev/null)",
+      "Bash(cat:*)",
+      "Read(/home/rbt/.cargo/git/checkouts/hoprnet-9b36f8012495d76a/cff7543/hopr/chain-config/src/**)",
+      "Read(/home/rbt/.cargo/git/checkouts/hoprnet-9b36f8012495d76a/cff7543/hopr/chain-config/src/**)",
+      "Bash(echo:*)",
+      "Read(/home/rbt/.cargo/git/checkouts/hoprnet-9b36f8012495d76a/cff7543/hopr/chain-config/src/**)",
+      "Read(/home/rbt/.cargo/git/checkouts/hoprnet-9b36f8012495d76a/cff7543/hopr/chain-config/src/**)",
+      "Read(/home/rbt/.cargo/git/checkouts/hoprnet-9b36f8012495d76a/cff7543/hopr/chain-config/src/**)",
+      "WebSearch",
+      "Read(//home/rbt/.cargo/registry/src/**)",
+      "Bash(gh issue view:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Read(//home/rbt/.cargo/git/checkouts/**)",
+      "WebFetch(domain:github.com)",
+      "Bash(RUST_BACKTRACE=1 cargo test -p blokli-db-sql --lib channels::tests::test_insert_get_by_id -- --nocapture)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}

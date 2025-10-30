@@ -222,7 +222,7 @@ async fn insert_channel_state_and_emit(
     // Create channel_state record with state fields from ChannelEntry
     let state_model = channel_state::ActiveModel {
         channel_id: Set(channel_id),
-        balance: Set(channel_entry.balance.amount().to_be_bytes().to_vec()),
+        balance: Set(channel_entry.balance.to_be_bytes().to_vec()),
         status: Set(i8::from(channel_entry.status)),
         epoch: Set(channel_entry.channel_epoch.as_u64() as i64),
         ticket_index: Set(channel_entry.ticket_index.as_u64() as i64),

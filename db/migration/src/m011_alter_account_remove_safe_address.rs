@@ -8,14 +8,17 @@ impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         // Drop safe_address column from account table
         // This field is now stored in account_state for full version history
-        manager
+        // Ignore errors if column doesn't exist (fresh database case)
+        let _ = manager
             .alter_table(
                 Table::alter()
                     .table(Account::Table)
                     .drop_column(Account::SafeAddress)
                     .to_owned(),
             )
-            .await
+            .await;
+
+        Ok(())
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {

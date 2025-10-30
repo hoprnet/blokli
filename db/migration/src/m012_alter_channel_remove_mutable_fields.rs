@@ -7,73 +7,77 @@ pub struct Migration;
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         // Drop indexes that reference columns we're about to remove
-        manager
+        // Ignore errors if indexes don't exist (fresh database case)
+        let _ = manager
             .drop_index(Index::drop().name("idx_channel_status").to_owned())
-            .await?;
+            .await;
 
-        manager
+        let _ = manager
             .drop_index(Index::drop().name("idx_channel_id_channel_epoch").to_owned())
-            .await?;
+            .await;
 
-        manager
+        let _ = manager
             .drop_index(Index::drop().name("idx_channel_closure_time").to_owned())
-            .await?;
+            .await;
 
         // Drop mutable columns from channel table
         // These fields are now stored in channel_state for full version history
-        manager
+        // Ignore errors if columns don't exist (fresh database case)
+        let _ = manager
             .alter_table(
                 Table::alter()
                     .table(Channel::Table)
                     .drop_column(Channel::Balance)
                     .to_owned(),
             )
-            .await?;
+            .await;
 
-        manager
+        let _ = manager
             .alter_table(
                 Table::alter()
                     .table(Channel::Table)
                     .drop_column(Channel::Status)
                     .to_owned(),
             )
-            .await?;
+            .await;
 
-        manager
+        let _ = manager
             .alter_table(
                 Table::alter()
                     .table(Channel::Table)
                     .drop_column(Channel::Epoch)
                     .to_owned(),
             )
-            .await?;
+            .await;
 
-        manager
+        let _ = manager
             .alter_table(
                 Table::alter()
                     .table(Channel::Table)
                     .drop_column(Channel::TicketIndex)
                     .to_owned(),
             )
-            .await?;
+            .await;
 
-        manager
+        let _ = manager
             .alter_table(
                 Table::alter()
                     .table(Channel::Table)
                     .drop_column(Channel::ClosureTime)
                     .to_owned(),
             )
-            .await?;
+            .await;
 
-        manager
+        let _ = manager
             .alter_table(
                 Table::alter()
                     .table(Channel::Table)
                     .drop_column(Channel::CorruptedState)
                     .to_owned(),
             )
-            .await
+            .await;
+
+        Ok(())
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {

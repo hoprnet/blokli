@@ -91,7 +91,7 @@ impl BlokliDb {
         cfg.validate()
             .map_err(|e| DbSqlError::Construction(format!("failed configuration validation: {e}")))?;
 
-        let is_sqlite = database_url.starts_with("sqlite://");
+        let is_sqlite = database_url.starts_with("sqlite:");
 
         // Helper function to ensure parent directory exists for SQLite databases
         let ensure_sqlite_dir = |url: &str| -> Result<()> {
@@ -208,6 +208,7 @@ impl BlokliDb {
     /// Returns `DbSqlError` if connection or initialization fails
     pub async fn new_in_memory() -> Result<Self> {
         // Use SQLite in-memory databases for testing (dual databases like production)
+        // Each call to :memory: creates a separate private database
         let index_url = "sqlite::memory:";
         let logs_url = "sqlite::memory:";
         Self::new(index_url, Some(logs_url), Default::default()).await
