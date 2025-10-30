@@ -12,8 +12,8 @@ use hopr_internal_types::{account::AccountType, prelude::AccountEntry};
 use hopr_primitive_types::{errors::GeneralError, prelude::Address, traits::ToHex};
 use multiaddr::Multiaddr;
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, ModelTrait, QueryFilter, QueryOrder, Related,
-    Set, sea_query::Expr,
+    ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, ModelTrait, QueryFilter, QueryOrder, Set,
+    sea_query::Expr,
 };
 use sea_query::{Condition, OnConflict};
 use tracing::instrument;
@@ -321,19 +321,25 @@ impl BlokliDbAccountOperations for BlokliDb {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    let to_delete = account::Entity::find_related()
-                        .filter(cpk)
-                        .all(tx.as_ref())
-                        .await?
-                        .into_iter()
-                        .map(|x| x.id)
-                        .collect::<Vec<_>>();
+                    // First find the account
+                    let account_opt = Account::find().filter(cpk).one(tx.as_ref()).await?;
 
-                    if !to_delete.is_empty() {
-                        announcement::Entity::delete_many()
-                            .filter(announcement::Column::Id.is_in(to_delete))
-                            .exec(tx.as_ref())
-                            .await?;
+                    if let Some(account_model) = account_opt {
+                        // Find and delete all related announcements
+                        let to_delete: Vec<i32> = Announcement::find()
+                            .filter(announcement::Column::AccountId.eq(account_model.id))
+                            .all(tx.as_ref())
+                            .await?
+                            .into_iter()
+                            .map(|x: announcement::Model| x.id)
+                            .collect();
+
+                        if !to_delete.is_empty() {
+                            announcement::Entity::delete_many()
+                                .filter(announcement::Column::Id.is_in(to_delete))
+                                .exec(tx.as_ref())
+                                .await?;
+                        }
 
                         Ok::<_, DbSqlError>(())
                     } else {

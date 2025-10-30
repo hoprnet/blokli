@@ -1,8 +1,10 @@
-use super::schema;
-use super::{CountResult, MissingFilterError, QueryFailedError, Uint64};
-use crate::api::v1::AccountSelector;
-use crate::errors::{BlokliClientError, ErrorKind};
 use hex::ToHex;
+
+use super::{CountResult, MissingFilterError, QueryFailedError, Uint64, schema};
+use crate::{
+    api::v1::AccountSelector,
+    errors::{BlokliClientError, ErrorKind},
+};
 
 #[derive(cynic::QueryVariables, Default)]
 pub struct AccountVariables {

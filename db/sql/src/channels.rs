@@ -2,16 +2,15 @@
 #![allow(clippy::cast_possible_wrap)]
 
 use async_trait::async_trait;
-use blokli_db_entity::{channel, conversions::channels::ChannelStatusUpdate, prelude::Channel};
-use chrono::Utc;
-use futures::{StreamExt, TryStreamExt, stream::BoxStream};
+use blokli_db_entity::{channel, prelude::Channel};
+use futures::{TryStreamExt, stream::BoxStream};
 use hopr_crypto_types::types::Hash;
 use hopr_internal_types::channels::{ChannelDirection, ChannelEntry, ChannelStatus};
 use hopr_primitive_types::{
     prelude::{Address, HoprBalance, U256},
-    traits::{IntoEndian, ToHex},
+    traits::ToHex,
 };
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, ExprTrait, IntoActiveModel, QueryFilter};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, IntoActiveModel, QueryFilter};
 use tracing::instrument;
 
 use crate::{
@@ -34,29 +33,27 @@ impl ChannelEditor {
     }
 
     /// Change the HOPR balance of the channel.
-    pub fn change_balance(mut self, balance: HoprBalance) -> Self {
-        self.model.balance = Set(balance.amount().to_be_bytes().to_vec());
-        self
+    /// TODO(Phase 2-3): Update to work with channel_state table
+    pub fn change_balance(self, _balance: HoprBalance) -> Self {
+        panic!("Channel balance updates must now go through channel_state table - not yet implemented");
     }
 
     /// Change the channel status.
-    pub fn change_status(mut self, status: ChannelStatus) -> Self {
-        self.model.set_status(status);
-        self
+    /// TODO(Phase 2-3): Update to work with channel_state table
+    pub fn change_status(self, _status: ChannelStatus) -> Self {
+        panic!("Channel status updates must now go through channel_state table - not yet implemented");
     }
 
     /// Change the ticket index.
-    /// Note: ticket_index is uint48 in Solidity, always fits in i64
-    pub fn change_ticket_index(mut self, index: impl Into<U256>) -> Self {
-        self.model.ticket_index = Set(index.into().as_u64() as i64);
-        self
+    /// TODO(Phase 2-3): Update to work with channel_state table
+    pub fn change_ticket_index(self, _index: impl Into<U256>) -> Self {
+        panic!("Channel ticket_index updates must now go through channel_state table - not yet implemented");
     }
 
     /// Change the channel epoch.
-    /// Note: epoch is uint24 in Solidity, always fits in i64
-    pub fn change_epoch(mut self, epoch: impl Into<U256>) -> Self {
-        self.model.epoch = Set(epoch.into().as_u64() as i64);
-        self
+    /// TODO(Phase 2-3): Update to work with channel_state table
+    pub fn change_epoch(self, _epoch: impl Into<U256>) -> Self {
+        panic!("Channel epoch updates must now go through channel_state table - not yet implemented");
     }
 
     /// If set, the channel will be deleted, no other edits will be done.
@@ -157,8 +154,8 @@ impl BlokliDbChannelOperations for BlokliDb {
     }
 
     async fn finish_channel_update<'a>(&'a self, tx: OptTx<'a>, editor: ChannelEditor) -> Result<Option<ChannelEntry>> {
-        let _epoch = editor.model.epoch.clone();
-
+        // TODO(Phase 2-3): Update to work with channel_state table
+        // Channel updates now need to create new channel_state records
         let ret = self
             .nest_transaction(tx)
             .await?
@@ -259,21 +256,12 @@ impl BlokliDbChannelOperations for BlokliDb {
     }
 
     async fn stream_active_channels<'a>(&'a self) -> Result<BoxStream<'a, Result<ChannelEntry>>> {
-        Ok(Channel::find()
-            .filter(
-                channel::Column::Status
-                    .eq(i8::from(ChannelStatus::Open))
-                    .or(channel::Column::Status
-                        .eq(i8::from(ChannelStatus::PendingToClose(
-                            hopr_platform::time::native::current_time(), // irrelevant
-                        )))
-                        .and(channel::Column::ClosureTime.gt(Utc::now()))),
-            )
-            .stream(&self.db)
-            .await?
-            .map_err(DbSqlError::from)
-            .and_then(|m| async move { Ok(ChannelEntry::try_from(m)?) })
-            .boxed())
+        // TODO(Phase 2-3): Update to query channel_current view or join with channel_state
+        // Status and ClosureTime are now in channel_state table
+        // For now, return error as this requires complex query changes
+        Err(DbSqlError::LogicalError(
+            "stream_active_channels requires channel_state table - use channel_current view in Phase 2-3".to_string(),
+        ))
     }
 
     async fn upsert_channel<'a>(&'a self, tx: OptTx<'a>, channel_entry: ChannelEntry) -> Result<()> {

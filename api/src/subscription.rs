@@ -12,9 +12,7 @@ use futures::Stream;
 use sea_orm::DatabaseConnection;
 use tokio::time::sleep;
 
-use crate::conversions::{
-    channel_from_model, channel_status_to_i8, hopr_balance_from_model, native_balance_from_model,
-};
+use crate::conversions::{hopr_balance_from_model, native_balance_from_model};
 
 /// Root subscription type providing real-time updates via Server-Sent Events (SSE)
 pub struct SubscriptionRoot;
@@ -218,13 +216,19 @@ impl SubscriptionRoot {
             query = query.filter(blokli_db_entity::channel::Column::ConcreteChannelId.eq(channel_id));
         }
 
-        if let Some(status_filter) = status {
-            query = query.filter(blokli_db_entity::channel::Column::Status.eq(channel_status_to_i8(status_filter)));
+        // TODO(Phase 2-3): Status filtering requires querying channel_state table
+        if let Some(_status_filter) = status {
+            return Err(sea_orm::DbErr::Custom(
+                "Channel status filtering temporarily unavailable during schema migration".to_string(),
+            ));
         }
 
-        let channels = query.all(db).await?;
+        let _channels = query.all(db).await?;
 
-        Ok(channels.into_iter().map(channel_from_model).collect())
+        // TODO(Phase 2-3): Cannot use channel_from_model until we implement channel_state lookup
+        Err(sea_orm::DbErr::Custom(
+            "Channel subscription temporarily unavailable during schema migration".to_string(),
+        ))
     }
 
     async fn fetch_filtered_accounts(
@@ -285,26 +289,13 @@ impl SubscriptionRoot {
 
             // Convert addresses to hex strings for GraphQL response
             let chain_key_str = address_to_string(&account_model.chain_key);
-            let safe_address_str = account_model.safe_address.as_ref().map(|addr| address_to_string(addr));
 
-            // Fetch safe balances if safe_address exists
-            let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr) = account_model.safe_address {
-                let safe_hopr = blokli_db_entity::hopr_balance::Entity::find()
-                    .filter(blokli_db_entity::hopr_balance::Column::Address.eq(safe_addr.clone()))
-                    .one(db)
-                    .await?
-                    .map(|b| hopr_balance_to_string(&b.balance));
+            // TODO(Phase 2-3): Query account_state table for safe_address
+            // safe_address has been moved to account_state table
+            let safe_address_str = None::<String>;
 
-                let safe_native = blokli_db_entity::native_balance::Entity::find()
-                    .filter(blokli_db_entity::native_balance::Column::Address.eq(safe_addr.clone()))
-                    .one(db)
-                    .await?
-                    .map(|b| native_balance_to_string(&b.balance));
-
-                (safe_hopr, safe_native)
-            } else {
-                (None, None)
-            };
+            // TODO(Phase 2-3): Fetch safe balances once safe_address is available from account_state
+            let (safe_hopr_balance, safe_native_balance) = (None, None);
 
             result.push(Account {
                 keyid: account_model.id,
@@ -322,47 +313,14 @@ impl SubscriptionRoot {
         Ok(result)
     }
 
-    async fn fetch_opened_channels_graph(db: &DatabaseConnection) -> Result<OpenedChannelsGraph, sea_orm::DbErr> {
-        use std::collections::HashSet;
+    async fn fetch_opened_channels_graph(_db: &DatabaseConnection) -> Result<OpenedChannelsGraph, sea_orm::DbErr> {
+        // TODO(Phase 2-3): This function requires querying channel_state table for status
+        // For now, return empty graph until we implement the channel_state lookup
+        // Original logic: Fetch all OPEN channels (status = 1) and their participating accounts
 
-        use blokli_db_entity::conversions::account_aggregation::fetch_accounts_by_keyids;
-        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-
-        // 1. Fetch all OPEN channels (status = 1)
-        let channel_models = blokli_db_entity::channel::Entity::find()
-            .filter(blokli_db_entity::channel::Column::Status.eq(1))
-            .all(db)
-            .await?;
-
-        // Convert to GraphQL Channel type
-        let channels: Vec<Channel> = channel_models.iter().map(|m| channel_from_model(m.clone())).collect();
-
-        // 2. Collect unique keyids from source and destination
-        let mut keyids = HashSet::new();
-        for channel in &channel_models {
-            keyids.insert(channel.source);
-            keyids.insert(channel.destination);
-        }
-
-        // 3. Fetch accounts for those keyids with optimized batch loading
-        let keyid_vec: Vec<i32> = keyids.into_iter().collect();
-        let aggregated_accounts = fetch_accounts_by_keyids(db, keyid_vec).await?;
-
-        // Convert to GraphQL Account type
-        let accounts = aggregated_accounts
-            .into_iter()
-            .map(|agg| Account {
-                keyid: agg.keyid,
-                chain_key: agg.chain_key,
-                packet_key: agg.packet_key,
-                account_hopr_balance: TokenValueString(agg.account_hopr_balance),
-                account_native_balance: TokenValueString(agg.account_native_balance),
-                safe_address: agg.safe_address,
-                safe_hopr_balance: agg.safe_hopr_balance.map(TokenValueString),
-                safe_native_balance: agg.safe_native_balance.map(TokenValueString),
-                multi_addresses: agg.multi_addresses,
-            })
-            .collect();
+        // Temporary: return empty graph
+        let channels: Vec<Channel> = Vec::new();
+        let accounts: Vec<Account> = Vec::new();
 
         Ok(OpenedChannelsGraph { channels, accounts })
     }

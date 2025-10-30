@@ -4,7 +4,7 @@
 //! models into GraphQL types. These conversions are kept separate from
 //! the type definitions to avoid requiring API clients to depend on database entities.
 
-use blokli_api_types::{Announcement, Channel, ChannelStatus, HoprBalance, NativeBalance, TokenValueString, UInt64};
+use blokli_api_types::{Announcement, Channel, ChannelStatus, HoprBalance, NativeBalance, TokenValueString};
 
 /// Convert ChannelStatus enum to database integer representation
 ///
@@ -32,31 +32,18 @@ pub fn announcement_from_model(model: blokli_db_entity::announcement::Model) -> 
 }
 
 /// Convert database channel model to GraphQL type
-pub fn channel_from_model(model: blokli_db_entity::channel::Model) -> Channel {
-    use blokli_db_entity::conversions::balances::hopr_balance_to_string;
-
-    let balance = TokenValueString(hopr_balance_to_string(&model.balance));
-
-    // epoch is uint24 in Solidity (max 16,777,215), safe cast to i32
-    // In practice, epoch should never exceed i32::MAX, but clamp for safety
-    #[allow(clippy::cast_possible_truncation)]
-    let epoch = model.epoch.clamp(0, i32::MAX as i64) as i32;
-
-    // ticket_index is uint48 in Solidity (max 281,474,976,710,655), fits in u64
-    // Cast i64 to u64 (safe: stored values are always non-negative blockchain indices)
-    #[allow(clippy::cast_sign_loss)]
-    let ticket_index = UInt64(model.ticket_index as u64);
-
-    Channel {
-        concrete_channel_id: model.concrete_channel_id,
-        source: model.source,
-        destination: model.destination,
-        balance,
-        status: ChannelStatus::from(model.status),
-        epoch,
-        ticket_index,
-        closure_time: model.closure_time,
-    }
+///
+/// TODO(Phase 2-3): This function needs to be refactored to query channel_state table
+/// Channel state fields (balance, status, epoch, ticket_index, closure_time) are now stored
+/// in channel_state table, not channel table. This requires database access to join with
+/// channel_state or use the channel_current view.
+pub fn channel_from_model(_model: blokli_db_entity::channel::Model) -> Channel {
+    // TODO(Phase 2-3): Implement proper channel state lookup from channel_state table
+    // For now, this function cannot be used until we implement the state lookup
+    panic!(
+        "channel_from_model requires refactoring to query channel_state table - use channel queries that join with \
+         channel_state instead"
+    )
 }
 
 /// Convert database HOPR balance model to GraphQL type

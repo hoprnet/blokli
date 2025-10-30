@@ -5,7 +5,7 @@ use blokli_api_types::{Account, ChainInfo, Channel, Hex32, HoprBalance, NativeBa
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::{
-    conversions::{channel_from_model, channel_status_to_i8, hopr_balance_from_model, native_balance_from_model},
+    conversions::{hopr_balance_from_model, native_balance_from_model},
     validation::validate_eth_address,
 };
 
@@ -153,8 +153,13 @@ impl QueryRoot {
             query = query.filter(blokli_db_entity::channel::Column::ConcreteChannelId.eq(channel_id));
         }
 
-        if let Some(status_filter) = status {
-            query = query.filter(blokli_db_entity::channel::Column::Status.eq(channel_status_to_i8(status_filter)));
+        // TODO(Phase 2-3): Status filtering requires querying channel_state table
+        // Status column has been moved to channel_state table
+        if let Some(_status_filter) = status {
+            return Err(async_graphql::Error::new(
+                "Channel status filtering is temporarily unavailable during schema migration. Use other filters \
+                 (sourceKeyId, destinationKeyId, or concreteChannelId) without status.",
+            ));
         }
 
         let count_u64 = query.count(db).await?;
@@ -185,11 +190,13 @@ impl QueryRoot {
         // Require at least one identity filter to prevent excessive data retrieval
         // Note: status alone is not sufficient as it could still return thousands of channels
         if source_key_id.is_none() && destination_key_id.is_none() && concrete_channel_id.is_none() {
-            return Err(async_graphql::Error::new(
-                "At least one identity filter is required (sourceKeyId, destinationKeyId, or concreteChannelId). \
+            return Err(
+                async_graphql::Error::new(
+                    "At least one identity filter is required (sourceKeyId, destinationKeyId, or concreteChannelId). \
                      \n                 The status filter can be used in combination but not alone. \n                 \
                      Example: channels(sourceKeyId: 1) or channels(sourceKeyId: 1, status: OPEN)",
-            ));
+                ),
+            );
         }
 
         let db = ctx.data::<DatabaseConnection>()?;
@@ -211,14 +218,23 @@ impl QueryRoot {
             query = query.filter(blokli_db_entity::channel::Column::ConcreteChannelId.eq(channel_id));
         }
 
-        // Apply status filter if provided
-        if let Some(status_filter) = status {
-            query = query.filter(blokli_db_entity::channel::Column::Status.eq(channel_status_to_i8(status_filter)));
+        // TODO(Phase 2-3): Status filtering requires querying channel_state table
+        // Status column has been moved to channel_state table
+        if let Some(_status_filter) = status {
+            return Err(async_graphql::Error::new(
+                "Channel status filtering is temporarily unavailable during schema migration. Use other filters \
+                 (sourceKeyId, destinationKeyId, or concreteChannelId) without status.",
+            ));
         }
 
-        let channels = query.all(db).await?;
+        let _channels = query.all(db).await?;
 
-        Ok(channels.into_iter().map(channel_from_model).collect())
+        // TODO(Phase 2-3): Cannot use channel_from_model until we implement channel_state lookup
+        // For now, return empty list as channels query requires state information
+        Err(async_graphql::Error::new(
+            "Channel queries are temporarily unavailable during schema migration. Channel state information needs to \
+             be joined from channel_state table.",
+        ))
     }
 
     /// Retrieve HOPR token balance for a specific address

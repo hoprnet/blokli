@@ -26,6 +26,7 @@ sqlite = [
 traits = []
 
 [dependencies]
+async-broadcast = { workspace = true }
 async-lock = { workspace = true }
 async-stream = { workspace = true }
 async-trait = { workspace = true }

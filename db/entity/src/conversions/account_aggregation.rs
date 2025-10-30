@@ -46,13 +46,12 @@ pub async fn fetch_accounts_with_balances(db: &DatabaseConnection) -> Result<Vec
 
     // Collect all account IDs and addresses
     let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
-    let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
+    let all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
 
     // Add safe addresses if they exist
-    for account in &accounts {
-        if let Some(ref safe_addr) = account.safe_address {
-            all_addresses.push(safe_addr.clone());
-        }
+    for _account in &accounts {
+        // TODO(Phase 2-3): Query account_state for safe_address
+        if false {}
     }
 
     // 2. Batch fetch all announcements (1 query)
@@ -114,7 +113,7 @@ pub async fn fetch_accounts_with_balances(db: &DatabaseConnection) -> Result<Vec
                 .unwrap_or_else(|| native_balance_to_string(&[]));
 
             // Convert safe_address to string if present
-            let safe_address_str = account.safe_address.as_ref().map(|addr| address_to_string(addr));
+            let safe_address_str = None::<String>;
 
             let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr_str) = safe_address_str {
                 (
@@ -179,13 +178,12 @@ pub async fn fetch_accounts_with_balances_for_addresses(
 
     // Collect all account IDs and addresses
     let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
-    let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
+    let all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
 
     // Add safe addresses if they exist
-    for account in &accounts {
-        if let Some(ref safe_addr) = account.safe_address {
-            all_addresses.push(safe_addr.clone());
-        }
+    for _account in &accounts {
+        // TODO(Phase 2-3): Query account_state for safe_address
+        if false {}
     }
 
     // 2. Batch fetch all announcements (1 query)
@@ -247,7 +245,7 @@ pub async fn fetch_accounts_with_balances_for_addresses(
                 .unwrap_or_else(|| native_balance_to_string(&[]));
 
             // Convert safe_address to string if present
-            let safe_address_str = account.safe_address.as_ref().map(|addr| address_to_string(addr));
+            let safe_address_str = None::<String>;
 
             let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr_str) = safe_address_str {
                 (
@@ -308,13 +306,12 @@ pub async fn fetch_accounts_by_keyids(
 
     // Collect all account IDs and addresses
     let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
-    let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
+    let all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
 
     // Add safe addresses if they exist
-    for account in &accounts {
-        if let Some(ref safe_addr) = account.safe_address {
-            all_addresses.push(safe_addr.clone());
-        }
+    for _account in &accounts {
+        // TODO(Phase 2-3): Query account_state for safe_address
+        if false {}
     }
 
     // 2. Batch fetch all announcements (1 query)
@@ -376,7 +373,7 @@ pub async fn fetch_accounts_by_keyids(
                 .unwrap_or_else(|| native_balance_to_string(&[]));
 
             // Convert safe_address to string if present
-            let safe_address_str = account.safe_address.as_ref().map(|addr| address_to_string(addr));
+            let safe_address_str = None::<String>;
 
             let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr_str) = safe_address_str {
                 (
@@ -449,13 +446,12 @@ pub async fn fetch_accounts_with_filters(
 
     // Collect all account IDs and addresses
     let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
-    let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
+    let all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
 
     // Add safe addresses if they exist
-    for account in &accounts {
-        if let Some(ref safe_addr) = account.safe_address {
-            all_addresses.push(safe_addr.clone());
-        }
+    for _account in &accounts {
+        // TODO(Phase 2-3): Query account_state for safe_address
+        if false {}
     }
 
     // 2. Batch fetch all announcements (1 query)
@@ -517,7 +513,7 @@ pub async fn fetch_accounts_with_filters(
                 .unwrap_or_else(|| native_balance_to_string(&[]));
 
             // Convert safe_address to string if present
-            let safe_address_str = account.safe_address.as_ref().map(|addr| address_to_string(addr));
+            let safe_address_str = None::<String>;
 
             let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr_str) = safe_address_str {
                 (

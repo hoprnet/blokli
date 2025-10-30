@@ -9,6 +9,13 @@ mod m005_seed_initial_data;
 mod m006_create_balance_and_safe_tables;
 mod m007_create_performance_indices;
 mod m008_add_channel_closure_grace_period;
+mod m009_create_account_state_table;
+mod m010_create_channel_state_table;
+mod m011_alter_account_remove_safe_address;
+mod m012_alter_channel_remove_mutable_fields;
+mod m013_alter_chain_info_add_watermark_indices;
+mod m014_add_announcement_position_index;
+mod m015_create_current_state_views;
 
 #[derive(PartialEq)]
 pub enum BackendType {
@@ -32,6 +39,13 @@ impl MigratorTrait for Migrator {
             Box::new(m006_create_balance_and_safe_tables::Migration),
             Box::new(m007_create_performance_indices::Migration),
             Box::new(m008_add_channel_closure_grace_period::Migration),
+            Box::new(m009_create_account_state_table::Migration),
+            Box::new(m010_create_channel_state_table::Migration),
+            Box::new(m011_alter_account_remove_safe_address::Migration),
+            Box::new(m012_alter_channel_remove_mutable_fields::Migration),
+            Box::new(m013_alter_chain_info_add_watermark_indices::Migration),
+            Box::new(m014_add_announcement_position_index::Migration),
+            Box::new(m015_create_current_state_views::Migration),
         ]
     }
 }
@@ -53,6 +67,13 @@ impl MigratorTrait for MigratorIndex {
             Box::new(m006_create_balance_and_safe_tables::Migration),
             Box::new(m007_create_performance_indices::Migration),
             Box::new(m008_add_channel_closure_grace_period::Migration),
+            Box::new(m009_create_account_state_table::Migration),
+            Box::new(m010_create_channel_state_table::Migration),
+            Box::new(m011_alter_account_remove_safe_address::Migration),
+            Box::new(m012_alter_channel_remove_mutable_fields::Migration),
+            Box::new(m013_alter_chain_info_add_watermark_indices::Migration),
+            Box::new(m014_add_announcement_position_index::Migration),
+            Box::new(m015_create_current_state_views::Migration),
         ]
     }
 }

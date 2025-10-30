@@ -2,8 +2,10 @@ use cynic::QueryBuilder;
 use hex::ToHex;
 
 use super::{BlokliClient, response_to_data};
-use crate::api::{internal::*, types::*, *};
-use crate::errors::{BlokliClientError, ErrorKind};
+use crate::{
+    api::{internal::*, types::*, *},
+    errors::{BlokliClientError, ErrorKind},
+};
 
 #[async_trait::async_trait]
 impl BlokliQueryClient for BlokliClient {

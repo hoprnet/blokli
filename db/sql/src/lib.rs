@@ -10,6 +10,7 @@ pub mod channels;
 // pub mod corrupted_channels;
 pub mod db;
 pub mod errors;
+pub mod events;
 pub mod info;
 pub mod logs;
 
@@ -276,5 +277,5 @@ pub mod prelude {
     pub use blokli_db_api::logs::*;
 
     pub use super::*;
-    pub use crate::{accounts::*, channels::*, /* corrupted_channels::*, */ db::*, errors::*, info::*};
+    pub use crate::{accounts::*, channels::*, /* corrupted_channels::*, */ db::*, errors::*, events::*, info::*};
 }

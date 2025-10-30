@@ -4,7 +4,6 @@ resolver = "2"
 
 members = [
   "api",
-  "types",
   "bloklid",
   "chain/actions",
   "chain/api",
@@ -16,6 +15,7 @@ members = [
   "db/entity",
   "db/migration",
   "db/sql",
+  "types",
 ]
 
 [workspace.dependencies]
@@ -28,6 +28,7 @@ alloy = { version = "=1.0.37", default-features = false, features = [
   "std",
 ] }
 anyhow = "1.0.99"
+async-broadcast = "0.7.1"
 async-channel = "2.5.0"
 async-compression = "0.4.30"
 async-graphql = { version = "7.0.14", features = ["chrono", "dataloader"] }
