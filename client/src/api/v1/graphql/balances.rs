@@ -1,7 +1,5 @@
-use super::schema;
-use super::{InvalidAddressError, QueryFailedError};
-use crate::api::types::TokenValueString;
-use crate::errors::BlokliClientError;
+use super::{InvalidAddressError, QueryFailedError, schema};
+use crate::{api::types::TokenValueString, errors::BlokliClientError};
 
 #[derive(cynic::QueryVariables)]
 pub struct BalanceVariables {

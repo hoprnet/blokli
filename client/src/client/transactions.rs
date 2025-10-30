@@ -2,8 +2,10 @@ use cynic::MutationBuilder;
 use hex::ToHex;
 
 use super::{BlokliClient, response_to_data};
-use crate::api::{internal::*, types::*, *};
-use crate::errors::ErrorKind;
+use crate::{
+    api::{internal::*, types::*, *},
+    errors::ErrorKind,
+};
 
 #[async_trait::async_trait]
 impl BlokliTransactionClient for BlokliClient {

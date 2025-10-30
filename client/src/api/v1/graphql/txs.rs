@@ -1,7 +1,8 @@
-use super::schema;
-use super::{DateTime, Hex32};
-use crate::api::TxReceipt;
-use crate::errors::{BlokliClientError, ErrorKind};
+use super::{DateTime, Hex32, schema};
+use crate::{
+    api::TxReceipt,
+    errors::{BlokliClientError, ErrorKind},
+};
 
 #[derive(cynic::QueryVariables)]
 pub struct TransactionsVariables {

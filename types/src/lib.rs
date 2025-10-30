@@ -154,7 +154,11 @@ pub struct ChainInfo {
     pub channel_closure_grace_period: Option<u64>,
 }
 
-/// Account information containing balances and multiaddresses
+/// Account information
+///
+/// The Account type contains identity information for HOPR nodes including keys,
+/// addresses, and network announcements. To query balances and allowances, use the
+/// dedicated balance and allowance queries (hoprBalance, nativeBalance, safeHoprAllowance).
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Account {
     /// Unique identifier for the account
@@ -165,30 +169,9 @@ pub struct Account {
     /// Unique account packet key in peer id format
     #[graphql(name = "packetKey")]
     pub packet_key: String,
-    /// wxHOPR balance associated with the on-chain address
-    ///
-    /// Returns zero balance if no balance record exists in the database.
-    #[graphql(name = "accountHoprBalance")]
-    pub account_hopr_balance: TokenValueString,
-    /// Native balance associated with the on-chain address
-    ///
-    /// Returns zero balance if no balance record exists in the database.
-    #[graphql(name = "accountNativeBalance")]
-    pub account_native_balance: TokenValueString,
     /// HOPR Safe contract address to which the account is linked
     #[graphql(name = "safeAddress")]
     pub safe_address: Option<String>,
-    /// wxHOPR balance associated with the linked Safe contract address
-    #[graphql(name = "safeHoprBalance")]
-    pub safe_hopr_balance: Option<TokenValueString>,
-    /// Native balance associated with the linked Safe contract address
-    #[graphql(name = "safeNativeBalance")]
-    pub safe_native_balance: Option<TokenValueString>,
-    /// wxHOPR token allowance granted by the safe to the channels contract
-    ///
-    /// Only available for the node's own safe address. Returns None for other accounts.
-    #[graphql(name = "safeHoprAllowance")]
-    pub safe_hopr_allowance: Option<TokenValueString>,
     /// List of multiaddresses associated with the packet key
     #[graphql(name = "multiAddresses")]
     pub multi_addresses: Vec<String>,
@@ -254,4 +237,13 @@ pub struct NativeBalance {
     pub address: String,
     /// Native token balance
     pub balance: TokenValueString,
+}
+
+/// Safe HOPR token allowance information for a specific Safe address
+#[derive(SimpleObject, Clone, Debug)]
+pub struct SafeHoprAllowance {
+    /// Safe contract address
+    pub address: String,
+    /// wxHOPR token allowance granted by the safe to the channels contract
+    pub allowance: TokenValueString,
 }

@@ -1,7 +1,9 @@
-use super::schema;
-use super::{ChannelStatus, CountResult, DateTime, MissingFilterError, QueryFailedError, TokenValueString, Uint64};
-use crate::api::v1::{ChannelFilter, ChannelSelector};
 use hex::ToHex;
+
+use super::{
+    ChannelStatus, CountResult, DateTime, MissingFilterError, QueryFailedError, TokenValueString, Uint64, schema,
+};
+use crate::api::v1::{ChannelFilter, ChannelSelector};
 
 #[derive(cynic::QueryVariables, Default)]
 pub struct ChannelsVariables {

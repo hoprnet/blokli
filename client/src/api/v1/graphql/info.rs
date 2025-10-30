@@ -1,6 +1,4 @@
-use super::TokenValueString;
-use super::schema;
-use super::{QueryFailedError, Uint64};
+use super::{QueryFailedError, TokenValueString, Uint64, schema};
 
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "QueryRoot")]

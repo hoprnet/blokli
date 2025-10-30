@@ -112,7 +112,8 @@ pub trait BlokliSubscriptionClient {
     /// Subscribes to transaction status changes given the `tx_id` previously returned
     /// by [`BlokliTransactionClient::submit_and_track_transaction`].
     ///
-    /// The stream ends after the [`TransactionStatus::Confirmed`](types::TransactionStatus::Confirmed) status has been reached.
+    /// The stream ends after the [`TransactionStatus::Confirmed`](types::TransactionStatus::Confirmed) status has been
+    /// reached.
     fn subscribe_transaction(
         &self,
         tx_id: TxId,
