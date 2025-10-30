@@ -4,7 +4,6 @@ resolver = "2"
 
 members = [
   "api",
-  "types",
   "bloklid",
   "chain/actions",
   "chain/api",
@@ -16,6 +15,7 @@ members = [
   "db/entity",
   "db/migration",
   "db/sql",
+  "types",
 ]
 
 [workspace.dependencies]

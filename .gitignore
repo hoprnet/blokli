@@ -37,3 +37,4 @@ result
 /.direnv
 /.pre-commit-config.yaml
 /schema.graphql
+db/entity/src/conversions/account_aggregation.rs.bak

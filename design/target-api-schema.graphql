@@ -5,57 +5,13 @@ schema {
 }
 
 """
-Account information containing balances and multiaddresses
+Account information
 
-**Querying Safe Balances:**
-If an account has a linked Safe contract (safeAddress is not null), you must make
-separate requests to query the Safe's balances. GraphQL does not support using the
-result of one query as input to another within the same request.
-
-Client-side pattern:
-1. Query the account to get safeAddress
-2. If safeAddress exists, make a second request with that address
-
-Example (two separate requests):
-```graphql
-# Request 1: Get account information
-query GetAccount {
-  accounts(keyid: 1) {
-    ... on AccountsList {
-      accounts {
-        keyid
-        chainKey
-        safeAddress
-        accountHoprBalance
-        accountNativeBalance
-      }
-    }
-  }
-}
-
-# Request 2: Use safeAddress from first response
-query GetSafeBalances($safeAddress: String!) {
-  hoprBalance(address: $safeAddress) {
-    ... on HoprBalance {
-      address
-      balance
-    }
-  }
-
-  nativeBalance(address: $safeAddress) {
-    ... on NativeBalance {
-      address
-      balance
-    }
-  }
-}
-```
+The Account type contains identity information for HOPR nodes including keys,
+addresses, and network announcements. To query balances and allowances, use the
+dedicated balance and allowance queries (hoprBalance, nativeBalance, safeHoprAllowance).
 """
 type Account {
-  "The wxHOPR balance associated with the on-chain address (returns zero if no balance record exists)"
-  accountHoprBalance: TokenValueString!
-  "Native balance associated with the on-chain address (returns zero if no balance record exists)"
-  accountNativeBalance: TokenValueString!
   "Unique account on-chain address in hexadecimal format"
   chainKey: String!
   "Unique identifier for the account"
@@ -66,7 +22,7 @@ type Account {
   packetKey: String!
   "HOPR Safe contract address to which the account is linked (null if no Safe is linked)"
   safeAddress: String
-  "HOPR Safe contract address transaction count"
+  "HOPR Safe contract transaction count"
   safeTransactionCount: UInt64
 }
 
@@ -434,35 +390,25 @@ type QueryRoot {
   Returns Error with code INVALID_ADDRESS if address format is invalid.
   Returns Error with code QUERY_FAILED if database query fails.
   Returns None if no balance exists for the address.
-  
-  Example (querying a Safe balance requires two separate requests):
-  ```graphql
-  # Request 1: Get the account's Safe address
-  query GetAccount {
-    accounts(keyid: 1) {
-      ... on AccountsList {
-        accounts {
-          safeAddress
-        }
-      }
-    }
-  }
-  
-  # Request 2: Query the Safe's native balance using address from first response
-  query GetSafeNativeBalance($safeAddress: String!) {
-    nativeBalance(address: $safeAddress) {
-      ... on NativeBalance {
-        address
-        balance
-      }
-    }
-  }
-  ```
   """
   nativeBalance(
     "On-chain address to query (hexadecimal format)"
     address: String!
   ): NativeBalanceResult!
+  """
+  Retrieve Safe HOPR token allowance for a specific Safe address
+  
+  This query returns the wxHOPR token allowance that the specified Safe contract
+  has granted to the HOPR channels contract.
+  
+  Returns Error with code INVALID_ADDRESS if address format is invalid.
+  Returns Error with code QUERY_FAILED if database query fails.
+  Returns None if no allowance data exists for the address.
+  """
+  safeHoprAllowance(
+    "Safe contract address to query (hexadecimal format)"
+    address: String!
+  ): SafeHoprAllowanceResult!
   """
   Retrieve transaction status by ID
   
@@ -490,6 +436,17 @@ type RpcError {
   "Human-readable error message"
   message: String!
 }
+
+"""Safe HOPR token allowance information for a specific Safe address"""
+type SafeHoprAllowance {
+  "Safe contract address"
+  address: String!
+  "WxHOPR token allowance granted by the safe to the channels contract"
+  allowance: TokenValueString!
+}
+
+"""Result type for Safe HOPR allowance queries"""
+union SafeHoprAllowanceResult = SafeHoprAllowance | InvalidAddressError | QueryFailedError
 
 """Result type for asynchronous transaction submission"""
 union SendTransactionAsyncResult = Transaction | ContractNotAllowedError | FunctionNotAllowedError | RpcError

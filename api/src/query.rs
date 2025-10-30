@@ -1,7 +1,9 @@
 //! GraphQL query root and resolver implementations
 
 use async_graphql::{Context, Object, Result};
-use blokli_api_types::{Account, ChainInfo, Channel, Hex32, HoprBalance, NativeBalance, TokenValueString};
+use blokli_api_types::{
+    Account, ChainInfo, Channel, Hex32, HoprBalance, NativeBalance, SafeHoprAllowance, TokenValueString,
+};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::{
@@ -59,12 +61,9 @@ impl QueryRoot {
                 keyid: agg.keyid,
                 chain_key: agg.chain_key,
                 packet_key: agg.packet_key,
-                account_hopr_balance: TokenValueString(agg.account_hopr_balance),
-                account_native_balance: TokenValueString(agg.account_native_balance),
                 safe_address: agg.safe_address,
-                safe_hopr_balance: agg.safe_hopr_balance.map(TokenValueString),
-                safe_native_balance: agg.safe_native_balance.map(TokenValueString),
                 multi_addresses: agg.multi_addresses,
+                safe_transaction_count: blokli_api_types::UInt64(agg.safe_transaction_count),
             })
             .collect();
 
@@ -185,11 +184,13 @@ impl QueryRoot {
         // Require at least one identity filter to prevent excessive data retrieval
         // Note: status alone is not sufficient as it could still return thousands of channels
         if source_key_id.is_none() && destination_key_id.is_none() && concrete_channel_id.is_none() {
-            return Err(async_graphql::Error::new(
-                "At least one identity filter is required (sourceKeyId, destinationKeyId, or concreteChannelId). \
+            return Err(
+                async_graphql::Error::new(
+                    "At least one identity filter is required (sourceKeyId, destinationKeyId, or concreteChannelId). \
                      \n                 The status filter can be used in combination but not alone. \n                 \
                      Example: channels(sourceKeyId: 1) or channels(sourceKeyId: 1, status: OPEN)",
-            ));
+                ),
+            );
         }
 
         let db = ctx.data::<DatabaseConnection>()?;
@@ -273,6 +274,37 @@ impl QueryRoot {
             .await?;
 
         Ok(balance.map(native_balance_from_model))
+    }
+
+    /// Retrieve Safe HOPR token allowance for a specific Safe address
+    ///
+    /// Returns the wxHOPR token allowance that the specified Safe contract has granted
+    /// to the HOPR channels contract.
+    ///
+    /// **Note:** Currently returns None as indexer/database support is not yet implemented.
+    /// Returns None if no allowance data exists for the address.
+    #[graphql(name = "safeHoprAllowance")]
+    async fn safe_hopr_allowance(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Safe contract address to query (hexadecimal format)")] address: String,
+    ) -> Result<Option<SafeHoprAllowance>> {
+        // Validate address format
+        validate_eth_address(&address)?;
+
+        // Prevent unused variable warning
+        let _db = ctx.data::<DatabaseConnection>()?;
+
+        // FIXME: Implement allowance fetching once indexer and database support is added
+        // The indexer needs to be extended to fetch and store Safe allowances for arbitrary addresses
+        // Database schema needs a table to store allowance data indexed by Safe address
+        //
+        // Implementation should:
+        // 1. Query allowance table by Safe address
+        // 2. Return SafeHoprAllowance { address, allowance } if data exists
+        // 3. Return None if no allowance data exists for the address
+
+        Ok(None)
     }
 
     /// Retrieve chain information

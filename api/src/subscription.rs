@@ -4,10 +4,8 @@ use std::time::Duration;
 
 use async_graphql::{Context, Result, Subscription};
 use async_stream::stream;
-use blokli_api_types::{Account, Channel, HoprBalance, NativeBalance, OpenedChannelsGraph, TokenValueString};
-use blokli_db_entity::conversions::balances::{
-    address_to_string, hopr_balance_to_string, native_balance_to_string, string_to_address,
-};
+use blokli_api_types::{Account, Channel, HoprBalance, NativeBalance, OpenedChannelsGraph};
+use blokli_db_entity::conversions::balances::string_to_address;
 use futures::Stream;
 use sea_orm::DatabaseConnection;
 use tokio::time::sleep;
@@ -233,91 +231,23 @@ impl SubscriptionRoot {
         packet_key: Option<String>,
         chain_key: Option<String>,
     ) -> Result<Vec<Account>, sea_orm::DbErr> {
-        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+        use blokli_db_entity::conversions::account_aggregation::fetch_accounts_with_filters;
 
-        // Build query with filters
-        let mut query = blokli_db_entity::account::Entity::find();
+        // Use optimized batch loading from account_aggregation
+        let aggregated_accounts = fetch_accounts_with_filters(db, keyid, packet_key, chain_key).await?;
 
-        if let Some(id) = keyid {
-            query = query.filter(blokli_db_entity::account::Column::Id.eq(id));
-        }
-
-        if let Some(pk) = packet_key {
-            query = query.filter(blokli_db_entity::account::Column::PacketKey.eq(pk));
-        }
-
-        if let Some(ck) = chain_key {
-            // Convert hex string address to binary for database query
-            let binary_chain_key = string_to_address(&ck);
-            query = query.filter(blokli_db_entity::account::Column::ChainKey.eq(binary_chain_key));
-        }
-
-        let accounts = query.all(db).await?;
-
-        let mut result = Vec::new();
-
-        for account_model in accounts {
-            // Fetch announcements for this account
-            let announcements = blokli_db_entity::announcement::Entity::find()
-                .filter(blokli_db_entity::announcement::Column::AccountId.eq(account_model.id))
-                .all(db)
-                .await?;
-
-            let multi_addresses: Vec<String> = announcements.into_iter().map(|a| a.multiaddress).collect();
-
-            // Fetch HOPR balance for account's chain_key
-            // Returns zero balance if no balance record exists (hopr_balance_to_string(&[]) returns "0")
-            let hopr_balance_value = blokli_db_entity::hopr_balance::Entity::find()
-                .filter(blokli_db_entity::hopr_balance::Column::Address.eq(account_model.chain_key.clone()))
-                .one(db)
-                .await?
-                .map(|b| hopr_balance_to_string(&b.balance))
-                .unwrap_or_else(|| hopr_balance_to_string(&[]));
-
-            // Fetch Native balance for account's chain_key
-            // Returns zero balance if no balance record exists (native_balance_to_string(&[]) returns "0")
-            let native_balance_value = blokli_db_entity::native_balance::Entity::find()
-                .filter(blokli_db_entity::native_balance::Column::Address.eq(account_model.chain_key.clone()))
-                .one(db)
-                .await?
-                .map(|b| native_balance_to_string(&b.balance))
-                .unwrap_or_else(|| native_balance_to_string(&[]));
-
-            // Convert addresses to hex strings for GraphQL response
-            let chain_key_str = address_to_string(&account_model.chain_key);
-            let safe_address_str = account_model.safe_address.as_ref().map(|addr| address_to_string(addr));
-
-            // Fetch safe balances if safe_address exists
-            let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr) = account_model.safe_address {
-                let safe_hopr = blokli_db_entity::hopr_balance::Entity::find()
-                    .filter(blokli_db_entity::hopr_balance::Column::Address.eq(safe_addr.clone()))
-                    .one(db)
-                    .await?
-                    .map(|b| hopr_balance_to_string(&b.balance));
-
-                let safe_native = blokli_db_entity::native_balance::Entity::find()
-                    .filter(blokli_db_entity::native_balance::Column::Address.eq(safe_addr.clone()))
-                    .one(db)
-                    .await?
-                    .map(|b| native_balance_to_string(&b.balance));
-
-                (safe_hopr, safe_native)
-            } else {
-                (None, None)
-            };
-
-            result.push(Account {
-                keyid: account_model.id,
-                chain_key: chain_key_str,
-                packet_key: account_model.packet_key,
-                account_hopr_balance: TokenValueString(hopr_balance_value),
-                account_native_balance: TokenValueString(native_balance_value),
-                safe_address: safe_address_str,
-                safe_hopr_balance: safe_hopr_balance.map(TokenValueString),
-                safe_native_balance: safe_native_balance.map(TokenValueString),
-                multi_addresses,
-            });
-        }
+        // Convert to GraphQL Account type
+        let result = aggregated_accounts
+            .into_iter()
+            .map(|agg| Account {
+                keyid: agg.keyid,
+                chain_key: agg.chain_key,
+                packet_key: agg.packet_key,
+                safe_address: agg.safe_address,
+                multi_addresses: agg.multi_addresses,
+                safe_transaction_count: blokli_api_types::UInt64(agg.safe_transaction_count),
+            })
+            .collect();
 
         Ok(result)
     }
@@ -355,12 +285,9 @@ impl SubscriptionRoot {
                 keyid: agg.keyid,
                 chain_key: agg.chain_key,
                 packet_key: agg.packet_key,
-                account_hopr_balance: TokenValueString(agg.account_hopr_balance),
-                account_native_balance: TokenValueString(agg.account_native_balance),
                 safe_address: agg.safe_address,
-                safe_hopr_balance: agg.safe_hopr_balance.map(TokenValueString),
-                safe_native_balance: agg.safe_native_balance.map(TokenValueString),
                 multi_addresses: agg.multi_addresses,
+                safe_transaction_count: blokli_api_types::UInt64(agg.safe_transaction_count),
             })
             .collect();
 
