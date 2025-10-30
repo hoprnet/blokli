@@ -256,7 +256,7 @@ impl SubscriptionRoot {
 
         // Fetch node_info to get the node's safe address and allowance
         let node_info = blokli_db_entity::node_info::Entity::find_by_id(1).one(db).await?;
-        let (node_safe_address, node_safe_allowance) = if let Some(info) = node_info {
+        let (node_safe_address, node_safe_hopr_allowance) = if let Some(info) = node_info {
             (
                 info.safe_address.as_ref().map(|addr| address_to_string(addr)),
                 Some(hopr_balance_to_string(&info.safe_allowance)),
@@ -299,7 +299,7 @@ impl SubscriptionRoot {
             let safe_address_str = account_model.safe_address.as_ref().map(|addr| address_to_string(addr));
 
             // Fetch safe balances and allowance if safe_address exists
-            let (safe_hopr_balance, safe_native_balance, safe_allowance) = if let Some(ref safe_addr) = account_model.safe_address {
+            let (safe_hopr_balance, safe_native_balance, safe_hopr_allowance) = if let Some(ref safe_addr) = account_model.safe_address {
                 let safe_hopr = blokli_db_entity::hopr_balance::Entity::find()
                     .filter(blokli_db_entity::hopr_balance::Column::Address.eq(safe_addr.clone()))
                     .one(db)
@@ -314,7 +314,7 @@ impl SubscriptionRoot {
 
                 // Check if this is the node's own safe address
                 let allowance = if node_safe_address.as_ref() == Some(safe_address_str.as_ref().unwrap()) {
-                    node_safe_allowance.clone()
+                    node_safe_hopr_allowance.clone()
                 } else {
                     None
                 };
@@ -333,7 +333,7 @@ impl SubscriptionRoot {
                 safe_address: safe_address_str,
                 safe_hopr_balance: safe_hopr_balance.map(TokenValueString),
                 safe_native_balance: safe_native_balance.map(TokenValueString),
-                safe_allowance: safe_allowance.map(TokenValueString),
+                safe_hopr_allowance: safe_hopr_allowance.map(TokenValueString),
                 multi_addresses,
             });
         }
@@ -379,7 +379,7 @@ impl SubscriptionRoot {
                 safe_address: agg.safe_address,
                 safe_hopr_balance: agg.safe_hopr_balance.map(TokenValueString),
                 safe_native_balance: agg.safe_native_balance.map(TokenValueString),
-                safe_allowance: agg.safe_allowance.map(TokenValueString),
+                safe_hopr_allowance: agg.safe_hopr_allowance.map(TokenValueString),
                 multi_addresses: agg.multi_addresses,
             })
             .collect();

@@ -70,8 +70,8 @@ type Account {
   safeHoprBalance: TokenValueString
   "Native balance associated with the linked Safe contract address (null if no Safe is linked)"
   safeNativeBalance: TokenValueString
-  "HOPR token allowance granted by the safe to the channels contract (only available for node's own safe)"
-  safeAllowance: TokenValueString
+  "wxHOPR token allowance granted by the safe to the channels contract (only available for node's own safe)"
+  safeHoprAllowance: TokenValueString
   "HOPR Safe contract address transaction count"
   safeTransactionCount: UInt64
 }

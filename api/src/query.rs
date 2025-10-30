@@ -64,7 +64,7 @@ impl QueryRoot {
                 safe_address: agg.safe_address,
                 safe_hopr_balance: agg.safe_hopr_balance.map(TokenValueString),
                 safe_native_balance: agg.safe_native_balance.map(TokenValueString),
-                safe_allowance: agg.safe_allowance.map(TokenValueString),
+                safe_hopr_allowance: agg.safe_hopr_allowance.map(TokenValueString),
                 multi_addresses: agg.multi_addresses,
             })
             .collect();

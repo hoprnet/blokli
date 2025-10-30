@@ -184,11 +184,11 @@ pub struct Account {
     /// Native balance associated with the linked Safe contract address
     #[graphql(name = "safeNativeBalance")]
     pub safe_native_balance: Option<TokenValueString>,
-    /// HOPR token allowance granted by the safe to the channels contract
+    /// wxHOPR token allowance granted by the safe to the channels contract
     ///
     /// Only available for the node's own safe address. Returns None for other accounts.
-    #[graphql(name = "safeAllowance")]
-    pub safe_allowance: Option<TokenValueString>,
+    #[graphql(name = "safeHoprAllowance")]
+    pub safe_hopr_allowance: Option<TokenValueString>,
     /// List of multiaddresses associated with the packet key
     #[graphql(name = "multiAddresses")]
     pub multi_addresses: Vec<String>,
