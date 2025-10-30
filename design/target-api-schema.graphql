@@ -66,6 +66,12 @@ type Account {
   packetKey: String!
   "HOPR Safe contract address to which the account is linked (null if no Safe is linked)"
   safeAddress: String
+  "wxHOPR balance associated with the linked Safe contract address (null if no Safe is linked)"
+  safeHoprBalance: TokenValueString
+  "Native balance associated with the linked Safe contract address (null if no Safe is linked)"
+  safeNativeBalance: TokenValueString
+  "HOPR token allowance granted by the safe to the channels contract (only available for node's own safe)"
+  safeAllowance: TokenValueString
   "HOPR Safe contract address transaction count"
   safeTransactionCount: UInt64
 }
@@ -268,12 +274,6 @@ type NativeBalance {
 """Result type for native balance queries"""
 union NativeBalanceResult = NativeBalance | InvalidAddressError | QueryFailedError
 
-"""Safe HOPR token allowance information"""
-type SafeAllowance {
-  "HOPR token allowance granted by the safe to the channels contract"
-  allowance: TokenValueString!
-}
-
 """
 A single edge in the opened payment channels graph
 
@@ -469,16 +469,6 @@ type QueryRoot {
     "On-chain address to query (hexadecimal format)"
     address: String!
   ): NativeBalanceResult!
-  """
-  Retrieve safe HOPR token allowance
-  
-  Returns the current allowance granted by the safe contract to the channels contract.
-  This value represents how much of the safe's HOPR tokens can be used by the channels contract.
-  
-  The safe allowance is stored in the node_info singleton table and represents a global
-  configuration value for the node.
-  """
-  safeAllowance: SafeAllowance!
   """
   Retrieve transaction status by ID
   

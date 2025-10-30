@@ -246,18 +246,7 @@ pub async fn fetch_accounts_with_balances_for_addresses(
         .map(|b| (address_to_string(&b.address), native_balance_to_string(&b.balance)))
         .collect();
 
-    // 5. Fetch node_info to get the node's safe address and allowance (1 query)
-    let node_info = node_info::Entity::find_by_id(1).one(db).await?;
-    let (node_safe_address, node_safe_allowance) = if let Some(info) = node_info {
-        (
-            info.safe_address.as_ref().map(|addr| address_to_string(addr)),
-            Some(hopr_balance_to_string(&info.safe_allowance)),
-        )
-    } else {
-        (None, None)
-    };
-
-    // 6. Aggregate all data
+    // 5. Aggregate all data
     let result = accounts
         .into_iter()
         .map(|account| {
@@ -281,21 +270,13 @@ pub async fn fetch_accounts_with_balances_for_addresses(
             // Convert safe_address to string if present
             let safe_address_str = account.safe_address.as_ref().map(|addr| address_to_string(addr));
 
-            let (safe_hopr_balance, safe_native_balance, safe_allowance) = if let Some(ref safe_addr_str) = safe_address_str {
-                // Check if this is the node's own safe address
-                let allowance = if node_safe_address.as_ref() == Some(safe_addr_str) {
-                    node_safe_allowance.clone()
-                } else {
-                    None
-                };
-
+            let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr_str) = safe_address_str {
                 (
                     hopr_balance_map.get(safe_addr_str).cloned(),
                     native_balance_map.get(safe_addr_str).cloned(),
-                    allowance,
                 )
             } else {
-                (None, None, None)
+                (None, None)
             };
 
             AggregatedAccount {
@@ -307,7 +288,6 @@ pub async fn fetch_accounts_with_balances_for_addresses(
                 safe_address: safe_address_str,
                 safe_hopr_balance,
                 safe_native_balance,
-                safe_allowance,
                 multi_addresses,
             }
         })
@@ -395,18 +375,7 @@ pub async fn fetch_accounts_by_keyids(
         .map(|b| (address_to_string(&b.address), native_balance_to_string(&b.balance)))
         .collect();
 
-    // 5. Fetch node_info to get the node's safe address and allowance (1 query)
-    let node_info = node_info::Entity::find_by_id(1).one(db).await?;
-    let (node_safe_address, node_safe_allowance) = if let Some(info) = node_info {
-        (
-            info.safe_address.as_ref().map(|addr| address_to_string(addr)),
-            Some(hopr_balance_to_string(&info.safe_allowance)),
-        )
-    } else {
-        (None, None)
-    };
-
-    // 6. Aggregate all data
+    // 5. Aggregate all data
     let result = accounts
         .into_iter()
         .map(|account| {
@@ -430,21 +399,13 @@ pub async fn fetch_accounts_by_keyids(
             // Convert safe_address to string if present
             let safe_address_str = account.safe_address.as_ref().map(|addr| address_to_string(addr));
 
-            let (safe_hopr_balance, safe_native_balance, safe_allowance) = if let Some(ref safe_addr_str) = safe_address_str {
-                // Check if this is the node's own safe address
-                let allowance = if node_safe_address.as_ref() == Some(safe_addr_str) {
-                    node_safe_allowance.clone()
-                } else {
-                    None
-                };
-
+            let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr_str) = safe_address_str {
                 (
                     hopr_balance_map.get(safe_addr_str).cloned(),
                     native_balance_map.get(safe_addr_str).cloned(),
-                    allowance,
                 )
             } else {
-                (None, None, None)
+                (None, None)
             };
 
             AggregatedAccount {
@@ -456,7 +417,6 @@ pub async fn fetch_accounts_by_keyids(
                 safe_address: safe_address_str,
                 safe_hopr_balance,
                 safe_native_balance,
-                safe_allowance,
                 multi_addresses,
             }
         })
@@ -556,18 +516,7 @@ pub async fn fetch_accounts_with_filters(
         .map(|b| (address_to_string(&b.address), native_balance_to_string(&b.balance)))
         .collect();
 
-    // 5. Fetch node_info to get the node's safe address and allowance (1 query)
-    let node_info = node_info::Entity::find_by_id(1).one(db).await?;
-    let (node_safe_address, node_safe_allowance) = if let Some(info) = node_info {
-        (
-            info.safe_address.as_ref().map(|addr| address_to_string(addr)),
-            Some(hopr_balance_to_string(&info.safe_allowance)),
-        )
-    } else {
-        (None, None)
-    };
-
-    // 6. Aggregate all data
+    // 5. Aggregate all data
     let result = accounts
         .into_iter()
         .map(|account| {
@@ -591,21 +540,13 @@ pub async fn fetch_accounts_with_filters(
             // Convert safe_address to string if present
             let safe_address_str = account.safe_address.as_ref().map(|addr| address_to_string(addr));
 
-            let (safe_hopr_balance, safe_native_balance, safe_allowance) = if let Some(ref safe_addr_str) = safe_address_str {
-                // Check if this is the node's own safe address
-                let allowance = if node_safe_address.as_ref() == Some(safe_addr_str) {
-                    node_safe_allowance.clone()
-                } else {
-                    None
-                };
-
+            let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr_str) = safe_address_str {
                 (
                     hopr_balance_map.get(safe_addr_str).cloned(),
                     native_balance_map.get(safe_addr_str).cloned(),
-                    allowance,
                 )
             } else {
-                (None, None, None)
+                (None, None)
             };
 
             AggregatedAccount {
@@ -617,7 +558,6 @@ pub async fn fetch_accounts_with_filters(
                 safe_address: safe_address_str,
                 safe_hopr_balance,
                 safe_native_balance,
-                safe_allowance,
                 multi_addresses,
             }
         })
