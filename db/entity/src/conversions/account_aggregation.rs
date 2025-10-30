@@ -15,6 +15,7 @@ pub struct AggregatedAccount {
     pub packet_key: String,
     pub safe_address: Option<String>,
     pub multi_addresses: Vec<String>,
+    pub safe_transaction_count: u64,
 }
 
 /// Fetch all accounts with their related data using optimized batch loading
@@ -75,6 +76,8 @@ pub async fn fetch_accounts_with_balances(db: &DatabaseConnection) -> Result<Vec
                 packet_key: account.packet_key,
                 safe_address: safe_address_str,
                 multi_addresses,
+                // TODO: Implement safe transaction count fetching from blockchain or database
+                safe_transaction_count: 0,
             }
         })
         .collect();
@@ -153,6 +156,8 @@ pub async fn fetch_accounts_with_balances_for_addresses(
                 packet_key: account.packet_key,
                 safe_address: safe_address_str,
                 multi_addresses,
+                // TODO: Implement safe transaction count fetching from blockchain or database
+                safe_transaction_count: 0,
             }
         })
         .collect();
@@ -227,6 +232,8 @@ pub async fn fetch_accounts_by_keyids(
                 packet_key: account.packet_key,
                 safe_address: safe_address_str,
                 multi_addresses,
+                // TODO: Implement safe transaction count fetching from blockchain or database
+                safe_transaction_count: 0,
             }
         })
         .collect();
@@ -313,6 +320,8 @@ pub async fn fetch_accounts_with_filters(
                 packet_key: account.packet_key,
                 safe_address: safe_address_str,
                 multi_addresses,
+                // TODO: Implement safe transaction count fetching from blockchain or database
+                safe_transaction_count: 0,
             }
         })
         .collect();

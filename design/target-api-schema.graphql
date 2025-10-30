@@ -22,6 +22,8 @@ type Account {
   packetKey: String!
   "HOPR Safe contract address to which the account is linked (null if no Safe is linked)"
   safeAddress: String
+  "HOPR Safe contract transaction count"
+  safeTransactionCount: UInt64
 }
 
 """Success response for accounts query"""

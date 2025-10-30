@@ -245,6 +245,7 @@ impl SubscriptionRoot {
                 packet_key: agg.packet_key,
                 safe_address: agg.safe_address,
                 multi_addresses: agg.multi_addresses,
+                safe_transaction_count: blokli_api_types::UInt64(agg.safe_transaction_count),
             })
             .collect();
 
@@ -286,6 +287,7 @@ impl SubscriptionRoot {
                 packet_key: agg.packet_key,
                 safe_address: agg.safe_address,
                 multi_addresses: agg.multi_addresses,
+                safe_transaction_count: blokli_api_types::UInt64(agg.safe_transaction_count),
             })
             .collect();
 

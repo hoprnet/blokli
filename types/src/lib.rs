@@ -175,6 +175,9 @@ pub struct Account {
     /// List of multiaddresses associated with the packet key
     #[graphql(name = "multiAddresses")]
     pub multi_addresses: Vec<String>,
+    /// HOPR Safe contract transaction count
+    #[graphql(name = "safeTransactionCount")]
+    pub safe_transaction_count: UInt64,
 }
 
 /// Network announcement with multiaddress information
