@@ -43,12 +43,32 @@
 
 use async_broadcast::{Receiver, Sender, broadcast};
 
-/// Position in the blockchain for ordering events
+/// Position in the blockchain for ordering events and temporal queries
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BlockPosition {
     pub block: i64,
     pub tx_index: i64,
     pub log_index: i64,
+}
+
+impl BlockPosition {
+    /// Create a new BlockPosition
+    pub fn new(block: i64, tx_index: i64, log_index: i64) -> Self {
+        Self {
+            block,
+            tx_index,
+            log_index,
+        }
+    }
+
+    /// Create a BlockPosition at the start of a block
+    pub fn at_block(block: i64) -> Self {
+        Self {
+            block,
+            tx_index: 0,
+            log_index: 0,
+        }
+    }
 }
 
 /// Account state change event
@@ -126,6 +146,9 @@ impl StateChange {
 #[derive(Clone)]
 pub struct EventBus {
     sender: Sender<StateChange>,
+    // Keep one receiver alive to prevent SendError when no subscribers exist
+    #[allow(dead_code)]
+    _keepalive: Receiver<StateChange>,
 }
 
 impl EventBus {
@@ -143,15 +166,19 @@ impl EventBus {
     /// let event_bus = EventBus::new(1000);
     /// ```
     pub fn new(capacity: usize) -> Self {
-        let (sender, _receiver) = broadcast(capacity);
-        Self { sender }
+        let (sender, receiver) = broadcast(capacity);
+        Self {
+            sender,
+            _keepalive: receiver,
+        }
     }
 
     /// Create event bus from an existing sender
     ///
     /// Useful when you need to share the same channel across multiple components.
     pub fn from_sender(sender: Sender<StateChange>) -> Self {
-        Self { sender }
+        let _keepalive = sender.new_receiver();
+        Self { sender, _keepalive }
     }
 
     /// Subscribe to state change events
@@ -227,7 +254,8 @@ mod tests {
         let mut subscriber1 = event_bus.subscribe();
         let mut subscriber2 = event_bus.subscribe();
 
-        assert_eq!(event_bus.subscriber_count(), 2);
+        // Count includes keepalive receiver + 2 subscribers
+        assert_eq!(event_bus.subscriber_count(), 3);
 
         let event = StateChange::ChannelState(ChannelStateChange {
             channel_id: 10,

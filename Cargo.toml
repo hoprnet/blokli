@@ -112,10 +112,8 @@ sea-orm-migration = { version = "2.0.0-rc.9", default-features = false, features
   "with-chrono",
 ] }
 sea-query = { version = "1.0.0-rc.14", default-features = false }
-sea-query-binder = { version = "0.8.0-rc.7", default-features = false, features = [
-  "sqlx-postgres",
-  "with-chrono",
-] }
+# Removed: sea-query-binder is incompatible with sea-query 1.0.0-rc.14
+# SeaORM 2.0.0-rc.9 uses its own internal sea-query-sqlx for database integration
 seaography = { version = "2.0.0-rc.2", features = ["with-chrono"] }
 semver = "1.0.26"
 serde = { version = "1.0", features = ["derive"] }

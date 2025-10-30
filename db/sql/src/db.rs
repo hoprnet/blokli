@@ -10,6 +10,7 @@ use crate::{
     BlokliDbAllOperations,
     accounts::model_to_account_entry,
     errors::{DbSqlError, Result},
+    events::EventBus,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, smart_default::SmartDefault, validator::Validate)]
@@ -29,7 +30,9 @@ pub struct BlokliDbConfig {
 ///
 /// Supports database snapshot imports for fast synchronization via
 /// [`BlokliDbGeneralModelOperations::import_logs_db`].
-#[derive(Debug, Clone)]
+///
+/// Includes event bus for real-time state change notifications.
+#[derive(Clone)]
 pub struct BlokliDb {
     /// Primary database connection (index tables for SQLite, all tables for PostgreSQL)
     pub(crate) db: sea_orm::DatabaseConnection,
@@ -37,8 +40,22 @@ pub struct BlokliDb {
     /// Logs database connection (only used for SQLite, None for PostgreSQL)
     pub(crate) logs_db: Option<sea_orm::DatabaseConnection>,
 
+    /// Event bus for broadcasting state changes
+    pub(crate) event_bus: EventBus,
+
     #[allow(dead_code)]
     pub(crate) cfg: BlokliDbConfig,
+}
+
+impl std::fmt::Debug for BlokliDb {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BlokliDb")
+            .field("db", &self.db)
+            .field("logs_db", &self.logs_db)
+            .field("event_bus_subscribers", &self.event_bus.subscriber_count())
+            .field("cfg", &self.cfg)
+            .finish()
+    }
 }
 
 impl BlokliDb {
@@ -166,7 +183,15 @@ impl BlokliDb {
                 }
             })?;
 
-        Ok(Self { db, logs_db, cfg })
+        // Initialize event bus with capacity for 1000 events per subscriber
+        let event_bus = EventBus::new(1000);
+
+        Ok(Self {
+            db,
+            logs_db,
+            event_bus,
+            cfg,
+        })
     }
 
     /// Create an in-memory SQLite database for testing.
@@ -183,8 +208,8 @@ impl BlokliDb {
     /// Returns `DbSqlError` if connection or initialization fails
     pub async fn new_in_memory() -> Result<Self> {
         // Use SQLite in-memory databases for testing (dual databases like production)
-        let index_url = "sqlite://:memory:?mode=rwc";
-        let logs_url = "sqlite://:memory:?mode=rwc";
+        let index_url = "sqlite::memory:";
+        let logs_url = "sqlite::memory:";
         Self::new(index_url, Some(logs_url), Default::default()).await
     }
 
@@ -194,6 +219,24 @@ impl BlokliDb {
     /// For PostgreSQL or single-database mode, returns the primary database connection.
     pub(crate) fn logs_db(&self) -> &sea_orm::DatabaseConnection {
         self.logs_db.as_ref().unwrap_or(&self.db)
+    }
+
+    /// Get a reference to the event bus for subscribing to state changes.
+    ///
+    /// Subscribers will receive real-time notifications when account or channel state changes.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// let mut subscriber = db.event_bus().subscribe();
+    /// tokio::spawn(async move {
+    ///     while let Ok(event) = subscriber.recv().await {
+    ///         // Handle state change event
+    ///     }
+    /// });
+    /// ```
+    pub fn event_bus(&self) -> &EventBus {
+        &self.event_bus
     }
 }
 

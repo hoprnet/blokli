@@ -13,6 +13,7 @@ pub mod errors;
 pub mod events;
 pub mod info;
 pub mod logs;
+pub mod state_queries;
 
 use std::path::PathBuf;
 
@@ -277,5 +278,13 @@ pub mod prelude {
     pub use blokli_db_api::logs::*;
 
     pub use super::*;
-    pub use crate::{accounts::*, channels::*, /* corrupted_channels::*, */ db::*, errors::*, events::*, info::*};
+    pub use crate::{
+        accounts::*,
+        channels::*, // corrupted_channels::*,
+        db::*,
+        errors::*,
+        events::*,
+        info::*,
+        state_queries::*,
+    };
 }
