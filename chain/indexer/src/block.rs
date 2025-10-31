@@ -1250,7 +1250,7 @@ mod tests {
                 .expect_contract_addresses_map()
                 .return_const(ContractAddresses::default());
 
-            let indexer_cfg = IndexerConfig::new(0, true, false, None, "/tmp/test_data".to_string());
+            let indexer_cfg = IndexerConfig::new(0, true, false, None, "/tmp/test_data".to_string(), 1000, 10);
             let indexer = Indexer::new(rpc, handlers, db.clone(), indexer_cfg, tx_events).without_panic_on_completion();
             let (indexing, _) = join!(indexer.start(), async move {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -1335,7 +1335,7 @@ mod tests {
                 .expect_contract_addresses_map()
                 .return_const(ContractAddresses::default());
 
-            let indexer_cfg = IndexerConfig::new(0, true, false, None, "/tmp/test_data".to_string());
+            let indexer_cfg = IndexerConfig::new(0, true, false, None, "/tmp/test_data".to_string(), 1000, 10);
             let indexer = Indexer::new(rpc, handlers, db.clone(), indexer_cfg, tx_events).without_panic_on_completion();
             let (indexing, _) = join!(indexer.start(), async move {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
@@ -1502,7 +1502,7 @@ mod tests {
             .expect_contract_addresses_map()
             .return_const(ContractAddresses::default());
 
-        let indexer_cfg = IndexerConfig::new(0, false, false, None, "/tmp/test_data".to_string());
+        let indexer_cfg = IndexerConfig::new(0, false, false, None, "/tmp/test_data".to_string(), 1000, 10);
 
         let (tx_events, _) = async_channel::unbounded();
         let indexer = Indexer::new(rpc, handlers, db.clone(), indexer_cfg, tx_events).without_panic_on_completion();
@@ -1520,7 +1520,7 @@ mod tests {
             block_id: 100,
             logs: BTreeSet::from([
                 SerializableLog {
-                    address: Address::new(b"test address 123456789"),
+                    address: Address::new(b"test address 1234567"),
                     topics: vec![Hash::create(&[b"topic"]).into()],
                     data: vec![1, 2, 3],
                     tx_index: 0,
@@ -1531,9 +1531,10 @@ mod tests {
                     removed: false,
                     processed: None,
                     checksum: None,
+                    processed_at: None,
                 },
                 SerializableLog {
-                    address: Address::new(b"test address 123456789"),
+                    address: Address::new(b"test address 1234567"),
                     topics: vec![Hash::create(&[b"topic"]).into()],
                     data: vec![4, 5, 6],
                     tx_index: 1,
@@ -1544,6 +1545,7 @@ mod tests {
                     removed: false,
                     processed: None,
                     checksum: None,
+                    processed_at: None,
                 },
             ]),
         };
@@ -1559,7 +1561,7 @@ mod tests {
             block_id: 200,
             logs: BTreeSet::from([
                 SerializableLog {
-                    address: Address::new(b"test address 123456789"),
+                    address: Address::new(b"test address 1234567"),
                     topics: vec![Hash::create(&[b"topic"]).into()],
                     data: vec![1, 2, 3],
                     tx_index: 0,
@@ -1570,9 +1572,10 @@ mod tests {
                     removed: true, // This log was reorged
                     processed: None,
                     checksum: None,
+                    processed_at: None,
                 },
                 SerializableLog {
-                    address: Address::new(b"test address 123456789"),
+                    address: Address::new(b"test address 1234567"),
                     topics: vec![Hash::create(&[b"topic"]).into()],
                     data: vec![4, 5, 6],
                     tx_index: 1,
@@ -1583,6 +1586,7 @@ mod tests {
                     removed: false,
                     processed: None,
                     checksum: None,
+                    processed_at: None,
                 },
             ]),
         };
@@ -1603,7 +1607,7 @@ mod tests {
             block_id: 150,
             logs: BTreeSet::from([
                 SerializableLog {
-                    address: Address::new(b"test address 123456789"),
+                    address: Address::new(b"test address 1234567"),
                     topics: vec![Hash::create(&[b"topic"]).into()],
                     data: vec![1, 2, 3],
                     tx_index: 0,
@@ -1614,9 +1618,10 @@ mod tests {
                     removed: true,
                     processed: None,
                     checksum: None,
+                    processed_at: None,
                 },
                 SerializableLog {
-                    address: Address::new(b"test address 123456789"),
+                    address: Address::new(b"test address 1234567"),
                     topics: vec![Hash::create(&[b"topic"]).into()],
                     data: vec![4, 5, 6],
                     tx_index: 1,
@@ -1627,9 +1632,10 @@ mod tests {
                     removed: true,
                     processed: None,
                     checksum: None,
+                    processed_at: None,
                 },
                 SerializableLog {
-                    address: Address::new(b"test address 123456789"),
+                    address: Address::new(b"test address 1234567"),
                     topics: vec![Hash::create(&[b"topic"]).into()],
                     data: vec![7, 8, 9],
                     tx_index: 2,
@@ -1640,6 +1646,7 @@ mod tests {
                     removed: false,
                     processed: None,
                     checksum: None,
+                    processed_at: None,
                 },
             ]),
         };
@@ -1660,7 +1667,7 @@ mod tests {
             block_id: 300,
             logs: BTreeSet::from([
                 SerializableLog {
-                    address: Address::new(b"test address 123456789"),
+                    address: Address::new(b"test address 1234567"),
                     topics: vec![Hash::create(&[b"topic"]).into()],
                     data: vec![1, 2, 3],
                     tx_index: 0,
@@ -1671,9 +1678,10 @@ mod tests {
                     removed: true,
                     processed: None,
                     checksum: None,
+                    processed_at: None,
                 },
                 SerializableLog {
-                    address: Address::new(b"test address 123456789"),
+                    address: Address::new(b"test address 1234567"),
                     topics: vec![Hash::create(&[b"topic"]).into()],
                     data: vec![4, 5, 6],
                     tx_index: 1,
@@ -1684,9 +1692,10 @@ mod tests {
                     removed: true,
                     processed: None,
                     checksum: None,
+                    processed_at: None,
                 },
                 SerializableLog {
-                    address: Address::new(b"test address 123456789"),
+                    address: Address::new(b"test address 1234567"),
                     topics: vec![Hash::create(&[b"topic"]).into()],
                     data: vec![7, 8, 9],
                     tx_index: 2,
@@ -1697,9 +1706,10 @@ mod tests {
                     removed: true,
                     processed: None,
                     checksum: None,
+                    processed_at: None,
                 },
                 SerializableLog {
-                    address: Address::new(b"test address 123456789"),
+                    address: Address::new(b"test address 1234567"),
                     topics: vec![Hash::create(&[b"topic"]).into()],
                     data: vec![10, 11, 12],
                     tx_index: 3,
@@ -1710,6 +1720,7 @@ mod tests {
                     removed: false,
                     processed: None,
                     checksum: None,
+                    processed_at: None,
                 },
             ]),
         };
@@ -1734,7 +1745,7 @@ mod tests {
             block_id: 1000,
             logs: BTreeSet::from([
                 SerializableLog {
-                    address: Address::new(b"test address 123456789"),
+                    address: Address::new(b"test address 1234567"),
                     topics: vec![Hash::create(&[b"topic"]).into()],
                     data: vec![1],
                     tx_index: 0,
@@ -1745,9 +1756,10 @@ mod tests {
                     removed: true,
                     processed: None,
                     checksum: None,
+                    processed_at: None,
                 },
                 SerializableLog {
-                    address: Address::new(b"test address 123456789"),
+                    address: Address::new(b"test address 1234567"),
                     topics: vec![Hash::create(&[b"topic"]).into()],
                     data: vec![2],
                     tx_index: 1,
@@ -1758,6 +1770,7 @@ mod tests {
                     removed: true,
                     processed: None,
                     checksum: None,
+                    processed_at: None,
                 },
             ]),
         };

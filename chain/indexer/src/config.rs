@@ -161,7 +161,7 @@ mod tests {
         let data_directory = "/tmp/hopr_test_data";
         let logs_snapshot_url = format!("file:///tmp/snapshot.tar.xz");
 
-        let cfg = IndexerConfig::new(0, true, true, Some(logs_snapshot_url), data_directory.into());
+        let cfg = IndexerConfig::new(0, true, true, Some(logs_snapshot_url), data_directory.into(), 1000, 10);
 
         cfg.validate().expect("Failed to validate snapshot configuration");
         assert!(cfg.is_valid(), "Valid configuration should return true for is_valid()");
@@ -169,7 +169,7 @@ mod tests {
 
     #[test]
     fn test_disabled_snapshot_config() {
-        let cfg = IndexerConfig::new(0, true, false, Some("".to_string()), "".to_string());
+        let cfg = IndexerConfig::new(0, true, false, Some("".to_string()), "".to_string(), 1000, 10);
 
         assert!(
             cfg.validate().is_ok(),
@@ -179,7 +179,7 @@ mod tests {
 
     #[test]
     fn test_missing_snapshot_url() {
-        let cfg = IndexerConfig::new(0, true, true, None, "".to_string());
+        let cfg = IndexerConfig::new(0, true, true, None, "".to_string(), 1000, 10);
 
         assert!(
             cfg.validate().is_err(),
