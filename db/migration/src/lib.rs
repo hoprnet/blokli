@@ -95,3 +95,579 @@ impl MigratorTrait for MigratorChainLogs {
         ]
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use sea_orm::{ConnectionTrait, Database, DbBackend, Statement};
+
+    use super::*;
+
+    async fn setup_test_db() -> sea_orm::DatabaseConnection {
+        // Create in-memory SQLite database for testing
+        Database::connect("sqlite::memory:")
+            .await
+            .expect("Failed to create test database")
+    }
+
+    async fn table_exists(db: &sea_orm::DatabaseConnection, table_name: &str) -> bool {
+        let result = db
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                format!(
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name='{}'",
+                    table_name
+                ),
+            ))
+            .await
+            .expect("Failed to query table existence");
+
+        result.is_some()
+    }
+
+    async fn view_exists(db: &sea_orm::DatabaseConnection, view_name: &str) -> bool {
+        let result = db
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                format!(
+                    "SELECT name FROM sqlite_master WHERE type='view' AND name='{}'",
+                    view_name
+                ),
+            ))
+            .await
+            .expect("Failed to query view existence");
+
+        result.is_some()
+    }
+
+    async fn index_exists(db: &sea_orm::DatabaseConnection, index_name: &str) -> bool {
+        let result = db
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                format!(
+                    "SELECT name FROM sqlite_master WHERE type='index' AND name='{}'",
+                    index_name
+                ),
+            ))
+            .await
+            .expect("Failed to query index existence");
+
+        result.is_some()
+    }
+
+    #[tokio::test]
+    async fn test_all_migrations_run_successfully() {
+        let db = setup_test_db().await;
+
+        // Run all migrations
+        let result = Migrator::up(&db, None).await;
+
+        assert!(result.is_ok(), "Migrations should run without errors");
+    }
+
+    #[tokio::test]
+    async fn test_account_state_table_created() {
+        let db = setup_test_db().await;
+        Migrator::up(&db, None).await.unwrap();
+
+        // Verify account_state table exists
+        assert!(
+            table_exists(&db, "account_state").await,
+            "account_state table should exist"
+        );
+
+        // Verify table structure by inserting and querying
+        let insert_result = db
+            .execute(Statement::from_string(
+                DbBackend::Sqlite,
+                "INSERT INTO account (chain_key, packet_key) VALUES (X'0101010101010101010101010101010101010101', \
+                 'peer1')"
+                    .to_string(),
+            ))
+            .await;
+        assert!(insert_result.is_ok(), "Should be able to insert into account");
+
+        let insert_state_result = db
+            .execute(Statement::from_string(
+                DbBackend::Sqlite,
+                "INSERT INTO account_state (account_id, safe_address, published_block, published_tx_index, \
+                 published_log_index) VALUES (1, X'0202020202020202020202020202020202020202', 100, 5, 3)"
+                    .to_string(),
+            ))
+            .await;
+        assert!(
+            insert_state_result.is_ok(),
+            "Should be able to insert into account_state"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_channel_state_table_created() {
+        let db = setup_test_db().await;
+        Migrator::up(&db, None).await.unwrap();
+
+        // Verify channel_state table exists
+        assert!(
+            table_exists(&db, "channel_state").await,
+            "channel_state table should exist"
+        );
+
+        // Verify table structure by inserting data
+        // First insert accounts
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO account (chain_key, packet_key) VALUES (X'0101010101010101010101010101010101010101', 'peer1')"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO account (chain_key, packet_key) VALUES (X'0202020202020202020202020202020202020202', 'peer2')"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        // Insert channel
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO channel (source, destination, concrete_channel_id) VALUES (1, 2, '0xabc123')".to_string(),
+        ))
+        .await
+        .unwrap();
+
+        // Insert channel_state
+        let insert_result = db
+            .execute(Statement::from_string(
+                DbBackend::Sqlite,
+                "INSERT INTO channel_state (channel_id, balance, status, epoch, ticket_index, closure_time, \
+                 corrupted_state, published_block, published_tx_index, published_log_index) VALUES (1, \
+                 X'010000000000000000000000', 1, 0, 0, NULL, 0, 100, 5, 3)"
+                    .to_string(),
+            ))
+            .await;
+
+        assert!(insert_result.is_ok(), "Should be able to insert into channel_state");
+    }
+
+    #[tokio::test]
+    async fn test_account_state_unique_position_index_created() {
+        let db = setup_test_db().await;
+        Migrator::up(&db, None).await.unwrap();
+
+        // Verify unique index exists
+        assert!(
+            index_exists(&db, "idx_account_state_unique_position").await,
+            "idx_account_state_unique_position should exist"
+        );
+
+        // Test uniqueness constraint
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO account (chain_key, packet_key) VALUES (X'0101010101010101010101010101010101010101', 'peer1')"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO account_state (account_id, safe_address, published_block, published_tx_index, \
+             published_log_index) VALUES (1, NULL, 100, 5, 3)"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        // Try to insert duplicate - should fail
+        let duplicate_result = db
+            .execute(Statement::from_string(
+                DbBackend::Sqlite,
+                "INSERT INTO account_state (account_id, safe_address, published_block, published_tx_index, \
+                 published_log_index) VALUES (1, NULL, 100, 5, 3)"
+                    .to_string(),
+            ))
+            .await;
+
+        assert!(
+            duplicate_result.is_err(),
+            "Duplicate position should be rejected by unique constraint"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_channel_state_unique_position_index_created() {
+        let db = setup_test_db().await;
+        Migrator::up(&db, None).await.unwrap();
+
+        // Verify unique index exists
+        assert!(
+            index_exists(&db, "idx_channel_state_unique_position").await,
+            "idx_channel_state_unique_position should exist"
+        );
+
+        // Test uniqueness constraint
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO account (chain_key, packet_key) VALUES (X'0101010101010101010101010101010101010101', 'peer1')"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO account (chain_key, packet_key) VALUES (X'0202020202020202020202020202020202020202', 'peer2')"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO channel (source, destination, concrete_channel_id) VALUES (1, 2, '0xabc')".to_string(),
+        ))
+        .await
+        .unwrap();
+
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO channel_state (channel_id, balance, status, epoch, ticket_index, closure_time, \
+             corrupted_state, published_block, published_tx_index, published_log_index) VALUES (1, \
+             X'010000000000000000000000', 1, 0, 0, NULL, 0, 100, 5, 3)"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        // Try to insert duplicate - should fail
+        let duplicate_result = db
+            .execute(Statement::from_string(
+                DbBackend::Sqlite,
+                "INSERT INTO channel_state (channel_id, balance, status, epoch, ticket_index, closure_time, \
+                 corrupted_state, published_block, published_tx_index, published_log_index) VALUES (1, \
+                 X'010000000000000000000000', 1, 0, 0, NULL, 0, 100, 5, 3)"
+                    .to_string(),
+            ))
+            .await;
+
+        assert!(
+            duplicate_result.is_err(),
+            "Duplicate position should be rejected by unique constraint"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_channel_state_performance_indices_created() {
+        let db = setup_test_db().await;
+        Migrator::up(&db, None).await.unwrap();
+
+        // Verify performance indices exist
+        assert!(
+            index_exists(&db, "idx_channel_state_position").await,
+            "idx_channel_state_position should exist"
+        );
+
+        assert!(
+            index_exists(&db, "idx_channel_state_status_position").await,
+            "idx_channel_state_status_position should exist"
+        );
+
+        assert!(
+            index_exists(&db, "idx_channel_state_status_channel_position").await,
+            "idx_channel_state_status_channel_position should exist"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_account_state_performance_index_created() {
+        let db = setup_test_db().await;
+        Migrator::up(&db, None).await.unwrap();
+
+        // Verify performance index exists
+        assert!(
+            index_exists(&db, "idx_account_state_position").await,
+            "idx_account_state_position should exist"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_current_state_views_created() {
+        let db = setup_test_db().await;
+        Migrator::up(&db, None).await.unwrap();
+
+        // Verify views exist
+        assert!(
+            view_exists(&db, "channel_current").await,
+            "channel_current view should exist"
+        );
+
+        assert!(
+            view_exists(&db, "account_current").await,
+            "account_current view should exist"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_channel_current_view_returns_latest_state() {
+        let db = setup_test_db().await;
+        Migrator::up(&db, None).await.unwrap();
+
+        // Insert test data
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO account (chain_key, packet_key) VALUES (X'0101010101010101010101010101010101010101', 'peer1')"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO account (chain_key, packet_key) VALUES (X'0202020202020202020202020202020202020202', 'peer2')"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO channel (source, destination, concrete_channel_id) VALUES (1, 2, '0xabc')".to_string(),
+        ))
+        .await
+        .unwrap();
+
+        // Insert multiple states for the same channel
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO channel_state (channel_id, balance, status, epoch, ticket_index, closure_time, \
+             corrupted_state, published_block, published_tx_index, published_log_index) VALUES (1, \
+             X'010000000000000000000000', 1, 0, 0, NULL, 0, 100, 0, 0)"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO channel_state (channel_id, balance, status, epoch, ticket_index, closure_time, \
+             corrupted_state, published_block, published_tx_index, published_log_index) VALUES (1, \
+             X'020000000000000000000000', 1, 0, 0, NULL, 0, 150, 0, 0)"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        // Query view - should return latest state (block 150)
+        let result = db
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT published_block FROM channel_current WHERE channel_id = 1".to_string(),
+            ))
+            .await
+            .unwrap();
+
+        assert!(result.is_some(), "View should return result");
+        let row = result.unwrap();
+        let block: i64 = row.try_get("", "published_block").unwrap();
+        assert_eq!(block, 150, "View should return latest state at block 150");
+    }
+
+    #[tokio::test]
+    async fn test_account_current_view_returns_latest_state() {
+        let db = setup_test_db().await;
+        Migrator::up(&db, None).await.unwrap();
+
+        // Insert test data
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO account (chain_key, packet_key) VALUES (X'0101010101010101010101010101010101010101', 'peer1')"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        // Insert multiple states for the same account
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO account_state (account_id, safe_address, published_block, published_tx_index, \
+             published_log_index) VALUES (1, X'0202020202020202020202020202020202020202', 100, 0, 0)"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO account_state (account_id, safe_address, published_block, published_tx_index, \
+             published_log_index) VALUES (1, X'0303030303030303030303030303030303030303', 150, 0, 0)"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        // Query view - should return latest state (block 150)
+        let result = db
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT published_block FROM account_current WHERE account_id = 1".to_string(),
+            ))
+            .await
+            .unwrap();
+
+        assert!(result.is_some(), "View should return result");
+        let row = result.unwrap();
+        let block: i64 = row.try_get("", "published_block").unwrap();
+        assert_eq!(block, 150, "View should return latest state at block 150");
+    }
+
+    #[tokio::test]
+    async fn test_foreign_key_cascade_on_account_state() {
+        let db = setup_test_db().await;
+        Migrator::up(&db, None).await.unwrap();
+
+        // Insert account and state
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO account (chain_key, packet_key) VALUES (X'0101010101010101010101010101010101010101', 'peer1')"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO account_state (account_id, safe_address, published_block, published_tx_index, \
+             published_log_index) VALUES (1, NULL, 100, 0, 0)"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        // Verify state exists
+        let result_before = db
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT COUNT(*) as cnt FROM account_state WHERE account_id = 1".to_string(),
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        let count_before: i32 = result_before.try_get("", "cnt").unwrap();
+        assert_eq!(count_before, 1, "Should have 1 account_state record");
+
+        // Delete account - should cascade to account_state
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "DELETE FROM account WHERE id = 1".to_string(),
+        ))
+        .await
+        .unwrap();
+
+        // Verify state was also deleted
+        let result_after = db
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT COUNT(*) as cnt FROM account_state WHERE account_id = 1".to_string(),
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        let count_after: i32 = result_after.try_get("", "cnt").unwrap();
+        assert_eq!(count_after, 0, "account_state should be deleted via cascade");
+    }
+
+    #[tokio::test]
+    async fn test_foreign_key_cascade_on_channel_state() {
+        let db = setup_test_db().await;
+        Migrator::up(&db, None).await.unwrap();
+
+        // Insert accounts and channel
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO account (chain_key, packet_key) VALUES (X'0101010101010101010101010101010101010101', 'peer1')"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO account (chain_key, packet_key) VALUES (X'0202020202020202020202020202020202020202', 'peer2')"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO channel (source, destination, concrete_channel_id) VALUES (1, 2, '0xabc')".to_string(),
+        ))
+        .await
+        .unwrap();
+
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO channel_state (channel_id, balance, status, epoch, ticket_index, closure_time, \
+             corrupted_state, published_block, published_tx_index, published_log_index) VALUES (1, \
+             X'010000000000000000000000', 1, 0, 0, NULL, 0, 100, 0, 0)"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        // Verify state exists
+        let result_before = db
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT COUNT(*) as cnt FROM channel_state WHERE channel_id = 1".to_string(),
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        let count_before: i32 = result_before.try_get("", "cnt").unwrap();
+        assert_eq!(count_before, 1, "Should have 1 channel_state record");
+
+        // Delete channel - should cascade to channel_state
+        db.execute(Statement::from_string(
+            DbBackend::Sqlite,
+            "DELETE FROM channel WHERE id = 1".to_string(),
+        ))
+        .await
+        .unwrap();
+
+        // Verify state was also deleted
+        let result_after = db
+            .query_one(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT COUNT(*) as cnt FROM channel_state WHERE channel_id = 1".to_string(),
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+        let count_after: i32 = result_after.try_get("", "cnt").unwrap();
+        assert_eq!(count_after, 0, "channel_state should be deleted via cascade");
+    }
+
+    #[tokio::test]
+    async fn test_chain_info_watermark_indices_exist() {
+        let db = setup_test_db().await;
+        Migrator::up(&db, None).await.unwrap();
+
+        // Verify chain_info table exists with watermark fields
+        let insert_result = db
+            .execute(Statement::from_string(
+                DbBackend::Sqlite,
+                "INSERT INTO chain_info (last_indexed_block, last_indexed_tx_index, last_indexed_log_index, \
+                 min_incoming_ticket_win_prob) VALUES (100, 5, 3, 0.5)"
+                    .to_string(),
+            ))
+            .await;
+
+        assert!(
+            insert_result.is_ok(),
+            "Should be able to insert into chain_info with watermark fields"
+        );
+    }
+}

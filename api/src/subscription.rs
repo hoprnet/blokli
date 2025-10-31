@@ -769,3 +769,657 @@ impl SubscriptionRoot {
         Ok(OpenedChannelsGraph { channels, accounts })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use blokli_chain_indexer::state::ChannelEvent;
+    use blokli_db_entity::codegen::prelude::*;
+    use blokli_db_sql::BlokliDb;
+    use sea_orm::{ActiveModelTrait, Set};
+
+    use super::*;
+
+    // Helper: Create test channel in database
+    async fn create_test_channel(
+        db: &DatabaseConnection,
+        source: i32,
+        destination: i32,
+        concrete_id: &str,
+    ) -> anyhow::Result<i32> {
+        let channel = blokli_db_entity::channel::ActiveModel {
+            id: Default::default(),
+            source: Set(source),
+            destination: Set(destination),
+            concrete_channel_id: Set(concrete_id.to_string()),
+        };
+
+        let result = channel.insert(db).await?;
+        Ok(result.id)
+    }
+
+    // Helper: Create test account in database
+    async fn create_test_account(db: &DatabaseConnection, chain_key: Vec<u8>, packet_key: &str) -> anyhow::Result<i32> {
+        let account = blokli_db_entity::account::ActiveModel {
+            id: Default::default(),
+            chain_key: Set(chain_key),
+            packet_key: Set(packet_key.to_string()),
+        };
+
+        let result = account.insert(db).await?;
+        Ok(result.id)
+    }
+
+    // Helper: Insert channel_state
+    async fn insert_channel_state(
+        db: &DatabaseConnection,
+        channel_id: i32,
+        block: i64,
+        tx_index: i64,
+        log_index: i64,
+        balance: Vec<u8>,
+        status: i8,
+    ) -> anyhow::Result<i32> {
+        let state = blokli_db_entity::channel_state::ActiveModel {
+            id: Default::default(),
+            channel_id: Set(channel_id),
+            balance: Set(balance),
+            status: Set(status),
+            epoch: Set(0),
+            ticket_index: Set(0),
+            closure_time: Set(None),
+            corrupted_state: Set(false),
+            published_block: Set(block),
+            published_tx_index: Set(tx_index),
+            published_log_index: Set(log_index),
+            reorg_correction: Set(false),
+        };
+
+        let result = state.insert(db).await?;
+        Ok(result.id)
+    }
+
+    // Helper: Initialize chain_info with watermark
+    async fn init_chain_info(db: &DatabaseConnection, block: i64, tx_index: i64, log_index: i64) -> anyhow::Result<()> {
+        let chain_info = blokli_db_entity::chain_info::ActiveModel {
+            id: Set(1),
+            last_indexed_block: Set(block),
+            last_indexed_tx_index: Set(tx_index),
+            last_indexed_log_index: Set(log_index),
+            ticket_price: Set(None),
+            channels_dst: Set(None),
+            ledger_dst: Set(None),
+            safe_registry_dst: Set(None),
+            min_incoming_ticket_win_prob: Set(0.0),
+            channel_closure_grace_period: Set(None),
+        };
+
+        chain_info.insert(db).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_capture_watermark_returns_correct_position() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let indexer_state = IndexerState::new(10, 100);
+
+        // Initialize chain_info with specific watermark
+        init_chain_info(db.connection(), 1000, 5, 3).await.unwrap();
+
+        // Capture watermark
+        let (watermark, _event_rx, _shutdown_rx) = capture_watermark_synchronized(&indexer_state, db.connection())
+            .await
+            .unwrap();
+
+        // Verify watermark matches chain_info
+        assert_eq!(watermark.block, 1000);
+        assert_eq!(watermark.tx_index, 5);
+        assert_eq!(watermark.log_index, 3);
+    }
+
+    #[tokio::test]
+    async fn test_capture_watermark_subscribes_to_event_bus() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let indexer_state = IndexerState::new(10, 100);
+
+        init_chain_info(db.connection(), 100, 0, 0).await.unwrap();
+
+        // Capture watermark (subscribes to event bus)
+        let (_watermark, mut event_rx, _shutdown_rx) = capture_watermark_synchronized(&indexer_state, db.connection())
+            .await
+            .unwrap();
+
+        // Publish event to bus
+        indexer_state
+            .publish_channel_event(ChannelEvent::Opened { channel_id: 42 })
+            .await;
+
+        // Verify subscriber receives the event
+        let received = event_rx.recv().await.unwrap();
+        assert!(matches!(received, ChannelEvent::Opened { channel_id: 42 }));
+    }
+
+    #[tokio::test]
+    async fn test_capture_watermark_fails_when_chain_info_missing() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let indexer_state = IndexerState::new(10, 100);
+
+        // Do NOT initialize chain_info - should fail
+        let result = capture_watermark_synchronized(&indexer_state, db.connection()).await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().message.contains("chain_info not initialized"));
+    }
+
+    #[tokio::test]
+    async fn test_query_channels_at_watermark_empty_db() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        let watermark = Watermark {
+            block: 100,
+            tx_index: 0,
+            log_index: 0,
+        };
+
+        let result = query_channels_at_watermark(db.connection(), &watermark, 100)
+            .await
+            .unwrap();
+
+        // No channels exist - should return empty
+        assert_eq!(result.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_query_channels_at_watermark_finds_open_channel() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        // Create accounts
+        let source_id = create_test_account(db.connection(), vec![1; 20], "peer1")
+            .await
+            .unwrap();
+        let dest_id = create_test_account(db.connection(), vec![2; 20], "peer2")
+            .await
+            .unwrap();
+
+        // Create channel
+        let channel_id = create_test_channel(db.connection(), source_id, dest_id, "0xabc123")
+            .await
+            .unwrap();
+
+        // Insert OPEN channel state (status = 1) at block 50
+        insert_channel_state(
+            db.connection(),
+            channel_id,
+            50,
+            0,
+            0,
+            vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], // 12 bytes balance
+            1,                                        // OPEN status
+        )
+        .await
+        .unwrap();
+
+        // Query at block 100 (after channel opened)
+        let watermark = Watermark {
+            block: 100,
+            tx_index: 0,
+            log_index: 0,
+        };
+
+        let result = query_channels_at_watermark(db.connection(), &watermark, 100)
+            .await
+            .unwrap();
+
+        // Should find 1 open channel
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].channel.concrete_channel_id, "0xabc123");
+        assert_eq!(result[0].channel.status, blokli_api_types::ChannelStatus::Open);
+    }
+
+    #[tokio::test]
+    async fn test_query_channels_at_watermark_excludes_closed_channels() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        // Create accounts
+        let source_id = create_test_account(db.connection(), vec![1; 20], "peer1")
+            .await
+            .unwrap();
+        let dest_id = create_test_account(db.connection(), vec![2; 20], "peer2")
+            .await
+            .unwrap();
+
+        // Create channel
+        let channel_id = create_test_channel(db.connection(), source_id, dest_id, "0xabc123")
+            .await
+            .unwrap();
+
+        // Insert CLOSED channel state (status = 2)
+        insert_channel_state(
+            db.connection(),
+            channel_id,
+            50,
+            0,
+            0,
+            vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            2, // CLOSED status
+        )
+        .await
+        .unwrap();
+
+        let watermark = Watermark {
+            block: 100,
+            tx_index: 0,
+            log_index: 0,
+        };
+
+        let result = query_channels_at_watermark(db.connection(), &watermark, 100)
+            .await
+            .unwrap();
+
+        // Closed channel should not be returned
+        assert_eq!(result.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_query_channels_at_watermark_respects_position() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        // Create accounts
+        let source_id = create_test_account(db.connection(), vec![1; 20], "peer1")
+            .await
+            .unwrap();
+        let dest_id = create_test_account(db.connection(), vec![2; 20], "peer2")
+            .await
+            .unwrap();
+
+        // Create channel
+        let channel_id = create_test_channel(db.connection(), source_id, dest_id, "0xabc123")
+            .await
+            .unwrap();
+
+        // Insert channel state at block 150 (after watermark)
+        insert_channel_state(
+            db.connection(),
+            channel_id,
+            150,
+            0,
+            0,
+            vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            1, // OPEN
+        )
+        .await
+        .unwrap();
+
+        // Query at block 100 (before channel opened)
+        let watermark = Watermark {
+            block: 100,
+            tx_index: 0,
+            log_index: 0,
+        };
+
+        let result = query_channels_at_watermark(db.connection(), &watermark, 100)
+            .await
+            .unwrap();
+
+        // Channel opened after watermark - should not be included
+        assert_eq!(result.len(), 0);
+    }
+
+    #[tokio::test]
+    async fn test_query_channels_at_watermark_uses_latest_state() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        // Create accounts
+        let source_id = create_test_account(db.connection(), vec![1; 20], "peer1")
+            .await
+            .unwrap();
+        let dest_id = create_test_account(db.connection(), vec![2; 20], "peer2")
+            .await
+            .unwrap();
+
+        // Create channel
+        let channel_id = create_test_channel(db.connection(), source_id, dest_id, "0xabc123")
+            .await
+            .unwrap();
+
+        // Insert multiple states for same channel
+        insert_channel_state(
+            db.connection(),
+            channel_id,
+            50,
+            0,
+            0,
+            vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], // balance = 1
+            1,                                        // OPEN
+        )
+        .await
+        .unwrap();
+
+        insert_channel_state(
+            db.connection(),
+            channel_id,
+            75,
+            0,
+            0,
+            vec![2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], // balance = 2 (updated)
+            1,                                        // Still OPEN
+        )
+        .await
+        .unwrap();
+
+        // Query at block 100
+        let watermark = Watermark {
+            block: 100,
+            tx_index: 0,
+            log_index: 0,
+        };
+
+        let result = query_channels_at_watermark(db.connection(), &watermark, 100)
+            .await
+            .unwrap();
+
+        // Should return channel with latest balance (2)
+        assert_eq!(result.len(), 1);
+        // Balance should be "2" in string form
+        assert_eq!(result[0].channel.balance.0, "2");
+    }
+
+    #[tokio::test]
+    async fn test_query_channels_at_watermark_respects_batch_size() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        // Create 5 open channels
+        for i in 0..5 {
+            let source_id = create_test_account(db.connection(), vec![i as u8; 20], &format!("peer{}_src", i))
+                .await
+                .unwrap();
+            let dest_id = create_test_account(db.connection(), vec![(i + 10) as u8; 20], &format!("peer{}_dst", i))
+                .await
+                .unwrap();
+
+            let channel_id = create_test_channel(db.connection(), source_id, dest_id, &format!("0xchannel{}", i))
+                .await
+                .unwrap();
+
+            insert_channel_state(
+                db.connection(),
+                channel_id,
+                50,
+                0,
+                i as i64,
+                vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+                1, // OPEN
+            )
+            .await
+            .unwrap();
+        }
+
+        let watermark = Watermark {
+            block: 100,
+            tx_index: 0,
+            log_index: 0,
+        };
+
+        // Query with batch_size = 3
+        let result = query_channels_at_watermark(db.connection(), &watermark, 3)
+            .await
+            .unwrap();
+
+        // Should return only 3 channels despite 5 existing
+        assert_eq!(result.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_channel_update_finds_existing_channel() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        // Create accounts
+        let source_id = create_test_account(db.connection(), vec![1; 20], "peer1")
+            .await
+            .unwrap();
+        let dest_id = create_test_account(db.connection(), vec![2; 20], "peer2")
+            .await
+            .unwrap();
+
+        // Create channel
+        let channel_id = create_test_channel(db.connection(), source_id, dest_id, "0xabc123")
+            .await
+            .unwrap();
+
+        // Insert channel state
+        insert_channel_state(
+            db.connection(),
+            channel_id,
+            50,
+            0,
+            0,
+            vec![5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            1, // OPEN
+        )
+        .await
+        .unwrap();
+
+        // Fetch channel update for event
+        let event = ChannelEvent::Updated { channel_id };
+        let result = fetch_channel_update(db.connection(), &event).await.unwrap();
+
+        assert!(result.is_some());
+        let update = result.unwrap();
+        assert_eq!(update.channel.concrete_channel_id, "0xabc123");
+        assert_eq!(update.channel.balance.0, "5");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_channel_update_returns_none_for_missing_channel() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        // Try to fetch non-existent channel
+        let event = ChannelEvent::Updated { channel_id: 999 };
+        let result = fetch_channel_update(db.connection(), &event).await.unwrap();
+
+        // Should return None for missing channel
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_channel_update_handles_all_event_types() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        // Create test channel
+        let source_id = create_test_account(db.connection(), vec![1; 20], "peer1")
+            .await
+            .unwrap();
+        let dest_id = create_test_account(db.connection(), vec![2; 20], "peer2")
+            .await
+            .unwrap();
+        let channel_id = create_test_channel(db.connection(), source_id, dest_id, "0xabc123")
+            .await
+            .unwrap();
+        insert_channel_state(
+            db.connection(),
+            channel_id,
+            50,
+            0,
+            0,
+            vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            1,
+        )
+        .await
+        .unwrap();
+
+        // Test all event types
+        let events = vec![
+            ChannelEvent::Opened { channel_id },
+            ChannelEvent::Updated { channel_id },
+            ChannelEvent::Closed { channel_id },
+        ];
+
+        for event in events {
+            let result = fetch_channel_update(db.connection(), &event).await.unwrap();
+            assert!(result.is_some(), "Failed for event: {:?}", event);
+        }
+    }
+
+    #[tokio::test]
+    async fn test_watermark_struct_fields() {
+        let watermark = Watermark {
+            block: 12345,
+            tx_index: 67,
+            log_index: 89,
+        };
+
+        assert_eq!(watermark.block, 12345);
+        assert_eq!(watermark.tx_index, 67);
+        assert_eq!(watermark.log_index, 89);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_native_balance_finds_existing_balance() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        // Insert native balance
+        let balance_model = blokli_db_entity::native_balance::ActiveModel {
+            id: Default::default(),
+            address: Set(vec![1; 20]),
+            balance: Set(vec![10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+        };
+        balance_model.insert(db.connection()).await.unwrap();
+
+        // Fetch balance using hex string address
+        let address = "0x0101010101010101010101010101010101010101";
+        let result = SubscriptionRoot::fetch_native_balance(db.connection(), address)
+            .await
+            .unwrap();
+
+        assert!(result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_native_balance_returns_none_for_missing() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        // Try to fetch non-existent balance
+        let address = "0x0000000000000000000000000000000000000000";
+        let result = SubscriptionRoot::fetch_native_balance(db.connection(), address)
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_hopr_balance_finds_existing_balance() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        // Insert HOPR balance
+        let balance_model = blokli_db_entity::hopr_balance::ActiveModel {
+            id: Default::default(),
+            address: Set(vec![2; 20]),
+            balance: Set(vec![20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
+        };
+        balance_model.insert(db.connection()).await.unwrap();
+
+        // Fetch balance
+        let address = "0x0202020202020202020202020202020202020202";
+        let result = SubscriptionRoot::fetch_hopr_balance(db.connection(), address)
+            .await
+            .unwrap();
+
+        assert!(result.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_hopr_balance_returns_none_for_missing() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        let address = "0x0000000000000000000000000000000000000000";
+        let result = SubscriptionRoot::fetch_hopr_balance(db.connection(), address)
+            .await
+            .unwrap();
+
+        assert!(result.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_fetch_filtered_accounts_filters_by_keyid() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        // Create 3 accounts
+        let id1 = create_test_account(db.connection(), vec![1; 20], "peer1")
+            .await
+            .unwrap();
+        let _id2 = create_test_account(db.connection(), vec![2; 20], "peer2")
+            .await
+            .unwrap();
+        let _id3 = create_test_account(db.connection(), vec![3; 20], "peer3")
+            .await
+            .unwrap();
+
+        // Filter by specific keyid
+        let result = SubscriptionRoot::fetch_filtered_accounts(db.connection(), Some(id1), None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].keyid, id1);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_filtered_accounts_filters_by_packet_key() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        create_test_account(db.connection(), vec![1; 20], "peer1")
+            .await
+            .unwrap();
+        create_test_account(db.connection(), vec![2; 20], "peer2")
+            .await
+            .unwrap();
+
+        // Filter by packet_key
+        let result = SubscriptionRoot::fetch_filtered_accounts(db.connection(), None, Some("peer1".to_string()), None)
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].packet_key, "peer1");
+    }
+
+    #[tokio::test]
+    async fn test_fetch_filtered_accounts_returns_all_when_no_filters() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        create_test_account(db.connection(), vec![1; 20], "peer1")
+            .await
+            .unwrap();
+        create_test_account(db.connection(), vec![2; 20], "peer2")
+            .await
+            .unwrap();
+        create_test_account(db.connection(), vec![3; 20], "peer3")
+            .await
+            .unwrap();
+
+        // No filters - should return all
+        let result = SubscriptionRoot::fetch_filtered_accounts(db.connection(), None, None, None)
+            .await
+            .unwrap();
+
+        assert_eq!(result.len(), 3);
+    }
+
+    #[tokio::test]
+    async fn test_fetch_filtered_channels_returns_error_for_status_filter() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        // Status filtering is not yet implemented
+        let result = SubscriptionRoot::fetch_filtered_channels(
+            db.connection(),
+            None,
+            None,
+            None,
+            Some(blokli_api_types::ChannelStatus::Open),
+        )
+        .await;
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("temporarily unavailable"));
+    }
+}
