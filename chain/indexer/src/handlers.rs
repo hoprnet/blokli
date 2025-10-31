@@ -776,6 +776,9 @@ mod tests {
 
     lazy_static::lazy_static! {
         static ref SELF_PRIV_KEY: OffchainKeypair = OffchainKeypair::from_secret(&hex!("492057cf93e99b31d2a85bc5e98a9c3aa0021feec52c227cc8170e8f7d047775")).expect("lazy static keypair should be constructible");
+        static ref SELF_CHAIN_ADDRESS: Address = SELF_PRIV_KEY.public().to_address();
+        static ref COUNTERPARTY_CHAIN_ADDRESS: Address = "1234567890abcdef1234567890abcdef12345678".parse().expect("lazy static address should be constructible"); // just a dummy
+        static ref SAFE_INSTANCE_ADDR: Address = "fedcba0987654321fedcba0987654321fedcba09".parse().expect("lazy static address should be constructible"); // just a dummy
         static ref STAKE_ADDRESS: Address = "4331eaa9542b6b034c43090d9ec1c2198758dbc3".parse().expect("lazy static address should be constructible");
         static ref CHANNELS_ADDR: Address = "bab20aea98368220baa4e3b7f151273ee71df93b".parse().expect("lazy static address should be constructible"); // just a dummy
         static ref TOKEN_ADDR: Address = "47d1677e018e79dcdd8a9c554466cb1556fa5007".parse().expect("lazy static address should be constructible"); // just a dummy

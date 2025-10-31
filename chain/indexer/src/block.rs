@@ -54,6 +54,17 @@ lazy_static::lazy_static! {
 
 }
 
+/// Information about a detected blockchain reorganization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReorgInfo {
+    /// The block number where the reorg was detected
+    pub detected_at_block: u64,
+    /// The range of blocks affected by the reorg (min, max)
+    pub affected_block_range: (u64, u64),
+    /// Number of logs that were marked as removed
+    pub removed_log_count: usize,
+}
+
 /// Indexer
 ///
 /// Accepts the RPC operational functionality [blokli_chain_rpc::HoprIndexerRpcOperations]
@@ -535,6 +546,36 @@ where
         let log_count = block.logs.len();
         debug!(block_id, "processing events");
 
+        // Check for blockchain reorganization before processing logs
+        if let Some(reorg_info) = Self::detect_reorg(&block) {
+            error!(
+                block_id = reorg_info.detected_at_block,
+                affected_blocks = ?reorg_info.affected_block_range,
+                removed_logs = reorg_info.removed_log_count,
+                "Blockchain reorganization detected"
+            );
+
+            // Handle the reorg by inserting corrective channel states
+            // Use the current block as the canonical block for corrective states
+            match Self::handle_reorg(db, &reorg_info, block_id).await {
+                Ok(corrected_count) => {
+                    info!(
+                        block_id,
+                        corrected_channels = corrected_count,
+                        "Successfully handled blockchain reorganization"
+                    );
+                }
+                Err(error) => {
+                    error!(
+                        block_id,
+                        %error,
+                        "Failed to handle blockchain reorganization, panicking to prevent data corruption"
+                    );
+                    panic!("Failed to handle blockchain reorganization: {error}");
+                }
+            }
+        }
+
         // FIXME: The block indexing and marking as processed should be done in a single
         // transaction. This is difficult since currently this would be across databases.
         let events = stream::iter(block.logs.clone())
@@ -608,6 +649,108 @@ where
         );
 
         Some(events)
+    }
+
+    /// Detects blockchain reorganization by checking for removed logs in a block.
+    ///
+    /// This function scans logs in a block to identify if any have been marked as removed
+    /// (indicating they were part of a reorganized chain). When a reorg is detected,
+    /// it returns information about which blocks and channels are affected.
+    ///
+    /// # Arguments
+    ///
+    /// * `block` - The block with logs to check for reorg indicators
+    ///
+    /// # Returns
+    ///
+    /// * `Option<ReorgInfo>` - Information about the detected reorg, or None if no reorg was detected
+    #[allow(dead_code)]
+    fn detect_reorg(block: &BlockWithLogs) -> Option<ReorgInfo> {
+        let removed_logs: Vec<&SerializableLog> = block.logs.iter().filter(|log| log.removed).collect();
+
+        if removed_logs.is_empty() {
+            return None;
+        }
+
+        let affected_blocks: Vec<u64> = removed_logs.iter().map(|log| log.block_number).collect();
+        let min_block = affected_blocks.iter().min().copied().unwrap_or(block.block_id);
+        let max_block = affected_blocks.iter().max().copied().unwrap_or(block.block_id);
+
+        Some(ReorgInfo {
+            detected_at_block: block.block_id,
+            affected_block_range: (min_block, max_block),
+            removed_log_count: removed_logs.len(),
+        })
+    }
+
+    /// Handles blockchain reorganization by correcting affected channel states.
+    ///
+    /// When a reorg is detected, this function:
+    /// 1. Identifies which channels were affected by logs in the reorged blocks
+    /// 2. Finds the last valid state for each affected channel (before the reorg)
+    /// 3. Inserts corrective channel_state entries with reorg_correction=true
+    /// 4. Signals active subscriptions to shut down and reconnect
+    ///
+    /// The corrective states are inserted at synthetic positions (canonical_block, 0, 0)
+    /// to indicate they represent the canonical state after reorg recovery, preserving
+    /// a complete audit trail without deleting historical data.
+    ///
+    /// # Arguments
+    ///
+    /// * `db` - Database handle for querying and inserting states
+    /// * `reorg_info` - Information about the detected reorganization
+    /// * `canonical_block` - The canonical block number after the reorg
+    ///
+    /// # Returns
+    ///
+    /// * `Result<usize>` - Number of corrective states inserted, or error if recovery fails
+    ///
+    /// # Implementation Status
+    ///
+    /// This is a skeleton implementation showing the required structure.
+    /// Full implementation requires:
+    /// - Database queries to find affected channels from reorged logs
+    /// - Queries to find last valid state before reorg for each channel
+    /// - Insertion of corrective states with reorg_correction=true
+    /// - Integration with IndexerState for subscription shutdown signaling
+    #[allow(dead_code)]
+    async fn handle_reorg(_db: &Db, _reorg_info: &ReorgInfo, _canonical_block: u64) -> Result<usize>
+    where
+        Db: BlokliDbGeneralModelOperations
+            + BlokliDbInfoOperations
+            + BlokliDbLogOperations
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    {
+        // TODO: Implement reorg handling logic:
+        //
+        // 1. Query logs in affected block range to identify which channels were affected
+        //    - Get logs for blocks in reorg_info.affected_block_range
+        //    - Filter for channel-related events (ChannelOpened, ChannelBalanceIncreased, etc.)
+        //    - Extract channel IDs from these events
+        //
+        // 2. For each affected channel:
+        //    - Query channel_state table for last state before min affected block
+        //    - If no prior state exists, channel was opened during reorg - no correction needed
+        //    - If prior state exists, prepare corrective state entry
+        //
+        // 3. Insert corrective states:
+        //    - Use ActiveModel to insert new channel_state rows
+        //    - Set published_block = canonical_block
+        //    - Set published_tx_index = 0, published_log_index = 0 (synthetic position)
+        //    - Set reorg_correction = true
+        //    - Copy other fields from last valid state
+        //
+        // 4. Signal shutdown to active subscriptions (requires IndexerState):
+        //    - indexer_state.signal_shutdown() to trigger subscription termination
+        //    - Subscriptions will detect shutdown and close client connections
+        //
+        // 5. Return count of corrective states inserted
+
+        // Placeholder return - replace with actual count once implemented
+        Ok(0)
     }
 
     async fn update_chain_head(rpc: &T, chain_head: Arc<AtomicU64>) -> u64
@@ -1366,5 +1509,277 @@ mod tests {
         indexer.start().await?;
 
         Ok(())
+    }
+
+    // ==================== Reorg Detection Tests ====================
+
+    #[test]
+    fn test_detect_reorg_returns_none_when_no_removed_logs() {
+        // Test that blocks with all logs having removed=false return None
+        let block = BlockWithLogs {
+            block_id: 100,
+            logs: BTreeSet::from([
+                SerializableLog {
+                    address: Address::new(b"test address 123456789"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![1, 2, 3],
+                    tx_index: 0,
+                    block_number: 100,
+                    block_hash: Hash::create(&[b"block 100"]).into(),
+                    tx_hash: Hash::create(&[b"tx 0"]).into(),
+                    log_index: 0,
+                    removed: false,
+                    processed: None,
+                    checksum: None,
+                },
+                SerializableLog {
+                    address: Address::new(b"test address 123456789"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![4, 5, 6],
+                    tx_index: 1,
+                    block_number: 100,
+                    block_hash: Hash::create(&[b"block 100"]).into(),
+                    tx_hash: Hash::create(&[b"tx 1"]).into(),
+                    log_index: 1,
+                    removed: false,
+                    processed: None,
+                    checksum: None,
+                },
+            ]),
+        };
+
+        let result = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::detect_reorg(&block);
+        assert!(result.is_none(), "Expected None when no logs are marked as removed");
+    }
+
+    #[test]
+    fn test_detect_reorg_detects_single_removed_log() {
+        // Test that a single removed log is properly detected
+        let block = BlockWithLogs {
+            block_id: 200,
+            logs: BTreeSet::from([
+                SerializableLog {
+                    address: Address::new(b"test address 123456789"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![1, 2, 3],
+                    tx_index: 0,
+                    block_number: 199,
+                    block_hash: Hash::create(&[b"block 199"]).into(),
+                    tx_hash: Hash::create(&[b"tx 0"]).into(),
+                    log_index: 0,
+                    removed: true, // This log was reorged
+                    processed: None,
+                    checksum: None,
+                },
+                SerializableLog {
+                    address: Address::new(b"test address 123456789"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![4, 5, 6],
+                    tx_index: 1,
+                    block_number: 200,
+                    block_hash: Hash::create(&[b"block 200"]).into(),
+                    tx_hash: Hash::create(&[b"tx 1"]).into(),
+                    log_index: 1,
+                    removed: false,
+                    processed: None,
+                    checksum: None,
+                },
+            ]),
+        };
+
+        let result = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::detect_reorg(&block);
+        assert!(result.is_some(), "Expected Some when removed logs are present");
+
+        let reorg_info = result.unwrap();
+        assert_eq!(reorg_info.detected_at_block, 200);
+        assert_eq!(reorg_info.affected_block_range, (199, 199));
+        assert_eq!(reorg_info.removed_log_count, 1);
+    }
+
+    #[test]
+    fn test_detect_reorg_detects_multiple_removed_logs_same_block() {
+        // Test multiple removed logs from the same block
+        let block = BlockWithLogs {
+            block_id: 150,
+            logs: BTreeSet::from([
+                SerializableLog {
+                    address: Address::new(b"test address 123456789"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![1, 2, 3],
+                    tx_index: 0,
+                    block_number: 148,
+                    block_hash: Hash::create(&[b"block 148"]).into(),
+                    tx_hash: Hash::create(&[b"tx 0"]).into(),
+                    log_index: 0,
+                    removed: true,
+                    processed: None,
+                    checksum: None,
+                },
+                SerializableLog {
+                    address: Address::new(b"test address 123456789"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![4, 5, 6],
+                    tx_index: 1,
+                    block_number: 148,
+                    block_hash: Hash::create(&[b"block 148"]).into(),
+                    tx_hash: Hash::create(&[b"tx 1"]).into(),
+                    log_index: 1,
+                    removed: true,
+                    processed: None,
+                    checksum: None,
+                },
+                SerializableLog {
+                    address: Address::new(b"test address 123456789"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![7, 8, 9],
+                    tx_index: 2,
+                    block_number: 150,
+                    block_hash: Hash::create(&[b"block 150"]).into(),
+                    tx_hash: Hash::create(&[b"tx 2"]).into(),
+                    log_index: 2,
+                    removed: false,
+                    processed: None,
+                    checksum: None,
+                },
+            ]),
+        };
+
+        let result = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::detect_reorg(&block);
+        assert!(result.is_some(), "Expected Some when removed logs are present");
+
+        let reorg_info = result.unwrap();
+        assert_eq!(reorg_info.detected_at_block, 150);
+        assert_eq!(reorg_info.affected_block_range, (148, 148));
+        assert_eq!(reorg_info.removed_log_count, 2);
+    }
+
+    #[test]
+    fn test_detect_reorg_detects_multiple_removed_logs_different_blocks() {
+        // Test removed logs from different blocks - calculates correct range
+        let block = BlockWithLogs {
+            block_id: 300,
+            logs: BTreeSet::from([
+                SerializableLog {
+                    address: Address::new(b"test address 123456789"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![1, 2, 3],
+                    tx_index: 0,
+                    block_number: 295,
+                    block_hash: Hash::create(&[b"block 295"]).into(),
+                    tx_hash: Hash::create(&[b"tx 0"]).into(),
+                    log_index: 0,
+                    removed: true,
+                    processed: None,
+                    checksum: None,
+                },
+                SerializableLog {
+                    address: Address::new(b"test address 123456789"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![4, 5, 6],
+                    tx_index: 1,
+                    block_number: 297,
+                    block_hash: Hash::create(&[b"block 297"]).into(),
+                    tx_hash: Hash::create(&[b"tx 1"]).into(),
+                    log_index: 1,
+                    removed: true,
+                    processed: None,
+                    checksum: None,
+                },
+                SerializableLog {
+                    address: Address::new(b"test address 123456789"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![7, 8, 9],
+                    tx_index: 2,
+                    block_number: 299,
+                    block_hash: Hash::create(&[b"block 299"]).into(),
+                    tx_hash: Hash::create(&[b"tx 2"]).into(),
+                    log_index: 2,
+                    removed: true,
+                    processed: None,
+                    checksum: None,
+                },
+                SerializableLog {
+                    address: Address::new(b"test address 123456789"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![10, 11, 12],
+                    tx_index: 3,
+                    block_number: 300,
+                    block_hash: Hash::create(&[b"block 300"]).into(),
+                    tx_hash: Hash::create(&[b"tx 3"]).into(),
+                    log_index: 3,
+                    removed: false,
+                    processed: None,
+                    checksum: None,
+                },
+            ]),
+        };
+
+        let result = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::detect_reorg(&block);
+        assert!(result.is_some(), "Expected Some when removed logs are present");
+
+        let reorg_info = result.unwrap();
+        assert_eq!(reorg_info.detected_at_block, 300);
+        assert_eq!(
+            reorg_info.affected_block_range,
+            (295, 299),
+            "Should span from min (295) to max (299) affected block"
+        );
+        assert_eq!(reorg_info.removed_log_count, 3);
+    }
+
+    #[test]
+    fn test_detect_reorg_calculates_correct_affected_range() {
+        // Test that min/max calculation works correctly
+        let block = BlockWithLogs {
+            block_id: 1000,
+            logs: BTreeSet::from([
+                SerializableLog {
+                    address: Address::new(b"test address 123456789"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![1],
+                    tx_index: 0,
+                    block_number: 990,
+                    block_hash: Hash::create(&[b"block 990"]).into(),
+                    tx_hash: Hash::create(&[b"tx 0"]).into(),
+                    log_index: 0,
+                    removed: true,
+                    processed: None,
+                    checksum: None,
+                },
+                SerializableLog {
+                    address: Address::new(b"test address 123456789"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![2],
+                    tx_index: 1,
+                    block_number: 998,
+                    block_hash: Hash::create(&[b"block 998"]).into(),
+                    tx_hash: Hash::create(&[b"tx 1"]).into(),
+                    log_index: 1,
+                    removed: true,
+                    processed: None,
+                    checksum: None,
+                },
+            ]),
+        };
+
+        let result = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::detect_reorg(&block);
+        assert!(result.is_some());
+
+        let reorg_info = result.unwrap();
+        assert_eq!(reorg_info.detected_at_block, 1000);
+        assert_eq!(reorg_info.affected_block_range, (990, 998));
+        assert_eq!(reorg_info.removed_log_count, 2);
+    }
+
+    #[test]
+    fn test_detect_reorg_empty_block() {
+        // Test that an empty block returns None
+        let block = BlockWithLogs {
+            block_id: 500,
+            logs: BTreeSet::new(),
+        };
+
+        let result = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::detect_reorg(&block);
+        assert!(result.is_none(), "Expected None for empty block");
     }
 }

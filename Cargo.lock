@@ -1825,7 +1825,7 @@ dependencies = [
  "lazy_static",
  "mockall",
  "multiaddr",
- "primitive-types 0.13.1",
+ "primitive-types 0.14.0",
  "reqwest",
  "smart-default",
  "sysinfo",
@@ -1860,7 +1860,7 @@ dependencies = [
  "mockall",
  "mockito",
  "moka",
- "primitive-types 0.13.1",
+ "primitive-types 0.14.0",
  "reqwest",
  "rust-stream-ext-concurrent",
  "serde",
@@ -5563,18 +5563,6 @@ dependencies = [
  "fixed-hash",
  "impl-codec 0.6.0",
  "uint 0.9.5",
-]
-
-[[package]]
-name = "primitive-types"
-version = "0.13.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d15600a7d856470b7d278b3fe0e311fe28c2526348549f8ef2ff7db3299c87f5"
-dependencies = [
- "fixed-hash",
- "impl-codec 0.7.1",
- "impl-serde",
- "uint 0.10.0",
 ]
 
 [[package]]
