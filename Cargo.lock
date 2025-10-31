@@ -1827,6 +1827,7 @@ dependencies = [
  "multiaddr",
  "primitive-types 0.14.0",
  "reqwest",
+ "sea-orm",
  "smart-default",
  "sysinfo",
  "tempfile",
