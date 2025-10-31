@@ -42,6 +42,7 @@ impl From<HoprBalanceResult> for Result<HoprBalance, BlokliClientError> {
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct HoprBalance {
+    pub __typename: String,
     pub balance: TokenValueString,
 }
 
@@ -67,6 +68,7 @@ impl From<NativeBalanceResult> for Result<NativeBalance, BlokliClientError> {
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct NativeBalance {
+    pub __typename: String,
     pub balance: TokenValueString,
 }
 
