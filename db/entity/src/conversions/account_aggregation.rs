@@ -2,10 +2,10 @@
 
 use std::collections::HashMap;
 
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 
 use super::balances::{address_to_string, hopr_balance_to_string, native_balance_to_string, string_to_address};
-use crate::codegen::{account, announcement, hopr_balance, native_balance};
+use crate::codegen::{account, account_state, announcement, hopr_balance, native_balance};
 
 /// Aggregated account data with all related information
 #[derive(Debug, Clone)]
@@ -46,13 +46,28 @@ pub async fn fetch_accounts_with_balances(db: &DatabaseConnection) -> Result<Vec
 
     // Collect all account IDs and addresses
     let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
-    let all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
+    let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
 
-    // Add safe addresses if they exist
-    for _account in &accounts {
-        // TODO(Phase 2-3): Query account_state for safe_address
-        if false {}
+    // Batch query account_state for all accounts to get safe_address
+    let account_states = account_state::Entity::find()
+        .filter(account_state::Column::AccountId.is_in(account_ids.clone()))
+        .order_by_desc(account_state::Column::PublishedBlock)
+        .order_by_desc(account_state::Column::PublishedTxIndex)
+        .order_by_desc(account_state::Column::PublishedLogIndex)
+        .all(db)
+        .await?;
+
+    // Build map of account_id -> safe_address (only keep latest state per account)
+    let mut safe_address_map: HashMap<i32, Vec<u8>> = HashMap::new();
+    for state in account_states {
+        if let Some(safe_addr) = state.safe_address {
+            // Only insert if we haven't seen this account yet (first occurrence is latest due to ordering)
+            safe_address_map.entry(state.account_id).or_insert(safe_addr);
+        }
     }
+
+    // Add safe addresses to all_addresses for balance lookup
+    all_addresses.extend(safe_address_map.values().cloned());
 
     // 2. Batch fetch all announcements (1 query)
     let announcements = announcement::Entity::find()
@@ -113,7 +128,7 @@ pub async fn fetch_accounts_with_balances(db: &DatabaseConnection) -> Result<Vec
                 .unwrap_or_else(|| native_balance_to_string(&[]));
 
             // Convert safe_address to string if present
-            let safe_address_str = None::<String>;
+            let safe_address_str = safe_address_map.get(&account.id).map(|addr| address_to_string(addr));
 
             let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr_str) = safe_address_str {
                 (
@@ -178,13 +193,28 @@ pub async fn fetch_accounts_with_balances_for_addresses(
 
     // Collect all account IDs and addresses
     let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
-    let all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
+    let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
 
-    // Add safe addresses if they exist
-    for _account in &accounts {
-        // TODO(Phase 2-3): Query account_state for safe_address
-        if false {}
+    // Batch query account_state for all accounts to get safe_address
+    let account_states = account_state::Entity::find()
+        .filter(account_state::Column::AccountId.is_in(account_ids.clone()))
+        .order_by_desc(account_state::Column::PublishedBlock)
+        .order_by_desc(account_state::Column::PublishedTxIndex)
+        .order_by_desc(account_state::Column::PublishedLogIndex)
+        .all(db)
+        .await?;
+
+    // Build map of account_id -> safe_address (only keep latest state per account)
+    let mut safe_address_map: HashMap<i32, Vec<u8>> = HashMap::new();
+    for state in account_states {
+        if let Some(safe_addr) = state.safe_address {
+            // Only insert if we haven't seen this account yet (first occurrence is latest due to ordering)
+            safe_address_map.entry(state.account_id).or_insert(safe_addr);
+        }
     }
+
+    // Add safe addresses to all_addresses for balance lookup
+    all_addresses.extend(safe_address_map.values().cloned());
 
     // 2. Batch fetch all announcements (1 query)
     let announcements = announcement::Entity::find()
@@ -245,7 +275,7 @@ pub async fn fetch_accounts_with_balances_for_addresses(
                 .unwrap_or_else(|| native_balance_to_string(&[]));
 
             // Convert safe_address to string if present
-            let safe_address_str = None::<String>;
+            let safe_address_str = safe_address_map.get(&account.id).map(|addr| address_to_string(addr));
 
             let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr_str) = safe_address_str {
                 (
@@ -306,13 +336,28 @@ pub async fn fetch_accounts_by_keyids(
 
     // Collect all account IDs and addresses
     let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
-    let all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
+    let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
 
-    // Add safe addresses if they exist
-    for _account in &accounts {
-        // TODO(Phase 2-3): Query account_state for safe_address
-        if false {}
+    // Batch query account_state for all accounts to get safe_address
+    let account_states = account_state::Entity::find()
+        .filter(account_state::Column::AccountId.is_in(account_ids.clone()))
+        .order_by_desc(account_state::Column::PublishedBlock)
+        .order_by_desc(account_state::Column::PublishedTxIndex)
+        .order_by_desc(account_state::Column::PublishedLogIndex)
+        .all(db)
+        .await?;
+
+    // Build map of account_id -> safe_address (only keep latest state per account)
+    let mut safe_address_map: HashMap<i32, Vec<u8>> = HashMap::new();
+    for state in account_states {
+        if let Some(safe_addr) = state.safe_address {
+            // Only insert if we haven't seen this account yet (first occurrence is latest due to ordering)
+            safe_address_map.entry(state.account_id).or_insert(safe_addr);
+        }
     }
+
+    // Add safe addresses to all_addresses for balance lookup
+    all_addresses.extend(safe_address_map.values().cloned());
 
     // 2. Batch fetch all announcements (1 query)
     let announcements = announcement::Entity::find()
@@ -373,7 +418,7 @@ pub async fn fetch_accounts_by_keyids(
                 .unwrap_or_else(|| native_balance_to_string(&[]));
 
             // Convert safe_address to string if present
-            let safe_address_str = None::<String>;
+            let safe_address_str = safe_address_map.get(&account.id).map(|addr| address_to_string(addr));
 
             let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr_str) = safe_address_str {
                 (
@@ -446,13 +491,28 @@ pub async fn fetch_accounts_with_filters(
 
     // Collect all account IDs and addresses
     let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
-    let all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
+    let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
 
-    // Add safe addresses if they exist
-    for _account in &accounts {
-        // TODO(Phase 2-3): Query account_state for safe_address
-        if false {}
+    // Batch query account_state for all accounts to get safe_address
+    let account_states = account_state::Entity::find()
+        .filter(account_state::Column::AccountId.is_in(account_ids.clone()))
+        .order_by_desc(account_state::Column::PublishedBlock)
+        .order_by_desc(account_state::Column::PublishedTxIndex)
+        .order_by_desc(account_state::Column::PublishedLogIndex)
+        .all(db)
+        .await?;
+
+    // Build map of account_id -> safe_address (only keep latest state per account)
+    let mut safe_address_map: HashMap<i32, Vec<u8>> = HashMap::new();
+    for state in account_states {
+        if let Some(safe_addr) = state.safe_address {
+            // Only insert if we haven't seen this account yet (first occurrence is latest due to ordering)
+            safe_address_map.entry(state.account_id).or_insert(safe_addr);
+        }
     }
+
+    // Add safe addresses to all_addresses for balance lookup
+    all_addresses.extend(safe_address_map.values().cloned());
 
     // 2. Batch fetch all announcements (1 query)
     let announcements = announcement::Entity::find()
@@ -513,7 +573,7 @@ pub async fn fetch_accounts_with_filters(
                 .unwrap_or_else(|| native_balance_to_string(&[]));
 
             // Convert safe_address to string if present
-            let safe_address_str = None::<String>;
+            let safe_address_str = safe_address_map.get(&account.id).map(|addr| address_to_string(addr));
 
             let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr_str) = safe_address_str {
                 (

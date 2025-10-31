@@ -187,6 +187,8 @@ impl QueryRoot {
             blokli_api_types::ChannelStatus,
         >,
     ) -> Result<Vec<Channel>> {
+        use blokli_db_entity::conversions::channel_aggregation::fetch_channels_with_state;
+
         // Require at least one identity filter to prevent excessive data retrieval
         // Note: status alone is not sufficient as it could still return thousands of channels
         if source_key_id.is_none() && destination_key_id.is_none() && concrete_channel_id.is_none() {
@@ -201,40 +203,50 @@ impl QueryRoot {
 
         let db = ctx.data::<DatabaseConnection>()?;
 
-        let mut query = blokli_db_entity::channel::Entity::find();
+        // Convert GraphQL ChannelStatus to database i8 representation if status filter is provided
+        let status_i8 = status.map(|s| match s {
+            blokli_api_types::ChannelStatus::Closed => 0,
+            blokli_api_types::ChannelStatus::Open => 1,
+            blokli_api_types::ChannelStatus::PendingToClose => 2,
+        });
 
-        // Apply source filter if provided
-        if let Some(src_keyid) = source_key_id {
-            query = query.filter(blokli_db_entity::channel::Column::Source.eq(src_keyid));
-        }
+        // Fetch channels with state using optimized batch loading (2 queries total)
+        let aggregated_channels =
+            fetch_channels_with_state(db, source_key_id, destination_key_id, concrete_channel_id, status_i8).await?;
 
-        // Apply destination filter if provided
-        if let Some(dst_keyid) = destination_key_id {
-            query = query.filter(blokli_db_entity::channel::Column::Destination.eq(dst_keyid));
-        }
+        // Convert to GraphQL Channel type
+        let result = aggregated_channels
+            .into_iter()
+            .map(|agg| {
+                // Convert status from i8 to ChannelStatus enum
+                let status = match agg.status {
+                    0 => blokli_api_types::ChannelStatus::Closed,
+                    1 => blokli_api_types::ChannelStatus::Open,
+                    2 => blokli_api_types::ChannelStatus::PendingToClose,
+                    _ => blokli_api_types::ChannelStatus::Closed, // Default to Closed for unknown values
+                };
 
-        // Apply concrete channel ID filter if provided
-        if let Some(channel_id) = concrete_channel_id {
-            query = query.filter(blokli_db_entity::channel::Column::ConcreteChannelId.eq(channel_id));
-        }
+                // Convert epoch from i64 to i32 with validation
+                // Epoch should fit in u24, so i32 should always be safe, but handle overflow
+                let epoch = i32::try_from(agg.epoch).unwrap_or(i32::MAX);
 
-        // TODO(Phase 2-3): Status filtering requires querying channel_state table
-        // Status column has been moved to channel_state table
-        if let Some(_status_filter) = status {
-            return Err(async_graphql::Error::new(
-                "Channel status filtering is temporarily unavailable during schema migration. Use other filters \
-                 (sourceKeyId, destinationKeyId, or concreteChannelId) without status.",
-            ));
-        }
+                // Convert ticket_index from i64 to u64 (should always be non-negative)
+                let ticket_index = blokli_api_types::UInt64(u64::try_from(agg.ticket_index).unwrap_or(0));
 
-        let _channels = query.all(db).await?;
+                Channel {
+                    concrete_channel_id: agg.concrete_channel_id,
+                    source: agg.source,
+                    destination: agg.destination,
+                    balance: TokenValueString(agg.balance),
+                    status,
+                    epoch,
+                    ticket_index,
+                    closure_time: agg.closure_time,
+                }
+            })
+            .collect();
 
-        // TODO(Phase 2-3): Cannot use channel_from_model until we implement channel_state lookup
-        // For now, return empty list as channels query requires state information
-        Err(async_graphql::Error::new(
-            "Channel queries are temporarily unavailable during schema migration. Channel state information needs to \
-             be joined from channel_state table.",
-        ))
+        Ok(result)
     }
 
     /// Retrieve HOPR token balance for a specific address

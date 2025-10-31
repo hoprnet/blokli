@@ -284,26 +284,26 @@ impl BlokliDbLogOperations for BlokliDb {
         }
     }
 
-    async fn set_log_processed<'a>(&'a self, mut log: SerializableLog) -> Result<()> {
-        log.processed = Some(true);
-        log.processed_at = Some(Utc::now());
-        let log_status = log_status::ActiveModel::from(log);
+    async fn set_log_processed<'a>(&'a self, log: SerializableLog) -> Result<()> {
+        let now = Utc::now();
 
-        let db_tx = self.nest_transaction_in_db(None, TargetDb::Logs).await?;
+        let query = LogStatus::update_many()
+            .col_expr(log_status::Column::Processed, Expr::value(Value::Bool(Some(true))))
+            .col_expr(
+                log_status::Column::ProcessedAt,
+                Expr::value(Value::ChronoDateTimeUtc(Some(now))),
+            )
+            .filter(log_status::Column::BlockNumber.eq(log.block_number as i64))
+            .filter(log_status::Column::TxIndex.eq(log.tx_index as i64))
+            .filter(log_status::Column::LogIndex.eq(log.log_index as i64));
 
-        db_tx
-            .perform(|tx| {
-                Box::pin(async move {
-                    match LogStatus::update(log_status).exec(tx.as_ref()).await {
-                        Ok(_) => Ok(()),
-                        Err(e) => {
-                            error!("Failed to update log status in db");
-                            Err(DbError::from(DbSqlError::from(e)))
-                        }
-                    }
-                })
-            })
-            .await
+        match query.exec(self.conn(TargetDb::Logs)).await {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                error!("Failed to update log status in db");
+                Err(DbError::from(DbSqlError::from(e)))
+            }
+        }
     }
 
     async fn set_logs_unprocessed(&self, block_number: Option<u64>, block_offset: Option<u64>) -> Result<()> {
