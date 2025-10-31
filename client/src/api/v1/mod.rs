@@ -1,11 +1,9 @@
-use crate::api::types::Transaction;
-
 mod graphql;
 pub mod types {
     pub use super::graphql::{
         ChannelStatus, TokenValueString,
         accounts::Account,
-        balances::{HoprBalance, NativeBalance},
+        balances::{HoprBalance, NativeBalance, SafeHoprAllowance},
         channels::Channel,
         graph::OpenedChannelsGraphEntry,
         info::ChainInfo,
@@ -16,7 +14,7 @@ pub mod types {
 pub(crate) mod internal {
     pub use super::graphql::{
         accounts::{AccountVariables, QueryAccountCount, QueryAccounts, SubscribeAccounts},
-        balances::{BalanceVariables, QueryHoprBalance, QueryNativeBalance},
+        balances::{BalanceVariables, QueryHoprBalance, QueryNativeBalance, QuerySafeAllowance},
         channels::{ChannelsVariables, QueryChannelCount, QueryChannels, SubscribeChannels},
         graph::SubscribeGraph,
         info::{QueryChainInfo, QueryHealth, QueryVersion},
@@ -80,6 +78,8 @@ pub trait BlokliQueryClient {
     async fn query_native_balance(&self, address: &ChainAddress) -> Result<types::NativeBalance>;
     /// Queries the token balance of the given account.
     async fn query_token_balance(&self, address: &ChainAddress) -> Result<types::HoprBalance>;
+    /// Queries the safe allowance of the given account.
+    async fn query_safe_allowance(&self, address: &ChainAddress) -> Result<types::SafeHoprAllowance>;
     /// Counts the number of channels matching the given selector.
     async fn count_channels(&self, selector: ChannelSelector) -> Result<u32>;
     /// Queries the channels matching the given selector.
@@ -125,5 +125,5 @@ pub trait BlokliTransactionClient {
     async fn submit_and_confirm_transaction(&self, signed_tx: &[u8], num_confirmations: usize) -> Result<TxReceipt>;
     /// Tracks the transaction given the `tx_id` previously returned
     /// by [`submit_and_track_transaction`](BlokliTransactionClient::submit_and_track_transaction) until it is confirmed or [fails](crate::errors::TrackingErrorKind).
-    async fn track_transaction(&self, tx_id: TxId, client_timeout: std::time::Duration) -> Result<Transaction>;
+    async fn track_transaction(&self, tx_id: TxId, client_timeout: std::time::Duration) -> Result<types::Transaction>;
 }

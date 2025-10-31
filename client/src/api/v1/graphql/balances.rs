@@ -69,3 +69,36 @@ impl From<NativeBalanceResult> for Result<NativeBalance, BlokliClientError> {
 pub struct NativeBalance {
     pub balance: TokenValueString,
 }
+
+#[derive(cynic::QueryFragment, Debug)]
+pub struct SafeHoprAllowance {
+    pub __typename: String,
+    pub allowance: TokenValueString,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "QueryRoot", variables = "BalanceVariables")]
+pub struct QuerySafeAllowance {
+    #[arguments(address: $address)]
+    pub safe_hopr_allowance: SafeHoprAllowanceResult,
+}
+
+#[derive(cynic::InlineFragments, Debug)]
+pub enum SafeHoprAllowanceResult {
+    SafeHoprAllowance(SafeHoprAllowance),
+    InvalidAddressError(InvalidAddressError),
+    QueryFailedError(QueryFailedError),
+    #[cynic(fallback)]
+    Unknown,
+}
+
+impl From<SafeHoprAllowanceResult> for Result<SafeHoprAllowance, BlokliClientError> {
+    fn from(value: SafeHoprAllowanceResult) -> Self {
+        match value {
+            SafeHoprAllowanceResult::SafeHoprAllowance(allowance) => Ok(allowance),
+            SafeHoprAllowanceResult::InvalidAddressError(e) => Err(e.into()),
+            SafeHoprAllowanceResult::QueryFailedError(e) => Err(e.into()),
+            SafeHoprAllowanceResult::Unknown => Err(crate::errors::ErrorKind::NoData.into()),
+        }
+    }
+}
