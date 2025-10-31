@@ -39,6 +39,20 @@ pub struct IndexerConfig {
     ///
     /// Default is empty string (must be set by application).
     pub data_directory: String,
+
+    /// Capacity of the event bus buffer for channel events.
+    /// Higher values prevent overflow but use more memory.
+    ///
+    /// Default is `1000`.
+    #[default(1000)]
+    pub event_bus_capacity: usize,
+
+    /// Capacity of the shutdown signal buffer.
+    /// Typically a small value is sufficient.
+    ///
+    /// Default is `10`.
+    #[default(10)]
+    pub shutdown_signal_capacity: usize,
 }
 
 impl IndexerConfig {
@@ -51,6 +65,8 @@ impl IndexerConfig {
     /// * `enable_logs_snapshot` - Whether to enable logs snapshot download
     /// * `logs_snapshot_url` - URL to download logs snapshot from
     /// * `data_directory` - Path to the data directory where databases are stored
+    /// * `event_bus_capacity` - Capacity of the event bus buffer
+    /// * `shutdown_signal_capacity` - Capacity of the shutdown signal buffer
     ///
     /// # Returns
     ///
@@ -61,6 +77,8 @@ impl IndexerConfig {
         enable_logs_snapshot: bool,
         logs_snapshot_url: Option<String>,
         data_directory: String,
+        event_bus_capacity: usize,
+        shutdown_signal_capacity: usize,
     ) -> Self {
         Self {
             start_block_number,
@@ -68,6 +86,8 @@ impl IndexerConfig {
             enable_logs_snapshot,
             logs_snapshot_url,
             data_directory,
+            event_bus_capacity,
+            shutdown_signal_capacity,
         }
     }
 

@@ -16,6 +16,7 @@ use axum::{
     },
     routing::get,
 };
+use blokli_chain_indexer::IndexerState;
 use futures::stream::StreamExt;
 use sea_orm::DatabaseConnection;
 use serde_json::Value;
@@ -64,8 +65,8 @@ pub struct AppState {
 }
 
 /// Build the Axum application router
-pub async fn build_app(db: DatabaseConnection, config: ApiConfig) -> ApiResult<Router> {
-    let schema = build_schema(db, config.chain_id);
+pub async fn build_app(db: DatabaseConnection, config: ApiConfig, indexer_state: IndexerState) -> ApiResult<Router> {
+    let schema = build_schema(db, config.chain_id, indexer_state);
     let app_state = AppState {
         schema: Arc::new(schema),
         playground_enabled: config.playground_enabled,

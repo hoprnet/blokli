@@ -1692,12 +1692,14 @@ name = "blokli-api"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-broadcast",
  "async-graphql",
  "async-graphql-axum",
  "async-stream",
  "axum",
  "axum-extra",
  "blokli-api-types",
+ "blokli-chain-indexer",
  "blokli-db-entity",
  "chrono",
  "clap",

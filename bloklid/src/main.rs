@@ -213,6 +213,8 @@ async fn run() -> errors::Result<()> {
                 enable_logs_snapshot: cfg.indexer.enable_logs_snapshot,
                 logs_snapshot_url: cfg.indexer.logs_snapshot_url.clone(),
                 data_directory: cfg.data_directory.clone(),
+                event_bus_capacity: cfg.indexer.subscription.event_bus_capacity,
+                shutdown_signal_capacity: cfg.indexer.subscription.shutdown_signal_capacity,
             };
 
             (
@@ -257,6 +259,9 @@ async fn run() -> errors::Result<()> {
         // Create BlokliChain instance
         let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, tx_events, rpc_url)?;
 
+        // Get IndexerState for API subscriptions
+        let indexer_state = blokli_chain.indexer_state();
+
         info!("Starting BlokliChain processes");
 
         // Start all chain processes
@@ -283,8 +288,8 @@ async fn run() -> errors::Result<()> {
                 chain_id,
             };
 
-            // Build API app
-            let api_app = blokli_api::server::build_app(api_db, blokli_api_config)
+            // Build API app with indexer state for subscriptions
+            let api_app = blokli_api::server::build_app(api_db, blokli_api_config, indexer_state)
                 .await
                 .map_err(|e| BloklidError::NonSpecific(format!("Failed to build API app: {}", e)))?;
 

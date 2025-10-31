@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use blokli_api::{config::ApiConfig, schema::export_schema_sdl, start_server};
+use blokli_chain_indexer::IndexerState;
 use clap::{Parser, Subcommand};
 use sea_orm::Database;
 
@@ -52,8 +53,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Connect to database
                 let db = Database::connect(&database_url).await?;
 
+                // Create a default IndexerState for schema export
+                // This is only used for schema generation, not for actual indexing
+                // Use minimal buffer sizes since no events will flow through
+                let indexer_state = IndexerState::new(1, 1);
+
                 // Generate schema SDL
-                let schema_sdl = export_schema_sdl(db, chain_id);
+                let schema_sdl = export_schema_sdl(db, chain_id, indexer_state);
 
                 // Write to file or stdout
                 if let Some(output_path) = output {

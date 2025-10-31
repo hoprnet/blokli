@@ -17,9 +17,10 @@ runtime-tokio = []
 
 [dependencies]
 # Async runtime
-async-stream = { workspace = true }
-futures      = { workspace = true }
-tokio        = { workspace = true }
+async-broadcast = { workspace = true }
+async-stream    = { workspace = true }
+futures         = { workspace = true }
+tokio           = { workspace = true }
 
 # TLS
 rustls         = { workspace = true }
@@ -52,8 +53,9 @@ chrono = { workspace = true }
 hex    = { workspace = true }
 
 # Internal dependencies
-blokli-api-types = { workspace = true }
-blokli-db-entity = { workspace = true }
+blokli-api-types     = { workspace = true }
+blokli-chain-indexer = { workspace = true }
+blokli-db-entity     = { workspace = true }
 
 # Logging
 tracing            = { workspace = true }

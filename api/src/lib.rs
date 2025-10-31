@@ -66,8 +66,13 @@ pub async fn start_server(config: ApiConfig) -> ApiResult<()> {
     let db = Database::connect(&config.database_url).await?;
     info!("Database connection established");
 
+    // Create a default IndexerState for standalone API server
+    // This is only used for subscription coordination, not for actual indexing
+    // Use small buffer sizes since no events will flow through in standalone mode
+    let indexer_state = blokli_chain_indexer::IndexerState::new(16, 16);
+
     // Build the application
-    let app = server::build_app(db, config.clone()).await?;
+    let app = server::build_app(db, config.clone(), indexer_state).await?;
 
     // Create TCP listener
     let listener = TcpListener::bind(config.bind_address).await?;

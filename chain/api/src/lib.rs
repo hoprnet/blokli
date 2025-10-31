@@ -156,7 +156,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         let blokli_chain_actions = ChainActions::new(db.clone(), action_sender);
 
         // Create IndexerState for coordinating block processing with subscriptions
-        let indexer_state = IndexerState::default();
+        let indexer_state = IndexerState::new(indexer_cfg.event_bus_capacity, indexer_cfg.shutdown_signal_capacity);
 
         Ok(Self {
             contract_addresses,
