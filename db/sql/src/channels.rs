@@ -109,7 +109,7 @@ fn reconstruct_channel_entry(
     source_addr: Address,
     dest_addr: Address,
 ) -> Result<ChannelEntry> {
-    // Convert balance from Vec<u8> (12 bytes) to U256
+    // Convert balance from Vec<u8> (12 bytes) to HoprBalance
     let balance_bytes: [u8; 12] = state
         .balance
         .as_slice()
@@ -220,9 +220,16 @@ async fn insert_channel_state_and_emit(
     }
 
     // Create channel_state record with state fields from ChannelEntry
+    // HoprBalance.to_be_bytes() returns 32 bytes (U256), but we only need the last 12 bytes
+    // for database storage (balances fit in 96 bits)
+    let balance_bytes_32 = channel_entry.balance.to_be_bytes();
+    let balance_bytes_12: [u8; 12] = balance_bytes_32[20..32]
+        .try_into()
+        .expect("slice should be exactly 12 bytes");
+
     let state_model = channel_state::ActiveModel {
         channel_id: Set(channel_id),
-        balance: Set(channel_entry.balance.to_be_bytes().to_vec()),
+        balance: Set(balance_bytes_12.to_vec()),
         status: Set(i8::from(channel_entry.status)),
         epoch: Set(channel_entry.channel_epoch.as_u64() as i64),
         ticket_index: Set(channel_entry.ticket_index.as_u64() as i64),
@@ -237,7 +244,9 @@ async fn insert_channel_state_and_emit(
         ..Default::default()
     };
 
+    tracing::debug!("About to insert channel_state");
     let inserted = state_model.insert(tx).await?;
+    tracing::debug!("Successfully inserted channel_state with id: {}", inserted.id);
 
     // Emit state change event (fire and forget - don't block on event delivery)
     let event = StateChange::ChannelState(ChannelStateChange {
@@ -674,6 +683,7 @@ mod tests {
         let ce = ChannelEntry::new(addr, addr, 0.into(), 0_u32.into(), ChannelStatus::Open, 0_u32.into());
 
         db.upsert_channel(None, ce).await?;
+
         let from_db = db
             .get_channel_by_id(None, &ce.get_id())
             .await?
