@@ -4,7 +4,9 @@ use std::time::Duration;
 
 use async_graphql::{Context, Result, Subscription};
 use async_stream::stream;
-use blokli_api_types::{Account, Channel, HoprBalance, NativeBalance, OpenedChannelsGraph, TokenValueString};
+use blokli_api_types::{
+    Account, Channel, ChannelUpdate, HoprBalance, NativeBalance, OpenedChannelsGraph, TokenValueString,
+};
 use blokli_db_entity::conversions::balances::{
     address_to_string, hopr_balance_to_string, native_balance_to_string, string_to_address,
 };
@@ -125,6 +127,28 @@ impl SubscriptionRoot {
                 }
             }
         })
+    }
+
+    /// Subscribe to a stream of opened payment channels with complete account information.
+    ///
+    /// This subscription implements a 2-phase streaming model:
+    /// - Phase 1: Streams all open channels at subscription time (historical snapshot)
+    /// - Phase 2: Streams real-time updates from the event bus
+    ///
+    /// Each update includes the channel along with complete source and destination account details.
+    /// This ensures no race conditions, duplicates, or data loss during the transition between phases.
+    #[graphql(name = "openedChannelsGraphStream")]
+    async fn opened_channels_graph_stream(&self, _ctx: &Context<'_>) -> Result<impl Stream<Item = ChannelUpdate>> {
+        // TODO(Phase 4): Implement 2-phase subscription model
+        // - Capture watermark synchronized with block processing completion
+        // - Phase 1: Query channels at watermark and stream historical snapshot
+        // - Phase 2: Stream events from event bus starting after watermark
+        // - Handle reorg notifications and lag recovery
+
+        // Placeholder: Returns a stream that never yields any values
+        // This will be implemented in subsequent tasks once IndexerState, watermark capture,
+        // and event bus integration are ready
+        Ok(futures::stream::pending())
     }
 
     /// Subscribe to real-time updates of account information

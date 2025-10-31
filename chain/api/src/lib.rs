@@ -17,7 +17,7 @@ use blokli_chain_actions::{
     action_queue::{ActionQueue, ActionQueueConfig},
     action_state::IndexerActionTracker,
 };
-use blokli_chain_indexer::{IndexerConfig, block::Indexer, handlers::ContractEventHandlers};
+use blokli_chain_indexer::{IndexerConfig, IndexerState, block::Indexer, handlers::ContractEventHandlers};
 use blokli_chain_rpc::{
     HoprRpcOperations,
     client::DefaultRetryPolicy,
@@ -74,6 +74,7 @@ pub struct BlokliChain<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt
     contract_addresses: ContractAddresses,
     indexer_cfg: IndexerConfig,
     indexer_events_tx: async_channel::Sender<SignificantChainEvent>,
+    indexer_state: IndexerState,
     db: T,
     blokli_chain_actions: ChainActions<T>,
     action_queue: ActionQueueType<T>,
@@ -154,10 +155,14 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         // Instantiate Chain Actions
         let blokli_chain_actions = ChainActions::new(db.clone(), action_sender);
 
+        // Create IndexerState for coordinating block processing with subscriptions
+        let indexer_state = IndexerState::default();
+
         Ok(Self {
             contract_addresses,
             indexer_cfg,
             indexer_events_tx,
+            indexer_state,
             db,
             blokli_chain_actions,
             action_queue,
@@ -195,6 +200,10 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
 
     pub fn action_state(&self) -> Arc<IndexerActionTracker> {
         self.action_state.clone()
+    }
+
+    pub fn indexer_state(&self) -> IndexerState {
+        self.indexer_state.clone()
     }
 
     pub async fn accounts_announced_on_chain(&self) -> errors::Result<Vec<AccountEntry>> {

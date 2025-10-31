@@ -30,6 +30,7 @@ alloy = { workspace = true, default-features = false, features = [
   "json-rpc",
   "node-bindings",
 ] }
+async-broadcast = { workspace = true }
 async-channel = { workspace = true }
 async-compression = { workspace = true, features = [
   "futures-io",
@@ -48,6 +49,7 @@ smart-default = { workspace = true }
 sysinfo = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 
 blokli-chain-rpc     = { workspace = true }

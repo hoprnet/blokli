@@ -1798,6 +1798,7 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "async-broadcast",
  "async-channel 2.5.0",
  "async-compression",
  "async-lock",

@@ -224,6 +224,20 @@ pub struct Channel {
     pub closure_time: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// Channel update event for subscriptions
+///
+/// Contains complete channel information along with source and destination account details.
+/// Used in the openedChannelsGraphStream subscription to provide real-time updates.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct ChannelUpdate {
+    /// The updated channel
+    pub channel: Channel,
+    /// Source account of the channel
+    pub source: Account,
+    /// Destination account of the channel
+    pub destination: Account,
+}
+
 /// Graph of opened payment channels with associated accounts
 #[derive(SimpleObject, Clone, Debug)]
 pub struct OpenedChannelsGraph {
