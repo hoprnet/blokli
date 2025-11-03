@@ -12,8 +12,11 @@ version     = "0.1.0"
 workspace = true
 
 [features]
-default       = ["runtime-tokio"]
-runtime-tokio = []
+default = ["runtime-tokio"]
+runtime-tokio = [
+  "blokli-chain-indexer/runtime-tokio",
+  "blokli-db-sql/runtime-tokio",
+]
 
 [dependencies]
 # Async runtime
@@ -56,6 +59,7 @@ hex    = { workspace = true }
 blokli-api-types     = { workspace = true }
 blokli-chain-indexer = { workspace = true }
 blokli-db-entity     = { workspace = true }
+blokli-db-sql        = { workspace = true }
 
 # Logging
 tracing            = { workspace = true }

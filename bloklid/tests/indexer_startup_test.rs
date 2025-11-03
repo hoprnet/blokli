@@ -5,9 +5,9 @@ use blokli_chain_indexer::{IndexerConfig, block::Indexer, handlers::ContractEven
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::ContractAddresses;
 use blokli_db_api::logs::BlokliDbLogOperations;
-use blokli_db_sql::db::{BlokliDb, BlokliDbConfig};
+use blokli_db_sql::db::BlokliDb;
 use futures::stream;
-use hopr_crypto_types::prelude::*;
+use hopr_crypto_types::types::Hash;
 use hopr_primitive_types::prelude::*;
 use tempfile::TempDir;
 
@@ -93,17 +93,8 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
     let temp_dir = TempDir::new()?;
     let db_path = temp_dir.path();
 
-    // Create a test keypair
-    let chain_key = ChainKeypair::random();
-    let safe_address = chain_key.public().to_address();
-
     // Initialize database
-    let db_config = BlokliDbConfig {
-        create_if_missing: true,
-        force_create: false,
-        log_slow_queries: Duration::from_secs(5),
-    };
-    let db = BlokliDb::new(db_config).await?;
+    let db = BlokliDb::new_in_memory().await?;
 
     // Create mock RPC operations
     let mock_rpc = MockRpcOperations::new();
@@ -113,23 +104,14 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         token: Address::from([1; 20]),
         channels: Address::from([2; 20]),
         announcements: Address::from([3; 20]),
-        network_registry: Address::from([4; 20]),
-        network_registry_proxy: Address::from([5; 20]),
         safe_registry: Address::from([6; 20]),
         price_oracle: Address::from([7; 20]),
         win_prob_oracle: Address::from([8; 20]),
         stake_factory: Address::from([9; 20]),
-        module_implementation: Address::from([10; 20]),
     };
 
     // Create event handlers
-    let handlers = ContractEventHandlers::new(
-        contract_addresses,
-        safe_address,
-        chain_key,
-        db.clone(),
-        mock_rpc.clone(),
-    );
+    let handlers = ContractEventHandlers::new(contract_addresses, db.clone(), mock_rpc.clone());
 
     // Initialize logs origin data using the proper contract addresses and topics
     let mut address_topics = vec![];
@@ -150,6 +132,8 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         enable_logs_snapshot: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
+        event_bus_capacity: 1000,
+        shutdown_signal_capacity: 10,
     };
 
     // Create channel for events
@@ -182,17 +166,8 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
     let temp_dir = TempDir::new()?;
     let db_path = temp_dir.path();
 
-    // Create a test keypair
-    let chain_key = ChainKeypair::random();
-    let safe_address = chain_key.public().to_address();
-
     // Initialize database
-    let db_config = BlokliDbConfig {
-        create_if_missing: true,
-        force_create: false,
-        log_slow_queries: Duration::from_secs(5),
-    };
-    let db = BlokliDb::new(db_config).await?;
+    let db = BlokliDb::new_in_memory().await?;
 
     // Create mock RPC operations
     let mock_rpc = MockRpcOperations::new();
@@ -202,23 +177,14 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         token: Address::from([1; 20]),
         channels: Address::from([2; 20]),
         announcements: Address::from([3; 20]),
-        network_registry: Address::from([4; 20]),
-        network_registry_proxy: Address::from([5; 20]),
         safe_registry: Address::from([6; 20]),
         price_oracle: Address::from([7; 20]),
         win_prob_oracle: Address::from([8; 20]),
         stake_factory: Address::from([9; 20]),
-        module_implementation: Address::from([10; 20]),
     };
 
     // Create event handlers
-    let handlers = ContractEventHandlers::new(
-        contract_addresses,
-        safe_address,
-        chain_key,
-        db.clone(),
-        mock_rpc.clone(),
-    );
+    let handlers = ContractEventHandlers::new(contract_addresses, db.clone(), mock_rpc.clone());
 
     // Initialize logs origin data using the proper contract addresses and topics
     let mut address_topics = vec![];
@@ -239,6 +205,8 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         enable_logs_snapshot: false, // Don't try to download snapshots
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
+        event_bus_capacity: 1000,
+        shutdown_signal_capacity: 10,
     };
 
     // Create channel for events
@@ -265,17 +233,8 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
     let temp_dir = TempDir::new()?;
     let db_path = temp_dir.path();
 
-    // Create a test keypair
-    let chain_key = ChainKeypair::random();
-    let safe_address = chain_key.public().to_address();
-
     // Initialize database
-    let db_config = BlokliDbConfig {
-        create_if_missing: true,
-        force_create: false,
-        log_slow_queries: Duration::from_secs(5),
-    };
-    let db = BlokliDb::new(db_config).await?;
+    let db = BlokliDb::new_in_memory().await?;
 
     // Create a custom mock RPC that tracks the start block requested
     #[derive(Clone)]
@@ -358,23 +317,14 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         token: Address::from([1; 20]),
         channels: Address::from([2; 20]),
         announcements: Address::from([3; 20]),
-        network_registry: Address::from([4; 20]),
-        network_registry_proxy: Address::from([5; 20]),
         safe_registry: Address::from([6; 20]),
         price_oracle: Address::from([7; 20]),
         win_prob_oracle: Address::from([8; 20]),
         stake_factory: Address::from([9; 20]),
-        module_implementation: Address::from([10; 20]),
     };
 
     // Create event handlers
-    let handlers = ContractEventHandlers::new(
-        contract_addresses,
-        safe_address,
-        chain_key,
-        db.clone(),
-        tracking_rpc.clone(),
-    );
+    let handlers = ContractEventHandlers::new(contract_addresses, db.clone(), tracking_rpc.clone());
 
     // Initialize logs origin data using the proper contract addresses and topics
     let mut address_topics = vec![];
@@ -396,6 +346,8 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         enable_logs_snapshot: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
+        event_bus_capacity: 1000,
+        shutdown_signal_capacity: 10,
     };
 
     // Create channel for events

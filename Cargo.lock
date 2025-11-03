@@ -1701,6 +1701,7 @@ dependencies = [
  "blokli-api-types",
  "blokli-chain-indexer",
  "blokli-db-entity",
+ "blokli-db-sql",
  "chrono",
  "clap",
  "futures",
