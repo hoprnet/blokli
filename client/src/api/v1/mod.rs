@@ -70,9 +70,9 @@ pub(crate) type Result<T> = std::result::Result<T, crate::errors::BlokliClientEr
 /// Trait defining restricted queries to Blokli API.
 #[async_trait::async_trait]
 pub trait BlokliQueryClient {
-    /// Counts the number of accounts matching the given selector.
-    async fn count_accounts(&self, selector: AccountSelector) -> Result<u32>;
-    /// Queries the accounts matching the given selector.
+    /// Counts the number of accounts optionally matching the given [`selector`](AccountSelector).
+    async fn count_accounts(&self, selector: Option<AccountSelector>) -> Result<u32>;
+    /// Queries the accounts matching the given [`selector`](AccountSelector).
     async fn query_accounts(&self, selector: AccountSelector) -> Result<Vec<types::Account>>;
     /// Queries the native balance of the given account.
     async fn query_native_balance(&self, address: &ChainAddress) -> Result<types::NativeBalance>;
@@ -80,10 +80,12 @@ pub trait BlokliQueryClient {
     async fn query_token_balance(&self, address: &ChainAddress) -> Result<types::HoprBalance>;
     /// Queries the safe allowance of the given account.
     async fn query_safe_allowance(&self, address: &ChainAddress) -> Result<types::SafeHoprAllowance>;
-    /// Counts the number of channels matching the given selector.
-    async fn count_channels(&self, selector: ChannelSelector) -> Result<u32>;
-    /// Queries the channels matching the given selector.
+    /// Counts the number of channels optionally matching the given [`selector`](ChannelSelector).
+    async fn count_channels(&self, selector: Option<ChannelSelector>) -> Result<u32>;
+    /// Queries the channels matching the given [`selector`](ChannelSelector).
     async fn query_channels(&self, selector: ChannelSelector) -> Result<Vec<types::Channel>>;
+    /// Queries the status of the transaction given the `tx_id` previously returned by
+    /// [`BlokliTransactionClient::submit_and_track_transaction`].
     async fn query_transaction_status(&self, tx_id: TxId) -> Result<types::Transaction>;
     /// Queries the chain info.
     async fn query_chain_info(&self) -> Result<types::ChainInfo>;

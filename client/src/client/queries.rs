@@ -10,7 +10,7 @@ use crate::{
 #[async_trait::async_trait]
 impl BlokliQueryClient for BlokliClient {
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
-    async fn count_accounts(&self, selector: AccountSelector) -> Result<u32> {
+    async fn count_accounts(&self, selector: Option<AccountSelector>) -> Result<u32> {
         let resp = self
             .build_query(QueryAccountCount::build(AccountVariables::from(selector)))?
             .await?;
@@ -61,7 +61,7 @@ impl BlokliQueryClient for BlokliClient {
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
-    async fn count_channels(&self, selector: ChannelSelector) -> Result<u32> {
+    async fn count_channels(&self, selector: Option<ChannelSelector>) -> Result<u32> {
         let resp = self
             .build_query(QueryChannelCount::build(ChannelsVariables::from(selector)))?
             .await?;

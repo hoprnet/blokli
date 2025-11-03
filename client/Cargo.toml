@@ -5,7 +5,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-client"
 repository  = "https://github.com/hoprnet/blokli"
-version     = "0.2.0"
+version     = "0.3.0"
 
 [dependencies]
 async-trait = { workspace = true }
