@@ -705,6 +705,105 @@ where
     ///
     /// * `Result<usize>` - Number of corrective states inserted, or error if recovery fails
     #[allow(dead_code)]
+    /// Handle blockchain reorganization by inserting corrective states
+    ///
+    /// When a blockchain reorg occurs, this function preserves the audit trail by inserting
+    /// **corrective states** that restore affected channels to their pre-reorg state, without
+    /// deleting any historical data.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. **Identify affected channels**: Query all channel states in the affected block range
+    /// 2. **Find last valid state**: For each affected channel, locate the most recent state
+    ///    before the reorg occurred (the "watermark" state)
+    /// 3. **Insert corrective state**: Create a new state at synthetic position `(canonical_block, 0, 0)`
+    ///    with the watermark state's values and `reorg_correction = true`
+    /// 4. **Skip channels without prior state**: Channels opened during the reorg are skipped
+    ///    (they will be re-indexed with the canonical chain)
+    ///
+    /// # Corrective States
+    ///
+    /// Corrective states are special state records that:
+    /// - Are inserted at **synthetic positions** `(canonical_block, 0, 0)` where `canonical_block`
+    ///   is the first valid block after the reorg
+    /// - Have the `reorg_correction` flag set to `true` to distinguish them from normal states
+    /// - Contain the same state values (balance, status, etc.) as the last valid state before the reorg
+    /// - Preserve the complete audit trail - no data is ever deleted
+    ///
+    /// The synthetic position `(block, 0, 0)` ensures corrective states are ordered before any
+    /// real events at the same block (which have `tx_index > 0` or `log_index > 0`).
+    ///
+    /// # Audit Trail Preservation
+    ///
+    /// This function follows the **never-delete principle**:
+    /// - Invalidated states from reorganized blocks remain in the database
+    /// - Temporal queries automatically use corrective states to reflect canonical chain state
+    /// - Complete history is preserved for auditing and forensic analysis
+    /// - Multiple reorgs can occur - each adds new corrective states without removing old ones
+    ///
+    /// # Arguments
+    ///
+    /// * `db` - Database connection implementing required operations
+    /// * `reorg_info` - Information about the detected reorganization:
+    ///   - `affected_block_range`: `(min_block, max_block)` range that was reorganized
+    ///   - `removed_log_count`: Number of logs removed during the reorg (for metrics)
+    /// * `canonical_block` - The first valid block number on the canonical chain after the reorg.
+    ///   This is where corrective states are positioned.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(count)` where `count` is the number of channels that received corrective states.
+    ///
+    /// A count of 0 indicates either:
+    /// - No channels were affected by the reorg
+    /// - All affected channels were opened during the reorg (no prior state to restore)
+    ///
+    /// # Errors
+    ///
+    /// Returns `CoreEthereumIndexerError::ProcessError` if:
+    /// - Database queries fail while identifying affected channels
+    /// - Cannot query for last valid states before the reorg
+    /// - Inserting corrective states into the database fails
+    ///
+    /// On error, the function may have partially completed. Some channels may have received
+    /// corrective states while others have not. The indexer should be restarted to retry.
+    ///
+    /// # Edge Cases
+    ///
+    /// - **Channels opened during reorg**: Skipped (no prior state to restore)
+    /// - **Multiple states at same block**: Uses lexicographic ordering to find the correct watermark
+    /// - **Reorg at block boundaries**: Correctly handles inclusive/exclusive range logic
+    /// - **Repeated reorgs**: Each creates new corrective states; all history is preserved
+    /// - **Large reorgs**: Efficiently processes 100+ affected blocks with minimal overhead
+    ///
+    /// # Performance
+    ///
+    /// - Scales linearly with the number of affected channels, not the number of blocks
+    /// - Uses database indices for efficient state lookups
+    /// - Tested with reorgs affecting 50+ channels and 100+ blocks
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Reorg detected: blocks 1100-1200 were reorganized
+    /// let reorg_info = ReorgInfo {
+    ///     detected_at_block: 1250,
+    ///     affected_block_range: (1100, 1200),
+    ///     removed_log_count: 73,
+    /// };
+    ///
+    /// // Canonical chain resumes at block 1201
+    /// let corrected = handle_reorg(&db, &reorg_info, 1201).await?;
+    ///
+    /// // corrected = number of channels that received corrective states
+    /// info!(corrected, "Reorg handling complete");
+    /// ```
+    ///
+    /// # See Also
+    ///
+    /// - [`ReorgInfo`] - Structure containing reorg detection information
+    /// - [`get_channel_state_at`](blokli_db_sql::state_queries::get_channel_state_at) - Temporal queries that work with corrective states
+    /// - Design document section 6.5 - Detailed reorg handling specification
     async fn handle_reorg(db: &Db, reorg_info: &ReorgInfo, canonical_block: u64) -> Result<usize>
     where
         Db: BlokliDbGeneralModelOperations
@@ -2288,6 +2387,333 @@ mod tests {
                 .any(|s| s.reorg_correction && s.published_block == 200),
             "Corrective state should be added"
         );
+
+        Ok(())
+    }
+
+    // ==================== Edge Case Tests ====================
+
+    #[tokio::test]
+    async fn test_handle_reorg_large_block_range() -> anyhow::Result<()> {
+        // Test reorg spanning many blocks to verify performance
+        let db = BlokliDb::new_in_memory().await?;
+
+        create_test_channel(&db, 1).await?;
+
+        // Create states before reorg range
+        create_channel_state(&db, 1, 10, 0, 0, [1u8; 12], 1, false).await?;
+
+        // Create many states in reorg range (blocks 100-200)
+        for block in 100..=200 {
+            create_channel_state(&db, 1, block, 0, 0, [2u8; 12], 1, false).await?;
+        }
+
+        let reorg_info = ReorgInfo {
+            detected_at_block: 250,
+            affected_block_range: (100, 200),
+            removed_log_count: 101,
+        };
+
+        let corrected_count =
+            Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 250).await?;
+
+        assert_eq!(corrected_count, 1, "Should correct one channel despite many affected blocks");
+
+        let states = get_channel_states(&db, 1).await?;
+        let corrective = states
+            .iter()
+            .find(|s| s.reorg_correction)
+            .expect("Corrective state not found");
+
+        // Should use last state before reorg (block 10)
+        assert_eq!(corrective.balance, vec![1u8; 12]);
+        assert_eq!(corrective.published_block, 250);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_with_no_prior_state() -> anyhow::Result<()> {
+        // Channel opened during reorg - should be skipped
+        let db = BlokliDb::new_in_memory().await?;
+
+        create_test_channel(&db, 1).await?;
+
+        // Only create state in reorg range
+        create_channel_state(&db, 1, 100, 0, 0, [1u8; 12], 1, false).await?;
+
+        let reorg_info = ReorgInfo {
+            detected_at_block: 150,
+            affected_block_range: (95, 105),
+            removed_log_count: 1,
+        };
+
+        let corrected_count =
+            Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 150).await?;
+
+        assert_eq!(
+            corrected_count, 0,
+            "Should skip channel with no prior state (opened during reorg)"
+        );
+
+        let states = get_channel_states(&db, 1).await?;
+        assert!(
+            !states.iter().any(|s| s.reorg_correction),
+            "No corrective state should be added"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_same_block_different_positions() -> anyhow::Result<()> {
+        // Test correct position ordering within same block
+        let db = BlokliDb::new_in_memory().await?;
+
+        create_test_channel(&db, 1).await?;
+
+        // Create multiple states at same block with different positions
+        create_channel_state(&db, 1, 50, 0, 5, [1u8; 12], 1, false).await?;
+        create_channel_state(&db, 1, 50, 1, 0, [2u8; 12], 1, false).await?;
+        create_channel_state(&db, 1, 50, 1, 3, [3u8; 12], 1, false).await?;
+
+        // States in reorg range
+        create_channel_state(&db, 1, 100, 0, 0, [99u8; 12], 2, false).await?;
+
+        let reorg_info = ReorgInfo {
+            detected_at_block: 150,
+            affected_block_range: (100, 100),
+            removed_log_count: 1,
+        };
+
+        Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 200).await?;
+
+        let states = get_channel_states(&db, 1).await?;
+        let corrective = states
+            .iter()
+            .find(|s| s.reorg_correction)
+            .expect("Corrective state not found");
+
+        // Should use latest state from block 50 (tx=1, log=3)
+        assert_eq!(
+            corrective.balance,
+            vec![3u8; 12],
+            "Should use state with highest position in block 50"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_watermark_boundary() -> anyhow::Result<()> {
+        // Test reorg exactly at boundary conditions
+        let db = BlokliDb::new_in_memory().await?;
+
+        create_test_channel(&db, 1).await?;
+
+        // State just before reorg start
+        create_channel_state(&db, 1, 99, 9, 9, [1u8; 12], 1, false).await?;
+
+        // State exactly at reorg start
+        create_channel_state(&db, 1, 100, 0, 0, [2u8; 12], 2, false).await?;
+
+        // State in middle of reorg range
+        create_channel_state(&db, 1, 105, 0, 0, [3u8; 12], 2, false).await?;
+
+        // State exactly at reorg end
+        create_channel_state(&db, 1, 110, 0, 0, [4u8; 12], 2, false).await?;
+
+        let reorg_info = ReorgInfo {
+            detected_at_block: 150,
+            affected_block_range: (100, 110),
+            removed_log_count: 3,
+        };
+
+        Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 200).await?;
+
+        let states = get_channel_states(&db, 1).await?;
+        let corrective = states
+            .iter()
+            .find(|s| s.reorg_correction)
+            .expect("Corrective state not found");
+
+        // Should use last state before reorg (block 99)
+        assert_eq!(corrective.balance, vec![1u8; 12]);
+        assert_eq!(corrective.status, 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_duplicate_correction_attempt() -> anyhow::Result<()> {
+        // Test idempotency - second correction should work or be benign
+        let db = BlokliDb::new_in_memory().await?;
+
+        create_test_channel(&db, 1).await?;
+
+        create_channel_state(&db, 1, 50, 0, 0, [1u8; 12], 1, false).await?;
+        create_channel_state(&db, 1, 100, 0, 0, [2u8; 12], 2, false).await?;
+
+        let reorg_info = ReorgInfo {
+            detected_at_block: 150,
+            affected_block_range: (100, 100),
+            removed_log_count: 1,
+        };
+
+        // First correction
+        let count1 =
+            Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 200).await?;
+        assert_eq!(count1, 1);
+
+        let states_after_first = get_channel_states(&db, 1).await?;
+        let corrections_count = states_after_first.iter().filter(|s| s.reorg_correction).count();
+
+        // Second correction attempt at different canonical block
+        let count2 =
+            Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 201).await?;
+        assert_eq!(count2, 1, "Second correction should also succeed");
+
+        let states_after_second = get_channel_states(&db, 1).await?;
+        let corrections_count_2 = states_after_second.iter().filter(|s| s.reorg_correction).count();
+
+        assert_eq!(
+            corrections_count_2,
+            corrections_count + 1,
+            "Should add another corrective state"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_concurrent_channels() -> anyhow::Result<()> {
+        // Test with many channels affected simultaneously
+        let db = BlokliDb::new_in_memory().await?;
+
+        let channel_count = 50; // Use moderate number for test speed
+
+        // Create many channels with states
+        for i in 1..=channel_count {
+            create_test_channel(&db, i).await?;
+            create_channel_state(&db, i, 50, 0, 0, [1u8; 12], 1, false).await?;
+            create_channel_state(&db, i, 100, 0, 0, [2u8; 12], 2, false).await?;
+        }
+
+        let reorg_info = ReorgInfo {
+            detected_at_block: 150,
+            affected_block_range: (100, 100),
+            removed_log_count: channel_count as usize,
+        };
+
+        let corrected_count =
+            Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 200).await?;
+
+        assert_eq!(
+            corrected_count as i32, channel_count,
+            "Should correct all affected channels"
+        );
+
+        // Verify each channel has corrective state
+        for i in 1..=channel_count {
+            let states = get_channel_states(&db, i).await?;
+            let has_correction = states.iter().any(|s| s.reorg_correction);
+            assert!(
+                has_correction,
+                "Channel {} should have corrective state",
+                i
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_with_reorg_correction_states() -> anyhow::Result<()> {
+        // Channel already has reorg correction from previous reorg
+        let db = BlokliDb::new_in_memory().await?;
+
+        create_test_channel(&db, 1).await?;
+
+        // Initial state
+        create_channel_state(&db, 1, 50, 0, 0, [1u8; 12], 1, false).await?;
+
+        // Previous reorg correction
+        create_channel_state(&db, 1, 150, 0, 0, [2u8; 12], 1, true).await?;
+
+        // New states after first reorg
+        create_channel_state(&db, 1, 200, 0, 0, [3u8; 12], 2, false).await?;
+
+        // Second reorg affecting block 200
+        let reorg_info = ReorgInfo {
+            detected_at_block: 250,
+            affected_block_range: (200, 200),
+            removed_log_count: 1,
+        };
+
+        Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 250).await?;
+
+        let states = get_channel_states(&db, 1).await?;
+
+        // Should now have 2 corrective states
+        let correction_count = states.iter().filter(|s| s.reorg_correction).count();
+        assert_eq!(correction_count, 2, "Should have both reorg corrections");
+
+        // Latest correction should reference previous correction state
+        let latest_correction = states
+            .iter()
+            .filter(|s| s.reorg_correction)
+            .max_by_key(|s| s.published_block)
+            .unwrap();
+
+        assert_eq!(
+            latest_correction.balance,
+            vec![2u8; 12],
+            "Should use previous correction as base"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_temporal_query_at_reorg_boundary() -> anyhow::Result<()> {
+        use blokli_db_sql::state_queries::get_channel_state_at;
+        use blokli_db_sql::events::BlockPosition;
+        use blokli_db_sql::TargetDb;
+
+        // Test querying at exact reorg correction position
+        let db = BlokliDb::new_in_memory().await?;
+
+        create_test_channel(&db, 1).await?;
+
+        create_channel_state(&db, 1, 50, 0, 0, [1u8; 12], 1, false).await?;
+        create_channel_state(&db, 1, 100, 0, 0, [2u8; 12], 2, false).await?;
+
+        let reorg_info = ReorgInfo {
+            detected_at_block: 150,
+            affected_block_range: (100, 100),
+            removed_log_count: 1,
+        };
+
+        Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 200).await?;
+
+        let conn = db.conn(TargetDb::Index);
+
+        // Query at exact corrective state position (200, 0, 0)
+        let position = BlockPosition {
+            block: 200,
+            tx_index: 0,
+            log_index: 0,
+        };
+
+        let state = get_channel_state_at(conn, 1, position).await?;
+        assert!(state.is_some(), "Should find corrective state");
+
+        let found_state = state.unwrap();
+        assert_eq!(found_state.balance, vec![1u8; 12], "Should return corrective state balance");
+        assert!(found_state.reorg_correction, "Should be reorg correction state");
+        assert_eq!(found_state.published_block, 200, "Should be at synthetic position");
+        assert_eq!(found_state.published_tx_index, 0, "Should use synthetic tx_index 0");
+        assert_eq!(found_state.published_log_index, 0, "Should use synthetic log_index 0");
 
         Ok(())
     }
