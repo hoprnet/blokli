@@ -594,7 +594,8 @@ mod tests {
         insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
         insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 10, 0, vec![2; 12], 1).await?;
         insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 0, 0, vec![3; 12], 1).await?;
-        let latest_state_id = insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 5, 1, vec![4; 12], 2).await?;
+        let latest_state_id =
+            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 5, 1, vec![4; 12], 2).await?;
 
         let result = get_current_channel_state(&db.conn(TargetDb::Index), channel_id).await?;
         assert!(result.is_some());
@@ -651,7 +652,8 @@ mod tests {
         let db = BlokliDb::new_in_memory().await?;
         let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
 
-        let state_id_1 = insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
+        let state_id_1 =
+            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
         insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 10, 0, vec![2; 12], 2).await?;
 
         // Query at a position between the two states
@@ -674,7 +676,8 @@ mod tests {
         let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
 
         insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
-        let state_id_2 = insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 10, 0, vec![2; 12], 2).await?;
+        let state_id_2 =
+            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 10, 0, vec![2; 12], 2).await?;
 
         // Query at a position after all states
         let position = BlockPosition {
@@ -718,9 +721,12 @@ mod tests {
         let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
 
         // Insert states at different positions
-        let state_id_1 = insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
-        let state_id_2 = insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 10, 0, vec![2; 12], 1).await?;
-        let state_id_3 = insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1002, 0, 0, vec![3; 12], 1).await?;
+        let state_id_1 =
+            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
+        let state_id_2 =
+            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 10, 0, vec![2; 12], 1).await?;
+        let state_id_3 =
+            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1002, 0, 0, vec![3; 12], 1).await?;
 
         let from = BlockPosition {
             block: 1000,
@@ -749,8 +755,10 @@ mod tests {
 
         // Insert states
         insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
-        let state_id_2 = insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 10, 0, vec![2; 12], 1).await?;
-        let state_id_3 = insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1002, 0, 0, vec![3; 12], 1).await?;
+        let state_id_2 =
+            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 10, 0, vec![2; 12], 1).await?;
+        let state_id_3 =
+            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1002, 0, 0, vec![3; 12], 1).await?;
 
         // Query range that excludes first state
         let from = BlockPosition {
@@ -884,10 +892,14 @@ mod tests {
         let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
 
         // Insert multiple states at same block with different (tx_index, log_index)
-        let _state_id_1 = insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
-        let state_id_2 = insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 5, vec![2; 12], 1).await?;
-        let state_id_3 = insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 10, 0, vec![3; 12], 1).await?;
-        let _state_id_4 = insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 10, 3, vec![4; 12], 1).await?;
+        let _state_id_1 =
+            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
+        let state_id_2 =
+            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 5, vec![2; 12], 1).await?;
+        let state_id_3 =
+            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 10, 0, vec![3; 12], 1).await?;
+        let _state_id_4 =
+            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 10, 3, vec![4; 12], 1).await?;
 
         // Query at position (1000, 5, 6) - should return state_id_2 at (1000, 5, 5)
         let position = BlockPosition {
@@ -907,7 +919,11 @@ mod tests {
         };
         let result = get_channel_state_at(&db.conn(TargetDb::Index), channel_id, position).await?;
         assert!(result.is_some());
-        assert_eq!(result.unwrap().id, state_id_2, "Should return state_id_2 (latest before position)");
+        assert_eq!(
+            result.unwrap().id,
+            state_id_2,
+            "Should return state_id_2 (latest before position)"
+        );
 
         // Query at position (1000, 10, 2) - should return state_id_3
         let position = BlockPosition {
@@ -929,10 +945,14 @@ mod tests {
         let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
 
         // Insert states at precise positions
-        let state_id_1 = insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
-        let state_id_2 = insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 10, 0, vec![2; 12], 1).await?;
-        let state_id_3 = insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 0, 0, vec![3; 12], 1).await?;
-        let state_id_4 = insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 5, 1, vec![4; 12], 1).await?;
+        let state_id_1 =
+            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
+        let state_id_2 =
+            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 10, 0, vec![2; 12], 1).await?;
+        let state_id_3 =
+            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 0, 0, vec![3; 12], 1).await?;
+        let state_id_4 =
+            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 5, 1, vec![4; 12], 1).await?;
 
         // Test exact boundary inclusion - from is inclusive
         let from = BlockPosition {
@@ -976,7 +996,8 @@ mod tests {
         let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
 
         // Insert normal state before reorg
-        let state_id_1 = insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
+        let state_id_1 =
+            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
 
         // Insert states that will be "reverted" by reorg
         insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1100, 10, 0, vec![2; 12], 2).await?;

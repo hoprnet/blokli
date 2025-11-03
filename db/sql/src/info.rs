@@ -448,7 +448,6 @@ impl BlokliDbInfoOperations for BlokliDb {
 #[cfg(test)]
 mod tests {
     use hex_literal::hex;
-    use hopr_crypto_types::{keypairs::ChainKeypair, prelude::Keypair};
     use hopr_primitive_types::{balance::HoprBalance, prelude::Address};
 
     use crate::{db::BlokliDb, info::BlokliDbInfoOperations};

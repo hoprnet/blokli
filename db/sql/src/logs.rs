@@ -520,7 +520,7 @@ fn create_log(raw_log: log::Model, status: log_status::Model) -> crate::errors::
 
 #[cfg(test)]
 mod tests {
-    use hopr_crypto_types::prelude::{ChainKeypair, Hash, Keypair};
+    use hopr_crypto_types::prelude::Hash;
 
     use super::*;
 

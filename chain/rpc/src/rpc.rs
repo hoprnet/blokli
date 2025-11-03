@@ -318,7 +318,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
 
 #[cfg(test)]
 mod tests {
-    use std::{sync::Arc, time::Duration};
+    use std::time::Duration;
 
     use alloy::{
         network::{Ethereum, TransactionBuilder},
@@ -327,18 +327,15 @@ mod tests {
         rpc::{client::ClientBuilder, types::TransactionRequest},
         transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
     };
-    use blokli_chain_types::{
-        ContractAddresses, ContractInstances, NetworkRegistryProxy, utils::create_native_transfer,
-    };
+    use blokli_chain_types::{ContractAddresses, ContractInstances, utils::create_native_transfer};
     use hex_literal::hex;
     use hopr_async_runtime::prelude::sleep;
     use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
     use hopr_primitive_types::prelude::*;
-    use primitive_types::H160;
 
     use crate::{
         HoprRpcOperations, PendingTransaction,
-        client::{AnvilRpcClient, create_rpc_client_to_anvil},
+        client::create_rpc_client_to_anvil,
         errors::Result,
         rpc::{RpcOperations, RpcOperationsConfig},
     };
@@ -411,7 +408,7 @@ mod tests {
         // Wait until contracts deployments are final
         sleep((1 + cfg.finality) * expected_block_time).await;
 
-        let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), &chain_key_0, cfg, None)?;
+        let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
 
         // call eth_gas_estimate
         let fees = rpc.provider.estimate_eip1559_fees().await?;
@@ -459,7 +456,7 @@ mod tests {
         // Wait until contracts deployments are final
         sleep((1 + cfg.finality) * expected_block_time).await;
 
-        let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), &chain_key_0, cfg, None)?;
+        let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
 
         let balance_1: XDaiBalance = rpc.get_xdai_balance((&chain_key_0).into()).await?;
         assert!(balance_1.amount().gt(&0.into()), "balance must be greater than 0");
@@ -503,13 +500,7 @@ mod tests {
         // Wait until contracts deployments are final
         sleep((1 + cfg.finality) * expected_block_time).await;
 
-        let rpc = RpcOperations::new(
-            rpc_client,
-            transport_client.client().clone(),
-            &chain_key_0,
-            cfg.clone(),
-            None,
-        )?;
+        let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg.clone(), None)?;
 
         let balance_1: XDaiBalance = rpc.get_xdai_balance((&chain_key_0).into()).await?;
         assert!(balance_1.amount().gt(&0.into()), "balance must be greater than 0");
@@ -565,7 +556,7 @@ mod tests {
         // Wait until contracts deployments are final
         sleep((1 + cfg.finality) * expected_block_time).await;
 
-        let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), &chain_key_0, cfg, None)?;
+        let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
 
         let balance_1: XDaiBalance = rpc.get_xdai_balance((&chain_key_0).into()).await?;
         assert!(balance_1.amount().gt(&0.into()), "balance must be greater than 0");
@@ -619,7 +610,7 @@ mod tests {
         // Wait until contracts deployments are final
         sleep((1 + cfg.finality) * expected_block_time).await;
 
-        let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), &chain_key_0, cfg, None)?;
+        let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
 
         let balance: HoprBalance = rpc.get_hopr_balance((&chain_key_0).into()).await?;
         assert_eq!(amount, balance.amount().as_u64(), "invalid balance");
@@ -627,93 +618,97 @@ mod tests {
         Ok(())
     }
 
-    #[tokio::test]
-    async fn test_check_node_safe_module_status() -> anyhow::Result<()> {
-        let _ = env_logger::builder().is_test(true).try_init();
-
-        let expected_block_time = Duration::from_secs(1);
-        let anvil = blokli_chain_types::utils::create_anvil(Some(expected_block_time));
-        let chain_key_0 = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
-
-        // Deploy contracts
-        let (contract_instances, module, safe) = {
-            let client = create_rpc_client_to_anvil(&anvil, &chain_key_0);
-            let instances = ContractInstances::deploy_for_testing(client.clone(), &chain_key_0).await?;
-
-            // deploy MULTICALL contract to anvil
-            deploy_multicall3_to_anvil(&client.clone()).await?;
-
-            let (module, safe) = blokli_chain_types::utils::deploy_one_safe_one_module_and_setup_for_testing::<
-                Arc<AnvilRpcClient>,
-            >(&instances, client.clone(), &chain_key_0)
-            .await?;
-
-            // deploy a module and safe instance and add node into the module. The module is enabled by default in the
-            // safe
-            (instances, module, safe)
-        };
-
-        let cfg = RpcOperationsConfig {
-            chain_id: anvil.chain_id(),
-            tx_polling_interval: Duration::from_millis(10),
-            expected_block_time,
-            finality: 2,
-            contract_addrs: ContractAddresses::from(&contract_instances),
-            gas_oracle_url: None,
-            ..RpcOperationsConfig::default()
-        };
-
-        let transport_client = ReqwestTransport::new(anvil.endpoint_url());
-
-        let rpc_client = ClientBuilder::default()
-            .layer(RetryBackoffLayer::new(2, 100, 100))
-            .transport(transport_client.clone(), transport_client.guess_local());
-
-        // Wait until contracts deployments are final
-        sleep((1 + cfg.finality) * expected_block_time).await;
-
-        let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), &chain_key_0, cfg, None)?;
-
-        let result_before_including_node = rpc.check_node_safe_module_status((&chain_key_0).into()).await?;
-        // before including node to the safe and module, only the first chck is false, the others are true
-        assert!(
-            !result_before_including_node.is_node_included_in_module,
-            "node should not be included in a default module"
-        );
-        assert!(
-            result_before_including_node.is_module_enabled_in_safe,
-            "module should be enabled in a default safe"
-        );
-        assert!(
-            result_before_including_node.is_safe_owner_of_module,
-            "safe should not be the owner of a default module"
-        );
-
-        // including node to the module
-        blokli_chain_types::utils::include_node_to_module_by_safe(
-            contract_instances.channels.provider().clone(),
-            safe,
-            module,
-            (&chain_key_0).into(),
-            &chain_key_0,
-        )
-        .await?;
-
-        let result_with_node_included = rpc.check_node_safe_module_status((&chain_key_0).into()).await?;
-        // after the node gets included into the module, all checks should be true
-        assert!(
-            result_with_node_included.is_node_included_in_module,
-            "node should be included in a default module"
-        );
-        assert!(
-            result_with_node_included.is_module_enabled_in_safe,
-            "module should be enabled in a default safe"
-        );
-        assert!(
-            result_with_node_included.is_safe_owner_of_module,
-            "safe should be the owner of a default module"
-        );
-
-        Ok(())
-    }
+    // NOTE: This test is commented out because check_node_safe_module_status() method is commented out
+    // and the helper functions deploy_one_safe_one_module_and_setup_for_testing and include_node_to_module_by_safe
+    // are no longer available in blokli_chain_types
+    //
+    // #[tokio::test]
+    // async fn test_check_node_safe_module_status() -> anyhow::Result<()> {
+    //         let _ = env_logger::builder().is_test(true).try_init();
+    //
+    //         let expected_block_time = Duration::from_secs(1);
+    //         let anvil = blokli_chain_types::utils::create_anvil(Some(expected_block_time));
+    //         let chain_key_0 = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
+    //
+    //         // Deploy contracts
+    //         let (contract_instances, module, safe) = {
+    //             let client = create_rpc_client_to_anvil(&anvil, &chain_key_0);
+    //             let instances = ContractInstances::deploy_for_testing(client.clone(), &chain_key_0).await?;
+    //
+    //             // deploy MULTICALL contract to anvil
+    //             deploy_multicall3_to_anvil(&client.clone()).await?;
+    //
+    //             let (module, safe) = blokli_chain_types::utils::deploy_one_safe_one_module_and_setup_for_testing::<
+    //                 Arc<AnvilRpcClient>,
+    //             >(&instances, client.clone(), &chain_key_0)
+    //             .await?;
+    //
+    //             // deploy a module and safe instance and add node into the module. The module is enabled by default
+    // in the             // safe
+    //             (instances, module, safe)
+    //         };
+    //
+    //         let cfg = RpcOperationsConfig {
+    //             chain_id: anvil.chain_id(),
+    //             tx_polling_interval: Duration::from_millis(10),
+    //             expected_block_time,
+    //             finality: 2,
+    //             contract_addrs: ContractAddresses::from(&contract_instances),
+    //             gas_oracle_url: None,
+    //             ..RpcOperationsConfig::default()
+    //         };
+    //
+    //         let transport_client = ReqwestTransport::new(anvil.endpoint_url());
+    //
+    //         let rpc_client = ClientBuilder::default()
+    //             .layer(RetryBackoffLayer::new(2, 100, 100))
+    //             .transport(transport_client.clone(), transport_client.guess_local());
+    //
+    //         // Wait until contracts deployments are final
+    //         sleep((1 + cfg.finality) * expected_block_time).await;
+    //
+    //         let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
+    //
+    //         let result_before_including_node = rpc.check_node_safe_module_status((&chain_key_0).into()).await?;
+    //         // before including node to the safe and module, only the first chck is false, the others are true
+    //         assert!(
+    //             !result_before_including_node.is_node_included_in_module,
+    //             "node should not be included in a default module"
+    //         );
+    //         assert!(
+    //             result_before_including_node.is_module_enabled_in_safe,
+    //             "module should be enabled in a default safe"
+    //         );
+    //         assert!(
+    //             result_before_including_node.is_safe_owner_of_module,
+    //             "safe should not be the owner of a default module"
+    //         );
+    //
+    //         // including node to the module
+    //         blokli_chain_types::utils::include_node_to_module_by_safe(
+    //             contract_instances.channels.provider().clone(),
+    //             safe,
+    //             module,
+    //             (&chain_key_0).into(),
+    //             &chain_key_0,
+    //         )
+    //         .await?;
+    //
+    //         let result_with_node_included = rpc.check_node_safe_module_status((&chain_key_0).into()).await?;
+    //         // after the node gets included into the module, all checks should be true
+    //         assert!(
+    //             result_with_node_included.is_node_included_in_module,
+    //             "node should be included in a default module"
+    //         );
+    //         assert!(
+    //             result_with_node_included.is_module_enabled_in_safe,
+    //             "module should be enabled in a default safe"
+    //         );
+    //         assert!(
+    //             result_with_node_included.is_safe_owner_of_module,
+    //             "safe should be the owner of a default module"
+    //         );
+    //
+    //         Ok(())
+    //     }
 }

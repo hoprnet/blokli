@@ -98,58 +98,52 @@ impl MigratorTrait for MigratorChainLogs {
 
 #[cfg(test)]
 mod tests {
-    use sea_orm::{ConnectionTrait, Database, DbBackend, Statement};
+    use sea_orm::{ConnectionTrait, Database, DatabaseConnection, DbBackend, Statement};
 
     use super::*;
 
-    async fn setup_test_db() -> sea_orm::DatabaseConnection {
+    async fn setup_test_db() -> DatabaseConnection {
         // Create in-memory SQLite database for testing
         Database::connect("sqlite::memory:")
             .await
             .expect("Failed to create test database")
     }
 
-    async fn table_exists(db: &sea_orm::DatabaseConnection, table_name: &str) -> bool {
-        let result = db
-            .query_one(Statement::from_string(
-                DbBackend::Sqlite,
-                format!(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name='{}'",
-                    table_name
-                ),
-            ))
-            .await
-            .expect("Failed to query table existence");
+    async fn table_exists(db: &DatabaseConnection, table_name: &str) -> bool {
+        let stmt = Statement::from_string(
+            DbBackend::Sqlite,
+            format!(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='{}'",
+                table_name
+            ),
+        );
+        let result = db.query_one_raw(stmt).await.expect("Failed to query table existence");
 
         result.is_some()
     }
 
-    async fn view_exists(db: &sea_orm::DatabaseConnection, view_name: &str) -> bool {
-        let result = db
-            .query_one(Statement::from_string(
-                DbBackend::Sqlite,
-                format!(
-                    "SELECT name FROM sqlite_master WHERE type='view' AND name='{}'",
-                    view_name
-                ),
-            ))
-            .await
-            .expect("Failed to query view existence");
+    async fn view_exists(db: &DatabaseConnection, view_name: &str) -> bool {
+        let stmt = Statement::from_string(
+            DbBackend::Sqlite,
+            format!(
+                "SELECT name FROM sqlite_master WHERE type='view' AND name='{}'",
+                view_name
+            ),
+        );
+        let result = db.query_one_raw(stmt).await.expect("Failed to query view existence");
 
         result.is_some()
     }
 
-    async fn index_exists(db: &sea_orm::DatabaseConnection, index_name: &str) -> bool {
-        let result = db
-            .query_one(Statement::from_string(
-                DbBackend::Sqlite,
-                format!(
-                    "SELECT name FROM sqlite_master WHERE type='index' AND name='{}'",
-                    index_name
-                ),
-            ))
-            .await
-            .expect("Failed to query index existence");
+    async fn index_exists(db: &DatabaseConnection, index_name: &str) -> bool {
+        let stmt = Statement::from_string(
+            DbBackend::Sqlite,
+            format!(
+                "SELECT name FROM sqlite_master WHERE type='index' AND name='{}'",
+                index_name
+            ),
+        );
+        let result = db.query_one_raw(stmt).await.expect("Failed to query index existence");
 
         result.is_some()
     }
@@ -177,7 +171,7 @@ mod tests {
 
         // Verify table structure by inserting and querying
         let insert_result = db
-            .execute(Statement::from_string(
+            .execute_raw(Statement::from_string(
                 DbBackend::Sqlite,
                 "INSERT INTO account (chain_key, packet_key) VALUES (X'0101010101010101010101010101010101010101', \
                  'peer1')"
@@ -187,7 +181,7 @@ mod tests {
         assert!(insert_result.is_ok(), "Should be able to insert into account");
 
         let insert_state_result = db
-            .execute(Statement::from_string(
+            .execute_raw(Statement::from_string(
                 DbBackend::Sqlite,
                 "INSERT INTO account_state (account_id, safe_address, published_block, published_tx_index, \
                  published_log_index) VALUES (1, X'0202020202020202020202020202020202020202', 100, 5, 3)"
@@ -213,7 +207,7 @@ mod tests {
 
         // Verify table structure by inserting data
         // First insert accounts
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO account (chain_key, packet_key) VALUES (X'0101010101010101010101010101010101010101', 'peer1')"
                 .to_string(),
@@ -221,7 +215,7 @@ mod tests {
         .await
         .unwrap();
 
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO account (chain_key, packet_key) VALUES (X'0202020202020202020202020202020202020202', 'peer2')"
                 .to_string(),
@@ -230,7 +224,7 @@ mod tests {
         .unwrap();
 
         // Insert channel
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO channel (source, destination, concrete_channel_id) VALUES (1, 2, '0xabc123')".to_string(),
         ))
@@ -239,7 +233,7 @@ mod tests {
 
         // Insert channel_state
         let insert_result = db
-            .execute(Statement::from_string(
+            .execute_raw(Statement::from_string(
                 DbBackend::Sqlite,
                 "INSERT INTO channel_state (channel_id, balance, status, epoch, ticket_index, closure_time, \
                  corrupted_state, published_block, published_tx_index, published_log_index) VALUES (1, \
@@ -263,7 +257,7 @@ mod tests {
         );
 
         // Test uniqueness constraint
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO account (chain_key, packet_key) VALUES (X'0101010101010101010101010101010101010101', 'peer1')"
                 .to_string(),
@@ -271,7 +265,7 @@ mod tests {
         .await
         .unwrap();
 
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO account_state (account_id, safe_address, published_block, published_tx_index, \
              published_log_index) VALUES (1, NULL, 100, 5, 3)"
@@ -282,7 +276,7 @@ mod tests {
 
         // Try to insert duplicate - should fail
         let duplicate_result = db
-            .execute(Statement::from_string(
+            .execute_raw(Statement::from_string(
                 DbBackend::Sqlite,
                 "INSERT INTO account_state (account_id, safe_address, published_block, published_tx_index, \
                  published_log_index) VALUES (1, NULL, 100, 5, 3)"
@@ -308,7 +302,7 @@ mod tests {
         );
 
         // Test uniqueness constraint
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO account (chain_key, packet_key) VALUES (X'0101010101010101010101010101010101010101', 'peer1')"
                 .to_string(),
@@ -316,7 +310,7 @@ mod tests {
         .await
         .unwrap();
 
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO account (chain_key, packet_key) VALUES (X'0202020202020202020202020202020202020202', 'peer2')"
                 .to_string(),
@@ -324,14 +318,14 @@ mod tests {
         .await
         .unwrap();
 
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO channel (source, destination, concrete_channel_id) VALUES (1, 2, '0xabc')".to_string(),
         ))
         .await
         .unwrap();
 
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO channel_state (channel_id, balance, status, epoch, ticket_index, closure_time, \
              corrupted_state, published_block, published_tx_index, published_log_index) VALUES (1, \
@@ -343,7 +337,7 @@ mod tests {
 
         // Try to insert duplicate - should fail
         let duplicate_result = db
-            .execute(Statement::from_string(
+            .execute_raw(Statement::from_string(
                 DbBackend::Sqlite,
                 "INSERT INTO channel_state (channel_id, balance, status, epoch, ticket_index, closure_time, \
                  corrupted_state, published_block, published_tx_index, published_log_index) VALUES (1, \
@@ -415,7 +409,7 @@ mod tests {
         Migrator::up(&db, None).await.unwrap();
 
         // Insert test data
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO account (chain_key, packet_key) VALUES (X'0101010101010101010101010101010101010101', 'peer1')"
                 .to_string(),
@@ -423,7 +417,7 @@ mod tests {
         .await
         .unwrap();
 
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO account (chain_key, packet_key) VALUES (X'0202020202020202020202020202020202020202', 'peer2')"
                 .to_string(),
@@ -431,7 +425,7 @@ mod tests {
         .await
         .unwrap();
 
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO channel (source, destination, concrete_channel_id) VALUES (1, 2, '0xabc')".to_string(),
         ))
@@ -439,7 +433,7 @@ mod tests {
         .unwrap();
 
         // Insert multiple states for the same channel
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO channel_state (channel_id, balance, status, epoch, ticket_index, closure_time, \
              corrupted_state, published_block, published_tx_index, published_log_index) VALUES (1, \
@@ -449,7 +443,7 @@ mod tests {
         .await
         .unwrap();
 
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO channel_state (channel_id, balance, status, epoch, ticket_index, closure_time, \
              corrupted_state, published_block, published_tx_index, published_log_index) VALUES (1, \
@@ -461,7 +455,7 @@ mod tests {
 
         // Query view - should return latest state (block 150)
         let result = db
-            .query_one(Statement::from_string(
+            .query_one_raw(Statement::from_string(
                 DbBackend::Sqlite,
                 "SELECT published_block FROM channel_current WHERE channel_id = 1".to_string(),
             ))
@@ -480,7 +474,7 @@ mod tests {
         Migrator::up(&db, None).await.unwrap();
 
         // Insert test data
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO account (chain_key, packet_key) VALUES (X'0101010101010101010101010101010101010101', 'peer1')"
                 .to_string(),
@@ -489,7 +483,7 @@ mod tests {
         .unwrap();
 
         // Insert multiple states for the same account
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO account_state (account_id, safe_address, published_block, published_tx_index, \
              published_log_index) VALUES (1, X'0202020202020202020202020202020202020202', 100, 0, 0)"
@@ -498,7 +492,7 @@ mod tests {
         .await
         .unwrap();
 
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO account_state (account_id, safe_address, published_block, published_tx_index, \
              published_log_index) VALUES (1, X'0303030303030303030303030303030303030303', 150, 0, 0)"
@@ -509,7 +503,7 @@ mod tests {
 
         // Query view - should return latest state (block 150)
         let result = db
-            .query_one(Statement::from_string(
+            .query_one_raw(Statement::from_string(
                 DbBackend::Sqlite,
                 "SELECT published_block FROM account_current WHERE account_id = 1".to_string(),
             ))
@@ -528,7 +522,7 @@ mod tests {
         Migrator::up(&db, None).await.unwrap();
 
         // Insert account and state
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO account (chain_key, packet_key) VALUES (X'0101010101010101010101010101010101010101', 'peer1')"
                 .to_string(),
@@ -536,7 +530,7 @@ mod tests {
         .await
         .unwrap();
 
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO account_state (account_id, safe_address, published_block, published_tx_index, \
              published_log_index) VALUES (1, NULL, 100, 0, 0)"
@@ -547,7 +541,7 @@ mod tests {
 
         // Verify state exists
         let result_before = db
-            .query_one(Statement::from_string(
+            .query_one_raw(Statement::from_string(
                 DbBackend::Sqlite,
                 "SELECT COUNT(*) as cnt FROM account_state WHERE account_id = 1".to_string(),
             ))
@@ -558,7 +552,7 @@ mod tests {
         assert_eq!(count_before, 1, "Should have 1 account_state record");
 
         // Delete account - should cascade to account_state
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "DELETE FROM account WHERE id = 1".to_string(),
         ))
@@ -567,7 +561,7 @@ mod tests {
 
         // Verify state was also deleted
         let result_after = db
-            .query_one(Statement::from_string(
+            .query_one_raw(Statement::from_string(
                 DbBackend::Sqlite,
                 "SELECT COUNT(*) as cnt FROM account_state WHERE account_id = 1".to_string(),
             ))
@@ -584,7 +578,7 @@ mod tests {
         Migrator::up(&db, None).await.unwrap();
 
         // Insert accounts and channel
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO account (chain_key, packet_key) VALUES (X'0101010101010101010101010101010101010101', 'peer1')"
                 .to_string(),
@@ -592,7 +586,7 @@ mod tests {
         .await
         .unwrap();
 
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO account (chain_key, packet_key) VALUES (X'0202020202020202020202020202020202020202', 'peer2')"
                 .to_string(),
@@ -600,14 +594,14 @@ mod tests {
         .await
         .unwrap();
 
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO channel (source, destination, concrete_channel_id) VALUES (1, 2, '0xabc')".to_string(),
         ))
         .await
         .unwrap();
 
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "INSERT INTO channel_state (channel_id, balance, status, epoch, ticket_index, closure_time, \
              corrupted_state, published_block, published_tx_index, published_log_index) VALUES (1, \
@@ -619,7 +613,7 @@ mod tests {
 
         // Verify state exists
         let result_before = db
-            .query_one(Statement::from_string(
+            .query_one_raw(Statement::from_string(
                 DbBackend::Sqlite,
                 "SELECT COUNT(*) as cnt FROM channel_state WHERE channel_id = 1".to_string(),
             ))
@@ -630,7 +624,7 @@ mod tests {
         assert_eq!(count_before, 1, "Should have 1 channel_state record");
 
         // Delete channel - should cascade to channel_state
-        db.execute(Statement::from_string(
+        db.execute_raw(Statement::from_string(
             DbBackend::Sqlite,
             "DELETE FROM channel WHERE id = 1".to_string(),
         ))
@@ -639,7 +633,7 @@ mod tests {
 
         // Verify state was also deleted
         let result_after = db
-            .query_one(Statement::from_string(
+            .query_one_raw(Statement::from_string(
                 DbBackend::Sqlite,
                 "SELECT COUNT(*) as cnt FROM channel_state WHERE channel_id = 1".to_string(),
             ))
@@ -657,7 +651,7 @@ mod tests {
 
         // Verify chain_info table exists with watermark fields
         let insert_result = db
-            .execute(Statement::from_string(
+            .execute_raw(Statement::from_string(
                 DbBackend::Sqlite,
                 "INSERT INTO chain_info (last_indexed_block, last_indexed_tx_index, last_indexed_log_index, \
                  min_incoming_ticket_win_prob) VALUES (100, 5, 3, 0.5)"

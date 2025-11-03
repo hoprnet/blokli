@@ -740,17 +740,14 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{
-        sync::{Arc, atomic::Ordering},
-        time::SystemTime,
-    };
+    use std::{sync::Arc, time::SystemTime};
 
     use alloy::{
         dyn_abi::DynSolValue,
         primitives::{Address as AlloyAddress, U256},
         sol_types::{SolEvent, SolValue},
     };
-    use anyhow::{Context, anyhow};
+    use anyhow::Context;
     use blokli_chain_rpc::HoprIndexerRpcOperations;
     use blokli_chain_types::{ContractAddresses, chain_events::ChainEventType};
     use blokli_db_sql::{

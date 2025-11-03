@@ -683,27 +683,6 @@ where
         })
     }
 
-    /// Handles blockchain reorganization by correcting affected channel states.
-    ///
-    /// When a reorg is detected, this function:
-    /// 1. Identifies which channels were affected by querying channel_state in the reorged blocks
-    /// 2. Finds the last valid state for each affected channel (before the reorg)
-    /// 3. Inserts corrective channel_state entries with reorg_correction=true
-    /// 4. TODO: Signals active subscriptions to shut down and reconnect (requires IndexerState parameter)
-    ///
-    /// The corrective states are inserted at synthetic positions (canonical_block, 0, 0)
-    /// to indicate they represent the canonical state after reorg recovery, preserving
-    /// a complete audit trail without deleting historical data.
-    ///
-    /// # Arguments
-    ///
-    /// * `db` - Database handle for querying and inserting states
-    /// * `reorg_info` - Information about the detected reorganization
-    /// * `canonical_block` - The canonical block number after the reorg
-    ///
-    /// # Returns
-    ///
-    /// * `Result<usize>` - Number of corrective states inserted, or error if recovery fails
     #[allow(dead_code)]
     /// Handle blockchain reorganization by inserting corrective states
     ///
@@ -714,18 +693,18 @@ where
     /// # Algorithm
     ///
     /// 1. **Identify affected channels**: Query all channel states in the affected block range
-    /// 2. **Find last valid state**: For each affected channel, locate the most recent state
-    ///    before the reorg occurred (the "watermark" state)
-    /// 3. **Insert corrective state**: Create a new state at synthetic position `(canonical_block, 0, 0)`
-    ///    with the watermark state's values and `reorg_correction = true`
-    /// 4. **Skip channels without prior state**: Channels opened during the reorg are skipped
-    ///    (they will be re-indexed with the canonical chain)
+    /// 2. **Find last valid state**: For each affected channel, locate the most recent state before the reorg occurred
+    ///    (the "watermark" state)
+    /// 3. **Insert corrective state**: Create a new state at synthetic position `(canonical_block, 0, 0)` with the
+    ///    watermark state's values and `reorg_correction = true`
+    /// 4. **Skip channels without prior state**: Channels opened during the reorg are skipped (they will be re-indexed
+    ///    with the canonical chain)
     ///
     /// # Corrective States
     ///
     /// Corrective states are special state records that:
-    /// - Are inserted at **synthetic positions** `(canonical_block, 0, 0)` where `canonical_block`
-    ///   is the first valid block after the reorg
+    /// - Are inserted at **synthetic positions** `(canonical_block, 0, 0)` where `canonical_block` is the first valid
+    ///   block after the reorg
     /// - Have the `reorg_correction` flag set to `true` to distinguish them from normal states
     /// - Contain the same state values (balance, status, etc.) as the last valid state before the reorg
     /// - Preserve the complete audit trail - no data is ever deleted
@@ -747,8 +726,8 @@ where
     /// * `reorg_info` - Information about the detected reorganization:
     ///   - `affected_block_range`: `(min_block, max_block)` range that was reorganized
     ///   - `removed_log_count`: Number of logs removed during the reorg (for metrics)
-    /// * `canonical_block` - The first valid block number on the canonical chain after the reorg.
-    ///   This is where corrective states are positioned.
+    /// * `canonical_block` - The first valid block number on the canonical chain after the reorg. This is where
+    ///   corrective states are positioned.
     ///
     /// # Returns
     ///
@@ -802,7 +781,8 @@ where
     /// # See Also
     ///
     /// - [`ReorgInfo`] - Structure containing reorg detection information
-    /// - [`get_channel_state_at`](blokli_db_sql::state_queries::get_channel_state_at) - Temporal queries that work with corrective states
+    /// - [`get_channel_state_at`](blokli_db_sql::state_queries::get_channel_state_at) - Temporal queries that work with
+    ///   corrective states
     /// - Design document section 6.5 - Detailed reorg handling specification
     async fn handle_reorg(db: &Db, reorg_info: &ReorgInfo, canonical_block: u64) -> Result<usize>
     where
@@ -2417,7 +2397,10 @@ mod tests {
         let corrected_count =
             Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 250).await?;
 
-        assert_eq!(corrected_count, 1, "Should correct one channel despite many affected blocks");
+        assert_eq!(
+            corrected_count, 1,
+            "Should correct one channel despite many affected blocks"
+        );
 
         let states = get_channel_states(&db, 1).await?;
         let corrective = states
@@ -2617,11 +2600,7 @@ mod tests {
         for i in 1..=channel_count {
             let states = get_channel_states(&db, i).await?;
             let has_correction = states.iter().any(|s| s.reorg_correction);
-            assert!(
-                has_correction,
-                "Channel {} should have corrective state",
-                i
-            );
+            assert!(has_correction, "Channel {} should have corrective state", i);
         }
 
         Ok(())
@@ -2676,9 +2655,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_temporal_query_at_reorg_boundary() -> anyhow::Result<()> {
-        use blokli_db_sql::state_queries::get_channel_state_at;
-        use blokli_db_sql::events::BlockPosition;
-        use blokli_db_sql::TargetDb;
+        use blokli_db_sql::{TargetDb, events::BlockPosition, state_queries::get_channel_state_at};
 
         // Test querying at exact reorg correction position
         let db = BlokliDb::new_in_memory().await?;
@@ -2709,7 +2686,11 @@ mod tests {
         assert!(state.is_some(), "Should find corrective state");
 
         let found_state = state.unwrap();
-        assert_eq!(found_state.balance, vec![1u8; 12], "Should return corrective state balance");
+        assert_eq!(
+            found_state.balance,
+            vec![1u8; 12],
+            "Should return corrective state balance"
+        );
         assert!(found_state.reorg_correction, "Should be reorg correction state");
         assert_eq!(found_state.published_block, 200, "Should be at synthetic position");
         assert_eq!(found_state.published_tx_index, 0, "Should use synthetic tx_index 0");

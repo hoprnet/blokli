@@ -245,7 +245,7 @@ impl BlokliDbAllOperations for BlokliDb {}
 
 #[cfg(test)]
 mod tests {
-    use migration::{MigratorChainLogs, MigratorIndex, MigratorTrait};
+    use migration::MigratorTrait;
 
     use crate::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 

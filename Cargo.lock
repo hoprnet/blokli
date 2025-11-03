@@ -1968,6 +1968,7 @@ version = "0.1.0"
 dependencies = [
  "hopr-internal-types",
  "hopr-primitive-types",
+ "sea-orm",
  "sea-orm-migration",
  "tokio",
 ]
