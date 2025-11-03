@@ -22,7 +22,7 @@ use hopr_primitive_types::prelude::*;
 use tracing::{debug, error, info, trace};
 
 use crate::{
-    IndexerConfig,
+    IndexerConfig, IndexerState,
     errors::{CoreEthereumIndexerError, Result},
     snapshot::{SnapshotInfo, SnapshotManager},
     traits::ChainLogHandler,
@@ -90,6 +90,7 @@ where
     db: Db,
     cfg: IndexerConfig,
     egress: async_channel::Sender<SignificantChainEvent>,
+    indexer_state: IndexerState,
     // If true (default), the indexer will panic if the event stream is terminated.
     // Setting it to false is useful for testing.
     panic_on_completion: bool,
@@ -107,6 +108,7 @@ where
         db: Db,
         cfg: IndexerConfig,
         egress: async_channel::Sender<SignificantChainEvent>,
+        indexer_state: IndexerState,
     ) -> Self {
         Self {
             rpc: Some(rpc),
@@ -114,6 +116,7 @@ where
             db,
             cfg,
             egress,
+            indexer_state,
             panic_on_completion: true,
         }
     }
@@ -148,6 +151,7 @@ where
         let logs_handler = Arc::new(self.db_processor.take().expect("db_processor should be present"));
         let db = self.db.clone();
         let tx_significant_events = self.egress.clone();
+        let indexer_state = self.indexer_state.clone();
         let panic_on_completion = self.panic_on_completion;
 
         let (log_filters, address_topics) = Self::generate_log_filters(&logs_handler);
@@ -361,9 +365,19 @@ where
                 trace!(%event, "processing on-chain event");
                 // Pass the events further only once we're fully synced
                 if is_synced.load(Ordering::Relaxed) {
-                    if let Err(error) = tx_significant_events.try_send(event) {
+                    if let Err(error) = tx_significant_events.try_send(event.clone()) {
                         error!(%error, "failed to pass a significant chain event further");
                     }
+
+                    // TODO(temporal-db): Publish channel events to the IndexerState event bus for real-time
+                    // subscriptions Currently disabled because we need to map ChannelEntry (with
+                    // on-chain Hash ID) to database internal ID (i32). This requires either:
+                    // 1. Querying the channel table by concrete_channel_id (adds latency)
+                    // 2. Refactoring handlers to return database IDs along with events
+                    // 3. Publishing events directly from database operations where IDs are known
+                    // For now, subscriptions will only work with the Phase 1 snapshot, without Phase 2 real-time
+                    // updates.
+                    let _ = (&indexer_state, &event); // Suppress unused variable warnings
                 }
             }
 

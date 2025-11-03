@@ -191,6 +191,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
                 self.db.clone(),
                 self.indexer_cfg.clone(),
                 self.indexer_events_tx.clone(),
+                self.indexer_state.clone(),
             )
             .start()
             .await?,
