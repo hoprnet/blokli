@@ -3,7 +3,7 @@
 //! This crate contains pure GraphQL type definitions that can be reused
 //! by clients without depending on the full API server implementation.
 
-use async_graphql::{Enum, InputValueError, NewType, Scalar, ScalarType, SimpleObject, Value};
+use async_graphql::{Enum, InputObject, InputValueError, NewType, Scalar, ScalarType, SimpleObject, Value};
 
 /// Token value represented as a string to maintain precision
 ///
@@ -263,4 +263,126 @@ pub struct NativeBalance {
     pub address: String,
     /// Native token balance
     pub balance: TokenValueString,
+}
+
+// ========================================
+// Transaction Submission Types
+// ========================================
+
+/// Status of a submitted transaction
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum TransactionStatus {
+    /// Transaction is pending submission to the chain
+    #[graphql(name = "PENDING")]
+    Pending,
+    /// Transaction has been submitted and is awaiting confirmation
+    #[graphql(name = "SUBMITTED")]
+    Submitted,
+    /// Transaction has been confirmed on-chain with success
+    #[graphql(name = "CONFIRMED")]
+    Confirmed,
+    /// Transaction was included on-chain but reverted (receipt.status = 0)
+    #[graphql(name = "REVERTED")]
+    Reverted,
+    /// Transaction was not mined within timeout window
+    #[graphql(name = "TIMEOUT")]
+    Timeout,
+    /// Transaction validation failed
+    #[graphql(name = "VALIDATION_FAILED")]
+    ValidationFailed,
+    /// Transaction submission failed
+    #[graphql(name = "SUBMISSION_FAILED")]
+    SubmissionFailed,
+}
+
+/// Input for transaction submission
+#[derive(InputObject, Clone, Debug)]
+pub struct TransactionInput {
+    /// Raw signed transaction data in hexadecimal format (with or without 0x prefix)
+    #[graphql(name = "rawTransaction")]
+    pub raw_transaction: String,
+}
+
+/// Transaction submission result
+#[derive(SimpleObject, Clone, Debug)]
+pub struct Transaction {
+    /// Unique identifier for the transaction (UUID)
+    pub id: String,
+    /// Current status of the transaction
+    pub status: TransactionStatus,
+    /// Timestamp when transaction was submitted
+    #[graphql(name = "submittedAt")]
+    pub submitted_at: chrono::DateTime<chrono::Utc>,
+    /// Transaction hash (available after submission)
+    #[graphql(name = "transactionHash")]
+    pub transaction_hash: Option<Hex32>,
+}
+
+/// Success response for fire-and-forget transaction submission
+#[derive(SimpleObject, Clone, Debug)]
+pub struct SendTransactionSuccess {
+    /// Transaction hash after successful submission
+    #[graphql(name = "transactionHash")]
+    pub transaction_hash: Hex32,
+}
+
+// ========================================
+// Transaction Error Types
+// ========================================
+
+/// RPC or blockchain error during transaction submission
+#[derive(SimpleObject, Clone, Debug)]
+pub struct RpcError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+}
+
+/// Target contract not in allowlist
+#[derive(SimpleObject, Clone, Debug)]
+pub struct ContractNotAllowedError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+    /// Contract address that was rejected
+    #[graphql(name = "contractAddress")]
+    pub contract_address: String,
+}
+
+/// Function selector not allowed
+#[derive(SimpleObject, Clone, Debug)]
+pub struct FunctionNotAllowedError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+    /// Contract address
+    #[graphql(name = "contractAddress")]
+    pub contract_address: String,
+    /// Function selector that was rejected
+    #[graphql(name = "functionSelector")]
+    pub function_selector: String,
+}
+
+/// Operation timed out
+#[derive(SimpleObject, Clone, Debug)]
+pub struct TimeoutError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+}
+
+/// Transaction ID format is invalid
+#[derive(SimpleObject, Clone, Debug)]
+pub struct InvalidTransactionIdError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+    /// The invalid transaction ID that was provided
+    #[graphql(name = "transactionId")]
+    pub transaction_id: String,
 }

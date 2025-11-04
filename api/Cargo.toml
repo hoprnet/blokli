@@ -54,12 +54,15 @@ sea-orm = { workspace = true }
 # Encoding
 chrono = { workspace = true }
 hex    = { workspace = true }
+uuid   = { workspace = true }
 
 # Internal dependencies
 blokli-api-types     = { workspace = true }
+blokli-chain-api     = { workspace = true }
 blokli-chain-indexer = { workspace = true }
 blokli-db            = { workspace = true }
 blokli-db-entity     = { workspace = true }
+hopr-crypto-types    = { workspace = true }
 
 # Logging
 tracing            = { workspace = true }

@@ -1,17 +1,43 @@
 //! GraphQL query root and resolver implementations
 
 use async_graphql::{Context, Object, Result};
-use blokli_api_types::{Account, ChainInfo, Channel, Hex32, HoprBalance, NativeBalance, TokenValueString};
+use blokli_api_types::{
+    Account, ChainInfo, Channel, Hex32, HoprBalance, InvalidTransactionIdError, NativeBalance, TokenValueString,
+    Transaction, TransactionStatus,
+};
+use blokli_chain_api::transaction_store::TransactionStore;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use std::sync::Arc;
 
 use crate::{
     conversions::{hopr_balance_from_model, native_balance_from_model},
+    mutation::TransactionResult,
     validation::validate_eth_address,
 };
 
 /// Helper function to convert binary domain separator to Hex32 format
 fn bytes_to_hex32(bytes: &[u8]) -> Hex32 {
     Hex32(format!("0x{}", hex::encode(bytes)))
+}
+
+/// Helper function to convert Hash to Hex32
+fn hash_to_hex32(hash: hopr_crypto_types::types::Hash) -> Hex32 {
+    Hex32(format!("0x{}", hex::encode(hash.as_ref())))
+}
+
+/// Convert store TransactionStatus to GraphQL TransactionStatus
+fn store_status_to_graphql(status: blokli_chain_api::transaction_store::TransactionStatus) -> TransactionStatus {
+    use blokli_chain_api::transaction_store::TransactionStatus as StoreStatus;
+
+    match status {
+        StoreStatus::Pending => TransactionStatus::Pending,
+        StoreStatus::Submitted => TransactionStatus::Submitted,
+        StoreStatus::Confirmed => TransactionStatus::Confirmed,
+        StoreStatus::Reverted => TransactionStatus::Reverted,
+        StoreStatus::Timeout => TransactionStatus::Timeout,
+        StoreStatus::ValidationFailed => TransactionStatus::ValidationFailed,
+        StoreStatus::SubmissionFailed => TransactionStatus::SubmissionFailed,
+    }
 }
 
 /// Root query type providing read-only access to indexed blockchain data
@@ -382,6 +408,43 @@ impl QueryRoot {
     /// Returns the current version of the blokli-api package
     async fn version(&self) -> &str {
         env!("CARGO_PKG_VERSION")
+    }
+
+    /// Retrieve transaction status by ID
+    ///
+    /// Returns the current status of a previously submitted transaction.
+    /// Returns Error with code INVALID_TRANSACTION_ID if ID format is invalid.
+    /// Returns None if transaction ID is not found.
+    async fn transaction(&self, ctx: &Context<'_>, id: async_graphql::ID) -> Result<Option<TransactionResult>> {
+        // Parse UUID from ID string
+        let uuid = match uuid::Uuid::parse_str(id.as_str()) {
+            Ok(uuid) => uuid,
+            Err(_) => {
+                return Ok(Some(TransactionResult::InvalidId(InvalidTransactionIdError {
+                    code: "INVALID_TRANSACTION_ID".to_string(),
+                    message: format!("Invalid transaction ID format: {}", id.as_str()),
+                    transaction_id: id.to_string(),
+                })))
+            }
+        };
+
+        // Get transaction store from context
+        let store = ctx.data::<Arc<TransactionStore>>()?;
+
+        // Try to retrieve the transaction
+        match store.get(uuid) {
+            Ok(record) => {
+                // Convert to GraphQL Transaction type
+                let transaction = Transaction {
+                    id: record.id.to_string(),
+                    status: store_status_to_graphql(record.status),
+                    submitted_at: record.submitted_at,
+                    transaction_hash: record.transaction_hash.map(hash_to_hex32),
+                };
+                Ok(Some(TransactionResult::Transaction(transaction)))
+            }
+            Err(_) => Ok(None), // Transaction not found
+        }
     }
 }
 
