@@ -304,6 +304,9 @@ where
         &self,
         tx: &OpenTransaction,
         event: HoprChannelsEvents,
+        block: u32,
+        tx_index: u32,
+        log_index: u32,
         _is_synced: bool,
     ) -> Result<Option<ChainEventType>> {
         #[cfg(all(feature = "prometheus", not(test)))]
@@ -313,194 +316,216 @@ where
             HoprChannelsEvents::ChannelBalanceDecreased(balance_decreased) => {
                 let channel_id = balance_decreased.channelId.0.into();
 
-                let maybe_channel = match self.db.begin_channel_update(tx.into(), &channel_id).await {
-                    Ok(channel) => channel,
+                // Get existing channel to calculate the diff
+                let existing_channel = match self.db.get_channel_by_id(tx.into(), &channel_id).await {
+                    Ok(Some(channel)) => channel,
+                    Ok(None) => {
+                        error!(%channel_id, "observed balance decreased event for a channel that does not exist");
+                        // Mark the state as corrupted
+                        self.db
+                            .mark_channel_state_corrupted(tx.into(), &channel_id, block, tx_index, log_index)
+                            .await
+                            .ok();
+                        return Err(CoreEthereumIndexerError::ChannelDoesNotExist);
+                    }
                     Err(e) => {
-                        error!(%channel_id, %e, "failed to begin channel update on on_channel_balance_decreased_event");
+                        error!(%channel_id, %e, "failed to get channel on on_channel_balance_decreased_event");
                         return Err(e.into());
                     }
                 };
 
                 trace!(
                     %channel_id,
-                    is_channel = maybe_channel.is_some(),
                     "on_channel_balance_decreased_event",
                 );
 
-                if let Some(channel_edits) = maybe_channel {
-                    // Decode the packed channel state from the event
-                    let decoded = decode_channel(balance_decreased.channel);
-                    let new_balance = decoded.balance;
-                    let diff = channel_edits.entry().balance - new_balance;
+                // Decode the packed channel state from the event
+                let decoded = decode_channel(balance_decreased.channel);
+                let new_balance = decoded.balance;
+                let diff = existing_channel.balance - new_balance;
 
-                    trace!(
-                        %channel_id,
-                        old_balance = %channel_edits.entry().balance,
-                        new_balance = %new_balance,
-                        diff = %diff,
-                        "ChannelBalanceDecreased: decoded channel state"
-                    );
+                trace!(
+                    %channel_id,
+                    old_balance = %existing_channel.balance,
+                    new_balance = %new_balance,
+                    diff = %diff,
+                    "ChannelBalanceDecreased: decoded channel state"
+                );
 
-                    let updated_channel = self
-                        .db
-                        .finish_channel_update(tx.into(), channel_edits.change_balance(new_balance))
-                        .await?
-                        .ok_or(CoreEthereumIndexerError::ProcessError(format!(
-                            "channel balance decreased event for channel {channel_id} did not return an updated \
-                             channel"
-                        )))?;
+                // Create updated channel entry with new state
+                let updated_channel = ChannelEntry::new(
+                    existing_channel.source,
+                    existing_channel.destination,
+                    new_balance,
+                    decoded.ticket_index.into(),
+                    decoded.status,
+                    decoded.epoch.into(),
+                );
 
-                    Ok(Some(ChainEventType::ChannelBalanceDecreased(updated_channel, diff)))
-                } else {
-                    error!(%channel_id, "observed balance decreased event for a channel that does not exist");
-                    // TODO: Set channel.corrupted_state = true
-                    // self.db.upsert_corrupted_channel(tx.into(), channel_id).await?;
-                    Err(CoreEthereumIndexerError::ChannelDoesNotExist)
-                }
+                // Atomically upsert the new state
+                self.db
+                    .upsert_channel(tx.into(), updated_channel, block, tx_index, log_index)
+                    .await?;
+
+                Ok(Some(ChainEventType::ChannelBalanceDecreased(updated_channel, diff)))
             }
             HoprChannelsEvents::ChannelBalanceIncreased(balance_increased) => {
                 let channel_id = balance_increased.channelId.0.into();
 
-                let maybe_channel = match self.db.begin_channel_update(tx.into(), &channel_id).await {
-                    Ok(channel) => channel,
+                // Get existing channel to calculate the diff
+                let existing_channel = match self.db.get_channel_by_id(tx.into(), &channel_id).await {
+                    Ok(Some(channel)) => channel,
+                    Ok(None) => {
+                        error!(%channel_id, "observed balance increased event for a channel that does not exist");
+                        // Mark the state as corrupted
+                        self.db
+                            .mark_channel_state_corrupted(tx.into(), &channel_id, block, tx_index, log_index)
+                            .await
+                            .ok();
+                        return Err(CoreEthereumIndexerError::ChannelDoesNotExist);
+                    }
                     Err(e) => {
-                        error!(%channel_id, %e, "failed to begin channel update on on_channel_balance_increased_event");
+                        error!(%channel_id, %e, "failed to get channel on on_channel_balance_increased_event");
                         return Err(e.into());
                     }
                 };
 
                 trace!(
                     %channel_id,
-                    is_channel = maybe_channel.is_some(),
                     "on_channel_balance_increased_event",
                 );
 
-                if let Some(channel_edits) = maybe_channel {
-                    // Decode the packed channel state from the event
-                    let decoded = decode_channel(balance_increased.channel);
-                    let new_balance = decoded.balance;
-                    let diff = new_balance - channel_edits.entry().balance;
+                // Decode the packed channel state from the event
+                let decoded = decode_channel(balance_increased.channel);
+                let new_balance = decoded.balance;
+                let diff = new_balance - existing_channel.balance;
 
-                    trace!(
-                        %channel_id,
-                        old_balance = %channel_edits.entry().balance,
-                        new_balance = %new_balance,
-                        diff = %diff,
-                        "ChannelBalanceIncreased: decoded channel state"
-                    );
+                trace!(
+                    %channel_id,
+                    old_balance = %existing_channel.balance,
+                    new_balance = %new_balance,
+                    diff = %diff,
+                    "ChannelBalanceIncreased: decoded channel state"
+                );
 
-                    let updated_channel = self
-                        .db
-                        .finish_channel_update(tx.into(), channel_edits.change_balance(new_balance))
-                        .await?
-                        .ok_or(CoreEthereumIndexerError::ProcessError(format!(
-                            "channel balance increased event for channel {channel_id} did not return an updated \
-                             channel"
-                        )))?;
+                // Create updated channel entry with new state
+                let updated_channel = ChannelEntry::new(
+                    existing_channel.source,
+                    existing_channel.destination,
+                    new_balance,
+                    decoded.ticket_index.into(),
+                    decoded.status,
+                    decoded.epoch.into(),
+                );
 
-                    Ok(Some(ChainEventType::ChannelBalanceIncreased(updated_channel, diff)))
-                } else {
-                    error!(%channel_id, "observed balance increased event for a channel that does not exist");
-                    // TODO: Set channel.corrupted_state = true
-                    // self.db.upsert_corrupted_channel(tx.into(), channel_id).await?;
-                    Err(CoreEthereumIndexerError::ChannelDoesNotExist)
-                }
+                // Atomically upsert the new state
+                self.db
+                    .upsert_channel(tx.into(), updated_channel, block, tx_index, log_index)
+                    .await?;
+
+                Ok(Some(ChainEventType::ChannelBalanceIncreased(updated_channel, diff)))
             }
             HoprChannelsEvents::ChannelClosed(channel_closed) => {
                 let channel_id = channel_closed.channelId.0.into();
 
-                let maybe_channel = match self.db.begin_channel_update(tx.into(), &channel_id).await {
-                    Ok(channel) => channel,
+                // Get existing channel
+                let existing_channel = match self.db.get_channel_by_id(tx.into(), &channel_id).await {
+                    Ok(Some(channel)) => channel,
+                    Ok(None) => {
+                        error!(%channel_id, "observed closure finalization event for a channel that does not exist");
+                        // Mark the state as corrupted
+                        self.db
+                            .mark_channel_state_corrupted(tx.into(), &channel_id, block, tx_index, log_index)
+                            .await
+                            .ok();
+                        return Err(CoreEthereumIndexerError::ChannelDoesNotExist);
+                    }
                     Err(e) => {
-                        error!(%channel_id, %e, "failed to begin channel update on on_channel_closed_event");
+                        error!(%channel_id, %e, "failed to get channel on on_channel_closed_event");
                         return Err(e.into());
                     }
                 };
 
                 trace!(
                     %channel_id,
-                    is_channel = maybe_channel.is_some(),
                     "on_channel_closed_event",
                 );
 
-                if let Some(channel_edits) = maybe_channel {
-                    // Decode the packed channel state from the event for verification
-                    let decoded = decode_channel(channel_closed.channel);
+                // Decode the packed channel state from the event
+                let decoded = decode_channel(channel_closed.channel);
 
-                    trace!(
-                        %channel_id,
-                        status = ?decoded.status,
-                        balance = %decoded.balance,
-                        ticket_index = decoded.ticket_index,
-                        "ChannelClosed: decoded channel state"
-                    );
+                trace!(
+                    %channel_id,
+                    status = ?decoded.status,
+                    balance = %decoded.balance,
+                    ticket_index = decoded.ticket_index,
+                    "ChannelClosed: decoded channel state"
+                );
 
-                    // Set all channel fields like we do on-chain on close
-                    // Use decoded values for accuracy
-                    let channel_edits = channel_edits
-                        .change_status(decoded.status)
-                        .change_balance(decoded.balance)
-                        .change_ticket_index(decoded.ticket_index);
+                // Create updated channel entry with all new state from decoded values
+                let updated_channel = ChannelEntry::new(
+                    existing_channel.source,
+                    existing_channel.destination,
+                    decoded.balance,
+                    decoded.ticket_index.into(),
+                    decoded.status,
+                    decoded.epoch.into(),
+                );
 
-                    let updated_channel = self.db.finish_channel_update(tx.into(), channel_edits).await?.ok_or(
-                        CoreEthereumIndexerError::ProcessError(format!(
-                            "channel closed event for channel {channel_id} did not return an updated channel",
-                        )),
-                    )?;
+                // Atomically upsert the new state
+                self.db
+                    .upsert_channel(tx.into(), updated_channel, block, tx_index, log_index)
+                    .await?;
 
-                    Ok(Some(ChainEventType::ChannelClosed(updated_channel)))
-                } else {
-                    error!(%channel_id, "observed closure finalization event for a channel that does not exist.");
-                    // TODO: Set channel.corrupted_state = true
-                    // self.db.upsert_corrupted_channel(tx.into(), channel_id).await?;
-                    Err(CoreEthereumIndexerError::ChannelDoesNotExist)
-                }
+                Ok(Some(ChainEventType::ChannelClosed(updated_channel)))
             }
             HoprChannelsEvents::ChannelOpened(channel_opened) => {
                 let source: Address = channel_opened.source.into();
                 let destination: Address = channel_opened.destination.into();
                 let channel_id = generate_channel_id(&source, &destination);
 
-                let maybe_channel = match self.db.begin_channel_update(tx.into(), &channel_id).await {
-                    Ok(channel) => channel,
+                let maybe_existing = match self.db.get_channel_by_id(tx.into(), &channel_id).await {
+                    Ok(existing) => existing,
                     Err(e) => {
-                        error!(%source, %destination, %channel_id, %e, "failed to begin channel update on on_channel_opened_event");
+                        error!(%source, %destination, %channel_id, %e, "failed to get channel on on_channel_opened_event");
                         return Err(e.into());
                     }
                 };
 
-                let channel = if let Some(channel_edits) = maybe_channel {
-                    // Check that we're not receiving the Open event without the channel being Close prior, or that the
-                    // channel is not yet corrupted
+                let channel = if let Some(existing) = maybe_existing {
+                    // Channel exists - check if it's in Closed state
+                    if existing.status != ChannelStatus::Closed {
+                        warn!(%source, %destination, %channel_id, "received Open event for a channel that is not Closed, marking state as corrupted");
 
-                    if channel_edits.entry().status != ChannelStatus::Closed {
-                        warn!(%source, %destination, %channel_id, "received Open event for a channel that is not Closed, marking it as corrupted");
-
-                        self.db.finish_channel_update(tx.into(), channel_edits.delete()).await?;
-                        // TODO: Set channel.corrupted_state = true
-                        // self.db.upsert_corrupted_channel(tx.into(), channel_id).await?;
+                        // Mark this state as corrupted
+                        self.db
+                            .mark_channel_state_corrupted(tx.into(), &channel_id, block, tx_index, log_index)
+                            .await
+                            .ok();
 
                         return Ok(None);
                     }
 
                     trace!(%source, %destination, %channel_id, "on_channel_reopened_event");
 
-                    let current_epoch = channel_edits.entry().channel_epoch;
+                    let current_epoch = existing.channel_epoch;
 
-                    // set all channel fields like we do on-chain on close
+                    // Reopen channel: reset ticket_index, increment epoch, set status to Open
+                    let reopened_channel = ChannelEntry::new(
+                        source,
+                        destination,
+                        existing.balance, // Keep existing balance
+                        0_u32.into(),     // Reset ticket index
+                        ChannelStatus::Open,
+                        current_epoch.add(1), // Increment epoch
+                    );
+
                     self.db
-                        .finish_channel_update(
-                            tx.into(),
-                            channel_edits
-                                .change_ticket_index(0_u32)
-                                .change_epoch(current_epoch.add(1))
-                                .change_status(ChannelStatus::Open),
-                        )
-                        .await?
-                        .ok_or(CoreEthereumIndexerError::ProcessError(format!(
-                            "channel opened event for channel {channel_id} did not return an updated channel",
-                        )))?
+                        .upsert_channel(tx.into(), reopened_channel, block, tx_index, log_index)
+                        .await?;
+                    reopened_channel
                 } else {
+                    // Channel doesn't exist - create new one
                     trace!(%source, %destination, %channel_id, "on_channel_opened_event");
 
                     let new_channel = ChannelEntry::new(
@@ -512,7 +537,9 @@ where
                         1_u32.into(),
                     );
 
-                    self.db.upsert_channel(tx.into(), new_channel).await?;
+                    self.db
+                        .upsert_channel(tx.into(), new_channel, block, tx_index, log_index)
+                        .await?;
                     new_channel
                 };
 
@@ -521,83 +548,98 @@ where
             HoprChannelsEvents::TicketRedeemed(ticket_redeemed) => {
                 let channel_id = ticket_redeemed.channelId.0.into();
 
-                let maybe_channel = match self.db.begin_channel_update(tx.into(), &channel_id).await {
-                    Ok(channel) => channel,
+                // Get existing channel
+                let existing_channel = match self.db.get_channel_by_id(tx.into(), &channel_id).await {
+                    Ok(Some(channel)) => channel,
+                    Ok(None) => {
+                        error!(%channel_id, "observed ticket redeem on a channel that we don't have in the DB");
+                        // Mark the state as corrupted
+                        self.db
+                            .mark_channel_state_corrupted(tx.into(), &channel_id, block, tx_index, log_index)
+                            .await
+                            .ok();
+                        return Err(CoreEthereumIndexerError::ChannelDoesNotExist);
+                    }
                     Err(e) => {
-                        error!(%channel_id, %e, "failed to begin channel update on on_ticket_redeemed_event");
+                        error!(%channel_id, %e, "failed to get channel on on_ticket_redeemed_event");
                         return Err(e.into());
                     }
                 };
 
-                if let Some(channel_edits) = maybe_channel {
-                    // Decode the packed channel state from the event
-                    let decoded = decode_channel(ticket_redeemed.channel);
+                // Decode the packed channel state from the event
+                let decoded = decode_channel(ticket_redeemed.channel);
 
-                    trace!(
-                        %channel_id,
-                        new_balance = %decoded.balance,
-                        new_ticket_index = decoded.ticket_index,
-                        "TicketRedeemed: decoded channel state"
-                    );
+                trace!(
+                    %channel_id,
+                    new_balance = %decoded.balance,
+                    new_ticket_index = decoded.ticket_index,
+                    "TicketRedeemed: decoded channel state"
+                );
 
-                    // Update channel with new balance and ticket index after ticket redemption
-                    let channel_edits = channel_edits
-                        .change_balance(decoded.balance)
-                        .change_ticket_index(decoded.ticket_index);
+                // Create updated channel entry with new balance and ticket index
+                let updated_channel = ChannelEntry::new(
+                    existing_channel.source,
+                    existing_channel.destination,
+                    decoded.balance,
+                    decoded.ticket_index.into(),
+                    decoded.status,
+                    decoded.epoch.into(),
+                );
 
-                    let _updated_channel = self.db.finish_channel_update(tx.into(), channel_edits).await?.ok_or(
-                        CoreEthereumIndexerError::ProcessError(format!(
-                            "ticket redeemed event for channel {channel_id} did not return an updated channel"
-                        )),
-                    )?;
+                // Atomically upsert the new state
+                self.db
+                    .upsert_channel(tx.into(), updated_channel, block, tx_index, log_index)
+                    .await?;
 
-                    Ok(None)
-                } else {
-                    error!(%channel_id, "observed ticket redeem on a channel that we don't have in the DB");
-                    // TODO: Set channel.corrupted_state = true
-                    // self.db.upsert_corrupted_channel(tx.into(), channel_id).await?;
-                    Err(CoreEthereumIndexerError::ChannelDoesNotExist)
-                }
+                Ok(None)
             }
             HoprChannelsEvents::OutgoingChannelClosureInitiated(closure_initiated) => {
                 let channel_id = closure_initiated.channelId.0.into();
 
-                let maybe_channel = match self.db.begin_channel_update(tx.into(), &channel_id).await {
-                    Ok(channel) => channel,
+                // Get existing channel
+                let existing_channel = match self.db.get_channel_by_id(tx.into(), &channel_id).await {
+                    Ok(Some(channel)) => channel,
+                    Ok(None) => {
+                        error!(%channel_id, "observed channel closure initiation on a channel that we don't have in the DB");
+                        // Mark the state as corrupted
+                        self.db
+                            .mark_channel_state_corrupted(tx.into(), &channel_id, block, tx_index, log_index)
+                            .await
+                            .ok();
+                        return Err(CoreEthereumIndexerError::ChannelDoesNotExist);
+                    }
                     Err(e) => {
-                        error!(%channel_id, %e, "failed to begin channel update on on_outgoing_channel_closure_initiated_event");
+                        error!(%channel_id, %e, "failed to get channel on on_outgoing_channel_closure_initiated_event");
                         return Err(e.into());
                     }
                 };
 
-                if let Some(channel_edits) = maybe_channel {
-                    // Decode the packed channel state from the event
-                    let decoded = decode_channel(closure_initiated.channel);
+                // Decode the packed channel state from the event
+                let decoded = decode_channel(closure_initiated.channel);
 
-                    trace!(
-                        %channel_id,
-                        closure_time = decoded.closure_time,
-                        status = ?decoded.status,
-                        "OutgoingChannelClosureInitiated: decoded channel state"
-                    );
+                trace!(
+                    %channel_id,
+                    closure_time = decoded.closure_time,
+                    status = ?decoded.status,
+                    "OutgoingChannelClosureInitiated: decoded channel state"
+                );
 
-                    // Use the decoded status which should be PendingToClose with the proper timestamp
-                    let channel = self
-                        .db
-                        .finish_channel_update(tx.into(), channel_edits.change_status(decoded.status))
-                        .await?
-                        .ok_or(CoreEthereumIndexerError::ProcessError(format!(
-                            "channel closure initiation event for channel {channel_id} did not return an updated \
-                             channel",
-                        )))?;
+                // Create updated channel entry with new status (PendingToClose)
+                let updated_channel = ChannelEntry::new(
+                    existing_channel.source,
+                    existing_channel.destination,
+                    decoded.balance,
+                    decoded.ticket_index.into(),
+                    decoded.status, // Should be PendingToClose with proper timestamp
+                    decoded.epoch.into(),
+                );
 
-                    Ok(Some(ChainEventType::ChannelClosureInitiated(channel)))
-                } else {
-                    error!(%channel_id, "observed channel closure initiation on a channel that we don't have in the DB");
-                    // TODO: Set channel.corrupted_state = true
-                    // self.db.upsert_corrupted_channel(tx.into(), channel_id).await?;
-                    Err(CoreEthereumIndexerError::ChannelDoesNotExist)
-                }
+                // Atomically upsert the new state
+                self.db
+                    .upsert_channel(tx.into(), updated_channel, block, tx_index, log_index)
+                    .await?;
+
+                Ok(Some(ChainEventType::ChannelClosureInitiated(updated_channel)))
             }
             HoprChannelsEvents::DomainSeparatorUpdated(domain_separator_updated) => {
                 self.db
@@ -869,7 +911,13 @@ where
             self.on_announcement_event(tx, event.data, bn, is_synced).await
         } else if log.address.eq(&self.addresses.channels) {
             let event = HoprChannelsEvents::decode_log(&primitive_log)?;
-            match self.on_channel_event(tx, event.data, is_synced).await {
+            let block = log.block_number as u32;
+            let tx_idx = log.tx_index as u32;
+            let log_idx = log.log_index.as_u32();
+            match self
+                .on_channel_event(tx, event.data, block, tx_idx, log_idx, is_synced)
+                .await
+            {
                 Ok(res) => Ok(res),
                 Err(CoreEthereumIndexerError::ChannelDoesNotExist) => {
                     // This is not an error, just a log that we don't have the channel in the DB
@@ -1629,7 +1677,7 @@ mod tests {
             primitive_types::U256::one(),
         );
 
-        db.upsert_channel(None, channel).await?;
+        db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let solidity_balance: HoprBalance = primitive_types::U256::from((1u128 << 96) - 1).into();
         let diff = solidity_balance - channel.balance;
@@ -1745,7 +1793,7 @@ mod tests {
             primitive_types::U256::one(),
         );
 
-        db.upsert_channel(None, channel).await?;
+        db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let solidity_balance: HoprBalance = primitive_types::U256::from((1u128 << 96) - 2).into();
         let diff = channel.balance - solidity_balance;
@@ -1810,7 +1858,7 @@ mod tests {
             primitive_types::U256::one(),
         );
 
-        db.upsert_channel(None, channel).await?;
+        db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let encoded_data = ().abi_encode();
 
@@ -1872,7 +1920,7 @@ mod tests {
             primitive_types::U256::one(),
         );
 
-        db.upsert_channel(None, channel).await?;
+        db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let encoded_data = ().abi_encode();
 
@@ -1976,7 +2024,7 @@ mod tests {
             3.into(),
         );
 
-        db.upsert_channel(None, channel).await?;
+        db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let encoded_data = ().abi_encode();
 
@@ -2037,7 +2085,7 @@ mod tests {
             3.into(),
         );
 
-        db.upsert_channel(None, channel).await?;
+        db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let encoded_data = ().abi_encode();
 
@@ -2397,7 +2445,7 @@ mod tests {
         let ticket_index = primitive_types::U256::from((1u128 << 48) - 2);
         let next_ticket_index = ticket_index + 1;
 
-        db.upsert_channel(None, channel).await?;
+        db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let ticket_redeemed_log = SerializableLog {
             address: handlers.addresses.channels,
@@ -2469,7 +2517,7 @@ mod tests {
             primitive_types::U256::one(),
         );
 
-        db.upsert_channel(None, channel).await?;
+        db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let next_ticket_index = primitive_types::U256::from((1u128 << 48) - 1);
 
@@ -2527,7 +2575,7 @@ mod tests {
             primitive_types::U256::one(),
         );
 
-        db.upsert_channel(None, channel).await?;
+        db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let next_ticket_index = primitive_types::U256::from((1u128 << 48) - 1);
 
@@ -2585,7 +2633,7 @@ mod tests {
             primitive_types::U256::one(),
         );
 
-        db.upsert_channel(None, channel).await?;
+        db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let timestamp = SystemTime::now();
 

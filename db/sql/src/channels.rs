@@ -141,51 +141,6 @@ fn reconstruct_channel_entry(
     ))
 }
 
-/// API for editing [ChannelEntry] in the DB.
-pub struct ChannelEditor {
-    orig: ChannelEntry,
-    #[allow(dead_code)] // TODO(Phase 3): Will be used when channel updates are refactored for state tables
-    model: channel::ActiveModel,
-    delete: bool,
-}
-
-impl ChannelEditor {
-    /// Original channel entry **before** the edits.
-    pub fn entry(&self) -> &ChannelEntry {
-        &self.orig
-    }
-
-    /// Change the HOPR balance of the channel.
-    /// TODO(Phase 2-3): Update to work with channel_state table
-    pub fn change_balance(self, _balance: HoprBalance) -> Self {
-        panic!("Channel balance updates must now go through channel_state table - not yet implemented");
-    }
-
-    /// Change the channel status.
-    /// TODO(Phase 2-3): Update to work with channel_state table
-    pub fn change_status(self, _status: ChannelStatus) -> Self {
-        panic!("Channel status updates must now go through channel_state table - not yet implemented");
-    }
-
-    /// Change the ticket index.
-    /// TODO(Phase 2-3): Update to work with channel_state table
-    pub fn change_ticket_index(self, _index: impl Into<U256>) -> Self {
-        panic!("Channel ticket_index updates must now go through channel_state table - not yet implemented");
-    }
-
-    /// Change the channel epoch.
-    /// TODO(Phase 2-3): Update to work with channel_state table
-    pub fn change_epoch(self, _epoch: impl Into<U256>) -> Self {
-        panic!("Channel epoch updates must now go through channel_state table - not yet implemented");
-    }
-
-    /// If set, the channel will be deleted, no other edits will be done.
-    pub fn delete(mut self) -> Self {
-        self.delete = true;
-        self
-    }
-}
-
 /// Helper function to insert a channel state record and emit event
 ///
 /// This creates a new version record in channel_state table and broadcasts the change event.
@@ -271,21 +226,12 @@ async fn insert_channel_state_and_emit(
 /// Defines DB API for accessing information about HOPR payment channels.
 #[async_trait]
 pub trait BlokliDbChannelOperations {
-    /// Retrieves channel by its channel ID hash.
+    /// Retrieves channel by its channel ID hash (returns latest state).
     ///
     /// See [generate_channel_id] on how to generate a channel ID hash from source and destination [Addresses](Address).
     async fn get_channel_by_id<'a>(&'a self, tx: OptTx<'a>, id: &Hash) -> Result<Option<ChannelEntry>>;
 
-    /// Start changes to channel entry.
-    /// If the channel with the given ID exists, the [ChannelEditor] is returned.
-    /// Use [`BlokliDbChannelOperations::finish_channel_update`] to commit edits to the DB when done.
-    async fn begin_channel_update<'a>(&'a self, tx: OptTx<'a>, id: &Hash) -> Result<Option<ChannelEditor>>;
-
-    /// Commits changes of the channel to the database.
-    /// Returns the updated channel, or on deletion, the deleted channel entry.
-    async fn finish_channel_update<'a>(&'a self, tx: OptTx<'a>, editor: ChannelEditor) -> Result<Option<ChannelEntry>>;
-
-    /// Retrieves the channel by source and destination.
+    /// Retrieves the channel by source and destination (returns latest state).
     async fn get_channel_by_parties<'a>(
         &'a self,
         tx: OptTx<'a>,
@@ -294,6 +240,7 @@ pub trait BlokliDbChannelOperations {
     ) -> Result<Option<ChannelEntry>>;
 
     /// Fetches all channels that are `Incoming` to the given `target`, or `Outgoing` from the given `target`
+    /// (returns latest state for each channel).
     async fn get_channels_via<'a>(
         &'a self,
         tx: OptTx<'a>,
@@ -301,14 +248,91 @@ pub trait BlokliDbChannelOperations {
         target: &Address,
     ) -> Result<Vec<ChannelEntry>>;
 
-    /// Retrieves all channels information from the DB.
+    /// Retrieves all channels information from the DB (returns latest state for each channel).
     async fn get_all_channels<'a>(&'a self, tx: OptTx<'a>) -> Result<Vec<ChannelEntry>>;
 
-    /// Returns a stream of all channels that are `Open` or `PendingToClose` with an active grace period.s
+    /// Returns a stream of all channels that are `Open` or `PendingToClose` with an active grace period.
+    ///
+    /// **DEPRECATED**: This function needs refactoring for channel_state table.
     async fn stream_active_channels<'a>(&'a self) -> Result<BoxStream<'a, Result<ChannelEntry>>>;
 
-    /// Inserts or updates the given channel entry.
-    async fn upsert_channel<'a>(&'a self, tx: OptTx<'a>, channel_entry: ChannelEntry) -> Result<()>;
+    /// Inserts or updates the given channel entry atomically.
+    ///
+    /// If the channel doesn't exist, creates the channel identity and initial state.
+    /// If the channel exists, adds a new state record with the given temporal coordinates.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - Optional database transaction
+    /// * `channel_entry` - Channel entry containing state information
+    /// * `block` - Block number where this state was published
+    /// * `tx_index` - Transaction index within the block
+    /// * `log_index` - Log index within the transaction
+    ///
+    /// # Temporal Database Semantics
+    ///
+    /// This function follows temporal database principles:
+    /// - Channel identity is created once and never modified
+    /// - Each state change creates a new immutable record in channel_state table
+    /// - State records are identified by (channel_id, block, tx_index, log_index)
+    /// - Historical states are preserved and can be queried
+    async fn upsert_channel<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        channel_entry: ChannelEntry,
+        block: u32,
+        tx_index: u32,
+        log_index: u32,
+    ) -> Result<()>;
+
+    /// Retrieves channel state at a specific block height.
+    ///
+    /// Returns the most recent state that was published at or before the given block.
+    /// If no state exists at or before the block, returns None.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - Optional database transaction
+    /// * `id` - Channel ID hash
+    /// * `block` - Block number to query state at
+    async fn get_channel_state_at_block<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        id: &Hash,
+        block: u32,
+    ) -> Result<Option<ChannelEntry>>;
+
+    /// Retrieves complete state history for a channel.
+    ///
+    /// Returns all state records for the channel ordered chronologically by
+    /// (block, tx_index, log_index) from earliest to latest.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - Optional database transaction
+    /// * `id` - Channel ID hash
+    async fn get_channel_history<'a>(&'a self, tx: OptTx<'a>, id: &Hash) -> Result<Vec<ChannelEntry>>;
+
+    /// Marks a specific channel state as corrupted.
+    ///
+    /// Updates the corrupted_state flag for the state record identified by
+    /// the channel ID and temporal coordinates.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - Optional database transaction
+    /// * `id` - Channel ID hash
+    /// * `block` - Block number of the state to mark
+    /// * `tx_index` - Transaction index of the state to mark
+    /// * `log_index` - Log index of the state to mark
+    async fn mark_channel_state_corrupted<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        id: &Hash,
+        block: u32,
+        tx_index: u32,
+        log_index: u32,
+    ) -> Result<()>;
 }
 
 #[async_trait]
@@ -361,26 +385,6 @@ impl BlokliDbChannelOperations for BlokliDb {
                 })
             })
             .await
-    }
-
-    async fn begin_channel_update<'a>(&'a self, _tx: OptTx<'a>, _id: &Hash) -> Result<Option<ChannelEditor>> {
-        // TODO(Phase 3): Complete implementation
-        // Channel updates need to be refactored to work with state tables
-        Err(DbSqlError::LogicalError(
-            "begin_channel_update requires refactoring for channel_state table - Phase 3".to_string(),
-        ))
-    }
-
-    async fn finish_channel_update<'a>(
-        &'a self,
-        _tx: OptTx<'a>,
-        _editor: ChannelEditor,
-    ) -> Result<Option<ChannelEntry>> {
-        // TODO(Phase 3): Complete implementation
-        // Channel updates need to insert new channel_state records and emit events
-        Err(DbSqlError::LogicalError(
-            "finish_channel_update requires refactoring for channel_state table - Phase 3".to_string(),
-        ))
     }
 
     #[instrument(level = "trace", skip(self, tx), err)]
@@ -585,16 +589,23 @@ impl BlokliDbChannelOperations for BlokliDb {
         ))
     }
 
-    async fn upsert_channel<'a>(&'a self, tx: OptTx<'a>, channel_entry: ChannelEntry) -> Result<()> {
-        // TODO(Phase 3): Add position parameters (block, tx_index, log_index) to this function
-        // For now, using placeholder position (0, 0, 0) which will need to be updated
-        // when integrating with the indexer that knows the actual blockchain position
-        let (block, tx_index, log_index) = (0i64, 0i64, 0i64);
-
+    async fn upsert_channel<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        channel_entry: ChannelEntry,
+        block: u32,
+        tx_index: u32,
+        log_index: u32,
+    ) -> Result<()> {
         let channel_id_hex = channel_entry.get_id().to_hex();
         let source_addr = channel_entry.source;
         let dest_addr = channel_entry.destination;
         let db_clone = self.clone();
+
+        // Convert u32 to i64 for database storage
+        let block_i64 = block as i64;
+        let tx_index_i64 = tx_index as i64;
+        let log_index_i64 = log_index as i64;
 
         self.nest_transaction(tx)
             .await?
@@ -610,8 +621,10 @@ impl BlokliDbChannelOperations for BlokliDb {
                         .one(tx.as_ref())
                         .await?
                     {
+                        // Channel exists - we're adding a new state
                         existing_channel.id
                     } else {
+                        // Channel doesn't exist - create identity + initial state
                         let channel_model = channel::ActiveModel {
                             concrete_channel_id: Set(channel_id_hex),
                             source: Set(source_id),
@@ -623,14 +636,15 @@ impl BlokliDbChannelOperations for BlokliDb {
                     };
 
                     // Step 3: Insert channel_state record with state information
+                    // This creates a new immutable state record (never updates existing records)
                     insert_channel_state_and_emit(
                         &db_clone,
                         tx.as_ref(),
                         channel_id,
                         &channel_entry,
-                        block,
-                        tx_index,
-                        log_index,
+                        block_i64,
+                        tx_index_i64,
+                        log_index_i64,
                     )
                     .await?;
 
@@ -640,6 +654,171 @@ impl BlokliDbChannelOperations for BlokliDb {
             .await?;
 
         Ok(())
+    }
+
+    async fn get_channel_state_at_block<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        id: &Hash,
+        block: u32,
+    ) -> Result<Option<ChannelEntry>> {
+        let id_hex = id.to_hex();
+        let block_i64 = block as i64;
+
+        self.nest_transaction(tx)
+            .await?
+            .perform(|tx| {
+                Box::pin(async move {
+                    use blokli_db_entity::{
+                        channel, channel_state,
+                        prelude::{Channel, ChannelState},
+                    };
+                    use sea_orm::QueryOrder;
+
+                    // Step 1: Find channel by concrete_channel_id
+                    let channel_model = match Channel::find()
+                        .filter(channel::Column::ConcreteChannelId.eq(id_hex))
+                        .one(tx.as_ref())
+                        .await?
+                    {
+                        Some(c) => c,
+                        None => return Ok(None),
+                    };
+
+                    // Step 2: Get the most recent channel_state at or before the given block
+                    let state_model = ChannelState::find()
+                        .filter(channel_state::Column::ChannelId.eq(channel_model.id))
+                        .filter(channel_state::Column::PublishedBlock.lte(block_i64))
+                        .order_by_desc(channel_state::Column::PublishedBlock)
+                        .order_by_desc(channel_state::Column::PublishedTxIndex)
+                        .order_by_desc(channel_state::Column::PublishedLogIndex)
+                        .one(tx.as_ref())
+                        .await?;
+
+                    // If no state exists at or before this block, return None
+                    let state = match state_model {
+                        Some(s) => s,
+                        None => return Ok(None),
+                    };
+
+                    // Step 3: Lookup account addresses
+                    let (source_addr, dest_addr) =
+                        lookup_account_addresses(tx.as_ref(), channel_model.source, channel_model.destination).await?;
+
+                    // Step 4: Reconstruct ChannelEntry
+                    let entry = reconstruct_channel_entry(&channel_model, &state, source_addr, dest_addr)?;
+
+                    Ok::<_, DbSqlError>(Some(entry))
+                })
+            })
+            .await
+    }
+
+    async fn get_channel_history<'a>(&'a self, tx: OptTx<'a>, id: &Hash) -> Result<Vec<ChannelEntry>> {
+        let id_hex = id.to_hex();
+
+        self.nest_transaction(tx)
+            .await?
+            .perform(|tx| {
+                Box::pin(async move {
+                    use blokli_db_entity::{
+                        channel, channel_state,
+                        prelude::{Channel, ChannelState},
+                    };
+                    use sea_orm::QueryOrder;
+
+                    // Step 1: Find channel by concrete_channel_id
+                    let channel_model = match Channel::find()
+                        .filter(channel::Column::ConcreteChannelId.eq(id_hex))
+                        .one(tx.as_ref())
+                        .await?
+                    {
+                        Some(c) => c,
+                        None => return Ok(vec![]),
+                    };
+
+                    // Step 2: Get all channel_state records ordered chronologically
+                    let state_models = ChannelState::find()
+                        .filter(channel_state::Column::ChannelId.eq(channel_model.id))
+                        .order_by_asc(channel_state::Column::PublishedBlock)
+                        .order_by_asc(channel_state::Column::PublishedTxIndex)
+                        .order_by_asc(channel_state::Column::PublishedLogIndex)
+                        .all(tx.as_ref())
+                        .await?;
+
+                    // Step 3: Lookup account addresses once
+                    let (source_addr, dest_addr) =
+                        lookup_account_addresses(tx.as_ref(), channel_model.source, channel_model.destination).await?;
+
+                    // Step 4: Reconstruct ChannelEntry for each state
+                    let mut history = Vec::new();
+                    for state in state_models {
+                        let entry = reconstruct_channel_entry(&channel_model, &state, source_addr, dest_addr)?;
+                        history.push(entry);
+                    }
+
+                    Ok::<_, DbSqlError>(history)
+                })
+            })
+            .await
+    }
+
+    async fn mark_channel_state_corrupted<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        id: &Hash,
+        block: u32,
+        tx_index: u32,
+        log_index: u32,
+    ) -> Result<()> {
+        let id_hex = id.to_hex();
+        let id_hex_clone = id_hex.clone();
+        let id_hex_clone2 = id_hex.clone();
+        let block_i64 = block as i64;
+        let tx_index_i64 = tx_index as i64;
+        let log_index_i64 = log_index as i64;
+
+        self.nest_transaction(tx)
+            .await?
+            .perform(|tx| {
+                Box::pin(async move {
+                    use blokli_db_entity::{
+                        channel, channel_state,
+                        prelude::{Channel, ChannelState},
+                    };
+                    use sea_orm::ActiveModelTrait;
+
+                    // Step 1: Find channel by concrete_channel_id
+                    let channel_model = Channel::find()
+                        .filter(channel::Column::ConcreteChannelId.eq(&id_hex))
+                        .one(tx.as_ref())
+                        .await?
+                        .ok_or_else(|| DbSqlError::LogicalError(format!("Channel {} not found", id_hex_clone)))?;
+
+                    // Step 2: Find the specific channel_state by temporal coordinates
+                    let state_model = ChannelState::find()
+                        .filter(channel_state::Column::ChannelId.eq(channel_model.id))
+                        .filter(channel_state::Column::PublishedBlock.eq(block_i64))
+                        .filter(channel_state::Column::PublishedTxIndex.eq(tx_index_i64))
+                        .filter(channel_state::Column::PublishedLogIndex.eq(log_index_i64))
+                        .one(tx.as_ref())
+                        .await?
+                        .ok_or_else(|| {
+                            DbSqlError::LogicalError(format!(
+                                "Channel state not found for channel {} at block {}, tx_index {}, log_index {}",
+                                id_hex_clone2, block, tx_index, log_index
+                            ))
+                        })?;
+
+                    // Step 3: Update the corrupted_state flag
+                    let mut active_model: channel_state::ActiveModel = state_model.into();
+                    active_model.corrupted_state = Set(true);
+                    active_model.update(tx.as_ref()).await?;
+
+                    Ok::<_, DbSqlError>(())
+                })
+            })
+            .await
     }
 }
 
@@ -656,7 +835,7 @@ mod tests {
         channels::ChannelStatus,
         prelude::{AccountEntry, ChannelDirection, ChannelEntry},
     };
-    use hopr_primitive_types::prelude::Address;
+    use hopr_primitive_types::prelude::{Address, HoprBalance};
 
     use crate::{
         BlokliDbGeneralModelOperations, accounts::BlokliDbAccountOperations, channels::BlokliDbChannelOperations,
@@ -682,7 +861,7 @@ mod tests {
 
         let ce = ChannelEntry::new(addr, addr, 0.into(), 0_u32.into(), ChannelStatus::Open, 0_u32.into());
 
-        db.upsert_channel(None, ce).await?;
+        db.upsert_channel(None, ce, 1, 0, 0).await?;
 
         let from_db = db
             .get_channel_by_id(None, &ce.get_id())
@@ -725,7 +904,7 @@ mod tests {
 
         let ce = ChannelEntry::new(a, b, 0.into(), 0_u32.into(), ChannelStatus::Open, 0_u32.into());
 
-        db.upsert_channel(None, ce).await?;
+        db.upsert_channel(None, ce, 1, 0, 0).await?;
         let from_db = db
             .get_channel_by_parties(None, &a, &b)
             .await?
@@ -778,7 +957,7 @@ mod tests {
             0_u32.into(),
         );
 
-        db.upsert_channel(None, ce).await?;
+        db.upsert_channel(None, ce, 1, 0, 0).await?;
         let from_db = db
             .get_channels_via(None, ChannelDirection::Incoming, &Address::default())
             .await?
@@ -843,8 +1022,8 @@ mod tests {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    db_clone.upsert_channel(Some(tx), ce_1).await?;
-                    db_clone.upsert_channel(Some(tx), ce_2).await
+                    db_clone.upsert_channel(Some(tx), ce_1, 1, 0, 0).await?;
+                    db_clone.upsert_channel(Some(tx), ce_2, 1, 0, 1).await
                 })
             })
             .await?;
@@ -859,6 +1038,611 @@ mod tests {
             vec![ce_1],
             db.get_channels_via(None, ChannelDirection::Outgoing, &addr_1).await?,
             "should return outgoing channel"
+        );
+
+        Ok(())
+    }
+
+    // ============================================================================
+    // TDD Tests for Temporal Database Operations
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_upsert_channel_creates_new_with_initial_state() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let addr_1 = Address::from(random_bytes());
+        let addr_2 = Address::from(random_bytes());
+
+        // Create accounts first
+        db.insert_account(
+            None,
+            AccountEntry {
+                public_key: *OffchainKeypair::random().public(),
+                chain_addr: addr_1,
+                published_at: 1,
+                entry_type: AccountType::NotAnnounced,
+            },
+        )
+        .await?;
+        db.insert_account(
+            None,
+            AccountEntry {
+                public_key: *OffchainKeypair::random().public(),
+                chain_addr: addr_2,
+                published_at: 1,
+                entry_type: AccountType::NotAnnounced,
+            },
+        )
+        .await?;
+
+        // Create channel with initial state at block 100
+        let initial_balance = HoprBalance::from(1000u32);
+        let ce = ChannelEntry::new(
+            addr_1,
+            addr_2,
+            initial_balance,
+            0_u32.into(),
+            ChannelStatus::Open,
+            1_u32.into(),
+        );
+
+        db.upsert_channel(None, ce, 100, 0, 0).await?;
+
+        // Verify channel can be retrieved
+        let retrieved = db
+            .get_channel_by_id(None, &ce.get_id())
+            .await?
+            .expect("channel should exist");
+
+        assert_eq!(ce, retrieved, "channel should match initial state");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upsert_channel_adds_state_to_existing() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let addr_1 = Address::from(random_bytes());
+        let addr_2 = Address::from(random_bytes());
+
+        // Create accounts first
+        db.insert_account(
+            None,
+            AccountEntry {
+                public_key: *OffchainKeypair::random().public(),
+                chain_addr: addr_1,
+                published_at: 1,
+                entry_type: AccountType::NotAnnounced,
+            },
+        )
+        .await?;
+        db.insert_account(
+            None,
+            AccountEntry {
+                public_key: *OffchainKeypair::random().public(),
+                chain_addr: addr_2,
+                published_at: 1,
+                entry_type: AccountType::NotAnnounced,
+            },
+        )
+        .await?;
+
+        // Create channel with initial state at block 100
+        let initial_balance = HoprBalance::from(1000u32);
+        let ce_initial = ChannelEntry::new(
+            addr_1,
+            addr_2,
+            initial_balance,
+            0_u32.into(),
+            ChannelStatus::Open,
+            1_u32.into(),
+        );
+
+        db.upsert_channel(None, ce_initial, 100, 0, 0).await?;
+
+        // Update channel with new balance at block 200
+        let new_balance = HoprBalance::from(2000u32);
+        let ce_updated = ChannelEntry::new(
+            addr_1,
+            addr_2,
+            new_balance,
+            0_u32.into(),
+            ChannelStatus::Open,
+            1_u32.into(),
+        );
+
+        db.upsert_channel(None, ce_updated, 200, 0, 0).await?;
+
+        // Verify latest state reflects new balance
+        let latest = db
+            .get_channel_by_id(None, &ce_updated.get_id())
+            .await?
+            .expect("channel should exist");
+
+        assert_eq!(new_balance, latest.balance, "latest state should have new balance");
+
+        // Verify old state still exists at block 100
+        let historical = db
+            .get_channel_state_at_block(None, &ce_initial.get_id(), 150)
+            .await?
+            .expect("historical state should exist");
+
+        assert_eq!(
+            initial_balance, historical.balance,
+            "historical state should have original balance"
+        );
+
+        // Verify full history contains both states
+        let history = db.get_channel_history(None, &ce_initial.get_id()).await?;
+
+        assert_eq!(2, history.len(), "should have 2 state records");
+        assert_eq!(
+            initial_balance, history[0].balance,
+            "first state should have initial balance"
+        );
+        assert_eq!(new_balance, history[1].balance, "second state should have new balance");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upsert_channel_status_transitions() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let addr_1 = Address::from(random_bytes());
+        let addr_2 = Address::from(random_bytes());
+
+        // Create accounts first
+        db.insert_account(
+            None,
+            AccountEntry {
+                public_key: *OffchainKeypair::random().public(),
+                chain_addr: addr_1,
+                published_at: 1,
+                entry_type: AccountType::NotAnnounced,
+            },
+        )
+        .await?;
+        db.insert_account(
+            None,
+            AccountEntry {
+                public_key: *OffchainKeypair::random().public(),
+                chain_addr: addr_2,
+                published_at: 1,
+                entry_type: AccountType::NotAnnounced,
+            },
+        )
+        .await?;
+
+        let balance = HoprBalance::from(1000u32);
+
+        // State 1: Open at block 100
+        let ce_open = ChannelEntry::new(addr_1, addr_2, balance, 0_u32.into(), ChannelStatus::Open, 1_u32.into());
+        db.upsert_channel(None, ce_open, 100, 0, 0).await?;
+
+        // State 2: PendingToClose at block 200
+        use std::time::{Duration, SystemTime};
+        let closure_time = SystemTime::now() + Duration::from_secs(3600);
+        let ce_pending = ChannelEntry::new(
+            addr_1,
+            addr_2,
+            balance,
+            0_u32.into(),
+            ChannelStatus::PendingToClose(closure_time),
+            1_u32.into(),
+        );
+        db.upsert_channel(None, ce_pending, 200, 0, 0).await?;
+
+        // State 3: Closed at block 300
+        let ce_closed = ChannelEntry::new(
+            addr_1,
+            addr_2,
+            balance,
+            0_u32.into(),
+            ChannelStatus::Closed,
+            1_u32.into(),
+        );
+        db.upsert_channel(None, ce_closed, 300, 0, 0).await?;
+
+        // Verify full history has all 3 states
+        let history = db.get_channel_history(None, &ce_open.get_id()).await?;
+
+        assert_eq!(3, history.len(), "should have 3 state records");
+        assert_eq!(ChannelStatus::Open, history[0].status, "first state should be Open");
+        assert!(
+            matches!(history[1].status, ChannelStatus::PendingToClose(_)),
+            "second state should be PendingToClose"
+        );
+        assert_eq!(ChannelStatus::Closed, history[2].status, "third state should be Closed");
+
+        // Verify temporal queries return correct states
+        let at_block_150 = db
+            .get_channel_state_at_block(None, &ce_open.get_id(), 150)
+            .await?
+            .expect("should exist");
+        assert_eq!(ChannelStatus::Open, at_block_150.status);
+
+        let at_block_250 = db
+            .get_channel_state_at_block(None, &ce_open.get_id(), 250)
+            .await?
+            .expect("should exist");
+        assert!(matches!(at_block_250.status, ChannelStatus::PendingToClose(_)));
+
+        let at_block_350 = db
+            .get_channel_state_at_block(None, &ce_open.get_id(), 350)
+            .await?
+            .expect("should exist");
+        assert_eq!(ChannelStatus::Closed, at_block_350.status);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upsert_channel_ticket_index_updates() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let addr_1 = Address::from(random_bytes());
+        let addr_2 = Address::from(random_bytes());
+
+        // Create accounts first
+        db.insert_account(
+            None,
+            AccountEntry {
+                public_key: *OffchainKeypair::random().public(),
+                chain_addr: addr_1,
+                published_at: 1,
+                entry_type: AccountType::NotAnnounced,
+            },
+        )
+        .await?;
+        db.insert_account(
+            None,
+            AccountEntry {
+                public_key: *OffchainKeypair::random().public(),
+                chain_addr: addr_2,
+                published_at: 1,
+                entry_type: AccountType::NotAnnounced,
+            },
+        )
+        .await?;
+
+        let balance = HoprBalance::from(1000u32);
+
+        // Initial state: ticket_index = 0
+        let ce_initial = ChannelEntry::new(addr_1, addr_2, balance, 0_u32.into(), ChannelStatus::Open, 1_u32.into());
+        db.upsert_channel(None, ce_initial, 100, 0, 0).await?;
+
+        // Update: ticket_index = 5
+        let ce_updated = ChannelEntry::new(addr_1, addr_2, balance, 5_u32.into(), ChannelStatus::Open, 1_u32.into());
+        db.upsert_channel(None, ce_updated, 200, 0, 0).await?;
+
+        // Verify history preserved
+        let history = db.get_channel_history(None, &ce_initial.get_id()).await?;
+
+        assert_eq!(2, history.len(), "should have 2 state records");
+        assert_eq!(
+            0u32,
+            history[0].ticket_index.as_u32(),
+            "first state should have ticket_index 0"
+        );
+        assert_eq!(
+            5u32,
+            history[1].ticket_index.as_u32(),
+            "second state should have ticket_index 5"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_channel_state_at_block() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let addr_1 = Address::from(random_bytes());
+        let addr_2 = Address::from(random_bytes());
+
+        // Create accounts first
+        db.insert_account(
+            None,
+            AccountEntry {
+                public_key: *OffchainKeypair::random().public(),
+                chain_addr: addr_1,
+                published_at: 1,
+                entry_type: AccountType::NotAnnounced,
+            },
+        )
+        .await?;
+        db.insert_account(
+            None,
+            AccountEntry {
+                public_key: *OffchainKeypair::random().public(),
+                chain_addr: addr_2,
+                published_at: 1,
+                entry_type: AccountType::NotAnnounced,
+            },
+        )
+        .await?;
+
+        // Create multiple states at different blocks
+        let ce_block_100 = ChannelEntry::new(
+            addr_1,
+            addr_2,
+            HoprBalance::from(1000u32),
+            0_u32.into(),
+            ChannelStatus::Open,
+            1_u32.into(),
+        );
+        db.upsert_channel(None, ce_block_100, 100, 0, 0).await?;
+
+        let ce_block_200 = ChannelEntry::new(
+            addr_1,
+            addr_2,
+            HoprBalance::from(2000u32),
+            1_u32.into(),
+            ChannelStatus::Open,
+            1_u32.into(),
+        );
+        db.upsert_channel(None, ce_block_200, 200, 0, 0).await?;
+
+        let ce_block_300 = ChannelEntry::new(
+            addr_1,
+            addr_2,
+            HoprBalance::from(3000u32),
+            2_u32.into(),
+            ChannelStatus::Open,
+            1_u32.into(),
+        );
+        db.upsert_channel(None, ce_block_300, 300, 0, 0).await?;
+
+        // Query state at various blocks
+        let at_50 = db.get_channel_state_at_block(None, &ce_block_100.get_id(), 50).await?;
+        assert!(at_50.is_none(), "no state should exist before block 100");
+
+        let at_100 = db
+            .get_channel_state_at_block(None, &ce_block_100.get_id(), 100)
+            .await?
+            .expect("state should exist at block 100");
+        assert_eq!(HoprBalance::from(1000u32), at_100.balance);
+
+        let at_150 = db
+            .get_channel_state_at_block(None, &ce_block_100.get_id(), 150)
+            .await?
+            .expect("state should exist at block 150");
+        assert_eq!(
+            HoprBalance::from(1000u32),
+            at_150.balance,
+            "should return state from block 100"
+        );
+
+        let at_200 = db
+            .get_channel_state_at_block(None, &ce_block_100.get_id(), 200)
+            .await?
+            .expect("state should exist at block 200");
+        assert_eq!(HoprBalance::from(2000u32), at_200.balance);
+
+        let at_250 = db
+            .get_channel_state_at_block(None, &ce_block_100.get_id(), 250)
+            .await?
+            .expect("state should exist at block 250");
+        assert_eq!(
+            HoprBalance::from(2000u32),
+            at_250.balance,
+            "should return state from block 200"
+        );
+
+        let at_300 = db
+            .get_channel_state_at_block(None, &ce_block_100.get_id(), 300)
+            .await?
+            .expect("state should exist at block 300");
+        assert_eq!(HoprBalance::from(3000u32), at_300.balance);
+
+        let at_400 = db
+            .get_channel_state_at_block(None, &ce_block_100.get_id(), 400)
+            .await?
+            .expect("state should exist at block 400");
+        assert_eq!(
+            HoprBalance::from(3000u32),
+            at_400.balance,
+            "should return latest state from block 300"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_channel_full_history() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let addr_1 = Address::from(random_bytes());
+        let addr_2 = Address::from(random_bytes());
+
+        // Create accounts first
+        db.insert_account(
+            None,
+            AccountEntry {
+                public_key: *OffchainKeypair::random().public(),
+                chain_addr: addr_1,
+                published_at: 1,
+                entry_type: AccountType::NotAnnounced,
+            },
+        )
+        .await?;
+        db.insert_account(
+            None,
+            AccountEntry {
+                public_key: *OffchainKeypair::random().public(),
+                chain_addr: addr_2,
+                published_at: 1,
+                entry_type: AccountType::NotAnnounced,
+            },
+        )
+        .await?;
+
+        // Create 5 state changes across different blocks
+        let channel_id = ChannelEntry::new(
+            addr_1,
+            addr_2,
+            HoprBalance::from(1000u32),
+            0_u32.into(),
+            ChannelStatus::Open,
+            1_u32.into(),
+        )
+        .get_id();
+
+        for i in 0..5 {
+            let balance = HoprBalance::from((i + 1) * 1000);
+            let ce = ChannelEntry::new(addr_1, addr_2, balance, i.into(), ChannelStatus::Open, 1_u32.into());
+            db.upsert_channel(None, ce, (i + 1) * 100, 0, 0).await?;
+        }
+
+        // Get full history
+        let history = db.get_channel_history(None, &channel_id).await?;
+
+        assert_eq!(5, history.len(), "should have 5 state records");
+
+        // Verify chronological ordering
+        for (i, state) in history.iter().enumerate() {
+            let expected_balance = HoprBalance::from(((i + 1) * 1000) as u32);
+            assert_eq!(
+                expected_balance, state.balance,
+                "state {} should have correct balance",
+                i
+            );
+            assert_eq!(
+                i as u32,
+                state.ticket_index.as_u32(),
+                "state {} should have correct ticket_index",
+                i
+            );
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_mark_channel_state_corrupted() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let addr_1 = Address::from(random_bytes());
+        let addr_2 = Address::from(random_bytes());
+
+        // Create accounts first
+        db.insert_account(
+            None,
+            AccountEntry {
+                public_key: *OffchainKeypair::random().public(),
+                chain_addr: addr_1,
+                published_at: 1,
+                entry_type: AccountType::NotAnnounced,
+            },
+        )
+        .await?;
+        db.insert_account(
+            None,
+            AccountEntry {
+                public_key: *OffchainKeypair::random().public(),
+                chain_addr: addr_2,
+                published_at: 1,
+                entry_type: AccountType::NotAnnounced,
+            },
+        )
+        .await?;
+
+        // Create channel with state at block 100
+        let ce = ChannelEntry::new(
+            addr_1,
+            addr_2,
+            HoprBalance::from(1000u32),
+            0_u32.into(),
+            ChannelStatus::Open,
+            1_u32.into(),
+        );
+        db.upsert_channel(None, ce, 100, 0, 0).await?;
+
+        // Mark the state as corrupted
+        db.mark_channel_state_corrupted(None, &ce.get_id(), 100, 0, 0).await?;
+
+        // TODO: Add query to verify corrupted flag is set
+        // This requires adding a way to query the corrupted_state field
+        // For now, just verify the operation doesn't error
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_channel_upserts() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let addr_1 = Address::from(random_bytes());
+        let addr_2 = Address::from(random_bytes());
+
+        // Create accounts first
+        db.insert_account(
+            None,
+            AccountEntry {
+                public_key: *OffchainKeypair::random().public(),
+                chain_addr: addr_1,
+                published_at: 1,
+                entry_type: AccountType::NotAnnounced,
+            },
+        )
+        .await?;
+        db.insert_account(
+            None,
+            AccountEntry {
+                public_key: *OffchainKeypair::random().public(),
+                chain_addr: addr_2,
+                published_at: 1,
+                entry_type: AccountType::NotAnnounced,
+            },
+        )
+        .await?;
+
+        // Create initial channel
+        let ce_initial = ChannelEntry::new(
+            addr_1,
+            addr_2,
+            HoprBalance::from(1000u32),
+            0_u32.into(),
+            ChannelStatus::Open,
+            1_u32.into(),
+        );
+        db.upsert_channel(None, ce_initial, 100, 0, 0).await?;
+
+        // Spawn multiple concurrent updates
+        let mut handles = vec![];
+        for i in 0..10 {
+            let db_clone = db.clone();
+            let channel_id = ce_initial.get_id();
+            let handle = tokio::spawn(async move {
+                let balance = HoprBalance::from((i + 2) * 1000);
+                let ce = ChannelEntry::new(
+                    addr_1,
+                    addr_2,
+                    balance,
+                    (i + 1).into(),
+                    ChannelStatus::Open,
+                    1_u32.into(),
+                );
+                db_clone.upsert_channel(None, ce, 200 + i, 0, 0).await
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all updates to complete
+        for handle in handles {
+            handle.await??;
+        }
+
+        // Verify all states were persisted (no lost updates)
+        let history = db.get_channel_history(None, &ce_initial.get_id()).await?;
+
+        assert_eq!(
+            11,
+            history.len(),
+            "should have 11 state records (1 initial + 10 updates)"
         );
 
         Ok(())
