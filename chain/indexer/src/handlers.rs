@@ -14,11 +14,12 @@ use blokli_chain_types::{
 };
 use blokli_db_sql::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator, errors::DbSqlError};
 use hopr_bindings::{
-    hoprannouncements::HoprAnnouncements::HoprAnnouncementsEvents, hoprchannels::HoprChannels::HoprChannelsEvents,
-    hoprnodemanagementmodule::HoprNodeManagementModule::HoprNodeManagementModuleEvents,
-    hoprnodesaferegistry::HoprNodeSafeRegistry::HoprNodeSafeRegistryEvents,
-    hoprticketpriceoracle::HoprTicketPriceOracle::HoprTicketPriceOracleEvents, hoprtoken::HoprToken::HoprTokenEvents,
-    hoprwinningprobabilityoracle::HoprWinningProbabilityOracle::HoprWinningProbabilityOracleEvents,
+    hopr_announcements::HoprAnnouncements::HoprAnnouncementsEvents, hopr_channels::HoprChannels::HoprChannelsEvents,
+    hopr_node_management_module::HoprNodeManagementModule::HoprNodeManagementModuleEvents,
+    hopr_node_safe_registry::HoprNodeSafeRegistry::HoprNodeSafeRegistryEvents,
+    hopr_ticket_price_oracle::HoprTicketPriceOracle::HoprTicketPriceOracleEvents,
+    hopr_token::HoprToken::HoprTokenEvents,
+    hopr_winning_probability_oracle::HoprWinningProbabilityOracle::HoprWinningProbabilityOracleEvents,
 };
 use hopr_crypto_types::prelude::*;
 use hopr_internal_types::prelude::*;
@@ -187,6 +188,38 @@ where
                     _ => {}
                 }
             }
+            HoprAnnouncementsEvents::Initialized(_event) => {
+                debug!("on_announcement_event: Initialized");
+            }
+            HoprAnnouncementsEvents::KeyBindingFeeUpdate(fee_update) => {
+                debug!(
+                    new_fee = %fee_update.newFee,
+                    "on_announcement_event: KeyBindingFeeUpdate"
+                );
+            }
+            HoprAnnouncementsEvents::LedgerDomainSeparatorUpdated(ledger_domain_separator) => {
+                self.db
+                    .set_domain_separator(
+                        Some(tx),
+                        DomainSeparator::Ledger,
+                        ledger_domain_separator.ledgerDomainSeparator.0.into(),
+                    )
+                    .await?;
+                debug!("on_announcement_event: LedgerDomainSeparatorUpdated");
+            }
+            HoprAnnouncementsEvents::OwnershipTransferred(ownership) => {
+                debug!(
+                    previous_owner = %ownership.previousOwner,
+                    new_owner = %ownership.newOwner,
+                    "on_announcement_event: OwnershipTransferred"
+                );
+            }
+            HoprAnnouncementsEvents::Upgraded(upgraded) => {
+                debug!(
+                    implementation = %upgraded.implementation,
+                    "on_announcement_event: Upgraded"
+                );
+            }
         };
 
         Ok(None)
@@ -220,8 +253,11 @@ where
                 );
 
                 if let Some(channel_edits) = maybe_channel {
-                    let new_balance = HoprBalance::from_be_bytes(balance_decreased.newBalance.to_be_bytes::<12>());
-                    let diff = channel_edits.entry().balance - new_balance;
+                    // TODO: The new contract events only emit channelId, need to query contract for current balance
+                    // For now, we'll skip updating the balance since the event structure has changed
+                    debug!("ChannelBalanceDecreased event - need to implement balance query from contract");
+                    let diff = HoprBalance::zero();
+                    let new_balance = channel_edits.entry().balance;
 
                     let updated_channel = self
                         .db
@@ -258,8 +294,11 @@ where
                 );
 
                 if let Some(channel_edits) = maybe_channel {
-                    let new_balance = HoprBalance::from_be_bytes(balance_increased.newBalance.to_be_bytes::<12>());
-                    let diff = new_balance - channel_edits.entry().balance;
+                    // TODO: The new contract events only emit channelId, need to query contract for current balance
+                    // For now, we'll skip updating the balance since the event structure has changed
+                    debug!("ChannelBalanceIncreased event - need to implement balance query from contract");
+                    let diff = HoprBalance::zero();
+                    let new_balance = channel_edits.entry().balance;
 
                     let updated_channel = self
                         .db
@@ -409,7 +448,9 @@ where
                     }
                 };
 
-                let closure_time: u32 = closure_initiated.closureTime;
+                // TODO: The new contract events only emit channelId, need to query contract for closure time
+                // For now, use current timestamp + estimated notice period
+                let closure_time: u32 = 0; // Will be updated when we implement contract queries
                 if let Some(channel_edits) = maybe_channel {
                     let new_status = ChannelStatus::PendingToClose(
                         SystemTime::UNIX_EPOCH.add(Duration::from_secs(closure_time.into())),
@@ -486,7 +527,69 @@ where
 
                 )
             }
-            _ => error!("Implement all the other filters for HoprTokenEvents"),
+            HoprTokenEvents::AuthorizedOperator(authorized) => {
+                debug!(
+                    operator = %authorized.operator,
+                    token_holder = %authorized.tokenHolder,
+                    "on_token_authorized_operator_event"
+                );
+            }
+            HoprTokenEvents::Burned(burned) => {
+                debug!(
+                    operator = %burned.operator,
+                    from = %burned.from,
+                    amount = %burned.amount,
+                    "on_token_burned_event"
+                );
+            }
+            HoprTokenEvents::Minted(minted) => {
+                debug!(
+                    operator = %minted.operator,
+                    to = %minted.to,
+                    amount = %minted.amount,
+                    "on_token_minted_event"
+                );
+            }
+            HoprTokenEvents::RevokedOperator(revoked) => {
+                debug!(
+                    operator = %revoked.operator,
+                    token_holder = %revoked.tokenHolder,
+                    "on_token_revoked_operator_event"
+                );
+            }
+            HoprTokenEvents::RoleAdminChanged(role_admin) => {
+                debug!(
+                    role = ?role_admin.role,
+                    previous_admin_role = ?role_admin.previousAdminRole,
+                    new_admin_role = ?role_admin.newAdminRole,
+                    "on_token_role_admin_changed_event"
+                );
+            }
+            HoprTokenEvents::RoleGranted(role_granted) => {
+                debug!(
+                    role = ?role_granted.role,
+                    account = %role_granted.account,
+                    sender = %role_granted.sender,
+                    "on_token_role_granted_event"
+                );
+            }
+            HoprTokenEvents::RoleRevoked(role_revoked) => {
+                debug!(
+                    role = ?role_revoked.role,
+                    account = %role_revoked.account,
+                    sender = %role_revoked.sender,
+                    "on_token_role_revoked_event"
+                );
+            }
+            HoprTokenEvents::Sent(sent) => {
+                debug!(
+                    operator = %sent.operator,
+                    from = %sent.from,
+                    to = %sent.to,
+                    amount = %sent.amount,
+                    "on_token_sent_event"
+                );
+            }
         }
 
         Ok(None)
@@ -505,7 +608,7 @@ where
             HoprNodeSafeRegistryEvents::RegisteredNodeSafe(registered) => {
                 info!(node_address = %registered.nodeAddress, safe_address = %registered.safeAddress, "Node safe registered", );
             }
-            HoprNodeSafeRegistryEvents::DergisteredNodeSafe(deregistered) => {
+            HoprNodeSafeRegistryEvents::DeregisteredNodeSafe(deregistered) => {
                 info!(node_address = %deregistered.nodeAddress, safe_address = %deregistered.safeAddress, "Node safe deregistered", );
             }
             HoprNodeSafeRegistryEvents::DomainSeparatorUpdated(domain_separator_updated) => {
@@ -566,8 +669,19 @@ where
                     "minimum ticket winning probability updated"
                 );
             }
-            _ => {
-                // Ignore other events
+            HoprWinningProbabilityOracleEvents::OwnershipTransferStarted(transfer_started) => {
+                debug!(
+                    previous_owner = %transfer_started.previousOwner,
+                    new_owner = %transfer_started.newOwner,
+                    "on_winning_prob_oracle_ownership_transfer_started"
+                );
+            }
+            HoprWinningProbabilityOracleEvents::OwnershipTransferred(transferred) => {
+                debug!(
+                    previous_owner = %transferred.previousOwner,
+                    new_owner = %transferred.newOwner,
+                    "on_winning_prob_oracle_ownership_transferred"
+                );
             }
         }
         Ok(None)

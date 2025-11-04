@@ -4,13 +4,13 @@ use alloy::{
 };
 use constants::{ERC_1820_DEPLOYER, ERC_1820_REGISTRY_DEPLOY_CODE, ETH_VALUE_FOR_ERC1820_DEPLOYER};
 use hopr_bindings::{
-    hoprannouncements::HoprAnnouncements::{self, HoprAnnouncementsInstance},
-    hoprchannels::HoprChannels::{self, HoprChannelsInstance},
-    hoprnodesaferegistry::HoprNodeSafeRegistry::{self, HoprNodeSafeRegistryInstance},
-    hoprnodestakefactory::HoprNodeStakeFactory::{self, HoprNodeStakeFactoryInstance},
-    hoprticketpriceoracle::HoprTicketPriceOracle::{self, HoprTicketPriceOracleInstance},
-    hoprtoken::HoprToken::{self, HoprTokenInstance},
-    hoprwinningprobabilityoracle::HoprWinningProbabilityOracle::{self, HoprWinningProbabilityOracleInstance},
+    hopr_announcements::HoprAnnouncements::{self, HoprAnnouncementsInstance},
+    hopr_channels::HoprChannels::{self, HoprChannelsInstance},
+    hopr_node_safe_registry::HoprNodeSafeRegistry::{self, HoprNodeSafeRegistryInstance},
+    hopr_node_stake_factory::HoprNodeStakeFactory::{self, HoprNodeStakeFactoryInstance},
+    hopr_ticket_price_oracle::HoprTicketPriceOracle::{self, HoprTicketPriceOracleInstance},
+    hopr_token::HoprToken::{self, HoprTokenInstance},
+    hopr_winning_probability_oracle::HoprWinningProbabilityOracle::{self, HoprWinningProbabilityOracleInstance},
 };
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
 use hopr_primitive_types::primitives::Address;
@@ -95,8 +95,15 @@ where
         // Get deployer address
         let self_address = deployer.public().to_address().into();
 
-        let stake_factory = HoprNodeStakeFactory::deploy(provider.clone()).await?;
         let safe_registry = HoprNodeSafeRegistry::deploy(provider.clone()).await?;
+        let announcements = HoprAnnouncements::deploy(provider.clone()).await?;
+        let stake_factory = HoprNodeStakeFactory::deploy(
+            provider.clone(),
+            primitives::Address::ZERO, // _moduleSingletonAddress - use zero for testing
+            primitives::Address::from(announcements.address().as_ref()),
+            self_address,
+        )
+        .await?;
         let price_oracle = HoprTicketPriceOracle::deploy(
             provider.clone(),
             self_address,
@@ -115,11 +122,6 @@ where
             provider.clone(),
             primitives::Address::from(token.address().as_ref()),
             1_u32,
-            primitives::Address::from(safe_registry.address().as_ref()),
-        )
-        .await?;
-        let announcements = HoprAnnouncements::deploy(
-            provider.clone(),
             primitives::Address::from(safe_registry.address().as_ref()),
         )
         .await?;

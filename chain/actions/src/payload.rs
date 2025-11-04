@@ -21,10 +21,12 @@ use alloy::{
 };
 use blokli_chain_types::ContractAddresses;
 use hopr_bindings::{
-    hoprannouncements::HoprAnnouncements::{
-        announceCall, announceSafeCall, bindKeysAnnounceCall, bindKeysAnnounceSafeCall,
+    hopr_announcements::HoprAnnouncements::{
+        announceCall,
+        announceSafeCall,
+        // TODO: bindKeysAnnounceCall and bindKeysAnnounceSafeCall removed in new contract
     },
-    hoprchannels::{
+    hopr_channels::{
         HoprChannels::{
             RedeemableTicket as OnChainRedeemableTicket, TicketData, closeIncomingChannelCall,
             closeIncomingChannelSafeCall, finalizeOutgoingChannelClosureCall, finalizeOutgoingChannelClosureSafeCall,
@@ -33,9 +35,9 @@ use hopr_bindings::{
         },
         HoprCrypto::{CompactSignature, VRFParameters},
     },
-    hoprnodemanagementmodule::HoprNodeManagementModule::execTransactionFromModuleCall,
-    hoprnodesaferegistry::HoprNodeSafeRegistry::{deregisterNodeBySafeCall, registerSafeByNodeCall},
-    hoprtoken::HoprToken::{approveCall, transferCall},
+    hopr_node_management_module::HoprNodeManagementModule::execTransactionFromModuleCall,
+    hopr_node_safe_registry::HoprNodeSafeRegistry::{deregisterNodeBySafeCall, registerSafeByNodeCall},
+    hopr_token::HoprToken::{approveCall, transferCall},
 };
 use hopr_crypto_types::prelude::*;
 use hopr_internal_types::prelude::*;
@@ -172,23 +174,18 @@ impl PayloadGenerator<TransactionRequest> for BasicPayloadGenerator {
     }
 
     fn announce(&self, announcement: AnnouncementData) -> Result<TransactionRequest> {
-        let payload = match &announcement.key_binding {
-            Some(binding) => {
-                let serialized_signature = binding.signature.as_ref();
+        // TODO: Key binding functionality removed in new contract - bindKeysAnnounceCall no longer exists
+        // For now, only support basic announcements without key binding
+        if announcement.key_binding.is_some() {
+            return Err(InvalidArguments(
+                "Key binding not supported in new contract version".into(),
+            ));
+        }
 
-                bindKeysAnnounceCall {
-                    ed25519_sig_0: B256::from_slice(&serialized_signature[0..32]),
-                    ed25519_sig_1: B256::from_slice(&serialized_signature[32..64]),
-                    ed25519_pub_key: B256::from_slice(binding.packet_key.as_ref()),
-                    baseMultiaddr: announcement.multiaddress().to_string(),
-                }
-                .abi_encode()
-            }
-            None => announceCall {
-                baseMultiaddr: announcement.multiaddress().to_string(),
-            }
-            .abi_encode(),
-        };
+        let payload = announceCall {
+            baseMultiaddr: announcement.multiaddress().to_string(),
+        }
+        .abi_encode();
 
         let tx = TransactionRequest::default()
             .with_input(payload)
@@ -333,25 +330,19 @@ impl PayloadGenerator<TransactionRequest> for SafePayloadGenerator {
     }
 
     fn announce(&self, announcement: AnnouncementData) -> Result<TransactionRequest> {
-        let call_data = match &announcement.key_binding {
-            Some(binding) => {
-                let serialized_signature = binding.signature.as_ref();
+        // TODO: Key binding functionality removed in new contract - bindKeysAnnounceSafeCall no longer exists
+        // For now, only support basic announcements without key binding
+        if announcement.key_binding.is_some() {
+            return Err(InvalidArguments(
+                "Key binding not supported in new contract version".into(),
+            ));
+        }
 
-                bindKeysAnnounceSafeCall {
-                    selfAddress: self.me.into(),
-                    ed25519_sig_0: B256::from_slice(&serialized_signature[0..32]),
-                    ed25519_sig_1: B256::from_slice(&serialized_signature[32..64]),
-                    ed25519_pub_key: B256::from_slice(binding.packet_key.as_ref()),
-                    baseMultiaddr: announcement.multiaddress().to_string(),
-                }
-                .abi_encode()
-            }
-            None => announceSafeCall {
-                selfAddress: self.me.into(),
-                baseMultiaddr: announcement.multiaddress().to_string(),
-            }
-            .abi_encode(),
-        };
+        let call_data = announceSafeCall {
+            selfAddress: self.me.into(),
+            baseMultiaddr: announcement.multiaddress().to_string(),
+        }
+        .abi_encode();
 
         let tx = TransactionRequest::default()
             .with_input(
@@ -556,7 +547,8 @@ pub fn convert_acknowledged_ticket(off_chain: &RedeemableTicket) -> Result<OnCha
                 channelId: B256::from_slice(off_chain.verified_ticket().channel_id.as_ref()),
                 amount: U96::from_be_slice(&off_chain.verified_ticket().amount.amount().to_be_bytes()[32 - 12..]), /* Extract only the last 12 bytes (lowest 96 bits) */
                 ticketIndex: U48::from_be_slice(&off_chain.verified_ticket().index.to_be_bytes()[8 - 6..]),
-                indexOffset: off_chain.verified_ticket().index_offset,
+                // TODO: indexOffset field removed from TicketData in new contract
+                // indexOffset: off_chain.verified_ticket().index_offset,
                 epoch: U24::from_be_slice(&off_chain.verified_ticket().channel_epoch.to_be_bytes()[4 - 3..]),
                 winProb: U56::from_be_slice(&off_chain.verified_ticket().encoded_win_prob),
             },

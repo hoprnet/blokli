@@ -16,7 +16,7 @@ use futures::{
     future::AbortHandle,
     stream::{self},
 };
-use hopr_bindings::hoprtoken::HoprToken::{Approval, Transfer};
+use hopr_bindings::hopr_token::HoprToken::{Approval, Transfer};
 use hopr_crypto_types::types::Hash;
 use hopr_primitive_types::prelude::*;
 use tracing::{debug, error, info, trace};

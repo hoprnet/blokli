@@ -242,7 +242,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
         match self
             .contract_instances
             .channels
-            .noticePeriodChannelClosure()
+            .NOTICE_PERIOD_CHANNEL_CLOSURE()
             .call()
             .await
         {

@@ -14,8 +14,8 @@ use alloy::{
     sol_types::SolCall,
 };
 use hopr_bindings::{
-    hoprchannels::HoprChannels::HoprChannelsInstance,
-    hoprtoken::HoprToken::{self, HoprTokenInstance},
+    hopr_channels::HoprChannels::HoprChannelsInstance,
+    hopr_token::HoprToken::{self, HoprTokenInstance},
 };
 use hopr_crypto_types::prelude::*;
 use hopr_primitive_types::primitives::Address;
