@@ -62,8 +62,8 @@
 //! ## Basic Usage
 //!
 //! ```rust,ignore
-//! use blokli_db_sql::state_queries::*;
-//! use blokli_db_sql::events::BlockPosition;
+//! use blokli_db::state_queries::*;
+//! use blokli_db::events::BlockPosition;
 //!
 //! // Get current channel state (most recent)
 //! let current = get_current_channel_state(&db.conn(TargetDb::Index), channel_id).await?;

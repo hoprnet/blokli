@@ -13,7 +13,7 @@
 
 use async_trait::async_trait;
 use blokli_chain_types::actions::Action;
-use blokli_db_sql::accounts::BlokliDbAccountOperations;
+use blokli_db::accounts::BlokliDbAccountOperations;
 use hopr_primitive_types::prelude::{Address, HoprBalance, XDaiBalance};
 use tracing::info;
 
@@ -76,7 +76,7 @@ mod tests {
         actions::Action,
         chain_events::{ChainEventType, SignificantChainEvent},
     };
-    use blokli_db_sql::{
+    use blokli_db::{
         accounts::BlokliDbAccountOperations, api::info::DomainSeparator, db::BlokliDb, info::BlokliDbInfoOperations,
     };
     use futures::FutureExt;

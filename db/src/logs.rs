@@ -2,10 +2,6 @@
 #![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 
 use async_trait::async_trait;
-use blokli_db_api::{
-    errors::{DbError, Result},
-    logs::BlokliDbLogOperations,
-};
 use blokli_db_entity::{
     errors::DbEntityError,
     log, log_status, log_topic_info,
@@ -23,7 +19,15 @@ use sea_orm::{
 };
 use tracing::{error, trace};
 
-use crate::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, errors::DbSqlError};
+use crate::{
+    BlokliDbGeneralModelOperations, TargetDb,
+    api::{
+        errors::{DbError, Result},
+        logs::BlokliDbLogOperations,
+    },
+    db::BlokliDb,
+    errors::DbSqlError,
+};
 
 #[derive(FromQueryResult)]
 struct BlockNumber {

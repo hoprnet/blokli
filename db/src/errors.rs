@@ -69,12 +69,12 @@ pub enum DbSqlError {
     NonSpecificError(#[from] hopr_primitive_types::errors::GeneralError),
 
     #[error(transparent)]
-    ApiError(#[from] blokli_db_api::errors::DbError),
+    ApiError(#[from] crate::api::errors::DbError),
 }
 
-impl From<DbSqlError> for blokli_db_api::errors::DbError {
+impl From<DbSqlError> for crate::api::errors::DbError {
     fn from(value: DbSqlError) -> Self {
-        blokli_db_api::errors::DbError::General(value.to_string())
+        crate::api::errors::DbError::General(value.to_string())
     }
 }
 

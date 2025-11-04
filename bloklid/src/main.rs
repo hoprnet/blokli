@@ -11,7 +11,7 @@ use std::{
 use async_signal::{Signal, Signals};
 use blokli_chain_api::{BlokliChain, SignificantChainEvent};
 use blokli_chain_types::ContractAddresses;
-use blokli_db_sql::db::{BlokliDb, BlokliDbConfig};
+use blokli_db::db::{BlokliDb, BlokliDbConfig};
 use clap::{Parser, Subcommand};
 use futures::TryStreamExt;
 use hopr_chain_config::ChainNetworkConfig;

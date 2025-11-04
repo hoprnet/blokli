@@ -1,9 +1,9 @@
 [package]
-description = "Contains SQL DB functionality implementing the DB API traits to be used by other crates in the code base"
+description = "BLOKLI database implementation with SQL backend"
 edition     = "2021"
 homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
-name        = "blokli-db-sql"
+name        = "blokli-db"
 repository  = "https://github.com/hoprnet/blokli"
 version     = "0.1.0"
 
@@ -35,6 +35,7 @@ lazy_static = { workspace = true, optional = true }
 libp2p-identity = { workspace = true }
 moka = { workspace = true, features = ["sync"] }
 multiaddr = { workspace = true }
+num_enum = { workspace = true }
 ringbuffer = { workspace = true }
 sea-orm = { workspace = true }
 sea-query = { workspace = true, default-features = false, features = [
@@ -49,7 +50,6 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 validator = { workspace = true }
 
-blokli-db-api        = { workspace = true }
 blokli-db-entity     = { workspace = true }
 blokli-db-migration  = { workspace = true }
 hopr-async-runtime   = { workspace = true }

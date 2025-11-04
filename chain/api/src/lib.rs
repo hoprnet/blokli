@@ -26,7 +26,7 @@ use blokli_chain_rpc::{
 };
 use blokli_chain_types::ContractAddresses;
 pub use blokli_chain_types::chain_events::SignificantChainEvent;
-use blokli_db_sql::BlokliDbAllOperations;
+use blokli_db::BlokliDbAllOperations;
 use executors::{EthereumTransactionExecutor, RpcEthereumClient, RpcEthereumClientConfig};
 use futures::future::AbortHandle;
 use hopr_async_runtime::spawn_as_abortable;

@@ -13,7 +13,7 @@ use std::{
 use async_channel::{Receiver, Sender, bounded};
 use async_trait::async_trait;
 use blokli_chain_types::{actions::Action, chain_events::ChainEventType};
-use blokli_db_sql::info::BlokliDbInfoOperations;
+use blokli_db::info::BlokliDbInfoOperations;
 use futures::{FutureExt, StreamExt, future::Either, pin_mut};
 use hopr_async_runtime::prelude::spawn;
 use hopr_crypto_types::types::Hash;

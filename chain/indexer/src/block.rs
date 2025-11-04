@@ -9,8 +9,7 @@ use std::{
 use alloy::sol_types::SolEvent;
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::chain_events::SignificantChainEvent;
-use blokli_db_api::logs::BlokliDbLogOperations;
-use blokli_db_sql::{BlokliDbGeneralModelOperations, info::BlokliDbInfoOperations};
+use blokli_db::{BlokliDbGeneralModelOperations, api::logs::BlokliDbLogOperations, info::BlokliDbInfoOperations};
 use futures::{
     StreamExt,
     future::AbortHandle,
@@ -795,7 +794,7 @@ where
     /// # See Also
     ///
     /// - [`ReorgInfo`] - Structure containing reorg detection information
-    /// - [`get_channel_state_at`](blokli_db_sql::state_queries::get_channel_state_at) - Temporal queries that work with
+    /// - [`get_channel_state_at`](blokli_db::state_queries::get_channel_state_at) - Temporal queries that work with
     ///   corrective states
     /// - Design document section 6.5 - Detailed reorg handling specification
     async fn handle_reorg(db: &Db, reorg_info: &ReorgInfo, canonical_block: u64) -> Result<usize>
@@ -810,8 +809,8 @@ where
     {
         use std::collections::HashSet;
 
+        use blokli_db::TargetDb;
         use blokli_db_entity::{channel_state, prelude::ChannelState};
-        use blokli_db_sql::TargetDb;
         use sea_orm::{
             ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder,
         };
@@ -1080,7 +1079,7 @@ mod tests {
     use async_trait::async_trait;
     use blokli_chain_rpc::BlockWithLogs;
     use blokli_chain_types::{ContractAddresses, chain_events::ChainEventType};
-    use blokli_db_sql::{accounts::BlokliDbAccountOperations, db::BlokliDb};
+    use blokli_db::{accounts::BlokliDbAccountOperations, db::BlokliDb};
     use futures::{Stream, join};
     use hex_literal::hex;
     use hopr_crypto_types::{
@@ -1957,11 +1956,11 @@ mod tests {
 
     // Helper function to create a test channel
     async fn create_test_channel(db: &BlokliDb, channel_id: i32) -> anyhow::Result<()> {
+        use blokli_db::TargetDb;
         use blokli_db_entity::{
             account, channel,
             prelude::{Account, Channel},
         };
-        use blokli_db_sql::TargetDb;
         use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait};
 
         let conn = db.conn(TargetDb::Index);
@@ -2023,8 +2022,8 @@ mod tests {
         status: i8,
         reorg_correction: bool,
     ) -> anyhow::Result<()> {
+        use blokli_db::TargetDb;
         use blokli_db_entity::channel_state;
-        use blokli_db_sql::TargetDb;
         use sea_orm::{ActiveModelTrait, ActiveValue::Set};
 
         let conn = db.conn(TargetDb::Index);
@@ -2051,8 +2050,8 @@ mod tests {
         db: &BlokliDb,
         channel_id: i32,
     ) -> anyhow::Result<Vec<blokli_db_entity::channel_state::Model>> {
+        use blokli_db::TargetDb;
         use blokli_db_entity::{channel_state, prelude::ChannelState};
-        use blokli_db_sql::TargetDb;
         use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 
         let conn = db.conn(TargetDb::Index);
@@ -2669,7 +2668,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_temporal_query_at_reorg_boundary() -> anyhow::Result<()> {
-        use blokli_db_sql::{TargetDb, events::BlockPosition, state_queries::get_channel_state_at};
+        use blokli_db::{TargetDb, events::BlockPosition, state_queries::get_channel_state_at};
 
         // Test querying at exact reorg correction position
         let db = BlokliDb::new_in_memory().await?;

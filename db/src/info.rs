@@ -2,7 +2,6 @@
 #![allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
 
 use async_trait::async_trait;
-use blokli_db_api::info::{DomainSeparator, IndexerData};
 use blokli_db_entity::{
     chain_info, node_info,
     prelude::{Account, Announcement, ChainInfo, Channel, NodeInfo},
@@ -18,6 +17,7 @@ use tracing::trace;
 
 use crate::{
     BlokliDbGeneralModelOperations, OptTx, SINGULAR_TABLE_FIXED_ID, TargetDb,
+    api::info::{DomainSeparator, IndexerData},
     db::BlokliDb,
     errors::{DbSqlError, DbSqlError::MissingFixedTableEntry, Result},
 };

@@ -12,7 +12,7 @@ use blokli_chain_types::{
     ContractAddresses,
     chain_events::{ChainEventType, SignificantChainEvent},
 };
-use blokli_db_sql::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator, errors::DbSqlError};
+use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator, errors::DbSqlError};
 use hopr_bindings::{
     hopr_announcements::HoprAnnouncements::HoprAnnouncementsEvents, hopr_channels::HoprChannels::HoprChannelsEvents,
     hopr_node_management_module::HoprNodeManagementModule::HoprNodeManagementModuleEvents,
@@ -1042,7 +1042,7 @@ mod tests {
     use anyhow::Context;
     use blokli_chain_rpc::HoprIndexerRpcOperations;
     use blokli_chain_types::{ContractAddresses, chain_events::ChainEventType};
-    use blokli_db_sql::{
+    use blokli_db::{
         BlokliDbAllOperations,
         BlokliDbGeneralModelOperations,
         accounts::{BlokliDbAccountOperations, ChainOrPacketKey},

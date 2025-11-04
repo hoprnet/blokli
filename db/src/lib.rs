@@ -5,6 +5,7 @@
 //! and supports importing logs database snapshots for fast synchronization.
 
 pub mod accounts;
+pub mod api;
 pub mod channels;
 // TODO: Refactor to use channel.corrupted_state field
 // pub mod corrupted_channels;
@@ -18,14 +19,13 @@ pub mod state_queries;
 use std::path::PathBuf;
 
 use async_trait::async_trait;
-pub use blokli_db_api as api;
-use blokli_db_api::logs::BlokliDbLogOperations;
 use futures::future::BoxFuture;
 use sea_orm::TransactionTrait;
 pub use sea_orm::{DatabaseConnection, DatabaseTransaction};
 
 use crate::{
     accounts::BlokliDbAccountOperations,
+    api::logs::BlokliDbLogOperations,
     channels::BlokliDbChannelOperations,
     // corrupted_channels::BlokliDbCorruptedChannelOperations,
     db::BlokliDb,
@@ -157,7 +157,7 @@ pub trait BlokliDbGeneralModelOperations {
     ///
     /// ```no_run
     /// # use std::path::PathBuf;
-    /// # use blokli_db_sql::BlokliDbGeneralModelOperations;
+    /// # use blokli_db::BlokliDbGeneralModelOperations;
     /// # async fn example(db: impl BlokliDbGeneralModelOperations) -> Result<(), Box<dyn std::error::Error>> {
     /// let snapshot_dir = PathBuf::from("/tmp/snapshot_extracted");
     /// db.import_logs_db(snapshot_dir).await?;
@@ -275,11 +275,11 @@ pub trait BlokliDbAllOperations:
 
 #[doc(hidden)]
 pub mod prelude {
-    pub use blokli_db_api::logs::*;
-
     pub use super::*;
+    pub use crate::api::logs::*;
     pub use crate::{
         accounts::*,
+        api,
         channels::*, // corrupted_channels::*,
         db::*,
         errors::*,

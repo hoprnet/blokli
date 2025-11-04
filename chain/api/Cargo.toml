@@ -15,12 +15,12 @@ prometheus = [
   "blokli-chain-actions/prometheus",
   "blokli-chain-indexer/prometheus",
   "blokli-chain-rpc/prometheus",
-  "blokli-db-sql/prometheus",
+  "blokli-db/prometheus",
 ]
 runtime-tokio = [
   "blokli-chain-actions/runtime-tokio",
   "blokli-chain-indexer/runtime-tokio",
-  "blokli-db-sql/runtime-tokio",
+  "blokli-db/runtime-tokio",
   "hopr-async-runtime/runtime-tokio",
 ]
 
@@ -47,7 +47,7 @@ blokli-chain-actions = { workspace = true }
 blokli-chain-indexer = { workspace = true }
 blokli-chain-rpc     = { workspace = true }
 blokli-chain-types   = { workspace = true }
-blokli-db-sql        = { workspace = true }
+blokli-db            = { workspace = true }
 hopr-async-runtime   = { workspace = true }
 hopr-chain-config    = { workspace = true }
 hopr-crypto-types    = { workspace = true }
@@ -55,5 +55,5 @@ hopr-internal-types  = { workspace = true }
 hopr-primitive-types = { workspace = true }
 
 [dev-dependencies]
-blokli-db-sql = { workspace = true, features = ["runtime-tokio"] }
-tokio         = { workspace = true }
+blokli-db = { workspace = true, features = ["runtime-tokio"] }
+tokio     = { workspace = true }

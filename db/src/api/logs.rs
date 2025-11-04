@@ -2,7 +2,7 @@ use async_trait::async_trait;
 use hopr_crypto_types::prelude::Hash;
 use hopr_primitive_types::prelude::{Address, SerializableLog};
 
-use crate::errors::Result;
+use super::errors::Result;
 
 #[async_trait]
 pub trait BlokliDbLogOperations {

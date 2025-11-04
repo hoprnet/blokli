@@ -15,12 +15,12 @@ crate-type = ["rlib"]
 default = []
 prometheus = [
   "blokli-chain-rpc/prometheus",
-  "blokli-db-sql/prometheus",
+  "blokli-db/prometheus",
   "dep:hopr-metrics",
 ]
 runtime-tokio = [
   "blokli-chain-rpc/runtime-tokio",
-  "blokli-db-sql/runtime-tokio",
+  "blokli-db/runtime-tokio",
   "hopr-async-runtime/runtime-tokio",
 ]
 
@@ -55,9 +55,8 @@ tracing = { workspace = true }
 
 blokli-chain-rpc     = { workspace = true }
 blokli-chain-types   = { workspace = true }
-blokli-db-api        = { workspace = true }
+blokli-db            = { workspace = true }
 blokli-db-entity     = { workspace = true }
-blokli-db-sql        = { workspace = true }
 hopr-async-runtime   = { workspace = true }
 hopr-bindings        = { workspace = true }
 hopr-crypto-types    = { workspace = true }
@@ -74,5 +73,5 @@ test-log        = { workspace = true }
 tokio           = { workspace = true }
 
 blokli-chain-rpc   = { workspace = true, features = ["runtime-tokio"] }
-blokli-db-sql      = { workspace = true, features = ["runtime-tokio"] }
+blokli-db          = { workspace = true, features = ["runtime-tokio"] }
 hopr-crypto-random = { workspace = true }

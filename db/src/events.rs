@@ -161,7 +161,7 @@ impl EventBus {
     /// # Example
     ///
     /// ```rust
-    /// use blokli_db_sql::events::EventBus;
+    /// use blokli_db::events::EventBus;
     ///
     /// let event_bus = EventBus::new(1000);
     /// ```
@@ -189,7 +189,7 @@ impl EventBus {
     /// # Example
     ///
     /// ```rust
-    /// use blokli_db_sql::events::EventBus;
+    /// use blokli_db::events::EventBus;
     ///
     /// let event_bus = EventBus::new(1000);
     /// let mut subscriber1 = event_bus.subscribe();
