@@ -170,7 +170,7 @@ mod tests {
     use std::{sync::Arc, time::Duration};
 
     use anyhow::Context;
-    use blokli_chain_types::chain_events::{ChainEventType, NetworkRegistryStatus, SignificantChainEvent};
+    use blokli_chain_types::chain_events::{ChainEventType, SignificantChainEvent};
     use hex_literal::hex;
     use hopr_crypto_random::random_bytes;
     use hopr_crypto_types::types::Hash;
@@ -260,20 +260,10 @@ mod tests {
     #[tokio::test]
     async fn test_expectation_should_resolve_and_filter() -> anyhow::Result<()> {
         let tx_hash = Hash::from(random_bytes::<{ Hash::SIZE }>());
-        let sample_events = vec![
-            SignificantChainEvent {
-                tx_hash: Hash::from(random_bytes::<{ Hash::SIZE }>()),
-                event_type: ChainEventType::NodeSafeRegistered(*RANDY),
-            },
-            SignificantChainEvent {
-                tx_hash,
-                event_type: ChainEventType::NetworkRegistryUpdate(*RANDY, NetworkRegistryStatus::Denied),
-            },
-            SignificantChainEvent {
-                tx_hash,
-                event_type: ChainEventType::NetworkRegistryUpdate(*RANDY, NetworkRegistryStatus::Allowed),
-            },
-        ];
+        let sample_events = vec![SignificantChainEvent {
+            tx_hash,
+            event_type: ChainEventType::NodeSafeRegistered(*RANDY),
+        }];
 
         let exp = Arc::new(IndexerActionTracker::default());
 
@@ -289,17 +279,14 @@ mod tests {
         let resolution = timeout(
             Duration::from_secs(5),
             exp.register_expectation(IndexerExpectation::new(tx_hash, move |e| {
-                matches!(
-                    e,
-                    ChainEventType::NetworkRegistryUpdate(_, NetworkRegistryStatus::Allowed)
-                )
+                matches!(e, ChainEventType::NodeSafeRegistered(_))
             }))
             .await?,
         )
         .await?
         .context("resolver must not be cancelled")?;
 
-        assert_eq!(sample_events[2], resolution, "resolving event must be equal");
+        assert_eq!(sample_events[0], resolution, "resolving event must be equal");
 
         Ok(())
     }
@@ -313,11 +300,7 @@ mod tests {
             },
             SignificantChainEvent {
                 tx_hash: Hash::from(random_bytes::<{ Hash::SIZE }>()),
-                event_type: ChainEventType::NetworkRegistryUpdate(*RANDY, NetworkRegistryStatus::Denied),
-            },
-            SignificantChainEvent {
-                tx_hash: Hash::from(random_bytes::<{ Hash::SIZE }>()),
-                event_type: ChainEventType::NetworkRegistryUpdate(*RANDY, NetworkRegistryStatus::Allowed),
+                event_type: ChainEventType::NodeSafeRegistered(*RANDY),
             },
         ];
 
@@ -333,11 +316,8 @@ mod tests {
         });
 
         let registered_exps = vec![
-            exp.register_expectation(IndexerExpectation::new(sample_events[2].tx_hash, move |e| {
-                matches!(
-                    e,
-                    ChainEventType::NetworkRegistryUpdate(_, NetworkRegistryStatus::Allowed)
-                )
+            exp.register_expectation(IndexerExpectation::new(sample_events[1].tx_hash, move |e| {
+                matches!(e, ChainEventType::NodeSafeRegistered(_))
             }))
             .await
             .context("should register 1")?,
@@ -352,7 +332,7 @@ mod tests {
             .await?
             .context("no resolver can cancel")?;
 
-        assert_eq!(sample_events[2], resolutions[0], "resolving event 1 must be equal");
+        assert_eq!(sample_events[1], resolutions[0], "resolving event 1 must be equal");
         assert_eq!(sample_events[0], resolutions[1], "resolving event 2 must be equal");
 
         Ok(())

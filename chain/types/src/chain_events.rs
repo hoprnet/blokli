@@ -28,15 +28,6 @@ impl Display for SignificantChainEvent {
     }
 }
 
-/// Status of a node in network registry.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NetworkRegistryStatus {
-    /// Connections to the node are allowed.
-    Allowed,
-    /// Connections to the node are not allowed.
-    Denied,
-}
-
 /// Enumeration of HOPR chain events.
 #[allow(clippy::large_enum_variant)] // TODO: Refactor the large enum variant
 #[derive(Debug, Clone, PartialEq)]
@@ -65,8 +56,6 @@ pub enum ChainEventType {
     TicketRedeemed(ChannelEntry, Option<AcknowledgedTicket>),
     /// Safe has been registered with the node.
     NodeSafeRegistered(Address),
-    /// Network registry update for a node.
-    NetworkRegistryUpdate(Address, NetworkRegistryStatus),
 }
 
 impl Display for ChainEventType {
@@ -84,7 +73,6 @@ impl Display for ChainEventType {
             ChainEventType::ChannelBalanceDecreased(c, _) => write!(f, "channel decrease balance event {}", c.get_id()),
             ChainEventType::TicketRedeemed(c, _) => write!(f, "ticket redeem event in channel {}", c.get_id()),
             ChainEventType::NodeSafeRegistered(s) => write!(f, "safe registered event {s}"),
-            ChainEventType::NetworkRegistryUpdate(a, s) => write!(f, "network registry update event {a}: {s:?}"),
         }
     }
 }

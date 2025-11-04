@@ -73,7 +73,7 @@ where
         }
     }
 
-    /// Deploys testing environment (with dummy network registry proxy) via the given provider.
+    /// Deploys testing environment via the given provider.
     async fn inner_deploy_common_contracts_for_testing(provider: P, deployer: &ChainKeypair) -> ContractResult<Self> {
         {
             // Fund 1820 deployer and deploy ERC1820Registry
@@ -137,14 +137,14 @@ where
         })
     }
 
-    /// Deploys testing environment (with dummy network registry proxy) via the given provider.
+    /// Deploys testing environment via the given provider.
     pub async fn deploy_for_testing(provider: P, deployer: &ChainKeypair) -> ContractResult<Self> {
         let instances = Self::inner_deploy_common_contracts_for_testing(provider.clone(), deployer).await?;
 
         Ok(Self { ..instances })
     }
 
-    /// Deploys testing environment (with dummy network registry proxy) via the given provider.
+    /// Deploys testing environment via the given provider.
     pub async fn deploy_for_testing_with_staking_proxy(provider: P, deployer: &ChainKeypair) -> ContractResult<Self> {
         let instances = Self::inner_deploy_common_contracts_for_testing(provider.clone(), deployer).await?;
 

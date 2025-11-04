@@ -21,9 +21,6 @@ pub enum ChainActionsError {
     #[error("multiaddress has been already announced on-chain")]
     AlreadyAnnounced,
 
-    #[error("network registry does not allow accessing this peer")]
-    PeerAccessDenied,
-
     #[error("acknowledged {0} is in a wrong state for the operation")]
     WrongTicketState(String),
 

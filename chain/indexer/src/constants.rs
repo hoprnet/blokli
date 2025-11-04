@@ -13,7 +13,6 @@ pub mod topics {
             ChannelBalanceDecreased, ChannelBalanceIncreased, ChannelClosed, ChannelOpened, DomainSeparatorUpdated,
             OutgoingChannelClosureInitiated, TicketRedeemed,
         },
-        // Note: Network registry has been removed in the new contract version
         hopr_node_safe_registry_events::HoprNodeSafeRegistryEvents::{DeregisteredNodeSafe, RegisteredNodeSafe},
         hopr_ticket_price_oracle_events::HoprTicketPriceOracleEvents::TicketPriceUpdated,
         hopr_winning_probability_oracle_events::HoprWinningProbabilityOracleEvents::WinProbUpdated,
@@ -30,11 +29,6 @@ pub mod topics {
             DomainSeparatorUpdated::SIGNATURE_HASH,
             LedgerDomainSeparatorUpdated::SIGNATURE_HASH,
         ]
-    }
-
-    pub fn network_registry() -> Vec<B256> {
-        // Network registry has been removed in the new contract version
-        vec![]
     }
 
     pub fn announcement() -> Vec<B256> {
