@@ -15,7 +15,7 @@ workspace = true
 default = ["runtime-tokio"]
 runtime-tokio = [
   "blokli-chain-indexer/runtime-tokio",
-  "blokli-db-sql/runtime-tokio",
+  "blokli-db/runtime-tokio",
 ]
 
 [dependencies]
@@ -58,8 +58,8 @@ hex    = { workspace = true }
 # Internal dependencies
 blokli-api-types     = { workspace = true }
 blokli-chain-indexer = { workspace = true }
+blokli-db            = { workspace = true }
 blokli-db-entity     = { workspace = true }
-blokli-db-sql        = { workspace = true }
 
 # Logging
 tracing            = { workspace = true }

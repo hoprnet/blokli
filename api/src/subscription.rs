@@ -773,8 +773,8 @@ impl SubscriptionRoot {
 #[cfg(test)]
 mod tests {
     use blokli_chain_indexer::state::ChannelEvent;
+    use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb};
     use blokli_db_entity::codegen::prelude::*;
-    use blokli_db_sql::{BlokliDbGeneralModelOperations, db::BlokliDb};
     use sea_orm::{ActiveModelTrait, Set};
 
     use super::*;
@@ -866,13 +866,13 @@ mod tests {
         let indexer_state = IndexerState::new(10, 100);
 
         // Initialize chain_info with specific watermark
-        init_chain_info(db.conn(blokli_db_sql::TargetDb::Index), 1000, 5, 3)
+        init_chain_info(db.conn(blokli_db::TargetDb::Index), 1000, 5, 3)
             .await
             .unwrap();
 
         // Capture watermark
         let (watermark, _event_rx, _shutdown_rx) =
-            capture_watermark_synchronized(&indexer_state, db.conn(blokli_db_sql::TargetDb::Index))
+            capture_watermark_synchronized(&indexer_state, db.conn(blokli_db::TargetDb::Index))
                 .await
                 .unwrap();
 
@@ -887,13 +887,13 @@ mod tests {
         let db = BlokliDb::new_in_memory().await.unwrap();
         let indexer_state = IndexerState::new(10, 100);
 
-        init_chain_info(db.conn(blokli_db_sql::TargetDb::Index), 100, 0, 0)
+        init_chain_info(db.conn(blokli_db::TargetDb::Index), 100, 0, 0)
             .await
             .unwrap();
 
         // Capture watermark (subscribes to event bus)
         let (_watermark, mut event_rx, _shutdown_rx) =
-            capture_watermark_synchronized(&indexer_state, db.conn(blokli_db_sql::TargetDb::Index))
+            capture_watermark_synchronized(&indexer_state, db.conn(blokli_db::TargetDb::Index))
                 .await
                 .unwrap();
 
@@ -911,7 +911,7 @@ mod tests {
         let indexer_state = IndexerState::new(10, 100);
 
         // Do NOT initialize chain_info - should fail
-        let result = capture_watermark_synchronized(&indexer_state, db.conn(blokli_db_sql::TargetDb::Index)).await;
+        let result = capture_watermark_synchronized(&indexer_state, db.conn(blokli_db::TargetDb::Index)).await;
 
         assert!(result.is_err());
         assert!(result.unwrap_err().message.contains("chain_info not initialized"));
@@ -927,7 +927,7 @@ mod tests {
             log_index: 0,
         };
 
-        let result = query_channels_at_watermark(db.conn(blokli_db_sql::TargetDb::Index), &watermark, 100)
+        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark, 100)
             .await
             .unwrap();
 
@@ -940,21 +940,21 @@ mod tests {
         let db = BlokliDb::new_in_memory().await.unwrap();
 
         // Create accounts
-        let source_id = create_test_account(db.conn(blokli_db_sql::TargetDb::Index), vec![1; 20], "peer1")
+        let source_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![1; 20], "peer1")
             .await
             .unwrap();
-        let dest_id = create_test_account(db.conn(blokli_db_sql::TargetDb::Index), vec![2; 20], "peer2")
+        let dest_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![2; 20], "peer2")
             .await
             .unwrap();
 
         // Create channel
-        let channel_id = create_test_channel(db.conn(blokli_db_sql::TargetDb::Index), source_id, dest_id, "0xabc123")
+        let channel_id = create_test_channel(db.conn(blokli_db::TargetDb::Index), source_id, dest_id, "0xabc123")
             .await
             .unwrap();
 
         // Insert OPEN channel state (status = 1) at block 50
         insert_channel_state(
-            db.conn(blokli_db_sql::TargetDb::Index),
+            db.conn(blokli_db::TargetDb::Index),
             channel_id,
             50,
             0,
@@ -972,7 +972,7 @@ mod tests {
             log_index: 0,
         };
 
-        let result = query_channels_at_watermark(db.conn(blokli_db_sql::TargetDb::Index), &watermark, 100)
+        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark, 100)
             .await
             .unwrap();
 
@@ -987,21 +987,21 @@ mod tests {
         let db = BlokliDb::new_in_memory().await.unwrap();
 
         // Create accounts
-        let source_id = create_test_account(db.conn(blokli_db_sql::TargetDb::Index), vec![1; 20], "peer1")
+        let source_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![1; 20], "peer1")
             .await
             .unwrap();
-        let dest_id = create_test_account(db.conn(blokli_db_sql::TargetDb::Index), vec![2; 20], "peer2")
+        let dest_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![2; 20], "peer2")
             .await
             .unwrap();
 
         // Create channel
-        let channel_id = create_test_channel(db.conn(blokli_db_sql::TargetDb::Index), source_id, dest_id, "0xabc123")
+        let channel_id = create_test_channel(db.conn(blokli_db::TargetDb::Index), source_id, dest_id, "0xabc123")
             .await
             .unwrap();
 
         // Insert CLOSED channel state (status = 2)
         insert_channel_state(
-            db.conn(blokli_db_sql::TargetDb::Index),
+            db.conn(blokli_db::TargetDb::Index),
             channel_id,
             50,
             0,
@@ -1018,7 +1018,7 @@ mod tests {
             log_index: 0,
         };
 
-        let result = query_channels_at_watermark(db.conn(blokli_db_sql::TargetDb::Index), &watermark, 100)
+        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark, 100)
             .await
             .unwrap();
 
@@ -1031,21 +1031,21 @@ mod tests {
         let db = BlokliDb::new_in_memory().await.unwrap();
 
         // Create accounts
-        let source_id = create_test_account(db.conn(blokli_db_sql::TargetDb::Index), vec![1; 20], "peer1")
+        let source_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![1; 20], "peer1")
             .await
             .unwrap();
-        let dest_id = create_test_account(db.conn(blokli_db_sql::TargetDb::Index), vec![2; 20], "peer2")
+        let dest_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![2; 20], "peer2")
             .await
             .unwrap();
 
         // Create channel
-        let channel_id = create_test_channel(db.conn(blokli_db_sql::TargetDb::Index), source_id, dest_id, "0xabc123")
+        let channel_id = create_test_channel(db.conn(blokli_db::TargetDb::Index), source_id, dest_id, "0xabc123")
             .await
             .unwrap();
 
         // Insert channel state at block 150 (after watermark)
         insert_channel_state(
-            db.conn(blokli_db_sql::TargetDb::Index),
+            db.conn(blokli_db::TargetDb::Index),
             channel_id,
             150,
             0,
@@ -1063,7 +1063,7 @@ mod tests {
             log_index: 0,
         };
 
-        let result = query_channels_at_watermark(db.conn(blokli_db_sql::TargetDb::Index), &watermark, 100)
+        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark, 100)
             .await
             .unwrap();
 
@@ -1076,21 +1076,21 @@ mod tests {
         let db = BlokliDb::new_in_memory().await.unwrap();
 
         // Create accounts
-        let source_id = create_test_account(db.conn(blokli_db_sql::TargetDb::Index), vec![1; 20], "peer1")
+        let source_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![1; 20], "peer1")
             .await
             .unwrap();
-        let dest_id = create_test_account(db.conn(blokli_db_sql::TargetDb::Index), vec![2; 20], "peer2")
+        let dest_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![2; 20], "peer2")
             .await
             .unwrap();
 
         // Create channel
-        let channel_id = create_test_channel(db.conn(blokli_db_sql::TargetDb::Index), source_id, dest_id, "0xabc123")
+        let channel_id = create_test_channel(db.conn(blokli_db::TargetDb::Index), source_id, dest_id, "0xabc123")
             .await
             .unwrap();
 
         // Insert multiple states for same channel
         insert_channel_state(
-            db.conn(blokli_db_sql::TargetDb::Index),
+            db.conn(blokli_db::TargetDb::Index),
             channel_id,
             50,
             0,
@@ -1102,7 +1102,7 @@ mod tests {
         .unwrap();
 
         insert_channel_state(
-            db.conn(blokli_db_sql::TargetDb::Index),
+            db.conn(blokli_db::TargetDb::Index),
             channel_id,
             75,
             0,
@@ -1120,7 +1120,7 @@ mod tests {
             log_index: 0,
         };
 
-        let result = query_channels_at_watermark(db.conn(blokli_db_sql::TargetDb::Index), &watermark, 100)
+        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark, 100)
             .await
             .unwrap();
 
@@ -1137,14 +1137,14 @@ mod tests {
         // Create 5 open channels
         for i in 0..5 {
             let source_id = create_test_account(
-                db.conn(blokli_db_sql::TargetDb::Index),
+                db.conn(blokli_db::TargetDb::Index),
                 vec![i as u8; 20],
                 &format!("peer{}_src", i),
             )
             .await
             .unwrap();
             let dest_id = create_test_account(
-                db.conn(blokli_db_sql::TargetDb::Index),
+                db.conn(blokli_db::TargetDb::Index),
                 vec![(i + 10) as u8; 20],
                 &format!("peer{}_dst", i),
             )
@@ -1152,7 +1152,7 @@ mod tests {
             .unwrap();
 
             let channel_id = create_test_channel(
-                db.conn(blokli_db_sql::TargetDb::Index),
+                db.conn(blokli_db::TargetDb::Index),
                 source_id,
                 dest_id,
                 &format!("0xchannel{}", i),
@@ -1161,7 +1161,7 @@ mod tests {
             .unwrap();
 
             insert_channel_state(
-                db.conn(blokli_db_sql::TargetDb::Index),
+                db.conn(blokli_db::TargetDb::Index),
                 channel_id,
                 50,
                 0,
@@ -1180,7 +1180,7 @@ mod tests {
         };
 
         // Query with batch_size = 3
-        let result = query_channels_at_watermark(db.conn(blokli_db_sql::TargetDb::Index), &watermark, 3)
+        let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark, 3)
             .await
             .unwrap();
 
@@ -1193,21 +1193,21 @@ mod tests {
         let db = BlokliDb::new_in_memory().await.unwrap();
 
         // Create accounts
-        let source_id = create_test_account(db.conn(blokli_db_sql::TargetDb::Index), vec![1; 20], "peer1")
+        let source_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![1; 20], "peer1")
             .await
             .unwrap();
-        let dest_id = create_test_account(db.conn(blokli_db_sql::TargetDb::Index), vec![2; 20], "peer2")
+        let dest_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![2; 20], "peer2")
             .await
             .unwrap();
 
         // Create channel
-        let channel_id = create_test_channel(db.conn(blokli_db_sql::TargetDb::Index), source_id, dest_id, "0xabc123")
+        let channel_id = create_test_channel(db.conn(blokli_db::TargetDb::Index), source_id, dest_id, "0xabc123")
             .await
             .unwrap();
 
         // Insert channel state
         insert_channel_state(
-            db.conn(blokli_db_sql::TargetDb::Index),
+            db.conn(blokli_db::TargetDb::Index),
             channel_id,
             50,
             0,
@@ -1220,7 +1220,7 @@ mod tests {
 
         // Fetch channel update for event
         let event = ChannelEvent::Updated { channel_id };
-        let result = fetch_channel_update(db.conn(blokli_db_sql::TargetDb::Index), &event)
+        let result = fetch_channel_update(db.conn(blokli_db::TargetDb::Index), &event)
             .await
             .unwrap();
 
@@ -1236,7 +1236,7 @@ mod tests {
 
         // Try to fetch non-existent channel
         let event = ChannelEvent::Updated { channel_id: 999 };
-        let result = fetch_channel_update(db.conn(blokli_db_sql::TargetDb::Index), &event)
+        let result = fetch_channel_update(db.conn(blokli_db::TargetDb::Index), &event)
             .await
             .unwrap();
 
@@ -1249,17 +1249,17 @@ mod tests {
         let db = BlokliDb::new_in_memory().await.unwrap();
 
         // Create test channel
-        let source_id = create_test_account(db.conn(blokli_db_sql::TargetDb::Index), vec![1; 20], "peer1")
+        let source_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![1; 20], "peer1")
             .await
             .unwrap();
-        let dest_id = create_test_account(db.conn(blokli_db_sql::TargetDb::Index), vec![2; 20], "peer2")
+        let dest_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![2; 20], "peer2")
             .await
             .unwrap();
-        let channel_id = create_test_channel(db.conn(blokli_db_sql::TargetDb::Index), source_id, dest_id, "0xabc123")
+        let channel_id = create_test_channel(db.conn(blokli_db::TargetDb::Index), source_id, dest_id, "0xabc123")
             .await
             .unwrap();
         insert_channel_state(
-            db.conn(blokli_db_sql::TargetDb::Index),
+            db.conn(blokli_db::TargetDb::Index),
             channel_id,
             50,
             0,
@@ -1278,7 +1278,7 @@ mod tests {
         ];
 
         for event in events {
-            let result = fetch_channel_update(db.conn(blokli_db_sql::TargetDb::Index), &event)
+            let result = fetch_channel_update(db.conn(blokli_db::TargetDb::Index), &event)
                 .await
                 .unwrap();
             assert!(result.is_some(), "Failed for event: {:?}", event);
@@ -1311,14 +1311,11 @@ mod tests {
             last_changed_tx_index: Set(0),
             last_changed_log_index: Set(0),
         };
-        balance_model
-            .insert(db.conn(blokli_db_sql::TargetDb::Index))
-            .await
-            .unwrap();
+        balance_model.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
 
         // Fetch balance using hex string address
         let address = "0x0101010101010101010101010101010101010101";
-        let result = SubscriptionRoot::fetch_native_balance(db.conn(blokli_db_sql::TargetDb::Index), address)
+        let result = SubscriptionRoot::fetch_native_balance(db.conn(blokli_db::TargetDb::Index), address)
             .await
             .unwrap();
 
@@ -1331,7 +1328,7 @@ mod tests {
 
         // Try to fetch non-existent balance
         let address = "0x0000000000000000000000000000000000000000";
-        let result = SubscriptionRoot::fetch_native_balance(db.conn(blokli_db_sql::TargetDb::Index), address)
+        let result = SubscriptionRoot::fetch_native_balance(db.conn(blokli_db::TargetDb::Index), address)
             .await
             .unwrap();
 
@@ -1351,14 +1348,11 @@ mod tests {
             last_changed_tx_index: Set(0),
             last_changed_log_index: Set(0),
         };
-        balance_model
-            .insert(db.conn(blokli_db_sql::TargetDb::Index))
-            .await
-            .unwrap();
+        balance_model.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
 
         // Fetch balance
         let address = "0x0202020202020202020202020202020202020202";
-        let result = SubscriptionRoot::fetch_hopr_balance(db.conn(blokli_db_sql::TargetDb::Index), address)
+        let result = SubscriptionRoot::fetch_hopr_balance(db.conn(blokli_db::TargetDb::Index), address)
             .await
             .unwrap();
 
@@ -1370,7 +1364,7 @@ mod tests {
         let db = BlokliDb::new_in_memory().await.unwrap();
 
         let address = "0x0000000000000000000000000000000000000000";
-        let result = SubscriptionRoot::fetch_hopr_balance(db.conn(blokli_db_sql::TargetDb::Index), address)
+        let result = SubscriptionRoot::fetch_hopr_balance(db.conn(blokli_db::TargetDb::Index), address)
             .await
             .unwrap();
 
@@ -1382,19 +1376,19 @@ mod tests {
         let db = BlokliDb::new_in_memory().await.unwrap();
 
         // Create 3 accounts
-        let id1 = create_test_account(db.conn(blokli_db_sql::TargetDb::Index), vec![1; 20], "peer1")
+        let id1 = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![1; 20], "peer1")
             .await
             .unwrap();
-        let _id2 = create_test_account(db.conn(blokli_db_sql::TargetDb::Index), vec![2; 20], "peer2")
+        let _id2 = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![2; 20], "peer2")
             .await
             .unwrap();
-        let _id3 = create_test_account(db.conn(blokli_db_sql::TargetDb::Index), vec![3; 20], "peer3")
+        let _id3 = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![3; 20], "peer3")
             .await
             .unwrap();
 
         // Filter by specific keyid
         let result =
-            SubscriptionRoot::fetch_filtered_accounts(db.conn(blokli_db_sql::TargetDb::Index), Some(id1), None, None)
+            SubscriptionRoot::fetch_filtered_accounts(db.conn(blokli_db::TargetDb::Index), Some(id1), None, None)
                 .await
                 .unwrap();
 
@@ -1406,16 +1400,16 @@ mod tests {
     async fn test_fetch_filtered_accounts_filters_by_packet_key() {
         let db = BlokliDb::new_in_memory().await.unwrap();
 
-        create_test_account(db.conn(blokli_db_sql::TargetDb::Index), vec![1; 20], "peer1")
+        create_test_account(db.conn(blokli_db::TargetDb::Index), vec![1; 20], "peer1")
             .await
             .unwrap();
-        create_test_account(db.conn(blokli_db_sql::TargetDb::Index), vec![2; 20], "peer2")
+        create_test_account(db.conn(blokli_db::TargetDb::Index), vec![2; 20], "peer2")
             .await
             .unwrap();
 
         // Filter by packet_key
         let result = SubscriptionRoot::fetch_filtered_accounts(
-            db.conn(blokli_db_sql::TargetDb::Index),
+            db.conn(blokli_db::TargetDb::Index),
             None,
             Some("peer1".to_string()),
             None,
@@ -1431,21 +1425,20 @@ mod tests {
     async fn test_fetch_filtered_accounts_returns_all_when_no_filters() {
         let db = BlokliDb::new_in_memory().await.unwrap();
 
-        create_test_account(db.conn(blokli_db_sql::TargetDb::Index), vec![1; 20], "peer1")
+        create_test_account(db.conn(blokli_db::TargetDb::Index), vec![1; 20], "peer1")
             .await
             .unwrap();
-        create_test_account(db.conn(blokli_db_sql::TargetDb::Index), vec![2; 20], "peer2")
+        create_test_account(db.conn(blokli_db::TargetDb::Index), vec![2; 20], "peer2")
             .await
             .unwrap();
-        create_test_account(db.conn(blokli_db_sql::TargetDb::Index), vec![3; 20], "peer3")
+        create_test_account(db.conn(blokli_db::TargetDb::Index), vec![3; 20], "peer3")
             .await
             .unwrap();
 
         // No filters - should return all
-        let result =
-            SubscriptionRoot::fetch_filtered_accounts(db.conn(blokli_db_sql::TargetDb::Index), None, None, None)
-                .await
-                .unwrap();
+        let result = SubscriptionRoot::fetch_filtered_accounts(db.conn(blokli_db::TargetDb::Index), None, None, None)
+            .await
+            .unwrap();
 
         assert_eq!(result.len(), 3);
     }
@@ -1456,7 +1449,7 @@ mod tests {
 
         // Status filtering is not yet implemented
         let result = SubscriptionRoot::fetch_filtered_channels(
-            db.conn(blokli_db_sql::TargetDb::Index),
+            db.conn(blokli_db::TargetDb::Index),
             None,
             None,
             None,

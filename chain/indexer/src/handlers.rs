@@ -169,6 +169,8 @@ where
         tx: &OpenTransaction,
         event: HoprAnnouncementsEvents,
         block_number: u32,
+        tx_index: u32,
+        log_index: u32,
         _is_synced: bool,
     ) -> Result<Option<ChainEventType>> {
         #[cfg(all(feature = "prometheus", not(test)))]
@@ -224,14 +226,14 @@ where
                     Ok(binding) => {
                         match self
                             .db
-                            .insert_account(
+                            .upsert_account(
                                 Some(tx),
-                                AccountEntry {
-                                    public_key: binding.packet_key,
-                                    chain_addr: binding.chain_key,
-                                    entry_type: AccountType::NotAnnounced,
-                                    published_at: block_number,
-                                },
+                                binding.chain_key,
+                                binding.packet_key,
+                                None, // safe_address is None for key bindings
+                                block_number,
+                                tx_index,
+                                log_index,
                             )
                             .await
                         {
@@ -907,8 +909,11 @@ where
 
         if log.address.eq(&self.addresses.announcements) {
             let bn = log.block_number as u32;
+            let tx_idx = log.tx_index as u32;
+            let log_idx = log.log_index.as_u32();
             let event = HoprAnnouncementsEvents::decode_log(&primitive_log)?;
-            self.on_announcement_event(tx, event.data, bn, is_synced).await
+            self.on_announcement_event(tx, event.data, bn, tx_idx, log_idx, is_synced)
+                .await
         } else if log.address.eq(&self.addresses.channels) {
             let event = HoprChannelsEvents::decode_log(&primitive_log)?;
             let block = log.block_number as u32;
@@ -1226,13 +1231,17 @@ mod tests {
         let handlers = init_handlers(clonable_rpc_operations, db.clone());
 
         // Assume that there is a keybinding
-        let account_entry = AccountEntry {
-            public_key: *SELF_PRIV_KEY.public(),
-            chain_addr: *SELF_CHAIN_ADDRESS,
-            entry_type: AccountType::NotAnnounced,
-            published_at: 1,
-        };
-        db.insert_account(None, account_entry.clone()).await?;
+        // Create account using upsert_account
+        db.upsert_account(
+            None,
+            *SELF_CHAIN_ADDRESS,
+            *SELF_PRIV_KEY.public(),
+            None, // no safe_address
+            1,    // block
+            0,    // tx_index
+            0,    // log_index
+        )
+        .await?;
 
         let test_multiaddr_empty: Multiaddr = "".parse()?;
 
@@ -1422,17 +1431,21 @@ mod tests {
         let test_multiaddr: Multiaddr = "/ip4/1.2.3.4/tcp/56".parse()?;
 
         // Assume that there is a keybinding and an address announcement
-        let announced_account_entry = AccountEntry {
-            public_key: *SELF_PRIV_KEY.public(),
-            chain_addr: *SELF_CHAIN_ADDRESS,
-            entry_type: AccountType::Announced {
-                multiaddr: test_multiaddr,
-                updated_block: 0,
-            },
-            published_at: 1,
-        };
+        // Create account using upsert_account
+        db.upsert_account(
+            None,
+            *SELF_CHAIN_ADDRESS,
+            *SELF_PRIV_KEY.public(),
+            None, // no safe_address
+            1,    // block
+            0,    // tx_index
+            0,    // log_index
+        )
+        .await?;
 
-        db.insert_account(None, announced_account_entry).await?;
+        // Add the announcement
+        db.insert_announcement(None, *SELF_CHAIN_ADDRESS, test_multiaddr, 0)
+            .await?;
 
         let encoded_data = (AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref()),).abi_encode();
 

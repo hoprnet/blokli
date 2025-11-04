@@ -831,9 +831,8 @@ mod tests {
         prelude::Keypair,
     };
     use hopr_internal_types::{
-        account::AccountType,
         channels::ChannelStatus,
-        prelude::{AccountEntry, ChannelDirection, ChannelEntry},
+        prelude::{ChannelDirection, ChannelEntry},
     };
     use hopr_primitive_types::prelude::{Address, HoprBalance};
 
@@ -848,16 +847,8 @@ mod tests {
 
         // Create accounts first (required before channels can be created)
         let addr = Address::default();
-        db.insert_account(
-            None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: addr,
-                published_at: 1,
-                entry_type: AccountType::NotAnnounced,
-            },
-        )
-        .await?;
+        let packet_key = *OffchainKeypair::random().public();
+        db.upsert_account(None, addr, packet_key, None, 1, 0, 0).await?;
 
         let ce = ChannelEntry::new(addr, addr, 0.into(), 0_u32.into(), ChannelStatus::Open, 0_u32.into());
 
@@ -881,26 +872,10 @@ mod tests {
         let b = Address::from(random_bytes());
 
         // Create accounts first (required before channels can be created)
-        db.insert_account(
-            None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: a,
-                published_at: 1,
-                entry_type: AccountType::NotAnnounced,
-            },
-        )
-        .await?;
-        db.insert_account(
-            None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: b,
-                published_at: 2,
-                entry_type: AccountType::NotAnnounced,
-            },
-        )
-        .await?;
+        let packet_key_a = *OffchainKeypair::random().public();
+        let packet_key_b = *OffchainKeypair::random().public();
+        db.upsert_account(None, a, packet_key_a, None, 1, 0, 0).await?;
+        db.upsert_account(None, b, packet_key_b, None, 2, 0, 0).await?;
 
         let ce = ChannelEntry::new(a, b, 0.into(), 0_u32.into(), ChannelStatus::Open, 0_u32.into());
 
@@ -937,14 +912,15 @@ mod tests {
         let expected_destination = Address::default();
 
         // Create account first (required before channels can be created)
-        db.insert_account(
+        let packet_key_expected_destination = *OffchainKeypair::random().public();
+        db.upsert_account(
             None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: expected_destination,
-                published_at: 1,
-                entry_type: AccountType::NotAnnounced,
-            },
+            expected_destination,
+            packet_key_expected_destination,
+            None,
+            1,
+            0,
+            0,
         )
         .await?;
 
@@ -978,26 +954,12 @@ mod tests {
         let db = BlokliDb::new_in_memory().await?;
 
         // Create accounts first (required before channels can be created)
-        db.insert_account(
-            None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: addr_1,
-                published_at: 1,
-                entry_type: AccountType::NotAnnounced,
-            },
-        )
-        .await?;
-        db.insert_account(
-            None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: addr_2,
-                published_at: 2,
-                entry_type: AccountType::NotAnnounced,
-            },
-        )
-        .await?;
+        let packet_key_addr_1 = *OffchainKeypair::random().public();
+        db.upsert_account(None, addr_1, packet_key_addr_1, None, 1, 0, 0)
+            .await?;
+        let packet_key_addr_2 = *OffchainKeypair::random().public();
+        db.upsert_account(None, addr_2, packet_key_addr_2, None, 2, 0, 0)
+            .await?;
 
         let ce_1 = ChannelEntry::new(
             addr_1,
@@ -1055,26 +1017,12 @@ mod tests {
         let addr_2 = Address::from(random_bytes());
 
         // Create accounts first
-        db.insert_account(
-            None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: addr_1,
-                published_at: 1,
-                entry_type: AccountType::NotAnnounced,
-            },
-        )
-        .await?;
-        db.insert_account(
-            None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: addr_2,
-                published_at: 1,
-                entry_type: AccountType::NotAnnounced,
-            },
-        )
-        .await?;
+        let packet_key_addr_1 = *OffchainKeypair::random().public();
+        db.upsert_account(None, addr_1, packet_key_addr_1, None, 1, 0, 0)
+            .await?;
+        let packet_key_addr_2 = *OffchainKeypair::random().public();
+        db.upsert_account(None, addr_2, packet_key_addr_2, None, 1, 0, 0)
+            .await?;
 
         // Create channel with initial state at block 100
         let initial_balance = HoprBalance::from(1000u32);
@@ -1108,26 +1056,12 @@ mod tests {
         let addr_2 = Address::from(random_bytes());
 
         // Create accounts first
-        db.insert_account(
-            None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: addr_1,
-                published_at: 1,
-                entry_type: AccountType::NotAnnounced,
-            },
-        )
-        .await?;
-        db.insert_account(
-            None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: addr_2,
-                published_at: 1,
-                entry_type: AccountType::NotAnnounced,
-            },
-        )
-        .await?;
+        let packet_key_addr_1 = *OffchainKeypair::random().public();
+        db.upsert_account(None, addr_1, packet_key_addr_1, None, 1, 0, 0)
+            .await?;
+        let packet_key_addr_2 = *OffchainKeypair::random().public();
+        db.upsert_account(None, addr_2, packet_key_addr_2, None, 1, 0, 0)
+            .await?;
 
         // Create channel with initial state at block 100
         let initial_balance = HoprBalance::from(1000u32);
@@ -1195,26 +1129,12 @@ mod tests {
         let addr_2 = Address::from(random_bytes());
 
         // Create accounts first
-        db.insert_account(
-            None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: addr_1,
-                published_at: 1,
-                entry_type: AccountType::NotAnnounced,
-            },
-        )
-        .await?;
-        db.insert_account(
-            None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: addr_2,
-                published_at: 1,
-                entry_type: AccountType::NotAnnounced,
-            },
-        )
-        .await?;
+        let packet_key_addr_1 = *OffchainKeypair::random().public();
+        db.upsert_account(None, addr_1, packet_key_addr_1, None, 1, 0, 0)
+            .await?;
+        let packet_key_addr_2 = *OffchainKeypair::random().public();
+        db.upsert_account(None, addr_2, packet_key_addr_2, None, 1, 0, 0)
+            .await?;
 
         let balance = HoprBalance::from(1000u32);
 
@@ -1287,26 +1207,12 @@ mod tests {
         let addr_2 = Address::from(random_bytes());
 
         // Create accounts first
-        db.insert_account(
-            None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: addr_1,
-                published_at: 1,
-                entry_type: AccountType::NotAnnounced,
-            },
-        )
-        .await?;
-        db.insert_account(
-            None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: addr_2,
-                published_at: 1,
-                entry_type: AccountType::NotAnnounced,
-            },
-        )
-        .await?;
+        let packet_key_addr_1 = *OffchainKeypair::random().public();
+        db.upsert_account(None, addr_1, packet_key_addr_1, None, 1, 0, 0)
+            .await?;
+        let packet_key_addr_2 = *OffchainKeypair::random().public();
+        db.upsert_account(None, addr_2, packet_key_addr_2, None, 1, 0, 0)
+            .await?;
 
         let balance = HoprBalance::from(1000u32);
 
@@ -1344,26 +1250,12 @@ mod tests {
         let addr_2 = Address::from(random_bytes());
 
         // Create accounts first
-        db.insert_account(
-            None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: addr_1,
-                published_at: 1,
-                entry_type: AccountType::NotAnnounced,
-            },
-        )
-        .await?;
-        db.insert_account(
-            None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: addr_2,
-                published_at: 1,
-                entry_type: AccountType::NotAnnounced,
-            },
-        )
-        .await?;
+        let packet_key_addr_1 = *OffchainKeypair::random().public();
+        db.upsert_account(None, addr_1, packet_key_addr_1, None, 1, 0, 0)
+            .await?;
+        let packet_key_addr_2 = *OffchainKeypair::random().public();
+        db.upsert_account(None, addr_2, packet_key_addr_2, None, 1, 0, 0)
+            .await?;
 
         // Create multiple states at different blocks
         let ce_block_100 = ChannelEntry::new(
@@ -1459,26 +1351,12 @@ mod tests {
         let addr_2 = Address::from(random_bytes());
 
         // Create accounts first
-        db.insert_account(
-            None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: addr_1,
-                published_at: 1,
-                entry_type: AccountType::NotAnnounced,
-            },
-        )
-        .await?;
-        db.insert_account(
-            None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: addr_2,
-                published_at: 1,
-                entry_type: AccountType::NotAnnounced,
-            },
-        )
-        .await?;
+        let packet_key_addr_1 = *OffchainKeypair::random().public();
+        db.upsert_account(None, addr_1, packet_key_addr_1, None, 1, 0, 0)
+            .await?;
+        let packet_key_addr_2 = *OffchainKeypair::random().public();
+        db.upsert_account(None, addr_2, packet_key_addr_2, None, 1, 0, 0)
+            .await?;
 
         // Create 5 state changes across different blocks
         let channel_id = ChannelEntry::new(
@@ -1529,26 +1407,12 @@ mod tests {
         let addr_2 = Address::from(random_bytes());
 
         // Create accounts first
-        db.insert_account(
-            None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: addr_1,
-                published_at: 1,
-                entry_type: AccountType::NotAnnounced,
-            },
-        )
-        .await?;
-        db.insert_account(
-            None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: addr_2,
-                published_at: 1,
-                entry_type: AccountType::NotAnnounced,
-            },
-        )
-        .await?;
+        let packet_key_addr_1 = *OffchainKeypair::random().public();
+        db.upsert_account(None, addr_1, packet_key_addr_1, None, 1, 0, 0)
+            .await?;
+        let packet_key_addr_2 = *OffchainKeypair::random().public();
+        db.upsert_account(None, addr_2, packet_key_addr_2, None, 1, 0, 0)
+            .await?;
 
         // Create channel with state at block 100
         let ce = ChannelEntry::new(
@@ -1579,26 +1443,12 @@ mod tests {
         let addr_2 = Address::from(random_bytes());
 
         // Create accounts first
-        db.insert_account(
-            None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: addr_1,
-                published_at: 1,
-                entry_type: AccountType::NotAnnounced,
-            },
-        )
-        .await?;
-        db.insert_account(
-            None,
-            AccountEntry {
-                public_key: *OffchainKeypair::random().public(),
-                chain_addr: addr_2,
-                published_at: 1,
-                entry_type: AccountType::NotAnnounced,
-            },
-        )
-        .await?;
+        let packet_key_addr_1 = *OffchainKeypair::random().public();
+        db.upsert_account(None, addr_1, packet_key_addr_1, None, 1, 0, 0)
+            .await?;
+        let packet_key_addr_2 = *OffchainKeypair::random().public();
+        db.upsert_account(None, addr_2, packet_key_addr_2, None, 1, 0, 0)
+            .await?;
 
         // Create initial channel
         let ce_initial = ChannelEntry::new(

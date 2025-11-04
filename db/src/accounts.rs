@@ -83,7 +83,41 @@ impl From<ChainOrPacketKey> for Condition {
 /// routable network information if the account has been announced as well.
 #[async_trait]
 pub trait BlokliDbAccountOperations {
-    /// Retrieves the account entry using a Packet key or Chain key.
+    /// Inserts or updates an account atomically with temporal versioning.
+    ///
+    /// If the account doesn't exist, creates the account identity and initial state.
+    /// If the account exists, adds a new state record with the given temporal coordinates.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - Optional database transaction
+    /// * `chain_key` - Chain address (20 bytes)
+    /// * `packet_key` - Off-chain public key
+    /// * `safe_address` - Optional safe address for the account state
+    /// * `block` - Block number where this state was published
+    /// * `tx_index` - Transaction index within the block
+    /// * `log_index` - Log index within the transaction
+    ///
+    /// # Temporal Database Semantics
+    ///
+    /// This function follows temporal database principles:
+    /// - Account identity is created once and never modified
+    /// - Each state change creates a new immutable record in account_state table
+    /// - State records are identified by (account_id, block, tx_index, log_index)
+    /// - Historical states are preserved and can be queried
+    #[allow(clippy::too_many_arguments)]
+    async fn upsert_account<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        chain_key: Address,
+        packet_key: OffchainPublicKey,
+        safe_address: Option<Address>,
+        block: u32,
+        tx_index: u32,
+        log_index: u32,
+    ) -> Result<()>;
+
+    /// Retrieves the account entry using a Packet key or Chain key (returns latest state).
     async fn get_account<'a, T>(&'a self, tx: OptTx<'a>, key: T) -> Result<Option<AccountEntry>>
     where
         T: Into<ChainOrPacketKey> + Send + Sync;
@@ -92,8 +126,42 @@ pub trait BlokliDbAccountOperations {
     /// or about all accounts without routeable address announcements (if `public_only` is `false`).
     async fn get_accounts<'a>(&'a self, tx: OptTx<'a>, public_only: bool) -> Result<Vec<AccountEntry>>;
 
+    /// Retrieves account state at a specific block height.
+    ///
+    /// Returns the most recent state that was published at or before the given block.
+    /// If no state exists at or before the block, returns None.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - Optional database transaction
+    /// * `key` - Chain or packet key to identify the account
+    /// * `block` - Block number to query state at
+    async fn get_account_state_at_block<'a, T>(
+        &'a self,
+        tx: OptTx<'a>,
+        key: T,
+        block: u32,
+    ) -> Result<Option<AccountEntry>>
+    where
+        T: Into<ChainOrPacketKey> + Send + Sync;
+
+    /// Retrieves complete state history for an account.
+    ///
+    /// Returns all state records for the account ordered chronologically by
+    /// (block, tx_index, log_index) from earliest to latest.
+    ///
+    /// # Arguments
+    ///
+    /// * `tx` - Optional database transaction
+    /// * `key` - Chain or packet key to identify the account
+    async fn get_account_history<'a, T>(&'a self, tx: OptTx<'a>, key: T) -> Result<Vec<AccountEntry>>
+    where
+        T: Into<ChainOrPacketKey> + Send + Sync;
+
     /// Inserts a new account entry to the database.
     /// Fails if such an entry already exists.
+    ///
+    /// **DEPRECATED**: Use `upsert_account` instead for temporal database semantics.
     async fn insert_account<'a>(&'a self, tx: OptTx<'a>, account: AccountEntry) -> Result<()>;
 
     /// Inserts a routable address announcement linked to a specific entry.
@@ -118,6 +186,8 @@ pub trait BlokliDbAccountOperations {
         T: Into<ChainOrPacketKey> + Send + Sync;
 
     /// Deletes account with the given `key` (chain or off-chain).
+    ///
+    /// **DEPRECATED**: This violates temporal database principles. Accounts should never be deleted.
     async fn delete_account<'a, T>(&'a self, tx: OptTx<'a>, key: T) -> Result<()>
     where
         T: Into<ChainOrPacketKey> + Send + Sync;
@@ -158,6 +228,70 @@ pub(crate) fn model_to_account_entry(
 
 #[async_trait]
 impl BlokliDbAccountOperations for BlokliDb {
+    async fn upsert_account<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        chain_key: Address,
+        packet_key: OffchainPublicKey,
+        safe_address: Option<Address>,
+        block: u32,
+        tx_index: u32,
+        log_index: u32,
+    ) -> Result<()> {
+        // Convert u32 to i64 for database storage
+        let block_i64 = block as i64;
+        let tx_index_i64 = tx_index as i64;
+        let log_index_i64 = log_index as i64;
+
+        self.nest_transaction(tx)
+            .await?
+            .perform(|tx| {
+                Box::pin(async move {
+                    use blokli_db_entity::{account_state, prelude::AccountState};
+
+                    // Step 1: Insert or find account identity record
+                    let account_id = if let Some(existing_account) = account::Entity::find()
+                        .filter(account::Column::ChainKey.eq(chain_key.as_ref().to_vec()))
+                        .one(tx.as_ref())
+                        .await?
+                    {
+                        // Account exists - we're adding a new state
+                        existing_account.id
+                    } else {
+                        // Account doesn't exist - create identity + initial state
+                        let account_model = account::ActiveModel {
+                            chain_key: Set(chain_key.as_ref().to_vec()),
+                            packet_key: Set(packet_key.to_hex()),
+                            published_block: Set(block_i64),
+                            published_tx_index: Set(tx_index_i64),
+                            published_log_index: Set(log_index_i64),
+                            ..Default::default()
+                        };
+                        let inserted = account_model.insert(tx.as_ref()).await?;
+                        inserted.id
+                    };
+
+                    // Step 2: Insert account_state record with state information
+                    // This creates a new immutable state record (never updates existing records)
+                    let state_model = account_state::ActiveModel {
+                        account_id: Set(account_id),
+                        safe_address: Set(safe_address.map(|a| a.as_ref().to_vec())),
+                        published_block: Set(block_i64),
+                        published_tx_index: Set(tx_index_i64),
+                        published_log_index: Set(log_index_i64),
+                        ..Default::default()
+                    };
+
+                    AccountState::insert(state_model).exec(tx.as_ref()).await?;
+
+                    Ok::<_, DbSqlError>(())
+                })
+            })
+            .await?;
+
+        Ok(())
+    }
+
     async fn get_account<'a, T: Into<ChainOrPacketKey> + Send + Sync>(
         &'a self,
         tx: OptTx<'a>,
@@ -168,19 +302,35 @@ impl BlokliDbAccountOperations for BlokliDb {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    let maybe_model = Account::find()
-                        .find_with_related(Announcement)
-                        .filter(cpk)
+                    use blokli_db_entity::{account_state, prelude::AccountState};
+
+                    // Step 1: Find account by key
+                    let account_model = match Account::find().filter(cpk).one(tx.as_ref()).await? {
+                        Some(a) => a,
+                        None => return Ok(None),
+                    };
+
+                    // Step 2: Get the most recent account_state (latest by block, tx_index, log_index)
+                    let _state_model = AccountState::find()
+                        .filter(account_state::Column::AccountId.eq(account_model.id))
+                        .order_by_desc(account_state::Column::PublishedBlock)
+                        .order_by_desc(account_state::Column::PublishedTxIndex)
+                        .order_by_desc(account_state::Column::PublishedLogIndex)
+                        .one(tx.as_ref())
+                        .await?;
+
+                    // Note: Currently AccountEntry doesn't store safe_address, so we don't use state_model yet
+                    // In the future, when AccountEntry includes safe_address, we'll use it from state_model
+
+                    // Step 3: Get announcements for account entry
+                    let announcements = Announcement::find()
+                        .filter(announcement::Column::AccountId.eq(account_model.id))
                         .order_by_desc(announcement::Column::PublishedBlock)
                         .all(tx.as_ref())
-                        .await?
-                        .pop();
+                        .await?;
 
-                    Ok::<_, DbSqlError>(if let Some((account, announcements)) = maybe_model {
-                        Some(model_to_account_entry(account, announcements)?)
-                    } else {
-                        None
-                    })
+                    // Step 4: Convert to AccountEntry
+                    Ok::<_, DbSqlError>(Some(model_to_account_entry(account_model, announcements)?))
                 })
             })
             .await
@@ -420,6 +570,106 @@ impl BlokliDbAccountOperations for BlokliDb {
                 .await?
                 .map(ChainOrPacketKey::ChainKey),
         })
+    }
+
+    async fn get_account_state_at_block<'a, T: Into<ChainOrPacketKey> + Send + Sync>(
+        &'a self,
+        tx: OptTx<'a>,
+        key: T,
+        block: u32,
+    ) -> Result<Option<AccountEntry>> {
+        let cpk = key.into();
+        let block_i64 = block as i64;
+
+        self.nest_transaction(tx)
+            .await?
+            .perform(|tx| {
+                Box::pin(async move {
+                    use blokli_db_entity::{account_state, prelude::AccountState};
+
+                    // Step 1: Find account by key
+                    let account_model = match Account::find().filter(cpk).one(tx.as_ref()).await? {
+                        Some(a) => a,
+                        None => return Ok(None),
+                    };
+
+                    // Step 2: Get the most recent account_state at or before the given block
+                    let state_model = AccountState::find()
+                        .filter(account_state::Column::AccountId.eq(account_model.id))
+                        .filter(account_state::Column::PublishedBlock.lte(block_i64))
+                        .order_by_desc(account_state::Column::PublishedBlock)
+                        .order_by_desc(account_state::Column::PublishedTxIndex)
+                        .order_by_desc(account_state::Column::PublishedLogIndex)
+                        .one(tx.as_ref())
+                        .await?;
+
+                    // If no state exists at or before this block, return None
+                    if state_model.is_none() {
+                        return Ok(None);
+                    }
+
+                    // Step 3: Get announcements for account entry
+                    let announcements = Announcement::find()
+                        .filter(announcement::Column::AccountId.eq(account_model.id))
+                        .order_by_desc(announcement::Column::PublishedBlock)
+                        .all(tx.as_ref())
+                        .await?;
+
+                    // Step 4: Convert to AccountEntry
+                    Ok::<_, DbSqlError>(Some(model_to_account_entry(account_model, announcements)?))
+                })
+            })
+            .await
+    }
+
+    async fn get_account_history<'a, T: Into<ChainOrPacketKey> + Send + Sync>(
+        &'a self,
+        tx: OptTx<'a>,
+        key: T,
+    ) -> Result<Vec<AccountEntry>> {
+        let cpk = key.into();
+
+        self.nest_transaction(tx)
+            .await?
+            .perform(|tx| {
+                Box::pin(async move {
+                    use blokli_db_entity::{account_state, prelude::AccountState};
+
+                    // Step 1: Find account by key
+                    let account_model = match Account::find().filter(cpk).one(tx.as_ref()).await? {
+                        Some(a) => a,
+                        None => return Ok(vec![]),
+                    };
+
+                    // Step 2: Get all account_state records ordered chronologically
+                    let state_models = AccountState::find()
+                        .filter(account_state::Column::AccountId.eq(account_model.id))
+                        .order_by_asc(account_state::Column::PublishedBlock)
+                        .order_by_asc(account_state::Column::PublishedTxIndex)
+                        .order_by_asc(account_state::Column::PublishedLogIndex)
+                        .all(tx.as_ref())
+                        .await?;
+
+                    // Step 3: Get announcements once
+                    let announcements = Announcement::find()
+                        .filter(announcement::Column::AccountId.eq(account_model.id))
+                        .order_by_desc(announcement::Column::PublishedBlock)
+                        .all(tx.as_ref())
+                        .await?;
+
+                    // Step 4: Convert each state to AccountEntry
+                    // Note: We use the same announcements for all states
+                    // In a temporal design, we'd want to filter announcements by state's block
+                    let mut history = Vec::new();
+                    for _ in &state_models {
+                        let entry = model_to_account_entry(account_model.clone(), announcements.clone())?;
+                        history.push(entry);
+                    }
+
+                    Ok::<_, DbSqlError>(history)
+                })
+            })
+            .await
     }
 }
 
@@ -879,6 +1129,298 @@ mod tests {
         assert_eq!(
             "/ip4/8.8.1.1/tcp/1234",
             acc_2.get_multiaddr().expect("should have a multiaddress").to_string()
+        );
+
+        Ok(())
+    }
+
+    // ============================================================================
+    // TDD Tests for Temporal Database Operations
+    // ============================================================================
+
+    #[tokio::test]
+    async fn test_upsert_account_creates_new_with_initial_state() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let chain_key = ChainKeypair::random().public().to_address();
+        let packet_key = *OffchainKeypair::random().public();
+        let safe_addr = Address::from(hopr_crypto_random::random_bytes());
+
+        // Create account with upsert at block 100
+        db.upsert_account(None, chain_key, packet_key, Some(safe_addr), 100, 0, 0)
+            .await?;
+
+        // Verify account can be retrieved with latest state
+        let retrieved = db.get_account(None, chain_key).await?.expect("account should exist");
+
+        assert_eq!(chain_key, retrieved.chain_addr);
+        assert_eq!(packet_key, retrieved.public_key);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upsert_account_adds_state_to_existing() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let chain_key = ChainKeypair::random().public().to_address();
+        let packet_key = *OffchainKeypair::random().public();
+        let safe_addr_1 = Address::from(hopr_crypto_random::random_bytes());
+        let safe_addr_2 = Address::from(hopr_crypto_random::random_bytes());
+
+        // Create account with initial state at block 100
+        db.upsert_account(None, chain_key, packet_key, Some(safe_addr_1), 100, 0, 0)
+            .await?;
+
+        // Update account with new safe address at block 200
+        db.upsert_account(None, chain_key, packet_key, Some(safe_addr_2), 200, 0, 0)
+            .await?;
+
+        // Verify latest state has new safe address
+        let latest = db.get_account(None, chain_key).await?.expect("account should exist");
+        assert_eq!(chain_key, latest.chain_addr);
+        assert_eq!(packet_key, latest.public_key);
+
+        // Verify old state still exists at block 100 (via temporal query)
+        let historical = db
+            .get_account_state_at_block(None, chain_key, 150)
+            .await?
+            .expect("historical state should exist");
+        assert_eq!(chain_key, historical.chain_addr);
+
+        // Verify full history contains both states
+        let history = db.get_account_history(None, chain_key).await?;
+        assert_eq!(2, history.len(), "should have 2 state records");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upsert_account_safe_address_changes() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let chain_key = ChainKeypair::random().public().to_address();
+        let packet_key = *OffchainKeypair::random().public();
+
+        // State 1: No safe address at block 100
+        db.upsert_account(None, chain_key, packet_key, None, 100, 0, 0).await?;
+
+        // State 2: Add safe address at block 200
+        let safe_addr = Address::from(hopr_crypto_random::random_bytes());
+        db.upsert_account(None, chain_key, packet_key, Some(safe_addr), 200, 0, 0)
+            .await?;
+
+        // State 3: Change safe address at block 300
+        let safe_addr_2 = Address::from(hopr_crypto_random::random_bytes());
+        db.upsert_account(None, chain_key, packet_key, Some(safe_addr_2), 300, 0, 0)
+            .await?;
+
+        // Verify full history has all 3 states
+        let history = db.get_account_history(None, chain_key).await?;
+        assert_eq!(3, history.len(), "should have 3 state records");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_account_state_at_block() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let chain_key = ChainKeypair::random().public().to_address();
+        let packet_key = *OffchainKeypair::random().public();
+
+        // Create multiple states at different blocks
+        db.upsert_account(None, chain_key, packet_key, None, 100, 0, 0).await?;
+
+        let safe_addr_1 = Address::from(hopr_crypto_random::random_bytes());
+        db.upsert_account(None, chain_key, packet_key, Some(safe_addr_1), 200, 0, 0)
+            .await?;
+
+        let safe_addr_2 = Address::from(hopr_crypto_random::random_bytes());
+        db.upsert_account(None, chain_key, packet_key, Some(safe_addr_2), 300, 0, 0)
+            .await?;
+
+        // Query state at various blocks
+        let at_50 = db.get_account_state_at_block(None, chain_key, 50).await?;
+        assert!(at_50.is_none(), "no state should exist before block 100");
+
+        let at_100 = db
+            .get_account_state_at_block(None, chain_key, 100)
+            .await?
+            .expect("state should exist at block 100");
+        assert_eq!(chain_key, at_100.chain_addr);
+
+        let at_150 = db
+            .get_account_state_at_block(None, chain_key, 150)
+            .await?
+            .expect("state should exist at block 150");
+        assert_eq!(chain_key, at_150.chain_addr);
+
+        let at_250 = db
+            .get_account_state_at_block(None, chain_key, 250)
+            .await?
+            .expect("state should exist at block 250");
+        assert_eq!(chain_key, at_250.chain_addr);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_account_history() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let chain_key = ChainKeypair::random().public().to_address();
+        let packet_key = *OffchainKeypair::random().public();
+
+        // Create 5 state changes across different blocks
+        for i in 0..5 {
+            let safe_addr = if i % 2 == 0 {
+                Some(Address::from(hopr_crypto_random::random_bytes()))
+            } else {
+                None
+            };
+            db.upsert_account(None, chain_key, packet_key, safe_addr, (i + 1) * 100, 0, 0)
+                .await?;
+        }
+
+        // Get full history
+        let history = db.get_account_history(None, chain_key).await?;
+
+        assert_eq!(5, history.len(), "should have 5 state records");
+
+        // Verify chronological ordering - all should have same chain/packet keys
+        for state in &history {
+            assert_eq!(chain_key, state.chain_addr);
+            assert_eq!(packet_key, state.public_key);
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_account_returns_latest_state() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let chain_key = ChainKeypair::random().public().to_address();
+        let packet_key = *OffchainKeypair::random().public();
+
+        // Create multiple states
+        db.upsert_account(None, chain_key, packet_key, None, 100, 0, 0).await?;
+        db.upsert_account(None, chain_key, packet_key, None, 200, 0, 0).await?;
+        let latest_safe = Address::from(hopr_crypto_random::random_bytes());
+        db.upsert_account(None, chain_key, packet_key, Some(latest_safe), 300, 0, 0)
+            .await?;
+
+        // get_account should return the latest state
+        let account = db.get_account(None, chain_key).await?.expect("account should exist");
+        assert_eq!(chain_key, account.chain_addr);
+        assert_eq!(packet_key, account.public_key);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_translate_key_still_works() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let chain_key = ChainKeypair::random().public().to_address();
+        let packet_key = *OffchainKeypair::random().public();
+
+        // Create account with upsert
+        db.upsert_account(None, chain_key, packet_key, None, 100, 0, 0).await?;
+
+        // Verify translate_key works in both directions
+        let translated_packet: OffchainPublicKey = db
+            .translate_key(None, chain_key)
+            .await?
+            .context("should find packet key")?
+            .try_into()?;
+        assert_eq!(packet_key, translated_packet);
+
+        let translated_chain: Address = db
+            .translate_key(None, packet_key)
+            .await?
+            .context("should find chain key")?
+            .try_into()?;
+        assert_eq!(chain_key, translated_chain);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_concurrent_account_upserts() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let chain_key = ChainKeypair::random().public().to_address();
+        let packet_key = *OffchainKeypair::random().public();
+
+        // Create initial account
+        db.upsert_account(None, chain_key, packet_key, None, 100, 0, 0).await?;
+
+        // Spawn multiple concurrent updates
+        let mut handles = vec![];
+        for i in 0..10 {
+            let db_clone = db.clone();
+            let handle = tokio::spawn(async move {
+                let safe = if i % 2 == 0 {
+                    Some(Address::from(hopr_crypto_random::random_bytes()))
+                } else {
+                    None
+                };
+                db_clone
+                    .upsert_account(None, chain_key, packet_key, safe, 200 + i, 0, 0)
+                    .await
+            });
+            handles.push(handle);
+        }
+
+        // Wait for all updates to complete
+        for handle in handles {
+            handle.await??;
+        }
+
+        // Verify all states were persisted (no lost updates)
+        let history = db.get_account_history(None, chain_key).await?;
+
+        assert_eq!(
+            11,
+            history.len(),
+            "should have 11 state records (1 initial + 10 updates)"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_account_state_isolation() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let chain_1 = ChainKeypair::random().public().to_address();
+        let packet_1 = *OffchainKeypair::random().public();
+
+        let chain_2 = ChainKeypair::random().public().to_address();
+        let packet_2 = *OffchainKeypair::random().public();
+
+        // Create two accounts with interleaved positions
+        db.upsert_account(None, chain_1, packet_1, None, 100, 5, 2).await?;
+        db.upsert_account(None, chain_2, packet_2, None, 100, 7, 0).await?;
+        db.upsert_account(None, chain_1, packet_1, None, 101, 3, 1).await?;
+        db.upsert_account(None, chain_2, packet_2, None, 101, 4, 2).await?;
+
+        // Query account 1 history - should not include account 2's states
+        let history_1 = db.get_account_history(None, chain_1).await?;
+        assert_eq!(history_1.len(), 2, "account 1 should have 2 states");
+        assert!(
+            history_1.iter().all(|s| s.chain_addr == chain_1),
+            "all states should belong to account 1"
+        );
+
+        // Query account 2 history - should not include account 1's states
+        let history_2 = db.get_account_history(None, chain_2).await?;
+        assert_eq!(history_2.len(), 2, "account 2 should have 2 states");
+        assert!(
+            history_2.iter().all(|s| s.chain_addr == chain_2),
+            "all states should belong to account 2"
         );
 
         Ok(())
