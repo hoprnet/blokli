@@ -5,11 +5,9 @@
 //! status and can be queried by UUID.
 
 use chrono::{DateTime, Utc};
+use dashmap::DashMap;
 use hopr_crypto_types::types::Hash;
-use std::{
-    collections::HashMap,
-    sync::{Arc, RwLock},
-};
+use std::sync::Arc;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -63,14 +61,14 @@ pub struct TransactionRecord {
 /// Thread-safe in-memory store for transaction records
 #[derive(Debug, Clone)]
 pub struct TransactionStore {
-    transactions: Arc<RwLock<HashMap<Uuid, TransactionRecord>>>,
+    transactions: Arc<DashMap<Uuid, TransactionRecord>>,
 }
 
 impl TransactionStore {
     /// Create a new empty transaction store
     pub fn new() -> Self {
         Self {
-            transactions: Arc::new(RwLock::new(HashMap::new())),
+            transactions: Arc::new(DashMap::new()),
         }
     }
 
@@ -79,17 +77,15 @@ impl TransactionStore {
     /// # Errors
     /// Returns `TransactionStoreError::AlreadyExists` if a transaction with the same ID already exists
     pub fn insert(&self, record: TransactionRecord) -> Result<(), TransactionStoreError> {
-        let mut store = self
-            .transactions
-            .write()
-            .expect("transaction store lock poisoned");
+        use dashmap::mapref::entry::Entry;
 
-        if store.contains_key(&record.id) {
-            return Err(TransactionStoreError::AlreadyExists(record.id));
+        match self.transactions.entry(record.id) {
+            Entry::Vacant(entry) => {
+                entry.insert(record);
+                Ok(())
+            }
+            Entry::Occupied(entry) => Err(TransactionStoreError::AlreadyExists(*entry.key())),
         }
-
-        store.insert(record.id, record);
-        Ok(())
     }
 
     /// Get a transaction record by its UUID
@@ -97,11 +93,9 @@ impl TransactionStore {
     /// # Errors
     /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
     pub fn get(&self, id: Uuid) -> Result<TransactionRecord, TransactionStoreError> {
-        let store = self.transactions.read().expect("transaction store lock poisoned");
-
-        store
+        self.transactions
             .get(&id)
-            .cloned()
+            .map(|entry| entry.value().clone())
             .ok_or(TransactionStoreError::NotFound(id))
     }
 
@@ -110,17 +104,15 @@ impl TransactionStore {
     /// # Errors
     /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
     pub fn update(&self, record: TransactionRecord) -> Result<(), TransactionStoreError> {
-        let mut store = self
-            .transactions
-            .write()
-            .expect("transaction store lock poisoned");
+        use dashmap::mapref::entry::Entry;
 
-        if !store.contains_key(&record.id) {
-            return Err(TransactionStoreError::NotFound(record.id));
+        match self.transactions.entry(record.id) {
+            Entry::Occupied(mut entry) => {
+                entry.insert(record);
+                Ok(())
+            }
+            Entry::Vacant(_) => Err(TransactionStoreError::NotFound(record.id)),
         }
-
-        store.insert(record.id, record);
-        Ok(())
     }
 
     /// Update the status of a transaction
@@ -133,24 +125,19 @@ impl TransactionStore {
         status: TransactionStatus,
         error_message: Option<String>,
     ) -> Result<(), TransactionStoreError> {
-        let mut store = self
-            .transactions
-            .write()
-            .expect("transaction store lock poisoned");
-
-        let record = store
+        self.transactions
             .get_mut(&id)
-            .ok_or(TransactionStoreError::NotFound(id))?;
+            .map(|mut entry| {
+                let record = entry.value_mut();
+                record.status = status;
+                record.error_message = error_message;
 
-        record.status = status;
-        record.error_message = error_message;
-
-        // Set confirmed_at timestamp if status is Confirmed
-        if status == TransactionStatus::Confirmed && record.confirmed_at.is_none() {
-            record.confirmed_at = Some(Utc::now());
-        }
-
-        Ok(())
+                // Set confirmed_at timestamp if status is Confirmed
+                if status == TransactionStatus::Confirmed && record.confirmed_at.is_none() {
+                    record.confirmed_at = Some(Utc::now());
+                }
+            })
+            .ok_or(TransactionStoreError::NotFound(id))
     }
 
     /// Update the transaction hash
@@ -162,34 +149,26 @@ impl TransactionStore {
         id: Uuid,
         transaction_hash: Hash,
     ) -> Result<(), TransactionStoreError> {
-        let mut store = self
-            .transactions
-            .write()
-            .expect("transaction store lock poisoned");
-
-        let record = store
+        self.transactions
             .get_mut(&id)
-            .ok_or(TransactionStoreError::NotFound(id))?;
-
-        record.transaction_hash = Some(transaction_hash);
-        Ok(())
+            .map(|mut entry| {
+                entry.value_mut().transaction_hash = Some(transaction_hash);
+            })
+            .ok_or(TransactionStoreError::NotFound(id))
     }
 
     /// List all transactions with a specific status
     pub fn list_by_status(&self, status: TransactionStatus) -> Vec<TransactionRecord> {
-        let store = self.transactions.read().expect("transaction store lock poisoned");
-
-        store
-            .values()
-            .filter(|record| record.status == status)
-            .cloned()
+        self.transactions
+            .iter()
+            .filter(|entry| entry.value().status == status)
+            .map(|entry| entry.value().clone())
             .collect()
     }
 
     /// Get the total count of transactions in the store
     pub fn count(&self) -> usize {
-        let store = self.transactions.read().expect("transaction store lock poisoned");
-        store.len()
+        self.transactions.len()
     }
 }
 

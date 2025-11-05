@@ -32,6 +32,7 @@ alloy = { workspace = true, default-features = false, features = [
 async-channel = { workspace = true }
 async-trait = { workspace = true }
 chrono = { workspace = true }
+dashmap = { workspace = true }
 futures = { workspace = true }
 tokio = { workspace = true }
 semver = { workspace = true }

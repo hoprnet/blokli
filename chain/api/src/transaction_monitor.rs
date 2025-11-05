@@ -132,32 +132,31 @@ mod tests {
     use super::*;
     use crate::transaction_store::TransactionRecord;
     use chrono::Utc;
-    use std::collections::HashMap;
-    use std::sync::Mutex;
+    use dashmap::DashMap;
     use uuid::Uuid;
 
     // Mock receipt provider for testing
     struct MockReceiptProvider {
         // Map from tx_hash to status (Some(true) = confirmed, Some(false) = reverted, None = pending)
-        statuses: Arc<Mutex<HashMap<Hash, Option<bool>>>>,
+        statuses: Arc<DashMap<Hash, Option<bool>>>,
     }
 
     impl MockReceiptProvider {
         fn new() -> Self {
             Self {
-                statuses: Arc::new(Mutex::new(HashMap::new())),
+                statuses: Arc::new(DashMap::new()),
             }
         }
 
         fn set_status(&self, tx_hash: Hash, status: Option<bool>) {
-            self.statuses.lock().unwrap().insert(tx_hash, status);
+            self.statuses.insert(tx_hash, status);
         }
     }
 
     #[async_trait]
     impl ReceiptProvider for MockReceiptProvider {
         async fn get_transaction_status(&self, tx_hash: Hash) -> Result<Option<bool>, String> {
-            Ok(self.statuses.lock().unwrap().get(&tx_hash).copied().unwrap_or(None))
+            Ok(self.statuses.get(&tx_hash).map(|entry| *entry.value()).unwrap_or(None))
         }
     }
 
