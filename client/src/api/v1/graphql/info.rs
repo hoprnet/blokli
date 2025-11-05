@@ -16,7 +16,11 @@ pub struct ChainInfo {
     pub min_ticket_winning_probability: f64,
     pub safe_registry_dst: Option<String>,
     pub ticket_price: TokenValueString,
+    pub contract_addresses: ContractAddressMap,
 }
+
+#[derive(cynic::Scalar, Debug, Clone)]
+pub struct ContractAddressMap(pub String);
 
 #[derive(cynic::InlineFragments, Debug)]
 pub enum ChainInfoResult {
