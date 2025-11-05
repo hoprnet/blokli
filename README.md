@@ -72,6 +72,9 @@ cargo test -p blokli-db-sql --lib subscription -F runtime-tokio
 # Integration tests
 cargo test -p bloklid --test indexer_startup_test -F runtime-tokio
 
+# Transaction integration tests
+cargo test -p blokli-chain-api --test transaction_integration_test -F runtime-tokio -- --test-threads=1
+
 # Run specific test by name
 cargo test test_get_channel_state_at -F runtime-tokio -- --nocapture
 ```
