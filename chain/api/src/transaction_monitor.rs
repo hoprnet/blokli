@@ -39,6 +39,7 @@ impl Default for TransactionMonitorConfig {
 }
 
 /// Background monitor for tracking transaction confirmations
+#[derive(Debug)]
 pub struct TransactionMonitor<R: ReceiptProvider> {
     transaction_store: Arc<TransactionStore>,
     receipt_provider: Arc<R>,

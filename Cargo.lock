@@ -1665,6 +1665,7 @@ dependencies = [
 name = "blokli-api"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "anyhow",
  "async-broadcast",
  "async-graphql",
@@ -1675,6 +1676,8 @@ dependencies = [
  "blokli-api-types",
  "blokli-chain-api",
  "blokli-chain-indexer",
+ "blokli-chain-rpc",
+ "blokli-chain-types",
  "blokli-db",
  "blokli-db-entity",
  "chrono",
@@ -1682,6 +1685,7 @@ dependencies = [
  "futures",
  "hex",
  "hopr-crypto-types",
+ "hopr-primitive-types",
  "rustls 0.23.34",
  "rustls-pemfile 2.2.0",
  "sea-orm",
@@ -1695,6 +1699,7 @@ dependencies = [
  "tower-http",
  "tracing",
  "tracing-subscriber",
+ "url",
  "uuid",
 ]
 

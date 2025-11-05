@@ -106,7 +106,7 @@ pub(crate) type HoprProvider<R> = FillProvider<
 /// Implementation of `HoprRpcOperations` and `HoprIndexerRpcOperations` trait via `alloy`
 #[derive(Debug, Clone)]
 pub struct RpcOperations<R: HttpRequestor + 'static + Clone> {
-    pub(crate) provider: Arc<HoprProvider<R>>,
+    pub provider: Arc<HoprProvider<R>>,
     pub(crate) cfg: RpcOperationsConfig,
     contract_instances: Arc<ContractInstances<HoprProvider<R>>>,
 }

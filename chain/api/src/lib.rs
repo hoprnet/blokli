@@ -2,6 +2,7 @@
 
 pub mod errors;
 pub mod executors;
+pub mod rpc_adapter;
 pub mod transaction_executor;
 pub mod transaction_monitor;
 pub mod transaction_store;
@@ -46,7 +47,14 @@ use hopr_primitive_types::{
     traits::IntoEndian,
 };
 
-use crate::errors::{BlokliChainError, Result};
+use crate::{
+    errors::{BlokliChainError, Result},
+    rpc_adapter::RpcAdapter,
+    transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
+    transaction_monitor::{TransactionMonitor, TransactionMonitorConfig},
+    transaction_store::TransactionStore,
+    transaction_validator::TransactionValidator,
+};
 
 pub type DefaultHttpRequestor = blokli_chain_rpc::transport::ReqwestClient;
 
@@ -59,6 +67,7 @@ fn build_transport_client(url: &str) -> Result<Http<ReqwestClient>> {
 pub enum BlokliChainProcess {
     Indexer,
     OutgoingOnchainActionQueue,
+    TransactionMonitor,
 }
 
 type ActionQueueType<T> = ActionQueue<
@@ -84,6 +93,9 @@ pub struct BlokliChain<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt
     action_queue: ActionQueueType<T>,
     action_state: Arc<IndexerActionTracker>,
     rpc_operations: RpcOperations<DefaultHttpRequestor>,
+    transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
+    transaction_store: Arc<TransactionStore>,
+    transaction_monitor: Arc<TransactionMonitor<RpcAdapter<DefaultHttpRequestor>>>,
 }
 
 impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static> BlokliChain<T> {
@@ -162,6 +174,24 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         // Create IndexerState for coordinating block processing with subscriptions
         let indexer_state = IndexerState::new(indexer_cfg.event_bus_capacity, indexer_cfg.shutdown_signal_capacity);
 
+        // Build transaction submission infrastructure
+        let transaction_store = Arc::new(TransactionStore::new());
+        let transaction_validator = Arc::new(TransactionValidator::new());
+        let rpc_adapter = Arc::new(RpcAdapter::new(rpc_operations.clone()));
+
+        let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
+            rpc_adapter.clone(),
+            transaction_store.clone(),
+            transaction_validator,
+            RawTransactionExecutorConfig::default(),
+        ));
+
+        let transaction_monitor = Arc::new(TransactionMonitor::new(
+            transaction_store.clone(),
+            (*rpc_adapter).clone(),
+            TransactionMonitorConfig::default(),
+        ));
+
         Ok(Self {
             contract_addresses,
             indexer_cfg,
@@ -172,13 +202,17 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
             action_queue,
             action_state,
             rpc_operations,
+            transaction_executor,
+            transaction_store,
+            transaction_monitor,
         })
     }
 
     /// Execute all processes of the [`BlokliChain`] object.
     ///
-    /// This method will spawn the [`BlokliChainProcess::Indexer`] and
-    /// [`BlokliChainProcess::OutgoingOnchainActionQueue`] processes and return join handles to the calling
+    /// This method will spawn the [`BlokliChainProcess::Indexer`],
+    /// [`BlokliChainProcess::OutgoingOnchainActionQueue`], and
+    /// [`BlokliChainProcess::TransactionMonitor`] processes and return join handles to the calling
     /// function.
     pub async fn start(&self) -> errors::Result<HashMap<BlokliChainProcess, AbortHandle>> {
         let mut processes: HashMap<BlokliChainProcess, AbortHandle> = HashMap::new();
@@ -186,6 +220,10 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         processes.insert(
             BlokliChainProcess::OutgoingOnchainActionQueue,
             spawn_as_abortable!(self.action_queue.clone().start()),
+        );
+        processes.insert(
+            BlokliChainProcess::TransactionMonitor,
+            spawn_as_abortable!(self.transaction_monitor.clone().start()),
         );
         processes.insert(
             BlokliChainProcess::Indexer,
@@ -209,6 +247,14 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
 
     pub fn indexer_state(&self) -> IndexerState {
         self.indexer_state.clone()
+    }
+
+    pub fn transaction_executor(&self) -> Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>> {
+        self.transaction_executor.clone()
+    }
+
+    pub fn transaction_store(&self) -> Arc<TransactionStore> {
+        self.transaction_store.clone()
     }
 
     pub async fn accounts_announced_on_chain(&self) -> errors::Result<Vec<AccountEntry>> {

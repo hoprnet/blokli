@@ -1,13 +1,17 @@
 //! GraphQL mutation root and resolver implementations for transaction submission
 
+use std::sync::Arc;
+
 use async_graphql::{Context, Object, Result, Union};
 use blokli_api_types::{
     ContractNotAllowedError, FunctionNotAllowedError, Hex32, InvalidTransactionIdError, RpcError, SendTransactionSuccess,
     TimeoutError, Transaction, TransactionInput, TransactionStatus,
 };
 use blokli_chain_api::{
-    transaction_executor::TransactionExecutorError,
-    transaction_store::{TransactionRecord, TransactionStatus as StoreStatus},
+    DefaultHttpRequestor,
+    rpc_adapter::RpcAdapter,
+    transaction_executor::{RawTransactionExecutor, TransactionExecutorError},
+    transaction_store::{TransactionRecord, TransactionStatus as StoreStatus, TransactionStore},
 };
 
 /// Root mutation type providing transaction submission capabilities
@@ -57,12 +61,21 @@ impl MutationRoot {
     /// Does not wait for confirmation and does not track transaction status.
     /// Use this mode for maximum performance when you don't need confirmation tracking.
     #[graphql(name = "sendTransaction")]
-    async fn send_transaction(&self, _ctx: &Context<'_>, _input: TransactionInput) -> Result<SendTransactionResult> {
-        // TODO: Implementation pending - requires RPC adapter integration
-        // This will be completed in Phase 6: RPC Adapter Implementation
-        Err(async_graphql::Error::new(
-            "Transaction submission not yet integrated. RPC adapter implementation pending.",
-        ))
+    async fn send_transaction(&self, ctx: &Context<'_>, input: TransactionInput) -> Result<SendTransactionResult> {
+        let executor = ctx
+            .data::<Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>>()
+            .map_err(|_| async_graphql::Error::new("Transaction executor not available"))?;
+
+        // Decode hex transaction data
+        let raw_tx = hex_to_bytes(&input.raw_transaction)?;
+
+        // Execute transaction in fire-and-forget mode
+        match executor.send_raw_transaction(raw_tx).await {
+            Ok(tx_hash) => Ok(SendTransactionResult::Success(SendTransactionSuccess {
+                transaction_hash: hash_to_hex32(tx_hash),
+            })),
+            Err(e) => Ok(executor_error_to_send_result(e)),
+        }
     }
 
     /// Submit a transaction asynchronously
@@ -73,14 +86,32 @@ impl MutationRoot {
     #[graphql(name = "sendTransactionAsync")]
     async fn send_transaction_async(
         &self,
-        _ctx: &Context<'_>,
-        _input: TransactionInput,
+        ctx: &Context<'_>,
+        input: TransactionInput,
     ) -> Result<SendTransactionAsyncResult> {
-        // TODO: Implementation pending - requires RPC adapter integration
-        // This will be completed in Phase 6: RPC Adapter Implementation
-        Err(async_graphql::Error::new(
-            "Transaction submission not yet integrated. RPC adapter implementation pending.",
-        ))
+        let executor = ctx
+            .data::<Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>>()
+            .map_err(|_| async_graphql::Error::new("Transaction executor not available"))?;
+
+        let store = ctx
+            .data::<Arc<TransactionStore>>()
+            .map_err(|_| async_graphql::Error::new("Transaction store not available"))?;
+
+        // Decode hex transaction data
+        let raw_tx = hex_to_bytes(&input.raw_transaction)?;
+
+        // Execute transaction in async mode
+        match executor.send_raw_transaction_async(raw_tx).await {
+            Ok(uuid) => {
+                // Retrieve the transaction record
+                let record = store
+                    .get(uuid)
+                    .map_err(|e| async_graphql::Error::new(format!("Failed to retrieve transaction: {}", e)))?;
+
+                Ok(SendTransactionAsyncResult::Transaction(record_to_graphql(record)))
+            }
+            Err(e) => Ok(executor_error_to_async_result(e)),
+        }
     }
 
     /// Submit a transaction synchronously
@@ -91,33 +122,40 @@ impl MutationRoot {
     #[graphql(name = "sendTransactionSync")]
     async fn send_transaction_sync(
         &self,
-        _ctx: &Context<'_>,
-        _input: TransactionInput,
-        _confirmations: Option<i32>,
+        ctx: &Context<'_>,
+        input: TransactionInput,
+        confirmations: Option<i32>,
     ) -> Result<SendTransactionSyncResult> {
-        // TODO: Implementation pending - requires RPC adapter integration
-        // This will be completed in Phase 6: RPC Adapter Implementation
-        Err(async_graphql::Error::new(
-            "Transaction submission not yet integrated. RPC adapter implementation pending.",
-        ))
+        let executor = ctx
+            .data::<Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>>()
+            .map_err(|_| async_graphql::Error::new("Transaction executor not available"))?;
+
+        // Decode hex transaction data
+        let raw_tx = hex_to_bytes(&input.raw_transaction)?;
+
+        // Convert i32 to u64 for confirmations
+        let confirmations = confirmations.map(|c| c.max(0) as u64);
+
+        // Execute transaction in sync mode
+        match executor.send_raw_transaction_sync(raw_tx, confirmations).await {
+            Ok(record) => Ok(SendTransactionSyncResult::Transaction(record_to_graphql(record))),
+            Err(e) => Ok(executor_error_to_sync_result(e)),
+        }
     }
 }
 
 /// Helper function to convert hex string to bytes
-#[allow(dead_code)]
 fn hex_to_bytes(hex_str: &str) -> Result<Vec<u8>> {
     let hex_str = hex_str.strip_prefix("0x").unwrap_or(hex_str);
     hex::decode(hex_str).map_err(|e| async_graphql::Error::new(format!("Invalid hex string: {}", e)))
 }
 
 /// Helper function to convert Hash to Hex32
-#[allow(dead_code)]
 fn hash_to_hex32(hash: hopr_crypto_types::types::Hash) -> Hex32 {
     Hex32(format!("0x{}", hex::encode(hash.as_ref())))
 }
 
 /// Convert TransactionRecord to GraphQL Transaction
-#[allow(dead_code)]
 fn record_to_graphql(record: TransactionRecord) -> Transaction {
     Transaction {
         id: record.id.to_string(),
@@ -128,7 +166,6 @@ fn record_to_graphql(record: TransactionRecord) -> Transaction {
 }
 
 /// Convert store TransactionStatus to GraphQL TransactionStatus
-#[allow(dead_code)]
 fn store_status_to_graphql(status: StoreStatus) -> TransactionStatus {
     match status {
         StoreStatus::Pending => TransactionStatus::Pending,
@@ -142,7 +179,6 @@ fn store_status_to_graphql(status: StoreStatus) -> TransactionStatus {
 }
 
 /// Convert TransactionExecutorError to SendTransactionResult
-#[allow(dead_code)]
 fn executor_error_to_send_result(error: TransactionExecutorError) -> SendTransactionResult {
     match error {
         TransactionExecutorError::ValidationFailed(_) => SendTransactionResult::RpcError(RpcError {
@@ -161,7 +197,6 @@ fn executor_error_to_send_result(error: TransactionExecutorError) -> SendTransac
 }
 
 /// Convert TransactionExecutorError to SendTransactionAsyncResult
-#[allow(dead_code)]
 fn executor_error_to_async_result(error: TransactionExecutorError) -> SendTransactionAsyncResult {
     match error {
         TransactionExecutorError::ValidationFailed(_) => SendTransactionAsyncResult::RpcError(RpcError {
@@ -180,7 +215,6 @@ fn executor_error_to_async_result(error: TransactionExecutorError) -> SendTransa
 }
 
 /// Convert TransactionExecutorError to SendTransactionSyncResult
-#[allow(dead_code)]
 fn executor_error_to_sync_result(error: TransactionExecutorError) -> SendTransactionSyncResult {
     match error {
         TransactionExecutorError::ValidationFailed(_) => SendTransactionSyncResult::RpcError(RpcError {

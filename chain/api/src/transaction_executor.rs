@@ -74,6 +74,7 @@ impl Default for RawTransactionExecutorConfig {
 /// - Fire-and-forget: Returns tx hash immediately, no tracking
 /// - Async: Returns UUID, tracks in store, background monitoring
 /// - Sync: Waits for confirmations, returns complete transaction record
+#[derive(Debug)]
 pub struct RawTransactionExecutor<R: RpcClient> {
     rpc_client: Arc<R>,
     transaction_store: Arc<TransactionStore>,
@@ -93,6 +94,24 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             rpc_client: Arc::new(rpc_client),
             transaction_store: Arc::new(transaction_store),
             validator: Arc::new(validator),
+            config,
+        }
+    }
+
+    /// Create a new raw transaction executor with shared Arc-wrapped dependencies
+    ///
+    /// This constructor is useful when you need multiple components to share the same
+    /// transaction store instance (e.g., executor and monitor).
+    pub fn with_shared_dependencies(
+        rpc_client: Arc<R>,
+        transaction_store: Arc<TransactionStore>,
+        validator: Arc<TransactionValidator>,
+        config: RawTransactionExecutorConfig,
+    ) -> Self {
+        Self {
+            rpc_client,
+            transaction_store,
+            validator,
             config,
         }
     }

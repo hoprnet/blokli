@@ -288,10 +288,16 @@ async fn run() -> errors::Result<()> {
                 chain_id,
             };
 
-            // Build API app with indexer state for subscriptions
-            let api_app = blokli_api::server::build_app(api_db, blokli_api_config, indexer_state)
-                .await
-                .map_err(|e| BloklidError::NonSpecific(format!("Failed to build API app: {}", e)))?;
+            // Build API app with indexer state for subscriptions and transaction components
+            let api_app = blokli_api::server::build_app(
+                api_db,
+                blokli_api_config,
+                indexer_state,
+                blokli_chain.transaction_executor(),
+                blokli_chain.transaction_store(),
+            )
+            .await
+            .map_err(|e| BloklidError::NonSpecific(format!("Failed to build API app: {}", e)))?;
 
             // Spawn API server as a background task
             let handle = tokio::spawn(async move {

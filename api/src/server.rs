@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use async_graphql::{
-    EmptyMutation, Schema,
+    Schema,
     http::{GraphQLPlaygroundConfig, playground_source},
 };
 use axum::{
@@ -30,8 +30,20 @@ use tower_http::{
     trace::TraceLayer,
 };
 
+use blokli_chain_api::{
+    DefaultHttpRequestor,
+    rpc_adapter::RpcAdapter,
+    transaction_executor::RawTransactionExecutor,
+    transaction_store::TransactionStore,
+};
+
 use crate::{
-    config::ApiConfig, errors::ApiResult, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot,
+    config::ApiConfig,
+    errors::ApiResult,
+    mutation::MutationRoot,
+    query::QueryRoot,
+    schema::build_schema,
+    subscription::SubscriptionRoot,
 };
 
 /// Predicate that excludes Server-Sent Events from compression
@@ -60,13 +72,19 @@ impl Predicate for NotSse {
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
-    pub schema: Arc<Schema<QueryRoot, EmptyMutation, SubscriptionRoot>>,
+    pub schema: Arc<Schema<QueryRoot, MutationRoot, SubscriptionRoot>>,
     pub playground_enabled: bool,
 }
 
 /// Build the Axum application router
-pub async fn build_app(db: DatabaseConnection, config: ApiConfig, indexer_state: IndexerState) -> ApiResult<Router> {
-    let schema = build_schema(db, config.chain_id, indexer_state);
+pub async fn build_app(
+    db: DatabaseConnection,
+    config: ApiConfig,
+    indexer_state: IndexerState,
+    transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
+    transaction_store: Arc<TransactionStore>,
+) -> ApiResult<Router> {
+    let schema = build_schema(db, config.chain_id, indexer_state, transaction_executor, transaction_store);
     let app_state = AppState {
         schema: Arc::new(schema),
         playground_enabled: config.playground_enabled,
