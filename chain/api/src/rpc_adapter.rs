@@ -6,16 +6,13 @@
 
 use std::sync::Arc;
 
-use alloy::primitives::Bytes;
-use alloy::providers::Provider;
+use alloy::{primitives::Bytes, providers::Provider};
 use async_trait::async_trait;
-use blokli_chain_rpc::rpc::RpcOperations;
-use blokli_chain_rpc::transport::HttpRequestor;
+use blokli_chain_rpc::{rpc::RpcOperations, transport::HttpRequestor};
 use hopr_crypto_types::types::Hash;
 use tracing::{debug, error};
 
-use crate::transaction_executor::RpcClient;
-use crate::transaction_monitor::ReceiptProvider;
+use crate::{transaction_executor::RpcClient, transaction_monitor::ReceiptProvider};
 
 /// RPC adapter that implements RpcClient and ReceiptProvider traits for RpcOperations
 ///
@@ -70,6 +67,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
         &self,
         raw_tx: Vec<u8>,
         confirmations: u64,
+        timeout: Option<std::time::Duration>,
     ) -> Result<Hash, String> {
         debug!(
             "Sending raw transaction ({} bytes) and waiting for {} confirmations",
@@ -86,9 +84,14 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
                 let tx_hash = *pending_tx.tx_hash();
                 debug!("Transaction submitted with hash: {:?}", tx_hash);
 
-                // Wait for confirmations
-                match pending_tx.with_required_confirmations(confirmations).get_receipt().await {
-                    Ok(receipt) => {
+                // Use configured timeout or default to 60 seconds
+                let timeout_duration = timeout.unwrap_or(std::time::Duration::from_secs(60));
+
+                // Wait for confirmations with timeout
+                let receipt_future = pending_tx.with_required_confirmations(confirmations).get_receipt();
+
+                match tokio::time::timeout(timeout_duration, receipt_future).await {
+                    Ok(Ok(receipt)) => {
                         debug!("Transaction {:?} confirmed", tx_hash);
 
                         // Check transaction status
@@ -100,16 +103,13 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
                             Err(format!("Transaction reverted: {:?}", tx_hash))
                         }
                     }
-                    Err(e) => {
+                    Ok(Err(e)) => {
                         error!("Error waiting for transaction confirmation: {}", e);
-
-                        // Check if it's a timeout error
-                        let err_str = e.to_string();
-                        if err_str.contains("timeout") || err_str.contains("timed out") {
-                            Err(format!("Transaction timeout: {}", err_str))
-                        } else {
-                            Err(format!("Confirmation error: {}", err_str))
-                        }
+                        Err(format!("Confirmation error: {}", e))
+                    }
+                    Err(_) => {
+                        error!("Transaction {:?} timed out after {:?}", tx_hash, timeout_duration);
+                        Err(format!("Transaction timeout: timed out after {:?}", timeout_duration))
                     }
                 }
             }

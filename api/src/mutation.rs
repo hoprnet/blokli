@@ -4,8 +4,8 @@ use std::sync::Arc;
 
 use async_graphql::{Context, Object, Result, Union};
 use blokli_api_types::{
-    ContractNotAllowedError, FunctionNotAllowedError, Hex32, InvalidTransactionIdError, RpcError, SendTransactionSuccess,
-    TimeoutError, Transaction, TransactionInput, TransactionStatus,
+    ContractNotAllowedError, FunctionNotAllowedError, Hex32, InvalidTransactionIdError, RpcError,
+    SendTransactionSuccess, TimeoutError, Transaction, TransactionInput, TransactionStatus,
 };
 use blokli_chain_api::{
     DefaultHttpRequestor,

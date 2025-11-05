@@ -4,9 +4,7 @@ use std::sync::Arc;
 
 use async_graphql::Schema;
 use blokli_chain_api::{
-    DefaultHttpRequestor,
-    rpc_adapter::RpcAdapter,
-    transaction_executor::RawTransactionExecutor,
+    DefaultHttpRequestor, rpc_adapter::RpcAdapter, transaction_executor::RawTransactionExecutor,
     transaction_store::TransactionStore,
 };
 use blokli_chain_indexer::IndexerState;

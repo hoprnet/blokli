@@ -129,11 +129,12 @@ impl<R: ReceiptProvider> TransactionMonitor<R> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use crate::transaction_store::TransactionRecord;
     use chrono::Utc;
     use dashmap::DashMap;
     use uuid::Uuid;
+
+    use super::*;
+    use crate::transaction_store::TransactionRecord;
 
     // Mock receipt provider for testing
     struct MockReceiptProvider {

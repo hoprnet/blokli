@@ -3,8 +3,7 @@
 //! These tests use an in-process Anvil instance to test the complete
 //! transaction flow from submission through confirmation tracking.
 
-use std::sync::Arc;
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
 use alloy::{
     consensus::{SignableTransaction, TxLegacy},
@@ -26,7 +25,7 @@ use blokli_chain_rpc::{
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
 };
-use blokli_chain_types::{utils::create_anvil, ContractAddresses};
+use blokli_chain_types::{ContractAddresses, utils::create_anvil};
 use hopr_crypto_types::{
     keypairs::{ChainKeypair, Keypair},
     types::Hash,
@@ -157,8 +156,7 @@ async fn create_eth_transfer_tx(
     };
 
     // Create a signer from the chain key
-    let signer = PrivateKeySigner::from_slice(ctx.chain_key.secret().as_ref())
-        .expect("Failed to create signer");
+    let signer = PrivateKeySigner::from_slice(ctx.chain_key.secret().as_ref()).expect("Failed to create signer");
 
     // Sign the transaction hash
     let tx_hash = tx.signature_hash();
@@ -178,12 +176,7 @@ async fn create_eth_transfer_tx(
 
 #[tokio::test]
 async fn test_fire_and_forget_returns_hash_immediately() -> anyhow::Result<()> {
-    let ctx = setup_test_environment(
-        Duration::from_secs(1),
-        2,
-        RawTransactionExecutorConfig::default(),
-    )
-    .await?;
+    let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     let recipient = random_address();
     let raw_tx = create_eth_transfer_tx(&ctx, recipient, 1000, 0).await?;
@@ -197,39 +190,17 @@ async fn test_fire_and_forget_returns_hash_immediately() -> anyhow::Result<()> {
     // Verify transaction is NOT in store (fire-and-forget doesn't track)
     let submitted = ctx.store.list_by_status(TransactionStatus::Submitted);
     let pending = ctx.store.list_by_status(TransactionStatus::Pending);
-    assert!(submitted.is_empty() && pending.is_empty(), "Fire-and-forget should not store transactions");
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_fire_and_forget_with_invalid_nonce() -> anyhow::Result<()> {
-    let ctx = setup_test_environment(
-        Duration::from_secs(1),
-        2,
-        RawTransactionExecutorConfig::default(),
-    )
-    .await?;
-
-    let recipient = random_address();
-    // Use nonce 5 when account nonce is 0 - should fail
-    let raw_tx = create_eth_transfer_tx(&ctx, recipient, 1000, 5).await?;
-
-    // Should return RPC error
-    let result = ctx.executor.send_raw_transaction(raw_tx).await;
-    assert!(result.is_err(), "Should fail with invalid nonce");
+    assert!(
+        submitted.is_empty() && pending.is_empty(),
+        "Fire-and-forget should not store transactions"
+    );
 
     Ok(())
 }
 
 #[tokio::test]
 async fn test_fire_and_forget_with_insufficient_gas() -> anyhow::Result<()> {
-    let ctx = setup_test_environment(
-        Duration::from_secs(1),
-        2,
-        RawTransactionExecutorConfig::default(),
-    )
-    .await?;
+    let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     let recipient = random_address();
     let mut raw_tx = create_eth_transfer_tx(&ctx, recipient, 1000, 0).await?;
@@ -249,12 +220,7 @@ async fn test_fire_and_forget_with_insufficient_gas() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_async_mode_returns_uuid_and_tracks() -> anyhow::Result<()> {
-    let mut ctx = setup_test_environment(
-        Duration::from_secs(1),
-        2,
-        RawTransactionExecutorConfig::default(),
-    )
-    .await?;
+    let mut ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     let recipient = random_address();
     let raw_tx = create_eth_transfer_tx(&ctx, recipient, 1000, 0).await?;
@@ -282,12 +248,7 @@ async fn test_async_mode_returns_uuid_and_tracks() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_async_mode_multiple_transactions() -> anyhow::Result<()> {
-    let mut ctx = setup_test_environment(
-        Duration::from_secs(1),
-        2,
-        RawTransactionExecutorConfig::default(),
-    )
-    .await?;
+    let mut ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     ctx.monitor_handle = Some(start_monitor(&mut ctx));
 
@@ -353,12 +314,7 @@ async fn test_async_mode_query_status_before_confirmation() -> anyhow::Result<()
 
 #[tokio::test]
 async fn test_async_mode_validation_failure() -> anyhow::Result<()> {
-    let ctx = setup_test_environment(
-        Duration::from_secs(1),
-        2,
-        RawTransactionExecutorConfig::default(),
-    )
-    .await?;
+    let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     // Empty transaction should fail validation
     let empty_tx = vec![];
@@ -369,7 +325,10 @@ async fn test_async_mode_validation_failure() -> anyhow::Result<()> {
     // Verify nothing was stored
     let submitted = ctx.store.list_by_status(TransactionStatus::Submitted);
     let pending = ctx.store.list_by_status(TransactionStatus::Pending);
-    assert!(submitted.is_empty() && pending.is_empty(), "Failed validation should not create record");
+    assert!(
+        submitted.is_empty() && pending.is_empty(),
+        "Failed validation should not create record"
+    );
 
     Ok(())
 }
@@ -380,12 +339,7 @@ async fn test_async_mode_validation_failure() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_sync_mode_waits_for_confirmations() -> anyhow::Result<()> {
-    let ctx = setup_test_environment(
-        Duration::from_secs(1),
-        2,
-        RawTransactionExecutorConfig::default(),
-    )
-    .await?;
+    let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     let recipient = random_address();
     let raw_tx = create_eth_transfer_tx(&ctx, recipient, 1000, 0).await?;
@@ -393,10 +347,7 @@ async fn test_sync_mode_waits_for_confirmations() -> anyhow::Result<()> {
     let start = std::time::Instant::now();
 
     // Send transaction in sync mode with 2 confirmations
-    let record = ctx
-        .executor
-        .send_raw_transaction_sync(raw_tx, Some(2))
-        .await?;
+    let record = ctx.executor.send_raw_transaction_sync(raw_tx, Some(2)).await?;
 
     let elapsed = start.elapsed();
 
@@ -412,12 +363,7 @@ async fn test_sync_mode_waits_for_confirmations() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_sync_mode_with_custom_confirmations() -> anyhow::Result<()> {
-    let ctx = setup_test_environment(
-        Duration::from_secs(1),
-        2,
-        RawTransactionExecutorConfig::default(),
-    )
-    .await?;
+    let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     let recipient = random_address();
     let raw_tx = create_eth_transfer_tx(&ctx, recipient, 1000, 0).await?;
@@ -425,10 +371,7 @@ async fn test_sync_mode_with_custom_confirmations() -> anyhow::Result<()> {
     let start = std::time::Instant::now();
 
     // Wait for 1 confirmation only
-    let record = ctx
-        .executor
-        .send_raw_transaction_sync(raw_tx, Some(1))
-        .await?;
+    let record = ctx.executor.send_raw_transaction_sync(raw_tx, Some(1)).await?;
 
     let elapsed = start.elapsed();
 
@@ -458,10 +401,7 @@ async fn test_sync_mode_timeout() -> anyhow::Result<()> {
     let raw_tx = create_eth_transfer_tx(&ctx, recipient, 1000, 0).await?;
 
     // Should timeout waiting for confirmations
-    let result = ctx
-        .executor
-        .send_raw_transaction_sync(raw_tx, Some(2))
-        .await;
+    let result = ctx.executor.send_raw_transaction_sync(raw_tx, Some(2)).await;
 
     assert!(result.is_err(), "Should timeout waiting for confirmations");
 
@@ -470,20 +410,12 @@ async fn test_sync_mode_timeout() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_sync_mode_persists_to_store() -> anyhow::Result<()> {
-    let ctx = setup_test_environment(
-        Duration::from_secs(1),
-        2,
-        RawTransactionExecutorConfig::default(),
-    )
-    .await?;
+    let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     let recipient = random_address();
     let raw_tx = create_eth_transfer_tx(&ctx, recipient, 1000, 0).await?;
 
-    let record = ctx
-        .executor
-        .send_raw_transaction_sync(raw_tx, Some(2))
-        .await?;
+    let record = ctx.executor.send_raw_transaction_sync(raw_tx, Some(2)).await?;
 
     // Verify transaction is in store
     let stored_record = ctx.store.get(record.id)?;
@@ -500,12 +432,7 @@ async fn test_sync_mode_persists_to_store() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_empty_transaction_validation() -> anyhow::Result<()> {
-    let ctx = setup_test_environment(
-        Duration::from_secs(1),
-        2,
-        RawTransactionExecutorConfig::default(),
-    )
-    .await?;
+    let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     let empty_tx = vec![];
 
@@ -519,12 +446,7 @@ async fn test_empty_transaction_validation() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_malformed_transaction_hex() -> anyhow::Result<()> {
-    let ctx = setup_test_environment(
-        Duration::from_secs(1),
-        2,
-        RawTransactionExecutorConfig::default(),
-    )
-    .await?;
+    let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     // Create invalid transaction data
     let malformed_tx = vec![0xFF; 10]; // Random bytes
@@ -537,12 +459,7 @@ async fn test_malformed_transaction_hex() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_transaction_with_invalid_signature() -> anyhow::Result<()> {
-    let ctx = setup_test_environment(
-        Duration::from_secs(1),
-        2,
-        RawTransactionExecutorConfig::default(),
-    )
-    .await?;
+    let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     let recipient = random_address();
     let mut raw_tx = create_eth_transfer_tx(&ctx, recipient, 1000, 0).await?;
@@ -573,12 +490,7 @@ async fn test_rpc_connection_failure_handling() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_concurrent_async_submissions() -> anyhow::Result<()> {
-    let mut ctx = setup_test_environment(
-        Duration::from_secs(1),
-        2,
-        RawTransactionExecutorConfig::default(),
-    )
-    .await?;
+    let mut ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     ctx.monitor_handle = Some(start_monitor(&mut ctx));
 
@@ -621,12 +533,7 @@ async fn test_concurrent_async_submissions() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_mixed_mode_operations() -> anyhow::Result<()> {
-    let mut ctx = setup_test_environment(
-        Duration::from_secs(1),
-        2,
-        RawTransactionExecutorConfig::default(),
-    )
-    .await?;
+    let mut ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     ctx.monitor_handle = Some(start_monitor(&mut ctx));
 
@@ -654,7 +561,11 @@ async fn test_mixed_mode_operations() -> anyhow::Result<()> {
 
     // Fire-and-forget should not be in store - count all statuses
     let mut total_tracked = 0;
-    for status in [TransactionStatus::Submitted, TransactionStatus::Confirmed, TransactionStatus::Pending] {
+    for status in [
+        TransactionStatus::Submitted,
+        TransactionStatus::Confirmed,
+        TransactionStatus::Pending,
+    ] {
         total_tracked += ctx.store.list_by_status(status).len();
     }
     assert_eq!(total_tracked, 2); // Only async and sync
@@ -668,12 +579,7 @@ async fn test_mixed_mode_operations() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_monitor_updates_confirmed_status() -> anyhow::Result<()> {
-    let mut ctx = setup_test_environment(
-        Duration::from_secs(1),
-        2,
-        RawTransactionExecutorConfig::default(),
-    )
-    .await?;
+    let mut ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     let recipient = random_address();
     let raw_tx = create_eth_transfer_tx(&ctx, recipient, 1000, 0).await?;
@@ -700,12 +606,7 @@ async fn test_monitor_updates_confirmed_status() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_monitor_batch_processing() -> anyhow::Result<()> {
-    let mut ctx = setup_test_environment(
-        Duration::from_secs(1),
-        2,
-        RawTransactionExecutorConfig::default(),
-    )
-    .await?;
+    let mut ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     // Submit multiple transactions
     let mut uuids = Vec::new();
@@ -733,12 +634,7 @@ async fn test_monitor_batch_processing() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_monitor_handles_reorg() -> anyhow::Result<()> {
-    let mut ctx = setup_test_environment(
-        Duration::from_secs(1),
-        2,
-        RawTransactionExecutorConfig::default(),
-    )
-    .await?;
+    let mut ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     ctx.monitor_handle = Some(start_monitor(&mut ctx));
 

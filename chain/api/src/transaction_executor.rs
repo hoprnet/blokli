@@ -47,6 +47,7 @@ pub trait RpcClient: Send + Sync {
         &self,
         raw_tx: Vec<u8>,
         confirmations: u64,
+        timeout: Option<Duration>,
     ) -> Result<Hash, String>;
 }
 
@@ -218,7 +219,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         // Submit to RPC with confirmation wait
         match self
             .rpc_client
-            .send_raw_transaction_with_confirm(raw_tx, confirmations)
+            .send_raw_transaction_with_confirm(raw_tx, confirmations, Some(self.config.confirmation_timeout))
             .await
         {
             Ok(tx_hash) => {
@@ -254,8 +255,9 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::sync::Mutex;
+
+    use super::*;
 
     // Mock RPC client for testing
     struct MockRpcClient {
@@ -311,6 +313,7 @@ mod tests {
             &self,
             _raw_tx: Vec<u8>,
             _confirmations: u64,
+            _timeout: Option<Duration>,
         ) -> Result<Hash, String> {
             *self.call_count.lock().unwrap() += 1;
 
@@ -362,10 +365,7 @@ mod tests {
         let empty_tx = vec![];
 
         let result = executor.send_raw_transaction(empty_tx).await;
-        assert!(matches!(
-            result,
-            Err(TransactionExecutorError::ValidationFailed(_))
-        ));
+        assert!(matches!(result, Err(TransactionExecutorError::ValidationFailed(_))));
     }
 
     #[tokio::test]

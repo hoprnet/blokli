@@ -16,6 +16,10 @@ use axum::{
     },
     routing::get,
 };
+use blokli_chain_api::{
+    DefaultHttpRequestor, rpc_adapter::RpcAdapter, transaction_executor::RawTransactionExecutor,
+    transaction_store::TransactionStore,
+};
 use blokli_chain_indexer::IndexerState;
 use futures::stream::StreamExt;
 use sea_orm::DatabaseConnection;
@@ -30,19 +34,8 @@ use tower_http::{
     trace::TraceLayer,
 };
 
-use blokli_chain_api::{
-    DefaultHttpRequestor,
-    rpc_adapter::RpcAdapter,
-    transaction_executor::RawTransactionExecutor,
-    transaction_store::TransactionStore,
-};
-
 use crate::{
-    config::ApiConfig,
-    errors::ApiResult,
-    mutation::MutationRoot,
-    query::QueryRoot,
-    schema::build_schema,
+    config::ApiConfig, errors::ApiResult, mutation::MutationRoot, query::QueryRoot, schema::build_schema,
     subscription::SubscriptionRoot,
 };
 
@@ -84,7 +77,13 @@ pub async fn build_app(
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
 ) -> ApiResult<Router> {
-    let schema = build_schema(db, config.chain_id, indexer_state, transaction_executor, transaction_store);
+    let schema = build_schema(
+        db,
+        config.chain_id,
+        indexer_state,
+        transaction_executor,
+        transaction_store,
+    );
     let app_state = AppState {
         schema: Arc::new(schema),
         playground_enabled: config.playground_enabled,

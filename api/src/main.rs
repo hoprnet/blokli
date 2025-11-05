@@ -118,7 +118,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 ));
 
                 // Generate schema SDL
-                let schema_sdl = export_schema_sdl(db, chain_id, indexer_state, transaction_executor, transaction_store);
+                let schema_sdl =
+                    export_schema_sdl(db, chain_id, indexer_state, transaction_executor, transaction_store);
 
                 // Write to file or stdout
                 if let Some(output_path) = output {

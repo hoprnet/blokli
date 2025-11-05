@@ -85,6 +85,21 @@
       }
     },
     "flake-utils": {
+      "locked": {
+        "lastModified": 1644229661,
+        "narHash": "sha256-1YdnJAsNy69bpcjuoKdOYQX0YxZBiCYZo4Twxerqv7k=",
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "rev": "3cecb5b042f7f209c56ffd8371b2711a290ec797",
+        "type": "github"
+      },
+      "original": {
+        "owner": "numtide",
+        "repo": "flake-utils",
+        "type": "github"
+      }
+    },
+    "flake-utils_2": {
       "inputs": {
         "systems": "systems"
       },
@@ -99,6 +114,27 @@
       "original": {
         "owner": "numtide",
         "repo": "flake-utils",
+        "type": "github"
+      }
+    },
+    "foundry": {
+      "inputs": {
+        "flake-utils": "flake-utils",
+        "nixpkgs": [
+          "nixpkgs"
+        ]
+      },
+      "locked": {
+        "lastModified": 1762326229,
+        "narHash": "sha256-UFMb92m4iZ8jh0nj9Y3Gy2kBhFTyeiL2FLlXUz2ZQE0=",
+        "owner": "shazow",
+        "repo": "foundry.nix",
+        "rev": "56ba0fc949fad12102717b46cec9097e024e510f",
+        "type": "github"
+      },
+      "original": {
+        "owner": "shazow",
+        "repo": "foundry.nix",
         "type": "github"
       }
     },
@@ -129,7 +165,7 @@
           "crane"
         ],
         "flake-parts": "flake-parts_2",
-        "flake-utils": "flake-utils",
+        "flake-utils": "flake-utils_2",
         "nixpkgs": [
           "nixpkgs"
         ],
@@ -242,6 +278,7 @@
         "crane": "crane",
         "flake-parts": "flake-parts",
         "flake-root": "flake-root",
+        "foundry": "foundry",
         "nix-lib": "nix-lib",
         "nixpkgs": "nixpkgs_2",
         "nixpkgs-unstable": "nixpkgs-unstable",

@@ -1,5 +1,7 @@
 //! GraphQL query root and resolver implementations
 
+use std::sync::Arc;
+
 use async_graphql::{Context, Object, Result};
 use blokli_api_types::{
     Account, ChainInfo, Channel, Hex32, HoprBalance, InvalidTransactionIdError, NativeBalance, TokenValueString,
@@ -7,7 +9,6 @@ use blokli_api_types::{
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
-use std::sync::Arc;
 
 use crate::{
     conversions::{hopr_balance_from_model, native_balance_from_model},
@@ -424,7 +425,7 @@ impl QueryRoot {
                     code: "INVALID_TRANSACTION_ID".to_string(),
                     message: format!("Invalid transaction ID format: {}", id.as_str()),
                     transaction_id: id.to_string(),
-                })))
+                })));
             }
         };
 

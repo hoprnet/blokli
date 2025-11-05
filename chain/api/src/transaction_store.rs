@@ -4,10 +4,11 @@
 //! submitted through the GraphQL API. Transactions are stored with their submission
 //! status and can be queried by UUID.
 
+use std::sync::Arc;
+
 use chrono::{DateTime, Utc};
 use dashmap::DashMap;
 use hopr_crypto_types::types::Hash;
-use std::sync::Arc;
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -144,11 +145,7 @@ impl TransactionStore {
     ///
     /// # Errors
     /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
-    pub fn update_transaction_hash(
-        &self,
-        id: Uuid,
-        transaction_hash: Hash,
-    ) -> Result<(), TransactionStoreError> {
+    pub fn update_transaction_hash(&self, id: Uuid, transaction_hash: Hash) -> Result<(), TransactionStoreError> {
         self.transactions
             .get_mut(&id)
             .map(|mut entry| {
@@ -180,8 +177,9 @@ impl Default for TransactionStore {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use std::thread;
+
+    use super::*;
 
     #[test]
     fn test_create_store_and_insert_transaction() {
@@ -226,10 +224,7 @@ mod tests {
 
         // Try to insert again with same ID
         let result = store.insert(record);
-        assert!(matches!(
-            result,
-            Err(TransactionStoreError::AlreadyExists(_))
-        ));
+        assert!(matches!(result, Err(TransactionStoreError::AlreadyExists(_))));
     }
 
     #[test]
@@ -259,18 +254,14 @@ mod tests {
         store.insert(record).unwrap();
 
         // Update status to Submitted
-        store
-            .update_status(id, TransactionStatus::Submitted, None)
-            .unwrap();
+        store.update_status(id, TransactionStatus::Submitted, None).unwrap();
 
         let retrieved = store.get(id).unwrap();
         assert_eq!(retrieved.status, TransactionStatus::Submitted);
         assert!(retrieved.confirmed_at.is_none());
 
         // Update status to Confirmed
-        store
-            .update_status(id, TransactionStatus::Confirmed, None)
-            .unwrap();
+        store.update_status(id, TransactionStatus::Confirmed, None).unwrap();
 
         let retrieved = store.get(id).unwrap();
         assert_eq!(retrieved.status, TransactionStatus::Confirmed);

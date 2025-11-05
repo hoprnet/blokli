@@ -98,10 +98,15 @@ pub async fn start_server(config: ApiConfig) -> ApiResult<()> {
     // Create a minimal RPC connection for stub purposes
     // In standalone mode, this won't actually be used
     let transport_client = alloy::transports::http::ReqwestTransport::new(
-        url::Url::parse("http://localhost:8545").expect("Failed to parse stub RPC URL")
+        url::Url::parse("http://localhost:8545").expect("Failed to parse stub RPC URL"),
     );
     let rpc_client = alloy::rpc::client::ClientBuilder::default()
-        .layer(alloy::transports::layers::RetryBackoffLayer::new_with_policy(2, 100, 100, DefaultRetryPolicy::default()))
+        .layer(alloy::transports::layers::RetryBackoffLayer::new_with_policy(
+            2,
+            100,
+            100,
+            DefaultRetryPolicy::default(),
+        ))
         .transport(transport_client.clone(), transport_client.guess_local());
 
     let rpc_operations = RpcOperations::new(
@@ -121,7 +126,8 @@ pub async fn start_server(config: ApiConfig) -> ApiResult<()> {
             ..Default::default()
         },
         None,
-    ).expect("Failed to create stub RPC operations");
+    )
+    .expect("Failed to create stub RPC operations");
 
     let rpc_adapter = Arc::new(RpcAdapter::new(rpc_operations));
 
