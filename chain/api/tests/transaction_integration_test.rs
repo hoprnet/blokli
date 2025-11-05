@@ -138,6 +138,30 @@ fn random_address() -> Address {
     Address::new(&rand::random::<[u8; 20]>())
 }
 
+/// Wait for a condition to become true, polling every 50ms
+///
+/// Returns immediately when condition succeeds, or errors after timeout.
+/// This significantly improves test suite runtime compared to fixed sleeps.
+async fn wait_for_condition<F>(timeout: Duration, condition_desc: &str, mut condition: F) -> anyhow::Result<()>
+where
+    F: FnMut() -> bool,
+{
+    let start = std::time::Instant::now();
+    let poll_interval = Duration::from_millis(50);
+
+    loop {
+        if condition() {
+            return Ok(());
+        }
+
+        if start.elapsed() >= timeout {
+            anyhow::bail!("Timeout waiting for: {}", condition_desc);
+        }
+
+        tokio::time::sleep(poll_interval).await;
+    }
+}
+
 /// Create a simple ETH transfer transaction
 async fn create_eth_transfer_tx(
     ctx: &TestContext,
@@ -237,11 +261,13 @@ async fn test_async_mode_returns_uuid_and_tracks() -> anyhow::Result<()> {
     assert!(record.transaction_hash.is_some());
 
     // Wait for monitor to update status
-    tokio::time::sleep(Duration::from_secs(3)).await;
-
-    // Verify transaction is confirmed
-    let record = ctx.store.get(uuid)?;
-    assert_eq!(record.status, TransactionStatus::Confirmed);
+    wait_for_condition(Duration::from_secs(3), "transaction to be confirmed", || {
+        ctx.store
+            .get(uuid)
+            .map(|r| r.status == TransactionStatus::Confirmed)
+            .unwrap_or(false)
+    })
+    .await?;
 
     Ok(())
 }
@@ -268,13 +294,15 @@ async fn test_async_mode_multiple_transactions() -> anyhow::Result<()> {
     }
 
     // Wait for confirmations
-    tokio::time::sleep(Duration::from_secs(4)).await;
-
-    // All should be confirmed
-    for uuid in &uuids {
-        let record = ctx.store.get(*uuid)?;
-        assert_eq!(record.status, TransactionStatus::Confirmed);
-    }
+    wait_for_condition(Duration::from_secs(4), "all transactions to be confirmed", || {
+        uuids.iter().all(|uuid| {
+            ctx.store
+                .get(*uuid)
+                .map(|r| r.status == TransactionStatus::Confirmed)
+                .unwrap_or(false)
+        })
+    })
+    .await?;
 
     Ok(())
 }
@@ -479,7 +507,7 @@ async fn test_transaction_with_invalid_signature() -> anyhow::Result<()> {
 #[tokio::test]
 #[ignore] // Skipped: Cannot drop anvil instance due to Drop trait on TestContext
 async fn test_rpc_connection_failure_handling() -> anyhow::Result<()> {
-    // This test would require a different approach to simulate RPC failure
+    // FIXME: This test would require a different approach to simulate RPC failure
     // without dropping the anvil instance
     Ok(())
 }
@@ -520,13 +548,19 @@ async fn test_concurrent_async_submissions() -> anyhow::Result<()> {
     }
 
     // Wait for confirmations
-    tokio::time::sleep(Duration::from_secs(4)).await;
-
-    // All should eventually confirm
-    for uuid in &uuids {
-        let record = ctx.store.get(*uuid)?;
-        assert_eq!(record.status, TransactionStatus::Confirmed);
-    }
+    wait_for_condition(
+        Duration::from_secs(4),
+        "all concurrent transactions to be confirmed",
+        || {
+            uuids.iter().all(|uuid| {
+                ctx.store
+                    .get(*uuid)
+                    .map(|r| r.status == TransactionStatus::Confirmed)
+                    .unwrap_or(false)
+            })
+        },
+    )
+    .await?;
 
     Ok(())
 }
@@ -554,10 +588,13 @@ async fn test_mixed_mode_operations() -> anyhow::Result<()> {
     assert_eq!(record3.status, TransactionStatus::Confirmed);
 
     // Wait for async to confirm
-    tokio::time::sleep(Duration::from_secs(3)).await;
-
-    let record2 = ctx.store.get(uuid2)?;
-    assert_eq!(record2.status, TransactionStatus::Confirmed);
+    wait_for_condition(Duration::from_secs(3), "async transaction to be confirmed", || {
+        ctx.store
+            .get(uuid2)
+            .map(|r| r.status == TransactionStatus::Confirmed)
+            .unwrap_or(false)
+    })
+    .await?;
 
     // Fire-and-forget should not be in store - count all statuses
     let mut total_tracked = 0;
@@ -595,12 +632,13 @@ async fn test_monitor_updates_confirmed_status() -> anyhow::Result<()> {
     ctx.monitor_handle = Some(start_monitor(&mut ctx));
 
     // Wait for monitor to process
-    tokio::time::sleep(Duration::from_secs(3)).await;
-
-    // Should now be confirmed
-    let record = ctx.store.get(uuid)?;
-    assert_eq!(record.status, TransactionStatus::Confirmed);
-
+    wait_for_condition(Duration::from_secs(3), "monitor to confirm transaction", || {
+        ctx.store
+            .get(uuid)
+            .map(|r| r.status == TransactionStatus::Confirmed)
+            .unwrap_or(false)
+    })
+    .await?;
     Ok(())
 }
 
@@ -621,14 +659,19 @@ async fn test_monitor_batch_processing() -> anyhow::Result<()> {
     ctx.monitor_handle = Some(start_monitor(&mut ctx));
 
     // Wait for batch processing
-    tokio::time::sleep(Duration::from_secs(4)).await;
-
-    // All should be confirmed
-    for uuid in &uuids {
-        let record = ctx.store.get(*uuid)?;
-        assert_eq!(record.status, TransactionStatus::Confirmed);
-    }
-
+    wait_for_condition(
+        Duration::from_secs(4),
+        "monitor to batch-process all transactions",
+        || {
+            uuids.iter().all(|uuid| {
+                ctx.store
+                    .get(*uuid)
+                    .map(|r| r.status == TransactionStatus::Confirmed)
+                    .unwrap_or(false)
+            })
+        },
+    )
+    .await?;
     Ok(())
 }
 
@@ -644,11 +687,17 @@ async fn test_monitor_handles_reorg() -> anyhow::Result<()> {
     let uuid = ctx.executor.send_raw_transaction_async(raw_tx).await?;
 
     // Wait for confirmation
-    tokio::time::sleep(Duration::from_secs(3)).await;
-
-    let record = ctx.store.get(uuid)?;
-    assert_eq!(record.status, TransactionStatus::Confirmed);
-
+    wait_for_condition(
+        Duration::from_secs(3),
+        "transaction to be confirmed after reorg",
+        || {
+            ctx.store
+                .get(uuid)
+                .map(|r| r.status == TransactionStatus::Confirmed)
+                .unwrap_or(false)
+        },
+    )
+    .await?;
     // In a real reorg scenario, the transaction might become pending again
     // For now, we just verify the monitor continues to work correctly
     tokio::time::sleep(Duration::from_secs(2)).await;
