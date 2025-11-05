@@ -133,8 +133,8 @@ impl MutationRoot {
         // Decode hex transaction data
         let raw_tx = hex_to_bytes(&input.raw_transaction)?;
 
-        // Convert i32 to u64 for confirmations
-        let confirmations = confirmations.map(|c| c.max(0) as u64);
+        // Convert i32 to u64 for confirmations (negative values become 0)
+        let confirmations = confirmations.map(|c| u64::try_from(c).unwrap_or(0));
 
         // Execute transaction in sync mode
         match executor.send_raw_transaction_sync(raw_tx, confirmations).await {
