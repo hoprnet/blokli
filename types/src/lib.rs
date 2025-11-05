@@ -3,6 +3,8 @@
 //! This crate contains pure GraphQL type definitions that can be reused
 //! by clients without depending on the full API server implementation.
 
+use std::collections::HashMap;
+
 use async_graphql::{Enum, InputValueError, NewType, Scalar, ScalarType, SimpleObject, Value};
 
 /// Token value represented as a string to maintain precision
@@ -78,6 +80,43 @@ impl ScalarType for UInt64 {
     }
 }
 
+/// Map of contract identifiers to contract addresses
+///
+/// This scalar type represents a mapping from contract identifier strings
+/// (e.g., "token", "channels") to their deployed addresses in hexadecimal format.
+/// Keys: token, channels, announcements, safe_registry, price_oracle, win_prob_oracle, stake_factory
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContractAddressMap(pub HashMap<String, String>);
+
+#[Scalar]
+impl ScalarType for ContractAddressMap {
+    fn parse(value: Value) -> async_graphql::InputValueResult<Self> {
+        match value {
+            Value::Object(obj) => {
+                let mut map = HashMap::new();
+                for (key, val) in obj {
+                    if let Value::String(addr) = val {
+                        map.insert(key.to_string(), addr);
+                    } else {
+                        return Err(InputValueError::custom("ContractAddressMap values must be strings"));
+                    }
+                }
+                Ok(ContractAddressMap(map))
+            }
+            _ => Err(InputValueError::custom("ContractAddressMap must be an object")),
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        let map = self
+            .0
+            .iter()
+            .map(|(k, v)| (async_graphql::Name::new(k.clone()), Value::String(v.clone())))
+            .collect();
+        Value::Object(map)
+    }
+}
+
 /// Status of a payment channel
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum ChannelStatus {
@@ -143,6 +182,9 @@ pub struct ChainInfo {
     /// Channel smart contract domain separator (hex string)
     #[graphql(name = "channelDst")]
     pub channel_dst: Option<Hex32>,
+    /// Map of contract identifiers to their deployed addresses
+    #[graphql(name = "contractAddresses")]
+    pub contract_addresses: ContractAddressMap,
     /// Ledger smart contract domain separator (hex string)
     #[graphql(name = "ledgerDst")]
     pub ledger_dst: Option<Hex32>,
@@ -249,4 +291,23 @@ pub struct SafeHoprAllowance {
     pub address: String,
     /// wxHOPR token allowance granted by the safe to the channels contract
     pub allowance: TokenValueString,
+}
+
+impl From<&blokli_chain_types::ContractAddresses> for ContractAddressMap {
+    fn from(addresses: &blokli_chain_types::ContractAddresses) -> Self {
+        let map = [
+            ("token", &addresses.token),
+            ("channels", &addresses.channels),
+            ("announcements", &addresses.announcements),
+            ("safe_registry", &addresses.safe_registry),
+            ("price_oracle", &addresses.price_oracle),
+            ("win_prob_oracle", &addresses.win_prob_oracle),
+            ("stake_factory", &addresses.stake_factory),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+        ContractAddressMap(map)
+    }
 }

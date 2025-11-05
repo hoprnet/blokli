@@ -1715,6 +1715,7 @@ dependencies = [
  "axum",
  "axum-extra",
  "blokli-api-types",
+ "blokli-chain-types",
  "blokli-db-entity",
  "chrono",
  "clap",
@@ -1740,6 +1741,7 @@ name = "blokli-api-types"
 version = "0.1.0"
 dependencies = [
  "async-graphql",
+ "blokli-chain-types",
  "chrono",
  "serde",
 ]

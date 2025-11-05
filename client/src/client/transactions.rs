@@ -1,12 +1,15 @@
+use std::time::Duration;
+
 use cynic::MutationBuilder;
 use futures::TryStreamExt;
 use futures_time::future::FutureExt;
 use hex::ToHex;
-use std::time::Duration;
 
 use super::{BlokliClient, response_to_data};
-use crate::api::{internal::*, types::*, *};
-use crate::errors::{ErrorKind, TrackingErrorKind};
+use crate::{
+    api::{internal::*, types::*, *},
+    errors::{ErrorKind, TrackingErrorKind},
+};
 
 #[async_trait::async_trait]
 impl BlokliTransactionClient for BlokliClient {

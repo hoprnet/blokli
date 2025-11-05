@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 
 use blokli_api::{config::ApiConfig, schema::export_schema_sdl, start_server};
+use blokli_chain_types::ContractAddresses;
 use clap::{Parser, Subcommand};
 use sea_orm::Database;
 
@@ -52,8 +53,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Connect to database
                 let db = Database::connect(&database_url).await?;
 
-                // Generate schema SDL
-                let schema_sdl = export_schema_sdl(db, chain_id);
+                // Generate schema SDL (using default contract addresses for schema export)
+                let schema_sdl = export_schema_sdl(db, chain_id, ContractAddresses::default());
 
                 // Write to file or stdout
                 if let Some(output_path) = output {

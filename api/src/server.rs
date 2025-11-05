@@ -65,7 +65,7 @@ pub struct AppState {
 
 /// Build the Axum application router
 pub async fn build_app(db: DatabaseConnection, config: ApiConfig) -> ApiResult<Router> {
-    let schema = build_schema(db, config.chain_id);
+    let schema = build_schema(db, config.chain_id, config.contract_addresses);
     let app_state = AppState {
         schema: Arc::new(schema),
         playground_enabled: config.playground_enabled,

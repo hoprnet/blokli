@@ -2,8 +2,11 @@
 
 use async_graphql::{Context, Object, Result};
 use blokli_api_types::{
-    Account, ChainInfo, Channel, Hex32, HoprBalance, NativeBalance, SafeHoprAllowance, TokenValueString,
+    Account, ChainInfo, Channel, ContractAddressMap, Hex32, HoprBalance, NativeBalance, SafeHoprAllowance,
+    TokenValueString,
 };
+use blokli_chain_types::ContractAddresses;
+use blokli_db_entity::conversions::balances::hopr_balance_to_string;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::{
@@ -310,10 +313,9 @@ impl QueryRoot {
     /// Retrieve chain information
     #[graphql(name = "chainInfo")]
     async fn chain_info(&self, ctx: &Context<'_>) -> Result<ChainInfo> {
-        use blokli_db_entity::conversions::balances::hopr_balance_to_string;
-
         let db = ctx.data::<DatabaseConnection>()?;
         let chain_id = ctx.data::<u64>()?;
+        let contract_addresses = ctx.data::<ContractAddresses>()?;
 
         // Fetch chain_info from database (assuming single row with id=1)
         let chain_info = blokli_db_entity::chain_info::Entity::find_by_id(1)
@@ -368,6 +370,7 @@ impl QueryRoot {
             ticket_price,
             min_ticket_winning_probability,
             channel_dst,
+            contract_addresses: ContractAddressMap::from(contract_addresses),
             ledger_dst,
             safe_registry_dst,
             channel_closure_grace_period,

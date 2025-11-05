@@ -17,3 +17,6 @@ chrono = { workspace = true }
 
 # Serialization
 serde = { workspace = true }
+
+# Internal dependencies
+blokli-chain-types = { workspace = true }

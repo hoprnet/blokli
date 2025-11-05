@@ -45,6 +45,8 @@ type ChainInfo {
   channelClosureGracePeriod: UInt64
   "Channel smart contract domain separator (hex string)"
   channelDst: String
+  "Map of contract identifiers to their deployed addresses"
+  contractAddresses: ContractAddressMap!
   "Ledger smart contract domain separator (hex string)"
   ledgerDst: String
   "Current minimum ticket winning probability (decimal value between 0.0 and 1.0)"
@@ -96,6 +98,13 @@ enum ChannelStatus {
   "Channel is in the process of closing"
   PENDINGTOCLOSE
 }
+
+"""
+Map of contract identifier to contract address (hexadecimal format).
+Keys: token, channels, announcements, safe_registry, price_oracle, win_prob_oracle, stake_factory
+Example: {"token": "0x123...", "channels": "0x456..."}
+"""
+scalar ContractAddressMap
 
 """Target contract not in allowlist"""
 type ContractNotAllowedError {
