@@ -281,6 +281,7 @@ async fn run() -> errors::Result<()> {
                 tls: None,
                 cors_allowed_origins: vec!["*".to_string()], // Permissive for now
                 chain_id,
+                contract_addresses: contracts,
             };
 
             // Build API app

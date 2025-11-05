@@ -126,6 +126,7 @@ pub trait BlokliTransactionClient {
     /// Submits a signed transaction to the chain and waits for the given number of confirmations.
     async fn submit_and_confirm_transaction(&self, signed_tx: &[u8], num_confirmations: usize) -> Result<TxReceipt>;
     /// Tracks the transaction given the `tx_id` previously returned
-    /// by [`submit_and_track_transaction`](BlokliTransactionClient::submit_and_track_transaction) until it is confirmed or [fails](crate::errors::TrackingErrorKind).
+    /// by [`submit_and_track_transaction`](BlokliTransactionClient::submit_and_track_transaction) until it is confirmed
+    /// or [fails](crate::errors::TrackingErrorKind).
     async fn track_transaction(&self, tx_id: TxId, client_timeout: std::time::Duration) -> Result<types::Transaction>;
 }
