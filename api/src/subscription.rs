@@ -8,7 +8,7 @@ use async_stream::stream;
 use blokli_api_types::{
     Account, Channel, ChannelUpdate, HoprBalance, NativeBalance, OpenedChannelsGraph, TokenValueString,
 };
-use blokli_chain_indexer::{IndexerState, state::ChannelEvent};
+use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
 use blokli_db_entity::conversions::balances::{
     address_to_string, hopr_balance_to_string, native_balance_to_string, string_to_address,
 };
@@ -58,7 +58,7 @@ pub struct Watermark {
 async fn capture_watermark_synchronized(
     indexer_state: &IndexerState,
     db: &DatabaseConnection,
-) -> Result<(Watermark, Receiver<ChannelEvent>, Receiver<()>)> {
+) -> Result<(Watermark, Receiver<IndexerEvent>, Receiver<()>)> {
     // Acquire read lock - this waits for any in-progress block processing to complete
     let _lock = indexer_state.acquire_watermark_lock().await;
 
@@ -250,120 +250,7 @@ async fn query_channels_at_watermark(
     Ok(results)
 }
 
-/// Converts a ChannelEvent to a ChannelUpdate by fetching current data
-///
-/// This function queries the database for the channel, its current state,
-/// and both participating accounts, then constructs a complete ChannelUpdate.
-///
-/// # Arguments
-///
-/// * `db` - Database connection
-/// * `event` - The channel event from the event bus
-///
-/// # Returns
-///
-/// ChannelUpdate with complete channel and account information, or None if channel not found
-#[allow(dead_code)]
-async fn fetch_channel_update(db: &DatabaseConnection, event: &ChannelEvent) -> Result<Option<ChannelUpdate>> {
-    use std::collections::HashMap;
-
-    use blokli_db_entity::{channel, channel_state};
-    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
-
-    // Extract channel_id from the event
-    let channel_id = match event {
-        ChannelEvent::Opened { channel_id }
-        | ChannelEvent::Updated { channel_id }
-        | ChannelEvent::Closed { channel_id } => *channel_id,
-    };
-
-    // Fetch the channel
-    let channel = channel::Entity::find_by_id(channel_id)
-        .one(db)
-        .await
-        .map_err(|e| async_graphql::Error::new(format!("Failed to query channel: {}", e)))?;
-
-    let channel = match channel {
-        Some(c) => c,
-        None => return Ok(None), // Channel not found, skip
-    };
-
-    // Fetch latest channel_state
-    let channel_state = channel_state::Entity::find()
-        .filter(channel_state::Column::ChannelId.eq(channel_id))
-        .order_by_desc(channel_state::Column::PublishedBlock)
-        .order_by_desc(channel_state::Column::PublishedTxIndex)
-        .order_by_desc(channel_state::Column::PublishedLogIndex)
-        .one(db)
-        .await
-        .map_err(|e| async_graphql::Error::new(format!("Failed to query channel_state: {}", e)))?;
-
-    let state = match channel_state {
-        Some(s) => s,
-        None => return Ok(None), // No state found, skip
-    };
-
-    // Fetch both accounts
-    let account_ids = vec![channel.source, channel.destination];
-    let accounts_result = blokli_db_entity::conversions::account_aggregation::fetch_accounts_by_keyids(db, account_ids)
-        .await
-        .map_err(|e| async_graphql::Error::new(format!("Failed to fetch accounts: {}", e)))?;
-
-    let account_map: HashMap<i32, blokli_db_entity::conversions::account_aggregation::AggregatedAccount> =
-        accounts_result.into_iter().map(|a| (a.keyid, a)).collect();
-
-    let source_account = account_map
-        .get(&channel.source)
-        .ok_or_else(|| async_graphql::Error::new(format!("Source account {} not found", channel.source)))?;
-
-    let dest_account = account_map
-        .get(&channel.destination)
-        .ok_or_else(|| async_graphql::Error::new(format!("Destination account {} not found", channel.destination)))?;
-
-    // Convert to GraphQL types
-    use blokli_db_entity::conversions::balances::balance_to_string;
-
-    let channel_gql = Channel {
-        concrete_channel_id: channel.concrete_channel_id,
-        source: channel.source,
-        destination: channel.destination,
-        balance: TokenValueString(balance_to_string(&state.balance)),
-        status: state.status.into(),
-        epoch: i32::try_from(state.epoch).unwrap_or(i32::MAX),
-        ticket_index: blokli_api_types::UInt64(u64::try_from(state.ticket_index).unwrap_or(0)),
-        closure_time: state.closure_time,
-    };
-
-    let source_gql = Account {
-        keyid: source_account.keyid,
-        chain_key: source_account.chain_key.clone(),
-        packet_key: source_account.packet_key.clone(),
-        account_hopr_balance: TokenValueString(source_account.account_hopr_balance.clone()),
-        account_native_balance: TokenValueString(source_account.account_native_balance.clone()),
-        safe_address: source_account.safe_address.clone(),
-        safe_hopr_balance: source_account.safe_hopr_balance.clone().map(TokenValueString),
-        safe_native_balance: source_account.safe_native_balance.clone().map(TokenValueString),
-        multi_addresses: source_account.multi_addresses.clone(),
-    };
-
-    let dest_gql = Account {
-        keyid: dest_account.keyid,
-        chain_key: dest_account.chain_key.clone(),
-        packet_key: dest_account.packet_key.clone(),
-        account_hopr_balance: TokenValueString(dest_account.account_hopr_balance.clone()),
-        account_native_balance: TokenValueString(dest_account.account_native_balance.clone()),
-        safe_address: dest_account.safe_address.clone(),
-        safe_hopr_balance: dest_account.safe_hopr_balance.clone().map(TokenValueString),
-        safe_native_balance: dest_account.safe_native_balance.clone().map(TokenValueString),
-        multi_addresses: dest_account.multi_addresses.clone(),
-    };
-
-    Ok(Some(ChannelUpdate {
-        channel: channel_gql,
-        source: source_gql,
-        destination: dest_gql,
-    }))
-}
+/// fetch_channel_update is no longer needed - events now contain complete data
 
 /// Root subscription type providing real-time updates via Server-Sent Events (SSE)
 pub struct SubscriptionRoot;
@@ -540,21 +427,13 @@ impl SubscriptionRoot {
                     // Receive event from event bus
                     event_result = event_receiver.recv() => {
                         match event_result {
-                            Ok(event) => {
-                                // Fetch channel update for this event
-                                match fetch_channel_update(&db, &event).await {
-                                    Ok(Some(channel_update)) => {
-                                        yield channel_update;
-                                    }
-                                    Ok(None) => {
-                                        // Channel not found or no state - skip silently
-                                        tracing::debug!("Skipping event {:?} - channel not found", event);
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("Failed to fetch channel update: {:?}", e);
-                                        // Continue on error rather than terminating subscription
-                                    }
-                                }
+                            Ok(IndexerEvent::ChannelUpdated(channel_update)) => {
+                                // Event already contains complete data, just yield it
+                                yield channel_update;
+                            }
+                            Ok(IndexerEvent::AccountUpdated(_)) => {
+                                // Account updates don't affect this subscription
+                                // Just continue to next event
                             }
                             Err(async_broadcast::RecvError::Closed) => {
                                 tracing::info!("Event bus closed, ending subscription");
@@ -772,9 +651,8 @@ impl SubscriptionRoot {
 
 #[cfg(test)]
 mod tests {
-    use blokli_chain_indexer::state::ChannelEvent;
+    use blokli_chain_indexer::state::IndexerEvent;
     use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb};
-    use blokli_db_entity::codegen::prelude::*;
     use sea_orm::{ActiveModelTrait, Set};
 
     use super::*;
@@ -897,12 +775,25 @@ mod tests {
                 .await
                 .unwrap();
 
+        // Create a test account for the event
+        let test_account = Account {
+            keyid: 1,
+            chain_key: "0x1111".to_string(),
+            packet_key: "peer1".to_string(),
+            account_hopr_balance: TokenValueString("100".to_string()),
+            account_native_balance: TokenValueString("50".to_string()),
+            safe_address: None,
+            safe_hopr_balance: None,
+            safe_native_balance: None,
+            multi_addresses: vec![],
+        };
+
         // Publish event to bus
-        indexer_state.publish_event(ChannelEvent::Opened { channel_id: 42 });
+        indexer_state.publish_event(IndexerEvent::AccountUpdated(test_account.clone()));
 
         // Verify subscriber receives the event
         let received = event_rx.recv().await.unwrap();
-        assert!(matches!(received, ChannelEvent::Opened { channel_id: 42 }));
+        assert!(matches!(received, IndexerEvent::AccountUpdated(_)));
     }
 
     #[tokio::test]
@@ -1188,102 +1079,8 @@ mod tests {
         assert_eq!(result.len(), 3);
     }
 
-    #[tokio::test]
-    async fn test_fetch_channel_update_finds_existing_channel() {
-        let db = BlokliDb::new_in_memory().await.unwrap();
-
-        // Create accounts
-        let source_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![1; 20], "peer1")
-            .await
-            .unwrap();
-        let dest_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![2; 20], "peer2")
-            .await
-            .unwrap();
-
-        // Create channel
-        let channel_id = create_test_channel(db.conn(blokli_db::TargetDb::Index), source_id, dest_id, "0xabc123")
-            .await
-            .unwrap();
-
-        // Insert channel state
-        insert_channel_state(
-            db.conn(blokli_db::TargetDb::Index),
-            channel_id,
-            50,
-            0,
-            0,
-            vec![5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            1, // OPEN
-        )
-        .await
-        .unwrap();
-
-        // Fetch channel update for event
-        let event = ChannelEvent::Updated { channel_id };
-        let result = fetch_channel_update(db.conn(blokli_db::TargetDb::Index), &event)
-            .await
-            .unwrap();
-
-        assert!(result.is_some());
-        let update = result.unwrap();
-        assert_eq!(update.channel.concrete_channel_id, "0xabc123");
-        assert_eq!(update.channel.balance.0, "5");
-    }
-
-    #[tokio::test]
-    async fn test_fetch_channel_update_returns_none_for_missing_channel() {
-        let db = BlokliDb::new_in_memory().await.unwrap();
-
-        // Try to fetch non-existent channel
-        let event = ChannelEvent::Updated { channel_id: 999 };
-        let result = fetch_channel_update(db.conn(blokli_db::TargetDb::Index), &event)
-            .await
-            .unwrap();
-
-        // Should return None for missing channel
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_fetch_channel_update_handles_all_event_types() {
-        let db = BlokliDb::new_in_memory().await.unwrap();
-
-        // Create test channel
-        let source_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![1; 20], "peer1")
-            .await
-            .unwrap();
-        let dest_id = create_test_account(db.conn(blokli_db::TargetDb::Index), vec![2; 20], "peer2")
-            .await
-            .unwrap();
-        let channel_id = create_test_channel(db.conn(blokli_db::TargetDb::Index), source_id, dest_id, "0xabc123")
-            .await
-            .unwrap();
-        insert_channel_state(
-            db.conn(blokli_db::TargetDb::Index),
-            channel_id,
-            50,
-            0,
-            0,
-            vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-            1,
-        )
-        .await
-        .unwrap();
-
-        // Test all event types
-        let events = vec![
-            ChannelEvent::Opened { channel_id },
-            ChannelEvent::Updated { channel_id },
-            ChannelEvent::Closed { channel_id },
-        ];
-
-        for event in events {
-            let result = fetch_channel_update(db.conn(blokli_db::TargetDb::Index), &event)
-                .await
-                .unwrap();
-            assert!(result.is_some(), "Failed for event: {:?}", event);
-        }
-    }
+    // Tests for fetch_channel_update removed - events now contain complete data
+    // No need to fetch from database as IndexerEvent contains full ChannelUpdate
 
     #[tokio::test]
     async fn test_watermark_struct_fields() {

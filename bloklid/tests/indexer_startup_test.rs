@@ -109,8 +109,11 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         stake_factory: Address::from([9; 20]),
     };
 
+    // Create indexer state for subscriptions (must be created before handlers)
+    let indexer_state = blokli_chain_indexer::IndexerState::new(1000, 10);
+
     // Create event handlers
-    let handlers = ContractEventHandlers::new(contract_addresses, db.clone(), mock_rpc.clone());
+    let handlers = ContractEventHandlers::new(contract_addresses, db.clone(), mock_rpc.clone(), indexer_state.clone());
 
     // Initialize logs origin data using the proper contract addresses and topics
     let mut address_topics = vec![];
@@ -137,9 +140,6 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
 
     // Create channel for events
     let (tx_events, _rx_events) = async_channel::unbounded();
-
-    // Create indexer state for subscriptions
-    let indexer_state = blokli_chain_indexer::IndexerState::new(1000, 10);
 
     // Create indexer
     let indexer =
@@ -186,8 +186,11 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         stake_factory: Address::from([9; 20]),
     };
 
+    // Create indexer state for subscriptions (must be created before handlers)
+    let indexer_state = blokli_chain_indexer::IndexerState::new(1000, 10);
+
     // Create event handlers
-    let handlers = ContractEventHandlers::new(contract_addresses, db.clone(), mock_rpc.clone());
+    let handlers = ContractEventHandlers::new(contract_addresses, db.clone(), mock_rpc.clone(), indexer_state.clone());
 
     // Initialize logs origin data using the proper contract addresses and topics
     let mut address_topics = vec![];
@@ -214,9 +217,6 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
 
     // Create channel for events
     let (tx_events, _rx_events) = async_channel::unbounded();
-
-    // Create indexer state for subscriptions
-    let indexer_state = blokli_chain_indexer::IndexerState::new(1000, 10);
 
     // Create indexer
     let indexer =
@@ -330,8 +330,11 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         stake_factory: Address::from([9; 20]),
     };
 
+    // Create indexer state for subscriptions (must be created before handlers)
+    let indexer_state = blokli_chain_indexer::IndexerState::new(1000, 10);
+
     // Create event handlers
-    let handlers = ContractEventHandlers::new(contract_addresses, db.clone(), tracking_rpc.clone());
+    let handlers = ContractEventHandlers::new(contract_addresses, db.clone(), tracking_rpc.clone(), indexer_state.clone());
 
     // Initialize logs origin data using the proper contract addresses and topics
     let mut address_topics = vec![];
@@ -359,9 +362,6 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
 
     // Create channel for events
     let (tx_events, _rx_events) = async_channel::unbounded();
-
-    // Create indexer state for subscriptions
-    let indexer_state = blokli_chain_indexer::IndexerState::new(1000, 10);
 
     // Create and start indexer
     let indexer = Indexer::new(tracking_rpc, handlers, db, indexer_config, tx_events, indexer_state)

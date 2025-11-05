@@ -13,7 +13,6 @@ use blokli_db::{BlokliDbGeneralModelOperations, api::logs::BlokliDbLogOperations
 use futures::{
     StreamExt,
     future::AbortHandle,
-    stream::{self},
 };
 use hopr_bindings::hopr_token::HoprToken::{Approval, Transfer};
 use hopr_crypto_types::types::Hash;
@@ -149,8 +148,8 @@ where
         let rpc = self.rpc.take().expect("rpc should be present");
         let logs_handler = Arc::new(self.db_processor.take().expect("db_processor should be present"));
         let db = self.db.clone();
-        let tx_significant_events = self.egress.clone();
-        let indexer_state = self.indexer_state.clone();
+        let _tx_significant_events = self.egress.clone();
+        let _indexer_state = self.indexer_state.clone();
         let panic_on_completion = self.panic_on_completion;
 
         let (log_filters, address_topics) = Self::generate_log_filters(&logs_handler);
@@ -348,37 +347,21 @@ where
                             }
                         }
                     }
-                })
-                .filter_map(|block| {
+                });
+
+            let block_processing_stream = event_stream
+                .then(|block| {
                     let db = db.clone();
                     let logs_handler = logs_handler.clone();
                     let is_synced = is_synced.clone();
                     async move {
-                        Self::process_block(&db, &logs_handler, block, false, is_synced.load(Ordering::Relaxed)).await
+                        // Events are now published directly via IndexerState within handlers
+                        Self::process_block(&db, &logs_handler, block, false, is_synced.load(Ordering::Relaxed)).await;
                     }
-                })
-                .flat_map(stream::iter);
+                });
 
-            futures::pin_mut!(event_stream);
-            while let Some(event) = event_stream.next().await {
-                trace!(%event, "processing on-chain event");
-                // Pass the events further only once we're fully synced
-                if is_synced.load(Ordering::Relaxed) {
-                    if let Err(error) = tx_significant_events.try_send(event.clone()) {
-                        error!(%error, "failed to pass a significant chain event further");
-                    }
-
-                    // TODO(temporal-db): Publish channel events to the IndexerState event bus for real-time
-                    // subscriptions Currently disabled because we need to map ChannelEntry (with
-                    // on-chain Hash ID) to database internal ID (i32). This requires either:
-                    // 1. Querying the channel table by concrete_channel_id (adds latency)
-                    // 2. Refactoring handlers to return database IDs along with events
-                    // 3. Publishing events directly from database operations where IDs are known
-                    // For now, subscriptions will only work with the Phase 1 snapshot, without Phase 2 real-time
-                    // updates.
-                    let _ = (&indexer_state, &event); // Suppress unused variable warnings
-                }
-            }
+            // Process all blocks (events are published internally via IndexerState)
+            block_processing_stream.collect::<Vec<_>>().await;
 
             if panic_on_completion {
                 panic!(
@@ -496,14 +479,13 @@ where
     ///
     /// # Returns
     ///
-    /// A `Result` containing an optional vector of significant chain events if the operation succeeds or an error if it
-    /// fails.
+    /// A `Result` containing an Option with unit type if the operation succeeds or an error if it fails.
     async fn process_block_by_id(
         db: &Db,
         logs_handler: &U,
         block_id: u64,
         is_synced: bool,
-    ) -> crate::errors::Result<Option<Vec<SignificantChainEvent>>>
+    ) -> crate::errors::Result<Option<()>>
     where
         U: ChainLogHandler + 'static,
         Db: BlokliDbLogOperations + 'static,
@@ -532,7 +514,8 @@ where
 
     /// Processes a block and its logs.
     ///
-    /// This function collects events from the block logs and updates the database with the processed logs.
+    /// This function processes the block logs and updates the database.
+    /// Events are published internally via IndexerState event bus.
     ///
     /// # Arguments
     ///
@@ -543,14 +526,14 @@ where
     ///
     /// # Returns
     ///
-    /// An optional vector of significant chain events if the operation succeeds.
+    /// An Option with unit type if the operation succeeds.
     async fn process_block(
         db: &Db,
         logs_handler: &U,
         block: BlockWithLogs,
         fetch_checksum_from_db: bool,
         is_synced: bool,
-    ) -> Option<Vec<SignificantChainEvent>>
+    ) -> Option<()>
     where
         U: ChainLogHandler + 'static,
         Db: BlokliDbLogOperations + 'static,
@@ -591,28 +574,25 @@ where
 
         // FIXME: The block indexing and marking as processed should be done in a single
         // transaction. This is difficult since currently this would be across databases.
-        let events = stream::iter(block.logs.clone())
-            .filter_map(|log| async move {
-                match logs_handler.collect_log_event(log.clone(), is_synced).await {
-                    Ok(data) => match db.set_log_processed(log).await {
-                        Ok(_) => data,
-                        Err(error) => {
-                            error!(block_id, %error, "failed to mark log as processed, panicking to prevent data loss");
-                            panic!("failed to mark log as processed, panicking to prevent data loss")
-                        }
-                    },
-                    Err(CoreEthereumIndexerError::ProcessError(error)) => {
-                        error!(block_id, %error, "failed to process log into event, continuing indexing");
-                        None
-                    }
+        // Process all logs - events are published internally via IndexerState
+        for log in block.logs.clone() {
+            match logs_handler.collect_log_event(log.clone(), is_synced).await {
+                Ok(()) => match db.set_log_processed(log).await {
+                    Ok(_) => {},
                     Err(error) => {
-                        error!(block_id, %error, "failed to process log into event, panicking to prevent data loss");
-                        panic!("failed to process log into event, panicking to prevent data loss")
+                        error!(block_id, %error, "failed to mark log as processed, panicking to prevent data loss");
+                        panic!("failed to mark log as processed, panicking to prevent data loss")
                     }
+                },
+                Err(CoreEthereumIndexerError::ProcessError(error)) => {
+                    error!(block_id, %error, "failed to process log, continuing indexing");
                 }
-            })
-            .collect::<Vec<SignificantChainEvent>>()
-            .await;
+                Err(error) => {
+                    error!(block_id, %error, "failed to process log, panicking to prevent data loss");
+                    panic!("failed to process log, panicking to prevent data loss")
+                }
+            }
+        }
 
         // if we made it this far, no errors occurred and we can update checksums and indexer state
         match db.update_logs_checksums().await {
@@ -657,11 +637,10 @@ where
 
         debug!(
             block_id,
-            num_events = events.len(),
-            "processed significant chain events from block",
+            "processed block logs - events published via IndexerState",
         );
 
-        Some(events)
+        Some(())
     }
 
     /// Detects blockchain reorganization by checking for removed logs in a block.

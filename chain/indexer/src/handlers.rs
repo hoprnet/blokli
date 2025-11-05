@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     fmt::{Debug, Formatter},
     ops::Add,
     sync::Arc,
@@ -7,12 +8,11 @@ use std::{
 
 use alloy::{primitives::B256, sol_types::SolEventInterface};
 use async_trait::async_trait;
+use blokli_api_types::{Account, Channel, ChannelUpdate, TokenValueString, UInt64};
 use blokli_chain_rpc::{HoprIndexerRpcOperations, Log};
-use blokli_chain_types::{
-    ContractAddresses,
-    chain_events::{ChainEventType, SignificantChainEvent},
-};
+use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator, errors::DbSqlError};
+use blokli_db_entity::conversions::{account_aggregation, balances::balance_to_string};
 use hopr_bindings::{
     hopr_announcements::HoprAnnouncements::HoprAnnouncementsEvents, hopr_channels::HoprChannels::HoprChannelsEvents,
     hopr_node_management_module::HoprNodeManagementModule::HoprNodeManagementModuleEvents,
@@ -24,9 +24,10 @@ use hopr_bindings::{
 use hopr_crypto_types::prelude::*;
 use hopr_internal_types::prelude::*;
 use hopr_primitive_types::prelude::*;
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use tracing::{debug, error, info, trace, warn};
 
-use crate::errors::{CoreEthereumIndexerError, Result};
+use crate::{IndexerState, errors::{CoreEthereumIndexerError, Result}};
 
 /// Represents the decoded state of a channel from the packed bytes32 format emitted by contract events.
 ///
@@ -103,6 +104,161 @@ fn decode_channel(channel: B256) -> DecodedChannel {
     }
 }
 
+/// Helper function to construct a complete ChannelUpdate from database channel_id
+///
+/// This function queries the database for the channel, its latest state, and both
+/// participating accounts, then constructs a complete ChannelUpdate with all GraphQL data.
+/// This is used to create events to publish to subscribers.
+///
+/// # Arguments
+/// * `db` - Database connection
+/// * `channel_id` - The on-chain channel ID (Hash, not the internal database ID)
+///
+/// # Returns
+/// * `Result<ChannelUpdate>` - Complete channel update with all account data
+///
+/// # Errors
+/// * Returns error if channel not found, state not found, or accounts not found
+async fn construct_channel_update(db: &DatabaseConnection, channel_id: &Hash) -> Result<ChannelUpdate> {
+    use blokli_db_entity::codegen::{channel, channel_state};
+
+    // Convert Hash to hex string for database query
+    let channel_id_hex = format!("0x{}", alloy::hex::encode(channel_id.as_ref()));
+
+    // 1. Find the channel by concrete_channel_id
+    let channel = channel::Entity::find()
+        .filter(channel::Column::ConcreteChannelId.eq(&channel_id_hex))
+        .one(db)
+        .await
+        .map_err(|e| CoreEthereumIndexerError::ProcessError(format!("Failed to query channel: {}", e)))?
+        .ok_or_else(|| CoreEthereumIndexerError::ProcessError(format!("Channel {} not found", channel_id_hex)))?;
+
+    // 2. Get the latest channel_state for this channel
+    let state = channel_state::Entity::find()
+        .filter(channel_state::Column::ChannelId.eq(channel.id))
+        .order_by_desc(channel_state::Column::PublishedBlock)
+        .order_by_desc(channel_state::Column::PublishedTxIndex)
+        .order_by_desc(channel_state::Column::PublishedLogIndex)
+        .one(db)
+        .await
+        .map_err(|e| CoreEthereumIndexerError::ProcessError(format!("Failed to query channel_state: {}", e)))?
+        .ok_or_else(|| CoreEthereumIndexerError::ProcessError(format!("Channel state not found for channel {}", channel.id)))?;
+
+    // 3. Fetch both accounts using the optimized aggregation function
+    let account_ids = vec![channel.source, channel.destination];
+    let accounts_result = account_aggregation::fetch_accounts_by_keyids(db, account_ids)
+        .await
+        .map_err(|e| CoreEthereumIndexerError::ProcessError(format!("Failed to fetch accounts: {}", e)))?;
+
+    let account_map: HashMap<i32, account_aggregation::AggregatedAccount> = accounts_result
+        .into_iter()
+        .map(|a| (a.keyid, a))
+        .collect();
+
+    let source_account = account_map
+        .get(&channel.source)
+        .ok_or_else(|| CoreEthereumIndexerError::ProcessError(format!("Source account {} not found", channel.source)))?;
+
+    let dest_account = account_map
+        .get(&channel.destination)
+        .ok_or_else(|| CoreEthereumIndexerError::ProcessError(format!("Destination account {} not found", channel.destination)))?;
+
+    // 4. Convert to GraphQL types
+    let channel_gql = Channel {
+        concrete_channel_id: channel.concrete_channel_id,
+        source: channel.source,
+        destination: channel.destination,
+        balance: TokenValueString(balance_to_string(&state.balance)),
+        status: state.status.into(),
+        epoch: i32::try_from(state.epoch).unwrap_or(i32::MAX),
+        ticket_index: UInt64(u64::try_from(state.ticket_index).unwrap_or(0)),
+        closure_time: state.closure_time,
+    };
+
+    let source_gql = Account {
+        keyid: source_account.keyid,
+        chain_key: source_account.chain_key.clone(),
+        packet_key: source_account.packet_key.clone(),
+        account_hopr_balance: TokenValueString(source_account.account_hopr_balance.clone()),
+        account_native_balance: TokenValueString(source_account.account_native_balance.clone()),
+        safe_address: source_account.safe_address.clone(),
+        safe_hopr_balance: source_account.safe_hopr_balance.clone().map(TokenValueString),
+        safe_native_balance: source_account.safe_native_balance.clone().map(TokenValueString),
+        multi_addresses: source_account.multi_addresses.clone(),
+    };
+
+    let dest_gql = Account {
+        keyid: dest_account.keyid,
+        chain_key: dest_account.chain_key.clone(),
+        packet_key: dest_account.packet_key.clone(),
+        account_hopr_balance: TokenValueString(dest_account.account_hopr_balance.clone()),
+        account_native_balance: TokenValueString(dest_account.account_native_balance.clone()),
+        safe_address: dest_account.safe_address.clone(),
+        safe_hopr_balance: dest_account.safe_hopr_balance.clone().map(TokenValueString),
+        safe_native_balance: dest_account.safe_native_balance.clone().map(TokenValueString),
+        multi_addresses: dest_account.multi_addresses.clone(),
+    };
+
+    Ok(ChannelUpdate {
+        channel: channel_gql,
+        source: source_gql,
+        destination: dest_gql,
+    })
+}
+
+/// Helper function to construct a complete Account from database account address
+///
+/// This function queries the database for the account with all related data
+/// (balances, announcements, safe address) and constructs a complete Account GraphQL object.
+/// This is used to create events to publish to subscribers.
+///
+/// # Arguments
+/// * `db` - Database connection
+/// * `address` - The on-chain account address
+///
+/// # Returns
+/// * `Result<Account>` - Complete account with all data
+///
+/// # Errors
+/// * Returns error if account not found
+async fn construct_account_update(db: &DatabaseConnection, address: &Address) -> Result<Account> {
+    use blokli_db_entity::{codegen::account, conversions::balances::address_to_string};
+
+    // Convert Address to binary for database query
+    let address_bytes = address.as_ref().to_vec();
+
+    // 1. Find the account by chain_key
+    let account = account::Entity::find()
+        .filter(account::Column::ChainKey.eq(address_bytes.clone()))
+        .one(db)
+        .await
+        .map_err(|e| CoreEthereumIndexerError::ProcessError(format!("Failed to query account: {}", e)))?
+        .ok_or_else(|| CoreEthereumIndexerError::ProcessError(format!("Account {} not found", address_to_string(&address_bytes))))?;
+
+    // 2. Fetch complete account data using the optimized aggregation function
+    let accounts_result = account_aggregation::fetch_accounts_by_keyids(db, vec![account.id])
+        .await
+        .map_err(|e| CoreEthereumIndexerError::ProcessError(format!("Failed to fetch account data: {}", e)))?;
+
+    let aggregated = accounts_result
+        .into_iter()
+        .next()
+        .ok_or_else(|| CoreEthereumIndexerError::ProcessError(format!("Account {} data not found", account.id)))?;
+
+    // 3. Convert to GraphQL type
+    Ok(Account {
+        keyid: aggregated.keyid,
+        chain_key: aggregated.chain_key,
+        packet_key: aggregated.packet_key,
+        account_hopr_balance: TokenValueString(aggregated.account_hopr_balance),
+        account_native_balance: TokenValueString(aggregated.account_native_balance),
+        safe_address: aggregated.safe_address,
+        safe_hopr_balance: aggregated.safe_hopr_balance.map(TokenValueString),
+        safe_native_balance: aggregated.safe_native_balance.map(TokenValueString),
+        multi_addresses: aggregated.multi_addresses,
+    })
+}
+
 #[cfg(all(feature = "prometheus", not(test)))]
 lazy_static::lazy_static! {
     static ref METRIC_INDEXER_LOG_COUNTERS: hopr_metrics::MultiCounter =
@@ -126,6 +282,8 @@ pub struct ContractEventHandlers<T, Db> {
     db: Db,
     /// rpc operations to interact with the chain
     _rpc_operations: T,
+    /// indexer state for publishing events to subscribers
+    indexer_state: IndexerState,
 }
 
 impl<T, Db> Debug for ContractEventHandlers<T, Db> {
@@ -153,14 +311,16 @@ where
     /// * `addresses` - Contract addresses configuration
     /// * `db` - Database connection for persistent storage
     /// * `rpc_operations` - RPC interface for direct blockchain queries
+    /// * `indexer_state` - Indexer state for publishing events to subscribers
     ///
     /// # Returns
     /// * `Self` - New instance of `ContractEventHandlers`
-    pub fn new(addresses: ContractAddresses, db: Db, rpc_operations: T) -> Self {
+    pub fn new(addresses: ContractAddresses, db: Db, rpc_operations: T, indexer_state: IndexerState) -> Self {
         Self {
             addresses: Arc::new(addresses),
             db,
             _rpc_operations: rpc_operations,
+            indexer_state,
         }
     }
 
@@ -171,8 +331,8 @@ where
         block_number: u32,
         tx_index: u32,
         log_index: u32,
-        _is_synced: bool,
-    ) -> Result<Option<ChainEventType>> {
+        is_synced: bool,
+    ) -> Result<()> {
         #[cfg(all(feature = "prometheus", not(test)))]
         METRIC_INDEXER_LOG_COUNTERS.increment(&["announcements"]);
 
@@ -189,12 +349,11 @@ where
                         address = %address_announcement.node,
                         "encountered empty multiaddress announcement",
                     );
-                    return Ok(None);
+                    return Ok(());
                 }
                 let node_address: Address = address_announcement.node.into();
 
-                return match self
-                    .db
+                self.db
                     .insert_announcement(
                         Some(tx),
                         node_address,
@@ -202,15 +361,25 @@ where
                         block_number,
                     )
                     .await
-                {
-                    Ok(account) => Ok(Some(ChainEventType::Announcement {
-                        peer: account.public_key.into(),
-                        address: account.chain_addr,
-                        multiaddresses: vec![account.get_multiaddr().expect("not must contain multiaddr")],
-                    })),
-                    Err(DbSqlError::MissingAccount) => Err(CoreEthereumIndexerError::AnnounceBeforeKeyBinding),
-                    Err(e) => Err(e.into()),
-                };
+                    .map_err(|e| match e {
+                        DbSqlError::MissingAccount => CoreEthereumIndexerError::AnnounceBeforeKeyBinding,
+                        other => other.into(),
+                    })?;
+
+                // Publish AccountUpdated event if synced
+                if is_synced {
+                    let db_conn = self.db.conn(blokli_db::TargetDb::Index);
+                    match construct_account_update(db_conn, &node_address).await {
+                        Ok(account) => {
+                            self.indexer_state.publish_event(
+                                crate::state::IndexerEvent::AccountUpdated(account)
+                            );
+                        }
+                        Err(e) => {
+                            warn!("Failed to construct account update for AddressAnnouncement: {}", e);
+                        }
+                    }
+                }
             }
             HoprAnnouncementsEvents::KeyBinding(key_binding) => {
                 debug!(
@@ -224,11 +393,12 @@ where
                     OffchainSignature::try_from((key_binding.ed25519_sig_0.0, key_binding.ed25519_sig_1.0))?,
                 ) {
                     Ok(binding) => {
+                        let chain_key = binding.chain_key;
                         match self
                             .db
                             .upsert_account(
                                 Some(tx),
-                                binding.chain_key,
+                                chain_key,
                                 binding.packet_key,
                                 None, // safe_address is None for key bindings
                                 block_number,
@@ -237,7 +407,22 @@ where
                             )
                             .await
                         {
-                            Ok(_) => (),
+                            Ok(_) => {
+                                // Publish AccountUpdated event if synced
+                                if is_synced {
+                                    let db_conn = self.db.conn(blokli_db::TargetDb::Index);
+                                    match construct_account_update(db_conn, &chain_key).await {
+                                        Ok(account) => {
+                                            self.indexer_state.publish_event(
+                                                crate::state::IndexerEvent::AccountUpdated(account)
+                                            );
+                                        }
+                                        Err(e) => {
+                                            warn!("Failed to construct account update for KeyBinding: {}", e);
+                                        }
+                                    }
+                                }
+                            }
                             Err(err) => {
                                 // We handle these errors gracefully and don't want the indexer to crash,
                                 // because anybody could write faulty entries into the announcement contract.
@@ -258,11 +443,26 @@ where
             HoprAnnouncementsEvents::RevokeAnnouncement(revocation) => {
                 let node_address: Address = revocation.node.into();
                 match self.db.delete_all_announcements(Some(tx), node_address).await {
+                    Ok(_) => {
+                        // Publish AccountUpdated event if synced
+                        if is_synced {
+                            let db_conn = self.db.conn(blokli_db::TargetDb::Index);
+                            match construct_account_update(db_conn, &node_address).await {
+                                Ok(account) => {
+                                    self.indexer_state.publish_event(
+                                        crate::state::IndexerEvent::AccountUpdated(account)
+                                    );
+                                }
+                                Err(e) => {
+                                    warn!("Failed to construct account update for RevokeAnnouncement: {}", e);
+                                }
+                            }
+                        }
+                    }
                     Err(DbSqlError::MissingAccount) => {
                         return Err(CoreEthereumIndexerError::RevocationBeforeKeyBinding);
                     }
                     Err(e) => return Err(e.into()),
-                    _ => {}
                 }
             }
             HoprAnnouncementsEvents::Initialized(_event) => {
@@ -297,9 +497,9 @@ where
                     "on_announcement_event: Upgraded"
                 );
             }
-        };
+        }
 
-        Ok(None)
+        Ok(())
     }
 
     async fn on_channel_event(
@@ -309,8 +509,8 @@ where
         block: u32,
         tx_index: u32,
         log_index: u32,
-        _is_synced: bool,
-    ) -> Result<Option<ChainEventType>> {
+        is_synced: bool,
+    ) -> Result<()> {
         #[cfg(all(feature = "prometheus", not(test)))]
         METRIC_INDEXER_LOG_COUNTERS.increment(&["channels"]);
 
@@ -369,7 +569,22 @@ where
                     .upsert_channel(tx.into(), updated_channel, block, tx_index, log_index)
                     .await?;
 
-                Ok(Some(ChainEventType::ChannelBalanceDecreased(updated_channel, diff)))
+                // Publish event if synced
+                if is_synced {
+                    let db_conn = self.db.conn(blokli_db::TargetDb::Index);
+                    match construct_channel_update(db_conn, &channel_id).await {
+                        Ok(channel_update) => {
+                            self.indexer_state.publish_event(
+                                crate::state::IndexerEvent::ChannelUpdated(channel_update)
+                            );
+                        }
+                        Err(e) => {
+                            warn!(%channel_id, %e, "Failed to construct channel update for ChannelBalanceDecreased");
+                        }
+                    }
+                }
+
+                Ok(())
             }
             HoprChannelsEvents::ChannelBalanceIncreased(balance_increased) => {
                 let channel_id = balance_increased.channelId.0.into();
@@ -425,7 +640,22 @@ where
                     .upsert_channel(tx.into(), updated_channel, block, tx_index, log_index)
                     .await?;
 
-                Ok(Some(ChainEventType::ChannelBalanceIncreased(updated_channel, diff)))
+                // Publish event if synced
+                if is_synced {
+                    let db_conn = self.db.conn(blokli_db::TargetDb::Index);
+                    match construct_channel_update(db_conn, &channel_id).await {
+                        Ok(channel_update) => {
+                            self.indexer_state.publish_event(
+                                crate::state::IndexerEvent::ChannelUpdated(channel_update)
+                            );
+                        }
+                        Err(e) => {
+                            warn!(%channel_id, %e, "Failed to construct channel update for ChannelBalanceIncreased");
+                        }
+                    }
+                }
+
+                Ok(())
             }
             HoprChannelsEvents::ChannelClosed(channel_closed) => {
                 let channel_id = channel_closed.channelId.0.into();
@@ -479,7 +709,22 @@ where
                     .upsert_channel(tx.into(), updated_channel, block, tx_index, log_index)
                     .await?;
 
-                Ok(Some(ChainEventType::ChannelClosed(updated_channel)))
+                // Publish event if synced
+                if is_synced {
+                    let db_conn = self.db.conn(blokli_db::TargetDb::Index);
+                    match construct_channel_update(db_conn, &channel_id).await {
+                        Ok(channel_update) => {
+                            self.indexer_state.publish_event(
+                                crate::state::IndexerEvent::ChannelUpdated(channel_update)
+                            );
+                        }
+                        Err(e) => {
+                            warn!(%channel_id, %e, "Failed to construct channel update for ChannelClosed");
+                        }
+                    }
+                }
+
+                Ok(())
             }
             HoprChannelsEvents::ChannelOpened(channel_opened) => {
                 let source: Address = channel_opened.source.into();
@@ -494,7 +739,7 @@ where
                     }
                 };
 
-                let channel = if let Some(existing) = maybe_existing {
+                if let Some(existing) = maybe_existing {
                     // Channel exists - check if it's in Closed state
                     if existing.status != ChannelStatus::Closed {
                         warn!(%source, %destination, %channel_id, "received Open event for a channel that is not Closed, marking state as corrupted");
@@ -505,7 +750,7 @@ where
                             .await
                             .ok();
 
-                        return Ok(None);
+                        return Ok(());
                     }
 
                     trace!(%source, %destination, %channel_id, "on_channel_reopened_event");
@@ -525,7 +770,6 @@ where
                     self.db
                         .upsert_channel(tx.into(), reopened_channel, block, tx_index, log_index)
                         .await?;
-                    reopened_channel
                 } else {
                     // Channel doesn't exist - create new one
                     trace!(%source, %destination, %channel_id, "on_channel_opened_event");
@@ -542,10 +786,24 @@ where
                     self.db
                         .upsert_channel(tx.into(), new_channel, block, tx_index, log_index)
                         .await?;
-                    new_channel
-                };
+                }
 
-                Ok(Some(ChainEventType::ChannelOpened(channel)))
+                // Publish event if synced
+                if is_synced {
+                    let db_conn = self.db.conn(blokli_db::TargetDb::Index);
+                    match construct_channel_update(db_conn, &channel_id).await {
+                        Ok(channel_update) => {
+                            self.indexer_state.publish_event(
+                                crate::state::IndexerEvent::ChannelUpdated(channel_update)
+                            );
+                        }
+                        Err(e) => {
+                            warn!(%channel_id, %e, "Failed to construct channel update for ChannelOpened");
+                        }
+                    }
+                }
+
+                Ok(())
             }
             HoprChannelsEvents::TicketRedeemed(ticket_redeemed) => {
                 let channel_id = ticket_redeemed.channelId.0.into();
@@ -593,7 +851,22 @@ where
                     .upsert_channel(tx.into(), updated_channel, block, tx_index, log_index)
                     .await?;
 
-                Ok(None)
+                // Publish event if synced
+                if is_synced {
+                    let db_conn = self.db.conn(blokli_db::TargetDb::Index);
+                    match construct_channel_update(db_conn, &channel_id).await {
+                        Ok(channel_update) => {
+                            self.indexer_state.publish_event(
+                                crate::state::IndexerEvent::ChannelUpdated(channel_update)
+                            );
+                        }
+                        Err(e) => {
+                            warn!(%channel_id, %e, "Failed to construct channel update for TicketRedeemed");
+                        }
+                    }
+                }
+
+                Ok(())
             }
             HoprChannelsEvents::OutgoingChannelClosureInitiated(closure_initiated) => {
                 let channel_id = closure_initiated.channelId.0.into();
@@ -641,7 +914,22 @@ where
                     .upsert_channel(tx.into(), updated_channel, block, tx_index, log_index)
                     .await?;
 
-                Ok(Some(ChainEventType::ChannelClosureInitiated(updated_channel)))
+                // Publish event if synced
+                if is_synced {
+                    let db_conn = self.db.conn(blokli_db::TargetDb::Index);
+                    match construct_channel_update(db_conn, &channel_id).await {
+                        Ok(channel_update) => {
+                            self.indexer_state.publish_event(
+                                crate::state::IndexerEvent::ChannelUpdated(channel_update)
+                            );
+                        }
+                        Err(e) => {
+                            warn!(%channel_id, %e, "Failed to construct channel update for OutgoingChannelClosureInitiated");
+                        }
+                    }
+                }
+
+                Ok(())
             }
             HoprChannelsEvents::DomainSeparatorUpdated(domain_separator_updated) => {
                 self.db
@@ -652,7 +940,7 @@ where
                     )
                     .await?;
 
-                Ok(None)
+                Ok(())
             }
             HoprChannelsEvents::LedgerDomainSeparatorUpdated(ledger_domain_separator_updated) => {
                 self.db
@@ -663,7 +951,7 @@ where
                     )
                     .await?;
 
-                Ok(None)
+                Ok(())
             }
         }
     }
@@ -673,7 +961,7 @@ where
         _tx: &OpenTransaction,
         event: HoprTokenEvents,
         _is_synced: bool,
-    ) -> Result<Option<ChainEventType>> {
+    ) -> Result<()> {
         #[cfg(all(feature = "prometheus", not(test)))]
         METRIC_INDEXER_LOG_COUNTERS.increment(&["token"]);
 
@@ -762,7 +1050,7 @@ where
             }
         }
 
-        Ok(None)
+        Ok(())
     }
 
     async fn on_node_safe_registry_event(
@@ -770,7 +1058,7 @@ where
         tx: &OpenTransaction,
         event: HoprNodeSafeRegistryEvents,
         _is_synced: bool,
-    ) -> Result<Option<ChainEventType>> {
+    ) -> Result<()> {
         #[cfg(all(feature = "prometheus", not(test)))]
         METRIC_INDEXER_LOG_COUNTERS.increment(&["safe_registry"]);
 
@@ -792,7 +1080,7 @@ where
             }
         }
 
-        Ok(None)
+        Ok(())
     }
 
     #[allow(dead_code)]
@@ -801,12 +1089,12 @@ where
         _db: &OpenTransaction,
         _event: HoprNodeManagementModuleEvents,
         _is_synced: bool,
-    ) -> Result<Option<ChainEventType>> {
+    ) -> Result<()> {
         #[cfg(all(feature = "prometheus", not(test)))]
         METRIC_INDEXER_LOG_COUNTERS.increment(&["node_management_module"]);
 
         // Don't care at the moment
-        Ok(None)
+        Ok(())
     }
 
     async fn on_ticket_winning_probability_oracle_event(
@@ -814,7 +1102,7 @@ where
         tx: &OpenTransaction,
         event: HoprWinningProbabilityOracleEvents,
         _is_synced: bool,
-    ) -> Result<Option<ChainEventType>> {
+    ) -> Result<()> {
         #[cfg(all(feature = "prometheus", not(test)))]
         METRIC_INDEXER_LOG_COUNTERS.increment(&["win_prob_oracle"]);
 
@@ -854,7 +1142,7 @@ where
                 );
             }
         }
-        Ok(None)
+        Ok(())
     }
 
     async fn on_ticket_price_oracle_event(
@@ -862,7 +1150,7 @@ where
         tx: &OpenTransaction,
         event: HoprTicketPriceOracleEvents,
         _is_synced: bool,
-    ) -> Result<Option<ChainEventType>> {
+    ) -> Result<()> {
         #[cfg(all(feature = "prometheus", not(test)))]
         METRIC_INDEXER_LOG_COUNTERS.increment(&["price_oracle"]);
 
@@ -884,7 +1172,7 @@ where
                 // ignore ownership transfer event
             }
         }
-        Ok(None)
+        Ok(())
     }
 
     #[tracing::instrument(level = "debug", skip(self, slog), fields(log=%slog))]
@@ -893,7 +1181,7 @@ where
         tx: &OpenTransaction,
         slog: SerializableLog,
         is_synced: bool,
-    ) -> Result<Option<ChainEventType>> {
+    ) -> Result<()> {
         trace!(log = %slog, "log content");
 
         let log = Log::from(slog.clone());
@@ -930,7 +1218,7 @@ where
                         ?log,
                         "channel didn't exist in the db. Created a corrupted channel entry and ignored event"
                     );
-                    Ok(None)
+                    Ok(())
                 }
                 Err(e) => Err(e),
             }
@@ -997,7 +1285,7 @@ where
         }
     }
 
-    async fn collect_log_event(&self, slog: SerializableLog, is_synced: bool) -> Result<Option<SignificantChainEvent>> {
+    async fn collect_log_event(&self, slog: SerializableLog, is_synced: bool) -> Result<()> {
         let myself = self.clone();
         self.db
             .begin_transaction()
@@ -1010,15 +1298,9 @@ where
 
                 Box::pin(async move {
                     match myself.process_log_event(tx, log, is_synced).await {
-                        // If a significant chain event can be extracted from the log
-                        Ok(Some(event_type)) => {
-                            let significant_event = SignificantChainEvent { tx_hash, event_type };
-                            debug!(block_id, %tx_hash, log_id, ?significant_event, "indexer got significant_event");
-                            Ok(Some(significant_event))
-                        }
-                        Ok(None) => {
-                            debug!(block_id, %tx_hash, log_id, "no significant event in log");
-                            Ok(None)
+                        Ok(()) => {
+                            debug!(block_id, %tx_hash, log_id, "processed log successfully");
+                            Ok(())
                         }
                         Err(error) => {
                             error!(block_id, %tx_hash, log_id, %error, "error processing log in tx");

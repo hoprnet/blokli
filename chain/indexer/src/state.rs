@@ -10,28 +10,25 @@
 use std::sync::Arc;
 
 use async_broadcast::{Receiver, Sender, broadcast};
+use blokli_api_types::{Account, ChannelUpdate};
 use tokio::sync::RwLock;
 
 /// Event type for the subscription event bus
 ///
-/// Represents changes to channels that should be broadcast to subscribers.
+/// Represents changes to accounts and channels that should be broadcast to subscribers.
+/// Events contain complete GraphQL data to avoid additional database queries per subscriber
+/// and to ensure temporal consistency.
 #[derive(Clone, Debug)]
-pub enum ChannelEvent {
-    /// A channel was opened with the given channel ID
-    Opened {
-        /// Database internal ID of the channel
-        channel_id: i32,
-    },
-    /// A channel's state was updated
-    Updated {
-        /// Database internal ID of the channel
-        channel_id: i32,
-    },
-    /// A channel was closed
-    Closed {
-        /// Database internal ID of the channel
-        channel_id: i32,
-    },
+pub enum IndexerEvent {
+    /// An account was updated (balance change, announcement, safe registration, etc.)
+    ///
+    /// Contains complete account data including all balances and multiaddresses.
+    AccountUpdated(Account),
+
+    /// A channel was updated (opened, closed, balance changed, etc.)
+    ///
+    /// Contains complete channel data plus both participating accounts.
+    ChannelUpdated(ChannelUpdate),
 }
 
 /// Shared state for coordinating indexer operations with subscriptions
@@ -50,11 +47,11 @@ pub struct IndexerState {
     /// - Read lock: Held during subscription watermark capture
     coordination_lock: Arc<RwLock<()>>,
 
-    /// Event bus sender for broadcasting channel updates
+    /// Event bus sender for broadcasting account and channel updates
     ///
     /// Block processing publishes events here after completing each block.
     /// Subscriptions receive events via receivers cloned from this sender.
-    event_bus: Sender<ChannelEvent>,
+    event_bus: Sender<IndexerEvent>,
 
     /// Shutdown signal sender for reorg handling
     ///
@@ -67,7 +64,7 @@ impl std::fmt::Debug for IndexerState {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("IndexerState")
             .field("coordination_lock", &"Arc<RwLock<()>>")
-            .field("event_bus", &"Sender<ChannelEvent>")
+            .field("event_bus", &"Sender<IndexerEvent>")
             .field("shutdown_signal", &"Sender<()>")
             .finish()
     }
@@ -119,32 +116,32 @@ impl IndexerState {
         self.coordination_lock.read().await
     }
 
-    /// Publishes a channel event to the event bus
+    /// Publishes an indexer event to the event bus
     ///
-    /// This should be called after successfully processing a block containing
-    /// channel-related events.
+    /// This should be called after successfully processing a database update
+    /// for accounts or channels.
     ///
     /// # Arguments
     ///
-    /// * `event` - The channel event to broadcast
+    /// * `event` - The indexer event to broadcast (AccountUpdated or ChannelUpdated)
     ///
     /// # Returns
     ///
     /// `true` if the event was broadcast successfully, `false` if the channel is closed
-    pub fn publish_event(&self, event: ChannelEvent) -> bool {
+    pub fn publish_event(&self, event: IndexerEvent) -> bool {
         self.event_bus.try_broadcast(event).is_ok()
     }
 
     /// Subscribes to the event bus
     ///
-    /// Creates a new receiver that will receive all future channel events.
+    /// Creates a new receiver that will receive all future indexer events.
     /// This should be called while holding the watermark lock to ensure
     /// proper synchronization.
     ///
     /// # Returns
     ///
-    /// A receiver for channel events
-    pub fn subscribe_to_events(&self) -> Receiver<ChannelEvent> {
+    /// A receiver for indexer events
+    pub fn subscribe_to_events(&self) -> Receiver<IndexerEvent> {
         self.event_bus.new_receiver()
     }
 
@@ -205,15 +202,28 @@ mod tests {
         // Subscribe before publishing
         let mut receiver = state.subscribe_to_events();
 
+        // Create a test account
+        let test_account = blokli_api_types::Account {
+            keyid: 42,
+            chain_key: "0x1234".to_string(),
+            packet_key: "peer123".to_string(),
+            account_hopr_balance: blokli_api_types::TokenValueString("100".to_string()),
+            account_native_balance: blokli_api_types::TokenValueString("50".to_string()),
+            safe_address: None,
+            safe_hopr_balance: None,
+            safe_native_balance: None,
+            multi_addresses: vec![],
+        };
+
         // Publish an event
-        let event = ChannelEvent::Opened { channel_id: 42 };
-        state.publish_event(event.clone());
+        let event = IndexerEvent::AccountUpdated(test_account.clone());
+        state.publish_event(event);
 
         // Receive the event
         let received = receiver.recv().await.unwrap();
         match received {
-            ChannelEvent::Opened { channel_id } => assert_eq!(channel_id, 42),
-            _ => panic!("Expected Opened event"),
+            IndexerEvent::AccountUpdated(account) => assert_eq!(account.keyid, 42),
+            _ => panic!("Expected AccountUpdated event"),
         }
     }
 
@@ -239,19 +249,32 @@ mod tests {
         let mut receiver1 = state.subscribe_to_events();
         let mut receiver2 = state.subscribe_to_events();
 
+        // Create a test account
+        let test_account = blokli_api_types::Account {
+            keyid: 123,
+            chain_key: "0xabcd".to_string(),
+            packet_key: "peer456".to_string(),
+            account_hopr_balance: blokli_api_types::TokenValueString("200".to_string()),
+            account_native_balance: blokli_api_types::TokenValueString("100".to_string()),
+            safe_address: None,
+            safe_hopr_balance: None,
+            safe_native_balance: None,
+            multi_addresses: vec![],
+        };
+
         // Publish event
-        let event = ChannelEvent::Updated { channel_id: 123 };
+        let event = IndexerEvent::AccountUpdated(test_account.clone());
         assert!(state.publish_event(event));
 
         // Verify both received the event
         match receiver1.recv().await.unwrap() {
-            ChannelEvent::Updated { channel_id } => assert_eq!(channel_id, 123),
-            _ => panic!("Expected Updated event"),
+            IndexerEvent::AccountUpdated(account) => assert_eq!(account.keyid, 123),
+            _ => panic!("Expected AccountUpdated event"),
         }
 
         match receiver2.recv().await.unwrap() {
-            ChannelEvent::Updated { channel_id } => assert_eq!(channel_id, 123),
-            _ => panic!("Expected Updated event"),
+            IndexerEvent::AccountUpdated(account) => assert_eq!(account.keyid, 123),
+            _ => panic!("Expected AccountUpdated event"),
         }
     }
 }

@@ -1798,6 +1798,7 @@ dependencies = [
  "async-tar",
  "async-trait",
  "backon",
+ "blokli-api-types",
  "blokli-chain-rpc",
  "blokli-chain-types",
  "blokli-db",
