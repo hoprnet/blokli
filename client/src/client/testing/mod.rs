@@ -62,6 +62,7 @@ impl Default for BlokliTestClient {
                 min_ticket_winning_probability: 1.0,
                 safe_registry_dst: Some("0000000000000000000000000000000000000000000000000000000000000000".into()),
                 ticket_price: TokenValueString("1".into()),
+                network: "rotsee".into(),
                 contract_addresses: ContractAddressMap(
                     r#"
                 {
