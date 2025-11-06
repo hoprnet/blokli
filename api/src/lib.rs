@@ -50,7 +50,7 @@ fn redact_url(url: &str) -> String {
 }
 
 /// Start the API server
-pub async fn start_server(config: ApiConfig) -> ApiResult<()> {
+pub async fn start_server(network: String, config: ApiConfig) -> ApiResult<()> {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -67,7 +67,7 @@ pub async fn start_server(config: ApiConfig) -> ApiResult<()> {
     info!("Database connection established");
 
     // Build the application
-    let app = server::build_app(db, config.clone()).await?;
+    let app = server::build_app(db, network, config.clone()).await?;
 
     // Create TCP listener
     let listener = TcpListener::bind(config.bind_address).await?;
