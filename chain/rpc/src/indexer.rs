@@ -292,8 +292,8 @@ mod tests {
     use futures::StreamExt;
     use hopr_async_runtime::prelude::{sleep, spawn};
     use hopr_bindings::{
-        hoprchannelsevents::HoprChannelsEvents::{ChannelBalanceIncreased, ChannelOpened},
-        hoprtoken::HoprToken::{Approval, Transfer},
+        hopr_channels_events::HoprChannelsEvents::{ChannelBalanceIncreased, ChannelOpened},
+        hopr_token::HoprToken::{Approval, Transfer},
     };
     use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
     use tokio::time::timeout;

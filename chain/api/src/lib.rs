@@ -1,7 +1,6 @@
 //! Crate containing the API object for chain operations used by the HOPRd node.
 
 pub mod errors;
-pub mod executors;
 pub mod rpc_adapter;
 pub mod transaction_executor;
 pub mod transaction_monitor;
@@ -11,16 +10,11 @@ pub mod transaction_validator;
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use alloy::{
-    rpc::{client::ClientBuilder, types::TransactionRequest},
+    rpc::client::ClientBuilder,
     transports::{
         http::{Http, ReqwestTransport},
         layers::RetryBackoffLayer,
     },
-};
-use blokli_chain_actions::{
-    ChainActions,
-    action_queue::{ActionQueue, ActionQueueConfig},
-    action_state::IndexerActionTracker,
 };
 use blokli_chain_indexer::{IndexerConfig, IndexerState, block::Indexer, handlers::ContractEventHandlers};
 use blokli_chain_rpc::{
@@ -32,7 +26,6 @@ use blokli_chain_rpc::{
 use blokli_chain_types::ContractAddresses;
 pub use blokli_chain_types::chain_events::SignificantChainEvent;
 use blokli_db::BlokliDbAllOperations;
-use executors::{EthereumTransactionExecutor, RpcEthereumClient, RpcEthereumClientConfig};
 use futures::future::AbortHandle;
 use hopr_async_runtime::spawn_as_abortable;
 use hopr_chain_config::ChainNetworkConfig;
@@ -66,15 +59,8 @@ fn build_transport_client(url: &str) -> Result<Http<ReqwestClient>> {
 #[derive(Debug, Copy, Clone, Hash, PartialEq, Eq)]
 pub enum BlokliChainProcess {
     Indexer,
-    OutgoingOnchainActionQueue,
     TransactionMonitor,
 }
-
-type ActionQueueType<T> = ActionQueue<
-    T,
-    IndexerActionTracker,
-    EthereumTransactionExecutor<TransactionRequest, RpcEthereumClient<RpcOperations<DefaultHttpRequestor>>>,
->;
 
 /// Represents all chain interactions exported to be used in the hopr-lib
 ///
@@ -89,9 +75,6 @@ pub struct BlokliChain<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt
     indexer_events_tx: async_channel::Sender<SignificantChainEvent>,
     indexer_state: IndexerState,
     db: T,
-    blokli_chain_actions: ChainActions<T>,
-    action_queue: ActionQueueType<T>,
-    action_state: Arc<IndexerActionTracker>,
     rpc_operations: RpcOperations<DefaultHttpRequestor>,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
@@ -129,12 +112,6 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
             ..Default::default()
         };
 
-        // TODO: extract this from the global config type
-        let rpc_client_cfg = RpcEthereumClientConfig::default();
-
-        // TODO: extract this from the global config type
-        let action_queue_cfg = ActionQueueConfig::default();
-
         // --- Configs done ---
 
         let transport_client = build_transport_client(&rpc_url)?;
@@ -148,28 +125,6 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         // Build RPC operations
         let rpc_operations =
             RpcOperations::new(rpc_client, requestor, rpc_cfg, None).expect("failed to initialize RPC");
-
-        // Build the Ethereum Transaction Executor that uses RpcOperations as backend
-        // let ethereum_tx_executor = EthereumTransactionExecutor::new(
-        //     RpcEthereumClient::new(rpc_operations.clone(), rpc_client_cfg),
-        //     SafePayloadGenerator::new(contract_addresses),
-        // );
-        let ethereum_tx_executor =
-            EthereumTransactionExecutor::new(RpcEthereumClient::new(rpc_operations.clone(), rpc_client_cfg));
-
-        // Build the Action Queue
-        let action_queue = ActionQueue::new(
-            db.clone(),
-            IndexerActionTracker::default(),
-            ethereum_tx_executor,
-            action_queue_cfg,
-        );
-
-        let action_state = action_queue.action_state();
-        let action_sender = action_queue.new_sender();
-
-        // Instantiate Chain Actions
-        let blokli_chain_actions = ChainActions::new(db.clone(), action_sender);
 
         // Create IndexerState for coordinating block processing with subscriptions
         let indexer_state = IndexerState::new(indexer_cfg.event_bus_capacity, indexer_cfg.shutdown_signal_capacity);
@@ -198,9 +153,6 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
             indexer_events_tx,
             indexer_state,
             db,
-            blokli_chain_actions,
-            action_queue,
-            action_state,
             rpc_operations,
             transaction_executor,
             transaction_store,
@@ -210,17 +162,12 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
 
     /// Execute all processes of the [`BlokliChain`] object.
     ///
-    /// This method will spawn the [`BlokliChainProcess::Indexer`],
-    /// [`BlokliChainProcess::OutgoingOnchainActionQueue`], and
+    /// This method will spawn the [`BlokliChainProcess::Indexer`] and
     /// [`BlokliChainProcess::TransactionMonitor`] processes and return join handles to the calling
     /// function.
     pub async fn start(&self) -> errors::Result<HashMap<BlokliChainProcess, AbortHandle>> {
         let mut processes: HashMap<BlokliChainProcess, AbortHandle> = HashMap::new();
 
-        processes.insert(
-            BlokliChainProcess::OutgoingOnchainActionQueue,
-            spawn_as_abortable!(self.action_queue.clone().start()),
-        );
         processes.insert(
             BlokliChainProcess::TransactionMonitor,
             spawn_as_abortable!(self.transaction_monitor.clone().start()),
@@ -244,10 +191,6 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
             .await?,
         );
         Ok(processes)
-    }
-
-    pub fn action_state(&self) -> Arc<IndexerActionTracker> {
-        self.action_state.clone()
     }
 
     pub fn indexer_state(&self) -> IndexerState {
@@ -301,14 +244,6 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
 
     pub async fn safe_allowance(&self) -> errors::Result<HoprBalance> {
         Ok(self.db.get_safe_hopr_allowance(None).await?)
-    }
-
-    pub fn actions_ref(&self) -> &ChainActions<T> {
-        &self.blokli_chain_actions
-    }
-
-    pub fn actions_mut_ref(&mut self) -> &mut ChainActions<T> {
-        &mut self.blokli_chain_actions
     }
 
     pub fn rpc(&self) -> &RpcOperations<DefaultHttpRequestor> {

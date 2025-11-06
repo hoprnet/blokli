@@ -1317,7 +1317,7 @@ mod tests {
     use alloy::{
         dyn_abi::DynSolValue,
         primitives::{Address as AlloyAddress, B256, U256},
-        sol_types::SolValue,
+        sol_types::{SolEvent, SolValue},
     };
     use anyhow::Context;
     use blokli_chain_rpc::HoprIndexerRpcOperations;
@@ -1336,12 +1336,15 @@ mod tests {
     };
     use hex_literal::hex;
     use hopr_crypto_types::prelude::*;
-    use hopr_internal_types::account::{AccountEntry, AccountType};
+    use hopr_internal_types::{
+        account::{AccountEntry, AccountType},
+        announcement::KeyBinding,
+    };
     use hopr_primitive_types::prelude::*;
     use multiaddr::Multiaddr;
     use primitive_types::H256;
 
-    use super::ContractEventHandlers;
+    use super::{ChannelEntry, ChannelStatus, ContractEventHandlers, WinningProbability, generate_channel_id};
 
     lazy_static::lazy_static! {
         static ref SELF_PRIV_KEY: OffchainKeypair = OffchainKeypair::from_secret(&hex!("492057cf93e99b31d2a85bc5e98a9c3aa0021feec52c227cc8170e8f7d047775")).expect("lazy static keypair should be constructible");
@@ -1459,7 +1462,7 @@ mod tests {
         let keybinding_log = SerializableLog {
             address: handlers.addresses.announcements,
             topics: vec![
-                hopr_bindings::hoprannouncementsevents::HoprAnnouncementsEvents::KeyBinding::SIGNATURE_HASH.into(),
+                hopr_bindings::hopr_announcements_events::HoprAnnouncementsEvents::KeyBinding::SIGNATURE_HASH.into(),
             ],
             data: DynSolValue::Tuple(vec![
                 DynSolValue::Bytes(keybinding.signature.as_ref().to_vec()),
@@ -1518,6 +1521,13 @@ mod tests {
         )
         .await?;
 
+        let account_entry = AccountEntry {
+            public_key: *SELF_PRIV_KEY.public(),
+            chain_addr: *SELF_CHAIN_ADDRESS,
+            entry_type: AccountType::NotAnnounced,
+            published_at: 1,
+        };
+
         let test_multiaddr_empty: Multiaddr = "".parse()?;
 
         let address_announcement_empty_log_encoded_data = DynSolValue::Tuple(vec![
@@ -1529,7 +1539,7 @@ mod tests {
         let address_announcement_empty_log = SerializableLog {
             address: handlers.addresses.announcements,
             topics: vec![
-                hopr_bindings::hoprannouncementsevents::HoprAnnouncementsEvents::AddressAnnouncement::SIGNATURE_HASH
+                hopr_bindings::hopr_announcements_events::HoprAnnouncementsEvents::AddressAnnouncement::SIGNATURE_HASH
                     .into(),
             ],
             data: address_announcement_empty_log_encoded_data[32..].into(),
@@ -1573,7 +1583,7 @@ mod tests {
             address: handlers.addresses.announcements,
             block_number: 1,
             topics: vec![
-                hopr_bindings::hoprannouncementsevents::HoprAnnouncementsEvents::AddressAnnouncement::SIGNATURE_HASH
+                hopr_bindings::hopr_announcements_events::HoprAnnouncementsEvents::AddressAnnouncement::SIGNATURE_HASH
                     .into(),
             ],
             data: address_announcement_log_encoded_data[32..].into(),
@@ -1640,7 +1650,7 @@ mod tests {
             address: handlers.addresses.announcements,
             block_number: 2,
             topics: vec![
-                hopr_bindings::hoprannouncementsevents::HoprAnnouncementsEvents::AddressAnnouncement::SIGNATURE_HASH
+                hopr_bindings::hopr_announcements_events::HoprAnnouncementsEvents::AddressAnnouncement::SIGNATURE_HASH
                     .into(),
             ],
             data: address_announcement_dns_log_encoded_data[32..].into(),
@@ -1727,7 +1737,7 @@ mod tests {
         let revoke_announcement_log = SerializableLog {
             address: handlers.addresses.announcements,
             topics: vec![
-                hopr_bindings::hoprannouncementsevents::HoprAnnouncementsEvents::RevokeAnnouncement::SIGNATURE_HASH
+                hopr_bindings::hopr_announcements_events::HoprAnnouncementsEvents::RevokeAnnouncement::SIGNATURE_HASH
                     .into(),
             ],
             data: encoded_data,
@@ -1790,7 +1800,7 @@ mod tests {
         let transferred_log = SerializableLog {
             address: handlers.addresses.token,
             topics: vec![
-                hopr_bindings::hoprtoken::HoprToken::Transfer::SIGNATURE_HASH.into(),
+                hopr_bindings::hopr_token::HoprToken::Transfer::SIGNATURE_HASH.into(),
                 H256::from_slice(&Address::default().to_bytes32()).into(),
                 H256::from_slice(&STAKE_ADDRESS.to_bytes32()).into(),
             ],
@@ -1845,7 +1855,7 @@ mod tests {
         let transferred_log = SerializableLog {
             address: handlers.addresses.token,
             topics: vec![
-                hopr_bindings::hoprtoken::HoprToken::Transfer::SIGNATURE_HASH.into(),
+                hopr_bindings::hopr_token::HoprToken::Transfer::SIGNATURE_HASH.into(),
                 H256::from_slice(&STAKE_ADDRESS.to_bytes32()).into(),
                 H256::from_slice(&Address::default().to_bytes32()).into(),
             ],
@@ -1887,7 +1897,7 @@ mod tests {
         let approval_log = SerializableLog {
             address: handlers.addresses.token,
             topics: vec![
-                hopr_bindings::hoprtoken::HoprToken::Approval::SIGNATURE_HASH.into(),
+                hopr_bindings::hopr_token::HoprToken::Approval::SIGNATURE_HASH.into(),
                 H256::from_slice(&SAFE_INSTANCE_ADDR.to_bytes32()).into(),
                 H256::from_slice(&handlers.addresses.channels.to_bytes32()).into(),
             ],
@@ -1975,7 +1985,7 @@ mod tests {
         let balance_increased_log = SerializableLog {
             address: handlers.addresses.channels,
             topics: vec![
-                hopr_bindings::hoprchannels::HoprChannels::ChannelBalanceIncreased::SIGNATURE_HASH.into(),
+                hopr_bindings::hopr_channels::HoprChannels::ChannelBalanceIncreased::SIGNATURE_HASH.into(),
                 // ChannelBalanceIncreasedFilter::signature().into(),
                 H256::from_slice(channel.get_id().as_ref()).into(),
             ],
@@ -2021,7 +2031,7 @@ mod tests {
         let channels_dst_updated = SerializableLog {
             address: handlers.addresses.channels,
             topics: vec![
-                hopr_bindings::hoprchannels::HoprChannels::DomainSeparatorUpdated::SIGNATURE_HASH.into(),
+                hopr_bindings::hopr_channels::HoprChannels::DomainSeparatorUpdated::SIGNATURE_HASH.into(),
                 // DomainSeparatorUpdatedFilter::signature().into(),
                 H256::from_slice(separator.as_ref()).into(),
             ],
@@ -2096,7 +2106,7 @@ mod tests {
         let balance_decreased_log = SerializableLog {
             address: handlers.addresses.channels,
             topics: vec![
-                hopr_bindings::hoprchannels::HoprChannels::ChannelBalanceDecreased::SIGNATURE_HASH.into(),
+                hopr_bindings::hopr_channels::HoprChannels::ChannelBalanceDecreased::SIGNATURE_HASH.into(),
                 // ChannelBalanceDecreasedFilter::signature().into(),
                 H256::from_slice(channel.get_id().as_ref()).into(),
             ],
@@ -2153,7 +2163,7 @@ mod tests {
         let channel_closed_log = SerializableLog {
             address: handlers.addresses.channels,
             topics: vec![
-                hopr_bindings::hoprchannels::HoprChannels::ChannelClosed::SIGNATURE_HASH.into(),
+                hopr_bindings::hopr_channels::HoprChannels::ChannelClosed::SIGNATURE_HASH.into(),
                 // ChannelClosedFilter::signature().into(),
                 H256::from_slice(channel.get_id().as_ref()).into(),
             ],
@@ -2215,7 +2225,7 @@ mod tests {
         let channel_closed_log = SerializableLog {
             address: handlers.addresses.channels,
             topics: vec![
-                hopr_bindings::hoprchannels::HoprChannels::ChannelClosed::SIGNATURE_HASH.into(),
+                hopr_bindings::hopr_channels::HoprChannels::ChannelClosed::SIGNATURE_HASH.into(),
                 // ChannelClosedFilter::signature().into(),
                 H256::from_slice(channel.get_id().as_ref()).into(),
             ],
@@ -2259,7 +2269,7 @@ mod tests {
         let channel_opened_log = SerializableLog {
             address: handlers.addresses.channels,
             topics: vec![
-                hopr_bindings::hoprchannels::HoprChannels::ChannelOpened::SIGNATURE_HASH.into(),
+                hopr_bindings::hopr_channels::HoprChannels::ChannelOpened::SIGNATURE_HASH.into(),
                 // ChannelOpenedFilter::signature().into(),
                 H256::from_slice(&SELF_CHAIN_ADDRESS.to_bytes32()).into(),
                 H256::from_slice(&COUNTERPARTY_CHAIN_ADDRESS.to_bytes32()).into(),
@@ -2319,7 +2329,7 @@ mod tests {
         let channel_opened_log = SerializableLog {
             address: handlers.addresses.channels,
             topics: vec![
-                hopr_bindings::hoprchannels::HoprChannels::ChannelOpened::SIGNATURE_HASH.into(),
+                hopr_bindings::hopr_channels::HoprChannels::ChannelOpened::SIGNATURE_HASH.into(),
                 // ChannelOpenedFilter::signature().into(),
                 H256::from_slice(&SELF_CHAIN_ADDRESS.to_bytes32()).into(),
                 H256::from_slice(&COUNTERPARTY_CHAIN_ADDRESS.to_bytes32()).into(),
@@ -2380,7 +2390,7 @@ mod tests {
         let channel_opened_log = SerializableLog {
             address: handlers.addresses.channels,
             topics: vec![
-                hopr_bindings::hoprchannels::HoprChannels::ChannelOpened::SIGNATURE_HASH.into(),
+                hopr_bindings::hopr_channels::HoprChannels::ChannelOpened::SIGNATURE_HASH.into(),
                 // ChannelOpenedFilter::signature().into(),
                 H256::from_slice(&SELF_CHAIN_ADDRESS.to_bytes32()).into(),
                 H256::from_slice(&COUNTERPARTY_CHAIN_ADDRESS.to_bytes32()).into(),
@@ -2429,7 +2439,7 @@ mod tests {
         let balance_increased_log = SerializableLog {
             address: handlers.addresses.channels,
             topics: vec![
-                hopr_bindings::hoprchannels::HoprChannels::ChannelBalanceIncreased::SIGNATURE_HASH.into(),
+                hopr_bindings::hopr_channels::HoprChannels::ChannelBalanceIncreased::SIGNATURE_HASH.into(),
                 // ChannelBalanceIncreasedFilter::signature().into(),
                 H256::from_slice(channel_id.as_ref()).into(),
             ],
@@ -2453,32 +2463,33 @@ mod tests {
 
     const PRICE_PER_PACKET: u32 = 20_u32;
 
-    fn mock_acknowledged_ticket(
-        signer: &ChainKeypair,
-        destination: &ChainKeypair,
-        index: u64,
-        win_prob: f64,
-    ) -> anyhow::Result<AcknowledgedTicket> {
-        let channel_id = generate_channel_id(&signer.into(), &destination.into());
-
-        let channel_epoch = 1u64;
-        let domain_separator = Hash::default();
-
-        let response = Response::try_from(
-            Hash::create(&[channel_id.as_ref(), &channel_epoch.to_be_bytes(), &index.to_be_bytes()]).as_ref(),
-        )?;
-
-        Ok(TicketBuilder::default()
-            .direction(&signer.into(), &destination.into())
-            .amount(primitive_types::U256::from(PRICE_PER_PACKET).div_f64(win_prob)?)
-            .index(index)
-            .index_offset(1)
-            .win_prob(win_prob.try_into()?)
-            .channel_epoch(1)
-            .challenge(response.to_challenge()?)
-            .build_signed(signer, &domain_separator)?
-            .into_acknowledged(response))
-    }
+    // TODO: Re-enable once ticket operations and types are implemented
+    // fn mock_acknowledged_ticket(
+    //     signer: &ChainKeypair,
+    //     destination: &ChainKeypair,
+    //     index: u64,
+    //     win_prob: f64,
+    // ) -> anyhow::Result<AcknowledgedTicket> {
+    //     let channel_id = generate_channel_id(&signer.into(), &destination.into());
+    //
+    //     let channel_epoch = 1u64;
+    //     let domain_separator = Hash::default();
+    //
+    //     let response = Response::try_from(
+    //         Hash::create(&[channel_id.as_ref(), &channel_epoch.to_be_bytes(), &index.to_be_bytes()]).as_ref(),
+    //     )?;
+    //
+    //     Ok(TicketBuilder::default()
+    //         .direction(&signer.into(), &destination.into())
+    //         .amount(primitive_types::U256::from(PRICE_PER_PACKET).div_f64(win_prob)?)
+    //         .index(index)
+    //         .index_offset(1)
+    //         .win_prob(win_prob.try_into()?)
+    //         .channel_epoch(1)
+    //         .challenge(response.to_challenge()?)
+    //         .build_signed(signer, &domain_separator)?
+    //         .into_acknowledged(response))
+    // }
 
     // TODO: Re-enable once ticket operations are implemented
     // #[tokio::test]
@@ -2518,7 +2529,7 @@ mod tests {
     //         let ticket_redeemed_log = SerializableLog {
     //             address: handlers.addresses.channels,
     //             topics: vec![
-    //                 hopr_bindings::hoprchannels::HoprChannels::TicketRedeemed::SIGNATURE_HASH.into(),
+    //                 hopr_bindings::hopr_channels::HoprChannels::TicketRedeemed::SIGNATURE_HASH.into(),
     //                 // TicketRedeemedFilter::signature().into(),
     //                 H256::from_slice(channel.get_id().as_ref()).into(),
     //             ],
@@ -2637,7 +2648,7 @@ mod tests {
     //         let ticket_redeemed_log = SerializableLog {
     //             address: handlers.addresses.channels,
     //             topics: vec![
-    //                 hopr_bindings::hoprchannels::HoprChannels::TicketRedeemed::SIGNATURE_HASH.into(),
+    //                 hopr_bindings::hopr_channels::HoprChannels::TicketRedeemed::SIGNATURE_HASH.into(),
     //                 // TicketRedeemedFilter::signature().into(),
     //                 H256::from_slice(channel.get_id().as_ref()).into(),
     //             ],
@@ -2738,7 +2749,7 @@ mod tests {
         let ticket_redeemed_log = SerializableLog {
             address: handlers.addresses.channels,
             topics: vec![
-                hopr_bindings::hoprchannels::HoprChannels::TicketRedeemed::SIGNATURE_HASH.into(),
+                hopr_bindings::hopr_channels::HoprChannels::TicketRedeemed::SIGNATURE_HASH.into(),
                 // TicketRedeemedFilter::signature().into(),
                 H256::from_slice(channel.get_id().as_ref()).into(),
             ],
@@ -2812,7 +2823,7 @@ mod tests {
         let ticket_redeemed_log = SerializableLog {
             address: handlers.addresses.channels,
             topics: vec![
-                hopr_bindings::hoprchannels::HoprChannels::TicketRedeemed::SIGNATURE_HASH.into(),
+                hopr_bindings::hopr_channels::HoprChannels::TicketRedeemed::SIGNATURE_HASH.into(),
                 // TicketRedeemedFilter::signature().into(),
                 H256::from_slice(channel.get_id().as_ref()).into(),
             ],
@@ -2870,7 +2881,7 @@ mod tests {
         let ticket_redeemed_log = SerializableLog {
             address: handlers.addresses.channels,
             topics: vec![
-                hopr_bindings::hoprchannels::HoprChannels::TicketRedeemed::SIGNATURE_HASH.into(),
+                hopr_bindings::hopr_channels::HoprChannels::TicketRedeemed::SIGNATURE_HASH.into(),
                 // TicketRedeemedFilter::signature().into(),
                 H256::from_slice(channel.get_id().as_ref()).into(),
             ],
@@ -2930,7 +2941,7 @@ mod tests {
         let closure_initiated_log = SerializableLog {
             address: handlers.addresses.channels,
             topics: vec![
-                hopr_bindings::hoprchannels::HoprChannels::OutgoingChannelClosureInitiated::SIGNATURE_HASH.into(),
+                hopr_bindings::hopr_channels::HoprChannels::OutgoingChannelClosureInitiated::SIGNATURE_HASH.into(),
                 // OutgoingChannelClosureInitiatedFilter::signature().into(),
                 H256::from_slice(channel.get_id().as_ref()).into(),
             ],
@@ -2979,7 +2990,7 @@ mod tests {
         let safe_registered_log = SerializableLog {
             address: handlers.addresses.safe_registry,
             topics: vec![
-                hopr_bindings::hoprnodesaferegistry::HoprNodeSafeRegistry::RegisteredNodeSafe::SIGNATURE_HASH.into(),
+                hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::RegisteredNodeSafe::SIGNATURE_HASH.into(),
                 // RegisteredNodeSafeFilter::signature().into(),
                 H256::from_slice(&SAFE_INSTANCE_ADDR.to_bytes32()).into(),
                 H256::from_slice(&SELF_CHAIN_ADDRESS.to_bytes32()).into(),
@@ -3018,8 +3029,8 @@ mod tests {
         let safe_registered_log = SerializableLog {
             address: handlers.addresses.safe_registry,
             topics: vec![
-                hopr_bindings::hoprnodesaferegistry::HoprNodeSafeRegistry::DergisteredNodeSafe::SIGNATURE_HASH.into(),
-                // DergisteredNodeSafeFilter::signature().into(),
+                hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::DeregisteredNodeSafe::SIGNATURE_HASH.into(),
+                // DeregisteredNodeSafeFilter::signature().into(),
                 H256::from_slice(&SAFE_INSTANCE_ADDR.to_bytes32()).into(),
                 H256::from_slice(&SELF_CHAIN_ADDRESS.to_bytes32()).into(),
             ],
@@ -3058,7 +3069,7 @@ mod tests {
         let price_change_log = SerializableLog {
             address: handlers.addresses.price_oracle,
             topics: vec![
-                hopr_bindings::hoprticketpriceoracle::HoprTicketPriceOracle::TicketPriceUpdated::SIGNATURE_HASH.into(),
+                hopr_bindings::hopr_ticket_price_oracle::HoprTicketPriceOracle::TicketPriceUpdated::SIGNATURE_HASH.into(),
                 // TicketPriceUpdatedFilter::signature().into()
             ],
             data: encoded_data,
@@ -3068,16 +3079,11 @@ mod tests {
 
         assert_eq!(db.get_indexer_data(None).await?.ticket_price, None);
 
-        let event_type = db
+        db
             .begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, price_change_log, true).await }))
             .await?;
-
-        assert!(
-            event_type.is_none(),
-            "there's no associated chain event type with price oracle"
-        );
 
         assert_eq!(
             db.get_indexer_data(None).await?.ticket_price.map(|p| p.amount()),
@@ -3106,7 +3112,7 @@ mod tests {
         let win_prob_change_log = SerializableLog {
             address: handlers.addresses.win_prob_oracle,
             topics: vec![
-                hopr_bindings::hoprwinningprobabilityoracle::HoprWinningProbabilityOracle::WinProbUpdated::SIGNATURE_HASH.into()],
+                hopr_bindings::hopr_winning_probability_oracle::HoprWinningProbabilityOracle::WinProbUpdated::SIGNATURE_HASH.into()],
             data: encoded_data,
             ..test_log()
         };
@@ -3116,16 +3122,11 @@ mod tests {
             1.0
         );
 
-        let event_type = db
+        db
             .begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, win_prob_change_log, true).await }))
             .await?;
-
-        assert!(
-            event_type.is_none(),
-            "there's no associated chain event type with winning probability change"
-        );
 
         assert_eq!(
             db.get_indexer_data(None).await?.minimum_incoming_ticket_winning_prob,
@@ -3421,7 +3422,7 @@ mod tests {
     //             address: handlers.addresses.win_prob_oracle,
     //             topics: vec![
     //
-    // hopr_bindings::hoprwinningprobabilityoracle::HoprWinningProbabilityOracle::WinProbUpdated::SIGNATURE_HASH.into(),
+    // hopr_bindings::hopr_winning_probability_oracle::HoprWinningProbabilityOracle::WinProbUpdated::SIGNATURE_HASH.into(),
     //             ],
     //             data: encoded_data,
     //             ..test_log()

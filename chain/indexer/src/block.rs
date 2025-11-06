@@ -1098,7 +1098,7 @@ mod tests {
             logs.push(SerializableLog {
                 address,
                 block_hash: block_hash.into(),
-                topics: vec![hopr_bindings::hoprannouncementsevents::HoprAnnouncementsEvents::AddressAnnouncement::SIGNATURE_HASH.into()],
+                topics: vec![hopr_bindings::hopr_announcements_events::HoprAnnouncementsEvents::AddressAnnouncement::SIGNATURE_HASH.into()],
                 data: DynSolValue::Tuple(vec![
                     DynSolValue::Address(AlloyAddress::from_slice(address.as_ref())),
                     DynSolValue::String(test_multiaddr.to_string()),

@@ -1713,40 +1713,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "blokli-chain-actions"
-version = "0.1.0"
-dependencies = [
- "alloy",
- "anyhow",
- "async-channel 2.5.0",
- "async-lock",
- "async-trait",
- "blokli-chain-rpc",
- "blokli-chain-types",
- "blokli-db",
- "futures",
- "futures-timer",
- "hex-literal",
- "hopr-async-runtime",
- "hopr-bindings 4.0.0",
- "hopr-crypto-random",
- "hopr-crypto-types",
- "hopr-internal-types",
- "hopr-metrics",
- "hopr-platform",
- "hopr-primitive-types",
- "lazy_static",
- "mockall",
- "multiaddr",
- "serde",
- "smart-default",
- "test-log",
- "thiserror 2.0.17",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "blokli-chain-api"
 version = "0.1.0"
 dependencies = [
@@ -1754,7 +1720,6 @@ dependencies = [
  "anyhow",
  "async-channel 2.5.0",
  "async-trait",
- "blokli-chain-actions",
  "blokli-chain-indexer",
  "blokli-chain-rpc",
  "blokli-chain-types",

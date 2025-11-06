@@ -18,31 +18,32 @@ use alloy::{
 use anyhow::anyhow;
 use async_trait::async_trait;
 use blokli_chain_indexer::handlers::ContractEventHandlers;
-use blokli_chain_rpc::{HoprIndexerRpcOperations, SerializableLog};
+use blokli_chain_rpc::HoprIndexerRpcOperations;
 use blokli_chain_types::{
     ContractAddresses,
     chain_events::{ChainEventType, SignificantChainEvent},
 };
 use blokli_db::{
-    accounts::{AccountEntry, AccountType, BlokliDbAccountOperations, ChainOrPacketKey},
+    accounts::{BlokliDbAccountOperations, ChainOrPacketKey},
     channels::{BlokliDbChannelOperations, ChannelEntry},
     db::BlokliDb,
     info::BlokliDbInfoOperations,
 };
 use hex_literal::hex;
 use hopr_bindings::{
-    hopr_announcements_events::HoprAnnouncementsEvents::{AddressAnnouncement, KeyBinding, RevokeAnnouncement},
+    hopr_announcements_events::HoprAnnouncementsEvents::{AddressAnnouncement, KeyBinding as HoprKeyBindingEvent, RevokeAnnouncement},
     hopr_channels::HoprChannels::LedgerDomainSeparatorUpdated,
     hopr_channels_events::HoprChannelsEvents::{
         ChannelBalanceDecreased, ChannelBalanceIncreased, ChannelClosed, ChannelOpened,
     },
 };
-use hopr_crypto_types::prelude::*;
+use hopr_crypto_types::prelude::{ChainKeypair, Hash, OffchainKeypair};
 use hopr_internal_types::{
+    account::{AccountEntry, AccountType},
     announcement::KeyBinding,
     channels::{ChannelStatus, generate_channel_id},
 };
-use hopr_primitive_types::prelude::*;
+use hopr_primitive_types::prelude::{Address, HoprBalance, SerializableLog, XDaiBalance};
 use multiaddr::Multiaddr;
 
 // Test constants
@@ -178,7 +179,7 @@ impl IndexerTestContext {
 
         SerializableLog {
             address: self.addresses.announcements,
-            topics: vec![KeyBinding::SIGNATURE_HASH.into()],
+            topics: vec![HoprKeyBindingEvent::SIGNATURE_HASH.into()],
             data: DynSolValue::Tuple(vec![
                 DynSolValue::Bytes(keybinding.signature.as_ref().to_vec()),
                 DynSolValue::Bytes(keybinding.packet_key.as_ref().to_vec()),

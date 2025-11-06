@@ -5,7 +5,6 @@ resolver = "2"
 members = [
   "api",
   "bloklid",
-  "chain/actions",
   "chain/api",
   "chain/indexer",
   "chain/rpc",
@@ -42,7 +41,6 @@ axum-extra = { version = "0.10.1", features = ["query"] }
 backon = { version = "1.5.2", default-features = false }
 bincode = "2.0.1"
 blokli-api-types = { path = "types" }
-blokli-chain-actions = { path = "chain/actions" }
 blokli-chain-api = { path = "chain/api" }
 blokli-chain-indexer = { path = "chain/indexer" }
 blokli-chain-rpc = { path = "chain/rpc" }

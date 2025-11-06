@@ -12,13 +12,11 @@ crate-type = ["rlib"]
 [features]
 default = []
 prometheus = [
-  "blokli-chain-actions/prometheus",
   "blokli-chain-indexer/prometheus",
   "blokli-chain-rpc/prometheus",
   "blokli-db/prometheus",
 ]
 runtime-tokio = [
-  "blokli-chain-actions/runtime-tokio",
   "blokli-chain-indexer/runtime-tokio",
   "blokli-db/runtime-tokio",
   "hopr-async-runtime/runtime-tokio",
@@ -47,7 +45,6 @@ url = { workspace = true }
 uuid = { workspace = true }
 validator = { workspace = true }
 
-blokli-chain-actions = { workspace = true }
 blokli-chain-indexer = { workspace = true }
 blokli-chain-rpc     = { workspace = true }
 blokli-chain-types   = { workspace = true }
