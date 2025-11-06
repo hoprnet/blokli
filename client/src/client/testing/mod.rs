@@ -4,6 +4,7 @@ use crate::{
 };
 use futures::{Stream, StreamExt};
 use std::collections::HashMap;
+use std::time::Duration;
 
 /// Blokli client for testing purposes.
 pub struct BlokliTestClient {
@@ -15,6 +16,18 @@ pub struct BlokliTestClient {
     pub chain_info: ChainInfo,
     pub version: String,
     pub health: String,
+    pub tx_client: Option<MockBlokliTransactionClientImpl>,
+}
+
+mockall::mock! {
+    pub BlokliTransactionClientImpl {}
+    #[async_trait::async_trait]
+    impl BlokliTransactionClient for BlokliTransactionClientImpl {
+        async fn submit_transaction(&self, signed_tx: &[u8]) -> Result<TxReceipt>;
+        async fn submit_and_track_transaction(&self, signed_tx: &[u8]) -> Result<TxId>;
+        async fn submit_and_confirm_transaction(&self, signed_tx: &[u8], num_confirmations: usize) -> Result<TxReceipt>;
+        async fn track_transaction(&self, tx_id: TxId, client_timeout: Duration) -> Result<Transaction>;
+    }
 }
 
 impl Default for BlokliTestClient {
@@ -51,6 +64,7 @@ impl Default for BlokliTestClient {
             },
             version: "1".to_string(),
             health: "OK".to_string(),
+            tx_client: None,
         }
     }
 }
@@ -170,7 +184,7 @@ impl BlokliQueryClient for BlokliTestClient {
     }
 
     async fn query_transaction_status(&self, _tx_id: TxId) -> Result<Transaction> {
-        unimplemented!()
+        Err(ErrorKind::Other(anyhow::anyhow!("mock cannot query transaction status")).into())
     }
 
     async fn query_chain_info(&self) -> Result<ChainInfo> {
@@ -241,5 +255,42 @@ impl BlokliSubscriptionClient for BlokliTestClient {
             })
         }))
         .chain(futures::stream::pending()))
+    }
+}
+
+#[async_trait::async_trait]
+impl BlokliTransactionClient for BlokliTestClient {
+    async fn submit_transaction(&self, signed_tx: &[u8]) -> Result<TxReceipt> {
+        if let Some(client) = &self.tx_client {
+            client.submit_transaction(signed_tx).await
+        } else {
+            Err(ErrorKind::Other(anyhow::anyhow!("no transaction client configured")).into())
+        }
+    }
+
+    async fn submit_and_track_transaction(&self, signed_tx: &[u8]) -> Result<TxId> {
+        if let Some(client) = &self.tx_client {
+            client.submit_and_track_transaction(signed_tx).await
+        } else {
+            Err(ErrorKind::Other(anyhow::anyhow!("no transaction client configured")).into())
+        }
+    }
+
+    async fn submit_and_confirm_transaction(&self, signed_tx: &[u8], num_confirmations: usize) -> Result<TxReceipt> {
+        if let Some(client) = &self.tx_client {
+            client
+                .submit_and_confirm_transaction(signed_tx, num_confirmations)
+                .await
+        } else {
+            Err(ErrorKind::Other(anyhow::anyhow!("no transaction client configured")).into())
+        }
+    }
+
+    async fn track_transaction(&self, tx_id: TxId, client_timeout: Duration) -> Result<Transaction> {
+        if let Some(client) = &self.tx_client {
+            client.track_transaction(tx_id, client_timeout).await
+        } else {
+            Err(ErrorKind::Other(anyhow::anyhow!("no transaction client configured")).into())
+        }
     }
 }

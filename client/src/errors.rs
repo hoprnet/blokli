@@ -53,6 +53,8 @@ pub enum ErrorKind {
     #[error("operation timed out at the client")]
     Timeout,
     #[error(transparent)]
+    Other(#[from] anyhow::Error),
+    #[error(transparent)]
     Subscription(#[from] eventsource_client::Error),
     #[error(transparent)]
     UrlParse(#[from] url::ParseError),
