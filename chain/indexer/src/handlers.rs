@@ -6,10 +6,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use alloy::{
-    primitives::{Address as AlloyAddress, B256},
-    sol_types::SolEventInterface,
-};
+use alloy::{primitives::B256, sol_types::SolEventInterface};
 use async_trait::async_trait;
 use blokli_api_types::{Account, Channel, ChannelUpdate, TokenValueString, UInt64};
 use blokli_chain_rpc::{HoprIndexerRpcOperations, Log};
@@ -2339,9 +2336,7 @@ mod tests {
 
         let channel_opened_log = SerializableLog {
             address: handlers.addresses.channels,
-            topics: vec![
-                hopr_bindings::hopr_channels_events::HoprChannelsEvents::ChannelOpened::SIGNATURE_HASH.into(),
-            ],
+            topics: vec![hopr_bindings::hopr_channels_events::HoprChannelsEvents::ChannelOpened::SIGNATURE_HASH.into()],
             data: encoded_data,
             ..test_log()
         };
@@ -2404,9 +2399,7 @@ mod tests {
 
         let channel_opened_log = SerializableLog {
             address: handlers.addresses.channels,
-            topics: vec![
-                hopr_bindings::hopr_channels_events::HoprChannelsEvents::ChannelOpened::SIGNATURE_HASH.into(),
-            ],
+            topics: vec![hopr_bindings::hopr_channels_events::HoprChannelsEvents::ChannelOpened::SIGNATURE_HASH.into()],
             data: encoded_data,
             ..test_log()
         };
@@ -2469,9 +2462,7 @@ mod tests {
 
         let channel_opened_log = SerializableLog {
             address: handlers.addresses.channels,
-            topics: vec![
-                hopr_bindings::hopr_channels_events::HoprChannelsEvents::ChannelOpened::SIGNATURE_HASH.into(),
-            ],
+            topics: vec![hopr_bindings::hopr_channels_events::HoprChannelsEvents::ChannelOpened::SIGNATURE_HASH.into()],
             data: encoded_data,
             ..test_log()
         };
