@@ -193,8 +193,8 @@ mod tests {
 
         assert!(result.is_ok(), "Extraction should succeed");
         let files = result.unwrap();
-        assert!(files.contains(&"hopr_logs.db".to_string()));
-        assert!(extract_dir.join("hopr_logs.db").exists());
+        assert!(files.contains(&"hopr_logs.sql".to_string()));
+        assert!(extract_dir.join("hopr_logs.sql").exists());
     }
 
     #[tokio::test]
@@ -208,7 +208,7 @@ mod tests {
         let extract_dir = temp_dir.path().join("extract");
 
         // verify files before extraction
-        assert!(!extract_dir.parent().unwrap().join("hopr_logs.db").exists());
+        assert!(!extract_dir.parent().unwrap().join("hopr_logs.sql").exists());
 
         let result = extractor.extract_snapshot(&archive_path, &extract_dir).await;
 
@@ -216,8 +216,8 @@ mod tests {
 
         // verify files after extraction
         let extracted_files = result.unwrap();
-        assert!(extracted_files.contains(&"hopr_logs.db".to_string()));
-        assert!(!extract_dir.parent().unwrap().join("hopr_logs.db").exists());
+        assert!(extracted_files.contains(&"hopr_logs.sql".to_string()));
+        assert!(!extract_dir.parent().unwrap().join("hopr_logs.sql").exists());
     }
 
     #[tokio::test]
