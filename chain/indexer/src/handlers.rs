@@ -21,13 +21,16 @@ use hopr_bindings::{
     hopr_token::HoprToken::HoprTokenEvents,
     hopr_winning_probability_oracle::HoprWinningProbabilityOracle::HoprWinningProbabilityOracleEvents,
 };
-use hopr_crypto_types::prelude::*;
+use hopr_crypto_types::prelude::{Hash, OffchainSignature};
 use hopr_internal_types::{
     announcement::KeyBinding,
     channels::{ChannelEntry, ChannelStatus, generate_channel_id},
     tickets::WinningProbability,
 };
-use hopr_primitive_types::prelude::*;
+use hopr_primitive_types::{
+    prelude::{Address, HoprBalance, SerializableLog},
+    traits::IntoEndian,
+};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use tracing::{debug, error, info, trace, warn};
 

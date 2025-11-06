@@ -13,7 +13,7 @@ use blokli_db::{BlokliDbGeneralModelOperations, api::logs::BlokliDbLogOperations
 use futures::{StreamExt, future::AbortHandle};
 use hopr_bindings::hopr_token::HoprToken::{Approval, Transfer};
 use hopr_crypto_types::types::Hash;
-use hopr_primitive_types::prelude::*;
+use hopr_primitive_types::prelude::{Address, SerializableLog};
 use tracing::{debug, error, info, trace};
 
 use crate::{

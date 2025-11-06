@@ -39,9 +39,12 @@ use hopr_bindings::{
     hopr_node_safe_registry::HoprNodeSafeRegistry::{deregisterNodeBySafeCall, registerSafeByNodeCall},
     hopr_token::HoprToken::{approveCall, transferCall},
 };
-use hopr_crypto_types::prelude::*;
+use hopr_crypto_types::prelude::{ChainKeypair, Hash, VrfParameters};
 use hopr_internal_types::{announcement::AnnouncementData, channels::ChannelEntry, tickets::RedeemableTicket};
-use hopr_primitive_types::prelude::*;
+use hopr_primitive_types::{
+    prelude::{Address, Balance, Currency, HoprBalance, WxHOPR, XDai},
+    traits::IntoEndian,
+};
 
 use crate::errors::{
     ChainActionsError::{InvalidArguments, InvalidState},
@@ -572,9 +575,9 @@ mod tests {
     use blokli_chain_rpc::client::create_rpc_client_to_anvil;
     use blokli_chain_types::ContractInstances;
     use hex_literal::hex;
-    use hopr_crypto_types::prelude::*;
-    use hopr_internal_types::announcement::AnnouncementData;
-    use hopr_primitive_types::prelude::HoprBalance;
+    use hopr_crypto_types::prelude::{ChainKeypair, OffchainKeypair, Response, TicketBuilder};
+    use hopr_internal_types::announcement::{AnnouncementData, KeyBinding};
+    use hopr_primitive_types::{prelude::HoprBalance, traits::IntoEndian};
     use multiaddr::Multiaddr;
 
     use super::{BasicPayloadGenerator, PayloadGenerator};

@@ -73,6 +73,8 @@ Group imports in this order:
 
 **DO NOT** use wildcard imports (`use module::*;`)
 
+**Exception:** Migration files (`db/migration/src/*.rs`) may use wildcard imports for `sea_orm` and `sea_query` as these libraries are designed for this pattern in database migrations.
+
 Always use workspace dependencies defined in the root `Cargo.toml`:
 
 ```toml
