@@ -6,6 +6,8 @@ mod transactions;
 
 use cynic::GraphQlResponse;
 use futures::{TryFutureExt, TryStreamExt};
+#[cfg(feature = "testing")]
+pub use testing::BlokliTestClient;
 use url::Url;
 
 use crate::{

@@ -6,7 +6,7 @@ use sea_orm::DatabaseConnection;
 
 use crate::{query::QueryRoot, subscription::SubscriptionRoot};
 
-/// Build the async-graphql schema with database connection, chain ID, and contract addresses
+/// Build the async-graphql schema with database connection, chain ID, network, and contract addresses
 ///
 /// This creates a GraphQL schema with:
 /// - Read-only queries for public entities (account, announcement, channel, balances)
@@ -16,6 +16,7 @@ use crate::{query::QueryRoot, subscription::SubscriptionRoot};
 /// The schema is configured with:
 /// - Database connection injected as context data
 /// - Chain ID injected as context data
+/// - Network name injected as context data
 /// - Contract addresses injected as context data
 /// - Query and subscription access patterns
 /// - Query depth limit (10 levels) to prevent excessive nesting
@@ -23,6 +24,7 @@ use crate::{query::QueryRoot, subscription::SubscriptionRoot};
 pub fn build_schema(
     db: DatabaseConnection,
     chain_id: u64,
+    network: String,
     contract_addresses: ContractAddresses,
 ) -> Schema<QueryRoot, EmptyMutation, SubscriptionRoot> {
     Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot)
@@ -30,6 +32,7 @@ pub fn build_schema(
         .limit_complexity(100)
         .data(db)
         .data(chain_id)
+        .data(network)
         .data(contract_addresses)
         .finish()
 }
@@ -38,7 +41,7 @@ pub fn build_schema(
 ///
 /// This generates a string representation of the GraphQL schema that can be used
 /// for code generation, documentation, or schema validation tools.
-pub fn export_schema_sdl(db: DatabaseConnection, chain_id: u64, contract_addresses: ContractAddresses) -> String {
-    let schema = build_schema(db, chain_id, contract_addresses);
+pub fn export_schema_sdl(db: DatabaseConnection, contract_addresses: ContractAddresses) -> String {
+    let schema = build_schema(db, 0, "PLACEHOLDER".to_string(), contract_addresses);
     schema.sdl()
 }
