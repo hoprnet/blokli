@@ -1,5 +1,7 @@
 mod queries;
 mod subscriptions;
+#[cfg(feature = "testing")]
+mod testing;
 mod transactions;
 
 use cynic::GraphQlResponse;
@@ -10,6 +12,9 @@ use crate::{
     api::VERSION,
     errors::{BlokliClientError, ErrorKind},
 };
+
+#[cfg(feature = "testing")]
+pub use testing::BlokliTestClient;
 
 /// Configuration for the [`BlokliClient`].
 #[derive(Clone, Debug, PartialEq, Eq, smart_default::SmartDefault)]

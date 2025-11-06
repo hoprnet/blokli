@@ -299,10 +299,10 @@ impl From<&blokli_chain_types::ContractAddresses> for ContractAddressMap {
             ("token", &addresses.token),
             ("channels", &addresses.channels),
             ("announcements", &addresses.announcements),
-            ("safe_registry", &addresses.safe_registry),
-            ("price_oracle", &addresses.price_oracle),
-            ("win_prob_oracle", &addresses.win_prob_oracle),
-            ("stake_factory", &addresses.stake_factory),
+            ("safe_registry", &addresses.node_safe_registry),
+            ("price_oracle", &addresses.ticket_price_oracle),
+            ("win_prob_oracle", &addresses.winning_probability_oracle),
+            ("stake_factory", &addresses.node_stake_v2_factory),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))

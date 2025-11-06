@@ -115,10 +115,10 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         announcements: Address::from([3; 20]),
         network_registry: Address::from([4; 20]),
         network_registry_proxy: Address::from([5; 20]),
-        safe_registry: Address::from([6; 20]),
-        price_oracle: Address::from([7; 20]),
-        win_prob_oracle: Address::from([8; 20]),
-        stake_factory: Address::from([9; 20]),
+        node_safe_registry: Address::from([6; 20]),
+        ticket_price_oracle: Address::from([7; 20]),
+        winning_probability_oracle: Address::from([8; 20]),
+        node_stake_v2_factory: Address::from([9; 20]),
         module_implementation: Address::from([10; 20]),
     };
 
@@ -204,10 +204,10 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         announcements: Address::from([3; 20]),
         network_registry: Address::from([4; 20]),
         network_registry_proxy: Address::from([5; 20]),
-        safe_registry: Address::from([6; 20]),
-        price_oracle: Address::from([7; 20]),
-        win_prob_oracle: Address::from([8; 20]),
-        stake_factory: Address::from([9; 20]),
+        node_safe_registry: Address::from([6; 20]),
+        ticket_price_oracle: Address::from([7; 20]),
+        winning_probability_oracle: Address::from([8; 20]),
+        node_stake_v2_factory: Address::from([9; 20]),
         module_implementation: Address::from([10; 20]),
     };
 
@@ -360,10 +360,10 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         announcements: Address::from([3; 20]),
         network_registry: Address::from([4; 20]),
         network_registry_proxy: Address::from([5; 20]),
-        safe_registry: Address::from([6; 20]),
-        price_oracle: Address::from([7; 20]),
-        win_prob_oracle: Address::from([8; 20]),
-        stake_factory: Address::from([9; 20]),
+        node_safe_registry: Address::from([6; 20]),
+        ticket_price_oracle: Address::from([7; 20]),
+        winning_probability_oracle: Address::from([8; 20]),
+        node_stake_v2_factory: Address::from([9; 20]),
         module_implementation: Address::from([10; 20]),
     };
 
