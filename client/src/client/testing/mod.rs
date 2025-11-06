@@ -20,6 +20,22 @@ pub struct BlokliTestClient {
     pub tx_client: Option<MockBlokliTransactionClientImpl>,
 }
 
+impl Clone for BlokliTestClient {
+    fn clone(&self) -> Self {
+        Self {
+            accounts: self.accounts.clone(),
+            native_balances: self.native_balances.clone(),
+            token_balances: self.token_balances.clone(),
+            safe_allowances: self.safe_allowances.clone(),
+            channels: self.channels.clone(),
+            chain_info: self.chain_info.clone(),
+            version: self.version.clone(),
+            health: self.health.clone(),
+            tx_client: None,
+        }
+    }
+}
+
 impl std::fmt::Debug for BlokliTestClient {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BlokliTestClient")
