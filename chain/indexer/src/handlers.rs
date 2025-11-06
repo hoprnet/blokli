@@ -6,7 +6,10 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use alloy::{primitives::B256, sol_types::SolEventInterface};
+use alloy::{
+    primitives::{Address as AlloyAddress, B256},
+    sol_types::SolEventInterface,
+};
 use async_trait::async_trait;
 use blokli_api_types::{Account, Channel, ChannelUpdate, TokenValueString, UInt64};
 use blokli_chain_rpc::{HoprIndexerRpcOperations, Log};
@@ -1351,6 +1354,7 @@ mod tests {
         static ref SELF_PRIV_KEY: OffchainKeypair = OffchainKeypair::from_secret(&hex!("492057cf93e99b31d2a85bc5e98a9c3aa0021feec52c227cc8170e8f7d047775")).expect("lazy static keypair should be constructible");
         static ref SELF_CHAIN_KEYPAIR: ChainKeypair = ChainKeypair::from_secret(&hex!("492057cf93e99b31d2a85bc5e98a9c3aa0021feec52c227cc8170e8f7d047775")).expect("lazy static chain keypair should be constructible");
         static ref SELF_CHAIN_ADDRESS: Address = SELF_CHAIN_KEYPAIR.public().to_address();
+        static ref COUNTERPARTY_PRIV_KEY: OffchainKeypair = OffchainKeypair::from_secret(&hex!("5e6a9defd47decd18dc7a80c7e774bc85e92b5c1a6593dcf2f8b0b9532b8a2e8")).expect("lazy static counterparty keypair should be constructible");
         static ref COUNTERPARTY_CHAIN_ADDRESS: Address = "1234567890abcdef1234567890abcdef12345678".parse().expect("lazy static address should be constructible"); // just a dummy
         static ref SAFE_INSTANCE_ADDR: Address = "fedcba0987654321fedcba0987654321fedcba09".parse().expect("lazy static address should be constructible"); // just a dummy
         static ref STAKE_ADDRESS: Address = "4331eaa9542b6b034c43090d9ec1c2198758dbc3".parse().expect("lazy static address should be constructible");
@@ -1472,6 +1476,58 @@ mod tests {
 
     fn test_log() -> SerializableLog {
         SerializableLog { ..Default::default() }
+    }
+
+    /// Helper function to create test accounts for channel operations
+    async fn create_test_accounts(db: &BlokliDb) -> anyhow::Result<()> {
+        db.upsert_account(None, *SELF_CHAIN_ADDRESS, *SELF_PRIV_KEY.public(), None, 1, 0, 0)
+            .await?;
+        db.upsert_account(
+            None,
+            *COUNTERPARTY_CHAIN_ADDRESS,
+            *COUNTERPARTY_PRIV_KEY.public(),
+            None,
+            1,
+            0,
+            1,
+        )
+        .await?;
+        Ok(())
+    }
+
+    /// Encodes channel state into bytes32 format as emitted by contract events
+    fn encode_channel_state(
+        balance: HoprBalance,
+        ticket_index: u32,
+        closure_time: u32,
+        epoch: u32,
+        status: ChannelStatus,
+    ) -> B256 {
+        let mut bytes = [0u8; 32];
+
+        // Balance (bytes 6-17)
+        let balance_bytes = balance.to_be_bytes();
+        bytes[6..18].copy_from_slice(&balance_bytes[20..32]);
+
+        // Ticket index (bytes 18-23)
+        let ticket_index_bytes = (ticket_index as u64).to_be_bytes();
+        bytes[18..24].copy_from_slice(&ticket_index_bytes[2..8]);
+
+        // Closure time (bytes 24-27)
+        bytes[24..28].copy_from_slice(&closure_time.to_be_bytes());
+
+        // Epoch (bytes 28-30)
+        let epoch_bytes = epoch.to_be_bytes();
+        bytes[28..31].copy_from_slice(&epoch_bytes[1..4]);
+
+        // Status (byte 31)
+        bytes[31] = match status {
+            ChannelStatus::Closed => 0,
+            ChannelStatus::Open => 1,
+            ChannelStatus::PendingToClose(_) => 2,
+        };
+
+        B256::from(bytes)
     }
 
     #[tokio::test]
@@ -2154,6 +2210,8 @@ mod tests {
         };
         let handlers = init_handlers(clonable_rpc_operations, db.clone());
 
+        create_test_accounts(&db).await?;
+
         let starting_balance = HoprBalance::from(primitive_types::U256::from((1u128 << 96) - 1));
 
         let channel = ChannelEntry::new(
@@ -2263,17 +2321,26 @@ mod tests {
         };
         let handlers = init_handlers(clonable_rpc_operations, db.clone());
 
+        // Create required accounts before channel operations
+        create_test_accounts(&db).await?;
+
         let channel_id = generate_channel_id(&SELF_CHAIN_ADDRESS, &COUNTERPARTY_CHAIN_ADDRESS);
 
-        let encoded_data = ().abi_encode();
+        let channel_state = encode_channel_state(HoprBalance::zero(), 0, 0, 1, ChannelStatus::Open);
+
+        let data = DynSolValue::Tuple(vec![
+            DynSolValue::Address(AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref())),
+            DynSolValue::Address(AlloyAddress::from_slice(COUNTERPARTY_CHAIN_ADDRESS.as_ref())),
+            DynSolValue::FixedBytes(channel_state.into(), 32),
+        ])
+        .abi_encode_params();
+
+        let encoded_data = data[32..].to_vec();
 
         let channel_opened_log = SerializableLog {
             address: handlers.addresses.channels,
             topics: vec![
-                hopr_bindings::hopr_channels::HoprChannels::ChannelOpened::SIGNATURE_HASH.into(),
-                // ChannelOpenedFilter::signature().into(),
-                H256::from_slice(&SELF_CHAIN_ADDRESS.to_bytes32()).into(),
-                H256::from_slice(&COUNTERPARTY_CHAIN_ADDRESS.to_bytes32()).into(),
+                hopr_bindings::hopr_channels_events::HoprChannelsEvents::ChannelOpened::SIGNATURE_HASH.into(),
             ],
             data: encoded_data,
             ..test_log()
@@ -2310,6 +2377,9 @@ mod tests {
         };
         let handlers = init_handlers(clonable_rpc_operations, db.clone());
 
+        // Create required accounts before channel operations
+        create_test_accounts(&db).await?;
+
         let channel = ChannelEntry::new(
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
@@ -2321,15 +2391,21 @@ mod tests {
 
         db.upsert_channel(None, channel, 1, 0, 0).await?;
 
-        let encoded_data = ().abi_encode();
+        let channel_state = encode_channel_state(HoprBalance::zero(), 0, 0, 1, ChannelStatus::Open);
+
+        let data = DynSolValue::Tuple(vec![
+            DynSolValue::Address(AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref())),
+            DynSolValue::Address(AlloyAddress::from_slice(COUNTERPARTY_CHAIN_ADDRESS.as_ref())),
+            DynSolValue::FixedBytes(channel_state.into(), 32),
+        ])
+        .abi_encode_params();
+
+        let encoded_data = data[32..].to_vec();
 
         let channel_opened_log = SerializableLog {
             address: handlers.addresses.channels,
             topics: vec![
-                hopr_bindings::hopr_channels::HoprChannels::ChannelOpened::SIGNATURE_HASH.into(),
-                // ChannelOpenedFilter::signature().into(),
-                H256::from_slice(&SELF_CHAIN_ADDRESS.to_bytes32()).into(),
-                H256::from_slice(&COUNTERPARTY_CHAIN_ADDRESS.to_bytes32()).into(),
+                hopr_bindings::hopr_channels_events::HoprChannelsEvents::ChannelOpened::SIGNATURE_HASH.into(),
             ],
             data: encoded_data,
             ..test_log()
@@ -2367,6 +2443,8 @@ mod tests {
         };
         let handlers = init_handlers(clonable_rpc_operations, db.clone());
 
+        create_test_accounts(&db).await?;
+
         let channel = ChannelEntry::new(
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
@@ -2378,15 +2456,21 @@ mod tests {
 
         db.upsert_channel(None, channel, 1, 0, 0).await?;
 
-        let encoded_data = ().abi_encode();
+        let channel_state = encode_channel_state(HoprBalance::zero(), 0, 0, 1, ChannelStatus::Open);
+
+        let data = DynSolValue::Tuple(vec![
+            DynSolValue::Address(AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref())),
+            DynSolValue::Address(AlloyAddress::from_slice(COUNTERPARTY_CHAIN_ADDRESS.as_ref())),
+            DynSolValue::FixedBytes(channel_state.into(), 32),
+        ])
+        .abi_encode_params();
+
+        let encoded_data = data[32..].to_vec();
 
         let channel_opened_log = SerializableLog {
             address: handlers.addresses.channels,
             topics: vec![
-                hopr_bindings::hopr_channels::HoprChannels::ChannelOpened::SIGNATURE_HASH.into(),
-                // ChannelOpenedFilter::signature().into(),
-                H256::from_slice(&SELF_CHAIN_ADDRESS.to_bytes32()).into(),
-                H256::from_slice(&COUNTERPARTY_CHAIN_ADDRESS.to_bytes32()).into(),
+                hopr_bindings::hopr_channels_events::HoprChannelsEvents::ChannelOpened::SIGNATURE_HASH.into(),
             ],
             data: encoded_data,
             ..test_log()
@@ -2720,6 +2804,8 @@ mod tests {
         };
         let handlers = init_handlers(clonable_rpc_operations, db.clone());
 
+        create_test_accounts(&db).await?;
+
         let channel = ChannelEntry::new(
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
@@ -2786,6 +2872,8 @@ mod tests {
             inner: Arc::new(rpc_operations),
         };
         let handlers = init_handlers(clonable_rpc_operations, db.clone());
+
+        create_test_accounts(&db).await?;
 
         let channel = ChannelEntry::new(
             *COUNTERPARTY_CHAIN_ADDRESS,
@@ -2894,6 +2982,8 @@ mod tests {
             inner: Arc::new(rpc_operations),
         };
         let handlers = init_handlers(clonable_rpc_operations, db.clone());
+
+        create_test_accounts(&db).await?;
 
         let channel = ChannelEntry::new(
             *SELF_CHAIN_ADDRESS,

@@ -720,7 +720,13 @@ mod tests {
 
     // Helper: Initialize chain_info with watermark
     async fn init_chain_info(db: &DatabaseConnection, block: i64, tx_index: i64, log_index: i64) -> anyhow::Result<()> {
-        let chain_info = blokli_db_entity::chain_info::ActiveModel {
+        use blokli_db_entity::chain_info;
+        use sea_orm::EntityTrait;
+
+        // Delete any existing chain_info to ensure test isolation
+        chain_info::Entity::delete_many().exec(db).await?;
+
+        let chain_info = chain_info::ActiveModel {
             id: Set(1),
             last_indexed_block: Set(block),
             last_indexed_tx_index: Set(tx_index),
@@ -797,8 +803,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_capture_watermark_fails_when_chain_info_missing() {
+        use blokli_db_entity::chain_info;
+        use sea_orm::EntityTrait;
+
         let db = BlokliDb::new_in_memory().await.unwrap();
         let indexer_state = IndexerState::new(10, 100);
+
+        // Ensure chain_info does NOT exist (delete any from previous tests)
+        chain_info::Entity::delete_many()
+            .exec(db.conn(blokli_db::TargetDb::Index))
+            .await
+            .unwrap();
 
         // Do NOT initialize chain_info - should fail
         let result = capture_watermark_synchronized(&indexer_state, db.conn(blokli_db::TargetDb::Index)).await;
@@ -979,13 +994,14 @@ mod tests {
             .unwrap();
 
         // Insert multiple states for same channel
+        // Note: Balance bytes must be big-endian (most significant byte first)
         insert_channel_state(
             db.conn(blokli_db::TargetDb::Index),
             channel_id,
             50,
             0,
             0,
-            vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], // balance = 1
+            vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1], // balance = 1 (big-endian)
             1,                                        // OPEN
         )
         .await
@@ -997,7 +1013,7 @@ mod tests {
             75,
             0,
             0,
-            vec![2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0], // balance = 2 (updated)
+            vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2], // balance = 2 (updated, big-endian)
             1,                                        // Still OPEN
         )
         .await
@@ -1014,10 +1030,10 @@ mod tests {
             .await
             .unwrap();
 
-        // Should return channel with latest balance (2)
+        // Should return channel with latest balance (2 wei, not 2 HOPR)
         assert_eq!(result.len(), 1);
-        // Balance should be "2" in string form
-        assert_eq!(result[0].channel.balance.0, "2");
+        // Balance is 2 wei which displays as 0.000000000000000002 HOPR
+        assert_eq!(result[0].channel.balance.0, "0.000000000000000002 wxHOPR");
     }
 
     #[tokio::test]
