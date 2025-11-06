@@ -7,4 +7,4 @@ pub mod errors;
 pub use client::{BlokliClient, BlokliClientConfig};
 
 #[cfg(feature = "testing")]
-pub use client::BlokliTestClient;
+pub use client::{BlokliTestClient, MockBlokliTransactionClientImpl};
