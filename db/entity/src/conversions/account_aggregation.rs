@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder};
 
 use super::balances::{address_to_string, hopr_balance_to_string, native_balance_to_string, string_to_address};
 use crate::codegen::{account, account_state, announcement, hopr_balance, native_balance};
@@ -36,9 +36,12 @@ pub struct AggregatedAccount {
 ///
 /// # Returns
 /// * `Result<Vec<AggregatedAccount>, sea_orm::DbErr>` - List of aggregated accounts
-pub async fn fetch_accounts_with_balances(db: &DatabaseConnection) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr> {
+pub async fn fetch_accounts_with_balances<C>(conn: &C) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr>
+where
+    C: ConnectionTrait,
+{
     // 1. Fetch all accounts (1 query)
-    let accounts = account::Entity::find().all(db).await?;
+    let accounts = account::Entity::find().all(conn).await?;
 
     if accounts.is_empty() {
         return Ok(Vec::new());
@@ -54,7 +57,7 @@ pub async fn fetch_accounts_with_balances(db: &DatabaseConnection) -> Result<Vec
         .order_by_desc(account_state::Column::PublishedBlock)
         .order_by_desc(account_state::Column::PublishedTxIndex)
         .order_by_desc(account_state::Column::PublishedLogIndex)
-        .all(db)
+        .all(conn)
         .await?;
 
     // Build map of account_id -> safe_address (only keep latest state per account)
@@ -72,7 +75,7 @@ pub async fn fetch_accounts_with_balances(db: &DatabaseConnection) -> Result<Vec
     // 2. Batch fetch all announcements (1 query)
     let announcements = announcement::Entity::find()
         .filter(announcement::Column::AccountId.is_in(account_ids))
-        .all(db)
+        .all(conn)
         .await?;
 
     // Group announcements by account_id
@@ -87,7 +90,7 @@ pub async fn fetch_accounts_with_balances(db: &DatabaseConnection) -> Result<Vec
     // 3. Batch fetch all HOPR balances (1 query)
     let hopr_balances = hopr_balance::Entity::find()
         .filter(hopr_balance::Column::Address.is_in(all_addresses.clone()))
-        .all(db)
+        .all(conn)
         .await?;
 
     let hopr_balance_map: HashMap<String, String> = hopr_balances
@@ -98,7 +101,7 @@ pub async fn fetch_accounts_with_balances(db: &DatabaseConnection) -> Result<Vec
     // 4. Batch fetch all native balances (1 query)
     let native_balances = native_balance::Entity::find()
         .filter(native_balance::Column::Address.is_in(all_addresses))
-        .all(db)
+        .all(conn)
         .await?;
 
     let native_balance_map: HashMap<String, String> = native_balances
@@ -170,10 +173,13 @@ pub async fn fetch_accounts_with_balances(db: &DatabaseConnection) -> Result<Vec
 ///
 /// # Returns
 /// * `Result<Vec<AggregatedAccount>, sea_orm::DbErr>` - List of aggregated accounts matching the addresses
-pub async fn fetch_accounts_with_balances_for_addresses(
-    db: &DatabaseConnection,
+pub async fn fetch_accounts_with_balances_for_addresses<C>(
+    conn: &C,
     addresses: Vec<String>,
-) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr> {
+) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr>
+where
+    C: ConnectionTrait,
+{
     if addresses.is_empty() {
         return Ok(Vec::new());
     }
@@ -184,7 +190,7 @@ pub async fn fetch_accounts_with_balances_for_addresses(
     // 1. Fetch accounts filtered by chain_key (1 query)
     let accounts = account::Entity::find()
         .filter(account::Column::ChainKey.is_in(binary_addresses))
-        .all(db)
+        .all(conn)
         .await?;
 
     if accounts.is_empty() {
@@ -201,7 +207,7 @@ pub async fn fetch_accounts_with_balances_for_addresses(
         .order_by_desc(account_state::Column::PublishedBlock)
         .order_by_desc(account_state::Column::PublishedTxIndex)
         .order_by_desc(account_state::Column::PublishedLogIndex)
-        .all(db)
+        .all(conn)
         .await?;
 
     // Build map of account_id -> safe_address (only keep latest state per account)
@@ -219,7 +225,7 @@ pub async fn fetch_accounts_with_balances_for_addresses(
     // 2. Batch fetch all announcements (1 query)
     let announcements = announcement::Entity::find()
         .filter(announcement::Column::AccountId.is_in(account_ids))
-        .all(db)
+        .all(conn)
         .await?;
 
     // Group announcements by account_id
@@ -234,7 +240,7 @@ pub async fn fetch_accounts_with_balances_for_addresses(
     // 3. Batch fetch all HOPR balances (1 query)
     let hopr_balances = hopr_balance::Entity::find()
         .filter(hopr_balance::Column::Address.is_in(all_addresses.clone()))
-        .all(db)
+        .all(conn)
         .await?;
 
     let hopr_balance_map: HashMap<String, String> = hopr_balances
@@ -245,7 +251,7 @@ pub async fn fetch_accounts_with_balances_for_addresses(
     // 4. Batch fetch all native balances (1 query)
     let native_balances = native_balance::Entity::find()
         .filter(native_balance::Column::Address.is_in(all_addresses))
-        .all(db)
+        .all(conn)
         .await?;
 
     let native_balance_map: HashMap<String, String> = native_balances
@@ -316,10 +322,10 @@ pub async fn fetch_accounts_with_balances_for_addresses(
 ///
 /// # Returns
 /// * `Result<Vec<AggregatedAccount>, sea_orm::DbErr>` - List of aggregated accounts matching the keyids
-pub async fn fetch_accounts_by_keyids(
-    db: &DatabaseConnection,
-    keyids: Vec<i32>,
-) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr> {
+pub async fn fetch_accounts_by_keyids<C>(conn: &C, keyids: Vec<i32>) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr>
+where
+    C: ConnectionTrait,
+{
     if keyids.is_empty() {
         return Ok(Vec::new());
     }
@@ -327,7 +333,7 @@ pub async fn fetch_accounts_by_keyids(
     // 1. Fetch accounts filtered by id (1 query)
     let accounts = account::Entity::find()
         .filter(account::Column::Id.is_in(keyids))
-        .all(db)
+        .all(conn)
         .await?;
 
     if accounts.is_empty() {
@@ -344,7 +350,7 @@ pub async fn fetch_accounts_by_keyids(
         .order_by_desc(account_state::Column::PublishedBlock)
         .order_by_desc(account_state::Column::PublishedTxIndex)
         .order_by_desc(account_state::Column::PublishedLogIndex)
-        .all(db)
+        .all(conn)
         .await?;
 
     // Build map of account_id -> safe_address (only keep latest state per account)
@@ -362,7 +368,7 @@ pub async fn fetch_accounts_by_keyids(
     // 2. Batch fetch all announcements (1 query)
     let announcements = announcement::Entity::find()
         .filter(announcement::Column::AccountId.is_in(account_ids))
-        .all(db)
+        .all(conn)
         .await?;
 
     // Group announcements by account_id
@@ -377,7 +383,7 @@ pub async fn fetch_accounts_by_keyids(
     // 3. Batch fetch all HOPR balances (1 query)
     let hopr_balances = hopr_balance::Entity::find()
         .filter(hopr_balance::Column::Address.is_in(all_addresses.clone()))
-        .all(db)
+        .all(conn)
         .await?;
 
     let hopr_balance_map: HashMap<String, String> = hopr_balances
@@ -388,7 +394,7 @@ pub async fn fetch_accounts_by_keyids(
     // 4. Batch fetch all native balances (1 query)
     let native_balances = native_balance::Entity::find()
         .filter(native_balance::Column::Address.is_in(all_addresses))
-        .all(db)
+        .all(conn)
         .await?;
 
     let native_balance_map: HashMap<String, String> = native_balances
@@ -461,12 +467,15 @@ pub async fn fetch_accounts_by_keyids(
 ///
 /// # Returns
 /// * `Result<Vec<AggregatedAccount>, sea_orm::DbErr>` - List of aggregated accounts matching the filters
-pub async fn fetch_accounts_with_filters(
-    db: &DatabaseConnection,
+pub async fn fetch_accounts_with_filters<C>(
+    conn: &C,
     keyid: Option<i32>,
     packet_key: Option<String>,
     chain_key: Option<String>,
-) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr> {
+) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr>
+where
+    C: ConnectionTrait,
+{
     // 1. Build query with filters (1 query)
     let mut query = account::Entity::find();
 
@@ -483,7 +492,7 @@ pub async fn fetch_accounts_with_filters(
         query = query.filter(account::Column::ChainKey.eq(binary_chain_key));
     }
 
-    let accounts = query.all(db).await?;
+    let accounts = query.all(conn).await?;
 
     if accounts.is_empty() {
         return Ok(Vec::new());
@@ -499,7 +508,7 @@ pub async fn fetch_accounts_with_filters(
         .order_by_desc(account_state::Column::PublishedBlock)
         .order_by_desc(account_state::Column::PublishedTxIndex)
         .order_by_desc(account_state::Column::PublishedLogIndex)
-        .all(db)
+        .all(conn)
         .await?;
 
     // Build map of account_id -> safe_address (only keep latest state per account)
@@ -517,7 +526,7 @@ pub async fn fetch_accounts_with_filters(
     // 2. Batch fetch all announcements (1 query)
     let announcements = announcement::Entity::find()
         .filter(announcement::Column::AccountId.is_in(account_ids))
-        .all(db)
+        .all(conn)
         .await?;
 
     // Group announcements by account_id
@@ -532,7 +541,7 @@ pub async fn fetch_accounts_with_filters(
     // 3. Batch fetch all HOPR balances (1 query)
     let hopr_balances = hopr_balance::Entity::find()
         .filter(hopr_balance::Column::Address.is_in(all_addresses.clone()))
-        .all(db)
+        .all(conn)
         .await?;
 
     let hopr_balance_map: HashMap<String, String> = hopr_balances
@@ -543,7 +552,7 @@ pub async fn fetch_accounts_with_filters(
     // 4. Batch fetch all native balances (1 query)
     let native_balances = native_balance::Entity::find()
         .filter(native_balance::Column::Address.is_in(all_addresses))
-        .all(db)
+        .all(conn)
         .await?;
 
     let native_balance_map: HashMap<String, String> = native_balances

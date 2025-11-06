@@ -31,7 +31,7 @@ use hopr_primitive_types::{
     prelude::{Address, HoprBalance, SerializableLog},
     traits::IntoEndian,
 };
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
@@ -231,7 +231,10 @@ async fn construct_channel_update(db: &DatabaseConnection, channel_id: &Hash) ->
 ///
 /// # Errors
 /// * Returns error if account not found
-async fn construct_account_update(db: &DatabaseConnection, address: &Address) -> Result<Account> {
+async fn construct_account_update<C>(conn: &C, address: &Address) -> Result<Account>
+where
+    C: ConnectionTrait,
+{
     use blokli_db_entity::{codegen::account, conversions::balances::address_to_string};
 
     // Convert Address to binary for database query
@@ -240,7 +243,7 @@ async fn construct_account_update(db: &DatabaseConnection, address: &Address) ->
     // 1. Find the account by chain_key
     let account = account::Entity::find()
         .filter(account::Column::ChainKey.eq(address_bytes.clone()))
-        .one(db)
+        .one(conn)
         .await
         .map_err(|e| CoreEthereumIndexerError::ProcessError(format!("Failed to query account: {}", e)))?
         .ok_or_else(|| {
@@ -248,7 +251,7 @@ async fn construct_account_update(db: &DatabaseConnection, address: &Address) ->
         })?;
 
     // 2. Fetch complete account data using the optimized aggregation function
-    let accounts_result = account_aggregation::fetch_accounts_by_keyids(db, vec![account.id])
+    let accounts_result = account_aggregation::fetch_accounts_by_keyids(conn, vec![account.id])
         .await
         .map_err(|e| CoreEthereumIndexerError::ProcessError(format!("Failed to fetch account data: {}", e)))?;
 
@@ -380,8 +383,7 @@ where
 
                 // Publish AccountUpdated event if synced
                 if is_synced {
-                    let db_conn = self.db.conn(blokli_db::TargetDb::Index);
-                    match construct_account_update(db_conn, &node_address).await {
+                    match construct_account_update(tx.as_ref(), &node_address).await {
                         Ok(account) => {
                             self.indexer_state
                                 .publish_event(crate::state::IndexerEvent::AccountUpdated(account));
@@ -421,8 +423,7 @@ where
                             Ok(_) => {
                                 // Publish AccountUpdated event if synced
                                 if is_synced {
-                                    let db_conn = self.db.conn(blokli_db::TargetDb::Index);
-                                    match construct_account_update(db_conn, &chain_key).await {
+                                    match construct_account_update(tx.as_ref(), &chain_key).await {
                                         Ok(account) => {
                                             self.indexer_state
                                                 .publish_event(crate::state::IndexerEvent::AccountUpdated(account));
@@ -456,8 +457,7 @@ where
                     Ok(_) => {
                         // Publish AccountUpdated event if synced
                         if is_synced {
-                            let db_conn = self.db.conn(blokli_db::TargetDb::Index);
-                            match construct_account_update(db_conn, &node_address).await {
+                            match construct_account_update(tx.as_ref(), &node_address).await {
                                 Ok(account) => {
                                     self.indexer_state
                                         .publish_event(crate::state::IndexerEvent::AccountUpdated(account));
@@ -1424,10 +1424,17 @@ mod tests {
     }
 
     /// Test helper to create handlers with event capture capability
-    fn init_handlers_with_events<T: HoprIndexerRpcOperations + Clone + Send + 'static, Db: BlokliDbAllOperations + Clone>(
+    fn init_handlers_with_events<
+        T: HoprIndexerRpcOperations + Clone + Send + 'static,
+        Db: BlokliDbAllOperations + Clone,
+    >(
         rpc_operations: T,
         db: Db,
-    ) -> (ContractEventHandlers<T, Db>, IndexerState, async_broadcast::Receiver<IndexerEvent>) {
+    ) -> (
+        ContractEventHandlers<T, Db>,
+        IndexerState,
+        async_broadcast::Receiver<IndexerEvent>,
+    ) {
         let indexer_state = IndexerState::default();
         let event_receiver = indexer_state.subscribe_to_events();
 
@@ -1454,7 +1461,7 @@ mod tests {
         rpc_operations: T,
         db: Db,
     ) -> ContractEventHandlers<T, Db> {
-        let (handlers, _, _) = init_handlers_with_events(rpc_operations, db);
+        let (handlers, ..) = init_handlers_with_events(rpc_operations, db);
         handlers
     }
 
@@ -1477,7 +1484,7 @@ mod tests {
             inner: Arc::new(rpc_operations),
         };
 
-        let handlers = init_handlers(clonable_rpc_operations, db.clone());
+        let (handlers, _state, mut event_receiver) = init_handlers_with_events(clonable_rpc_operations, db.clone());
 
         let keybinding = KeyBinding::new(*SELF_CHAIN_ADDRESS, &SELF_PRIV_KEY);
 
@@ -1502,13 +1509,13 @@ mod tests {
             published_at: 0,
         };
 
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, keybinding_log, true).await }))
             .await?;
 
-        // Keybinding events do not publish to subscribers (no need to assert)
+        // Verify AccountUpdated event was published
+        let _event = try_recv_event(&mut event_receiver).expect("Expected AccountUpdated event to be published");
 
         assert_eq!(
             db.get_account(None, ChainOrPacketKey::ChainKey(*SELF_CHAIN_ADDRESS))
@@ -1528,7 +1535,8 @@ mod tests {
             //
             inner: Arc::new(rpc_operations),
         };
-        let (handlers, _indexer_state, mut event_receiver) = init_handlers_with_events(clonable_rpc_operations, db.clone());
+        let (handlers, _indexer_state, mut event_receiver) =
+            init_handlers_with_events(clonable_rpc_operations, db.clone());
 
         // Assume that there is a keybinding
         // Create account using upsert_account
@@ -1569,8 +1577,7 @@ mod tests {
         };
 
         let handlers_clone = handlers.clone();
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| {
                 Box::pin(async move {
@@ -1620,8 +1627,7 @@ mod tests {
         };
 
         let handlers_clone = handlers.clone();
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| {
                 Box::pin(async move {
@@ -1633,8 +1639,7 @@ mod tests {
             .await?;
 
         // Verify AccountUpdated event was published with the multiaddress
-        let event = try_recv_event(&mut event_receiver)
-            .expect("Expected AccountUpdated event to be published");
+        let event = try_recv_event(&mut event_receiver).expect("Expected AccountUpdated event to be published");
         match event {
             IndexerEvent::AccountUpdated(account) => {
                 assert_eq!(account.multi_addresses.len(), 1, "Should have one multiaddress");
@@ -1696,8 +1701,7 @@ mod tests {
             published_at: 1,
         };
 
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| {
                 Box::pin(async move { handlers.process_log_event(tx, address_announcement_dns_log, true).await })
@@ -1737,7 +1741,7 @@ mod tests {
             //
             inner: Arc::new(rpc_operations),
         };
-        let handlers = init_handlers(clonable_rpc_operations, db.clone());
+        let (handlers, _state, mut event_receiver) = init_handlers_with_events(clonable_rpc_operations, db.clone());
 
         let test_multiaddr: Multiaddr = "/ip4/1.2.3.4/tcp/56".parse()?;
 
@@ -1777,13 +1781,13 @@ mod tests {
             published_at: 1,
         };
 
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, revoke_announcement_log, true).await }))
             .await?;
 
-        // Revoke announcement events do not publish to subscribers (no need to assert)
+        // Verify AccountUpdated event was published
+        let _event = try_recv_event(&mut event_receiver).expect("Expected AccountUpdated event to be published");
 
         assert_eq!(
             db.get_account(None, ChainOrPacketKey::ChainKey(*SELF_CHAIN_ADDRESS))
@@ -1831,8 +1835,7 @@ mod tests {
             ..test_log()
         };
 
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, transferred_log, true).await }))
             .await?;
@@ -1886,8 +1889,7 @@ mod tests {
             ..test_log()
         };
 
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, transferred_log, true).await }))
             .await?;
@@ -1933,8 +1935,7 @@ mod tests {
 
         let approval_log_clone = approval_log.clone();
         let handlers_clone = handlers.clone();
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers_clone.process_log_event(tx, approval_log_clone, true).await }))
             .await?;
@@ -1954,8 +1955,7 @@ mod tests {
         );
 
         let handlers_clone = handlers.clone();
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers_clone.process_log_event(tx, approval_log, true).await }))
             .await?;
@@ -2016,8 +2016,7 @@ mod tests {
             ..test_log()
         };
 
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, balance_increased_log, true).await }))
             .await?;
@@ -2061,12 +2060,10 @@ mod tests {
 
         assert!(db.get_indexer_data(None).await?.channels_dst.is_none());
 
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, channels_dst_updated, true).await }))
             .await?;
-
 
         assert_eq!(
             separator,
@@ -2130,8 +2127,7 @@ mod tests {
             ..test_log()
         };
 
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, balance_decreased_log, true).await }))
             .await?;
@@ -2184,8 +2180,7 @@ mod tests {
             ..test_log()
         };
 
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, channel_closed_log, true).await }))
             .await?;
@@ -2243,8 +2238,7 @@ mod tests {
             ..test_log()
         };
 
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, channel_closed_log, true).await }))
             .await?;
@@ -2285,8 +2279,7 @@ mod tests {
             ..test_log()
         };
 
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, channel_opened_log, true).await }))
             .await?;
@@ -2342,8 +2335,7 @@ mod tests {
             ..test_log()
         };
 
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, channel_opened_log, true).await }))
             .await?;
@@ -2405,7 +2397,6 @@ mod tests {
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, channel_opened_log, true).await }))
             .await
             .context("Channel should stay open, with corrupted flag set")?;
-
 
         // TODO: Refactor to check channel.corrupted_state field
         // db.get_corrupted_channel_by_id(None, &channel.get_id())
@@ -2567,7 +2558,7 @@ mod tests {
     //             .context("a value should be present")?;
     //
     //         assert!(
-        // TODO: Add event verification - check published IndexerEvent instead of return value
+    // TODO: Add event verification - check published IndexerEvent instead of return value
     // Some(ticket)),             "must return the updated channel entry and the redeemed ticket"
     //         );
     //
@@ -2682,7 +2673,7 @@ mod tests {
     //             .context("a value should be present")?;
     //
     //         assert!(
-        // TODO: Add event verification - check published IndexerEvent instead of return value
+    // TODO: Add event verification - check published IndexerEvent instead of return value
     // Some(ticket)),             "must return the updated channel entry and the redeemed ticket"
     //         );
     //
@@ -2754,8 +2745,7 @@ mod tests {
             ..test_log()
         };
 
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, ticket_redeemed_log, true).await }))
             .await?;
@@ -2821,8 +2811,7 @@ mod tests {
             ..test_log()
         };
 
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, ticket_redeemed_log, true).await }))
             .await?;
@@ -2876,8 +2865,7 @@ mod tests {
             ..test_log()
         };
 
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, ticket_redeemed_log, true).await }))
             .await?;
@@ -2934,8 +2922,7 @@ mod tests {
             ..test_log()
         };
 
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, closure_initiated_log, true).await }))
             .await?;
@@ -2980,8 +2967,7 @@ mod tests {
             ..test_log()
         };
 
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, safe_registered_log, true).await }))
             .await?;
@@ -3010,7 +2996,8 @@ mod tests {
         let safe_registered_log = SerializableLog {
             address: handlers.addresses.safe_registry,
             topics: vec![
-                hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::DeregisteredNodeSafe::SIGNATURE_HASH.into(),
+                hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::DeregisteredNodeSafe::SIGNATURE_HASH
+                    .into(),
                 // DeregisteredNodeSafeFilter::signature().into(),
                 H256::from_slice(&SAFE_INSTANCE_ADDR.to_bytes32()).into(),
                 H256::from_slice(&SELF_CHAIN_ADDRESS.to_bytes32()).into(),
@@ -3019,12 +3006,10 @@ mod tests {
             ..test_log()
         };
 
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, safe_registered_log, true).await }))
             .await?;
-
 
         // Nothing to check in the DB here, since we do not track this
         Ok(())
@@ -3046,7 +3031,8 @@ mod tests {
         let price_change_log = SerializableLog {
             address: handlers.addresses.price_oracle,
             topics: vec![
-                hopr_bindings::hopr_ticket_price_oracle::HoprTicketPriceOracle::TicketPriceUpdated::SIGNATURE_HASH.into(),
+                hopr_bindings::hopr_ticket_price_oracle::HoprTicketPriceOracle::TicketPriceUpdated::SIGNATURE_HASH
+                    .into(),
                 // TicketPriceUpdatedFilter::signature().into()
             ],
             data: encoded_data,
@@ -3056,8 +3042,7 @@ mod tests {
 
         assert_eq!(db.get_indexer_data(None).await?.ticket_price, None);
 
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, price_change_log, true).await }))
             .await?;
@@ -3099,8 +3084,7 @@ mod tests {
             1.0
         );
 
-        db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, win_prob_change_log, true).await }))
             .await?;
@@ -3391,8 +3375,8 @@ mod tests {
     //             address: handlers.addresses.win_prob_oracle,
     //             topics: vec![
     //
-    // hopr_bindings::hopr_winning_probability_oracle::HoprWinningProbabilityOracle::WinProbUpdated::SIGNATURE_HASH.into(),
-    //             ],
+    // hopr_bindings::hopr_winning_probability_oracle::HoprWinningProbabilityOracle::WinProbUpdated::SIGNATURE_HASH.
+    // into(),             ],
     //             data: encoded_data,
     //             ..test_log()
     //         };
