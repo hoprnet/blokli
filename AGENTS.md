@@ -175,6 +175,38 @@ pub async fn index_range(from_block: u64, to_block: u64) -> Result<usize, Indexe
 
 ## Architecture
 
+### Architecture Documentation
+
+**IMPORTANT**: The complete system architecture is documented in `design/architecture.md`. This document provides:
+
+- High-level component architecture and interactions
+- Data flow patterns and event processing pipelines
+- User flows through the GraphQL API
+- Deployment architectures and scaling considerations
+- Performance characteristics and optimization strategies
+- Security considerations and error handling patterns
+
+**Agent Responsibilities**:
+
+1. **Read the Architecture Document**: Before making significant changes to the system, read `design/architecture.md` to understand how components interact and the design principles behind the current architecture.
+
+2. **Update Architecture Documentation**: When making changes that affect the architecture, update `design/architecture.md` to reflect the new design. This includes:
+
+   - Adding new components or services
+   - Changing component interactions or data flows
+   - Modifying database schema or queries patterns
+   - Altering API endpoints or GraphQL schema structure
+   - Changing deployment models or configuration options
+   - Introducing new architectural patterns or design decisions
+
+3. **Maintain Consistency**: Ensure that architectural changes are reflected consistently across:
+   - Code implementation
+   - Architecture documentation (`design/architecture.md`)
+   - API schema documentation (`design/target-api-schema.graphql`)
+   - Database schema documentation (`design/target-db-schema.mmd`)
+
+**Note**: The architecture document focuses on high-level design and should NOT contain code examples, CLI commands, or configuration snippets. Keep it conceptual and architectural.
+
 ### Workspace Structure
 
 - `bloklid` - Daemon for indexing HOPR on-chain events
