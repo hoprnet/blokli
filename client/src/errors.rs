@@ -64,4 +64,7 @@ pub enum ErrorKind {
     Cynic(#[from] CynicReqwestError),
     #[error(transparent)]
     GraphQLError(#[from] cynic::GraphQlError),
+    #[cfg(feature = "testing")]
+    #[error(transparent)]
+    MockClientError(#[from] anyhow::Error),
 }

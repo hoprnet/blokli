@@ -8,12 +8,14 @@ repository  = "https://github.com/hoprnet/blokli"
 version     = "0.4.0"
 
 [dependencies]
+anyhow = { workspace = true }
 async-trait = { workspace = true }
 cynic = { workspace = true, features = ["http-reqwest"] }
 eventsource-client = { workspace = true }
 futures = { workspace = true }
 futures-time = { workspace = true }
 hex = { workspace = true }
+mockall = { workspace = true, optional = true }
 reqwest = { workspace = true, features = [
   "brotli",
   "deflate",
@@ -26,6 +28,9 @@ smart-default = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
+
+[features]
+testing = ["dep:mockall"]
 
 
 [build-dependencies]

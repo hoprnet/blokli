@@ -72,7 +72,7 @@ pub struct NativeBalance {
     pub balance: TokenValueString,
 }
 
-#[derive(cynic::QueryFragment, Debug)]
+#[derive(cynic::QueryFragment, Debug, Clone)]
 pub struct SafeHoprAllowance {
     pub __typename: String,
     pub allowance: TokenValueString,

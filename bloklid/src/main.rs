@@ -111,10 +111,10 @@ impl Args {
             token: chain_network_config.token,
             channels: chain_network_config.channels,
             announcements: chain_network_config.announcements,
-            safe_registry: chain_network_config.node_safe_registry,
-            price_oracle: chain_network_config.ticket_price_oracle,
-            win_prob_oracle: chain_network_config.winning_probability_oracle,
-            stake_factory: chain_network_config.node_stake_v2_factory,
+            node_safe_registry: chain_network_config.node_safe_registry,
+            ticket_price_oracle: chain_network_config.ticket_price_oracle,
+            winning_probability_oracle: chain_network_config.winning_probability_oracle,
+            node_stake_v2_factory: chain_network_config.node_stake_v2_factory,
         };
         config.contracts = contract_addresses;
 
