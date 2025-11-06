@@ -1,7 +1,7 @@
 mod graphql;
 pub mod types {
     pub use super::graphql::{
-        ChannelStatus, Hex32, TokenValueString, Uint64,
+        ChannelStatus, DateTime, Hex32, TokenValueString, Uint64,
         accounts::Account,
         balances::{HoprBalance, NativeBalance, SafeHoprAllowance},
         channels::Channel,

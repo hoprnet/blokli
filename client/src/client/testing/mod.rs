@@ -19,6 +19,20 @@ pub struct BlokliTestClient {
     pub tx_client: Option<MockBlokliTransactionClientImpl>,
 }
 
+impl std::fmt::Debug for BlokliTestClient {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("BlokliTestClient")
+            .field("accounts", &self.accounts)
+            .field("native_balances", &self.native_balances)
+            .field("token_balances", &self.token_balances)
+            .field("safe_allowances", &self.safe_allowances)
+            .field("channels", &self.channels)
+            .field("chain_info", &self.chain_info)
+            .field("version", &self.version)
+            .finish_non_exhaustive()
+    }
+}
+
 mockall::mock! {
     pub BlokliTransactionClientImpl {}
     #[async_trait::async_trait]
