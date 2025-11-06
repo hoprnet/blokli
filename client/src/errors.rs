@@ -53,8 +53,6 @@ pub enum ErrorKind {
     #[error("operation timed out at the client")]
     Timeout,
     #[error(transparent)]
-    Other(#[from] anyhow::Error),
-    #[error(transparent)]
     Subscription(#[from] eventsource_client::Error),
     #[error(transparent)]
     UrlParse(#[from] url::ParseError),
@@ -66,4 +64,7 @@ pub enum ErrorKind {
     Cynic(#[from] CynicReqwestError),
     #[error(transparent)]
     GraphQLError(#[from] cynic::GraphQlError),
+    #[cfg(feature = "testing")]
+    #[error(transparent)]
+    MockClientError(#[from] anyhow::Error),
 }

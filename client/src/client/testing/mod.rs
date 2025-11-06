@@ -184,7 +184,7 @@ impl BlokliQueryClient for BlokliTestClient {
     }
 
     async fn query_transaction_status(&self, _tx_id: TxId) -> Result<Transaction> {
-        Err(ErrorKind::Other(anyhow::anyhow!("mock cannot query transaction status")).into())
+        Err(ErrorKind::MockClientError(anyhow::anyhow!("mock cannot query transaction status")).into())
     }
 
     async fn query_chain_info(&self) -> Result<ChainInfo> {
@@ -264,7 +264,7 @@ impl BlokliTransactionClient for BlokliTestClient {
         if let Some(client) = &self.tx_client {
             client.submit_transaction(signed_tx).await
         } else {
-            Err(ErrorKind::Other(anyhow::anyhow!("no transaction client configured")).into())
+            Err(ErrorKind::MockClientError(anyhow::anyhow!("no transaction client configured")).into())
         }
     }
 
@@ -272,7 +272,7 @@ impl BlokliTransactionClient for BlokliTestClient {
         if let Some(client) = &self.tx_client {
             client.submit_and_track_transaction(signed_tx).await
         } else {
-            Err(ErrorKind::Other(anyhow::anyhow!("no transaction client configured")).into())
+            Err(ErrorKind::MockClientError(anyhow::anyhow!("no transaction client configured")).into())
         }
     }
 
@@ -282,7 +282,7 @@ impl BlokliTransactionClient for BlokliTestClient {
                 .submit_and_confirm_transaction(signed_tx, num_confirmations)
                 .await
         } else {
-            Err(ErrorKind::Other(anyhow::anyhow!("no transaction client configured")).into())
+            Err(ErrorKind::MockClientError(anyhow::anyhow!("no transaction client configured")).into())
         }
     }
 
@@ -290,7 +290,7 @@ impl BlokliTransactionClient for BlokliTestClient {
         if let Some(client) = &self.tx_client {
             client.track_transaction(tx_id, client_timeout).await
         } else {
-            Err(ErrorKind::Other(anyhow::anyhow!("no transaction client configured")).into())
+            Err(ErrorKind::MockClientError(anyhow::anyhow!("no transaction client configured")).into())
         }
     }
 }
