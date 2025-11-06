@@ -41,12 +41,7 @@ pub fn build_schema(
 ///
 /// This generates a string representation of the GraphQL schema that can be used
 /// for code generation, documentation, or schema validation tools.
-pub fn export_schema_sdl(
-    db: DatabaseConnection,
-    chain_id: u64,
-    network: String,
-    contract_addresses: ContractAddresses,
-) -> String {
-    let schema = build_schema(db, chain_id, network, contract_addresses);
+pub fn export_schema_sdl(db: DatabaseConnection, contract_addresses: ContractAddresses) -> String {
+    let schema = build_schema(db, 0, "PLACEHOLDER".to_string(), contract_addresses);
     schema.sdl()
 }
