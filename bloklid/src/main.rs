@@ -248,8 +248,9 @@ async fn run() -> errors::Result<()> {
 
         info!("Connecting to RPC endpoint: {}", rpc_url);
 
-        // Extract chain_id before chain_network is moved
+        // Extract chain_id and network before chain_network is moved
         let chain_id = chain_network.chain.chain_id as u64;
+        let network = chain_network.id.clone();
 
         // Create channel for chain events
         let (tx_events, _rx_events) = async_channel::unbounded::<SignificantChainEvent>();
@@ -284,8 +285,8 @@ async fn run() -> errors::Result<()> {
                 contract_addresses: contracts,
             };
 
-            // Build API app
-            let api_app = blokli_api::server::build_app(api_db, blokli_api_config)
+            // Build API app (network comes from ChainNetworkConfig.id)
+            let api_app = blokli_api::server::build_app(api_db, network, blokli_api_config)
                 .await
                 .map_err(|e| BloklidError::NonSpecific(format!("Failed to build API app: {}", e)))?;
 

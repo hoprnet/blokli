@@ -173,6 +173,8 @@ pub struct ChainInfo {
     /// Chain ID of the connected blockchain network
     #[graphql(name = "chainId")]
     pub chain_id: i32,
+    /// Network name (e.g., 'dufour', 'rotsee')
+    pub network: String,
     /// Current HOPR token price
     #[graphql(name = "ticketPrice")]
     pub ticket_price: TokenValueString,

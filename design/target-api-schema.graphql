@@ -51,6 +51,8 @@ type ChainInfo {
   ledgerDst: String
   "Current minimum ticket winning probability (decimal value between 0.0 and 1.0)"
   minTicketWinningProbability: Float!
+  "Network name (e.g., 'dufour', 'rotsee')"
+  network: String!
   "Safe Registry smart contract domain separator (hex string)"
   safeRegistryDst: String
   "Current HOPR token price"

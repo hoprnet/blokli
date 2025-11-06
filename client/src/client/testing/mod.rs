@@ -1,10 +1,11 @@
+use std::{collections::HashMap, time::Duration};
+
+use futures::{Stream, StreamExt};
+
 use crate::{
     api::{types::*, *},
     errors::{BlokliClientError, ErrorKind},
 };
-use futures::{Stream, StreamExt};
-use std::collections::HashMap;
-use std::time::Duration;
 
 /// Blokli client for testing purposes.
 pub struct BlokliTestClient {

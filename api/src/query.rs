@@ -315,6 +315,7 @@ impl QueryRoot {
     async fn chain_info(&self, ctx: &Context<'_>) -> Result<ChainInfo> {
         let db = ctx.data::<DatabaseConnection>()?;
         let chain_id = ctx.data::<u64>()?;
+        let network = ctx.data::<String>()?;
         let contract_addresses = ctx.data::<ContractAddresses>()?;
 
         // Fetch chain_info from database (assuming single row with id=1)
@@ -367,6 +368,7 @@ impl QueryRoot {
         Ok(ChainInfo {
             block_number,
             chain_id: chain_id_i32,
+            network: network.clone(),
             ticket_price,
             min_ticket_winning_probability,
             channel_dst,
