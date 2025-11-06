@@ -16,6 +16,7 @@ pub struct ChainInfo {
     pub min_ticket_winning_probability: f64,
     pub safe_registry_dst: Option<String>,
     pub ticket_price: TokenValueString,
+    pub network: String,
     pub contract_addresses: ContractAddressMap,
 }
 

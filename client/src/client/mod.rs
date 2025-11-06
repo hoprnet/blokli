@@ -15,6 +15,9 @@ use crate::{
     errors::{BlokliClientError, ErrorKind},
 };
 
+#[cfg(feature = "testing")]
+pub use testing::{BlokliTestClient, MockBlokliTransactionClientImpl};
+
 /// Configuration for the [`BlokliClient`].
 #[derive(Clone, Debug, PartialEq, Eq, smart_default::SmartDefault)]
 pub struct BlokliClientConfig {

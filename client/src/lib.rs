@@ -4,6 +4,7 @@ mod client;
 /// Errors returned by the Blokli client.
 pub mod errors;
 
-#[cfg(feature = "testing")]
-pub use client::BlokliTestClient;
 pub use client::{BlokliClient, BlokliClientConfig};
+
+#[cfg(feature = "testing")]
+pub use client::{BlokliTestClient, MockBlokliTransactionClientImpl};
