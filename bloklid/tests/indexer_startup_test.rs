@@ -334,7 +334,12 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
     let indexer_state = blokli_chain_indexer::IndexerState::new(1000, 10);
 
     // Create event handlers
-    let handlers = ContractEventHandlers::new(contract_addresses, db.clone(), tracking_rpc.clone(), indexer_state.clone());
+    let handlers = ContractEventHandlers::new(
+        contract_addresses,
+        db.clone(),
+        tracking_rpc.clone(),
+        indexer_state.clone(),
+    );
 
     // Initialize logs origin data using the proper contract addresses and topics
     let mut address_topics = vec![];

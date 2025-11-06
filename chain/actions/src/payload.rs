@@ -40,7 +40,7 @@ use hopr_bindings::{
     hopr_token::HoprToken::{approveCall, transferCall},
 };
 use hopr_crypto_types::prelude::*;
-use hopr_internal_types::prelude::*;
+use hopr_internal_types::{announcement::AnnouncementData, channels::ChannelEntry, tickets::RedeemableTicket};
 use hopr_primitive_types::prelude::*;
 
 use crate::errors::{
@@ -573,7 +573,7 @@ mod tests {
     use blokli_chain_types::ContractInstances;
     use hex_literal::hex;
     use hopr_crypto_types::prelude::*;
-    use hopr_internal_types::prelude::*;
+    use hopr_internal_types::announcement::AnnouncementData;
     use hopr_primitive_types::prelude::HoprBalance;
     use multiaddr::Multiaddr;
 

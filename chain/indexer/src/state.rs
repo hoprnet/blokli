@@ -28,7 +28,7 @@ pub enum IndexerEvent {
     /// A channel was updated (opened, closed, balance changed, etc.)
     ///
     /// Contains complete channel data plus both participating accounts.
-    ChannelUpdated(ChannelUpdate),
+    ChannelUpdated(Box<ChannelUpdate>),
 }
 
 /// Shared state for coordinating indexer operations with subscriptions

@@ -22,12 +22,19 @@ use hopr_bindings::{
     hopr_winning_probability_oracle::HoprWinningProbabilityOracle::HoprWinningProbabilityOracleEvents,
 };
 use hopr_crypto_types::prelude::*;
-use hopr_internal_types::prelude::*;
+use hopr_internal_types::{
+    announcement::KeyBinding,
+    channels::{ChannelEntry, ChannelStatus, generate_channel_id},
+    tickets::WinningProbability,
+};
 use hopr_primitive_types::prelude::*;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use tracing::{debug, error, info, trace, warn};
 
-use crate::{IndexerState, errors::{CoreEthereumIndexerError, Result}};
+use crate::{
+    IndexerState,
+    errors::{CoreEthereumIndexerError, Result},
+};
 
 /// Represents the decoded state of a channel from the packed bytes32 format emitted by contract events.
 ///
@@ -142,7 +149,9 @@ async fn construct_channel_update(db: &DatabaseConnection, channel_id: &Hash) ->
         .one(db)
         .await
         .map_err(|e| CoreEthereumIndexerError::ProcessError(format!("Failed to query channel_state: {}", e)))?
-        .ok_or_else(|| CoreEthereumIndexerError::ProcessError(format!("Channel state not found for channel {}", channel.id)))?;
+        .ok_or_else(|| {
+            CoreEthereumIndexerError::ProcessError(format!("Channel state not found for channel {}", channel.id))
+        })?;
 
     // 3. Fetch both accounts using the optimized aggregation function
     let account_ids = vec![channel.source, channel.destination];
@@ -150,18 +159,16 @@ async fn construct_channel_update(db: &DatabaseConnection, channel_id: &Hash) ->
         .await
         .map_err(|e| CoreEthereumIndexerError::ProcessError(format!("Failed to fetch accounts: {}", e)))?;
 
-    let account_map: HashMap<i32, account_aggregation::AggregatedAccount> = accounts_result
-        .into_iter()
-        .map(|a| (a.keyid, a))
-        .collect();
+    let account_map: HashMap<i32, account_aggregation::AggregatedAccount> =
+        accounts_result.into_iter().map(|a| (a.keyid, a)).collect();
 
-    let source_account = account_map
-        .get(&channel.source)
-        .ok_or_else(|| CoreEthereumIndexerError::ProcessError(format!("Source account {} not found", channel.source)))?;
+    let source_account = account_map.get(&channel.source).ok_or_else(|| {
+        CoreEthereumIndexerError::ProcessError(format!("Source account {} not found", channel.source))
+    })?;
 
-    let dest_account = account_map
-        .get(&channel.destination)
-        .ok_or_else(|| CoreEthereumIndexerError::ProcessError(format!("Destination account {} not found", channel.destination)))?;
+    let dest_account = account_map.get(&channel.destination).ok_or_else(|| {
+        CoreEthereumIndexerError::ProcessError(format!("Destination account {} not found", channel.destination))
+    })?;
 
     // 4. Convert to GraphQL types
     let channel_gql = Channel {
@@ -233,7 +240,9 @@ async fn construct_account_update(db: &DatabaseConnection, address: &Address) ->
         .one(db)
         .await
         .map_err(|e| CoreEthereumIndexerError::ProcessError(format!("Failed to query account: {}", e)))?
-        .ok_or_else(|| CoreEthereumIndexerError::ProcessError(format!("Account {} not found", address_to_string(&address_bytes))))?;
+        .ok_or_else(|| {
+            CoreEthereumIndexerError::ProcessError(format!("Account {} not found", address_to_string(&address_bytes)))
+        })?;
 
     // 2. Fetch complete account data using the optimized aggregation function
     let accounts_result = account_aggregation::fetch_accounts_by_keyids(db, vec![account.id])
@@ -371,9 +380,8 @@ where
                     let db_conn = self.db.conn(blokli_db::TargetDb::Index);
                     match construct_account_update(db_conn, &node_address).await {
                         Ok(account) => {
-                            self.indexer_state.publish_event(
-                                crate::state::IndexerEvent::AccountUpdated(account)
-                            );
+                            self.indexer_state
+                                .publish_event(crate::state::IndexerEvent::AccountUpdated(account));
                         }
                         Err(e) => {
                             warn!("Failed to construct account update for AddressAnnouncement: {}", e);
@@ -413,9 +421,8 @@ where
                                     let db_conn = self.db.conn(blokli_db::TargetDb::Index);
                                     match construct_account_update(db_conn, &chain_key).await {
                                         Ok(account) => {
-                                            self.indexer_state.publish_event(
-                                                crate::state::IndexerEvent::AccountUpdated(account)
-                                            );
+                                            self.indexer_state
+                                                .publish_event(crate::state::IndexerEvent::AccountUpdated(account));
                                         }
                                         Err(e) => {
                                             warn!("Failed to construct account update for KeyBinding: {}", e);
@@ -449,9 +456,8 @@ where
                             let db_conn = self.db.conn(blokli_db::TargetDb::Index);
                             match construct_account_update(db_conn, &node_address).await {
                                 Ok(account) => {
-                                    self.indexer_state.publish_event(
-                                        crate::state::IndexerEvent::AccountUpdated(account)
-                                    );
+                                    self.indexer_state
+                                        .publish_event(crate::state::IndexerEvent::AccountUpdated(account));
                                 }
                                 Err(e) => {
                                     warn!("Failed to construct account update for RevokeAnnouncement: {}", e);
@@ -574,9 +580,8 @@ where
                     let db_conn = self.db.conn(blokli_db::TargetDb::Index);
                     match construct_channel_update(db_conn, &channel_id).await {
                         Ok(channel_update) => {
-                            self.indexer_state.publish_event(
-                                crate::state::IndexerEvent::ChannelUpdated(channel_update)
-                            );
+                            self.indexer_state
+                                .publish_event(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for ChannelBalanceDecreased");
@@ -645,9 +650,8 @@ where
                     let db_conn = self.db.conn(blokli_db::TargetDb::Index);
                     match construct_channel_update(db_conn, &channel_id).await {
                         Ok(channel_update) => {
-                            self.indexer_state.publish_event(
-                                crate::state::IndexerEvent::ChannelUpdated(channel_update)
-                            );
+                            self.indexer_state
+                                .publish_event(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for ChannelBalanceIncreased");
@@ -714,9 +718,8 @@ where
                     let db_conn = self.db.conn(blokli_db::TargetDb::Index);
                     match construct_channel_update(db_conn, &channel_id).await {
                         Ok(channel_update) => {
-                            self.indexer_state.publish_event(
-                                crate::state::IndexerEvent::ChannelUpdated(channel_update)
-                            );
+                            self.indexer_state
+                                .publish_event(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for ChannelClosed");
@@ -793,9 +796,8 @@ where
                     let db_conn = self.db.conn(blokli_db::TargetDb::Index);
                     match construct_channel_update(db_conn, &channel_id).await {
                         Ok(channel_update) => {
-                            self.indexer_state.publish_event(
-                                crate::state::IndexerEvent::ChannelUpdated(channel_update)
-                            );
+                            self.indexer_state
+                                .publish_event(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for ChannelOpened");
@@ -856,9 +858,8 @@ where
                     let db_conn = self.db.conn(blokli_db::TargetDb::Index);
                     match construct_channel_update(db_conn, &channel_id).await {
                         Ok(channel_update) => {
-                            self.indexer_state.publish_event(
-                                crate::state::IndexerEvent::ChannelUpdated(channel_update)
-                            );
+                            self.indexer_state
+                                .publish_event(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for TicketRedeemed");
@@ -919,9 +920,8 @@ where
                     let db_conn = self.db.conn(blokli_db::TargetDb::Index);
                     match construct_channel_update(db_conn, &channel_id).await {
                         Ok(channel_update) => {
-                            self.indexer_state.publish_event(
-                                crate::state::IndexerEvent::ChannelUpdated(channel_update)
-                            );
+                            self.indexer_state
+                                .publish_event(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for OutgoingChannelClosureInitiated");
@@ -956,12 +956,7 @@ where
         }
     }
 
-    async fn on_token_event(
-        &self,
-        _tx: &OpenTransaction,
-        event: HoprTokenEvents,
-        _is_synced: bool,
-    ) -> Result<()> {
+    async fn on_token_event(&self, _tx: &OpenTransaction, event: HoprTokenEvents, _is_synced: bool) -> Result<()> {
         #[cfg(all(feature = "prometheus", not(test)))]
         METRIC_INDEXER_LOG_COUNTERS.increment(&["token"]);
 
@@ -1176,12 +1171,7 @@ where
     }
 
     #[tracing::instrument(level = "debug", skip(self, slog), fields(log=%slog))]
-    async fn process_log_event(
-        &self,
-        tx: &OpenTransaction,
-        slog: SerializableLog,
-        is_synced: bool,
-    ) -> Result<()> {
+    async fn process_log_event(&self, tx: &OpenTransaction, slog: SerializableLog, is_synced: bool) -> Result<()> {
         trace!(log = %slog, "log content");
 
         let log = Log::from(slog.clone());
@@ -1343,7 +1333,7 @@ mod tests {
     };
     use hex_literal::hex;
     use hopr_crypto_types::prelude::*;
-    use hopr_internal_types::prelude::*;
+    use hopr_internal_types::account::{AccountEntry, AccountType};
     use hopr_primitive_types::prelude::*;
     use multiaddr::Multiaddr;
     use primitive_types::H256;

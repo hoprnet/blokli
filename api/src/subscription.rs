@@ -251,7 +251,6 @@ async fn query_channels_at_watermark(
 }
 
 /// fetch_channel_update is no longer needed - events now contain complete data
-
 /// Root subscription type providing real-time updates via Server-Sent Events (SSE)
 pub struct SubscriptionRoot;
 
@@ -429,7 +428,7 @@ impl SubscriptionRoot {
                         match event_result {
                             Ok(IndexerEvent::ChannelUpdated(channel_update)) => {
                                 // Event already contains complete data, just yield it
-                                yield channel_update;
+                                yield *channel_update;
                             }
                             Ok(IndexerEvent::AccountUpdated(_)) => {
                                 // Account updates don't affect this subscription

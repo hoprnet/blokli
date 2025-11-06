@@ -10,10 +10,7 @@ use alloy::sol_types::SolEvent;
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::chain_events::SignificantChainEvent;
 use blokli_db::{BlokliDbGeneralModelOperations, api::logs::BlokliDbLogOperations, info::BlokliDbInfoOperations};
-use futures::{
-    StreamExt,
-    future::AbortHandle,
-};
+use futures::{StreamExt, future::AbortHandle};
 use hopr_bindings::hopr_token::HoprToken::{Approval, Transfer};
 use hopr_crypto_types::types::Hash;
 use hopr_primitive_types::prelude::*;
@@ -349,16 +346,15 @@ where
                     }
                 });
 
-            let block_processing_stream = event_stream
-                .then(|block| {
-                    let db = db.clone();
-                    let logs_handler = logs_handler.clone();
-                    let is_synced = is_synced.clone();
-                    async move {
-                        // Events are now published directly via IndexerState within handlers
-                        Self::process_block(&db, &logs_handler, block, false, is_synced.load(Ordering::Relaxed)).await;
-                    }
-                });
+            let block_processing_stream = event_stream.then(|block| {
+                let db = db.clone();
+                let logs_handler = logs_handler.clone();
+                let is_synced = is_synced.clone();
+                async move {
+                    // Events are now published directly via IndexerState within handlers
+                    Self::process_block(&db, &logs_handler, block, false, is_synced.load(Ordering::Relaxed)).await;
+                }
+            });
 
             // Process all blocks (events are published internally via IndexerState)
             block_processing_stream.collect::<Vec<_>>().await;
@@ -578,7 +574,7 @@ where
         for log in block.logs.clone() {
             match logs_handler.collect_log_event(log.clone(), is_synced).await {
                 Ok(()) => match db.set_log_processed(log).await {
-                    Ok(_) => {},
+                    Ok(_) => {}
                     Err(error) => {
                         error!(block_id, %error, "failed to mark log as processed, panicking to prevent data loss");
                         panic!("failed to mark log as processed, panicking to prevent data loss")
@@ -635,10 +631,7 @@ where
             Err(error) => error!(block_id, %error, "failed to update checksums for logs from block"),
         }
 
-        debug!(
-            block_id,
-            "processed block logs - events published via IndexerState",
-        );
+        debug!(block_id, "processed block logs - events published via IndexerState",);
 
         Some(())
     }

@@ -6,7 +6,7 @@
 use std::fmt::{Display, Formatter};
 
 use hopr_crypto_types::types::Hash;
-use hopr_internal_types::prelude::*;
+use hopr_internal_types::{channels::ChannelEntry, tickets::AcknowledgedTicket};
 use hopr_primitive_types::prelude::*;
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;

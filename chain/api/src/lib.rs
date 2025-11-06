@@ -229,7 +229,12 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
             BlokliChainProcess::Indexer,
             Indexer::new(
                 self.rpc_operations.clone(),
-                ContractEventHandlers::new(self.contract_addresses, self.db.clone(), self.rpc_operations.clone(), self.indexer_state.clone()),
+                ContractEventHandlers::new(
+                    self.contract_addresses,
+                    self.db.clone(),
+                    self.rpc_operations.clone(),
+                    self.indexer_state.clone(),
+                ),
                 self.db.clone(),
                 self.indexer_cfg.clone(),
                 self.indexer_events_tx.clone(),

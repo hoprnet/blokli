@@ -38,7 +38,10 @@ use hopr_bindings::{
     },
 };
 use hopr_crypto_types::prelude::*;
-use hopr_internal_types::prelude::*;
+use hopr_internal_types::{
+    announcement::KeyBinding,
+    channels::{ChannelStatus, generate_channel_id},
+};
 use hopr_primitive_types::prelude::*;
 use multiaddr::Multiaddr;
 
@@ -278,13 +281,7 @@ impl IndexerTestContext {
 
     /// Create a ChannelOpened event log
     fn create_channel_opened_log(&self, source: Address, destination: Address) -> SerializableLog {
-        let channel_state = self.encode_channel_state(
-            HoprBalance::zero(),
-            0,
-            0,
-            0,
-            ChannelStatus::Open,
-        );
+        let channel_state = self.encode_channel_state(HoprBalance::zero(), 0, 0, 0, ChannelStatus::Open);
 
         let data = DynSolValue::Tuple(vec![
             DynSolValue::Address(AlloyAddress::from_slice(source.as_ref())),
@@ -418,7 +415,12 @@ impl IndexerTestContext {
     }
 
     /// Assert that an event was published matching the expected type pattern
-    fn assert_event_type_matches<F>(&self, event: &Option<SignificantChainEvent>, type_name: &str, matcher: F) -> anyhow::Result<()>
+    fn assert_event_type_matches<F>(
+        &self,
+        event: &Option<SignificantChainEvent>,
+        type_name: &str,
+        matcher: F,
+    ) -> anyhow::Result<()>
     where
         F: FnOnce(&ChainEventType) -> bool,
     {
@@ -889,11 +891,7 @@ async fn test_address_announcement_multiaddr_parsing() -> anyhow::Result<()> {
         let result = ctx.process_log(log).await;
 
         // All valid multiaddrs should be accepted
-        assert!(
-            result.is_ok(),
-            "Failed to process valid multiaddr: {}",
-            multiaddr
-        );
+        assert!(result.is_ok(), "Failed to process valid multiaddr: {}", multiaddr);
 
         // Verify stored
         let account = ctx.get_account(*SELF_CHAIN_ADDRESS).await?.unwrap();
@@ -929,8 +927,7 @@ async fn test_channel_opened_creates_channel() -> anyhow::Result<()> {
 
     // Verify channel was created
     let channel_id = generate_channel_id(&SELF_CHAIN_ADDRESS, &COUNTERPARTY_CHAIN_ADDRESS);
-    ctx.assert_channel_exists(&channel_id, ChannelStatus::Open)
-        .await?;
+    ctx.assert_channel_exists(&channel_id, ChannelStatus::Open).await?;
 
     // Verify event was published
     ctx.assert_event_published(&event, "ChannelBalanceChanged")?;
@@ -955,8 +952,7 @@ async fn test_channel_opened_zero_balance() -> anyhow::Result<()> {
 
     // Verify zero balance
     let channel_id = generate_channel_id(&SELF_CHAIN_ADDRESS, &COUNTERPARTY_CHAIN_ADDRESS);
-    ctx.assert_channel_balance(&channel_id, HoprBalance::zero())
-        .await?;
+    ctx.assert_channel_balance(&channel_id, HoprBalance::zero()).await?;
 
     Ok(())
 }
@@ -981,8 +977,7 @@ async fn test_channel_closed_updates_status() -> anyhow::Result<()> {
     let event = ctx.process_log(close_log).await?;
 
     // Verify channel is closed
-    ctx.assert_channel_exists(&channel_id, ChannelStatus::Closed)
-        .await?;
+    ctx.assert_channel_exists(&channel_id, ChannelStatus::Closed).await?;
 
     // Verify event was published
     ctx.assert_event_published(&event, "ChannelClosed")?;
@@ -1014,10 +1009,7 @@ async fn test_channel_opened_without_accounts_fails() -> anyhow::Result<()> {
     let result = ctx.process_log(log).await;
 
     // Should fail because accounts don't exist
-    assert!(
-        result.is_err(),
-        "Expected error when opening channel without accounts"
-    );
+    assert!(result.is_err(), "Expected error when opening channel without accounts");
 
     Ok(())
 }
@@ -1038,16 +1030,14 @@ async fn test_channel_lifecycle_full_flow() -> anyhow::Result<()> {
     let event1 = ctx.process_log(open_log).await?;
 
     let channel_id = generate_channel_id(&SELF_CHAIN_ADDRESS, &COUNTERPARTY_CHAIN_ADDRESS);
-    ctx.assert_channel_exists(&channel_id, ChannelStatus::Open)
-        .await?;
+    ctx.assert_channel_exists(&channel_id, ChannelStatus::Open).await?;
     ctx.assert_event_published(&event1, "ChannelBalanceChanged")?;
 
     // Close channel
     let close_log = ctx.create_channel_closed_log(channel_id);
     let event2 = ctx.process_log(close_log).await?;
 
-    ctx.assert_channel_exists(&channel_id, ChannelStatus::Closed)
-        .await?;
+    ctx.assert_channel_exists(&channel_id, ChannelStatus::Closed).await?;
     ctx.assert_event_published(&event2, "ChannelClosed")?;
 
     Ok(())
@@ -1221,10 +1211,8 @@ async fn test_multiple_channels_same_accounts() -> anyhow::Result<()> {
 
     assert_ne!(channel_id1, channel_id2, "Channel IDs should be different");
 
-    ctx.assert_channel_exists(&channel_id1, ChannelStatus::Open)
-        .await?;
-    ctx.assert_channel_exists(&channel_id2, ChannelStatus::Open)
-        .await?;
+    ctx.assert_channel_exists(&channel_id1, ChannelStatus::Open).await?;
+    ctx.assert_channel_exists(&channel_id2, ChannelStatus::Open).await?;
 
     Ok(())
 }
@@ -1254,8 +1242,7 @@ async fn test_channel_balance_to_zero() -> anyhow::Result<()> {
         .await?;
 
     // Verify balance is zero
-    ctx.assert_channel_balance(&channel_id, HoprBalance::zero())
-        .await?;
+    ctx.assert_channel_balance(&channel_id, HoprBalance::zero()).await?;
 
     Ok(())
 }
@@ -1288,8 +1275,7 @@ async fn test_channel_operations_after_closure() -> anyhow::Result<()> {
     // Should fail or be ignored
     if result.is_ok() {
         // If it succeeds, channel should still be closed
-        ctx.assert_channel_exists(&channel_id, ChannelStatus::Closed)
-            .await?;
+        ctx.assert_channel_exists(&channel_id, ChannelStatus::Closed).await?;
     }
 
     Ok(())
@@ -1338,18 +1324,15 @@ async fn test_channel_reopen_after_closure() -> anyhow::Result<()> {
     // Open, close, and reopen channel
     let open_log1 = ctx.create_channel_opened_log(*SELF_CHAIN_ADDRESS, *COUNTERPARTY_CHAIN_ADDRESS);
     ctx.process_log(open_log1).await?;
-    ctx.assert_channel_exists(&channel_id, ChannelStatus::Open)
-        .await?;
+    ctx.assert_channel_exists(&channel_id, ChannelStatus::Open).await?;
 
     let close_log = ctx.create_channel_closed_log(channel_id);
     ctx.process_log(close_log).await?;
-    ctx.assert_channel_exists(&channel_id, ChannelStatus::Closed)
-        .await?;
+    ctx.assert_channel_exists(&channel_id, ChannelStatus::Closed).await?;
 
     let open_log2 = ctx.create_channel_opened_log(*SELF_CHAIN_ADDRESS, *COUNTERPARTY_CHAIN_ADDRESS);
     ctx.process_log(open_log2).await?;
-    ctx.assert_channel_exists(&channel_id, ChannelStatus::Open)
-        .await?;
+    ctx.assert_channel_exists(&channel_id, ChannelStatus::Open).await?;
 
     Ok(())
 }
@@ -1383,8 +1366,7 @@ async fn test_channel_with_announced_accounts() -> anyhow::Result<()> {
     let event = ctx.process_log(open_log).await?;
 
     let channel_id = generate_channel_id(&SELF_CHAIN_ADDRESS, &COUNTERPARTY_CHAIN_ADDRESS);
-    ctx.assert_channel_exists(&channel_id, ChannelStatus::Open)
-        .await?;
+    ctx.assert_channel_exists(&channel_id, ChannelStatus::Open).await?;
     ctx.assert_event_published(&event, "ChannelBalanceChanged")?;
 
     Ok(())
@@ -1512,8 +1494,7 @@ async fn test_channel_state_consistency() -> anyhow::Result<()> {
     assert_eq!(channel2.status, ChannelStatus::Open);
 
     // Close and verify state
-    ctx.process_log(ctx.create_channel_closed_log(channel_id))
-        .await?;
+    ctx.process_log(ctx.create_channel_closed_log(channel_id)).await?;
 
     let channel3 = ctx.get_channel(&channel_id).await?.unwrap();
     assert_eq!(channel3.status, ChannelStatus::Closed);
@@ -1561,8 +1542,7 @@ async fn test_full_workflow_keybinding_to_channel() -> anyhow::Result<()> {
         .await?;
 
     let channel_id = generate_channel_id(&SELF_CHAIN_ADDRESS, &COUNTERPARTY_CHAIN_ADDRESS);
-    ctx.assert_channel_exists(&channel_id, ChannelStatus::Open)
-        .await?;
+    ctx.assert_channel_exists(&channel_id, ChannelStatus::Open).await?;
 
     Ok(())
 }
@@ -1592,8 +1572,7 @@ async fn test_multiple_contracts_same_block() -> anyhow::Result<()> {
         .await?;
 
     let channel_id = generate_channel_id(&SELF_CHAIN_ADDRESS, &COUNTERPARTY_CHAIN_ADDRESS);
-    ctx.assert_channel_exists(&channel_id, ChannelStatus::Open)
-        .await?;
+    ctx.assert_channel_exists(&channel_id, ChannelStatus::Open).await?;
 
     Ok(())
 }
@@ -1618,8 +1597,7 @@ async fn test_announcement_revoke_with_open_channel() -> anyhow::Result<()> {
     ctx.process_log(open_log).await?;
 
     let channel_id = generate_channel_id(&SELF_CHAIN_ADDRESS, &COUNTERPARTY_CHAIN_ADDRESS);
-    ctx.assert_channel_exists(&channel_id, ChannelStatus::Open)
-        .await?;
+    ctx.assert_channel_exists(&channel_id, ChannelStatus::Open).await?;
 
     // Revoke announcement while channel is open
     let revoke_log = ctx.create_revoke_announcement_log(*SELF_CHAIN_ADDRESS);
@@ -1628,8 +1606,7 @@ async fn test_announcement_revoke_with_open_channel() -> anyhow::Result<()> {
     // Verify announcement is revoked but channel remains open
     ctx.assert_account_exists(*SELF_CHAIN_ADDRESS, AccountType::NotAnnounced)
         .await?;
-    ctx.assert_channel_exists(&channel_id, ChannelStatus::Open)
-        .await?;
+    ctx.assert_channel_exists(&channel_id, ChannelStatus::Open).await?;
 
     Ok(())
 }
@@ -1664,8 +1641,7 @@ async fn test_channel_operations_preserve_account_state() -> anyhow::Result<()> 
     ctx.process_log(ctx.create_balance_increased_log(channel_id, balance))
         .await?;
 
-    ctx.process_log(ctx.create_channel_closed_log(channel_id))
-        .await?;
+    ctx.process_log(ctx.create_channel_closed_log(channel_id)).await?;
 
     // Verify account state is preserved
     let account_after = ctx.get_account(*SELF_CHAIN_ADDRESS).await?.unwrap();
@@ -1705,10 +1681,8 @@ async fn test_bidirectional_channels_with_announcements() -> anyhow::Result<()> 
     let channel_id1 = generate_channel_id(&SELF_CHAIN_ADDRESS, &COUNTERPARTY_CHAIN_ADDRESS);
     let channel_id2 = generate_channel_id(&COUNTERPARTY_CHAIN_ADDRESS, &SELF_CHAIN_ADDRESS);
 
-    ctx.assert_channel_exists(&channel_id1, ChannelStatus::Open)
-        .await?;
-    ctx.assert_channel_exists(&channel_id2, ChannelStatus::Open)
-        .await?;
+    ctx.assert_channel_exists(&channel_id1, ChannelStatus::Open).await?;
+    ctx.assert_channel_exists(&channel_id2, ChannelStatus::Open).await?;
     ctx.assert_account_exists(*SELF_CHAIN_ADDRESS, AccountType::Announced)
         .await?;
     ctx.assert_account_exists(*COUNTERPARTY_CHAIN_ADDRESS, AccountType::Announced)
@@ -1743,8 +1717,7 @@ async fn test_domain_separator_with_channel_operations() -> anyhow::Result<()> {
 
     // Verify channel operations work correctly
     let channel_id = generate_channel_id(&SELF_CHAIN_ADDRESS, &COUNTERPARTY_CHAIN_ADDRESS);
-    ctx.assert_channel_exists(&channel_id, ChannelStatus::Open)
-        .await?;
+    ctx.assert_channel_exists(&channel_id, ChannelStatus::Open).await?;
 
     Ok(())
 }
@@ -1783,12 +1756,9 @@ async fn test_complex_multi_party_scenario() -> anyhow::Result<()> {
     let channel_id2 = generate_channel_id(&COUNTERPARTY_CHAIN_ADDRESS, &third_address);
     let channel_id3 = generate_channel_id(&third_address, &SELF_CHAIN_ADDRESS);
 
-    ctx.assert_channel_exists(&channel_id1, ChannelStatus::Open)
-        .await?;
-    ctx.assert_channel_exists(&channel_id2, ChannelStatus::Open)
-        .await?;
-    ctx.assert_channel_exists(&channel_id3, ChannelStatus::Open)
-        .await?;
+    ctx.assert_channel_exists(&channel_id1, ChannelStatus::Open).await?;
+    ctx.assert_channel_exists(&channel_id2, ChannelStatus::Open).await?;
+    ctx.assert_channel_exists(&channel_id3, ChannelStatus::Open).await?;
 
     Ok(())
 }
