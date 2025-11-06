@@ -58,6 +58,15 @@ pub struct IndexerState {
     /// When a reorg is detected, a signal is sent to all active subscriptions
     /// to terminate and allow clients to reconnect with fresh state.
     shutdown_signal: Sender<()>,
+
+    /// Initial receiver kept alive to maintain channel state
+    ///
+    /// This receiver is never used but must be kept alive to prevent the
+    /// async_broadcast channel from entering a closed state.
+    _event_bus_rx: Arc<Receiver<IndexerEvent>>,
+
+    /// Initial shutdown receiver kept alive to maintain channel state
+    _shutdown_rx: Arc<Receiver<()>>,
 }
 
 impl std::fmt::Debug for IndexerState {
@@ -66,6 +75,8 @@ impl std::fmt::Debug for IndexerState {
             .field("coordination_lock", &"Arc<RwLock<()>>")
             .field("event_bus", &"Sender<IndexerEvent>")
             .field("shutdown_signal", &"Sender<()>")
+            .field("_event_bus_rx", &"Arc<Receiver<IndexerEvent>>")
+            .field("_shutdown_rx", &"Arc<Receiver<()>>")
             .finish()
     }
 }
@@ -82,13 +93,20 @@ impl IndexerState {
     ///
     /// A new IndexerState instance ready for use
     pub fn new(event_bus_capacity: usize, shutdown_signal_capacity: usize) -> Self {
-        let (event_bus, _) = broadcast(event_bus_capacity);
-        let (shutdown_signal, _) = broadcast(shutdown_signal_capacity);
+        // Create broadcast channels, keeping the initial receivers alive
+        let (mut event_bus, event_bus_rx) = broadcast(event_bus_capacity);
+        let (mut shutdown_signal, shutdown_rx) = broadcast(shutdown_signal_capacity);
+
+        // Set overflow behavior to allow new receivers to miss old messages if they can't keep up
+        event_bus.set_overflow(true);
+        shutdown_signal.set_overflow(true);
 
         Self {
             coordination_lock: Arc::new(RwLock::new(())),
             event_bus,
             shutdown_signal,
+            _event_bus_rx: Arc::new(event_bus_rx),
+            _shutdown_rx: Arc::new(shutdown_rx),
         }
     }
 
@@ -142,7 +160,8 @@ impl IndexerState {
     ///
     /// A receiver for indexer events
     pub fn subscribe_to_events(&self) -> Receiver<IndexerEvent> {
-        self.event_bus.new_receiver()
+        // Clone the initial receiver to create a new receiver
+        self._event_bus_rx.as_ref().clone()
     }
 
     /// Signals all subscriptions to shut down due to reorg
@@ -168,7 +187,8 @@ impl IndexerState {
     ///
     /// A receiver for shutdown signals
     pub fn subscribe_to_shutdown(&self) -> Receiver<()> {
-        self.shutdown_signal.new_receiver()
+        // Clone the initial receiver to create a new receiver
+        self._shutdown_rx.as_ref().clone()
     }
 }
 

@@ -1172,6 +1172,7 @@ mod tests {
             db.clone(),
             IndexerConfig::default(),
             async_channel::unbounded().0,
+            IndexerState::default(),
         )
         .without_panic_on_completion();
 
@@ -1246,6 +1247,7 @@ mod tests {
                 ..Default::default()
             },
             async_channel::unbounded().0,
+            IndexerState::default(),
         )
         .without_panic_on_completion();
 
@@ -1307,13 +1309,13 @@ mod tests {
             .expect_collect_log_event()
             // .times(2)
             .times(finalized_block.logs.len())
-            .returning(|_, _| Ok(None));
+            .returning(|_, _| Ok(()));
 
         assert!(tx.start_send(finalized_block.clone()).is_ok());
         assert!(tx.start_send(head_allowing_finalization.clone()).is_ok());
 
         let indexer =
-            Indexer::new(rpc, handlers, db.clone(), cfg, async_channel::unbounded().0).without_panic_on_completion();
+            Indexer::new(rpc, handlers, db.clone(), cfg, async_channel::unbounded().0, IndexerState::default()).without_panic_on_completion();
         let _ = join!(indexer.start(), async move {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             tx.close_channel()
@@ -1369,7 +1371,7 @@ mod tests {
                 .expect_collect_log_event()
                 .times(2)
                 .withf(move |l, _| [1, 2].contains(&l.block_number))
-                .returning(|_, _| Ok(None));
+                .returning(|_, _| Ok(()));
             handlers
                 .expect_contract_address_topics()
                 .withf(move |x| x == &addr)
@@ -1379,7 +1381,7 @@ mod tests {
                 .return_const(ContractAddresses::default());
 
             let indexer_cfg = IndexerConfig::new(0, true, false, None, "/tmp/test_data".to_string(), 1000, 10);
-            let indexer = Indexer::new(rpc, handlers, db.clone(), indexer_cfg, tx_events).without_panic_on_completion();
+            let indexer = Indexer::new(rpc, handlers, db.clone(), indexer_cfg, tx_events, IndexerState::default()).without_panic_on_completion();
             let (indexing, _) = join!(indexer.start(), async move {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 tx.close_channel()
@@ -1454,7 +1456,7 @@ mod tests {
                 .expect_collect_log_event()
                 .times(2)
                 .withf(move |l, _| [3, 4].contains(&l.block_number))
-                .returning(|_, _| Ok(None));
+                .returning(|_, _| Ok(()));
             handlers
                 .expect_contract_address_topics()
                 .withf(move |x| x == &addr)
@@ -1464,7 +1466,7 @@ mod tests {
                 .return_const(ContractAddresses::default());
 
             let indexer_cfg = IndexerConfig::new(0, true, false, None, "/tmp/test_data".to_string(), 1000, 10);
-            let indexer = Indexer::new(rpc, handlers, db.clone(), indexer_cfg, tx_events).without_panic_on_completion();
+            let indexer = Indexer::new(rpc, handlers, db.clone(), indexer_cfg, tx_events, IndexerState::default()).without_panic_on_completion();
             let (indexing, _) = join!(indexer.start(), async move {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 tx.close_channel()
@@ -1538,16 +1540,10 @@ mod tests {
             .expect_collect_log_event()
             .times(1)
             .withf(move |l, _| block_numbers.contains(&l.block_number))
-            .returning(|l, _| {
-                let block_number = l.block_number;
-                Ok(Some(SignificantChainEvent {
-                    tx_hash: Hash::create(&[format!("my tx hash {block_number}").as_bytes()]),
-                    event_type: RANDOM_ANNOUNCEMENT_CHAIN_EVENT.clone(),
-                }))
-            });
+            .returning(|_, _| Ok(()));
 
         let (tx_events, rx_events) = async_channel::unbounded();
-        let indexer = Indexer::new(rpc, handlers, db.clone(), cfg, tx_events).without_panic_on_completion();
+        let indexer = Indexer::new(rpc, handlers, db.clone(), cfg, tx_events, IndexerState::default()).without_panic_on_completion();
         indexer.start().await?;
 
         // At this point we expect 2 events to arrive. The third event, which was generated first,
@@ -1633,7 +1629,7 @@ mod tests {
         let indexer_cfg = IndexerConfig::new(0, false, false, None, "/tmp/test_data".to_string(), 1000, 10);
 
         let (tx_events, _) = async_channel::unbounded();
-        let indexer = Indexer::new(rpc, handlers, db.clone(), indexer_cfg, tx_events).without_panic_on_completion();
+        let indexer = Indexer::new(rpc, handlers, db.clone(), indexer_cfg, tx_events, IndexerState::default()).without_panic_on_completion();
         indexer.start().await?;
 
         Ok(())
