@@ -4,11 +4,13 @@ use crate::{
 };
 use async_broadcast::TrySendError;
 use futures::{Stream, StreamExt};
+use std::ops::Div;
 use std::sync::Arc;
 use std::{collections::HashMap, time::Duration};
 
+/// Represents a state for [`BlokliTestClient`].
 #[derive(Clone, Debug, PartialEq)]
-pub struct BlokliState {
+pub struct BlokliTestState {
     pub accounts: Vec<Account>,
     pub native_balances: HashMap<String, NativeBalance>,
     pub token_balances: HashMap<String, HoprBalance>,
@@ -20,7 +22,7 @@ pub struct BlokliState {
     pub active_txs: HashMap<TxId, Transaction>,
 }
 
-impl Default for BlokliState {
+impl Default for BlokliTestState {
     fn default() -> Self {
         Self {
             accounts: Default::default(),
@@ -60,34 +62,56 @@ impl Default for BlokliState {
     }
 }
 
-pub trait StateMutator {
-    fn update_state(&self, tx: &[u8], state: &mut BlokliState) -> Result<()>;
+/// Mutator for the [`BlokliTestState`].
+pub trait BlokliTestStateMutator {
+    /// Updates the state given the signed transaction.
+    ///
+    /// Mutations that remove accounts or channels are not allowed.
+    fn update_state(&self, signed_tx: &[u8], state: &mut BlokliTestState) -> Result<()>;
 }
 
+/// No-op state mutator.
+///
+/// Useful for static tests.
 pub struct NopStateMutator;
 
-impl StateMutator for NopStateMutator {
-    fn update_state(&self, _: &[u8], _: &mut BlokliState) -> Result<()> {
+impl BlokliTestStateMutator for NopStateMutator {
+    fn update_state(&self, _: &[u8], _: &mut BlokliTestState) -> Result<()> {
         Ok(())
     }
 }
 
+type AccountEvents = (
+    async_broadcast::Sender<Account>,
+    async_broadcast::InactiveReceiver<Account>,
+);
+
+type GraphEvents = (
+    async_broadcast::Sender<(Account, Channel, Account)>,
+    async_broadcast::InactiveReceiver<(Account, Channel, Account)>,
+);
+
 /// Blokli client for testing purposes.
+///
+/// This is useful to simulate Blokli server in unit tests.
+/// The test client gets an initial [state](BlokliTestState).
+///
+/// Later transactions done using the client can [mutate](BlokliTestStateMutator) the state and
+/// changes are propagated to the subscribers.
+/// Mutations that remove accounts or channels are not allowed.
 pub struct BlokliTestClient {
-    state: std::sync::Arc<parking_lot::RwLock<BlokliState>>,
-    mutator: Box<dyn StateMutator + Send + Sync>,
-    accounts_channel: (
-        async_broadcast::Sender<Account>,
-        async_broadcast::InactiveReceiver<Account>,
-    ),
-    channels_channel: (
-        async_broadcast::Sender<(Account, Channel, Account)>,
-        async_broadcast::InactiveReceiver<(Account, Channel, Account)>,
-    ),
+    state: Arc<parking_lot::RwLock<BlokliTestState>>,
+    mutator: Box<dyn BlokliTestStateMutator + Send + Sync>,
+    accounts_channel: AccountEvents,
+    channels_channel: GraphEvents,
 }
 
 impl BlokliTestClient {
-    pub fn new<M: StateMutator + Send + Sync + 'static>(initial_state: BlokliState, mutator: M) -> Self {
+    /// Constructs a new client that owns the given [`initial_state`](BlokliTestState).
+    ///
+    /// After construction, the only way to mutate the state is when the client calls the given [`mutator`](BlokliTestStateMutator)
+    /// based on a [submitted](BlokliTransactionClient) transaction.
+    pub fn new<M: BlokliTestStateMutator + Send + Sync + 'static>(initial_state: BlokliTestState, mutator: M) -> Self {
         let (mut accounts_tx, accounts_rx) = async_broadcast::broadcast(1024);
         accounts_tx.set_await_active(false);
         accounts_tx.set_overflow(false);
@@ -106,7 +130,7 @@ impl BlokliTestClient {
 }
 
 fn channel_matches(channel: &Channel, selector: &ChannelSelector) -> bool {
-    let a = match selector.filter {
+    let filter = match selector.filter {
         ChannelFilter::ChannelId(id) => channel.concrete_channel_id == hex::encode(id),
         ChannelFilter::DestinationKeyId(dst_id) => channel.destination as u32 == dst_id,
         ChannelFilter::SourceKeyId(src_id) => channel.source as u32 == src_id,
@@ -114,7 +138,7 @@ fn channel_matches(channel: &Channel, selector: &ChannelSelector) -> bool {
             channel.source as u32 == src_id && channel.destination as u32 == dst_id
         }
     };
-    a && selector.status.map_or(true, |status| channel.status == status)
+    filter && selector.status.is_none_or(|status| channel.status == status)
 }
 
 fn account_matches(account: &Account, selector: &AccountSelector) -> bool {
@@ -322,13 +346,40 @@ impl BlokliSubscriptionClient for BlokliTestClient {
 
 fn submit_tx(
     signed_tx: &[u8],
-    state: &mut BlokliState,
-    mutator: &dyn StateMutator,
+    state: &mut BlokliTestState,
+    mutator: &dyn BlokliTestStateMutator,
     accounts_channel: &async_broadcast::Sender<Account>,
     channels_channel: &async_broadcast::Sender<(Account, Channel, Account)>,
 ) -> Result<()> {
     let old_state = state.clone();
     mutator.update_state(signed_tx, state)?;
+
+    if old_state.accounts.len() > state.accounts.len() {
+        *state = old_state;
+        return Err(ErrorKind::MockClientError(anyhow::anyhow!("mutation cannot remove accounts")).into());
+    }
+
+    if old_state.channels.len() > state.channels.len() {
+        *state = old_state;
+        return Err(ErrorKind::MockClientError(anyhow::anyhow!("mutation cannot remove channels")).into());
+    }
+
+    if old_state.native_balances.len() > state.native_balances.len() {
+        *state = old_state;
+        return Err(ErrorKind::MockClientError(anyhow::anyhow!("mutation cannot remove native balances")).into());
+    }
+
+    if old_state.token_balances.len() > state.token_balances.len() {
+        return Err(ErrorKind::MockClientError(anyhow::anyhow!("mutation cannot remove token balances")).into());
+    }
+
+    if old_state.safe_allowances.len() > state.safe_allowances.len() {
+        return Err(ErrorKind::MockClientError(anyhow::anyhow!("mutation cannot remove safe allowances")).into());
+    }
+
+    if old_state.active_txs.len() > state.active_txs.len() {
+        return Err(ErrorKind::MockClientError(anyhow::anyhow!("mutation cannot remove active txs")).into());
+    }
 
     // Compare accounts and broadcast changes
     state
@@ -433,8 +484,8 @@ impl BlokliTransactionClient for BlokliTestClient {
         self.submit_transaction(signed_tx).await
     }
 
-    async fn track_transaction(&self, tx_id: TxId, _: Duration) -> Result<Transaction> {
-        futures_time::task::sleep(Duration::from_millis(500).into()).await;
+    async fn track_transaction(&self, tx_id: TxId, client_timeout: Duration) -> Result<Transaction> {
+        futures_time::task::sleep(client_timeout.div(10).into()).await;
         self.state
             .write()
             .active_txs
