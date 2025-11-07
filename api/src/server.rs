@@ -21,6 +21,7 @@ use blokli_chain_api::{
     transaction_store::TransactionStore,
 };
 use blokli_chain_indexer::IndexerState;
+use blokli_chain_rpc::{rpc::RpcOperations, transport::ReqwestClient};
 use futures::stream::StreamExt;
 use sea_orm::DatabaseConnection;
 use serde_json::Value;
@@ -76,6 +77,7 @@ pub async fn build_app(
     indexer_state: IndexerState,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
+    rpc_operations: Arc<RpcOperations<ReqwestClient>>,
 ) -> ApiResult<Router> {
     let schema = build_schema(
         db,
@@ -83,6 +85,7 @@ pub async fn build_app(
         indexer_state,
         transaction_executor,
         transaction_store,
+        rpc_operations,
     );
     let app_state = AppState {
         schema: Arc::new(schema),

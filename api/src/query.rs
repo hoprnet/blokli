@@ -8,13 +8,12 @@ use blokli_api_types::{
     Transaction, TransactionStatus,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
+use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
+use blokli_db_entity::conversions::balances::string_to_address;
+use hopr_primitive_types::traits::IntoEndian;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
-use crate::{
-    conversions::{hopr_balance_from_model, native_balance_from_model},
-    mutation::TransactionResult,
-    validation::validate_eth_address,
-};
+use crate::{mutation::TransactionResult, validation::validate_eth_address};
 
 /// Helper function to convert binary domain separator to Hex32 format
 fn bytes_to_hex32(bytes: &[u8]) -> Hex32 {
@@ -278,56 +277,74 @@ impl QueryRoot {
 
     /// Retrieve HOPR token balance for a specific address
     ///
-    /// Returns None if no balance exists for the address.
+    /// This query makes a direct RPC call to the blockchain to get the current HOPR token balance.
+    /// No database storage is used - balance is fetched directly from the chain.
     #[graphql(name = "hoprBalance")]
     async fn hopr_balance(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "On-chain address to query (hexadecimal format)")] address: String,
     ) -> Result<Option<HoprBalance>> {
-        use blokli_db_entity::conversions::balances::string_to_address;
+        use hopr_primitive_types::primitives::Address;
 
         // Validate address format
         validate_eth_address(&address)?;
 
-        let db = ctx.data::<DatabaseConnection>()?;
+        // Convert hex string address to Address type
+        let parsed_address = Address::new(&string_to_address(&address));
 
-        // Convert hex string address to binary for database query
-        let binary_address = string_to_address(&address);
+        // Get RPC operations from context - using ReqwestClient as the concrete type
+        let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
 
-        let balance = blokli_db_entity::hopr_balance::Entity::find()
-            .filter(blokli_db_entity::hopr_balance::Column::Address.eq(binary_address))
-            .one(db)
-            .await?;
-
-        Ok(balance.map(hopr_balance_from_model))
+        // Make RPC call to get balance from blockchain
+        match rpc.get_hopr_balance(parsed_address).await {
+            Ok(balance) => Ok(Some(HoprBalance {
+                address,
+                balance: TokenValueString(blokli_db_entity::conversions::balances::hopr_balance_to_string(
+                    &balance.to_be_bytes(),
+                )),
+            })),
+            Err(e) => Err(async_graphql::Error::new(format!(
+                "Failed to query HOPR balance from RPC: {}",
+                e
+            ))),
+        }
     }
 
     /// Retrieve native token balance for a specific address
     ///
-    /// Returns None if no balance exists for the address.
+    /// This query makes a direct RPC call to the blockchain to get the current native token (xDAI) balance.
+    /// No database storage is used - balance is fetched directly from the chain.
     #[graphql(name = "nativeBalance")]
     async fn native_balance(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "On-chain address to query (hexadecimal format)")] address: String,
     ) -> Result<Option<NativeBalance>> {
-        use blokli_db_entity::conversions::balances::string_to_address;
+        use hopr_primitive_types::primitives::Address;
 
         // Validate address format
         validate_eth_address(&address)?;
 
-        let db = ctx.data::<DatabaseConnection>()?;
+        // Convert hex string address to Address type
+        let parsed_address = Address::new(&string_to_address(&address));
 
-        // Convert hex string address to binary for database query
-        let binary_address = string_to_address(&address);
+        // Get RPC operations from context - using ReqwestClient as the concrete type
+        let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
 
-        let balance = blokli_db_entity::native_balance::Entity::find()
-            .filter(blokli_db_entity::native_balance::Column::Address.eq(binary_address))
-            .one(db)
-            .await?;
-
-        Ok(balance.map(native_balance_from_model))
+        // Make RPC call to get native balance from blockchain
+        match rpc.get_xdai_balance(parsed_address).await {
+            Ok(balance) => Ok(Some(NativeBalance {
+                address,
+                balance: TokenValueString(blokli_db_entity::conversions::balances::native_balance_to_string(
+                    &balance.to_be_bytes(),
+                )),
+            })),
+            Err(e) => Err(async_graphql::Error::new(format!(
+                "Failed to query native balance from RPC: {}",
+                e
+            ))),
+        }
     }
 
     /// Retrieve chain information

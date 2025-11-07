@@ -8,6 +8,7 @@ use blokli_chain_api::{
     transaction_store::TransactionStore,
 };
 use blokli_chain_indexer::IndexerState;
+use blokli_chain_rpc::{rpc::RpcOperations, transport::HttpRequestor};
 use sea_orm::DatabaseConnection;
 
 use crate::{mutation::MutationRoot, query::QueryRoot, subscription::SubscriptionRoot};
@@ -24,14 +25,16 @@ use crate::{mutation::MutationRoot, query::QueryRoot, subscription::Subscription
 /// - Chain ID injected as context data
 /// - IndexerState injected as context data (for subscription coordination)
 /// - Transaction executor and store injected as context data (for mutations and transaction queries)
+/// - RPC operations injected as context data (for passthrough balance queries)
 /// - Query depth limit (10 levels) to prevent excessive nesting
 /// - Query complexity limit (100 points) to prevent expensive operations
-pub fn build_schema(
+pub fn build_schema<R: HttpRequestor + 'static + Clone>(
     db: DatabaseConnection,
     chain_id: u64,
     indexer_state: IndexerState,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
+    rpc_operations: Arc<RpcOperations<R>>,
 ) -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
     Schema::build(QueryRoot, MutationRoot, SubscriptionRoot)
         .limit_depth(10)
@@ -41,6 +44,7 @@ pub fn build_schema(
         .data(indexer_state)
         .data(transaction_executor)
         .data(transaction_store)
+        .data(rpc_operations)
         .finish()
 }
 
@@ -48,13 +52,21 @@ pub fn build_schema(
 ///
 /// This generates a string representation of the GraphQL schema that can be used
 /// for code generation, documentation, or schema validation tools.
-pub fn export_schema_sdl(
+pub fn export_schema_sdl<R: HttpRequestor + 'static + Clone>(
     db: DatabaseConnection,
     chain_id: u64,
     indexer_state: IndexerState,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
+    rpc_operations: Arc<RpcOperations<R>>,
 ) -> String {
-    let schema = build_schema(db, chain_id, indexer_state, transaction_executor, transaction_store);
+    let schema = build_schema(
+        db,
+        chain_id,
+        indexer_state,
+        transaction_executor,
+        transaction_store,
+        rpc_operations,
+    );
     schema.sdl()
 }

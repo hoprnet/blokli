@@ -279,6 +279,14 @@ async fn run() -> errors::Result<()> {
                 .map_err(|e| BloklidError::NonSpecific(format!("Failed to connect API database: {}", e)))?;
 
             // Construct blokli-api ApiConfig from bloklid config
+            // We need to get rpc_url and contracts from the original config
+            let (rpc_url_for_api, contracts_for_api) = {
+                let cfg = config
+                    .read()
+                    .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
+                (cfg.rpc_url.clone(), cfg.contracts)
+            };
+
             let blokli_api_config = blokli_api::config::ApiConfig {
                 bind_address: api_config.bind_address,
                 playground_enabled: api_config.playground_enabled,
@@ -286,7 +294,12 @@ async fn run() -> errors::Result<()> {
                 tls: None,
                 cors_allowed_origins: vec!["*".to_string()], // Permissive for now
                 chain_id,
+                rpc_url: rpc_url_for_api,
+                contract_addresses: contracts_for_api,
             };
+
+            // Get RPC operations from blokli_chain for balance queries
+            let rpc_operations = Arc::new(blokli_chain.rpc().clone());
 
             // Build API app with indexer state for subscriptions and transaction components
             let api_app = blokli_api::server::build_app(
@@ -295,6 +308,7 @@ async fn run() -> errors::Result<()> {
                 indexer_state,
                 blokli_chain.transaction_executor(),
                 blokli_chain.transaction_store(),
+                rpc_operations,
             )
             .await
             .map_err(|e| BloklidError::NonSpecific(format!("Failed to build API app: {}", e)))?;

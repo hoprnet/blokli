@@ -28,10 +28,8 @@ use blokli_chain_rpc::{
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
 };
-use blokli_chain_types::ContractAddresses;
 use config::ApiConfig;
 use errors::ApiResult;
-use hopr_primitive_types::primitives::Address;
 use sea_orm::Database;
 use tokio::net::TcpListener;
 use tracing::{info, warn};
@@ -95,10 +93,10 @@ pub async fn start_server(config: ApiConfig) -> ApiResult<()> {
     let transaction_store = Arc::new(TransactionStore::new());
     let transaction_validator = Arc::new(TransactionValidator::new());
 
-    // Create a minimal RPC connection for stub purposes
-    // In standalone mode, this won't actually be used
+    // Create RPC connection for balance queries
+    info!("Connecting to RPC: {}", config.rpc_url);
     let transport_client = alloy::transports::http::ReqwestTransport::new(
-        url::Url::parse("http://localhost:8545").expect("Failed to parse stub RPC URL"),
+        url::Url::parse(&config.rpc_url).expect("Failed to parse RPC URL"),
     );
     let rpc_client = alloy::rpc::client::ClientBuilder::default()
         .layer(alloy::transports::layers::RetryBackoffLayer::new_with_policy(
@@ -110,26 +108,18 @@ pub async fn start_server(config: ApiConfig) -> ApiResult<()> {
         .transport(transport_client.clone(), transport_client.guess_local());
 
     let rpc_operations = RpcOperations::new(
-        rpc_client,
+        rpc_client.clone(),
         ReqwestClient::new(),
         RpcOperationsConfig {
             chain_id: config.chain_id,
-            contract_addrs: ContractAddresses {
-                token: Address::default(),
-                channels: Address::default(),
-                announcements: Address::default(),
-                safe_registry: Address::default(),
-                price_oracle: Address::default(),
-                win_prob_oracle: Address::default(),
-                stake_factory: Address::default(),
-            },
+            contract_addrs: config.contract_addresses,
             ..Default::default()
         },
         None,
     )
-    .expect("Failed to create stub RPC operations");
+    .expect("Failed to create RPC operations");
 
-    let rpc_adapter = Arc::new(RpcAdapter::new(rpc_operations));
+    let rpc_adapter = Arc::new(RpcAdapter::new(rpc_operations.clone()));
 
     let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
         rpc_adapter,
@@ -145,6 +135,7 @@ pub async fn start_server(config: ApiConfig) -> ApiResult<()> {
         indexer_state,
         transaction_executor,
         transaction_store,
+        Arc::new(rpc_operations),
     )
     .await?;
 

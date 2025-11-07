@@ -2,6 +2,8 @@
 
 use std::{net::SocketAddr, path::PathBuf};
 
+use blokli_chain_types::ContractAddresses;
+use hopr_primitive_types::primitives::Address;
 use serde::{Deserialize, Serialize};
 
 /// API server configuration
@@ -31,6 +33,14 @@ pub struct ApiConfig {
     /// Chain ID for the blockchain network
     #[serde(default = "default_chain_id")]
     pub chain_id: u64,
+
+    /// RPC URL for blockchain queries (required for balance passthrough)
+    #[serde(default = "default_rpc_url")]
+    pub rpc_url: String,
+
+    /// Contract addresses for HOPR smart contracts
+    #[serde(default = "default_contract_addresses")]
+    pub contract_addresses: ContractAddresses,
 }
 
 /// TLS configuration
@@ -52,6 +62,8 @@ impl Default for ApiConfig {
             tls: None,
             cors_allowed_origins: default_cors_allowed_origins(),
             chain_id: default_chain_id(),
+            rpc_url: default_rpc_url(),
+            contract_addresses: default_contract_addresses(),
         }
     }
 }
@@ -86,4 +98,20 @@ fn default_chain_id() -> u64 {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(100) // Default to Gnosis Chain (chain ID 100)
+}
+
+fn default_rpc_url() -> String {
+    std::env::var("RPC_URL").unwrap_or_else(|_| "http://localhost:8545".to_string())
+}
+
+fn default_contract_addresses() -> ContractAddresses {
+    ContractAddresses {
+        token: Address::default(),
+        channels: Address::default(),
+        announcements: Address::default(),
+        safe_registry: Address::default(),
+        price_oracle: Address::default(),
+        win_prob_oracle: Address::default(),
+        stake_factory: Address::default(),
+    }
 }
