@@ -40,7 +40,7 @@ impl From<HoprBalanceResult> for Result<HoprBalance, BlokliClientError> {
     }
 }
 
-#[derive(cynic::QueryFragment, Debug, Clone)]
+#[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
 pub struct HoprBalance {
     pub __typename: String,
     pub balance: TokenValueString,
@@ -66,13 +66,13 @@ impl From<NativeBalanceResult> for Result<NativeBalance, BlokliClientError> {
     }
 }
 
-#[derive(cynic::QueryFragment, Debug, Clone)]
+#[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
 pub struct NativeBalance {
     pub __typename: String,
     pub balance: TokenValueString,
 }
 
-#[derive(cynic::QueryFragment, Debug, Clone)]
+#[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
 pub struct SafeHoprAllowance {
     pub __typename: String,
     pub allowance: TokenValueString,

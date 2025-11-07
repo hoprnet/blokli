@@ -22,17 +22,17 @@ pub enum ChannelStatus {
     Closed,
 }
 
-#[derive(cynic::Scalar, Debug, Clone)]
+#[derive(cynic::Scalar, Debug, Clone, PartialEq, Eq)]
 pub struct DateTime(pub String);
 
-#[derive(cynic::Scalar, Debug, Clone)]
+#[derive(cynic::Scalar, Debug, Clone, PartialEq, Eq)]
 pub struct TokenValueString(pub String);
 
-#[derive(cynic::Scalar, Debug, Clone)]
+#[derive(cynic::Scalar, Debug, Clone, PartialEq, Eq)]
 #[cynic(graphql_type = "UInt64")]
 pub struct Uint64(pub String);
 
-#[derive(cynic::Scalar, Debug, Clone)]
+#[derive(cynic::Scalar, Debug, Clone, PartialEq, Eq)]
 pub struct Hex32(pub String);
 
 #[derive(cynic::InlineFragments, Debug)]
