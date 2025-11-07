@@ -307,6 +307,25 @@ pub async fn process_channel(
 }
 ```
 
+#### hopr-bindings
+
+Provides smart contract bindings and encoding/decoding utilities for HOPR on-chain contracts:
+
+**Purpose:**
+
+For any contract encoding/decoding or event encoding/decoding work, use the existing `hopr-bindings` crate and its modules. This crate contains generated bindings for HOPR smart contracts and provides type-safe interfaces for interacting with blockchain events and contract calls.
+
+**Getting Started:**
+
+To explore the full API and available contract bindings, generate the crate documentation:
+
+```bash
+# Build and open docs for hopr-bindings
+cargo doc --package hopr-bindings --open
+```
+
+The generated documentation will show all available contract modules, event types, and encoding/decoding utilities.
+
 #### Building Documentation
 
 To explore the full API of these crates, build their documentation:
@@ -320,6 +339,9 @@ cargo doc --package hopr-crypto-types --open
 
 # Build and open docs for internal types
 cargo doc --package hopr-internal-types --open
+
+# Build and open docs for contract bindings
+cargo doc --package hopr-bindings --open
 ```
 
 #### Best Practices
@@ -484,6 +506,7 @@ impl Query {
 - Imports inside functions, impl blocks, or other nested scopes
 - Inline fully-qualified type paths instead of imports (e.g., `std::collections::HashMap::new()`)
 - Creating custom types when HOPR foundation types exist (`hopr_primitive_types`, `hopr_crypto_types`, `hopr_internal_types`)
+- Creating custom contract encoding/decoding logic when `hopr-bindings` provides the necessary types and utilities
 - Missing type annotations on public function parameters and return types
 - Unwrap/expect in production code (use proper error handling)
 - Blocking operations in async contexts
