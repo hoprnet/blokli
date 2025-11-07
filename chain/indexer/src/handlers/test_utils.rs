@@ -2,7 +2,7 @@
 pub(super) mod test_helpers {
     use std::sync::Arc;
 
-    use alloy::primitives::B256;
+    use alloy::{primitives::B256, sol_types::private::IntoLogData};
     use async_trait::async_trait;
     use blokli_chain_rpc::HoprIndexerRpcOperations;
     use blokli_chain_types::ContractAddresses;
@@ -147,6 +147,21 @@ pub(super) mod test_helpers {
 
     pub fn test_log() -> SerializableLog {
         SerializableLog { ..Default::default() }
+    }
+
+    /// Converts an Alloy event struct into a SerializableLog for testing.
+    ///
+    /// This helper uses the contract bindings' IntoLogData trait to properly encode
+    /// indexed parameters as topics and non-indexed parameters as data, matching
+    /// the actual on-chain event structure.
+    pub fn event_to_log<E: IntoLogData>(event: E, contract_address: Address) -> SerializableLog {
+        let log_data = event.to_log_data();
+        SerializableLog {
+            address: contract_address,
+            topics: log_data.topics().iter().map(|t| t.0).collect(),
+            data: log_data.data.to_vec(),
+            ..Default::default()
+        }
     }
 
     /// Helper function to create test accounts for channel operations

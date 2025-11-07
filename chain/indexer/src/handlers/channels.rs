@@ -480,16 +480,23 @@ mod tests {
 
     use alloy::{
         dyn_abi::DynSolValue,
-        primitives::{Address as AlloyAddress, U256},
+        primitives::{Address as AlloyAddress, FixedBytes, U256},
         sol_types::{SolEvent, SolValue},
     };
     use anyhow::Context;
     use blokli_db::{
-        BlokliDbGeneralModelOperations, api::info::DomainSeparator, channels::BlokliDbChannelOperations, db::BlokliDb,
-        info::BlokliDbInfoOperations,
+        BlokliDbGeneralModelOperations, accounts::BlokliDbAccountOperations, api::info::DomainSeparator,
+        channels::BlokliDbChannelOperations, db::BlokliDb, info::BlokliDbInfoOperations,
     };
     use hex_literal::hex;
-    use hopr_crypto_types::prelude::Hash;
+    use hopr_bindings::hopr_channels_events::HoprChannelsEvents::{
+        ChannelBalanceDecreased, ChannelBalanceIncreased, ChannelClosed, ChannelOpened,
+        OutgoingChannelClosureInitiated, TicketRedeemed,
+    };
+    use hopr_crypto_types::{
+        keypairs::Keypair,
+        prelude::{Hash, OffchainKeypair},
+    };
     use hopr_internal_types::channels::{ChannelEntry, ChannelStatus, generate_channel_id};
     use hopr_primitive_types::{
         prelude::{Address, HoprBalance, SerializableLog},
@@ -503,24 +510,14 @@ mod tests {
     async fn on_channel_event_balance_increased() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
 
-        let value = U256::MAX;
-        let target_hopr_balance = HoprBalance::from(primitive_types::U256::from_big_endian(
-            value.to_be_bytes_vec().as_slice(),
-        ));
-
-        let mut rpc_operations = MockIndexerRpcOperations::new();
-        rpc_operations
-            .expect_get_hopr_balance()
-            .times(1)
-            .return_once(move |_| Ok(target_hopr_balance));
-        rpc_operations
-            .expect_get_hopr_allowance()
-            .times(1)
-            .returning(move |_, _| Ok(HoprBalance::from(primitive_types::U256::from(1000u64))));
+        let rpc_operations = MockIndexerRpcOperations::new();
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
         };
         let handlers = init_handlers(clonable_rpc_operations, db.clone());
+
+        // Create required accounts before channel operations
+        create_test_accounts(&db).await?;
 
         let channel = ChannelEntry::new(
             *SELF_CHAIN_ADDRESS,
@@ -531,23 +528,24 @@ mod tests {
             primitive_types::U256::one(),
         );
 
-        db.upsert_channel(None, channel, 1, 0, 0).await?;
+        db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
 
         let solidity_balance: HoprBalance = primitive_types::U256::from((1u128 << 96) - 1).into();
-        let diff = solidity_balance - channel.balance;
+        let channel_state = encode_channel_state(
+            solidity_balance,
+            channel.ticket_index.as_u32(),
+            0,
+            channel.channel_epoch.as_u32(),
+            channel.status,
+        );
 
-        let encoded_data = (solidity_balance.amount().to_be_bytes()).abi_encode();
-
-        let balance_increased_log = SerializableLog {
-            address: handlers.addresses.channels,
-            topics: vec![
-                hopr_bindings::hopr_channels::HoprChannels::ChannelBalanceIncreased::SIGNATURE_HASH.into(),
-                // ChannelBalanceIncreasedFilter::signature().into(),
-                H256::from_slice(channel.get_id().as_ref()).into(),
-            ],
-            data: encoded_data,
-            ..test_log()
+        // Create ChannelBalanceIncreased event using bindings
+        let event = ChannelBalanceIncreased {
+            channelId: FixedBytes::from_slice(channel.get_id().as_ref()),
+            channel: channel_state,
         };
+
+        let balance_increased_log = event_to_log(event, handlers.addresses.channels);
 
         db.begin_transaction()
             .await?
@@ -613,20 +611,14 @@ mod tests {
     async fn on_channel_event_balance_decreased() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
 
-        let value = U256::MAX;
-        let target_hopr_balance = HoprBalance::from(primitive_types::U256::from_big_endian(
-            value.to_be_bytes_vec().as_slice(),
-        ));
-
-        let mut rpc_operations = MockIndexerRpcOperations::new();
-        rpc_operations
-            .expect_get_hopr_balance()
-            .times(1)
-            .return_once(move |_| Ok(target_hopr_balance));
+        let rpc_operations = MockIndexerRpcOperations::new();
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
         };
         let handlers = init_handlers(clonable_rpc_operations, db.clone());
+
+        // Create required accounts before channel operations
+        create_test_accounts(&db).await?;
 
         let channel = ChannelEntry::new(
             *SELF_CHAIN_ADDRESS,
@@ -637,28 +629,24 @@ mod tests {
             primitive_types::U256::one(),
         );
 
-        db.upsert_channel(None, channel, 1, 0, 0).await?;
+        db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
 
         let solidity_balance: HoprBalance = primitive_types::U256::from((1u128 << 96) - 2).into();
-        let diff = channel.balance - solidity_balance;
+        let channel_state = encode_channel_state(
+            solidity_balance,
+            channel.ticket_index.as_u32(),
+            0,
+            channel.channel_epoch.as_u32(),
+            channel.status,
+        );
 
-        // let encoded_data = (solidity_balance).abi_encode();
-        let encoded_data = DynSolValue::Tuple(vec![DynSolValue::Uint(
-            U256::from_be_slice(&solidity_balance.amount().to_be_bytes()),
-            256,
-        )])
-        .abi_encode();
-
-        let balance_decreased_log = SerializableLog {
-            address: handlers.addresses.channels,
-            topics: vec![
-                hopr_bindings::hopr_channels::HoprChannels::ChannelBalanceDecreased::SIGNATURE_HASH.into(),
-                // ChannelBalanceDecreasedFilter::signature().into(),
-                H256::from_slice(channel.get_id().as_ref()).into(),
-            ],
-            data: encoded_data,
-            ..test_log()
+        // Create ChannelBalanceDecreased event using bindings
+        let event = ChannelBalanceDecreased {
+            channelId: FixedBytes::from_slice(channel.get_id().as_ref()),
+            channel: channel_state,
         };
+
+        let balance_decreased_log = event_to_log(event, handlers.addresses.channels);
 
         db.begin_transaction()
             .await?
@@ -700,20 +688,24 @@ mod tests {
             primitive_types::U256::one(),
         );
 
-        db.upsert_channel(None, channel, 1, 0, 0).await?;
+        db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
 
-        let encoded_data = ().abi_encode();
+        // When channel is closed, balance is 0, ticket_index is reset to 0, and status is Closed
+        let channel_state = encode_channel_state(
+            HoprBalance::zero(),
+            0,
+            0,
+            channel.channel_epoch.as_u32(),
+            ChannelStatus::Closed,
+        );
 
-        let channel_closed_log = SerializableLog {
-            address: handlers.addresses.channels,
-            topics: vec![
-                hopr_bindings::hopr_channels::HoprChannels::ChannelClosed::SIGNATURE_HASH.into(),
-                // ChannelClosedFilter::signature().into(),
-                H256::from_slice(channel.get_id().as_ref()).into(),
-            ],
-            data: encoded_data,
-            ..test_log()
+        // Create ChannelClosed event using bindings
+        let event = ChannelClosed {
+            channelId: FixedBytes::from_slice(channel.get_id().as_ref()),
+            channel: channel_state,
         };
+
+        let channel_closed_log = event_to_log(event, handlers.addresses.channels);
 
         db.begin_transaction()
             .await?
@@ -747,31 +739,52 @@ mod tests {
         };
         let handlers = init_handlers(clonable_rpc_operations, db.clone());
 
+        // Create accounts for foreign addresses before channel operations
+        let foreign_addr1 = Address::new(&hex!("B7397C218766eBe6A1A634df523A1a7e412e67eA"));
+        let foreign_addr2 = Address::new(&hex!("D4fdec44DB9D44B8f2b6d529620f9C0C7066A2c1"));
+        let foreign_key1 = OffchainKeypair::from_secret(&hex!(
+            "1111111111111111111111111111111111111111111111111111111111111111"
+        ))
+        .expect("valid keypair");
+        let foreign_key2 = OffchainKeypair::from_secret(&hex!(
+            "2222222222222222222222222222222222222222222222222222222222222222"
+        ))
+        .expect("valid keypair");
+
+        db.upsert_account(None, foreign_addr1, *foreign_key1.public(), None, 1, 0, 0)
+            .await?;
+        db.upsert_account(None, foreign_addr2, *foreign_key2.public(), None, 1, 0, 1)
+            .await?;
+
         let starting_balance = HoprBalance::from(primitive_types::U256::from((1u128 << 96) - 1));
 
         let channel = ChannelEntry::new(
-            Address::new(&hex!("B7397C218766eBe6A1A634df523A1a7e412e67eA")),
-            Address::new(&hex!("D4fdec44DB9D44B8f2b6d529620f9C0C7066A2c1")),
+            foreign_addr1,
+            foreign_addr2,
             starting_balance,
             primitive_types::U256::zero(),
             ChannelStatus::Open,
             primitive_types::U256::one(),
         );
 
-        db.upsert_channel(None, channel, 1, 0, 0).await?;
+        db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
 
-        let encoded_data = ().abi_encode();
+        // When channel is closed, balance is 0, ticket_index is reset to 0, and status is Closed
+        let channel_state = encode_channel_state(
+            HoprBalance::zero(),
+            0,
+            0,
+            channel.channel_epoch.as_u32(),
+            ChannelStatus::Closed,
+        );
 
-        let channel_closed_log = SerializableLog {
-            address: handlers.addresses.channels,
-            topics: vec![
-                hopr_bindings::hopr_channels::HoprChannels::ChannelClosed::SIGNATURE_HASH.into(),
-                // ChannelClosedFilter::signature().into(),
-                H256::from_slice(channel.get_id().as_ref()).into(),
-            ],
-            data: encoded_data,
-            ..test_log()
+        // Create ChannelClosed event using bindings
+        let event = ChannelClosed {
+            channelId: FixedBytes::from_slice(channel.get_id().as_ref()),
+            channel: channel_state,
         };
+
+        let channel_closed_log = event_to_log(event, handlers.addresses.channels);
 
         db.begin_transaction()
             .await?
@@ -805,21 +818,15 @@ mod tests {
 
         let channel_state = encode_channel_state(HoprBalance::zero(), 0, 0, 1, ChannelStatus::Open);
 
-        let data = DynSolValue::Tuple(vec![
-            DynSolValue::Address(AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref())),
-            DynSolValue::Address(AlloyAddress::from_slice(COUNTERPARTY_CHAIN_ADDRESS.as_ref())),
-            DynSolValue::FixedBytes(channel_state.into(), 32),
-        ])
-        .abi_encode_params();
-
-        let encoded_data = data[32..].to_vec();
-
-        let channel_opened_log = SerializableLog {
-            address: handlers.addresses.channels,
-            topics: vec![hopr_bindings::hopr_channels_events::HoprChannelsEvents::ChannelOpened::SIGNATURE_HASH.into()],
-            data: encoded_data,
-            ..test_log()
+        // Create ChannelOpened event using bindings
+        let event = ChannelOpened {
+            channelId: FixedBytes::from_slice(channel_id.as_ref()),
+            source: AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref()),
+            destination: AlloyAddress::from_slice(COUNTERPARTY_CHAIN_ADDRESS.as_ref()),
+            channel: channel_state,
         };
+
+        let channel_opened_log = event_to_log(event, handlers.addresses.channels);
 
         db.begin_transaction()
             .await?
@@ -866,23 +873,18 @@ mod tests {
 
         db.upsert_channel(None, channel, 1, 0, 0).await?;
 
+        let channel_id = generate_channel_id(&SELF_CHAIN_ADDRESS, &COUNTERPARTY_CHAIN_ADDRESS);
         let channel_state = encode_channel_state(HoprBalance::zero(), 0, 0, 1, ChannelStatus::Open);
 
-        let data = DynSolValue::Tuple(vec![
-            DynSolValue::Address(AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref())),
-            DynSolValue::Address(AlloyAddress::from_slice(COUNTERPARTY_CHAIN_ADDRESS.as_ref())),
-            DynSolValue::FixedBytes(channel_state.into(), 32),
-        ])
-        .abi_encode_params();
-
-        let encoded_data = data[32..].to_vec();
-
-        let channel_opened_log = SerializableLog {
-            address: handlers.addresses.channels,
-            topics: vec![hopr_bindings::hopr_channels_events::HoprChannelsEvents::ChannelOpened::SIGNATURE_HASH.into()],
-            data: encoded_data,
-            ..test_log()
+        // Create ChannelOpened event using bindings (reopening is a ChannelOpened event)
+        let event = ChannelOpened {
+            channelId: FixedBytes::from_slice(channel_id.as_ref()),
+            source: AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref()),
+            destination: AlloyAddress::from_slice(COUNTERPARTY_CHAIN_ADDRESS.as_ref()),
+            channel: channel_state,
         };
+
+        let channel_opened_log = event_to_log(event, handlers.addresses.channels);
 
         db.begin_transaction()
             .await?
@@ -929,23 +931,18 @@ mod tests {
 
         db.upsert_channel(None, channel, 1, 0, 0).await?;
 
+        let channel_id = generate_channel_id(&SELF_CHAIN_ADDRESS, &COUNTERPARTY_CHAIN_ADDRESS);
         let channel_state = encode_channel_state(HoprBalance::zero(), 0, 0, 1, ChannelStatus::Open);
 
-        let data = DynSolValue::Tuple(vec![
-            DynSolValue::Address(AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref())),
-            DynSolValue::Address(AlloyAddress::from_slice(COUNTERPARTY_CHAIN_ADDRESS.as_ref())),
-            DynSolValue::FixedBytes(channel_state.into(), 32),
-        ])
-        .abi_encode_params();
-
-        let encoded_data = data[32..].to_vec();
-
-        let channel_opened_log = SerializableLog {
-            address: handlers.addresses.channels,
-            topics: vec![hopr_bindings::hopr_channels_events::HoprChannelsEvents::ChannelOpened::SIGNATURE_HASH.into()],
-            data: encoded_data,
-            ..test_log()
+        // Create ChannelOpened event using bindings
+        let event = ChannelOpened {
+            channelId: FixedBytes::from_slice(channel_id.as_ref()),
+            source: AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref()),
+            destination: AlloyAddress::from_slice(COUNTERPARTY_CHAIN_ADDRESS.as_ref()),
+            channel: channel_state,
         };
+
+        let channel_opened_log = event_to_log(event, handlers.addresses.channels);
 
         db.begin_transaction()
             .await?
@@ -1400,29 +1397,46 @@ mod tests {
         };
         let handlers = init_handlers(clonable_rpc_operations, db.clone());
 
+        // Generate foreign addresses and create accounts before channel operations
+        let foreign_addr1 = Address::from(hopr_crypto_random::random_bytes());
+        let foreign_addr2 = Address::from(hopr_crypto_random::random_bytes());
+        let foreign_key1 =
+            OffchainKeypair::from_secret(&hopr_crypto_random::random_bytes::<32>()).expect("valid keypair");
+        let foreign_key2 =
+            OffchainKeypair::from_secret(&hopr_crypto_random::random_bytes::<32>()).expect("valid keypair");
+
+        db.upsert_account(None, foreign_addr1, *foreign_key1.public(), None, 1, 0, 0)
+            .await?;
+        db.upsert_account(None, foreign_addr2, *foreign_key2.public(), None, 1, 0, 1)
+            .await?;
+
         let channel = ChannelEntry::new(
-            Address::from(hopr_crypto_random::random_bytes()),
-            Address::from(hopr_crypto_random::random_bytes()),
+            foreign_addr1,
+            foreign_addr2,
             primitive_types::U256::from((1u128 << 96) - 1).into(),
             primitive_types::U256::zero(),
             ChannelStatus::Open,
             primitive_types::U256::one(),
         );
 
-        db.upsert_channel(None, channel, 1, 0, 0).await?;
+        db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
 
         let next_ticket_index = primitive_types::U256::from((1u128 << 48) - 1);
+        let channel_state = encode_channel_state(
+            channel.balance,
+            next_ticket_index.as_u32(),
+            0,
+            channel.channel_epoch.as_u32(),
+            channel.status,
+        );
 
-        let ticket_redeemed_log = SerializableLog {
-            address: handlers.addresses.channels,
-            topics: vec![
-                hopr_bindings::hopr_channels::HoprChannels::TicketRedeemed::SIGNATURE_HASH.into(),
-                // TicketRedeemedFilter::signature().into(),
-                H256::from_slice(channel.get_id().as_ref()).into(),
-            ],
-            data: Vec::from(next_ticket_index.to_be_bytes()),
-            ..test_log()
+        // Create TicketRedeemed event using bindings
+        let event = TicketRedeemed {
+            channelId: FixedBytes::from_slice(channel.get_id().as_ref()),
+            channel: channel_state,
         };
+
+        let ticket_redeemed_log = event_to_log(event, handlers.addresses.channels);
 
         db.begin_transaction()
             .await?
