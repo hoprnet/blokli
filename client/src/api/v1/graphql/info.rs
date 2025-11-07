@@ -6,7 +6,7 @@ pub struct QueryChainInfo {
     pub chain_info: ChainInfoResult,
 }
 
-#[derive(cynic::QueryFragment, Debug, Clone)]
+#[derive(cynic::QueryFragment, Debug, Clone, PartialEq)]
 pub struct ChainInfo {
     pub channel_closure_grace_period: Option<Uint64>,
     pub channel_dst: Option<String>,
@@ -20,7 +20,7 @@ pub struct ChainInfo {
     pub contract_addresses: ContractAddressMap,
 }
 
-#[derive(cynic::Scalar, Debug, Clone)]
+#[derive(cynic::Scalar, Debug, Clone, PartialEq, Eq)]
 pub struct ContractAddressMap(pub String);
 
 #[derive(cynic::InlineFragments, Debug)]

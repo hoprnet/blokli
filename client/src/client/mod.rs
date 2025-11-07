@@ -14,7 +14,7 @@ use crate::{
 };
 
 #[cfg(feature = "testing")]
-pub use testing::BlokliTestClient;
+pub use testing::{BlokliState, BlokliTestClient, NopStateMutator};
 
 /// Configuration for the [`BlokliClient`].
 #[derive(Clone, Debug, PartialEq, Eq, smart_default::SmartDefault)]
@@ -79,11 +79,6 @@ impl BlokliClient {
             .header("Accept", "text/event-stream")
             .map_err(ErrorKind::from)?
             .header("Content-Type", "application/json")
-            .map_err(ErrorKind::from)?
-            .header(
-                "User-Agent",
-                &format!("blokli-client/{}-{}", env!("CARGO_PKG_VERSION"), VERSION),
-            )
             .map_err(ErrorKind::from)?
             .method("GET".into())
             .body(serde_json::to_string(&op).map_err(ErrorKind::from)?)
