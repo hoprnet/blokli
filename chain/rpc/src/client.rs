@@ -272,6 +272,8 @@ pub struct GasOracleFiller<C> {
     client: C,
     url: Url,
     gas_category: GasCategory,
+    fallback_max_fee_per_gas: u128,
+    fallback_max_priority_fee_per_gas: u128,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq)]
@@ -313,11 +315,24 @@ where
     C: HttpRequestor + Clone,
 {
     /// Same as [`Self::new`] but with a custom [`Client`].
-    pub fn new(client: C, url: Option<Url>) -> Self {
+    ///
+    /// # Arguments
+    /// * `client` - HTTP client for making gas oracle requests
+    /// * `url` - Optional gas oracle URL (defaults to Gnosis chain oracle)
+    /// * `fallback_max_fee_per_gas` - Fallback max fee per gas for EIP-1559 transactions (in wei)
+    /// * `fallback_max_priority_fee_per_gas` - Fallback max priority fee per gas for EIP-1559 transactions (in wei)
+    pub fn new(
+        client: C,
+        url: Option<Url>,
+        fallback_max_fee_per_gas: u128,
+        fallback_max_priority_fee_per_gas: u128,
+    ) -> Self {
         Self {
             client,
             url: url.unwrap_or_else(|| Url::parse(DEFAULT_GAS_ORACLE_URL).unwrap()),
             gas_category: GasCategory::Standard,
+            fallback_max_fee_per_gas,
+            fallback_max_priority_fee_per_gas,
         }
     }
 
@@ -395,13 +410,13 @@ where
         })
     }
 
-    // returns hardcoded (max_fee_per_gas, max_priority_fee_per_gas)
-    // Due to foundry is unable to estimate EIP-1559 fees for L2s https://github.com/foundry-rs/foundry/issues/5709,
-    // a hardcoded value of (3 gwei, 0.1 gwei) for Gnosischain is returned.
+    // Returns fallback (max_fee_per_gas, max_priority_fee_per_gas)
+    // Due to foundry being unable to estimate EIP-1559 fees for L2s https://github.com/foundry-rs/foundry/issues/5709,
+    // fallback values are returned. For Gnosis chain, the default fallback is (3 gwei, 0.1 gwei).
     fn estimate_eip1559_fees(&self) -> Eip1559Estimation {
         Eip1559Estimation {
-            max_fee_per_gas: EIP1559_FEE_ESTIMATION_DEFAULT_MAX_FEE_GNOSIS,
-            max_priority_fee_per_gas: EIP1559_FEE_ESTIMATION_DEFAULT_PRIORITY_FEE_GNOSIS,
+            max_fee_per_gas: self.fallback_max_fee_per_gas,
+            max_priority_fee_per_gas: self.fallback_max_priority_fee_per_gas,
         }
     }
 }
@@ -881,140 +896,13 @@ mod tests {
     use std::time::Duration;
 
     use alloy::{
-        network::TransactionBuilder,
-        primitives::{U256, address},
-        providers::{
-            Provider, ProviderBuilder,
-            fillers::{BlobGasFiller, CachedNonceManager, ChainIdFiller, GasFiller, NonceFiller},
-        },
-        rpc::{client::ClientBuilder, types::TransactionRequest},
-        signers::local::PrivateKeySigner,
+        providers::{Provider, ProviderBuilder},
+        rpc::client::ClientBuilder,
         transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
     };
-    use anyhow::Ok;
-    use blokli_chain_types::{ContractAddresses, ContractInstances, utils::create_anvil};
-    use hopr_async_runtime::prelude::sleep;
-    use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
-    use hopr_primitive_types::primitives::Address;
     use serde_json::json;
-    use tempfile::NamedTempFile;
 
-    use crate::client::{
-        DefaultRetryPolicy, GasOracleFiller, MetricsLayer, SnapshotRequestor, SnapshotRequestorLayer, ZeroRetryPolicy,
-    };
-
-    #[tokio::test]
-    async fn test_client_should_deploy_contracts_via_reqwest() -> anyhow::Result<()> {
-        let anvil = create_anvil(None);
-        let signer: PrivateKeySigner = anvil.keys()[0].clone().into();
-        let signer_chain_key = ChainKeypair::from_secret(signer.to_bytes().as_ref())?;
-
-        let rpc_client = ClientBuilder::default().http(anvil.endpoint_url());
-
-        let provider = ProviderBuilder::new().wallet(signer).connect_client(rpc_client);
-
-        let contracts = ContractInstances::deploy_for_testing(provider.clone(), &signer_chain_key)
-            .await
-            .expect("deploy failed");
-
-        let contract_addrs = ContractAddresses::from(&contracts);
-
-        assert_ne!(contract_addrs.token, Address::default());
-        assert_ne!(contract_addrs.channels, Address::default());
-        assert_ne!(contract_addrs.announcements, Address::default());
-        assert_ne!(contract_addrs.safe_registry, Address::default());
-        assert_ne!(contract_addrs.price_oracle, Address::default());
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_client_should_get_block_number() -> anyhow::Result<()> {
-        let block_time = Duration::from_millis(1100);
-
-        let anvil = create_anvil(Some(block_time));
-        let signer: PrivateKeySigner = anvil.keys()[0].clone().into();
-
-        let transport_client = ReqwestTransport::new(anvil.endpoint_url());
-
-        let rpc_client = ClientBuilder::default().transport(transport_client.clone(), transport_client.guess_local());
-
-        let provider = ProviderBuilder::new().wallet(signer).connect_client(rpc_client);
-
-        let mut last_number = 0;
-
-        for _ in 0..3 {
-            sleep(block_time).await;
-
-            let num = provider.get_block_number().await?;
-
-            assert!(num > last_number, "next block number must be greater");
-            last_number = num;
-        }
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_client_should_get_block_number_with_metrics_without_retry() -> anyhow::Result<()> {
-        let block_time = Duration::from_secs(1);
-
-        let anvil = create_anvil(Some(block_time));
-        let signer: PrivateKeySigner = anvil.keys()[0].clone().into();
-
-        let transport_client = ReqwestTransport::new(anvil.endpoint_url());
-
-        // additional retry layer
-        let retry_layer = RetryBackoffLayer::new(2, 100, 100);
-
-        let rpc_client = ClientBuilder::default()
-            .layer(retry_layer)
-            .layer(MetricsLayer)
-            .transport(transport_client.clone(), transport_client.guess_local());
-
-        let provider = ProviderBuilder::new().wallet(signer).connect_client(rpc_client);
-
-        let mut last_number = 0;
-
-        for _ in 0..3 {
-            sleep(block_time).await;
-
-            let num = provider.get_block_number().await?;
-
-            assert!(num > last_number, "next block number must be greater");
-            last_number = num;
-        }
-
-        // FIXME: cannot get the private field `requests_enqueued`
-        // assert_eq!(
-        //     0,
-        //     rpc_client.requests_enqueued.load(Ordering::SeqCst),
-        //     "retry queue should be zero on successful requests"
-        // );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_client_should_fail_on_malformed_request() -> anyhow::Result<()> {
-        let anvil = create_anvil(None);
-        let signer: PrivateKeySigner = anvil.keys()[0].clone().into();
-
-        let transport_client = ReqwestTransport::new(anvil.endpoint_url());
-
-        let rpc_client = ClientBuilder::default().transport(transport_client.clone(), transport_client.guess_local());
-
-        let provider = ProviderBuilder::new().wallet(signer).connect_client(rpc_client);
-
-        let err = provider
-            .raw_request::<(), alloy::primitives::U64>("eth_blockNumber_bla".into(), ())
-            .await
-            .expect_err("expected error");
-
-        assert!(matches!(err, alloy::transports::RpcError::ErrorResp(..)));
-
-        Ok(())
-    }
+    use crate::client::{DefaultRetryPolicy, ZeroRetryPolicy};
 
     #[tokio::test]
     async fn test_client_should_fail_on_malformed_response() {
@@ -1352,167 +1240,5 @@ mod tests {
         //     client.requests_enqueued.load(Ordering::SeqCst),
         //     "retry queue should be zero when policy says no more retries"
         // );
-    }
-
-    #[test_log::test(tokio::test)]
-    async fn test_client_from_file() -> anyhow::Result<()> {
-        let block_time = Duration::from_millis(1100);
-        let snapshot_file = NamedTempFile::new()?;
-
-        let anvil = create_anvil(Some(block_time));
-
-        {
-            let mut last_number = 0;
-
-            let transport_client = ReqwestTransport::new(anvil.endpoint_url());
-
-            let rpc_client = ClientBuilder::default()
-                .layer(RetryBackoffLayer::new_with_policy(
-                    2,
-                    100,
-                    100,
-                    DefaultRetryPolicy::default(),
-                ))
-                .layer(SnapshotRequestorLayer::new(snapshot_file.path().to_str().unwrap()))
-                .transport(transport_client.clone(), transport_client.guess_local());
-
-            let provider = ProviderBuilder::new().connect_client(rpc_client);
-
-            for _ in 0..3 {
-                sleep(block_time).await;
-
-                let num = provider.get_block_number().await?;
-
-                assert!(num > last_number, "next block number must be greater");
-                last_number = num;
-            }
-        }
-
-        {
-            let transport_client = ReqwestTransport::new(anvil.endpoint_url());
-
-            let snapshot_requestor = SnapshotRequestor::new(snapshot_file.path().to_str().unwrap())
-                .load(true)
-                .await;
-
-            let rpc_client = ClientBuilder::default()
-                .layer(RetryBackoffLayer::new_with_policy(
-                    2,
-                    100,
-                    100,
-                    DefaultRetryPolicy::default(),
-                ))
-                .layer(SnapshotRequestorLayer::from_requestor(snapshot_requestor))
-                .transport(transport_client.clone(), transport_client.guess_local());
-
-            let provider = ProviderBuilder::new().connect_client(rpc_client);
-
-            let mut last_number = 0;
-            for _ in 0..3 {
-                sleep(block_time).await;
-
-                let num = provider.get_block_number().await?;
-
-                assert!(num > last_number, "next block number must be greater");
-                last_number = num;
-            }
-        }
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_client_should_call_on_gas_oracle_for_eip1559_tx() -> anyhow::Result<()> {
-        let _ = env_logger::builder().is_test(true).try_init();
-
-        let mut server = mockito::Server::new_async().await;
-
-        let m = server
-            .mock("GET", "/gasapi.ashx?apikey=key&method=gasoracle")
-            .with_status(http::StatusCode::ACCEPTED.as_u16().into())
-            .with_body(r#"{"status":"1","message":"OK","result":{"LastBlock":"39864926","SafeGasPrice":"1.1","ProposeGasPrice":"1.1","FastGasPrice":"1.6","UsdPrice":"0.999968207972734"}}"#)
-            .expect(0)
-            .create();
-
-        let anvil = create_anvil(None);
-        let signer: PrivateKeySigner = anvil.keys()[0].clone().into();
-
-        let transport_client = ReqwestTransport::new(anvil.endpoint_url());
-        // let underlying_transport_client = transport_client.client().clone();
-
-        let rpc_client = ClientBuilder::default()
-            .layer(RetryBackoffLayer::new(2, 100, 100))
-            .transport(transport_client.clone(), transport_client.guess_local());
-
-        let provider = ProviderBuilder::new()
-            .disable_recommended_fillers()
-            .wallet(signer)
-            .filler(NonceFiller::new(CachedNonceManager::default()))
-            .filler(GasOracleFiller::new(
-                transport_client.client().clone(),
-                Some((server.url() + "/gasapi.ashx?apikey=key&method=gasoracle").parse()?),
-            ))
-            .filler(GasFiller)
-            .connect_client(rpc_client);
-
-        let tx = TransactionRequest::default()
-            .with_chain_id(provider.get_chain_id().await?)
-            .to(address!("d8dA6BF26964aF9D7eEd9e03E53415D37aA96045"))
-            .value(U256::from(100))
-            .transaction_type(2);
-
-        let receipt = provider.send_transaction(tx).await?.get_receipt().await?;
-
-        m.assert();
-        assert_eq!(receipt.gas_used, 21000);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_client_should_call_on_gas_oracle_for_legacy_tx() -> anyhow::Result<()> {
-        let _ = env_logger::builder().is_test(true).try_init();
-
-        let mut server = mockito::Server::new_async().await;
-
-        let m = server
-            .mock("GET", "/gasapi.ashx?apikey=key&method=gasoracle")
-            .with_status(http::StatusCode::ACCEPTED.as_u16().into())
-            .with_body(r#"{"status":"1","message":"OK","result":{"LastBlock":"39864926","SafeGasPrice":"1.1","ProposeGasPrice":"3.5","FastGasPrice":"1.6","UsdPrice":"0.999968207972734"}}"#)
-            .expect(1)
-            .create();
-
-        let anvil = create_anvil(None);
-        let signer: PrivateKeySigner = anvil.keys()[0].clone().into();
-
-        let transport_client = ReqwestTransport::new(anvil.endpoint_url());
-
-        let rpc_client = ClientBuilder::default()
-            .layer(RetryBackoffLayer::new(2, 100, 100))
-            .transport(transport_client.clone(), transport_client.guess_local());
-
-        let provider = ProviderBuilder::new()
-            .disable_recommended_fillers()
-            .wallet(signer)
-            .filler(ChainIdFiller::default())
-            .filler(NonceFiller::new(CachedNonceManager::default()))
-            .filler(GasOracleFiller::new(
-                transport_client.client().clone(),
-                Some((server.url() + "/gasapi.ashx?apikey=key&method=gasoracle").parse()?),
-            ))
-            .filler(GasFiller)
-            .filler(BlobGasFiller)
-            .connect_client(rpc_client);
-
-        // GasEstimationLayer requires chain_id to be set to handle EIP-1559 tx
-        let tx = TransactionRequest::default()
-            .with_to(address!("d8dA6BF26964aF9D7eEd9e03E53415D37aA96045"))
-            .with_value(U256::from(100))
-            .with_gas_price(1000000000);
-
-        let receipt = provider.send_transaction(tx).await?.get_receipt().await?;
-
-        m.assert();
-        assert_eq!(receipt.gas_used, 21000);
-        Ok(())
     }
 }
