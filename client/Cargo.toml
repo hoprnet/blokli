@@ -38,6 +38,9 @@ cynic-codegen = { version = "3" }
 
 [dev-dependencies]
 anyhow   = { workspace = true }
-httpmock = { version = "0.8.2", features = ["record"] }
-insta    = "1"
+insta    = { workspace = true, features = ["json", "yaml"] }
+mockito = { workspace = true }
+parking_lot = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tokio    = { workspace = true }
