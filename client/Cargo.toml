@@ -5,7 +5,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-client"
 repository  = "https://github.com/hoprnet/blokli"
-version     = "0.4.3"
+version     = "0.5.0"
 
 [dependencies]
 anyhow = { workspace = true }
@@ -26,6 +26,7 @@ reqwest = { workspace = true, features = [
   "json",
   "zstd",
 ] }
+serde = { workspace = true, optional = true }
 serde_json = { workspace = true }
 smart-default = { workspace = true }
 thiserror = { workspace = true }
@@ -33,11 +34,13 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 [features]
+serde = ["dep:serde"]
 testing = [
   "dep:async-broadcast",
   "dep:chrono",
   "dep:parking_lot",
-  "dep:rand"
+  "dep:rand",
+  "serde",
 ]
 
 

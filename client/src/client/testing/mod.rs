@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::{collections::HashMap, time::Duration};
 
 /// Represents a state for [`BlokliTestClient`].
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BlokliTestState {
     pub accounts: Vec<Account>,
     pub native_balances: HashMap<String, NativeBalance>,
@@ -91,6 +91,32 @@ type GraphEvents = (
     async_broadcast::InactiveReceiver<(Account, Channel, Account)>,
 );
 
+/// Represents a snapshot of the [`BlokliTestState`] inside a [`BlokliTestClient`].
+#[derive(Clone)]
+pub struct BlokliTestStateSnapshot {
+    state: Arc<parking_lot::RwLock<BlokliTestState>>,
+    snapshot: BlokliTestState,
+}
+
+impl BlokliTestStateSnapshot {
+    /// Refreshes the snapshot by fetching it from the [`BlokliTestClient`].
+    pub fn refresh(mut self) -> Self {
+        {
+            let state = self.state.read();
+            self.snapshot = state.clone();
+        }
+        self
+    }
+}
+
+impl std::ops::Deref for BlokliTestStateSnapshot {
+    type Target = BlokliTestState;
+
+    fn deref(&self) -> &Self::Target {
+        &self.snapshot
+    }
+}
+
 /// Blokli client for testing purposes.
 ///
 /// This is useful to simulate Blokli server in unit tests.
@@ -125,6 +151,17 @@ impl BlokliTestClient {
             mutator: Box::new(mutator),
             accounts_channel: (accounts_tx, accounts_rx.deactivate()),
             channels_channel: (channels_tx, channels_rx.deactivate()),
+        }
+    }
+
+    /// Returns the current snapshot of the internal state.
+    ///
+    /// The snapshot can be repeatedly [refreshed](BlokliTestStateSnapshot::refresh) to get the latest state.
+    pub fn snapshot(&self) -> BlokliTestStateSnapshot {
+        let state = self.state.read();
+        BlokliTestStateSnapshot {
+            state: self.state.clone(),
+            snapshot: state.clone(),
         }
     }
 }

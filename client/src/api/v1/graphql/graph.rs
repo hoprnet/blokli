@@ -7,6 +7,7 @@ pub struct SubscribeGraph {
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct OpenedChannelsGraphEntry {
     pub channel: Channel,
     pub destination: Account,

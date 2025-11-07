@@ -75,6 +75,7 @@ pub struct ChannelsList {
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Channel {
     pub balance: TokenValueString,
     pub closure_time: Option<DateTime>,
