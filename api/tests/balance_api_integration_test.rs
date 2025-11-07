@@ -208,265 +208,243 @@ async fn query_native_balance(
     Ok(data["nativeBalance"]["balance"].as_str().map(|s| s.to_string()))
 }
 
+/// Comprehensive balance API integration test covering all scenarios.
+/// This consolidated test runs setup once for optimal performance.
 #[test_log::test(tokio::test)]
-async fn test_hopr_balance_query_after_mint() -> anyhow::Result<()> {
+async fn test_balance_api_integration() -> anyhow::Result<()> {
     let ctx = setup_test_environment().await?;
 
-    // Mint 1000 HOPR tokens in wei (1000 * 10^18)
-    let token_amount = U256::from(1000) * U256::from(10).pow(U256::from(18));
-    blokli_chain_types::utils::mint_tokens(ctx.contract_instances.token.clone(), token_amount)
+    // ========================================
+    // Phase 1: Input Validation Tests
+    // ========================================
+
+    // Test Case 1: Invalid address formats should return errors
+    {
+        let invalid_addresses = vec![
+            "not_an_address",
+            "0xinvalid",
+            "0x123",                                      // Too short
+            "0xZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ", // Invalid hex
+        ];
+
+        for invalid_addr in invalid_addresses {
+            let query = format!(
+                r#"query {{ hoprBalance(address: "{}") {{ address balance }} }}"#,
+                invalid_addr
+            );
+
+            let response = execute_graphql_query(&ctx.schema, &query).await;
+
+            assert!(
+                !response.errors.is_empty(),
+                "Invalid address '{}' should return error",
+                invalid_addr
+            );
+        }
+    }
+
+    // Test Case 2: Address without 0x prefix should be valid
+    {
+        let test_addr = ctx.test_accounts[0].public().to_address();
+        let addr_without_prefix = test_addr.to_hex().trim_start_matches("0x").to_string();
+
+        let balance = query_hopr_balance(&ctx.schema, &addr_without_prefix).await?;
+
+        assert!(
+            balance.is_some(),
+            "Balance should be returned for address without 0x prefix"
+        );
+        let balance_str = balance.unwrap();
+        let _parsed_balance =
+            HoprBalance::from_str(&balance_str).expect("Balance string should be valid HoprBalance format");
+    }
+
+    // ========================================
+    // Phase 2: Zero Balance Query Tests
+    // ========================================
+
+    // Test Case 3: Query HOPR balance for unfunded account
+    {
+        let test_addr = ctx.test_accounts[2].public().to_address();
+        let balance = query_hopr_balance(&ctx.schema, &test_addr.to_hex()).await?;
+
+        assert!(balance.is_some(), "Balance should be returned");
+        let balance_str = balance.unwrap();
+        let parsed_balance =
+            HoprBalance::from_str(&balance_str).expect("Balance string should be valid HoprBalance format");
+        let expected_balance = HoprBalance::from_str("0 wxHOPR").unwrap();
+        assert_eq!(parsed_balance, expected_balance, "Balance should be zero");
+    }
+
+    // Test Case 4: Query native balance for zero address
+    {
+        let zero_address = "0x0000000000000000000000000000000000000001";
+        let balance = query_native_balance(&ctx.schema, zero_address).await?;
+
+        assert!(balance.is_some(), "Balance should be returned");
+        let balance_str = balance.unwrap();
+        let parsed_balance =
+            XDaiBalance::from_str(&balance_str).expect("Balance string should be valid XDaiBalance format");
+        let expected_balance = XDaiBalance::from_str("0 xDai").unwrap();
+        assert_eq!(parsed_balance, expected_balance, "Balance should be zero");
+    }
+
+    // ========================================
+    // Phase 3: Funded Balance Operation Tests
+    // ========================================
+
+    // Test Case 5: Mint and fund HOPR tokens, then query balance
+    {
+        // Mint 1000 HOPR tokens in wei (1000 * 10^18)
+        let token_amount = U256::from(1000) * U256::from(10).pow(U256::from(18));
+        blokli_chain_types::utils::mint_tokens(ctx.contract_instances.token.clone(), token_amount)
+            .await
+            .expect("Minting should return ok");
+
+        // Fund 1000 HOPR tokens to test account (in wei)
+        let test_addr = ctx.test_accounts[0].public().to_address();
+        blokli_chain_types::utils::fund_node(
+            test_addr,
+            U256::ZERO,
+            token_amount,
+            ctx.contract_instances.token.clone(),
+        )
         .await
-        .expect("Minting should return ok");
+        .expect("Funding should return ok");
 
-    // Fund 1000 HOPR tokens to test account (in wei)
-    let test_addr = ctx.test_accounts[0].public().to_address();
-    blokli_chain_types::utils::fund_node(
-        test_addr,
-        U256::ZERO,
-        token_amount,
-        ctx.contract_instances.token.clone(),
-    )
-    .await
-    .expect("Funding should return ok");
+        // Query balance via GraphQL
+        let balance = query_hopr_balance(&ctx.schema, &test_addr.to_hex()).await?;
 
-    // Query balance via GraphQL
-    let balance = query_hopr_balance(&ctx.schema, &test_addr.to_hex()).await?;
+        // Verify balance by parsing into HoprBalance type
+        assert!(balance.is_some(), "Balance should be returned");
+        let balance_str = balance.unwrap();
+        tracing::info!("HOPR balance: {balance_str}");
 
-    // Verify balance by parsing into HoprBalance type (idiomatic validation)
-    assert!(balance.is_some(), "Balance should be returned");
-    let balance_str = balance.unwrap();
-    tracing::info!("balance: {balance_str}");
+        let parsed_balance =
+            HoprBalance::from_str(&balance_str).expect("Balance string should be valid HoprBalance format");
+        let expected_balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
+        assert_eq!(parsed_balance, expected_balance, "Balance mismatch");
+    }
 
-    let parsed_balance =
-        HoprBalance::from_str(&balance_str).expect("Balance string should be valid HoprBalance format");
-    let expected_balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    assert_eq!(parsed_balance, expected_balance, "Balance mismatch");
+    // Test Case 6: Fund native tokens and query balance
+    {
+        // Fund 1000 xDai to test account (in wei: 1000 * 10^18)
+        let test_addr = ctx.test_accounts[0].public().to_address();
+        let native_amount = U256::from(1000) * U256::from(10).pow(U256::from(18));
+        blokli_chain_types::utils::fund_node(
+            test_addr,
+            native_amount,
+            U256::ZERO,
+            ctx.contract_instances.token.clone(),
+        )
+        .await
+        .expect("Funding should return ok");
 
-    Ok(())
-}
+        let balance = query_native_balance(&ctx.schema, &test_addr.to_hex()).await?;
 
-#[tokio::test]
-async fn test_hopr_balance_query_zero_balance() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+        // Verify balance exists and is non-zero
+        assert!(balance.is_some(), "Balance should be returned");
+        let balance_str = balance.unwrap();
+        tracing::info!("Native balance: {balance_str}");
+        let parsed_balance =
+            XDaiBalance::from_str(&balance_str).expect("Balance string should be valid XDaiBalance format");
 
-    // Query balance of account that has never received tokens
-    let test_addr = ctx.test_accounts[2].public().to_address();
-    let balance = query_hopr_balance(&ctx.schema, &test_addr.to_hex()).await?;
+        // Account should have at least 1000 xDai (Anvil pre-funds accounts with ~10000 ETH)
+        let minimum_expected = XDaiBalance::from_str("1000 xDai").unwrap();
+        assert!(
+            parsed_balance >= minimum_expected,
+            "Balance should be at least 1000 xDai, got: {}",
+            balance_str
+        );
+    }
 
-    // Verify zero balance by parsing into HoprBalance type
-    assert!(balance.is_some(), "Balance should be returned");
-    let balance_str = balance.unwrap();
-    let parsed_balance =
-        HoprBalance::from_str(&balance_str).expect("Balance string should be valid HoprBalance format");
-    let expected_balance = HoprBalance::from_str("0 wxHOPR").unwrap();
-    assert_eq!(parsed_balance, expected_balance, "Balance should be zero");
+    // ========================================
+    // Phase 4: Multi-Query Scenario Tests
+    // ========================================
 
-    Ok(())
-}
+    // Test Case 7: Query both balance types in single GraphQL request
+    {
+        let test_addr = ctx.test_accounts[0].public().to_address();
+        let addr_str = test_addr.to_hex();
 
-#[test_log::test(tokio::test)]
-async fn test_native_balance_query_funded_account() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
-
-    // Fund 1000 xDai to test account (in wei: 1000 * 10^18)
-    let test_addr = ctx.test_accounts[0].public().to_address();
-    let native_amount = U256::from(1000) * U256::from(10).pow(U256::from(18));
-    blokli_chain_types::utils::fund_node(
-        test_addr,
-        native_amount,
-        U256::ZERO,
-        ctx.contract_instances.token.clone(),
-    )
-    .await
-    .expect("Funding should return ok");
-
-    let balance = query_native_balance(&ctx.schema, &test_addr.to_hex()).await?;
-
-    // Verify balance exists and is non-zero by parsing into XDaiBalance type
-    assert!(balance.is_some(), "Balance should be returned");
-    let balance_str = balance.unwrap();
-    tracing::info!("BALANCE: {balance_str}");
-    let parsed_balance =
-        XDaiBalance::from_str(&balance_str).expect("Balance string should be valid XDaiBalance format");
-
-    // Account should have at least 1000 xDai (Anvil pre-funds accounts with ~10000 ETH, so actual balance will be higher)
-    let minimum_expected = XDaiBalance::from_str("1000 xDai").unwrap();
-    assert!(
-        parsed_balance >= minimum_expected,
-        "Balance should be at least 1000 xDai, got: {}",
-        balance_str
-    );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_native_balance_query_zero_balance() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
-
-    // Query balance of an address that doesn't exist in Anvil
-    let zero_address = "0x0000000000000000000000000000000000000001";
-    let balance = query_native_balance(&ctx.schema, zero_address).await?;
-
-    // Verify zero balance by parsing into XDaiBalance type
-    assert!(balance.is_some(), "Balance should be returned");
-    let balance_str = balance.unwrap();
-    let parsed_balance =
-        XDaiBalance::from_str(&balance_str).expect("Balance string should be valid XDaiBalance format");
-    let expected_balance = XDaiBalance::from_str("0 xDai").unwrap();
-    assert_eq!(parsed_balance, expected_balance, "Balance should be zero");
-
-    Ok(())
-}
-#[tokio::test]
-async fn test_invalid_address_format_returns_error() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
-
-    // Try to query with invalid address format
-    let invalid_addresses = vec![
-        "not_an_address",
-        "0xinvalid",
-        "0x123",                                      // Too short
-        "0xZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ", // Invalid hex
-    ];
-
-    for invalid_addr in invalid_addresses {
         let query = format!(
-            r#"query {{ hoprBalance(address: "{}") {{ address balance }} }}"#,
-            invalid_addr
+            r#"query {{
+                hoprBalance(address: "{}") {{ address balance }}
+                nativeBalance(address: "{}") {{ address balance }}
+            }}"#,
+            addr_str, addr_str
         );
 
         let response = execute_graphql_query(&ctx.schema, &query).await;
 
-        // Should return error
+        assert!(response.errors.is_empty(), "Query should succeed without errors");
+
+        let data = response.data.into_json()?;
+
         assert!(
-            !response.errors.is_empty(),
-            "Invalid address '{}' should return error",
-            invalid_addr
+            data["hoprBalance"]["balance"].is_string(),
+            "HOPR balance should be returned"
         );
+        let hopr_balance_str = data["hoprBalance"]["balance"].as_str().unwrap();
+        let _hopr_parsed =
+            HoprBalance::from_str(hopr_balance_str).expect("HOPR balance string should be valid HoprBalance format");
+
+        assert!(
+            data["nativeBalance"]["balance"].is_string(),
+            "Native balance should be returned"
+        );
+        let native_balance_str = data["nativeBalance"]["balance"].as_str().unwrap();
+        let _native_parsed = XDaiBalance::from_str(native_balance_str)
+            .expect("Native balance string should be valid XDaiBalance format");
     }
 
-    Ok(())
-}
+    // ========================================
+    // Phase 5: Concurrency & Performance Tests
+    // ========================================
 
-#[tokio::test]
-async fn test_address_without_0x_prefix_is_valid() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    // Test Case 8: Concurrent balance queries
+    {
+        let mut handles = vec![];
+        for account in &ctx.test_accounts {
+            let schema = ctx.schema.clone();
+            let address = account.public().to_address().to_hex();
 
-    let test_addr = ctx.test_accounts[0].public().to_address();
-    // Remove 0x prefix - this should still be valid according to validate_eth_address
-    let addr_without_prefix = test_addr.to_hex().trim_start_matches("0x").to_string();
+            handles.push(tokio::spawn(async move { query_hopr_balance(&schema, &address).await }));
+        }
 
-    let balance = query_hopr_balance(&ctx.schema, &addr_without_prefix).await?;
+        let results: Vec<_> = futures::future::join_all(handles).await;
 
-    // Should succeed and return a valid balance (parsing confirms format is correct)
-    assert!(
-        balance.is_some(),
-        "Balance should be returned for address without 0x prefix"
-    );
-    let balance_str = balance.unwrap();
-    let _parsed_balance =
-        HoprBalance::from_str(&balance_str).expect("Balance string should be valid HoprBalance format");
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_concurrent_balance_queries() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
-
-    // Execute concurrent balance queries (no minting needed - just testing concurrency)
-    let mut handles = vec![];
-    for account in &ctx.test_accounts {
-        let schema = ctx.schema.clone();
-        let address = account.public().to_address().to_hex();
-
-        handles.push(tokio::spawn(async move { query_hopr_balance(&schema, &address).await }));
+        for result in results {
+            assert!(result.is_ok(), "Concurrent query task should not panic");
+            let balance = result.unwrap().expect("Concurrent query should succeed");
+            if let Some(balance_str) = balance {
+                let _parsed =
+                    HoprBalance::from_str(&balance_str).expect("Balance string should be valid HoprBalance format");
+            }
+        }
     }
 
-    // Wait for all queries to complete
-    let results: Vec<_> = futures::future::join_all(handles).await;
+    // Test Case 9: Query performance measurement
+    {
+        let test_addr = ctx.test_accounts[0].public().to_address().to_hex();
 
-    // All queries should succeed and return valid balance formats
-    for result in results {
-        assert!(result.is_ok(), "Concurrent query task should not panic");
-        let balance = result.unwrap().expect("Concurrent query should succeed");
+        let start = std::time::Instant::now();
+        let balance = query_hopr_balance(&ctx.schema, &test_addr).await?;
+        let duration = start.elapsed();
+
         if let Some(balance_str) = balance {
             let _parsed =
                 HoprBalance::from_str(&balance_str).expect("Balance string should be valid HoprBalance format");
         }
+
+        assert!(
+            duration < Duration::from_millis(10),
+            "Balance query took too long: {:?}",
+            duration
+        );
+
+        println!("Balance query completed in: {:?}", duration);
     }
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_both_balance_types_in_single_query() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
-
-    let test_addr = ctx.test_accounts[0].public().to_address();
-    let addr_str = test_addr.to_hex();
-
-    // Query both balance types in a single GraphQL request
-    let query = format!(
-        r#"query {{
-            hoprBalance(address: "{}") {{ address balance }}
-            nativeBalance(address: "{}") {{ address balance }}
-        }}"#,
-        addr_str, addr_str
-    );
-
-    let response = execute_graphql_query(&ctx.schema, &query).await;
-
-    // Verify no errors
-    assert!(response.errors.is_empty(), "Query should succeed without errors");
-
-    let data = response.data.into_json()?;
-
-    // Verify both balances are returned with valid formats
-    assert!(
-        data["hoprBalance"]["balance"].is_string(),
-        "HOPR balance should be returned"
-    );
-    let hopr_balance_str = data["hoprBalance"]["balance"].as_str().unwrap();
-    let _hopr_parsed =
-        HoprBalance::from_str(hopr_balance_str).expect("HOPR balance string should be valid HoprBalance format");
-
-    assert!(
-        data["nativeBalance"]["balance"].is_string(),
-        "Native balance should be returned"
-    );
-    let native_balance_str = data["nativeBalance"]["balance"].as_str().unwrap();
-    let _native_parsed =
-        XDaiBalance::from_str(native_balance_str).expect("Native balance string should be valid XDaiBalance format");
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_balance_query_performance() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
-
-    let test_addr = ctx.test_accounts[0].public().to_address().to_hex();
-
-    // Measure query execution time
-    let start = std::time::Instant::now();
-    let balance = query_hopr_balance(&ctx.schema, &test_addr).await?;
-    let duration = start.elapsed();
-
-    // Validate balance format
-    if let Some(balance_str) = balance {
-        let _parsed = HoprBalance::from_str(&balance_str).expect("Balance string should be valid HoprBalance format");
-    }
-
-    // Balance query should complete reasonably quickly (< 10ms for Anvil RPC)
-    assert!(
-        duration < Duration::from_millis(10),
-        "Balance query took too long: {:?}",
-        duration
-    );
-
-    println!("Balance query completed in: {:?}", duration);
 
     Ok(())
 }
