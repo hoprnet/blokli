@@ -56,6 +56,7 @@ pub struct MutateSendTransaction {
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Transaction {
     pub id: cynic::Id,
     pub status: TransactionStatus,

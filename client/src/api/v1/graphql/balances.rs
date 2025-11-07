@@ -41,6 +41,7 @@ impl From<HoprBalanceResult> for Result<HoprBalance, BlokliClientError> {
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct HoprBalance {
     pub __typename: String,
     pub balance: TokenValueString,
@@ -67,12 +68,14 @@ impl From<NativeBalanceResult> for Result<NativeBalance, BlokliClientError> {
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct NativeBalance {
     pub __typename: String,
     pub balance: TokenValueString,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct SafeHoprAllowance {
     pub __typename: String,
     pub allowance: TokenValueString,

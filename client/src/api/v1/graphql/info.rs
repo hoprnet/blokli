@@ -7,6 +7,7 @@ pub struct QueryChainInfo {
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ChainInfo {
     pub channel_closure_grace_period: Option<Uint64>,
     pub channel_dst: Option<String>,
