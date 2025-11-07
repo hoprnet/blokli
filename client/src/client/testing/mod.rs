@@ -17,7 +17,7 @@ pub struct BlokliTestClient {
     pub chain_info: ChainInfo,
     pub version: String,
     pub health: String,
-    pub tx_client: Option<MockBlokliTransactionClientImpl>,
+    pub tx_client: Option<Box<dyn BlokliTransactionClient + Send + Sync>>,
 }
 
 impl Clone for BlokliTestClient {
@@ -47,17 +47,6 @@ impl std::fmt::Debug for BlokliTestClient {
             .field("chain_info", &self.chain_info)
             .field("version", &self.version)
             .finish_non_exhaustive()
-    }
-}
-
-mockall::mock! {
-    pub BlokliTransactionClientImpl {}
-    #[async_trait::async_trait]
-    impl BlokliTransactionClient for BlokliTransactionClientImpl {
-        async fn submit_transaction(&self, signed_tx: &[u8]) -> Result<TxReceipt>;
-        async fn submit_and_track_transaction(&self, signed_tx: &[u8]) -> Result<TxId>;
-        async fn submit_and_confirm_transaction(&self, signed_tx: &[u8], num_confirmations: usize) -> Result<TxReceipt>;
-        async fn track_transaction(&self, tx_id: TxId, client_timeout: Duration) -> Result<Transaction>;
     }
 }
 

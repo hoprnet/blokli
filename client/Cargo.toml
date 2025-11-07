@@ -5,7 +5,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-client"
 repository  = "https://github.com/hoprnet/blokli"
-version     = "0.4.2"
+version     = "0.4.3"
 
 [dependencies]
 anyhow = { workspace = true }
@@ -15,7 +15,6 @@ eventsource-client = { workspace = true }
 futures = { workspace = true }
 futures-time = { workspace = true }
 hex = { workspace = true }
-mockall = { workspace = true, optional = true }
 reqwest = { workspace = true, features = [
   "brotli",
   "deflate",
@@ -30,7 +29,7 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 [features]
-testing = ["dep:mockall"]
+testing = []
 
 
 [build-dependencies]
@@ -38,6 +37,9 @@ cynic-codegen = { version = "3" }
 
 [dev-dependencies]
 anyhow   = { workspace = true }
-httpmock = { version = "0.8.2", features = ["record"] }
-insta    = "1"
+insta    = { workspace = true, features = ["json", "yaml"] }
+mockito = { workspace = true }
+parking_lot = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 tokio    = { workspace = true }
