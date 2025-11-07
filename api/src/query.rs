@@ -10,7 +10,6 @@ use blokli_api_types::{
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
 use blokli_db_entity::conversions::balances::string_to_address;
-use hopr_primitive_types::traits::IntoEndian;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::{mutation::TransactionResult, validation::validate_eth_address};
@@ -300,9 +299,7 @@ impl QueryRoot {
         match rpc.get_hopr_balance(parsed_address).await {
             Ok(balance) => Ok(Some(HoprBalance {
                 address,
-                balance: TokenValueString(blokli_db_entity::conversions::balances::hopr_balance_to_string(
-                    &balance.to_be_bytes(),
-                )),
+                balance: TokenValueString(balance.to_string()),
             })),
             Err(e) => Err(async_graphql::Error::new(format!(
                 "Failed to query HOPR balance from RPC: {}",
@@ -336,9 +333,7 @@ impl QueryRoot {
         match rpc.get_xdai_balance(parsed_address).await {
             Ok(balance) => Ok(Some(NativeBalance {
                 address,
-                balance: TokenValueString(blokli_db_entity::conversions::balances::native_balance_to_string(
-                    &balance.to_be_bytes(),
-                )),
+                balance: TokenValueString(balance.to_string()),
             })),
             Err(e) => Err(async_graphql::Error::new(format!(
                 "Failed to query native balance from RPC: {}",
