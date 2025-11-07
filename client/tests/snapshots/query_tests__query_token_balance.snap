@@ -1,0 +1,12 @@
+---
+source: client/tests/query_tests.rs
+expression: recorder.requests()
+---
+- method: POST
+  path_and_query: /graphql
+  body:
+    Json:
+      operationName: QueryHoprBalance
+      query: "query QueryHoprBalance($address: String!) {\n  hoprBalance(address: $address) {\n    __typename\n    ... on HoprBalance {\n      __typename\n      balance\n    }\n    ... on InvalidAddressError {\n      __typename\n      code\n      message\n    }\n    ... on QueryFailedError {\n      __typename\n      message\n      code\n    }\n  }\n}\n"
+      variables:
+        address: "0101010101010101010101010101010101010101"
