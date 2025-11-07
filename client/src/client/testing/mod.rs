@@ -389,7 +389,10 @@ fn simulate_tx_execution(
     channels_channel: &async_broadcast::Sender<(Account, Channel, Account)>,
 ) -> Result<()> {
     let old_state = state.clone();
-    mutator.update_state(signed_tx, state)?;
+    if let Err(error) = mutator.update_state(signed_tx, state) {
+        *state = old_state;
+        return Err(error);
+    }
 
     if old_state.accounts.len() > state.accounts.len() {
         *state = old_state;
@@ -487,7 +490,7 @@ impl BlokliTransactionClient for BlokliTestClient {
             &self.accounts_channel.0,
             &self.channels_channel.0,
         ) {
-            tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction");
+            tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction, state reverted");
         } else {
             tracing::debug!("transaction execution succeeded");
         }
@@ -513,7 +516,7 @@ impl BlokliTransactionClient for BlokliTestClient {
             TransactionStatus::Confirmed
         })
         .unwrap_or_else(|error| {
-            tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction");
+            tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction, state reverted");
             TransactionStatus::Reverted
         });
 
@@ -547,7 +550,7 @@ impl BlokliTransactionClient for BlokliTestClient {
             &self.channels_channel.0,
         )
         .inspect_err(|error| {
-            tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction");
+            tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction, state reverted");
         })?;
 
         tracing::debug!("transaction execution succeeded");
