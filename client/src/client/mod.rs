@@ -14,7 +14,9 @@ use crate::{
 };
 
 #[cfg(feature = "testing")]
-pub use testing::{BlokliTestClient, BlokliTestState, BlokliTestStateMutator, NopStateMutator};
+pub use testing::{
+    BlokliTestClient, BlokliTestState, BlokliTestStateMutator, BlokliTestStateSnapshot, NopStateMutator,
+};
 
 /// Configuration for the [`BlokliClient`].
 #[derive(Clone, Debug, PartialEq, Eq, smart_default::SmartDefault)]
