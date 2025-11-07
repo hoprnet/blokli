@@ -381,7 +381,7 @@ impl BlokliSubscriptionClient for BlokliTestClient {
     }
 }
 
-fn submit_tx(
+fn simulate_tx_execution(
     signed_tx: &[u8],
     state: &mut BlokliTestState,
     mutator: &dyn BlokliTestStateMutator,
@@ -480,13 +480,17 @@ impl BlokliTransactionClient for BlokliTestClient {
         rand::fill(&mut tx_receipt);
 
         let mut state = self.state.write();
-        submit_tx(
+        if let Err(error) = simulate_tx_execution(
             signed_tx,
             &mut state,
             &*self.mutator,
             &self.accounts_channel.0,
             &self.channels_channel.0,
-        )?;
+        ) {
+            tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction");
+        } else {
+            tracing::debug!("transaction execution succeeded");
+        }
 
         Ok(tx_receipt)
     }
@@ -496,11 +500,28 @@ impl BlokliTransactionClient for BlokliTestClient {
         let tx_hash = hex::encode(rand::random_iter::<u8>().take(32).collect::<Vec<_>>());
 
         let mut state = self.state.write();
+
+        let status = simulate_tx_execution(
+            signed_tx,
+            &mut state,
+            &*self.mutator,
+            &self.accounts_channel.0,
+            &self.channels_channel.0,
+        )
+        .map(|_| {
+            tracing::debug!("transaction execution succeeded");
+            TransactionStatus::Confirmed
+        })
+        .unwrap_or_else(|error| {
+            tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction");
+            TransactionStatus::Reverted
+        });
+
         state.active_txs.insert(
             tx_id.clone(),
             Transaction {
                 id: tx_id.clone().into(),
-                status: TransactionStatus::Confirmed,
+                status,
                 submitted_at: DateTime(
                     chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now()).to_rfc3339(),
                 ),
@@ -508,20 +529,29 @@ impl BlokliTransactionClient for BlokliTestClient {
             },
         );
 
-        submit_tx(
-            signed_tx,
-            &mut state,
-            &*self.mutator,
-            &self.accounts_channel.0,
-            &self.channels_channel.0,
-        )?;
-
         Ok(tx_id)
     }
 
     async fn submit_and_confirm_transaction(&self, signed_tx: &[u8], num_confirmations: usize) -> Result<TxReceipt> {
         futures_time::task::sleep((Duration::from_millis(200) * num_confirmations as u32).into()).await;
-        self.submit_transaction(signed_tx).await
+
+        let mut tx_receipt = [0u8; 32];
+        rand::fill(&mut tx_receipt);
+
+        let mut state = self.state.write();
+        simulate_tx_execution(
+            signed_tx,
+            &mut state,
+            &*self.mutator,
+            &self.accounts_channel.0,
+            &self.channels_channel.0,
+        )
+        .inspect_err(|error| {
+            tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction");
+        })?;
+
+        tracing::debug!("transaction execution succeeded");
+        Ok(tx_receipt)
     }
 
     async fn track_transaction(&self, tx_id: TxId, client_timeout: Duration) -> Result<Transaction> {
