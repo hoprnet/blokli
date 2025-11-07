@@ -370,14 +370,17 @@ fn submit_tx(
     }
 
     if old_state.token_balances.len() > state.token_balances.len() {
+        *state = old_state;
         return Err(ErrorKind::MockClientError(anyhow::anyhow!("mutation cannot remove token balances")).into());
     }
 
     if old_state.safe_allowances.len() > state.safe_allowances.len() {
+        *state = old_state;
         return Err(ErrorKind::MockClientError(anyhow::anyhow!("mutation cannot remove safe allowances")).into());
     }
 
     if old_state.active_txs.len() > state.active_txs.len() {
+        *state = old_state;
         return Err(ErrorKind::MockClientError(anyhow::anyhow!("mutation cannot remove active txs")).into());
     }
 
