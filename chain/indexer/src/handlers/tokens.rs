@@ -242,7 +242,7 @@ mod tests {
 
     #[tokio::test]
     #[ignore = "TODO: Fix mock expectations - handler doesn't call RPC methods"]
-    async fn on_token_approval_correct() -> anyhow::Result<()> {
+    async fn test_on_token_approval_correct() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
 
         let target_allowance = HoprBalance::from(primitive_types::U256::from(1000u64));

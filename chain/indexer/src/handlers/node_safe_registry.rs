@@ -64,7 +64,7 @@ mod tests {
     use crate::handlers::test_utils::test_helpers::*;
 
     #[tokio::test]
-    async fn on_node_safe_registry_registered() -> anyhow::Result<()> {
+    async fn test_on_node_safe_registry_registered() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
@@ -100,7 +100,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_node_safe_registry_deregistered() -> anyhow::Result<()> {
+    async fn test_on_node_safe_registry_deregistered() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here

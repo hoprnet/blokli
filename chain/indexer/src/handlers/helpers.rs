@@ -4,7 +4,7 @@ use blokli_api_types::{Account, Channel, ChannelUpdate, TokenValueString, UInt64
 use blokli_db_entity::conversions::{account_aggregation, balances::balance_to_string};
 use hopr_crypto_types::prelude::Hash;
 use hopr_primitive_types::prelude::Address;
-use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder};
 
 use crate::errors::{CoreEthereumIndexerError, Result};
 
@@ -24,7 +24,10 @@ use crate::errors::{CoreEthereumIndexerError, Result};
 /// # Errors
 /// * Returns error if channel not found, state not found, or accounts not found
 #[allow(dead_code)]
-pub(super) async fn construct_channel_update(db: &DatabaseConnection, channel_id: &Hash) -> Result<ChannelUpdate> {
+pub(super) async fn construct_channel_update<C>(conn: &C, channel_id: &Hash) -> Result<ChannelUpdate>
+where
+    C: ConnectionTrait,
+{
     use blokli_db_entity::codegen::{channel, channel_state};
 
     // Convert Hash to hex string for database query
@@ -33,7 +36,7 @@ pub(super) async fn construct_channel_update(db: &DatabaseConnection, channel_id
     // 1. Find the channel by concrete_channel_id
     let channel = channel::Entity::find()
         .filter(channel::Column::ConcreteChannelId.eq(&channel_id_hex))
-        .one(db)
+        .one(conn)
         .await
         .map_err(|e| CoreEthereumIndexerError::ProcessError(format!("Failed to query channel: {}", e)))?
         .ok_or_else(|| CoreEthereumIndexerError::ProcessError(format!("Channel {} not found", channel_id_hex)))?;
@@ -44,7 +47,7 @@ pub(super) async fn construct_channel_update(db: &DatabaseConnection, channel_id
         .order_by_desc(channel_state::Column::PublishedBlock)
         .order_by_desc(channel_state::Column::PublishedTxIndex)
         .order_by_desc(channel_state::Column::PublishedLogIndex)
-        .one(db)
+        .one(conn)
         .await
         .map_err(|e| CoreEthereumIndexerError::ProcessError(format!("Failed to query channel_state: {}", e)))?
         .ok_or_else(|| {
@@ -53,7 +56,7 @@ pub(super) async fn construct_channel_update(db: &DatabaseConnection, channel_id
 
     // 3. Fetch both accounts using the optimized aggregation function
     let account_ids = vec![channel.source, channel.destination];
-    let accounts_result = account_aggregation::fetch_accounts_by_keyids(db, account_ids)
+    let accounts_result = account_aggregation::fetch_accounts_by_keyids(conn, account_ids)
         .await
         .map_err(|e| CoreEthereumIndexerError::ProcessError(format!("Failed to fetch accounts: {}", e)))?;
 

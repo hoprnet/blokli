@@ -121,7 +121,7 @@ mod tests {
     use crate::handlers::test_utils::test_helpers::*;
 
     #[tokio::test]
-    async fn ticket_price_update() -> anyhow::Result<()> {
+    async fn test_ticket_price_update() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
@@ -160,7 +160,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn minimum_win_prob_update() -> anyhow::Result<()> {
+    async fn test_minimum_win_prob_update() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here

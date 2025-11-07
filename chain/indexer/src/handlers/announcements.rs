@@ -224,7 +224,7 @@ mod tests {
     use crate::{handlers::test_utils::test_helpers::*, state::IndexerEvent};
 
     #[tokio::test]
-    async fn announce_keybinding() -> anyhow::Result<()> {
+    async fn test_announce_keybinding() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
 
         let rpc_operations = MockIndexerRpcOperations::new();
@@ -276,7 +276,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn announce_address_announcement() -> anyhow::Result<()> {
+    async fn test_announce_address_announcement() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
@@ -482,7 +482,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn announce_revoke() -> anyhow::Result<()> {
+    async fn test_announce_revoke() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here

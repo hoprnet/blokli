@@ -94,8 +94,7 @@ where
 
                 // Publish event if synced
                 if is_synced {
-                    let db_conn = self.db.conn(blokli_db::TargetDb::Index);
-                    match construct_channel_update(db_conn, &channel_id).await {
+                    match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
                             self.indexer_state
                                 .publish_event(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
@@ -164,8 +163,7 @@ where
 
                 // Publish event if synced
                 if is_synced {
-                    let db_conn = self.db.conn(blokli_db::TargetDb::Index);
-                    match construct_channel_update(db_conn, &channel_id).await {
+                    match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
                             self.indexer_state
                                 .publish_event(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
@@ -232,8 +230,7 @@ where
 
                 // Publish event if synced
                 if is_synced {
-                    let db_conn = self.db.conn(blokli_db::TargetDb::Index);
-                    match construct_channel_update(db_conn, &channel_id).await {
+                    match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
                             self.indexer_state
                                 .publish_event(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
@@ -310,8 +307,7 @@ where
 
                 // Publish event if synced
                 if is_synced {
-                    let db_conn = self.db.conn(blokli_db::TargetDb::Index);
-                    match construct_channel_update(db_conn, &channel_id).await {
+                    match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
                             self.indexer_state
                                 .publish_event(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
@@ -372,8 +368,7 @@ where
 
                 // Publish event if synced
                 if is_synced {
-                    let db_conn = self.db.conn(blokli_db::TargetDb::Index);
-                    match construct_channel_update(db_conn, &channel_id).await {
+                    match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
                             self.indexer_state
                                 .publish_event(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
@@ -434,8 +429,7 @@ where
 
                 // Publish event if synced
                 if is_synced {
-                    let db_conn = self.db.conn(blokli_db::TargetDb::Index);
-                    match construct_channel_update(db_conn, &channel_id).await {
+                    match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
                             self.indexer_state
                                 .publish_event(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
@@ -507,7 +501,7 @@ mod tests {
     use crate::handlers::test_utils::test_helpers::*;
 
     #[tokio::test]
-    async fn on_channel_event_balance_increased() -> anyhow::Result<()> {
+    async fn test_on_channel_event_balance_increased() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
 
         let rpc_operations = MockIndexerRpcOperations::new();
@@ -564,7 +558,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_channel_event_domain_separator_updated() -> anyhow::Result<()> {
+    async fn test_on_channel_event_domain_separator_updated() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
@@ -608,7 +602,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_channel_event_balance_decreased() -> anyhow::Result<()> {
+    async fn test_on_channel_event_balance_decreased() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
 
         let rpc_operations = MockIndexerRpcOperations::new();
@@ -665,7 +659,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_channel_closed() -> anyhow::Result<()> {
+    async fn test_on_channel_closed() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
@@ -729,7 +723,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_foreign_channel_closed() -> anyhow::Result<()> {
+    async fn test_on_foreign_channel_closed() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
@@ -791,17 +785,23 @@ mod tests {
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, channel_closed_log, true).await }))
             .await?;
 
-        let closed_channel = db.get_channel_by_id(None, &channel.get_id()).await?;
+        let closed_channel = db
+            .get_channel_by_id(None, &channel.get_id())
+            .await?
+            .context("channel should still exist after closing")?;
 
-        assert_eq!(None, closed_channel, "foreign channel must be deleted");
+        // Foreign channels are kept in database with Closed status for historical data
+        assert_eq!(closed_channel.status, ChannelStatus::Closed);
+        assert_eq!(closed_channel.balance, HoprBalance::zero());
+        assert_eq!(closed_channel.ticket_index, 0u64.into());
 
         // TODO: Add event verification - check published IndexerEvent instead of return value
 
         Ok(())
     }
 
-    #[tokio::test]
-    async fn on_channel_opened() -> anyhow::Result<()> {
+    #[test_log::test(tokio::test)]
+    async fn test_on_channel_opened() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
@@ -849,7 +849,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_channel_reopened() -> anyhow::Result<()> {
+    async fn test_on_channel_reopened() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
@@ -908,7 +908,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn on_channel_should_not_reopen_when_not_closed() -> anyhow::Result<()> {
+    async fn test_on_channel_should_not_reopen_when_not_closed() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
@@ -959,7 +959,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn event_for_non_existing_channel_should_create_corrupted_channel() -> anyhow::Result<()> {
+    async fn test_event_for_non_existing_channel_should_create_corrupted_channel() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
