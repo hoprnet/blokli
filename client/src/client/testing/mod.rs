@@ -117,6 +117,7 @@ pub trait BlokliTestStateMutator {
 /// No-op state mutator.
 ///
 /// Useful for static tests.
+#[derive(Clone, Debug, Default)]
 pub struct NopStateMutator;
 
 impl BlokliTestStateMutator for NopStateMutator {
@@ -169,19 +170,18 @@ impl std::ops::Deref for BlokliTestStateSnapshot {
 /// Later transactions done using the client can [mutate](BlokliTestStateMutator) the state and
 /// changes are propagated to the subscribers.
 /// Mutations that remove accounts or channels are not allowed.
-pub struct BlokliTestClient {
+///
+/// Cloning the client will create a new client that shares the same state with the previous one.
+/// This makes sense, however, only when the `mutator` can perform actual changes on the shared state.
+pub struct BlokliTestClient<M> {
     state: Arc<parking_lot::RwLock<BlokliTestState>>,
-    mutator: Box<dyn BlokliTestStateMutator + Send + Sync>,
+    mutator: M,
     accounts_channel: AccountEvents,
     channels_channel: GraphEvents,
 }
 
-impl BlokliTestClient {
-    /// Constructs a new client that owns the given [`initial_state`](BlokliTestState).
-    ///
-    /// After construction, the only way to mutate the state is when the client calls the given [`mutator`](BlokliTestStateMutator)
-    /// based on a [submitted](BlokliTransactionClient) transaction.
-    pub fn new<M: BlokliTestStateMutator + Send + Sync + 'static>(initial_state: BlokliTestState, mutator: M) -> Self {
+impl<M: Clone> Clone for BlokliTestClient<M> {
+    fn clone(&self) -> Self {
         let (mut accounts_tx, accounts_rx) = async_broadcast::broadcast(1024);
         accounts_tx.set_await_active(false);
         accounts_tx.set_overflow(false);
@@ -191,21 +191,10 @@ impl BlokliTestClient {
         channels_tx.set_overflow(false);
 
         Self {
-            state: Arc::new(parking_lot::RwLock::new(initial_state)),
-            mutator: Box::new(mutator),
+            state: self.state.clone(),
+            mutator: self.mutator.clone(),
             accounts_channel: (accounts_tx, accounts_rx.deactivate()),
             channels_channel: (channels_tx, channels_rx.deactivate()),
-        }
-    }
-
-    /// Returns the current snapshot of the internal state.
-    ///
-    /// The snapshot can be repeatedly [refreshed](BlokliTestStateSnapshot::refresh) to get the latest state.
-    pub fn snapshot(&self) -> BlokliTestStateSnapshot {
-        let state = self.state.read();
-        BlokliTestStateSnapshot {
-            state: self.state.clone(),
-            snapshot: state.clone(),
         }
     }
 }
@@ -230,7 +219,39 @@ fn account_matches(account: &Account, selector: &AccountSelector) -> bool {
     }
 }
 
-impl BlokliTestClient {
+impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
+    /// Constructs a new client that owns the given [`initial_state`](BlokliTestState).
+    ///
+    /// After construction, the only way to mutate the state is when the client calls the given [`mutator`](BlokliTestStateMutator)
+    /// based on a [submitted](BlokliTransactionClient) transaction.
+    pub fn new(initial_state: BlokliTestState, mutator: M) -> Self {
+        let (mut accounts_tx, accounts_rx) = async_broadcast::broadcast(1024);
+        accounts_tx.set_await_active(false);
+        accounts_tx.set_overflow(false);
+
+        let (mut channels_tx, channels_rx) = async_broadcast::broadcast(1024);
+        channels_tx.set_await_active(false);
+        channels_tx.set_overflow(false);
+
+        Self {
+            state: Arc::new(parking_lot::RwLock::new(initial_state)),
+            mutator,
+            accounts_channel: (accounts_tx, accounts_rx.deactivate()),
+            channels_channel: (channels_tx, channels_rx.deactivate()),
+        }
+    }
+
+    /// Returns the current snapshot of the internal state.
+    ///
+    /// The snapshot can be repeatedly [refreshed](BlokliTestStateSnapshot::refresh) to get the latest state.
+    pub fn snapshot(&self) -> BlokliTestStateSnapshot {
+        let state = self.state.read();
+        BlokliTestStateSnapshot {
+            state: self.state.clone(),
+            snapshot: state.clone(),
+        }
+    }
+
     fn do_query_channels(&self, selector: ChannelSelector) -> Result<Vec<Channel>> {
         Ok(self
             .state
@@ -255,7 +276,7 @@ impl BlokliTestClient {
 }
 
 #[async_trait::async_trait]
-impl BlokliQueryClient for BlokliTestClient {
+impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestClient<M> {
     async fn count_accounts(&self, selector: Option<AccountSelector>) -> Result<u32> {
         Ok(match selector {
             None => self.state.read().accounts.len() as u32,
@@ -330,7 +351,7 @@ impl BlokliQueryClient for BlokliTestClient {
     }
 }
 
-impl BlokliSubscriptionClient for BlokliTestClient {
+impl<M: BlokliTestStateMutator + Send + Sync> BlokliSubscriptionClient for BlokliTestClient<M> {
     fn subscribe_channels(
         &self,
         selector: Option<ChannelSelector>,
@@ -472,7 +493,17 @@ fn simulate_tx_execution(
     state
         .accounts
         .iter()
-        .filter(|new_account| !old_state.accounts.contains(new_account))
+        .filter(|new_account| {
+            old_state
+                .accounts
+                .iter()
+                .find(|acc| acc.keyid == new_account.keyid)
+                .is_none_or(|old_account| {
+                    // Change is notified only if safe address or multi addresses changed
+                    old_account.safe_address != new_account.safe_address
+                        || old_account.multi_addresses != new_account.multi_addresses
+                })
+        })
         .for_each(
             |changed_account| match accounts_channel.try_broadcast(changed_account.clone()) {
                 Err(TrySendError::Full(_)) => {
@@ -521,7 +552,7 @@ fn simulate_tx_execution(
 }
 
 #[async_trait::async_trait]
-impl BlokliTransactionClient for BlokliTestClient {
+impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for BlokliTestClient<M> {
     async fn submit_transaction(&self, signed_tx: &[u8]) -> Result<TxReceipt> {
         let mut tx_receipt = [0u8; 32];
         rand::fill(&mut tx_receipt);
@@ -530,7 +561,7 @@ impl BlokliTransactionClient for BlokliTestClient {
         if let Err(error) = simulate_tx_execution(
             signed_tx,
             &mut state,
-            &*self.mutator,
+            &self.mutator,
             &self.accounts_channel.0,
             &self.channels_channel.0,
         ) {
@@ -551,7 +582,7 @@ impl BlokliTransactionClient for BlokliTestClient {
         let status = simulate_tx_execution(
             signed_tx,
             &mut state,
-            &*self.mutator,
+            &self.mutator,
             &self.accounts_channel.0,
             &self.channels_channel.0,
         )
@@ -589,7 +620,7 @@ impl BlokliTransactionClient for BlokliTestClient {
         simulate_tx_execution(
             signed_tx,
             &mut state,
-            &*self.mutator,
+            &self.mutator,
             &self.accounts_channel.0,
             &self.channels_channel.0,
         )
