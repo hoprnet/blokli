@@ -62,6 +62,50 @@ impl Default for BlokliTestState {
     }
 }
 
+impl BlokliTestState {
+    pub fn get_account(&self, chain_key: &ChainAddress) -> Option<&Account> {
+        self.accounts.iter().find(|acc| acc.chain_key == hex::encode(chain_key))
+    }
+
+    pub fn get_account_mut(&mut self, chain_key: &ChainAddress) -> Option<&mut Account> {
+        self.accounts
+            .iter_mut()
+            .find(|acc| acc.chain_key == hex::encode(chain_key))
+    }
+
+    pub fn get_channel_by_id(&mut self, channel_id: &ChannelId) -> Option<&Channel> {
+        self.channels
+            .iter()
+            .find(|ch| ch.concrete_channel_id == hex::encode(channel_id))
+    }
+
+    pub fn get_channel_by_id_mut(&mut self, channel_id: &ChannelId) -> Option<&mut Channel> {
+        self.channels
+            .iter_mut()
+            .find(|ch| ch.concrete_channel_id == hex::encode(channel_id))
+    }
+
+    pub fn get_account_safe_token_balance(&self, chain_key: &ChainAddress) -> Option<&HoprBalance> {
+        let account = self.get_account(chain_key)?;
+        self.token_balances.get(account.safe_address.as_ref()?)
+    }
+
+    pub fn get_account_safe_token_balance_mut(&mut self, chain_key: &ChainAddress) -> Option<&mut HoprBalance> {
+        let account = self.get_account(chain_key).and_then(|a| a.safe_address.clone())?;
+        self.token_balances.get_mut(&account)
+    }
+
+    pub fn get_account_safe_allowance(&self, chain_key: &ChainAddress) -> Option<&SafeHoprAllowance> {
+        let account = self.get_account(chain_key)?;
+        self.safe_allowances.get(account.safe_address.as_ref()?)
+    }
+
+    pub fn get_account_safe_allowance_mut(&mut self, chain_key: &ChainAddress) -> Option<&mut SafeHoprAllowance> {
+        let account = self.get_account(chain_key).and_then(|a| a.safe_address.clone())?;
+        self.safe_allowances.get_mut(&account)
+    }
+}
+
 /// Mutator for the [`BlokliTestState`].
 pub trait BlokliTestStateMutator {
     /// Updates the state given the signed transaction.
