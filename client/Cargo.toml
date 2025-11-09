@@ -43,7 +43,6 @@ testing = [
   "serde",
 ]
 
-
 [build-dependencies]
 cynic-codegen = { version = "3" }
 
