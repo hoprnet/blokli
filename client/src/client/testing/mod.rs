@@ -73,7 +73,7 @@ impl BlokliTestState {
             .find(|acc| acc.chain_key == hex::encode(chain_key))
     }
 
-    pub fn get_channel_by_id(&mut self, channel_id: &ChannelId) -> Option<&Channel> {
+    pub fn get_channel_by_id(&self, channel_id: &ChannelId) -> Option<&Channel> {
         self.channels
             .iter()
             .find(|ch| ch.concrete_channel_id == hex::encode(channel_id))
