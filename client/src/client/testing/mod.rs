@@ -11,11 +11,11 @@ use std::{collections::HashMap, time::Duration};
 /// Represents a state for [`BlokliTestClient`].
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BlokliTestState {
-    pub accounts: Vec<Account>,
+    pub accounts: HashMap<u32, Account>,
     pub native_balances: HashMap<String, NativeBalance>,
     pub token_balances: HashMap<String, HoprBalance>,
     pub safe_allowances: HashMap<String, SafeHoprAllowance>,
-    pub channels: Vec<Channel>,
+    pub channels: HashMap<ChannelId, Channel>,
     pub chain_info: ChainInfo,
     pub version: String,
     pub health: String,
@@ -64,25 +64,23 @@ impl Default for BlokliTestState {
 
 impl BlokliTestState {
     pub fn get_account(&self, chain_key: &ChainAddress) -> Option<&Account> {
-        self.accounts.iter().find(|acc| acc.chain_key == hex::encode(chain_key))
+        self.accounts
+            .values()
+            .find(|acc| acc.chain_key == hex::encode(chain_key))
     }
 
     pub fn get_account_mut(&mut self, chain_key: &ChainAddress) -> Option<&mut Account> {
         self.accounts
-            .iter_mut()
+            .values_mut()
             .find(|acc| acc.chain_key == hex::encode(chain_key))
     }
 
     pub fn get_channel_by_id(&self, channel_id: &ChannelId) -> Option<&Channel> {
-        self.channels
-            .iter()
-            .find(|ch| ch.concrete_channel_id == hex::encode(channel_id))
+        self.channels.get(channel_id)
     }
 
     pub fn get_channel_by_id_mut(&mut self, channel_id: &ChannelId) -> Option<&mut Channel> {
-        self.channels
-            .iter_mut()
-            .find(|ch| ch.concrete_channel_id == hex::encode(channel_id))
+        self.channels.get_mut(channel_id)
     }
 
     pub fn get_account_safe_token_balance(&self, chain_key: &ChainAddress) -> Option<&HoprBalance> {
@@ -173,30 +171,12 @@ impl std::ops::Deref for BlokliTestStateSnapshot {
 ///
 /// Cloning the client will create a new client that shares the same state with the previous one.
 /// This makes sense, however, only when the `mutator` can perform actual changes on the shared state.
+#[derive(Clone)]
 pub struct BlokliTestClient<M> {
     state: Arc<parking_lot::RwLock<BlokliTestState>>,
     mutator: M,
     accounts_channel: AccountEvents,
     channels_channel: GraphEvents,
-}
-
-impl<M: Clone> Clone for BlokliTestClient<M> {
-    fn clone(&self) -> Self {
-        let (mut accounts_tx, accounts_rx) = async_broadcast::broadcast(1024);
-        accounts_tx.set_await_active(false);
-        accounts_tx.set_overflow(false);
-
-        let (mut channels_tx, channels_rx) = async_broadcast::broadcast(1024);
-        channels_tx.set_await_active(false);
-        channels_tx.set_overflow(false);
-
-        Self {
-            state: self.state.clone(),
-            mutator: self.mutator.clone(),
-            accounts_channel: (accounts_tx, accounts_rx.deactivate()),
-            channels_channel: (channels_tx, channels_rx.deactivate()),
-        }
-    }
 }
 
 fn channel_matches(channel: &Channel, selector: &ChannelSelector) -> bool {
@@ -257,7 +237,7 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
             .state
             .read()
             .channels
-            .iter()
+            .values()
             .filter(|c| channel_matches(c, &selector))
             .cloned()
             .collect())
@@ -268,7 +248,7 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
             .state
             .read()
             .accounts
-            .iter()
+            .values()
             .filter(|a| account_matches(a, &selector))
             .cloned()
             .collect())
@@ -359,7 +339,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliSubscriptionClient for Blokl
         Ok(match selector {
             None => {
                 let channels = self.state.read().channels.clone();
-                futures::stream::iter(channels)
+                futures::stream::iter(channels.into_values())
                     .map(Ok)
                     .chain(
                         self.channels_channel
@@ -389,7 +369,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliSubscriptionClient for Blokl
         Ok(match selector {
             None => {
                 let accounts = self.state.read().accounts.clone();
-                futures::stream::iter(accounts)
+                futures::stream::iter(accounts.into_values())
                     .map(Ok)
                     .chain(self.accounts_channel.1.activate_cloned().map(Ok))
                     .boxed()
@@ -413,15 +393,13 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliSubscriptionClient for Blokl
             (state.accounts.clone(), state.channels.clone())
         };
 
-        Ok(futures::stream::iter(channels.into_iter().map(move |channel| {
+        Ok(futures::stream::iter(channels.into_values().map(move |channel| {
             let source = accounts
-                .iter()
-                .find(|acc| acc.keyid == channel.source)
+                .get(&(channel.source as u32))
                 .cloned()
                 .ok_or_else(|| BlokliClientError::from(ErrorKind::NoData))?;
             let destination = accounts
-                .iter()
-                .find(|acc| acc.keyid == channel.destination)
+                .get(&(channel.destination as u32))
                 .cloned()
                 .ok_or_else(|| BlokliClientError::from(ErrorKind::NoData))?;
 
@@ -493,19 +471,15 @@ fn simulate_tx_execution(
     state
         .accounts
         .iter()
-        .filter(|new_account| {
-            old_state
-                .accounts
-                .iter()
-                .find(|acc| acc.keyid == new_account.keyid)
-                .is_none_or(|old_account| {
-                    // Change is notified only if safe address or multi addresses changed
-                    old_account.safe_address != new_account.safe_address
-                        || old_account.multi_addresses != new_account.multi_addresses
-                })
+        .filter(|(new_id, new_account)| {
+            old_state.accounts.get(new_id).is_none_or(|old_account| {
+                // Change is notified only if safe address or multi addresses changed
+                old_account.safe_address != new_account.safe_address
+                    || old_account.multi_addresses != new_account.multi_addresses
+            })
         })
         .for_each(
-            |changed_account| match accounts_channel.try_broadcast(changed_account.clone()) {
+            |(_, changed_account)| match accounts_channel.try_broadcast(changed_account.clone()) {
                 Err(TrySendError::Full(_)) => {
                     tracing::error!("failed to broadcast account change - channel is full");
                 }
@@ -520,18 +494,15 @@ fn simulate_tx_execution(
     state
         .channels
         .iter()
-        .filter(|new_channel| !old_state.channels.contains(new_channel))
-        .filter_map(|changed_channel| {
-            let source = state
-                .accounts
-                .iter()
-                .find(|acc| acc.keyid == changed_channel.source)
-                .cloned();
-            let destination = state
-                .accounts
-                .iter()
-                .find(|acc| acc.keyid == changed_channel.destination)
-                .cloned();
+        .filter(|&(new_id, new_channel)| {
+            old_state
+                .channels
+                .get(new_id)
+                .is_none_or(|old_channel| old_channel != new_channel)
+        })
+        .filter_map(|(_, changed_channel)| {
+            let source = state.accounts.get(&(changed_channel.source as u32)).cloned();
+            let destination = state.accounts.get(&(changed_channel.destination as u32)).cloned();
             source
                 .zip(destination)
                 .map(|(source, destination)| (source, changed_channel.clone(), destination))
