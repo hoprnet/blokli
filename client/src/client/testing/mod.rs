@@ -173,30 +173,12 @@ impl std::ops::Deref for BlokliTestStateSnapshot {
 ///
 /// Cloning the client will create a new client that shares the same state with the previous one.
 /// This makes sense, however, only when the `mutator` can perform actual changes on the shared state.
+#[derive(Clone)]
 pub struct BlokliTestClient<M> {
     state: Arc<parking_lot::RwLock<BlokliTestState>>,
     mutator: M,
     accounts_channel: AccountEvents,
     channels_channel: GraphEvents,
-}
-
-impl<M: Clone> Clone for BlokliTestClient<M> {
-    fn clone(&self) -> Self {
-        let (mut accounts_tx, accounts_rx) = async_broadcast::broadcast(1024);
-        accounts_tx.set_await_active(false);
-        accounts_tx.set_overflow(false);
-
-        let (mut channels_tx, channels_rx) = async_broadcast::broadcast(1024);
-        channels_tx.set_await_active(false);
-        channels_tx.set_overflow(false);
-
-        Self {
-            state: self.state.clone(),
-            mutator: self.mutator.clone(),
-            accounts_channel: (accounts_tx, accounts_rx.deactivate()),
-            channels_channel: (channels_tx, channels_rx.deactivate()),
-        }
-    }
 }
 
 fn channel_matches(channel: &Channel, selector: &ChannelSelector) -> bool {
