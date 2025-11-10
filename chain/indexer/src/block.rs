@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     path::Path,
     sync::{
         Arc,
@@ -9,11 +10,15 @@ use std::{
 use alloy::sol_types::SolEvent;
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::chain_events::SignificantChainEvent;
-use blokli_db::{BlokliDbGeneralModelOperations, api::logs::BlokliDbLogOperations, info::BlokliDbInfoOperations};
+use blokli_db::{
+    BlokliDbGeneralModelOperations, TargetDb, api::logs::BlokliDbLogOperations, info::BlokliDbInfoOperations,
+};
+use blokli_db_entity::{channel_state, prelude::ChannelState};
 use futures::{StreamExt, future::AbortHandle};
 use hopr_bindings::hopr_token::HoprToken::{Approval, Transfer};
 use hopr_crypto_types::types::Hash;
 use hopr_primitive_types::prelude::{Address, SerializableLog};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder};
 use tracing::{debug, error, info, trace};
 
 use crate::{
@@ -779,14 +784,6 @@ where
             + Sync
             + 'static,
     {
-        use std::collections::HashSet;
-
-        use blokli_db::TargetDb;
-        use blokli_db_entity::{channel_state, prelude::ChannelState};
-        use sea_orm::{
-            ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder,
-        };
-
         let (min_block, max_block) = reorg_info.affected_block_range;
         let db_conn = db.conn(TargetDb::Index);
 

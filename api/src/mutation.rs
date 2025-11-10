@@ -4,16 +4,15 @@ use std::sync::Arc;
 
 use async_graphql::{Context, Object, Result, Union};
 use blokli_api_types::{
-    ContractNotAllowedError, FunctionNotAllowedError, Hex32, InvalidTransactionIdError, RpcError,
-    SendTransactionSuccess, TimeoutError, Transaction, TransactionInput, TransactionStatus,
+    ContractNotAllowedError, FunctionNotAllowedError, InvalidTransactionIdError, RpcError, SendTransactionSuccess,
+    TimeoutError, Transaction, TransactionInput,
 };
 use blokli_chain_api::{
     DefaultHttpRequestor,
     rpc_adapter::RpcAdapter,
     transaction_executor::{RawTransactionExecutor, TransactionExecutorError},
-    transaction_store::{TransactionRecord, TransactionStatus as StoreStatus, TransactionStore},
+    transaction_store::{TransactionRecord, TransactionStore},
 };
-use hopr_primitive_types::prelude::ToHex;
 
 /// Root mutation type providing transaction submission capabilities
 pub struct MutationRoot;
@@ -73,7 +72,7 @@ impl MutationRoot {
         // Execute transaction in fire-and-forget mode
         match executor.send_raw_transaction(raw_tx).await {
             Ok(tx_hash) => Ok(SendTransactionResult::Success(SendTransactionSuccess {
-                transaction_hash: hash_to_hex32(tx_hash),
+                transaction_hash: tx_hash.into(),
             })),
             Err(e) => Ok(executor_error_to_send_result(e)),
         }
@@ -151,31 +150,13 @@ fn hex_to_bytes(hex_str: &str) -> Result<Vec<u8>> {
     hex::decode(hex_str).map_err(|e| async_graphql::Error::new(format!("Invalid hex string: {}", e)))
 }
 
-/// Helper function to convert Hash to Hex32
-fn hash_to_hex32(hash: hopr_crypto_types::types::Hash) -> Hex32 {
-    Hex32(hash.to_hex())
-}
-
 /// Convert TransactionRecord to GraphQL Transaction
 fn record_to_graphql(record: TransactionRecord) -> Transaction {
     Transaction {
         id: record.id.to_string(),
-        status: store_status_to_graphql(record.status),
+        status: crate::conversions::store_status_to_graphql(record.status),
         submitted_at: record.submitted_at,
-        transaction_hash: record.transaction_hash.map(hash_to_hex32),
-    }
-}
-
-/// Convert store TransactionStatus to GraphQL TransactionStatus
-fn store_status_to_graphql(status: StoreStatus) -> TransactionStatus {
-    match status {
-        StoreStatus::Pending => TransactionStatus::Pending,
-        StoreStatus::Submitted => TransactionStatus::Submitted,
-        StoreStatus::Confirmed => TransactionStatus::Confirmed,
-        StoreStatus::Reverted => TransactionStatus::Reverted,
-        StoreStatus::Timeout => TransactionStatus::Timeout,
-        StoreStatus::ValidationFailed => TransactionStatus::ValidationFailed,
-        StoreStatus::SubmissionFailed => TransactionStatus::SubmissionFailed,
+        transaction_hash: record.transaction_hash.map(Into::into),
     }
 }
 

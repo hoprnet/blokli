@@ -1,11 +1,12 @@
 //! Axum HTTP server configuration with GraphQL support
 
-use std::sync::Arc;
+use std::{pin::Pin, sync::Arc};
 
 use async_graphql::{
     Schema,
     http::{GraphQLPlaygroundConfig, playground_source},
 };
+use async_stream::stream;
 use axum::{
     Json, Router,
     extract::State,
@@ -22,7 +23,7 @@ use blokli_chain_api::{
 };
 use blokli_chain_indexer::IndexerState;
 use blokli_chain_rpc::{rpc::RpcOperations, transport::ReqwestClient};
-use futures::stream::StreamExt;
+use futures::stream::{Stream, StreamExt};
 use sea_orm::DatabaseConnection;
 use serde_json::Value;
 use tower_http::{
@@ -171,11 +172,6 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
 
     // Handle subscription requests via SSE
     if accepts_sse && is_subscription {
-        use std::pin::Pin;
-
-        use async_stream::stream;
-        use futures::stream::Stream;
-
         let schema = state.schema.clone();
         let sse_stream: Pin<Box<dyn Stream<Item = Result<Event, std::convert::Infallible>> + Send>> =
             Box::pin(stream! {

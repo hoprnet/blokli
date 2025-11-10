@@ -1,6 +1,9 @@
 //! GraphQL subscription root and resolver implementations
 
-use std::{collections::HashSet, time::Duration};
+use std::{
+    collections::{HashMap, HashSet},
+    time::Duration,
+};
 
 use async_broadcast::Receiver;
 use async_graphql::{Context, Result, Subscription};
@@ -9,9 +12,16 @@ use blokli_api_types::{
     Account, Channel, ChannelUpdate, HoprBalance, NativeBalance, OpenedChannelsGraph, TokenValueString, UInt64,
 };
 use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
-use blokli_db_entity::conversions::{account_aggregation::fetch_accounts_by_keyids, balances::string_to_address};
+use blokli_db_entity::{
+    channel, channel_state,
+    conversions::{
+        account_aggregation::{fetch_accounts_by_keyids, fetch_accounts_with_filters},
+        balances::{balance_to_string, string_to_address},
+        channel_aggregation::fetch_channels_with_state,
+    },
+};
 use futures::Stream;
-use sea_orm::{DatabaseConnection, EntityTrait};
+use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use tokio::time::sleep;
 
 use crate::conversions::{hopr_balance_from_model, native_balance_from_model};
@@ -104,11 +114,6 @@ async fn query_channels_at_watermark(
     watermark: &Watermark,
     batch_size: usize,
 ) -> Result<Vec<ChannelUpdate>> {
-    use std::collections::HashMap;
-
-    use blokli_db_entity::{channel, channel_state};
-    use sea_orm::{ColumnTrait, Condition, QueryFilter, QueryOrder};
-
     // Query all channels (identity table has no temporal component)
     let channels = channel::Entity::find()
         .all(db)
@@ -197,8 +202,6 @@ async fn query_channels_at_watermark(
         })?;
 
         // Convert to GraphQL types
-        use blokli_db_entity::conversions::balances::balance_to_string;
-
         let channel_gql = Channel {
             concrete_channel_id: channel.concrete_channel_id,
             source: channel.source,
@@ -479,8 +482,6 @@ impl SubscriptionRoot {
         db: &DatabaseConnection,
         address: &str,
     ) -> Result<Option<NativeBalance>, sea_orm::DbErr> {
-        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-
         // Convert hex string address to binary for database query
         let binary_address = string_to_address(address);
 
@@ -493,8 +494,6 @@ impl SubscriptionRoot {
     }
 
     async fn fetch_hopr_balance(db: &DatabaseConnection, address: &str) -> Result<Option<HoprBalance>, sea_orm::DbErr> {
-        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-
         // Convert hex string address to binary for database query
         let binary_address = string_to_address(address);
 
@@ -513,8 +512,6 @@ impl SubscriptionRoot {
         concrete_channel_id: Option<String>,
         status: Option<blokli_api_types::ChannelStatus>,
     ) -> Result<Vec<Channel>, sea_orm::DbErr> {
-        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
-
         // Build query with filters
         let mut query = blokli_db_entity::channel::Entity::find();
 
@@ -551,8 +548,6 @@ impl SubscriptionRoot {
         packet_key: Option<String>,
         chain_key: Option<String>,
     ) -> Result<Vec<Account>, sea_orm::DbErr> {
-        use blokli_db_entity::conversions::account_aggregation::fetch_accounts_with_filters;
-
         // Use optimized batch loading from account_aggregation
         let aggregated_accounts = fetch_accounts_with_filters(db, keyid, packet_key, chain_key).await?;
 
@@ -573,10 +568,7 @@ impl SubscriptionRoot {
     }
 
     async fn fetch_opened_channels_graph(db: &DatabaseConnection) -> Result<OpenedChannelsGraph, sea_orm::DbErr> {
-        // Fetch all OPEN channels (status = 1) using channel aggregation
-        use blokli_db_entity::conversions::channel_aggregation::fetch_channels_with_state;
-
-        // 1. Fetch all OPEN channels (status = 1)
+        // 1. Fetch all OPEN channels (status = 1) using channel aggregation
         let aggregated_channels = fetch_channels_with_state(db, None, None, None, Some(1)).await?;
 
         // Convert to GraphQL Channel type

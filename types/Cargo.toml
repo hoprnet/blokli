@@ -18,5 +18,10 @@ chrono = { workspace = true }
 # Serialization
 serde = { workspace = true }
 
+# Encoding
+hex = { workspace = true }
+
 # Internal dependencies
-blokli-chain-types = { workspace = true }
+blokli-chain-types   = { workspace = true }
+hopr-crypto-types    = { workspace = true }
+hopr-primitive-types = { workspace = true }

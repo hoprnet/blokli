@@ -6,6 +6,8 @@
 use std::collections::HashMap;
 
 use async_graphql::{Enum, InputObject, InputValueError, NewType, Scalar, ScalarType, SimpleObject, Value};
+use hopr_crypto_types::types::Hash;
+use hopr_primitive_types::prelude::ToHex;
 
 /// Token value represented as a string to maintain precision
 ///
@@ -45,6 +47,18 @@ impl ScalarType for Hex32 {
 
     fn to_value(&self) -> Value {
         Value::String(self.0.clone())
+    }
+}
+
+impl From<&[u8; 32]> for Hex32 {
+    fn from(bytes: &[u8; 32]) -> Self {
+        Hex32(Hash::from(*bytes).to_hex())
+    }
+}
+
+impl From<hopr_crypto_types::types::Hash> for Hex32 {
+    fn from(hash: Hash) -> Self {
+        Hex32(hash.to_hex())
     }
 }
 
@@ -138,6 +152,16 @@ impl From<i8> for ChannelStatus {
             1 => ChannelStatus::Open,
             2 => ChannelStatus::PendingToClose,
             _ => ChannelStatus::Closed, // Default to closed for invalid values
+        }
+    }
+}
+
+impl From<ChannelStatus> for i8 {
+    fn from(status: ChannelStatus) -> Self {
+        match status {
+            ChannelStatus::Closed => 0,
+            ChannelStatus::Open => 1,
+            ChannelStatus::PendingToClose => 2,
         }
     }
 }

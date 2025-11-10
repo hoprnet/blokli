@@ -6,41 +6,19 @@ use async_graphql::{Context, Object, Result, Union};
 use blokli_api_types::{
     Account, ChainInfo, Channel, ContractAddressMap, Hex32, HoprBalance, InvalidAddressError,
     InvalidTransactionIdError, NativeBalance, QueryFailedError, SafeHoprAllowance, TokenValueString, Transaction,
-    TransactionStatus,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
 use blokli_chain_types::ContractAddresses;
-use blokli_db_entity::conversions::balances::{hopr_balance_to_string, string_to_address};
-use hopr_primitive_types::prelude::ToHex;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use blokli_db_entity::conversions::{
+    account_aggregation::fetch_accounts_with_filters,
+    balances::{hopr_balance_to_string, string_to_address},
+    channel_aggregation::fetch_channels_with_state,
+};
+use hopr_primitive_types::primitives::Address;
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
 
 use crate::{mutation::TransactionResult, validation::validate_eth_address};
-
-/// Helper function to convert binary domain separator to Hex32 format
-fn bytes_to_hex32(bytes: &[u8]) -> Hex32 {
-    Hex32(format!("0x{}", hex::encode(bytes)))
-}
-
-/// Helper function to convert Hash to Hex32
-fn hash_to_hex32(hash: hopr_crypto_types::types::Hash) -> Hex32 {
-    Hex32(hash.to_hex())
-}
-
-/// Convert store TransactionStatus to GraphQL TransactionStatus
-fn store_status_to_graphql(status: blokli_chain_api::transaction_store::TransactionStatus) -> TransactionStatus {
-    use blokli_chain_api::transaction_store::TransactionStatus as StoreStatus;
-
-    match status {
-        StoreStatus::Pending => TransactionStatus::Pending,
-        StoreStatus::Submitted => TransactionStatus::Submitted,
-        StoreStatus::Confirmed => TransactionStatus::Confirmed,
-        StoreStatus::Reverted => TransactionStatus::Reverted,
-        StoreStatus::Timeout => TransactionStatus::Timeout,
-        StoreStatus::ValidationFailed => TransactionStatus::ValidationFailed,
-        StoreStatus::SubmissionFailed => TransactionStatus::SubmissionFailed,
-    }
-}
 
 /// Result type for HOPR balance queries
 #[derive(Union)]
@@ -83,8 +61,6 @@ impl QueryRoot {
         #[graphql(desc = "Filter by packet key (peer ID format)")] packet_key: Option<String>,
         #[graphql(desc = "Filter by chain key (hexadecimal format)")] chain_key: Option<String>,
     ) -> Result<Vec<Account>> {
-        use blokli_db_entity::conversions::account_aggregation::fetch_accounts_with_filters;
-
         // Require at least one identity filter to prevent excessive data retrieval
         // Note: status alone is not sufficient as it could still return thousands of channels
         if keyid.is_none() && packet_key.is_none() && chain_key.is_none() {
@@ -132,9 +108,6 @@ impl QueryRoot {
         #[graphql(desc = "Filter by packet key (peer ID format)")] packet_key: Option<String>,
         #[graphql(desc = "Filter by chain key (hexadecimal format)")] chain_key: Option<String>,
     ) -> Result<i32> {
-        use blokli_db_entity::conversions::balances::string_to_address;
-        use sea_orm::PaginatorTrait;
-
         // Validate chain_key before DB access
         if let Some(ref ck) = chain_key {
             validate_eth_address(ck)?;
@@ -184,8 +157,6 @@ impl QueryRoot {
             blokli_api_types::ChannelStatus,
         >,
     ) -> Result<i32> {
-        use sea_orm::PaginatorTrait;
-
         let db = ctx.data::<DatabaseConnection>()?;
 
         let mut query = blokli_db_entity::channel::Entity::find();
@@ -236,8 +207,6 @@ impl QueryRoot {
             blokli_api_types::ChannelStatus,
         >,
     ) -> Result<Vec<Channel>> {
-        use blokli_db_entity::conversions::channel_aggregation::fetch_channels_with_state;
-
         // Require at least one identity filter to prevent excessive data retrieval
         // Note: status alone is not sufficient as it could still return thousands of channels
         if source_key_id.is_none() && destination_key_id.is_none() && concrete_channel_id.is_none() {
@@ -308,8 +277,6 @@ impl QueryRoot {
         ctx: &Context<'_>,
         #[graphql(desc = "On-chain address to query (hexadecimal format)")] address: String,
     ) -> Result<HoprBalanceResult> {
-        use hopr_primitive_types::primitives::Address;
-
         // Validate address format
         if let Err(e) = validate_eth_address(&address) {
             return Ok(HoprBalanceResult::InvalidAddress(InvalidAddressError {
@@ -348,8 +315,6 @@ impl QueryRoot {
         ctx: &Context<'_>,
         #[graphql(desc = "On-chain address to query (hexadecimal format)")] address: String,
     ) -> Result<NativeBalanceResult> {
-        use hopr_primitive_types::primitives::Address;
-
         // Validate address format
         if let Err(e) = validate_eth_address(&address) {
             return Ok(NativeBalanceResult::InvalidAddress(InvalidAddressError {
@@ -391,8 +356,6 @@ impl QueryRoot {
         ctx: &Context<'_>,
         #[graphql(desc = "Safe contract address to query (hexadecimal format)")] address: String,
     ) -> Result<SafeHoprAllowanceResult> {
-        use hopr_primitive_types::primitives::Address;
-
         // Validate address format
         if let Err(e) = validate_eth_address(&address) {
             return Ok(SafeHoprAllowanceResult::InvalidAddress(InvalidAddressError {
@@ -463,9 +426,18 @@ impl QueryRoot {
         let min_ticket_winning_probability = chain_info.min_incoming_ticket_win_prob as f64;
 
         // Convert domain separators from binary to hex strings
-        let channel_dst = chain_info.channels_dst.as_ref().map(|b| bytes_to_hex32(b));
-        let ledger_dst = chain_info.ledger_dst.as_ref().map(|b| bytes_to_hex32(b));
-        let safe_registry_dst = chain_info.safe_registry_dst.as_ref().map(|b| bytes_to_hex32(b));
+        let channel_dst = chain_info.channels_dst.as_ref().map(|b| {
+            let bytes: &[u8; 32] = b.as_slice().try_into().expect("channels_dst must be 32 bytes");
+            Hex32::from(bytes)
+        });
+        let ledger_dst = chain_info.ledger_dst.as_ref().map(|b| {
+            let bytes: &[u8; 32] = b.as_slice().try_into().expect("ledger_dst must be 32 bytes");
+            Hex32::from(bytes)
+        });
+        let safe_registry_dst = chain_info.safe_registry_dst.as_ref().map(|b| {
+            let bytes: &[u8; 32] = b.as_slice().try_into().expect("safe_registry_dst must be 32 bytes");
+            Hex32::from(bytes)
+        });
 
         // Convert channel closure grace period from i64 to u64 with validation
         let channel_closure_grace_period = chain_info
@@ -535,9 +507,9 @@ impl QueryRoot {
                 // Convert to GraphQL Transaction type
                 let transaction = Transaction {
                     id: record.id.to_string(),
-                    status: store_status_to_graphql(record.status),
+                    status: crate::conversions::store_status_to_graphql(record.status),
                     submitted_at: record.submitted_at,
-                    transaction_hash: record.transaction_hash.map(hash_to_hex32),
+                    transaction_hash: record.transaction_hash.map(Into::into),
                 };
                 Ok(Some(TransactionResult::Transaction(transaction)))
             }

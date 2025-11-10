@@ -1,7 +1,13 @@
 use std::collections::HashMap;
 
 use blokli_api_types::{Account, Channel, ChannelUpdate, TokenValueString, UInt64};
-use blokli_db_entity::conversions::{account_aggregation, balances::balance_to_string};
+use blokli_db_entity::{
+    codegen::{account, channel, channel_state},
+    conversions::{
+        account_aggregation,
+        balances::{address_to_string, balance_to_string},
+    },
+};
 use hopr_crypto_types::prelude::Hash;
 use hopr_primitive_types::prelude::{Address, ToHex};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder};
@@ -28,8 +34,6 @@ pub(super) async fn construct_channel_update<C>(conn: &C, channel_id: &Hash) -> 
 where
     C: ConnectionTrait,
 {
-    use blokli_db_entity::codegen::{channel, channel_state};
-
     // Convert Hash to hex string for database query
     let channel_id_hex = channel_id.to_hex();
 
@@ -127,8 +131,6 @@ pub(super) async fn construct_account_update<C>(conn: &C, address: &Address) -> 
 where
     C: ConnectionTrait,
 {
-    use blokli_db_entity::{codegen::account, conversions::balances::address_to_string};
-
     // Convert Address to binary for database query
     let address_bytes = address.as_ref().to_vec();
 
