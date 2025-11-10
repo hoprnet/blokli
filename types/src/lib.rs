@@ -422,6 +422,26 @@ pub struct InvalidTransactionIdError {
     pub transaction_id: String,
 }
 
+/// Address format is invalid
+#[derive(SimpleObject, Clone, Debug)]
+pub struct InvalidAddressError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+    /// The invalid address that was provided
+    pub address: String,
+}
+
+/// Database or internal query error
+#[derive(SimpleObject, Clone, Debug)]
+pub struct QueryFailedError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+}
+
 /// Safe HOPR token allowance information for a specific Safe address
 #[derive(SimpleObject, Clone, Debug)]
 pub struct SafeHoprAllowance {

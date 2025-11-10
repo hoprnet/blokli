@@ -2,10 +2,11 @@
 
 use std::sync::Arc;
 
-use async_graphql::{Context, Object, Result};
+use async_graphql::{Context, Object, Result, Union};
 use blokli_api_types::{
-    Account, ChainInfo, Channel, ContractAddressMap, Hex32, HoprBalance, InvalidTransactionIdError, NativeBalance,
-    SafeHoprAllowance, TokenValueString, Transaction, TransactionStatus,
+    Account, ChainInfo, Channel, ContractAddressMap, Hex32, HoprBalance, InvalidAddressError,
+    InvalidTransactionIdError, NativeBalance, QueryFailedError, SafeHoprAllowance, TokenValueString, Transaction,
+    TransactionStatus,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
@@ -39,6 +40,30 @@ fn store_status_to_graphql(status: blokli_chain_api::transaction_store::Transact
         StoreStatus::ValidationFailed => TransactionStatus::ValidationFailed,
         StoreStatus::SubmissionFailed => TransactionStatus::SubmissionFailed,
     }
+}
+
+/// Result type for HOPR balance queries
+#[derive(Union)]
+pub enum HoprBalanceResult {
+    Balance(HoprBalance),
+    InvalidAddress(InvalidAddressError),
+    QueryFailed(QueryFailedError),
+}
+
+/// Result type for native balance queries
+#[derive(Union)]
+pub enum NativeBalanceResult {
+    Balance(NativeBalance),
+    InvalidAddress(InvalidAddressError),
+    QueryFailed(QueryFailedError),
+}
+
+/// Result type for Safe HOPR allowance queries
+#[derive(Union)]
+pub enum SafeHoprAllowanceResult {
+    Allowance(SafeHoprAllowance),
+    InvalidAddress(InvalidAddressError),
+    QueryFailed(QueryFailedError),
 }
 
 /// Root query type providing read-only access to indexed blockchain data
@@ -282,11 +307,17 @@ impl QueryRoot {
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "On-chain address to query (hexadecimal format)")] address: String,
-    ) -> Result<Option<HoprBalance>> {
+    ) -> Result<HoprBalanceResult> {
         use hopr_primitive_types::primitives::Address;
 
         // Validate address format
-        validate_eth_address(&address)?;
+        if let Err(e) = validate_eth_address(&address) {
+            return Ok(HoprBalanceResult::InvalidAddress(InvalidAddressError {
+                code: "INVALID_ADDRESS".to_string(),
+                message: e.message,
+                address,
+            }));
+        }
 
         // Convert hex string address to Address type
         let parsed_address = Address::new(&string_to_address(&address));
@@ -296,14 +327,14 @@ impl QueryRoot {
 
         // Make RPC call to get balance from blockchain
         match rpc.get_hopr_balance(parsed_address).await {
-            Ok(balance) => Ok(Some(HoprBalance {
+            Ok(balance) => Ok(HoprBalanceResult::Balance(HoprBalance {
                 address,
                 balance: TokenValueString(balance.to_string()),
             })),
-            Err(e) => Err(async_graphql::Error::new(format!(
-                "Failed to query HOPR balance from RPC: {}",
-                e
-            ))),
+            Err(e) => Ok(HoprBalanceResult::QueryFailed(QueryFailedError {
+                code: "QUERY_FAILED".to_string(),
+                message: format!("Failed to query HOPR balance from RPC: {}", e),
+            })),
         }
     }
 
@@ -316,11 +347,17 @@ impl QueryRoot {
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "On-chain address to query (hexadecimal format)")] address: String,
-    ) -> Result<Option<NativeBalance>> {
+    ) -> Result<NativeBalanceResult> {
         use hopr_primitive_types::primitives::Address;
 
         // Validate address format
-        validate_eth_address(&address)?;
+        if let Err(e) = validate_eth_address(&address) {
+            return Ok(NativeBalanceResult::InvalidAddress(InvalidAddressError {
+                code: "INVALID_ADDRESS".to_string(),
+                message: e.message,
+                address,
+            }));
+        }
 
         // Convert hex string address to Address type
         let parsed_address = Address::new(&string_to_address(&address));
@@ -330,14 +367,14 @@ impl QueryRoot {
 
         // Make RPC call to get native balance from blockchain
         match rpc.get_xdai_balance(parsed_address).await {
-            Ok(balance) => Ok(Some(NativeBalance {
+            Ok(balance) => Ok(NativeBalanceResult::Balance(NativeBalance {
                 address,
                 balance: TokenValueString(balance.to_string()),
             })),
-            Err(e) => Err(async_graphql::Error::new(format!(
-                "Failed to query native balance from RPC: {}",
-                e
-            ))),
+            Err(e) => Ok(NativeBalanceResult::QueryFailed(QueryFailedError {
+                code: "QUERY_FAILED".to_string(),
+                message: format!("Failed to query native balance from RPC: {}", e),
+            })),
         }
     }
 
@@ -346,30 +383,46 @@ impl QueryRoot {
     /// Returns the wxHOPR token allowance that the specified Safe contract has granted
     /// to the HOPR channels contract.
     ///
-    /// **Note:** Currently returns None as indexer/database support is not yet implemented.
-    /// Returns None if no allowance data exists for the address.
+    /// This query makes a direct RPC call to the blockchain to get the current allowance.
+    /// No database storage is used - allowance is fetched directly from the chain.
     #[graphql(name = "safeHoprAllowance")]
     async fn safe_hopr_allowance(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Safe contract address to query (hexadecimal format)")] address: String,
-    ) -> Result<Option<SafeHoprAllowance>> {
+    ) -> Result<SafeHoprAllowanceResult> {
+        use hopr_primitive_types::primitives::Address;
+
         // Validate address format
-        validate_eth_address(&address)?;
+        if let Err(e) = validate_eth_address(&address) {
+            return Ok(SafeHoprAllowanceResult::InvalidAddress(InvalidAddressError {
+                code: "INVALID_ADDRESS".to_string(),
+                message: e.message,
+                address,
+            }));
+        }
 
-        // Prevent unused variable warning
-        let _db = ctx.data::<DatabaseConnection>()?;
+        // Convert hex string address to Address type
+        let safe_address = Address::new(&string_to_address(&address));
 
-        // FIXME: Implement allowance fetching once indexer and database support is added
-        // The indexer needs to be extended to fetch and store Safe allowances for arbitrary addresses
-        // Database schema needs a table to store allowance data indexed by Safe address
-        //
-        // Implementation should:
-        // 1. Query allowance table by Safe address
-        // 2. Return SafeHoprAllowance { address, allowance } if data exists
-        // 3. Return None if no allowance data exists for the address
+        // Get contract addresses from context to access channels contract
+        let contract_addresses = ctx.data::<ContractAddresses>()?;
+        let channels_address = contract_addresses.channels;
 
-        Ok(None)
+        // Get RPC operations from context - using ReqwestClient as the concrete type
+        let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
+
+        // Make RPC call to get allowance from blockchain
+        match rpc.get_hopr_allowance(safe_address, channels_address).await {
+            Ok(allowance) => Ok(SafeHoprAllowanceResult::Allowance(SafeHoprAllowance {
+                address,
+                allowance: TokenValueString(allowance.to_string()),
+            })),
+            Err(e) => Ok(SafeHoprAllowanceResult::QueryFailed(QueryFailedError {
+                code: "QUERY_FAILED".to_string(),
+                message: format!("Failed to query HOPR allowance from RPC: {}", e),
+            })),
+        }
     }
 
     /// Retrieve chain information
