@@ -25,7 +25,7 @@ pub const TEST_TX_POLLING_INTERVAL: Duration = Duration::from_millis(10);
 
 /// Wait for a transaction to be confirmed with a timeout.
 ///
-/// This function will sleep for the specified timeout duration, then await the pending transaction.
+/// This function will await the pending transaction with a deadline enforced by the timeout.
 /// It will panic if the transaction is not confirmed within the timeout period.
 ///
 /// # Arguments
@@ -38,10 +38,10 @@ pub const TEST_TX_POLLING_INTERVAL: Duration = Duration::from_millis(10);
 /// Panics if the transaction is not confirmed within the timeout period.
 pub async fn wait_until_tx(pending: PendingTransaction, timeout: Duration) {
     let tx_hash = *pending.tx_hash();
-    sleep(timeout).await;
-    pending
+    tokio::time::timeout(timeout, pending)
         .await
-        .unwrap_or_else(|_| panic!("timeout awaiting tx hash {tx_hash} after {} seconds", timeout.as_secs()));
+        .unwrap_or_else(|_| panic!("timeout awaiting tx hash {tx_hash} after {} seconds", timeout.as_secs()))
+        .unwrap();
 }
 
 /// Wait for the finality period to ensure transactions are confirmed.
