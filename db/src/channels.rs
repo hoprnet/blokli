@@ -35,7 +35,7 @@ use crate::{
 /// # Returns
 ///
 /// The account's database ID (primary key)
-async fn get_or_create_account_id(tx: &sea_orm::DatabaseTransaction, address: &Address) -> Result<i32> {
+async fn get_or_create_account_id(tx: &sea_orm::DatabaseTransaction, address: &Address) -> Result<i64> {
     use blokli_db_entity::{account, prelude::Account};
 
     // Try to find existing account
@@ -69,8 +69,8 @@ async fn get_or_create_account_id(tx: &sea_orm::DatabaseTransaction, address: &A
 /// Tuple of (source_address, dest_address)
 async fn lookup_account_addresses(
     tx: &sea_orm::DatabaseTransaction,
-    source_id: i32,
-    dest_id: i32,
+    source_id: i64,
+    dest_id: i64,
 ) -> Result<(Address, Address)> {
     use blokli_db_entity::prelude::Account;
 
@@ -161,7 +161,7 @@ fn reconstruct_channel_entry(
 async fn insert_channel_state_and_emit(
     db: &BlokliDb,
     tx: &sea_orm::DatabaseTransaction,
-    channel_id: i32,
+    channel_id: i64,
     channel_entry: &ChannelEntry,
     block: i64,
     tx_index: i64,

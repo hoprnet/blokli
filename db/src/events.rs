@@ -75,9 +75,9 @@ impl BlockPosition {
 #[derive(Debug, Clone)]
 pub struct AccountStateChange {
     /// Account ID that changed
-    pub account_id: i32,
+    pub account_id: i64,
     /// New state record ID
-    pub state_id: i32,
+    pub state_id: i64,
     /// Block number where change occurred
     pub published_block: i64,
     /// Transaction index within block
@@ -100,9 +100,9 @@ impl AccountStateChange {
 #[derive(Debug, Clone)]
 pub struct ChannelStateChange {
     /// Channel ID that changed
-    pub channel_id: i32,
+    pub channel_id: i64,
     /// New state record ID
-    pub state_id: i32,
+    pub state_id: i64,
     /// Block number where change occurred
     pub published_block: i64,
     /// Transaction index within block

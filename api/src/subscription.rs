@@ -1,19 +1,15 @@
 //! GraphQL subscription root and resolver implementations
 
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 use async_broadcast::Receiver;
 use async_graphql::{Context, Result, Subscription};
 use async_stream::stream;
 use blokli_api_types::{
-    Account, Channel, ChannelUpdate, HoprBalance, NativeBalance, OpenedChannelsGraph, TokenValueString,
+    Account, Channel, ChannelUpdate, HoprBalance, NativeBalance, OpenedChannelsGraph, TokenValueString, UInt64,
 };
-use blokli_api_types::{Account, Channel, HoprBalance, NativeBalance, OpenedChannelsGraph};
 use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
-use blokli_db_entity::conversions::balances::string_to_address;
-use blokli_db_entity::conversions::balances::{
-    address_to_string, hopr_balance_to_string, native_balance_to_string, string_to_address,
-};
+use blokli_db_entity::conversions::{account_aggregation::fetch_accounts_by_keyids, balances::string_to_address};
 use futures::Stream;
 use sea_orm::{DatabaseConnection, EntityTrait};
 use tokio::time::sleep;
@@ -123,7 +119,7 @@ async fn query_channels_at_watermark(
         return Ok(Vec::new());
     }
 
-    let channel_ids: Vec<i32> = channels.iter().map(|c| c.id).collect();
+    let channel_ids: Vec<i64> = channels.iter().map(|c| c.id).collect();
 
     // Query channel_state for all channels, filtered by watermark
     // Only get states published at or before the watermark
@@ -154,7 +150,7 @@ async fn query_channels_at_watermark(
         .map_err(|e| async_graphql::Error::new(format!("Failed to query channel_state: {}", e)))?;
 
     // Build map of channel_id -> latest state (first occurrence due to ordering)
-    let mut state_map: HashMap<i32, channel_state::Model> = HashMap::new();
+    let mut state_map: HashMap<i64, channel_state::Model> = HashMap::new();
     for state in channel_states {
         state_map.entry(state.channel_id).or_insert(state);
     }
@@ -170,7 +166,7 @@ async fn query_channels_at_watermark(
     }
 
     // Collect all unique account IDs we need to fetch
-    let mut account_ids: Vec<i32> = open_channels
+    let mut account_ids: Vec<i64> = open_channels
         .iter()
         .flat_map(|c| vec![c.source, c.destination])
         .collect();
@@ -184,7 +180,7 @@ async fn query_channels_at_watermark(
             .map_err(|e| async_graphql::Error::new(format!("Failed to fetch accounts: {}", e)))?;
 
     // Build account map for quick lookup
-    let account_map: HashMap<i32, blokli_db_entity::conversions::account_aggregation::AggregatedAccount> =
+    let account_map: HashMap<i64, blokli_db_entity::conversions::account_aggregation::AggregatedAccount> =
         accounts_result.into_iter().map(|a| (a.keyid, a)).collect();
 
     // Build ChannelUpdate objects
@@ -218,24 +214,18 @@ async fn query_channels_at_watermark(
             keyid: source_account.keyid,
             chain_key: source_account.chain_key.clone(),
             packet_key: source_account.packet_key.clone(),
-            account_hopr_balance: TokenValueString(source_account.account_hopr_balance.clone()),
-            account_native_balance: TokenValueString(source_account.account_native_balance.clone()),
             safe_address: source_account.safe_address.clone(),
-            safe_hopr_balance: source_account.safe_hopr_balance.clone().map(TokenValueString),
-            safe_native_balance: source_account.safe_native_balance.clone().map(TokenValueString),
             multi_addresses: source_account.multi_addresses.clone(),
+            safe_transaction_count: UInt64(source_account.safe_transaction_count),
         };
 
         let dest_gql = Account {
             keyid: dest_account.keyid,
             chain_key: dest_account.chain_key.clone(),
             packet_key: dest_account.packet_key.clone(),
-            account_hopr_balance: TokenValueString(dest_account.account_hopr_balance.clone()),
-            account_native_balance: TokenValueString(dest_account.account_native_balance.clone()),
             safe_address: dest_account.safe_address.clone(),
-            safe_hopr_balance: dest_account.safe_hopr_balance.clone().map(TokenValueString),
-            safe_native_balance: dest_account.safe_native_balance.clone().map(TokenValueString),
             multi_addresses: dest_account.multi_addresses.clone(),
+            safe_transaction_count: UInt64(dest_account.safe_transaction_count),
         };
 
         results.push(ChannelUpdate {
@@ -569,61 +559,50 @@ impl SubscriptionRoot {
         // Convert to GraphQL Account type
         let result = aggregated_accounts
             .into_iter()
-            .map(|agg| {
-                // Fetch announcements for this account
-                let announcements = blokli_db_entity::announcement::Entity::find()
-                    .filter(blokli_db_entity::announcement::Column::AccountId.eq(account_model.id))
-                    .all(db)
-                    .await?;
-
-                let multi_addresses: Vec<String> = announcements.into_iter().map(|a| a.multiaddress).collect();
-
-                // Convert addresses to hex strings for GraphQL response
-                let chain_key_str = address_to_string(&account_model.chain_key);
-
-                // TODO(Phase 2-3): Query account_state table for safe_address
-                // safe_address has been moved to account_state table
-                let safe_address_str = None::<String>;
-
-                Account {
-                    keyid: account_model.keyid,
-                    chain_key: chain_key_str,
-                    packet_key: account_model.packet_key,
-                    safe_address: safe_address_str,
-                    multi_addresses,
-                    safe_transaction_count: blokli_api_types::UInt64(agg.safe_transaction_count),
-                }
+            .map(|agg| Account {
+                keyid: agg.keyid,
+                chain_key: agg.chain_key,
+                packet_key: agg.packet_key,
+                safe_address: agg.safe_address,
+                multi_addresses: agg.multi_addresses,
+                safe_transaction_count: UInt64(agg.safe_transaction_count),
             })
             .collect();
 
         Ok(result)
     }
 
-    async fn fetch_opened_channels_graph(_db: &DatabaseConnection) -> Result<OpenedChannelsGraph, sea_orm::DbErr> {
-        // TODO(Phase 2-3): This function requires querying channel_state table for status
-        // For now, return empty graph until we implement the channel_state lookup
-        // Original logic: Fetch all OPEN channels (status = 1) and their participating accounts
-        use blokli_db_entity::conversions::account_aggregation::fetch_accounts_by_keyids;
-        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+    async fn fetch_opened_channels_graph(db: &DatabaseConnection) -> Result<OpenedChannelsGraph, sea_orm::DbErr> {
+        // Fetch all OPEN channels (status = 1) using channel aggregation
+        use blokli_db_entity::conversions::channel_aggregation::fetch_channels_with_state;
 
         // 1. Fetch all OPEN channels (status = 1)
-        let channel_models = blokli_db_entity::channel::Entity::find()
-            .filter(blokli_db_entity::channel::Column::Status.eq(1))
-            .all(db)
-            .await?;
+        let aggregated_channels = fetch_channels_with_state(db, None, None, None, Some(1)).await?;
 
         // Convert to GraphQL Channel type
-        let channels: Vec<Channel> = channel_models.iter().map(|m| channel_from_model(m.clone())).collect();
+        let channels: Vec<Channel> = aggregated_channels
+            .iter()
+            .map(|agg| Channel {
+                concrete_channel_id: agg.concrete_channel_id.clone(),
+                source: agg.source,
+                destination: agg.destination,
+                balance: TokenValueString(agg.balance.clone()),
+                status: agg.status.into(),
+                epoch: i32::try_from(agg.epoch).unwrap_or(i32::MAX),
+                ticket_index: UInt64(u64::try_from(agg.ticket_index).unwrap_or(0)),
+                closure_time: agg.closure_time,
+            })
+            .collect();
 
         // 2. Collect unique keyids from source and destination
         let mut keyids = HashSet::new();
-        for channel in &channel_models {
+        for channel in &aggregated_channels {
             keyids.insert(channel.source);
             keyids.insert(channel.destination);
         }
 
         // 3. Fetch accounts for those keyids with optimized batch loading
-        let keyid_vec: Vec<i32> = keyids.into_iter().collect();
+        let keyid_vec: Vec<i64> = keyids.into_iter().collect();
         let aggregated_accounts = fetch_accounts_by_keyids(db, keyid_vec).await?;
 
         // Convert to GraphQL Account type

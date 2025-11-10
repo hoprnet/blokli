@@ -476,7 +476,7 @@ impl BlokliDbAccountOperations for BlokliDb {
 
                     if let Some(account_model) = account_opt {
                         // Find and delete all related announcements
-                        let to_delete: Vec<i32> = Announcement::find()
+                        let to_delete: Vec<i64> = Announcement::find()
                             .filter(announcement::Column::AccountId.eq(account_model.id))
                             .all(tx.as_ref())
                             .await?

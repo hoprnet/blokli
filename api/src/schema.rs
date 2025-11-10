@@ -3,7 +3,6 @@
 use std::sync::Arc;
 
 use async_graphql::Schema;
-use async_graphql::{EmptyMutation, Schema};
 use blokli_chain_api::{
     DefaultHttpRequestor, rpc_adapter::RpcAdapter, transaction_executor::RawTransactionExecutor,
     transaction_store::TransactionStore,
@@ -15,7 +14,8 @@ use sea_orm::DatabaseConnection;
 
 use crate::{mutation::MutationRoot, query::QueryRoot, subscription::SubscriptionRoot};
 
-/// Build the async-graphql schema with database connection, chain ID, network, indexer state, and transaction components
+/// Build the async-graphql schema with database connection, chain ID, network, indexer state, and transaction
+/// components
 ///
 /// This creates a GraphQL schema with:
 /// - Read-only queries for public entities (account, announcement, channel, balances)
@@ -26,12 +26,13 @@ use crate::{mutation::MutationRoot, query::QueryRoot, subscription::Subscription
 /// - Database connection injected as context data
 /// - Chain ID injected as context data
 /// - Network name injected as context data
-/// - Contract addresses injected as context data<<<<<<< HEAD
+/// - Contract addresses injected as context data
 /// - IndexerState injected as context data (for subscription coordination)
 /// - Transaction executor and store injected as context data (for mutations and transaction queries)
 /// - RPC operations injected as context data (for passthrough balance queries)
 /// - Query depth limit (10 levels) to prevent excessive nesting
 /// - Query complexity limit (100 points) to prevent expensive operations
+#[allow(clippy::too_many_arguments)]
 pub fn build_schema<R: HttpRequestor + 'static + Clone>(
     db: DatabaseConnection,
     chain_id: u64,
@@ -62,6 +63,7 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
 /// for code generation, documentation, or schema validation tools.
 pub fn export_schema_sdl<R: HttpRequestor + 'static + Clone>(
     db: DatabaseConnection,
+    chain_id: u64,
     contract_addresses: ContractAddresses,
     indexer_state: IndexerState,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
@@ -70,7 +72,9 @@ pub fn export_schema_sdl<R: HttpRequestor + 'static + Clone>(
 ) -> String {
     let schema = build_schema(
         db,
+        chain_id,
         "PLACEHOLDER".to_string(),
+        contract_addresses,
         indexer_state,
         transaction_executor,
         transaction_store,

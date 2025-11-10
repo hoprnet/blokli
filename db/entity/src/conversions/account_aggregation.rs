@@ -5,12 +5,12 @@ use std::collections::HashMap;
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder};
 
 use super::balances::{address_to_string, string_to_address};
-use crate::codegen::{account, announcement};
+use crate::codegen::{account, account_state, announcement};
 
 /// Aggregated account data with all related information
 #[derive(Debug, Clone)]
 pub struct AggregatedAccount {
-    pub keyid: i32,
+    pub keyid: i64,
     pub chain_key: String,
     pub packet_key: String,
     pub safe_address: Option<String>,
@@ -44,7 +44,7 @@ where
     }
 
     // Collect all account IDs
-    let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
+    let account_ids: Vec<i64> = accounts.iter().map(|a| a.id).collect();
 
     let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
 
@@ -58,7 +58,7 @@ where
         .await?;
 
     // Build map of account_id -> safe_address (only keep latest state per account)
-    let mut safe_address_map: HashMap<i32, Vec<u8>> = HashMap::new();
+    let mut safe_address_map: HashMap<i64, Vec<u8>> = HashMap::new();
     for state in account_states {
         if let Some(safe_addr) = state.safe_address {
             // Only insert if we haven't seen this account yet (first occurrence is latest due to ordering)
@@ -76,7 +76,7 @@ where
         .await?;
 
     // Group announcements by account_id
-    let mut announcements_by_account: HashMap<i32, Vec<String>> = HashMap::new();
+    let mut announcements_by_account: HashMap<i64, Vec<String>> = HashMap::new();
     for ann in announcements {
         announcements_by_account
             .entry(ann.account_id)
@@ -150,7 +150,7 @@ where
     }
 
     // Collect all account IDs
-    let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
+    let account_ids: Vec<i64> = accounts.iter().map(|a| a.id).collect();
 
     let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
 
@@ -164,7 +164,7 @@ where
         .await?;
 
     // Build map of account_id -> safe_address (only keep latest state per account)
-    let mut safe_address_map: HashMap<i32, Vec<u8>> = HashMap::new();
+    let mut safe_address_map: HashMap<i64, Vec<u8>> = HashMap::new();
     for state in account_states {
         if let Some(safe_addr) = state.safe_address {
             // Only insert if we haven't seen this account yet (first occurrence is latest due to ordering)
@@ -182,7 +182,7 @@ where
         .await?;
 
     // Group announcements by account_id
-    let mut announcements_by_account: HashMap<i32, Vec<String>> = HashMap::new();
+    let mut announcements_by_account: HashMap<i64, Vec<String>> = HashMap::new();
     for ann in announcements {
         announcements_by_account
             .entry(ann.account_id)
@@ -231,7 +231,7 @@ where
 ///
 /// # Returns
 /// * `Result<Vec<AggregatedAccount>, sea_orm::DbErr>` - List of aggregated accounts matching the keyids
-pub async fn fetch_accounts_by_keyids<C>(conn: &C, keyids: Vec<i32>) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr>
+pub async fn fetch_accounts_by_keyids<C>(conn: &C, keyids: Vec<i64>) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr>
 where
     C: ConnectionTrait,
 {
@@ -250,7 +250,7 @@ where
     }
 
     // Collect all account IDs
-    let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
+    let account_ids: Vec<i64> = accounts.iter().map(|a| a.id).collect();
 
     let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
 
@@ -264,7 +264,7 @@ where
         .await?;
 
     // Build map of account_id -> safe_address (only keep latest state per account)
-    let mut safe_address_map: HashMap<i32, Vec<u8>> = HashMap::new();
+    let mut safe_address_map: HashMap<i64, Vec<u8>> = HashMap::new();
     for state in account_states {
         if let Some(safe_addr) = state.safe_address {
             // Only insert if we haven't seen this account yet (first occurrence is latest due to ordering)
@@ -282,7 +282,7 @@ where
         .await?;
 
     // Group announcements by account_id
-    let mut announcements_by_account: HashMap<i32, Vec<String>> = HashMap::new();
+    let mut announcements_by_account: HashMap<i64, Vec<String>> = HashMap::new();
     for ann in announcements {
         announcements_by_account
             .entry(ann.account_id)
@@ -364,7 +364,7 @@ where
     }
 
     // Collect all account IDs
-    let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
+    let account_ids: Vec<i64> = accounts.iter().map(|a| a.id).collect();
 
     let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
 
@@ -378,7 +378,7 @@ where
         .await?;
 
     // Build map of account_id -> safe_address (only keep latest state per account)
-    let mut safe_address_map: HashMap<i32, Vec<u8>> = HashMap::new();
+    let mut safe_address_map: HashMap<i64, Vec<u8>> = HashMap::new();
     for state in account_states {
         if let Some(safe_addr) = state.safe_address {
             // Only insert if we haven't seen this account yet (first occurrence is latest due to ordering)
@@ -396,7 +396,7 @@ where
         .await?;
 
     // Group announcements by account_id
-    let mut announcements_by_account: HashMap<i32, Vec<String>> = HashMap::new();
+    let mut announcements_by_account: HashMap<i64, Vec<String>> = HashMap::new();
     for ann in announcements {
         announcements_by_account
             .entry(ann.account_id)

@@ -86,8 +86,8 @@ mockito = "1.7.0"
 moka = { version = "0.12.10", features = ["future"] }
 multiaddr = "0.18.2"
 num_enum = "0.7.4"
-primitive-types = { version = "0.14.0", features = ["serde"] }
 parking_lot = "0.12.5"
+primitive-types = { version = "0.14.0", features = ["serde"] }
 rand = "0.9.2" # ignored in renovate, cannot be updated, dependencies reference old ones
 reqwest = { version = "0.12.23", features = ["json"] }
 ringbuffer = "0.16.0"
@@ -190,5 +190,5 @@ cast_sign_loss           = "deny"
 
 # faster insta test runs
 [profile.dev.package]
-insta.opt-level = 3
+insta.opt-level   = 3
 similar.opt-level = 3

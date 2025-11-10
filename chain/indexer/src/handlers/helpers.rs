@@ -60,7 +60,7 @@ where
         .await
         .map_err(|e| CoreEthereumIndexerError::ProcessError(format!("Failed to fetch accounts: {}", e)))?;
 
-    let account_map: HashMap<i32, account_aggregation::AggregatedAccount> =
+    let account_map: HashMap<i64, account_aggregation::AggregatedAccount> =
         accounts_result.into_iter().map(|a| (a.keyid, a)).collect();
 
     let source_account = account_map.get(&channel.source).ok_or_else(|| {
@@ -87,24 +87,18 @@ where
         keyid: source_account.keyid,
         chain_key: source_account.chain_key.clone(),
         packet_key: source_account.packet_key.clone(),
-        account_hopr_balance: TokenValueString(source_account.account_hopr_balance.clone()),
-        account_native_balance: TokenValueString(source_account.account_native_balance.clone()),
         safe_address: source_account.safe_address.clone(),
-        safe_hopr_balance: source_account.safe_hopr_balance.clone().map(TokenValueString),
-        safe_native_balance: source_account.safe_native_balance.clone().map(TokenValueString),
         multi_addresses: source_account.multi_addresses.clone(),
+        safe_transaction_count: UInt64(source_account.safe_transaction_count),
     };
 
     let dest_gql = Account {
         keyid: dest_account.keyid,
         chain_key: dest_account.chain_key.clone(),
         packet_key: dest_account.packet_key.clone(),
-        account_hopr_balance: TokenValueString(dest_account.account_hopr_balance.clone()),
-        account_native_balance: TokenValueString(dest_account.account_native_balance.clone()),
         safe_address: dest_account.safe_address.clone(),
-        safe_hopr_balance: dest_account.safe_hopr_balance.clone().map(TokenValueString),
-        safe_native_balance: dest_account.safe_native_balance.clone().map(TokenValueString),
         multi_addresses: dest_account.multi_addresses.clone(),
+        safe_transaction_count: UInt64(dest_account.safe_transaction_count),
     };
 
     Ok(ChannelUpdate {
@@ -163,11 +157,8 @@ where
         keyid: aggregated.keyid,
         chain_key: aggregated.chain_key,
         packet_key: aggregated.packet_key,
-        account_hopr_balance: TokenValueString(aggregated.account_hopr_balance),
-        account_native_balance: TokenValueString(aggregated.account_native_balance),
         safe_address: aggregated.safe_address,
-        safe_hopr_balance: aggregated.safe_hopr_balance.map(TokenValueString),
-        safe_native_balance: aggregated.safe_native_balance.map(TokenValueString),
         multi_addresses: aggregated.multi_addresses,
+        safe_transaction_count: UInt64(aggregated.safe_transaction_count),
     })
 }

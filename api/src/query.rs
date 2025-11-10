@@ -4,14 +4,13 @@ use std::sync::Arc;
 
 use async_graphql::{Context, Object, Result};
 use blokli_api_types::{
-    Account, ChainInfo, Channel, Hex32, HoprBalance, InvalidTransactionIdError, NativeBalance, TokenValueString,
-    Transaction, TransactionStatus,
+    Account, ChainInfo, Channel, ContractAddressMap, Hex32, HoprBalance, InvalidTransactionIdError, NativeBalance,
+    SafeHoprAllowance, TokenValueString, Transaction, TransactionStatus,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
 use blokli_chain_types::ContractAddresses;
-use blokli_db_entity::conversions::balances::hopr_balance_to_string;
-use blokli_db_entity::conversions::balances::string_to_address;
+use blokli_db_entity::conversions::balances::{hopr_balance_to_string, string_to_address};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::{mutation::TransactionResult, validation::validate_eth_address};
@@ -204,8 +203,8 @@ impl QueryRoot {
     async fn channels(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Filter by source node keyid")] source_key_id: Option<i32>,
-        #[graphql(desc = "Filter by destination node keyid")] destination_key_id: Option<i32>,
+        #[graphql(desc = "Filter by source node keyid")] source_key_id: Option<i64>,
+        #[graphql(desc = "Filter by destination node keyid")] destination_key_id: Option<i64>,
         #[graphql(desc = "Filter by concrete channel ID (hexadecimal format)")] concrete_channel_id: Option<String>,
         #[graphql(desc = "Filter by channel status (optional, combine with identity filters)")] status: Option<
             blokli_api_types::ChannelStatus,
@@ -216,11 +215,13 @@ impl QueryRoot {
         // Require at least one identity filter to prevent excessive data retrieval
         // Note: status alone is not sufficient as it could still return thousands of channels
         if source_key_id.is_none() && destination_key_id.is_none() && concrete_channel_id.is_none() {
-            return Err(async_graphql::Error::new(
-                "At least one identity filter is required (sourceKeyId, destinationKeyId, or concreteChannelId). \
+            return Err(
+                async_graphql::Error::new(
+                    "At least one identity filter is required (sourceKeyId, destinationKeyId, or concreteChannelId). \
                      \n                 The status filter can be used in combination but not alone. \n                 \
                      Example: channels(sourceKeyId: 1) or channels(sourceKeyId: 1, status: OPEN)",
-            ));
+                ),
+            );
         }
 
         let db = ctx.data::<DatabaseConnection>()?;

@@ -34,7 +34,7 @@ use crate::{
 };
 
 /// Primary key used in tables that contain only a single row.
-pub const SINGULAR_TABLE_FIXED_ID: i32 = 1;
+pub const SINGULAR_TABLE_FIXED_ID: i64 = 1;
 
 /// Shorthand for the `chrono` based timestamp type used in the database.
 pub type DbTimestamp = chrono::DateTime<chrono::Utc>;

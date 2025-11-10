@@ -810,7 +810,7 @@ where
             })?;
 
         // Extract unique channel IDs
-        let affected_channel_ids: HashSet<i32> = affected_states.iter().map(|state| state.channel_id).collect();
+        let affected_channel_ids: HashSet<i64> = affected_states.iter().map(|state| state.channel_id).collect();
 
         info!(affected_count = affected_channel_ids.len(), "Found affected channels");
 

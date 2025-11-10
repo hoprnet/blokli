@@ -3,11 +3,9 @@
 //! This crate contains pure GraphQL type definitions that can be reused
 //! by clients without depending on the full API server implementation.
 
+use std::collections::HashMap;
 
 use async_graphql::{Enum, InputObject, InputValueError, NewType, Scalar, ScalarType, SimpleObject, Value};
-use std::collections::HashMap;
-use async_graphql::{Enum, InputValueError, NewType, Scalar, ScalarType, SimpleObject, Value};
-
 
 /// Token value represented as a string to maintain precision
 ///
@@ -208,7 +206,7 @@ pub struct ChainInfo {
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Account {
     /// Unique identifier for the account
-    pub keyid: i32,
+    pub keyid: i64,
     /// Unique account on-chain address in hexadecimal format
     #[graphql(name = "chainKey")]
     pub chain_key: String,
@@ -229,8 +227,8 @@ pub struct Account {
 /// Network announcement with multiaddress information
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Announcement {
-    pub id: i32,
-    pub account_id: i32,
+    pub id: i64,
+    pub account_id: i64,
     /// Multiaddress for the node
     pub multiaddress: String,
     /// Published block as hex string
@@ -244,9 +242,9 @@ pub struct Channel {
     #[graphql(name = "concreteChannelId")]
     pub concrete_channel_id: String,
     /// Account keyid of the source node
-    pub source: i32,
+    pub source: i64,
     /// Account keyid of the destination node
-    pub destination: i32,
+    pub destination: i64,
     /// Total amount of HOPR tokens allocated to the channel
     pub balance: TokenValueString,
     /// Current state of the channel (OPEN, PENDINGTOCLOSE, or CLOSED)
@@ -422,6 +420,7 @@ pub struct InvalidTransactionIdError {
     /// The invalid transaction ID that was provided
     #[graphql(name = "transactionId")]
     pub transaction_id: String,
+}
 
 /// Safe HOPR token allowance information for a specific Safe address
 #[derive(SimpleObject, Clone, Debug)]

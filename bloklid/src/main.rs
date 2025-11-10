@@ -281,7 +281,7 @@ async fn run() -> errors::Result<()> {
 
             // Construct blokli-api ApiConfig from bloklid config
             // We need to get rpc_url and contracts from the original config
-            let (rpc_url_for_api, contracts_for_api) = {
+            let (rpc_url_for_api, _contracts_for_api) = {
                 let cfg = config
                     .read()
                     .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;

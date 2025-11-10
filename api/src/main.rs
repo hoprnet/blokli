@@ -2,7 +2,7 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use blokli_api::{config::ApiConfig, schema::export_schema_sdl, start_server};
+use blokli_api::schema::export_schema_sdl;
 use blokli_chain_api::{
     rpc_adapter::RpcAdapter,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
@@ -58,7 +58,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Connect to database
                 let db = Database::connect(&database_url).await?;
 
-<<<<<<< HEAD
                 // Create a default IndexerState for schema export
                 // This is only used for schema generation, not for actual indexing
                 // Use minimal buffer sizes since no events will flow through
@@ -81,6 +80,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     ))
                     .transport(transport_client.clone(), transport_client.guess_local());
 
+                // Use default chain ID for schema export (Gnosis Chain)
+                let chain_id = 100u64;
+
                 let rpc_operations = RpcOperations::new(
                     rpc_client.clone(),
                     ReqwestClient::new(),
@@ -90,10 +92,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             token: Address::default(),
                             channels: Address::default(),
                             announcements: Address::default(),
-                            safe_registry: Address::default(),
-                            price_oracle: Address::default(),
-                            win_prob_oracle: Address::default(),
-                            stake_factory: Address::default(),
+                            node_safe_registry: Address::default(),
+                            ticket_price_oracle: Address::default(),
+                            winning_probability_oracle: Address::default(),
+                            node_stake_v2_factory: Address::default(),
                         },
                         ..Default::default()
                     },
@@ -113,8 +115,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Generate schema SDL
                 let schema_sdl = export_schema_sdl(
                     db,
-              ContractAddresses::default(),
                     chain_id,
+                    ContractAddresses::default(),
                     indexer_state,
                     transaction_executor,
                     transaction_store,

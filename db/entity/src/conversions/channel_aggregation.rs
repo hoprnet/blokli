@@ -12,8 +12,8 @@ use crate::codegen::{channel, channel_state};
 #[derive(Debug, Clone)]
 pub struct AggregatedChannel {
     pub concrete_channel_id: String,
-    pub source: i32,
-    pub destination: i32,
+    pub source: i64,
+    pub destination: i64,
     pub balance: String,
     pub status: i8,
     pub epoch: i64,
@@ -39,8 +39,8 @@ pub struct AggregatedChannel {
 /// * `Result<Vec<AggregatedChannel>, sea_orm::DbErr>` - List of aggregated channels with state
 pub async fn fetch_channels_with_state(
     db: &DatabaseConnection,
-    source_key_id: Option<i32>,
-    destination_key_id: Option<i32>,
+    source_key_id: Option<i64>,
+    destination_key_id: Option<i64>,
     concrete_channel_id: Option<String>,
     status: Option<i8>,
 ) -> Result<Vec<AggregatedChannel>, sea_orm::DbErr> {
@@ -66,7 +66,7 @@ pub async fn fetch_channels_with_state(
     }
 
     // Collect all channel IDs
-    let channel_ids: Vec<i32> = channels.iter().map(|c| c.id).collect();
+    let channel_ids: Vec<i64> = channels.iter().map(|c| c.id).collect();
 
     // 2. Batch query channel_state for all channels to get latest state
     let channel_states = channel_state::Entity::find()
@@ -78,7 +78,7 @@ pub async fn fetch_channels_with_state(
         .await?;
 
     // Build map of channel_id -> latest state (only keep first state per channel due to ordering)
-    let mut state_map: HashMap<i32, channel_state::Model> = HashMap::new();
+    let mut state_map: HashMap<i64, channel_state::Model> = HashMap::new();
     for state in channel_states {
         // Only insert if we haven't seen this channel yet (first occurrence is latest due to ordering)
         state_map.entry(state.channel_id).or_insert(state);

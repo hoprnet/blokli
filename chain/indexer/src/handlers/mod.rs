@@ -160,13 +160,13 @@ where
         } else if log.address.eq(&self.addresses.token) {
             let event = HoprTokenEvents::decode_log(&primitive_log)?;
             self.on_token_event(tx, event.data, is_synced).await
-        } else if log.address.eq(&self.addresses.safe_registry) {
+        } else if log.address.eq(&self.addresses.node_safe_registry) {
             let event = HoprNodeSafeRegistryEvents::decode_log(&primitive_log)?;
             self.on_node_safe_registry_event(tx, event.data, is_synced).await
-        } else if log.address.eq(&self.addresses.price_oracle) {
+        } else if log.address.eq(&self.addresses.ticket_price_oracle) {
             let event = HoprTicketPriceOracleEvents::decode_log(&primitive_log)?;
             self.on_ticket_price_oracle_event(tx, event.data, is_synced).await
-        } else if log.address.eq(&self.addresses.win_prob_oracle) {
+        } else if log.address.eq(&self.addresses.winning_probability_oracle) {
             let event = HoprWinningProbabilityOracleEvents::decode_log(&primitive_log)?;
             self.on_ticket_winning_probability_oracle_event(tx, event.data, is_synced)
                 .await
@@ -193,9 +193,9 @@ where
         vec![
             self.addresses.announcements,
             self.addresses.channels,
-            self.addresses.price_oracle,
-            self.addresses.win_prob_oracle,
-            self.addresses.safe_registry,
+            self.addresses.ticket_price_oracle,
+            self.addresses.winning_probability_oracle,
+            self.addresses.node_safe_registry,
             self.addresses.token,
         ]
     }
@@ -209,11 +209,11 @@ where
             crate::constants::topics::announcement()
         } else if contract.eq(&self.addresses.channels) {
             crate::constants::topics::channel()
-        } else if contract.eq(&self.addresses.price_oracle) {
+        } else if contract.eq(&self.addresses.ticket_price_oracle) {
             crate::constants::topics::ticket_price_oracle()
-        } else if contract.eq(&self.addresses.win_prob_oracle) {
+        } else if contract.eq(&self.addresses.winning_probability_oracle) {
             crate::constants::topics::winning_prob_oracle()
-        } else if contract.eq(&self.addresses.safe_registry) {
+        } else if contract.eq(&self.addresses.node_safe_registry) {
             crate::constants::topics::node_safe_registry()
         } else {
             panic!("use of unsupported contract address: {contract}");
