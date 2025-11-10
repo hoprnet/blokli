@@ -125,15 +125,16 @@ async fn test_try_stream_logs_should_contain_all_logs_when_opening_channel() -> 
     .await;
 
     let retrieved_logs = timeout(Duration::from_secs(30), retrieved_logs) // Give up after 30 seconds
-        .await???;
+        .await
+        .context("log streaming timed out")?
+        .context("log stream task failed")?;
 
-    // The last block must contain all 4 events
-    let last_block_logs = retrieved_logs
-        .into_iter()
-        .next_back()
+    let blocks = retrieved_logs.context("log stream yielded no blocks")?;
+    let last_block_logs = blocks
+        .last()
         .context("a log should be present")?
-        .clone()
-        .logs;
+        .logs
+        .clone();
 
     let channel_open_filter = ChannelOpened::SIGNATURE_HASH;
     let channel_balance_filter = ChannelBalanceIncreased::SIGNATURE_HASH;

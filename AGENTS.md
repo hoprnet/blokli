@@ -96,7 +96,7 @@ pub async fn fetch_block(block_number: u64, db: &DatabaseConnection) {
 - Struct field types (always required)
 - Variables where the type isn't immediately clear from the initializer
 
-###Import Organization
+### Import Organization
 
 **IMPORTANT**: All imports must be declared at the top of the module, never inside functions, impl blocks, or other nested scopes.
 

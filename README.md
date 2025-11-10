@@ -43,7 +43,7 @@ Blokli has comprehensive test coverage for temporal queries, blockchain reorgani
 just test
 
 # Run specific package tests
-just test-package blokli-db-sql         # Database and temporal query tests
+just test-package blokli-db             # Database and temporal query tests
 just test-package blokli-chain-indexer  # Indexer and reorg handling tests
 
 # Run tests with debug output (single-threaded, shows println!)
