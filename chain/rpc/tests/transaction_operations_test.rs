@@ -27,6 +27,15 @@ lazy_static! {
     static ref RANDY: Address = hex!("762614a5ed652457a2f1cdb8006380530c26ae6a").into();
 }
 
+/// Tests that provider-native gas estimation methods work correctly without using custom gas oracle.
+///
+/// This is a **negative test** that verifies:
+/// 1. Provider methods like `estimate_eip1559_fees()` and `get_gas_price()` make direct Ethereum RPC calls
+/// 2. These methods do NOT trigger the custom gas oracle endpoint (mock expects 0 calls)
+/// 3. The custom gas oracle (via GasOracleFiller) is only used when sending transactions through a provider that was
+///    configured with ProviderBuilder and the GasOracleFiller
+///
+/// See `gas_oracle_test.rs` for positive tests where GasOracleFiller IS used during transaction sending.
 #[tokio::test]
 async fn test_should_estimate_tx() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
@@ -34,12 +43,14 @@ async fn test_should_estimate_tx() -> anyhow::Result<()> {
     let anvil = blokli_chain_types::utils::create_anvil(Some(TEST_BLOCK_TIME));
     let _chain_key_0 = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
 
+    // Set up gas oracle mock that expects to never be called
+    // This verifies that provider gas estimation does not use the custom gas oracle
     let mut server = mockito::Server::new_async().await;
     let gas_oracle_mock = server
         .mock("GET", "/gas_oracle")
         .with_status(200)
         .with_body(r#"{"status":"1","message":"OK","result":{"LastBlock":"38791478","SafeGasPrice":"1.1","ProposeGasPrice":"1.1","FastGasPrice":"1.6","UsdPrice":"0.999985432689946"}}"#)
-        .expect(0)
+        .expect(0) // Expect 0 calls - this is intentional!
         .create_async()
         .await;
 
@@ -51,6 +62,8 @@ async fn test_should_estimate_tx() -> anyhow::Result<()> {
     // Wait until contracts deployments are final
     wait_for_finality(TEST_FINALITY, TEST_BLOCK_TIME).await;
 
+    // Create RpcOperations with gas oracle URL configured
+    // However, the provider doesn't have GasOracleFiller, so it won't use the gas oracle
     let rpc = create_test_rpc_operations(
         rpc_client,
         transport_client.client().clone(),
@@ -58,7 +71,7 @@ async fn test_should_estimate_tx() -> anyhow::Result<()> {
         Some((server.url() + "/gas_oracle").parse()?),
     )?;
 
-    // call eth_gas_estimate
+    // Call provider gas estimation methods - these use direct Ethereum RPC (eth_feeHistory, eth_gasPrice)
     let fees = rpc.provider.estimate_eip1559_fees().await?;
 
     assert!(
@@ -72,6 +85,8 @@ async fn test_should_estimate_tx() -> anyhow::Result<()> {
         "estimated_max_fee must be greater than 0.1 gwei"
     );
 
+    // Verify the gas oracle mock was never called (expect(0))
+    // This confirms that provider gas estimation uses direct Ethereum RPC, not the custom gas oracle
     gas_oracle_mock.assert();
 
     Ok(())
