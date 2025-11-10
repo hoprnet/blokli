@@ -1969,8 +1969,8 @@ mod tests {
         }
 
         // Create source and destination accounts if they don't exist
-        let source_id = channel_id * 10;
-        let dest_id = channel_id * 10 + 1;
+        let source_id: i64 = channel_id * 10;
+        let dest_id: i64 = channel_id * 10 + 1;
 
         let source_exists = Account::find_by_id(source_id).one(conn).await?.is_some();
         if !source_exists {

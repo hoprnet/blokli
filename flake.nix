@@ -337,6 +337,23 @@
                 };
                 includes = [ "design/*.graphql" ];
               };
+              # Markdown linter
+              settings.formatter.markdownlint-cli2 = {
+                command = pkgs.writeShellApplication {
+                  name = "markdownlint-cli2";
+                  runtimeInputs = [
+                    pkgs.nodejs
+                    pkgs.nodePackages.npm
+                  ];
+                  text = ''
+                    npx --yes markdownlint-cli2 --fix "$@"
+                  '';
+                };
+                includes = [
+                  "**/*.md"
+                  "*.md"
+                ];
+              };
             };
           };
 

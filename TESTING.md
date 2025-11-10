@@ -6,12 +6,10 @@ This document provides comprehensive guidance for testing the Blokli indexer and
 
 - [Running Tests](#running-tests)
 - [Test Organization](#test-organization)
-- [Core Testing Areas](#core-testing-areas)
-- [Temporal Query Testing](#temporal-query-testing)
-- [Reorg Testing](#reorg-testing)
-- [Edge Case Testing](#edge-case-testing)
-- [Performance Testing](#performance-testing)
 - [Writing New Tests](#writing-new-tests)
+- [Continuous Integration](#continuous-integration)
+- [Troubleshooting](#troubleshooting)
+- [Additional Resources](#additional-resources)
 
 ## Running Tests
 
