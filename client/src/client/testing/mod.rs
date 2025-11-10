@@ -1,12 +1,12 @@
+use std::{collections::HashMap, ops::Div, sync::Arc, time::Duration};
+
+use async_broadcast::TrySendError;
+use futures::{Stream, StreamExt};
+
 use crate::{
     api::{types::*, *},
     errors::{BlokliClientError, ErrorKind},
 };
-use async_broadcast::TrySendError;
-use futures::{Stream, StreamExt};
-use std::ops::Div;
-use std::sync::Arc;
-use std::{collections::HashMap, time::Duration};
 
 /// Represents a state for [`BlokliTestClient`].
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -202,8 +202,8 @@ fn account_matches(account: &Account, selector: &AccountSelector) -> bool {
 impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
     /// Constructs a new client that owns the given [`initial_state`](BlokliTestState).
     ///
-    /// After construction, the only way to mutate the state is when the client calls the given [`mutator`](BlokliTestStateMutator)
-    /// based on a [submitted](BlokliTransactionClient) transaction.
+    /// After construction, the only way to mutate the state is when the client calls the given
+    /// [`mutator`](BlokliTestStateMutator) based on a [submitted](BlokliTransactionClient) transaction.
     pub fn new(initial_state: BlokliTestState, mutator: M) -> Self {
         let (mut accounts_tx, accounts_rx) = async_broadcast::broadcast(1024);
         accounts_tx.set_await_active(false);

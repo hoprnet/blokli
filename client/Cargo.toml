@@ -9,10 +9,10 @@ version     = "0.5.1"
 
 [dependencies]
 anyhow = { workspace = true }
+async-broadcast = { workspace = true, optional = true }
 async-trait = { workspace = true }
-async-broadcast = { workspace = true, optional = true}
-cynic = { workspace = true, features = ["http-reqwest"] }
 chrono = { workspace = true, optional = true }
+cynic = { workspace = true, features = ["http-reqwest"] }
 eventsource-client = { workspace = true }
 futures = { workspace = true }
 futures-time = { workspace = true }
@@ -47,10 +47,10 @@ testing = [
 cynic-codegen = { version = "3" }
 
 [dev-dependencies]
-anyhow   = { workspace = true }
-insta    = { workspace = true, features = ["json", "yaml"] }
-mockito = { workspace = true }
+anyhow      = { workspace = true }
+insta       = { workspace = true, features = ["json", "yaml"] }
+mockito     = { workspace = true }
 parking_lot = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-tokio    = { workspace = true }
+serde       = { workspace = true }
+serde_json  = { workspace = true }
+tokio       = { workspace = true }

@@ -6,16 +6,15 @@ mod transactions;
 
 use cynic::GraphQlResponse;
 use futures::{TryFutureExt, TryStreamExt};
+#[cfg(feature = "testing")]
+pub use testing::{
+    BlokliTestClient, BlokliTestState, BlokliTestStateMutator, BlokliTestStateSnapshot, NopStateMutator,
+};
 use url::Url;
 
 use crate::{
     api::VERSION,
     errors::{BlokliClientError, ErrorKind},
-};
-
-#[cfg(feature = "testing")]
-pub use testing::{
-    BlokliTestClient, BlokliTestState, BlokliTestStateMutator, BlokliTestStateSnapshot, NopStateMutator,
 };
 
 /// Configuration for the [`BlokliClient`].
