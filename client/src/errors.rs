@@ -22,6 +22,19 @@ impl std::error::Error for BlokliClientError {
     }
 }
 
+/// Error kinds for transaction tracking failure.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum TrackingErrorKind {
+    /// Transaction was reverted.
+    Reverted,
+    /// Transaction timed out in Blokli.
+    Timeout,
+    /// Transaction submission failed.
+    SubmissionFailed,
+    /// Transaction validation failed.
+    ValidationFailed,
+}
+
 /// Error kinds for the Blokli client.
 #[derive(Debug, thiserror::Error)]
 pub enum ErrorKind {
@@ -33,8 +46,12 @@ pub enum ErrorKind {
         code: String,
         message: String,
     },
+    #[error("transaction tracking error: {0:?}")]
+    TrackingError(TrackingErrorKind),
     #[error("data returned from blokli was unparseable")]
     ParseError,
+    #[error("operation timed out at the client")]
+    Timeout,
     #[error(transparent)]
     Subscription(#[from] eventsource_client::Error),
     #[error(transparent)]
@@ -47,4 +64,7 @@ pub enum ErrorKind {
     Cynic(#[from] CynicReqwestError),
     #[error(transparent)]
     GraphQLError(#[from] cynic::GraphQlError),
+    #[cfg(feature = "testing")]
+    #[error(transparent)]
+    MockClientError(#[from] anyhow::Error),
 }

@@ -3,7 +3,11 @@
 //! This crate contains pure GraphQL type definitions that can be reused
 //! by clients without depending on the full API server implementation.
 
+
 use async_graphql::{Enum, InputObject, InputValueError, NewType, Scalar, ScalarType, SimpleObject, Value};
+use std::collections::HashMap;
+use async_graphql::{Enum, InputValueError, NewType, Scalar, ScalarType, SimpleObject, Value};
+
 
 /// Token value represented as a string to maintain precision
 ///
@@ -78,6 +82,43 @@ impl ScalarType for UInt64 {
     }
 }
 
+/// Map of contract identifiers to contract addresses
+///
+/// This scalar type represents a mapping from contract identifier strings
+/// (e.g., "token", "channels") to their deployed addresses in hexadecimal format.
+/// Keys: token, channels, announcements, safe_registry, price_oracle, win_prob_oracle, stake_factory
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContractAddressMap(pub HashMap<String, String>);
+
+#[Scalar]
+impl ScalarType for ContractAddressMap {
+    fn parse(value: Value) -> async_graphql::InputValueResult<Self> {
+        match value {
+            Value::Object(obj) => {
+                let mut map = HashMap::new();
+                for (key, val) in obj {
+                    if let Value::String(addr) = val {
+                        map.insert(key.to_string(), addr);
+                    } else {
+                        return Err(InputValueError::custom("ContractAddressMap values must be strings"));
+                    }
+                }
+                Ok(ContractAddressMap(map))
+            }
+            _ => Err(InputValueError::custom("ContractAddressMap must be an object")),
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        let map = self
+            .0
+            .iter()
+            .map(|(k, v)| (async_graphql::Name::new(k.clone()), Value::String(v.clone())))
+            .collect();
+        Value::Object(map)
+    }
+}
+
 /// Status of a payment channel
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum ChannelStatus {
@@ -134,6 +175,8 @@ pub struct ChainInfo {
     /// Chain ID of the connected blockchain network
     #[graphql(name = "chainId")]
     pub chain_id: i32,
+    /// Network name (e.g., 'dufour', 'rotsee')
+    pub network: String,
     /// Current HOPR token price
     #[graphql(name = "ticketPrice")]
     pub ticket_price: TokenValueString,
@@ -143,6 +186,9 @@ pub struct ChainInfo {
     /// Channel smart contract domain separator (hex string)
     #[graphql(name = "channelDst")]
     pub channel_dst: Option<Hex32>,
+    /// Map of contract identifiers to their deployed addresses
+    #[graphql(name = "contractAddresses")]
+    pub contract_addresses: ContractAddressMap,
     /// Ledger smart contract domain separator (hex string)
     #[graphql(name = "ledgerDst")]
     pub ledger_dst: Option<Hex32>,
@@ -154,7 +200,11 @@ pub struct ChainInfo {
     pub channel_closure_grace_period: Option<u64>,
 }
 
-/// Account information containing balances and multiaddresses
+/// Account information
+///
+/// The Account type contains identity information for HOPR nodes including keys,
+/// addresses, and network announcements. To query balances and allowances, use the
+/// dedicated balance and allowance queries (hoprBalance, nativeBalance, safeHoprAllowance).
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Account {
     /// Unique identifier for the account
@@ -165,28 +215,15 @@ pub struct Account {
     /// Unique account packet key in peer id format
     #[graphql(name = "packetKey")]
     pub packet_key: String,
-    /// wxHOPR balance associated with the on-chain address
-    ///
-    /// Returns zero balance if no balance record exists in the database.
-    #[graphql(name = "accountHoprBalance")]
-    pub account_hopr_balance: TokenValueString,
-    /// Native balance associated with the on-chain address
-    ///
-    /// Returns zero balance if no balance record exists in the database.
-    #[graphql(name = "accountNativeBalance")]
-    pub account_native_balance: TokenValueString,
     /// HOPR Safe contract address to which the account is linked
     #[graphql(name = "safeAddress")]
     pub safe_address: Option<String>,
-    /// wxHOPR balance associated with the linked Safe contract address
-    #[graphql(name = "safeHoprBalance")]
-    pub safe_hopr_balance: Option<TokenValueString>,
-    /// Native balance associated with the linked Safe contract address
-    #[graphql(name = "safeNativeBalance")]
-    pub safe_native_balance: Option<TokenValueString>,
     /// List of multiaddresses associated with the packet key
     #[graphql(name = "multiAddresses")]
     pub multi_addresses: Vec<String>,
+    /// HOPR Safe contract transaction count
+    #[graphql(name = "safeTransactionCount")]
+    pub safe_transaction_count: UInt64,
 }
 
 /// Network announcement with multiaddress information
@@ -385,4 +422,31 @@ pub struct InvalidTransactionIdError {
     /// The invalid transaction ID that was provided
     #[graphql(name = "transactionId")]
     pub transaction_id: String,
+
+/// Safe HOPR token allowance information for a specific Safe address
+#[derive(SimpleObject, Clone, Debug)]
+pub struct SafeHoprAllowance {
+    /// Safe contract address
+    pub address: String,
+    /// wxHOPR token allowance granted by the safe to the channels contract
+    pub allowance: TokenValueString,
+}
+
+impl From<&blokli_chain_types::ContractAddresses> for ContractAddressMap {
+    fn from(addresses: &blokli_chain_types::ContractAddresses) -> Self {
+        let map = [
+            ("token", &addresses.token),
+            ("channels", &addresses.channels),
+            ("announcements", &addresses.announcements),
+            ("safe_registry", &addresses.node_safe_registry),
+            ("price_oracle", &addresses.ticket_price_oracle),
+            ("win_prob_oracle", &addresses.winning_probability_oracle),
+            ("stake_factory", &addresses.node_stake_v2_factory),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v.to_string()))
+        .collect();
+
+        ContractAddressMap(map)
+    }
 }

@@ -41,10 +41,6 @@ enum Command {
         #[arg(short = 'd', long = "database-url", env = "DATABASE_URL")]
         database_url: String,
 
-        /// Chain ID for the blockchain network
-        #[arg(short = 'i', long = "chain-id", env = "CHAIN_ID", default_value = "100")]
-        chain_id: u64,
-
         /// Output file path (defaults to stdout if not specified)
         #[arg(short = 'o', long = "output", value_name = "FILE")]
         output: Option<PathBuf>,
@@ -58,14 +54,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Handle subcommands
     if let Some(command) = args.command {
         match command {
-            Command::ExportSchema {
-                database_url,
-                chain_id,
-                output,
-            } => {
+            Command::ExportSchema { database_url, output } => {
                 // Connect to database
                 let db = Database::connect(&database_url).await?;
 
+<<<<<<< HEAD
                 // Create a default IndexerState for schema export
                 // This is only used for schema generation, not for actual indexing
                 // Use minimal buffer sizes since no events will flow through
@@ -120,6 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // Generate schema SDL
                 let schema_sdl = export_schema_sdl(
                     db,
+              ContractAddresses::default(),
                     chain_id,
                     indexer_state,
                     transaction_executor,
@@ -140,11 +134,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    // Load configuration (for now using defaults)
-    let config = ApiConfig::default();
-
-    // Start the server
-    start_server(config).await?;
-
-    Ok(())
+    // The API server is not meant to be run standalone
+    // It should only be run as part of bloklid
+    eprintln!("Error: blokli-api is not meant to be run standalone.");
+    eprintln!("Please run 'bloklid' instead, which embeds the API server.");
+    eprintln!();
+    eprintln!("To export the GraphQL schema, use:");
+    eprintln!("  blokli-api export-schema -d <database-url> -o schema.graphql");
+    std::process::exit(1);
 }

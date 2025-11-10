@@ -103,10 +103,11 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         token: Address::from([1; 20]),
         channels: Address::from([2; 20]),
         announcements: Address::from([3; 20]),
-        safe_registry: Address::from([6; 20]),
-        price_oracle: Address::from([7; 20]),
-        win_prob_oracle: Address::from([8; 20]),
-        stake_factory: Address::from([9; 20]),
+        node_safe_registry: Address::from([4; 20]),
+        ticket_price_oracle: Address::from([5; 20]),
+        winning_probability_oracle: Address::from([6; 20]),
+        node_stake_v2_factory: Address::from([7; 20]),
+        module_implementation: Address::from([8; 20]),
     };
 
     // Create indexer state for subscriptions (must be created before handlers)
@@ -180,10 +181,11 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         token: Address::from([1; 20]),
         channels: Address::from([2; 20]),
         announcements: Address::from([3; 20]),
-        safe_registry: Address::from([6; 20]),
-        price_oracle: Address::from([7; 20]),
-        win_prob_oracle: Address::from([8; 20]),
-        stake_factory: Address::from([9; 20]),
+        node_safe_registry: Address::from([4; 20]),
+        ticket_price_oracle: Address::from([5; 20]),
+        winning_probability_oracle: Address::from([6; 20]),
+        node_stake_v2_factory: Address::from([7; 20]),
+        module_implementation: Address::from([8; 20]),
     };
 
     // Create indexer state for subscriptions (must be created before handlers)
@@ -324,10 +326,11 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         token: Address::from([1; 20]),
         channels: Address::from([2; 20]),
         announcements: Address::from([3; 20]),
-        safe_registry: Address::from([6; 20]),
-        price_oracle: Address::from([7; 20]),
-        win_prob_oracle: Address::from([8; 20]),
-        stake_factory: Address::from([9; 20]),
+        node_safe_registry: Address::from([4; 20]),
+        ticket_price_oracle: Address::from([5; 20]),
+        winning_probability_oracle: Address::from([6; 20]),
+        node_stake_v2_factory: Address::from([7; 20]),
+        module_implementation: Address::from([8; 20]),
     };
 
     // Create indexer state for subscriptions (must be created before handlers)

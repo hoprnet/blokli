@@ -9,6 +9,8 @@ use blokli_api_types::{
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
+use blokli_chain_types::ContractAddresses;
+use blokli_db_entity::conversions::balances::hopr_balance_to_string;
 use blokli_db_entity::conversions::balances::string_to_address;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
@@ -84,12 +86,9 @@ impl QueryRoot {
                 keyid: agg.keyid,
                 chain_key: agg.chain_key,
                 packet_key: agg.packet_key,
-                account_hopr_balance: TokenValueString(agg.account_hopr_balance),
-                account_native_balance: TokenValueString(agg.account_native_balance),
                 safe_address: agg.safe_address,
-                safe_hopr_balance: agg.safe_hopr_balance.map(TokenValueString),
-                safe_native_balance: agg.safe_native_balance.map(TokenValueString),
                 multi_addresses: agg.multi_addresses,
+                safe_transaction_count: blokli_api_types::UInt64(agg.safe_transaction_count),
             })
             .collect();
 
@@ -217,13 +216,11 @@ impl QueryRoot {
         // Require at least one identity filter to prevent excessive data retrieval
         // Note: status alone is not sufficient as it could still return thousands of channels
         if source_key_id.is_none() && destination_key_id.is_none() && concrete_channel_id.is_none() {
-            return Err(
-                async_graphql::Error::new(
-                    "At least one identity filter is required (sourceKeyId, destinationKeyId, or concreteChannelId). \
+            return Err(async_graphql::Error::new(
+                "At least one identity filter is required (sourceKeyId, destinationKeyId, or concreteChannelId). \
                      \n                 The status filter can be used in combination but not alone. \n                 \
                      Example: channels(sourceKeyId: 1) or channels(sourceKeyId: 1, status: OPEN)",
-                ),
-            );
+            ));
         }
 
         let db = ctx.data::<DatabaseConnection>()?;
@@ -342,13 +339,44 @@ impl QueryRoot {
         }
     }
 
+    /// Retrieve Safe HOPR token allowance for a specific Safe address
+    ///
+    /// Returns the wxHOPR token allowance that the specified Safe contract has granted
+    /// to the HOPR channels contract.
+    ///
+    /// **Note:** Currently returns None as indexer/database support is not yet implemented.
+    /// Returns None if no allowance data exists for the address.
+    #[graphql(name = "safeHoprAllowance")]
+    async fn safe_hopr_allowance(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Safe contract address to query (hexadecimal format)")] address: String,
+    ) -> Result<Option<SafeHoprAllowance>> {
+        // Validate address format
+        validate_eth_address(&address)?;
+
+        // Prevent unused variable warning
+        let _db = ctx.data::<DatabaseConnection>()?;
+
+        // FIXME: Implement allowance fetching once indexer and database support is added
+        // The indexer needs to be extended to fetch and store Safe allowances for arbitrary addresses
+        // Database schema needs a table to store allowance data indexed by Safe address
+        //
+        // Implementation should:
+        // 1. Query allowance table by Safe address
+        // 2. Return SafeHoprAllowance { address, allowance } if data exists
+        // 3. Return None if no allowance data exists for the address
+
+        Ok(None)
+    }
+
     /// Retrieve chain information
     #[graphql(name = "chainInfo")]
     async fn chain_info(&self, ctx: &Context<'_>) -> Result<ChainInfo> {
-        use blokli_db_entity::conversions::balances::hopr_balance_to_string;
-
         let db = ctx.data::<DatabaseConnection>()?;
         let chain_id = ctx.data::<u64>()?;
+        let network = ctx.data::<String>()?;
+        let contract_addresses = ctx.data::<ContractAddresses>()?;
 
         // Fetch chain_info from database (assuming single row with id=1)
         let chain_info = blokli_db_entity::chain_info::Entity::find_by_id(1)
@@ -400,9 +428,11 @@ impl QueryRoot {
         Ok(ChainInfo {
             block_number,
             chain_id: chain_id_i32,
+            network: network.clone(),
             ticket_price,
             min_ticket_winning_probability,
             channel_dst,
+            contract_addresses: ContractAddressMap::from(contract_addresses),
             ledger_dst,
             safe_registry_dst,
             channel_closure_grace_period,

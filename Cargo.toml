@@ -26,7 +26,7 @@ alloy = { version = "1.0.42", default-features = false, features = [
   "std",
 ] }
 anyhow = "1.0.99"
-async-broadcast = "0.7.1"
+async-broadcast = "0.7.2"
 async-channel = "2.5.0"
 async-compression = "0.4.30"
 async-graphql = { version = "7.0.14", features = ["chrono", "dataloader"] }
@@ -55,6 +55,7 @@ dashmap = "6.1.0"
 env_logger = "0.11.8"
 eventsource-client = "0.15.1"
 futures = "0.3.31"
+futures-time = "3.0.0"
 futures-timer = "3.0.3"
 futures-util = "0.3.31"
 hex = "0.4.3"
@@ -73,6 +74,7 @@ hopr-path = { git = "https://github.com/hoprnet/hoprnet" }
 hopr-platform = { git = "https://github.com/hoprnet/hoprnet" }
 hopr-primitive-types = { git = "https://github.com/hoprnet/hoprnet" }
 http = "1.3.1"
+insta = "1.43.2"
 lazy_static = "1.5.0"
 libp2p-identity = { version = "0.2.12", features = [
   "ed25519",
@@ -85,6 +87,7 @@ moka = { version = "0.12.10", features = ["future"] }
 multiaddr = "0.18.2"
 num_enum = "0.7.4"
 primitive-types = { version = "0.14.0", features = ["serde"] }
+parking_lot = "0.12.5"
 rand = "0.9.2" # ignored in renovate, cannot be updated, dependencies reference old ones
 reqwest = { version = "0.12.23", features = ["json"] }
 ringbuffer = "0.16.0"
@@ -184,3 +187,8 @@ strip         = true
 cast_possible_truncation = "deny"
 cast_possible_wrap       = "deny"
 cast_sign_loss           = "deny"
+
+# faster insta test runs
+[profile.dev.package]
+insta.opt-level = 3
+similar.opt-level = 3

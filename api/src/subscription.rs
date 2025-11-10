@@ -8,7 +8,9 @@ use async_stream::stream;
 use blokli_api_types::{
     Account, Channel, ChannelUpdate, HoprBalance, NativeBalance, OpenedChannelsGraph, TokenValueString,
 };
+use blokli_api_types::{Account, Channel, HoprBalance, NativeBalance, OpenedChannelsGraph};
 use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
+use blokli_db_entity::conversions::balances::string_to_address;
 use blokli_db_entity::conversions::balances::{
     address_to_string, hopr_balance_to_string, native_balance_to_string, string_to_address,
 };
@@ -559,78 +561,40 @@ impl SubscriptionRoot {
         packet_key: Option<String>,
         chain_key: Option<String>,
     ) -> Result<Vec<Account>, sea_orm::DbErr> {
-        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+        use blokli_db_entity::conversions::account_aggregation::fetch_accounts_with_filters;
 
-        // Build query with filters
-        let mut query = blokli_db_entity::account::Entity::find();
+        // Use optimized batch loading from account_aggregation
+        let aggregated_accounts = fetch_accounts_with_filters(db, keyid, packet_key, chain_key).await?;
 
-        if let Some(id) = keyid {
-            query = query.filter(blokli_db_entity::account::Column::Id.eq(id));
-        }
+        // Convert to GraphQL Account type
+        let result = aggregated_accounts
+            .into_iter()
+            .map(|agg| {
+                // Fetch announcements for this account
+                let announcements = blokli_db_entity::announcement::Entity::find()
+                    .filter(blokli_db_entity::announcement::Column::AccountId.eq(account_model.id))
+                    .all(db)
+                    .await?;
 
-        if let Some(pk) = packet_key {
-            query = query.filter(blokli_db_entity::account::Column::PacketKey.eq(pk));
-        }
+                let multi_addresses: Vec<String> = announcements.into_iter().map(|a| a.multiaddress).collect();
 
-        if let Some(ck) = chain_key {
-            // Convert hex string address to binary for database query
-            let binary_chain_key = string_to_address(&ck);
-            query = query.filter(blokli_db_entity::account::Column::ChainKey.eq(binary_chain_key));
-        }
+                // Convert addresses to hex strings for GraphQL response
+                let chain_key_str = address_to_string(&account_model.chain_key);
 
-        let accounts = query.all(db).await?;
+                // TODO(Phase 2-3): Query account_state table for safe_address
+                // safe_address has been moved to account_state table
+                let safe_address_str = None::<String>;
 
-        let mut result = Vec::new();
-
-        for account_model in accounts {
-            // Fetch announcements for this account
-            let announcements = blokli_db_entity::announcement::Entity::find()
-                .filter(blokli_db_entity::announcement::Column::AccountId.eq(account_model.id))
-                .all(db)
-                .await?;
-
-            let multi_addresses: Vec<String> = announcements.into_iter().map(|a| a.multiaddress).collect();
-
-            // Fetch HOPR balance for account's chain_key
-            // Returns zero balance if no balance record exists (hopr_balance_to_string(&[]) returns "0")
-            let hopr_balance_value = blokli_db_entity::hopr_balance::Entity::find()
-                .filter(blokli_db_entity::hopr_balance::Column::Address.eq(account_model.chain_key.clone()))
-                .one(db)
-                .await?
-                .map(|b| hopr_balance_to_string(&b.balance))
-                .unwrap_or_else(|| hopr_balance_to_string(&[]));
-
-            // Fetch Native balance for account's chain_key
-            // Returns zero balance if no balance record exists (native_balance_to_string(&[]) returns "0")
-            let native_balance_value = blokli_db_entity::native_balance::Entity::find()
-                .filter(blokli_db_entity::native_balance::Column::Address.eq(account_model.chain_key.clone()))
-                .one(db)
-                .await?
-                .map(|b| native_balance_to_string(&b.balance))
-                .unwrap_or_else(|| native_balance_to_string(&[]));
-
-            // Convert addresses to hex strings for GraphQL response
-            let chain_key_str = address_to_string(&account_model.chain_key);
-
-            // TODO(Phase 2-3): Query account_state table for safe_address
-            // safe_address has been moved to account_state table
-            let safe_address_str = None::<String>;
-
-            // TODO(Phase 2-3): Fetch safe balances once safe_address is available from account_state
-            let (safe_hopr_balance, safe_native_balance) = (None, None);
-
-            result.push(Account {
-                keyid: account_model.id,
-                chain_key: chain_key_str,
-                packet_key: account_model.packet_key,
-                account_hopr_balance: TokenValueString(hopr_balance_value),
-                account_native_balance: TokenValueString(native_balance_value),
-                safe_address: safe_address_str,
-                safe_hopr_balance: safe_hopr_balance.map(TokenValueString),
-                safe_native_balance: safe_native_balance.map(TokenValueString),
-                multi_addresses,
-            });
-        }
+                Account {
+                    keyid: account_model.keyid,
+                    chain_key: chain_key_str,
+                    packet_key: account_model.packet_key,
+                    safe_address: safe_address_str,
+                    multi_addresses,
+                    safe_transaction_count: blokli_api_types::UInt64(agg.safe_transaction_count),
+                }
+            })
+            .collect();
 
         Ok(result)
     }
@@ -639,10 +603,41 @@ impl SubscriptionRoot {
         // TODO(Phase 2-3): This function requires querying channel_state table for status
         // For now, return empty graph until we implement the channel_state lookup
         // Original logic: Fetch all OPEN channels (status = 1) and their participating accounts
+        use blokli_db_entity::conversions::account_aggregation::fetch_accounts_by_keyids;
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
-        // Temporary: return empty graph
-        let channels: Vec<Channel> = Vec::new();
-        let accounts: Vec<Account> = Vec::new();
+        // 1. Fetch all OPEN channels (status = 1)
+        let channel_models = blokli_db_entity::channel::Entity::find()
+            .filter(blokli_db_entity::channel::Column::Status.eq(1))
+            .all(db)
+            .await?;
+
+        // Convert to GraphQL Channel type
+        let channels: Vec<Channel> = channel_models.iter().map(|m| channel_from_model(m.clone())).collect();
+
+        // 2. Collect unique keyids from source and destination
+        let mut keyids = HashSet::new();
+        for channel in &channel_models {
+            keyids.insert(channel.source);
+            keyids.insert(channel.destination);
+        }
+
+        // 3. Fetch accounts for those keyids with optimized batch loading
+        let keyid_vec: Vec<i32> = keyids.into_iter().collect();
+        let aggregated_accounts = fetch_accounts_by_keyids(db, keyid_vec).await?;
+
+        // Convert to GraphQL Account type
+        let accounts = aggregated_accounts
+            .into_iter()
+            .map(|agg| Account {
+                keyid: agg.keyid,
+                chain_key: agg.chain_key,
+                packet_key: agg.packet_key,
+                safe_address: agg.safe_address,
+                multi_addresses: agg.multi_addresses,
+                safe_transaction_count: blokli_api_types::UInt64(agg.safe_transaction_count),
+            })
+            .collect();
 
         Ok(OpenedChannelsGraph { channels, accounts })
     }

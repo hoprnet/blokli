@@ -33,13 +33,13 @@ pub struct ContractAddresses {
     /// Announcements contract
     pub announcements: Address,
     /// Safe registry contract
-    pub safe_registry: Address,
+    pub node_safe_registry: Address,
     /// Price oracle contract
-    pub price_oracle: Address,
+    pub ticket_price_oracle: Address,
     /// Minimum ticket winning probability contract
-    pub win_prob_oracle: Address,
+    pub winning_probability_oracle: Address,
     /// Stake factory contract
-    pub stake_factory: Address,
+    pub node_stake_v2_factory: Address,
 }
 
 /// Holds instances to contracts.
@@ -63,13 +63,22 @@ where
             token: HoprTokenInstance::new(contract_addresses.token.into(), provider.clone()),
             channels: HoprChannelsInstance::new(contract_addresses.channels.into(), provider.clone()),
             announcements: HoprAnnouncementsInstance::new(contract_addresses.announcements.into(), provider.clone()),
-            safe_registry: HoprNodeSafeRegistryInstance::new(contract_addresses.safe_registry.into(), provider.clone()),
-            price_oracle: HoprTicketPriceOracleInstance::new(contract_addresses.price_oracle.into(), provider.clone()),
-            win_prob_oracle: HoprWinningProbabilityOracleInstance::new(
-                contract_addresses.win_prob_oracle.into(),
+            safe_registry: HoprNodeSafeRegistryInstance::new(
+                contract_addresses.node_safe_registry.into(),
                 provider.clone(),
             ),
-            stake_factory: HoprNodeStakeFactoryInstance::new(contract_addresses.stake_factory.into(), provider.clone()),
+            price_oracle: HoprTicketPriceOracleInstance::new(
+                contract_addresses.ticket_price_oracle.into(),
+                provider.clone(),
+            ),
+            win_prob_oracle: HoprWinningProbabilityOracleInstance::new(
+                contract_addresses.winning_probability_oracle.into(),
+                provider.clone(),
+            ),
+            stake_factory: HoprNodeStakeFactoryInstance::new(
+                contract_addresses.node_stake_v2_factory.into(),
+                provider.clone(),
+            ),
         }
     }
 
@@ -161,10 +170,10 @@ where
             token: Into::<Address>::into(*instances.token.address()),
             channels: Into::<Address>::into(*instances.channels.address()),
             announcements: Into::<Address>::into(*instances.announcements.address()),
-            safe_registry: Into::<Address>::into(*instances.safe_registry.address()),
-            price_oracle: Into::<Address>::into(*instances.price_oracle.address()),
-            win_prob_oracle: Into::<Address>::into(*instances.win_prob_oracle.address()),
-            stake_factory: Into::<Address>::into(*instances.stake_factory.address()),
+            node_safe_registry: Into::<Address>::into(*instances.safe_registry.address()),
+            ticket_price_oracle: Into::<Address>::into(*instances.price_oracle.address()),
+            winning_probability_oracle: Into::<Address>::into(*instances.win_prob_oracle.address()),
+            node_stake_v2_factory: Into::<Address>::into(*instances.stake_factory.address()),
         }
     }
 }

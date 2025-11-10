@@ -4,8 +4,8 @@ use std::collections::HashMap;
 
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder};
 
-use super::balances::{address_to_string, hopr_balance_to_string, native_balance_to_string, string_to_address};
-use crate::codegen::{account, account_state, announcement, hopr_balance, native_balance};
+use super::balances::{address_to_string, string_to_address};
+use crate::codegen::{account, announcement};
 
 /// Aggregated account data with all related information
 #[derive(Debug, Clone)]
@@ -13,12 +13,9 @@ pub struct AggregatedAccount {
     pub keyid: i32,
     pub chain_key: String,
     pub packet_key: String,
-    pub account_hopr_balance: String,
-    pub account_native_balance: String,
     pub safe_address: Option<String>,
-    pub safe_hopr_balance: Option<String>,
-    pub safe_native_balance: Option<String>,
     pub multi_addresses: Vec<String>,
+    pub safe_transaction_count: u64,
 }
 
 /// Fetch all accounts with their related data using optimized batch loading
@@ -26,10 +23,9 @@ pub struct AggregatedAccount {
 /// This function eliminates N+1 queries by:
 /// 1. Fetching all accounts in one query
 /// 2. Batch loading all announcements for those accounts
-/// 3. Batch loading all balances (HOPR and native) for all relevant addresses
-/// 4. Aggregating the data in memory
+/// 3. Aggregating the data in memory
 ///
-/// Instead of 1 + (N * 5) queries, this uses only 4 queries total.
+/// Instead of 1 + (N * 2) queries, this uses only 2 queries total.
 ///
 /// # Arguments
 /// * `db` - Database connection
@@ -47,8 +43,9 @@ where
         return Ok(Vec::new());
     }
 
-    // Collect all account IDs and addresses
+    // Collect all account IDs
     let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
+
     let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
 
     // Batch query account_state for all accounts to get safe_address
@@ -87,71 +84,26 @@ where
             .push(ann.multiaddress);
     }
 
-    // 3. Batch fetch all HOPR balances (1 query)
-    let hopr_balances = hopr_balance::Entity::find()
-        .filter(hopr_balance::Column::Address.is_in(all_addresses.clone()))
-        .all(conn)
-        .await?;
-
-    let hopr_balance_map: HashMap<String, String> = hopr_balances
-        .into_iter()
-        .map(|b| (address_to_string(&b.address), hopr_balance_to_string(&b.balance)))
-        .collect();
-
-    // 4. Batch fetch all native balances (1 query)
-    let native_balances = native_balance::Entity::find()
-        .filter(native_balance::Column::Address.is_in(all_addresses))
-        .all(conn)
-        .await?;
-
-    let native_balance_map: HashMap<String, String> = native_balances
-        .into_iter()
-        .map(|b| (address_to_string(&b.address), native_balance_to_string(&b.balance)))
-        .collect();
-
-    // 5. Aggregate all data
+    // 3. Aggregate all data
     let result = accounts
         .into_iter()
         .map(|account| {
             let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
 
-            // Convert chain_key to string for lookups
+            // Convert chain_key to string
             let chain_key_str = address_to_string(&account.chain_key);
-
-            // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
-            let account_hopr_balance = hopr_balance_map
-                .get(&chain_key_str)
-                .cloned()
-                .unwrap_or_else(|| hopr_balance_to_string(&[]));
-
-            // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
-            let account_native_balance = native_balance_map
-                .get(&chain_key_str)
-                .cloned()
-                .unwrap_or_else(|| native_balance_to_string(&[]));
 
             // Convert safe_address to string if present
             let safe_address_str = safe_address_map.get(&account.id).map(|addr| address_to_string(addr));
-
-            let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr_str) = safe_address_str {
-                (
-                    hopr_balance_map.get(safe_addr_str).cloned(),
-                    native_balance_map.get(safe_addr_str).cloned(),
-                )
-            } else {
-                (None, None)
-            };
 
             AggregatedAccount {
                 keyid: account.id,
                 chain_key: chain_key_str,
                 packet_key: account.packet_key,
-                account_hopr_balance,
-                account_native_balance,
                 safe_address: safe_address_str,
-                safe_hopr_balance,
-                safe_native_balance,
                 multi_addresses,
+                // TODO: Implement safe transaction count fetching from blockchain or database
+                safe_transaction_count: 0,
             }
         })
         .collect();
@@ -165,7 +117,7 @@ where
 /// whose chain_key is in the provided address list. This is useful for queries that only
 /// need a subset of accounts.
 ///
-/// Uses the same optimized batch loading approach: 4 queries total instead of N+1.
+/// Uses the same optimized batch loading approach: 2 queries total instead of N+1.
 ///
 /// # Arguments
 /// * `db` - Database connection
@@ -197,8 +149,9 @@ where
         return Ok(Vec::new());
     }
 
-    // Collect all account IDs and addresses
+    // Collect all account IDs
     let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
+
     let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
 
     // Batch query account_state for all accounts to get safe_address
@@ -237,71 +190,27 @@ where
             .push(ann.multiaddress);
     }
 
-    // 3. Batch fetch all HOPR balances (1 query)
-    let hopr_balances = hopr_balance::Entity::find()
-        .filter(hopr_balance::Column::Address.is_in(all_addresses.clone()))
-        .all(conn)
-        .await?;
+    // 3. Aggregate all data
 
-    let hopr_balance_map: HashMap<String, String> = hopr_balances
-        .into_iter()
-        .map(|b| (address_to_string(&b.address), hopr_balance_to_string(&b.balance)))
-        .collect();
-
-    // 4. Batch fetch all native balances (1 query)
-    let native_balances = native_balance::Entity::find()
-        .filter(native_balance::Column::Address.is_in(all_addresses))
-        .all(conn)
-        .await?;
-
-    let native_balance_map: HashMap<String, String> = native_balances
-        .into_iter()
-        .map(|b| (address_to_string(&b.address), native_balance_to_string(&b.balance)))
-        .collect();
-
-    // 5. Aggregate all data
     let result = accounts
         .into_iter()
         .map(|account| {
             let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
 
-            // Convert chain_key to string for lookups
+            // Convert chain_key to string
             let chain_key_str = address_to_string(&account.chain_key);
-
-            // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
-            let account_hopr_balance = hopr_balance_map
-                .get(&chain_key_str)
-                .cloned()
-                .unwrap_or_else(|| hopr_balance_to_string(&[]));
-
-            // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
-            let account_native_balance = native_balance_map
-                .get(&chain_key_str)
-                .cloned()
-                .unwrap_or_else(|| native_balance_to_string(&[]));
 
             // Convert safe_address to string if present
             let safe_address_str = safe_address_map.get(&account.id).map(|addr| address_to_string(addr));
-
-            let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr_str) = safe_address_str {
-                (
-                    hopr_balance_map.get(safe_addr_str).cloned(),
-                    native_balance_map.get(safe_addr_str).cloned(),
-                )
-            } else {
-                (None, None)
-            };
 
             AggregatedAccount {
                 keyid: account.id,
                 chain_key: chain_key_str,
                 packet_key: account.packet_key,
-                account_hopr_balance,
-                account_native_balance,
                 safe_address: safe_address_str,
-                safe_hopr_balance,
-                safe_native_balance,
                 multi_addresses,
+                // TODO: Implement safe transaction count fetching from blockchain or database
+                safe_transaction_count: 0,
             }
         })
         .collect();
@@ -314,7 +223,7 @@ where
 /// This function is similar to `fetch_accounts_with_balances_for_addresses` but filters
 /// by account IDs instead of addresses. Useful when you have keyids from channels.
 ///
-/// Uses the same optimized batch loading approach: 4 queries total instead of N+1.
+/// Uses the same optimized batch loading approach: 2 queries total instead of N+1.
 ///
 /// # Arguments
 /// * `db` - Database connection
@@ -340,8 +249,9 @@ where
         return Ok(Vec::new());
     }
 
-    // Collect all account IDs and addresses
+    // Collect all account IDs
     let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
+
     let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
 
     // Batch query account_state for all accounts to get safe_address
@@ -380,71 +290,26 @@ where
             .push(ann.multiaddress);
     }
 
-    // 3. Batch fetch all HOPR balances (1 query)
-    let hopr_balances = hopr_balance::Entity::find()
-        .filter(hopr_balance::Column::Address.is_in(all_addresses.clone()))
-        .all(conn)
-        .await?;
-
-    let hopr_balance_map: HashMap<String, String> = hopr_balances
-        .into_iter()
-        .map(|b| (address_to_string(&b.address), hopr_balance_to_string(&b.balance)))
-        .collect();
-
-    // 4. Batch fetch all native balances (1 query)
-    let native_balances = native_balance::Entity::find()
-        .filter(native_balance::Column::Address.is_in(all_addresses))
-        .all(conn)
-        .await?;
-
-    let native_balance_map: HashMap<String, String> = native_balances
-        .into_iter()
-        .map(|b| (address_to_string(&b.address), native_balance_to_string(&b.balance)))
-        .collect();
-
-    // 5. Aggregate all data
+    // 3. Aggregate all data
     let result = accounts
         .into_iter()
         .map(|account| {
             let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
 
-            // Convert chain_key to string for lookups
+            // Convert chain_key to string
             let chain_key_str = address_to_string(&account.chain_key);
-
-            // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
-            let account_hopr_balance = hopr_balance_map
-                .get(&chain_key_str)
-                .cloned()
-                .unwrap_or_else(|| hopr_balance_to_string(&[]));
-
-            // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
-            let account_native_balance = native_balance_map
-                .get(&chain_key_str)
-                .cloned()
-                .unwrap_or_else(|| native_balance_to_string(&[]));
 
             // Convert safe_address to string if present
             let safe_address_str = safe_address_map.get(&account.id).map(|addr| address_to_string(addr));
-
-            let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr_str) = safe_address_str {
-                (
-                    hopr_balance_map.get(safe_addr_str).cloned(),
-                    native_balance_map.get(safe_addr_str).cloned(),
-                )
-            } else {
-                (None, None)
-            };
 
             AggregatedAccount {
                 keyid: account.id,
                 chain_key: chain_key_str,
                 packet_key: account.packet_key,
-                account_hopr_balance,
-                account_native_balance,
                 safe_address: safe_address_str,
-                safe_hopr_balance,
-                safe_native_balance,
                 multi_addresses,
+                // TODO: Implement safe transaction count fetching from blockchain or database
+                safe_transaction_count: 0,
             }
         })
         .collect();
@@ -457,7 +322,7 @@ where
 /// This function allows filtering accounts by keyid, packet_key, and/or chain_key.
 /// Multiple filters can be combined. If no filters are provided, returns all accounts.
 ///
-/// Uses the same optimized batch loading approach: 4 queries total instead of N+1.
+/// Uses the same optimized batch loading approach: 2 queries total instead of N+1.
 ///
 /// # Arguments
 /// * `db` - Database connection
@@ -498,8 +363,9 @@ where
         return Ok(Vec::new());
     }
 
-    // Collect all account IDs and addresses
+    // Collect all account IDs
     let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
+
     let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
 
     // Batch query account_state for all accounts to get safe_address
@@ -538,71 +404,27 @@ where
             .push(ann.multiaddress);
     }
 
-    // 3. Batch fetch all HOPR balances (1 query)
-    let hopr_balances = hopr_balance::Entity::find()
-        .filter(hopr_balance::Column::Address.is_in(all_addresses.clone()))
-        .all(conn)
-        .await?;
+    // 3. Aggregate all data
 
-    let hopr_balance_map: HashMap<String, String> = hopr_balances
-        .into_iter()
-        .map(|b| (address_to_string(&b.address), hopr_balance_to_string(&b.balance)))
-        .collect();
-
-    // 4. Batch fetch all native balances (1 query)
-    let native_balances = native_balance::Entity::find()
-        .filter(native_balance::Column::Address.is_in(all_addresses))
-        .all(conn)
-        .await?;
-
-    let native_balance_map: HashMap<String, String> = native_balances
-        .into_iter()
-        .map(|b| (address_to_string(&b.address), native_balance_to_string(&b.balance)))
-        .collect();
-
-    // 5. Aggregate all data
     let result = accounts
         .into_iter()
         .map(|account| {
             let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
 
-            // Convert chain_key to string for lookups
+            // Convert chain_key to string
             let chain_key_str = address_to_string(&account.chain_key);
-
-            // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
-            let account_hopr_balance = hopr_balance_map
-                .get(&chain_key_str)
-                .cloned()
-                .unwrap_or_else(|| hopr_balance_to_string(&[]));
-
-            // If no balance record exists in DB, return zero balance (non-nullable in GraphQL schema)
-            let account_native_balance = native_balance_map
-                .get(&chain_key_str)
-                .cloned()
-                .unwrap_or_else(|| native_balance_to_string(&[]));
 
             // Convert safe_address to string if present
             let safe_address_str = safe_address_map.get(&account.id).map(|addr| address_to_string(addr));
-
-            let (safe_hopr_balance, safe_native_balance) = if let Some(ref safe_addr_str) = safe_address_str {
-                (
-                    hopr_balance_map.get(safe_addr_str).cloned(),
-                    native_balance_map.get(safe_addr_str).cloned(),
-                )
-            } else {
-                (None, None)
-            };
 
             AggregatedAccount {
                 keyid: account.id,
                 chain_key: chain_key_str,
                 packet_key: account.packet_key,
-                account_hopr_balance,
-                account_native_balance,
                 safe_address: safe_address_str,
-                safe_hopr_balance,
-                safe_native_balance,
                 multi_addresses,
+                // TODO: Implement safe transaction count fetching from blockchain or database
+                safe_transaction_count: 0,
             }
         })
         .collect();

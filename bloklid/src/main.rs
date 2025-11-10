@@ -111,10 +111,10 @@ impl Args {
             token: chain_network_config.token,
             channels: chain_network_config.channels,
             announcements: chain_network_config.announcements,
-            safe_registry: chain_network_config.node_safe_registry,
-            price_oracle: chain_network_config.ticket_price_oracle,
-            win_prob_oracle: chain_network_config.winning_probability_oracle,
-            stake_factory: chain_network_config.node_stake_v2_factory,
+            node_safe_registry: chain_network_config.node_safe_registry,
+            ticket_price_oracle: chain_network_config.ticket_price_oracle,
+            winning_probability_oracle: chain_network_config.winning_probability_oracle,
+            node_stake_v2_factory: chain_network_config.node_stake_v2_factory,
         };
         config.contracts = contract_addresses;
 
@@ -250,8 +250,9 @@ async fn run() -> errors::Result<()> {
 
         info!("Connecting to RPC endpoint: {}", rpc_url);
 
-        // Extract chain_id before chain_network is moved
+        // Extract chain_id and network before chain_network is moved
         let chain_id = chain_network.chain.chain_id as u64;
+        let network = chain_network.id.clone();
 
         // Create channel for chain events
         let (tx_events, _rx_events) = async_channel::unbounded::<SignificantChainEvent>();
@@ -295,7 +296,7 @@ async fn run() -> errors::Result<()> {
                 cors_allowed_origins: vec!["*".to_string()], // Permissive for now
                 chain_id,
                 rpc_url: rpc_url_for_api,
-                contract_addresses: contracts_for_api,
+                contract_addresses: contracts,
             };
 
             // Get RPC operations from blokli_chain for balance queries
@@ -304,6 +305,7 @@ async fn run() -> errors::Result<()> {
             // Build API app with indexer state for subscriptions and transaction components
             let api_app = blokli_api::server::build_app(
                 api_db,
+                network,
                 blokli_api_config,
                 indexer_state,
                 blokli_chain.transaction_executor(),

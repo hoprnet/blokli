@@ -1,12 +1,12 @@
 mod graphql;
 pub mod types {
     pub use super::graphql::{
-        ChannelStatus, TokenValueString,
+        ChannelStatus, DateTime, Hex32, TokenValueString, Uint64,
         accounts::Account,
-        balances::{HoprBalance, NativeBalance},
+        balances::{HoprBalance, NativeBalance, SafeHoprAllowance},
         channels::Channel,
         graph::OpenedChannelsGraphEntry,
-        info::ChainInfo,
+        info::{ChainInfo, ContractAddressMap},
         txs::{Transaction, TransactionStatus},
     };
 }
@@ -14,7 +14,7 @@ pub mod types {
 pub(crate) mod internal {
     pub use super::graphql::{
         accounts::{AccountVariables, QueryAccountCount, QueryAccounts, SubscribeAccounts},
-        balances::{BalanceVariables, QueryHoprBalance, QueryNativeBalance},
+        balances::{BalanceVariables, QueryHoprBalance, QueryNativeBalance, QuerySafeAllowance},
         channels::{ChannelsVariables, QueryChannelCount, QueryChannels, SubscribeChannels},
         graph::SubscribeGraph,
         info::{QueryChainInfo, QueryHealth, QueryVersion},
@@ -70,18 +70,22 @@ pub(crate) type Result<T> = std::result::Result<T, crate::errors::BlokliClientEr
 /// Trait defining restricted queries to Blokli API.
 #[async_trait::async_trait]
 pub trait BlokliQueryClient {
-    /// Counts the number of accounts matching the given selector.
-    async fn count_accounts(&self, selector: AccountSelector) -> Result<u32>;
-    /// Queries the accounts matching the given selector.
+    /// Counts the number of accounts optionally matching the given [`selector`](AccountSelector).
+    async fn count_accounts(&self, selector: Option<AccountSelector>) -> Result<u32>;
+    /// Queries the accounts matching the given [`selector`](AccountSelector).
     async fn query_accounts(&self, selector: AccountSelector) -> Result<Vec<types::Account>>;
     /// Queries the native balance of the given account.
     async fn query_native_balance(&self, address: &ChainAddress) -> Result<types::NativeBalance>;
     /// Queries the token balance of the given account.
     async fn query_token_balance(&self, address: &ChainAddress) -> Result<types::HoprBalance>;
-    /// Counts the number of channels matching the given selector.
-    async fn count_channels(&self, selector: ChannelSelector) -> Result<u32>;
-    /// Queries the channels matching the given selector.
+    /// Queries the safe allowance of the given account.
+    async fn query_safe_allowance(&self, address: &ChainAddress) -> Result<types::SafeHoprAllowance>;
+    /// Counts the number of channels optionally matching the given [`selector`](ChannelSelector).
+    async fn count_channels(&self, selector: Option<ChannelSelector>) -> Result<u32>;
+    /// Queries the channels matching the given [`selector`](ChannelSelector).
     async fn query_channels(&self, selector: ChannelSelector) -> Result<Vec<types::Channel>>;
+    /// Queries the status of the transaction given the `tx_id` previously returned by
+    /// [`BlokliTransactionClient::submit_and_track_transaction`].
     async fn query_transaction_status(&self, tx_id: TxId) -> Result<types::Transaction>;
     /// Queries the chain info.
     async fn query_chain_info(&self) -> Result<types::ChainInfo>;
@@ -109,15 +113,6 @@ pub trait BlokliSubscriptionClient {
     ) -> Result<impl futures::Stream<Item = Result<types::Account>> + Send>;
     /// Subscribes to updates of the entire channel graph.
     fn subscribe_graph(&self) -> Result<impl futures::Stream<Item = Result<types::OpenedChannelsGraphEntry>> + Send>;
-    /// Subscribes to transaction status changes given the `tx_id` previously returned
-    /// by [`BlokliTransactionClient::submit_and_track_transaction`].
-    ///
-    /// The stream ends after the [`TransactionStatus::Confirmed`](types::TransactionStatus::Confirmed) status has been
-    /// reached.
-    fn subscribe_transaction(
-        &self,
-        tx_id: TxId,
-    ) -> Result<impl futures::Stream<Item = Result<types::Transaction>> + Send>;
 }
 
 /// Trait defining Blokli API for signed transaction submission to the chain.
@@ -130,4 +125,8 @@ pub trait BlokliTransactionClient {
     async fn submit_and_track_transaction(&self, signed_tx: &[u8]) -> Result<TxId>;
     /// Submits a signed transaction to the chain and waits for the given number of confirmations.
     async fn submit_and_confirm_transaction(&self, signed_tx: &[u8], num_confirmations: usize) -> Result<TxReceipt>;
+    /// Tracks the transaction given the `tx_id` previously returned
+    /// by [`submit_and_track_transaction`](BlokliTransactionClient::submit_and_track_transaction) until it is confirmed
+    /// or [fails](crate::errors::TrackingErrorKind).
+    async fn track_transaction(&self, tx_id: TxId, client_timeout: std::time::Duration) -> Result<types::Transaction>;
 }

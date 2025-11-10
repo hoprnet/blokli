@@ -64,7 +64,8 @@ pub struct AccountsList {
     pub accounts: Vec<Account>,
 }
 
-#[derive(cynic::QueryFragment, Debug, Clone)]
+#[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Account {
     pub chain_key: String,
     pub keyid: i32,

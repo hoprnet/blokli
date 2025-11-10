@@ -40,8 +40,10 @@ impl From<HoprBalanceResult> for Result<HoprBalance, BlokliClientError> {
     }
 }
 
-#[derive(cynic::QueryFragment, Debug, Clone)]
+#[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct HoprBalance {
+    pub __typename: String,
     pub balance: TokenValueString,
 }
 
@@ -65,7 +67,43 @@ impl From<NativeBalanceResult> for Result<NativeBalance, BlokliClientError> {
     }
 }
 
-#[derive(cynic::QueryFragment, Debug, Clone)]
+#[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct NativeBalance {
+    pub __typename: String,
     pub balance: TokenValueString,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct SafeHoprAllowance {
+    pub __typename: String,
+    pub allowance: TokenValueString,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "QueryRoot", variables = "BalanceVariables")]
+pub struct QuerySafeAllowance {
+    #[arguments(address: $address)]
+    pub safe_hopr_allowance: SafeHoprAllowanceResult,
+}
+
+#[derive(cynic::InlineFragments, Debug)]
+pub enum SafeHoprAllowanceResult {
+    SafeHoprAllowance(SafeHoprAllowance),
+    InvalidAddressError(InvalidAddressError),
+    QueryFailedError(QueryFailedError),
+    #[cynic(fallback)]
+    Unknown,
+}
+
+impl From<SafeHoprAllowanceResult> for Result<SafeHoprAllowance, BlokliClientError> {
+    fn from(value: SafeHoprAllowanceResult) -> Self {
+        match value {
+            SafeHoprAllowanceResult::SafeHoprAllowance(allowance) => Ok(allowance),
+            SafeHoprAllowanceResult::InvalidAddressError(e) => Err(e.into()),
+            SafeHoprAllowanceResult::QueryFailedError(e) => Err(e.into()),
+            SafeHoprAllowanceResult::Unknown => Err(crate::errors::ErrorKind::NoData.into()),
+        }
+    }
 }

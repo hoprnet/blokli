@@ -73,6 +73,7 @@ pub struct AppState {
 /// Build the Axum application router
 pub async fn build_app(
     db: DatabaseConnection,
+    network: String,
     config: ApiConfig,
     indexer_state: IndexerState,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
@@ -82,11 +83,14 @@ pub async fn build_app(
     let schema = build_schema(
         db,
         config.chain_id,
+        network,
+        config.contract_addresses,
         indexer_state,
         transaction_executor,
         transaction_store,
         rpc_operations,
     );
+
     let app_state = AppState {
         schema: Arc::new(schema),
         playground_enabled: config.playground_enabled,
