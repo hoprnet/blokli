@@ -333,7 +333,7 @@ where
 /// * `Result<Vec<AggregatedAccount>, sea_orm::DbErr>` - List of aggregated accounts matching the filters
 pub async fn fetch_accounts_with_filters<C>(
     conn: &C,
-    keyid: Option<i32>,
+    keyid: Option<i64>,
     packet_key: Option<String>,
     chain_key: Option<String>,
 ) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr>

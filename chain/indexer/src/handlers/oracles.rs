@@ -134,7 +134,7 @@ mod tests {
         let encoded_data = (U256::from(1u64), U256::from(123u64)).abi_encode();
 
         let price_change_log = SerializableLog {
-            address: handlers.addresses.price_oracle,
+            address: handlers.addresses.ticket_price_oracle,
             topics: vec![
                 hopr_bindings::hopr_ticket_price_oracle::HoprTicketPriceOracle::TicketPriceUpdated::SIGNATURE_HASH
                     .into(),
@@ -177,7 +177,7 @@ mod tests {
             .abi_encode();
 
         let win_prob_change_log = SerializableLog {
-            address: handlers.addresses.win_prob_oracle,
+            address: handlers.addresses.winning_probability_oracle,
             topics: vec![
                 hopr_bindings::hopr_winning_probability_oracle::HoprWinningProbabilityOracle::WinProbUpdated::SIGNATURE_HASH.into()],
             data: encoded_data,

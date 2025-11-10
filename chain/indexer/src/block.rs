@@ -1952,7 +1952,7 @@ mod tests {
     // ==================== Reorg Handling Tests ====================
 
     // Helper function to create a test channel
-    async fn create_test_channel(db: &BlokliDb, channel_id: i32) -> anyhow::Result<()> {
+    async fn create_test_channel(db: &BlokliDb, channel_id: i64) -> anyhow::Result<()> {
         use blokli_db::TargetDb;
         use blokli_db_entity::{
             account, channel,
@@ -2011,7 +2011,7 @@ mod tests {
     // Helper function to create a channel state
     async fn create_channel_state(
         db: &BlokliDb,
-        channel_id: i32,
+        channel_id: i64,
         block: u64,
         tx_index: u64,
         log_index: u64,
@@ -2045,7 +2045,7 @@ mod tests {
     // Helper function to get all channel states for a channel
     async fn get_channel_states(
         db: &BlokliDb,
-        channel_id: i32,
+        channel_id: i64,
     ) -> anyhow::Result<Vec<blokli_db_entity::channel_state::Model>> {
         use blokli_db::TargetDb;
         use blokli_db_entity::{channel_state, prelude::ChannelState};
@@ -2602,7 +2602,7 @@ mod tests {
             Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 200).await?;
 
         assert_eq!(
-            corrected_count as i32, channel_count,
+            corrected_count as i64, channel_count,
             "Should correct all affected channels"
         );
 

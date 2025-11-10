@@ -77,7 +77,7 @@ mod tests {
         let encoded_data = ().abi_encode();
 
         let safe_registered_log = SerializableLog {
-            address: handlers.addresses.safe_registry,
+            address: handlers.addresses.node_safe_registry,
             topics: vec![
                 hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::RegisteredNodeSafe::SIGNATURE_HASH.into(),
                 // RegisteredNodeSafeFilter::signature().into(),
@@ -115,7 +115,7 @@ mod tests {
         let encoded_data = ().abi_encode();
 
         let safe_registered_log = SerializableLog {
-            address: handlers.addresses.safe_registry,
+            address: handlers.addresses.node_safe_registry,
             topics: vec![
                 hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::DeregisteredNodeSafe::SIGNATURE_HASH
                     .into(),

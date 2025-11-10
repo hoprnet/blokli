@@ -4,7 +4,7 @@
 //! models into GraphQL types. These conversions are kept separate from
 //! the type definitions to avoid requiring API clients to depend on database entities.
 
-use blokli_api_types::{Announcement, Channel, HoprBalance, NativeBalance, TokenValueString, TransactionStatus};
+use blokli_api_types::{Announcement, HoprBalance, NativeBalance, TokenValueString, TransactionStatus};
 use blokli_chain_api::transaction_store::TransactionStatus as StoreStatus;
 use blokli_db_entity::conversions::balances::{address_to_string, balance_to_string};
 
@@ -29,21 +29,6 @@ pub fn announcement_from_model(model: blokli_db_entity::announcement::Model) -> 
         multiaddress: model.multiaddress,
         published_block: model.published_block.to_string(),
     }
-}
-
-/// Convert database channel model to GraphQL type
-///
-/// TODO(Phase 2-3): This function needs to be refactored to query channel_state table
-/// Channel state fields (balance, status, epoch, ticket_index, closure_time) are now stored
-/// in channel_state table, not channel table. This requires database access to join with
-/// channel_state or use the channel_current view.
-pub fn channel_from_model(_model: blokli_db_entity::channel::Model) -> Channel {
-    // TODO(Phase 2-3): Implement proper channel state lookup from channel_state table
-    // For now, this function cannot be used until we implement the state lookup
-    panic!(
-        "channel_from_model requires refactoring to query channel_state table - use channel queries that join with \
-         channel_state instead"
-    )
 }
 
 /// Convert database HOPR balance model to GraphQL type

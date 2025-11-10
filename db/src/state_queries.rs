@@ -125,7 +125,7 @@ use crate::{errors::Result, events::BlockPosition};
 /// The current channel state record, or None if channel doesn't exist or has no state
 pub async fn get_current_channel_state(
     db: &DatabaseConnection,
-    channel_id: i32,
+    channel_id: i64,
 ) -> Result<Option<blokli_db_entity::channel_state::Model>> {
     use blokli_db_entity::{channel_state, prelude::ChannelState};
 
@@ -157,7 +157,7 @@ pub async fn get_current_channel_state(
 /// The channel state at the given position, or None if no state exists before that point
 pub async fn get_channel_state_at(
     db: &DatabaseConnection,
-    channel_id: i32,
+    channel_id: i64,
     position: BlockPosition,
 ) -> Result<Option<blokli_db_entity::channel_state::Model>> {
     use blokli_db_entity::{channel_state, prelude::ChannelState};
@@ -209,7 +209,7 @@ pub async fn get_channel_state_at(
 /// Vector of channel state changes, ordered by position (oldest first)
 pub async fn get_channel_state_history(
     db: &DatabaseConnection,
-    channel_id: i32,
+    channel_id: i64,
     from: BlockPosition,
     to: BlockPosition,
 ) -> Result<Vec<blokli_db_entity::channel_state::Model>> {
@@ -272,7 +272,7 @@ pub async fn get_channel_state_history(
 /// The current account state record, or None if account doesn't exist or has no state
 pub async fn get_current_account_state(
     db: &DatabaseConnection,
-    account_id: i32,
+    account_id: i64,
 ) -> Result<Option<blokli_db_entity::account_state::Model>> {
     use blokli_db_entity::{account_state, prelude::AccountState};
 
@@ -304,7 +304,7 @@ pub async fn get_current_account_state(
 /// The account state at the given position, or None if no state exists before that point
 pub async fn get_account_state_at(
     db: &DatabaseConnection,
-    account_id: i32,
+    account_id: i64,
     position: BlockPosition,
 ) -> Result<Option<blokli_db_entity::account_state::Model>> {
     use blokli_db_entity::{account_state, prelude::AccountState};
@@ -352,7 +352,7 @@ pub async fn get_account_state_at(
 /// Vector of account state changes, ordered by position (oldest first)
 pub async fn get_account_state_history(
     db: &DatabaseConnection,
-    account_id: i32,
+    account_id: i64,
     from: BlockPosition,
     to: BlockPosition,
 ) -> Result<Vec<blokli_db_entity::account_state::Model>> {
@@ -409,7 +409,7 @@ mod tests {
     use crate::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 
     // Helper to create test channel in database
-    async fn create_test_channel(db: &DatabaseConnection) -> anyhow::Result<i32> {
+    async fn create_test_channel(db: &DatabaseConnection) -> anyhow::Result<i64> {
         use blokli_db_entity::{account, channel};
 
         // First create source and destination accounts
@@ -446,7 +446,7 @@ mod tests {
     }
 
     // Helper to create test account in database
-    async fn create_test_account(db: &DatabaseConnection) -> anyhow::Result<i32> {
+    async fn create_test_account(db: &DatabaseConnection) -> anyhow::Result<i64> {
         use blokli_db_entity::account;
 
         let account = account::ActiveModel {
@@ -467,13 +467,13 @@ mod tests {
     // Helper to insert channel state
     async fn insert_channel_state(
         db: &DatabaseConnection,
-        channel_id: i32,
+        channel_id: i64,
         block: i64,
         tx_index: i64,
         log_index: i64,
         balance: Vec<u8>,
         status: i8,
-    ) -> anyhow::Result<i32> {
+    ) -> anyhow::Result<i64> {
         let state = channel_state::ActiveModel {
             channel_id: ActiveValue::Set(channel_id),
             balance: ActiveValue::Set(balance),
@@ -496,11 +496,11 @@ mod tests {
     // Helper to insert account state
     async fn insert_account_state(
         db: &DatabaseConnection,
-        account_id: i32,
+        account_id: i64,
         block: i64,
         tx_index: i64,
         log_index: i64,
-    ) -> anyhow::Result<i32> {
+    ) -> anyhow::Result<i64> {
         let state = account_state::ActiveModel {
             account_id: ActiveValue::Set(account_id),
             published_block: ActiveValue::Set(block),

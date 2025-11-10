@@ -227,12 +227,9 @@ mod tests {
             keyid: 42,
             chain_key: "0x1234".to_string(),
             packet_key: "peer123".to_string(),
-            account_hopr_balance: blokli_api_types::TokenValueString("100".to_string()),
-            account_native_balance: blokli_api_types::TokenValueString("50".to_string()),
             safe_address: None,
-            safe_hopr_balance: None,
-            safe_native_balance: None,
             multi_addresses: vec![],
+            safe_transaction_count: blokli_api_types::UInt64(0),
         };
 
         // Publish an event
@@ -274,12 +271,9 @@ mod tests {
             keyid: 123,
             chain_key: "0xabcd".to_string(),
             packet_key: "peer456".to_string(),
-            account_hopr_balance: blokli_api_types::TokenValueString("200".to_string()),
-            account_native_balance: blokli_api_types::TokenValueString("100".to_string()),
             safe_address: None,
-            safe_hopr_balance: None,
-            safe_native_balance: None,
             multi_addresses: vec![],
+            safe_transaction_count: blokli_api_types::UInt64(0),
         };
 
         // Publish event

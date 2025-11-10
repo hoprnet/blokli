@@ -453,7 +453,7 @@ impl SubscriptionRoot {
     async fn account_updated(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Filter by account keyid")] keyid: Option<i32>,
+        #[graphql(desc = "Filter by account keyid")] keyid: Option<i64>,
         #[graphql(desc = "Filter by packet key (peer ID format)")] packet_key: Option<String>,
         #[graphql(desc = "Filter by chain key (hexadecimal format)")] chain_key: Option<String>,
     ) -> Result<impl Stream<Item = Account>> {
@@ -536,7 +536,8 @@ impl SubscriptionRoot {
 
         let _channels = query.all(db).await?;
 
-        // TODO(Phase 2-3): Cannot use channel_from_model until we implement channel_state lookup
+        // TODO(Phase 2-3): Use proper channel query functions from blokli_db::channels
+        // that join with channel_state table to get complete channel data
         Err(sea_orm::DbErr::Custom(
             "Channel subscription temporarily unavailable during schema migration".to_string(),
         ))
@@ -544,7 +545,7 @@ impl SubscriptionRoot {
 
     async fn fetch_filtered_accounts(
         db: &DatabaseConnection,
-        keyid: Option<i32>,
+        keyid: Option<i64>,
         packet_key: Option<String>,
         chain_key: Option<String>,
     ) -> Result<Vec<Account>, sea_orm::DbErr> {
@@ -625,10 +626,10 @@ mod tests {
     // Helper: Create test channel in database
     async fn create_test_channel(
         db: &DatabaseConnection,
-        source: i32,
-        destination: i32,
+        source: i64,
+        destination: i64,
         concrete_id: &str,
-    ) -> anyhow::Result<i32> {
+    ) -> anyhow::Result<i64> {
         let channel = blokli_db_entity::channel::ActiveModel {
             id: Default::default(),
             source: Set(source),
@@ -641,7 +642,7 @@ mod tests {
     }
 
     // Helper: Create test account in database
-    async fn create_test_account(db: &DatabaseConnection, chain_key: Vec<u8>, packet_key: &str) -> anyhow::Result<i32> {
+    async fn create_test_account(db: &DatabaseConnection, chain_key: Vec<u8>, packet_key: &str) -> anyhow::Result<i64> {
         let account = blokli_db_entity::account::ActiveModel {
             id: Default::default(),
             chain_key: Set(chain_key),
@@ -658,13 +659,13 @@ mod tests {
     // Helper: Insert channel_state
     async fn insert_channel_state(
         db: &DatabaseConnection,
-        channel_id: i32,
+        channel_id: i64,
         block: i64,
         tx_index: i64,
         log_index: i64,
         balance: Vec<u8>,
         status: i8,
-    ) -> anyhow::Result<i32> {
+    ) -> anyhow::Result<i64> {
         let state = blokli_db_entity::channel_state::ActiveModel {
             id: Default::default(),
             channel_id: Set(channel_id),
@@ -751,12 +752,9 @@ mod tests {
             keyid: 1,
             chain_key: "0x1111".to_string(),
             packet_key: "peer1".to_string(),
-            account_hopr_balance: TokenValueString("100".to_string()),
-            account_native_balance: TokenValueString("50".to_string()),
             safe_address: None,
-            safe_hopr_balance: None,
-            safe_native_balance: None,
             multi_addresses: vec![],
+            safe_transaction_count: UInt64(0),
         };
 
         // Publish event to bus

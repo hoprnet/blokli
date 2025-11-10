@@ -39,12 +39,12 @@ url                = { workspace = true }
 validator          = { workspace = true }
 
 # Local dependencies
-blokli-api           = { path = "../api" }
-blokli-chain-api     = { path = "../chain/api" }
-blokli-chain-indexer = { path = "../chain/indexer" }
-blokli-chain-rpc     = { path = "../chain/rpc" }
-blokli-chain-types   = { path = "../chain/types" }
-blokli-db            = { path = "../db" }
+blokli-api           = { workspace = true }
+blokli-chain-api     = { workspace = true }
+blokli-chain-indexer = { workspace = true }
+blokli-chain-rpc     = { workspace = true }
+blokli-chain-types   = { workspace = true }
+blokli-db            = { workspace = true }
 
 # HOPR dependencies
 hopr-chain-config    = { workspace = true }

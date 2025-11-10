@@ -57,7 +57,7 @@ impl QueryRoot {
     async fn accounts(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Filter by account keyid")] keyid: Option<i32>,
+        #[graphql(desc = "Filter by account keyid")] keyid: Option<i64>,
         #[graphql(desc = "Filter by packet key (peer ID format)")] packet_key: Option<String>,
         #[graphql(desc = "Filter by chain key (hexadecimal format)")] chain_key: Option<String>,
     ) -> Result<Vec<Account>> {
@@ -104,7 +104,7 @@ impl QueryRoot {
     async fn account_count(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Filter by account keyid")] keyid: Option<i32>,
+        #[graphql(desc = "Filter by account keyid")] keyid: Option<i64>,
         #[graphql(desc = "Filter by packet key (peer ID format)")] packet_key: Option<String>,
         #[graphql(desc = "Filter by chain key (hexadecimal format)")] chain_key: Option<String>,
     ) -> Result<i32> {
