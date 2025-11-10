@@ -1877,6 +1877,8 @@ dependencies = [
  "futures",
  "futures-time",
  "hex",
+ "hopr-crypto-types",
+ "hopr-primitive-types",
  "insta",
  "mockito",
  "parking_lot",

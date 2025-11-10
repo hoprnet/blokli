@@ -145,6 +145,8 @@ async fn setup_test_environment() -> anyhow::Result<TestContext> {
     let schema = build_schema(
         db.clone(),
         chain_id,
+        "test-network".to_string(),
+        contract_addrs,
         indexer_state,
         transaction_executor,
         transaction_store,

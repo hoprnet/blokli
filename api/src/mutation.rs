@@ -13,6 +13,7 @@ use blokli_chain_api::{
     transaction_executor::{RawTransactionExecutor, TransactionExecutorError},
     transaction_store::{TransactionRecord, TransactionStatus as StoreStatus, TransactionStore},
 };
+use hopr_primitive_types::prelude::ToHex;
 
 /// Root mutation type providing transaction submission capabilities
 pub struct MutationRoot;
@@ -152,7 +153,7 @@ fn hex_to_bytes(hex_str: &str) -> Result<Vec<u8>> {
 
 /// Helper function to convert Hash to Hex32
 fn hash_to_hex32(hash: hopr_crypto_types::types::Hash) -> Hex32 {
-    Hex32(format!("0x{}", hex::encode(hash.as_ref())))
+    Hex32(hash.to_hex())
 }
 
 /// Convert TransactionRecord to GraphQL Transaction

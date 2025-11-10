@@ -17,6 +17,8 @@ eventsource-client = { workspace = true }
 futures = { workspace = true }
 futures-time = { workspace = true }
 hex = { workspace = true }
+hopr-crypto-types = { workspace = true }
+hopr-primitive-types = { workspace = true }
 parking_lot = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 reqwest = { workspace = true, features = [

@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use blokli_api_types::{Account, Channel, ChannelUpdate, TokenValueString, UInt64};
 use blokli_db_entity::conversions::{account_aggregation, balances::balance_to_string};
 use hopr_crypto_types::prelude::Hash;
-use hopr_primitive_types::prelude::Address;
+use hopr_primitive_types::prelude::{Address, ToHex};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder};
 
 use crate::errors::{CoreEthereumIndexerError, Result};
@@ -31,7 +31,7 @@ where
     use blokli_db_entity::codegen::{channel, channel_state};
 
     // Convert Hash to hex string for database query
-    let channel_id_hex = format!("0x{}", alloy::hex::encode(channel_id.as_ref()));
+    let channel_id_hex = channel_id.to_hex();
 
     // 1. Find the channel by concrete_channel_id
     let channel = channel::Entity::find()

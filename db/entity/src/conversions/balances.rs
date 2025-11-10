@@ -1,6 +1,6 @@
 //! Balance conversion utilities for HOPR blokli
 
-use hopr_primitive_types::prelude::{Balance, Currency, HoprBalance, IntoEndian, XDaiBalance};
+use hopr_primitive_types::prelude::{Address, Balance, Currency, HoprBalance, IntoEndian, ToHex, XDaiBalance};
 
 /// Convert binary address (20 bytes) to hex string (without 0x prefix)
 ///
@@ -27,7 +27,10 @@ pub fn address_to_string(address: &[u8]) -> String {
 /// * `Err(&'static str)` - Error message if the address is not exactly 20 bytes
 pub fn try_address_to_string(address: &[u8]) -> Result<String, &'static str> {
     if address.len() == 20 {
-        Ok(hex::encode(address))
+        let mut addr_bytes = [0u8; 20];
+        addr_bytes.copy_from_slice(address);
+        let addr = Address::new(&addr_bytes);
+        Ok(addr.to_hex())
     } else {
         Err("address must be exactly 20 bytes")
     }
@@ -59,12 +62,18 @@ pub fn string_to_address(address: &str) -> Vec<u8> {
 /// * `Ok([u8; 20])` - The address as a 20-byte array
 /// * `Err(String)` - Error message if the address is invalid
 pub fn try_string_to_address(address: &str) -> Result<[u8; 20], String> {
-    let addr = address.strip_prefix("0x").unwrap_or(address);
-    let bytes = hex::decode(addr).map_err(|e| format!("invalid hex: {}", e))?;
-    let len = bytes.len();
-    bytes
+    let addr_str = if address.starts_with("0x") {
+        address
+    } else {
+        &format!("0x{}", address)
+    };
+
+    let parsed_addr = Address::from_hex(addr_str).map_err(|e| format!("invalid hex address: {}", e))?;
+    let bytes: [u8; 20] = parsed_addr
+        .as_ref()
         .try_into()
-        .map_err(|_| format!("address must be 20 bytes, got {}", len))
+        .map_err(|_| "failed to convert address to 20 bytes".to_string())?;
+    Ok(bytes)
 }
 
 /// Convert a 12-byte balance representation to f64

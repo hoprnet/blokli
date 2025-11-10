@@ -1,5 +1,6 @@
 use cynic::QueryBuilder;
 use hex::ToHex;
+use hopr_primitive_types::{prelude::Address, traits::ToHex as PrimitiveToHex};
 
 use super::{BlokliClient, response_to_data};
 use crate::{
@@ -27,7 +28,7 @@ impl BlokliQueryClient for BlokliClient {
         response_to_data(resp)?.accounts.into()
     }
 
-    #[tracing::instrument(level = "debug", skip(self), fields(address = hex::encode(address)))]
+    #[tracing::instrument(level = "debug", skip(self), fields(address = Address::new(address).to_hex()))]
     async fn query_native_balance(&self, address: &ChainAddress) -> Result<NativeBalance> {
         let resp = self
             .build_query(QueryNativeBalance::build(BalanceVariables {
@@ -38,7 +39,7 @@ impl BlokliQueryClient for BlokliClient {
         response_to_data(resp)?.native_balance.into()
     }
 
-    #[tracing::instrument(level = "debug", skip(self), fields(address = hex::encode(address)))]
+    #[tracing::instrument(level = "debug", skip(self), fields(address = Address::new(address).to_hex()))]
     async fn query_token_balance(&self, address: &ChainAddress) -> Result<HoprBalance> {
         let resp = self
             .build_query(QueryHoprBalance::build(BalanceVariables {
@@ -49,7 +50,7 @@ impl BlokliQueryClient for BlokliClient {
         response_to_data(resp)?.hopr_balance.into()
     }
 
-    #[tracing::instrument(level = "debug", skip(self), fields(address = hex::encode(address)))]
+    #[tracing::instrument(level = "debug", skip(self), fields(address = Address::new(address).to_hex()))]
     async fn query_safe_allowance(&self, address: &ChainAddress) -> Result<SafeHoprAllowance> {
         let resp = self
             .build_query(QuerySafeAllowance::build(BalanceVariables {

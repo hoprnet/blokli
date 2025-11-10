@@ -1,3 +1,6 @@
+use hopr_crypto_types::types::Hash;
+use hopr_primitive_types::traits::ToHex;
+
 use super::{DateTime, Hex32, schema};
 use crate::{
     api::TxReceipt,
@@ -234,10 +237,11 @@ pub enum SendTransactionResult {
 impl From<SendTransactionResult> for Result<TxReceipt, BlokliClientError> {
     fn from(value: SendTransactionResult) -> Self {
         match value {
-            SendTransactionResult::SendTransactionSuccess(t) => Ok(hex::decode(t.transaction_hash.0)
-                .map_err(|_| ErrorKind::ParseError)?
-                .try_into()
-                .map_err(|_| ErrorKind::ParseError)?),
+            SendTransactionResult::SendTransactionSuccess(t) => {
+                let hash = Hash::from_hex(&t.transaction_hash.0).map_err(|_| ErrorKind::ParseError)?;
+                let bytes: [u8; 32] = hash.as_ref().try_into().map_err(|_| ErrorKind::ParseError)?;
+                Ok(bytes)
+            }
             SendTransactionResult::ContractNotAllowedError(e) => Err(e.into()),
             SendTransactionResult::FunctionNotAllowedError(e) => Err(e.into()),
             SendTransactionResult::RpcError(e) => Err(e.into()),

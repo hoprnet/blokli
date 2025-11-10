@@ -2,11 +2,33 @@ use std::{collections::HashMap, ops::Div, sync::Arc, time::Duration};
 
 use async_broadcast::TrySendError;
 use futures::{Stream, StreamExt};
+use hopr_crypto_types::types::Hash;
+use hopr_primitive_types::prelude::{Address, ToHex};
 
 use crate::{
     api::{types::*, *},
     errors::{BlokliClientError, ErrorKind},
 };
+
+/// Helper to convert transaction bytes to hex for logging
+fn tx_bytes_to_hex(bytes: &[u8]) -> String {
+    // For test logging purposes, we convert raw transaction bytes to hex
+    // This is only used for debug/error messages
+    bytes.iter().map(|b| format!("{:02x}", b)).collect()
+}
+
+/// Helper to generate a random test transaction ID (16 bytes as hex string)
+fn generate_test_tx_id() -> String {
+    let bytes: Vec<u8> = rand::random_iter::<u8>().take(16).collect();
+    tx_bytes_to_hex(&bytes)
+}
+
+/// Helper to generate a random test transaction hash (32 bytes as hex string)
+fn generate_test_tx_hash() -> String {
+    let random_bytes: [u8; 32] = rand::random();
+    let hash = Hash::from(random_bytes);
+    hash.to_hex()
+}
 
 /// Represents a state for [`BlokliTestClient`].
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -64,15 +86,13 @@ impl Default for BlokliTestState {
 
 impl BlokliTestState {
     pub fn get_account(&self, chain_key: &ChainAddress) -> Option<&Account> {
-        self.accounts
-            .values()
-            .find(|acc| acc.chain_key == hex::encode(chain_key))
+        let address_hex = Address::new(chain_key).to_hex();
+        self.accounts.values().find(|acc| acc.chain_key == address_hex)
     }
 
     pub fn get_account_mut(&mut self, chain_key: &ChainAddress) -> Option<&mut Account> {
-        self.accounts
-            .values_mut()
-            .find(|acc| acc.chain_key == hex::encode(chain_key))
+        let address_hex = Address::new(chain_key).to_hex();
+        self.accounts.values_mut().find(|acc| acc.chain_key == address_hex)
     }
 
     pub fn get_channel_by_id(&self, channel_id: &ChannelId) -> Option<&Channel> {
@@ -181,7 +201,11 @@ pub struct BlokliTestClient<M> {
 
 fn channel_matches(channel: &Channel, selector: &ChannelSelector) -> bool {
     let filter = match selector.filter {
-        ChannelFilter::ChannelId(id) => channel.concrete_channel_id == hex::encode(id),
+        ChannelFilter::ChannelId(id) => {
+            let id_bytes: [u8; 32] = id.try_into().unwrap_or([0u8; 32]);
+            let hash = Hash::from(id_bytes);
+            channel.concrete_channel_id == hash.to_hex()
+        }
         ChannelFilter::DestinationKeyId(dst_id) => channel.destination as u32 == dst_id,
         ChannelFilter::SourceKeyId(src_id) => channel.source as u32 == src_id,
         ChannelFilter::SourceAndDestinationKeyIds(src_id, dst_id) => {
@@ -193,9 +217,9 @@ fn channel_matches(channel: &Channel, selector: &ChannelSelector) -> bool {
 
 fn account_matches(account: &Account, selector: &AccountSelector) -> bool {
     match selector {
-        AccountSelector::Address(address) => account.chain_key == hex::encode(address),
+        AccountSelector::Address(address) => account.chain_key == Address::new(address).to_hex(),
         AccountSelector::KeyId(id) => account.keyid as u32 == *id,
-        AccountSelector::PacketKey(packet_key) => account.packet_key == hex::encode(packet_key),
+        AccountSelector::PacketKey(packet_key) => account.packet_key == Address::new(packet_key).to_hex(),
     }
 }
 
@@ -269,7 +293,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
     }
 
     async fn query_native_balance(&self, address: &ChainAddress) -> Result<NativeBalance> {
-        let address = hex::encode(address);
+        let address = Address::new(address).to_hex();
         self.state
             .read()
             .native_balances
@@ -279,7 +303,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
     }
 
     async fn query_token_balance(&self, address: &ChainAddress) -> Result<HoprBalance> {
-        let address = hex::encode(address);
+        let address = Address::new(address).to_hex();
         self.state
             .read()
             .token_balances
@@ -289,7 +313,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
     }
 
     async fn query_safe_allowance(&self, address: &ChainAddress) -> Result<SafeHoprAllowance> {
-        let address = hex::encode(address);
+        let address = Address::new(address).to_hex();
         self.state
             .read()
             .safe_allowances
@@ -536,7 +560,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
             &self.accounts_channel.0,
             &self.channels_channel.0,
         ) {
-            tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction, state reverted");
+            tracing::error!(%error, signed_tx_data = tx_bytes_to_hex(signed_tx), "failed to execute transaction, state reverted");
         } else {
             tracing::debug!("transaction execution succeeded");
         }
@@ -545,8 +569,8 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
     }
 
     async fn submit_and_track_transaction(&self, signed_tx: &[u8]) -> Result<TxId> {
-        let tx_id = hex::encode(rand::random_iter::<u8>().take(16).collect::<Vec<_>>());
-        let tx_hash = hex::encode(rand::random_iter::<u8>().take(32).collect::<Vec<_>>());
+        let tx_id = generate_test_tx_id();
+        let tx_hash = generate_test_tx_hash();
 
         let mut state = self.state.write();
 
@@ -562,7 +586,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
             TransactionStatus::Confirmed
         })
         .unwrap_or_else(|error| {
-            tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction, state reverted");
+            tracing::error!(%error, signed_tx_data = tx_bytes_to_hex(signed_tx), "failed to execute transaction, state reverted");
             TransactionStatus::Reverted
         });
 
@@ -596,7 +620,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
             &self.channels_channel.0,
         )
         .inspect_err(|error| {
-            tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction, state reverted");
+            tracing::error!(%error, signed_tx_data = tx_bytes_to_hex(signed_tx), "failed to execute transaction, state reverted");
         })?;
 
         tracing::debug!("transaction execution succeeded");

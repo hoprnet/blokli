@@ -11,6 +11,7 @@ use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
 use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::conversions::balances::{hopr_balance_to_string, string_to_address};
+use hopr_primitive_types::prelude::ToHex;
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
 
 use crate::{mutation::TransactionResult, validation::validate_eth_address};
@@ -22,7 +23,7 @@ fn bytes_to_hex32(bytes: &[u8]) -> Hex32 {
 
 /// Helper function to convert Hash to Hex32
 fn hash_to_hex32(hash: hopr_crypto_types::types::Hash) -> Hex32 {
-    Hex32(format!("0x{}", hex::encode(hash.as_ref())))
+    Hex32(hash.to_hex())
 }
 
 /// Convert store TransactionStatus to GraphQL TransactionStatus
