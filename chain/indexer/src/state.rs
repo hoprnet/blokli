@@ -160,8 +160,8 @@ impl IndexerState {
     ///
     /// A receiver for indexer events
     pub fn subscribe_to_events(&self) -> Receiver<IndexerEvent> {
-        // Clone the initial receiver to create a new receiver
-        self._event_bus_rx.as_ref().clone()
+        // Get a fresh receiver from the sender to avoid inheriting backlog
+        self.event_bus.new_receiver()
     }
 
     /// Signals all subscriptions to shut down due to reorg
@@ -187,8 +187,8 @@ impl IndexerState {
     ///
     /// A receiver for shutdown signals
     pub fn subscribe_to_shutdown(&self) -> Receiver<()> {
-        // Clone the initial receiver to create a new receiver
-        self._shutdown_rx.as_ref().clone()
+        // Get a fresh receiver from the sender to avoid inheriting backlog
+        self.shutdown_signal.new_receiver()
     }
 }
 
