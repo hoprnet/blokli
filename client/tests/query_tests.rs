@@ -1,6 +1,6 @@
-use blokli_client::{BlokliClient, api::BlokliQueryClient};
-
 use crate::common::RequestRecorder;
+use blokli_client::BlokliClient;
+use blokli_client::api::BlokliQueryClient;
 
 mod common;
 

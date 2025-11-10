@@ -4,8 +4,6 @@ use cynic::MutationBuilder;
 use futures::TryStreamExt;
 use futures_time::future::FutureExt;
 use hex::ToHex;
-use hopr_crypto_types::types::Hash;
-use hopr_primitive_types::traits::ToHex as PrimitiveToHex;
 
 use super::{BlokliClient, response_to_data};
 use crate::{
@@ -54,10 +52,11 @@ impl BlokliTransactionClient for BlokliClient {
 
         let tx: Result<Transaction> = response_to_data(resp)?.send_transaction_sync.into();
 
-        let hash_hex = tx?.transaction_hash.ok_or(ErrorKind::NoData)?;
-        let hash = Hash::from_hex(&hash_hex.0).map_err(|_| ErrorKind::ParseError)?;
-        let bytes: [u8; 32] = hash.as_ref().try_into().map_err(|_| ErrorKind::ParseError)?;
-        Ok(bytes)
+        Ok(tx?.transaction_hash.ok_or(ErrorKind::NoData).and_then(|d| {
+            hex::decode(d.0)
+                .map_err(|_| ErrorKind::ParseError)
+                .and_then(|d| d.try_into().map_err(|_| ErrorKind::ParseError))
+        })?)
     }
 
     async fn track_transaction(&self, tx_id: TxId, client_timeout: Duration) -> Result<Transaction> {

@@ -191,7 +191,6 @@ where
     }
 
     // 3. Aggregate all data
-
     let result = accounts
         .into_iter()
         .map(|account| {
@@ -405,7 +404,6 @@ where
     }
 
     // 3. Aggregate all data
-
     let result = accounts
         .into_iter()
         .map(|account| {
