@@ -80,5 +80,6 @@ clap = { workspace = true }
 
 [dev-dependencies]
 env_logger = { workspace = true }
+rand       = { workspace = true }
 test-log   = { workspace = true }
 tokio-test = { workspace = true }

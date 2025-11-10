@@ -130,11 +130,7 @@ async fn test_try_stream_logs_should_contain_all_logs_when_opening_channel() -> 
         .context("log stream task failed")?;
 
     let blocks = retrieved_logs.context("log stream yielded no blocks")?;
-    let last_block_logs = blocks
-        .last()
-        .context("a log should be present")?
-        .logs
-        .clone();
+    let last_block_logs = blocks.last().context("a log should be present")?.logs.clone();
 
     let channel_open_filter = ChannelOpened::SIGNATURE_HASH;
     let channel_balance_filter = ChannelBalanceIncreased::SIGNATURE_HASH;
