@@ -3687,7 +3687,7 @@ dependencies = [
 [[package]]
 name = "hopr-bindings"
 version = "4.0.0"
-source = "git+https://github.com/hoprnet/contracts?branch=q%2Fkey-id-with-token-burn#75a63f0e556c50555cbdf4dd168a1fa7d3c38531"
+source = "git+https://github.com/hoprnet/contracts?branch=main#ffebf594c416d05ef9500921b149e07ef53d6e6b"
 dependencies = [
  "alloy",
  "anyhow",
@@ -6435,9 +6435,9 @@ dependencies = [
 
 [[package]]
 name = "sea-schema"
-version = "0.17.0-rc.12"
+version = "0.17.0-rc.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "09cb79f2d0fe3a3ca7852eb1c61590452674700fdeb9f07656b9eb16f8d1990b"
+checksum = "da2e92a98855cfdc2e32daac3f48517a3d9911209db012e5c74af1ff13a24946"
 dependencies = [
  "async-trait",
  "sea-query",
