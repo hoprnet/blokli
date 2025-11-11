@@ -138,12 +138,8 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         shutdown_signal_capacity: 10,
     };
 
-    // Create channel for events
-    let (tx_events, _rx_events) = async_channel::unbounded();
-
     // Create indexer
-    let indexer =
-        Indexer::new(mock_rpc, handlers, db, indexer_config, tx_events, indexer_state).without_panic_on_completion(); // Don't panic when stream ends in tests
+    let indexer = Indexer::new(mock_rpc, handlers, db, indexer_config, indexer_state).without_panic_on_completion(); // Don't panic when stream ends in tests
 
     // Start indexer
     let indexer_handle = indexer.start().await?;
@@ -215,12 +211,8 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         shutdown_signal_capacity: 10,
     };
 
-    // Create channel for events
-    let (tx_events, _rx_events) = async_channel::unbounded();
-
     // Create indexer
-    let indexer =
-        Indexer::new(mock_rpc, handlers, db, indexer_config, tx_events, indexer_state).without_panic_on_completion();
+    let indexer = Indexer::new(mock_rpc, handlers, db, indexer_config, indexer_state).without_panic_on_completion();
 
     // Start indexer
     let indexer_handle = indexer.start().await?;
@@ -365,12 +357,8 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         shutdown_signal_capacity: 10,
     };
 
-    // Create channel for events
-    let (tx_events, _rx_events) = async_channel::unbounded();
-
     // Create and start indexer
-    let indexer = Indexer::new(tracking_rpc, handlers, db, indexer_config, tx_events, indexer_state)
-        .without_panic_on_completion();
+    let indexer = Indexer::new(tracking_rpc, handlers, db, indexer_config, indexer_state).without_panic_on_completion();
 
     let indexer_handle = indexer.start().await?;
 

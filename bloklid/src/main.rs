@@ -9,7 +9,7 @@ use std::{
 };
 
 use async_signal::{Signal, Signals};
-use blokli_chain_api::{BlokliChain, SignificantChainEvent};
+use blokli_chain_api::BlokliChain;
 use blokli_chain_types::ContractAddresses;
 use blokli_db::db::{BlokliDb, BlokliDbConfig};
 use clap::{Parser, Subcommand};
@@ -254,11 +254,8 @@ async fn run() -> errors::Result<()> {
         let chain_id = chain_network.chain.chain_id as u64;
         let network = chain_network.id.clone();
 
-        // Create channel for chain events
-        let (tx_events, _rx_events) = async_channel::unbounded::<SignificantChainEvent>();
-
         // Create BlokliChain instance
-        let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, tx_events, rpc_url)?;
+        let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, rpc_url)?;
 
         // Get IndexerState for API subscriptions
         let indexer_state = blokli_chain.indexer_state();
