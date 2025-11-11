@@ -2,9 +2,10 @@
 
 use std::collections::HashMap;
 
+use hopr_primitive_types::{primitives::Address, traits::ToHex};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder};
 
-use super::balances::{address_to_string, string_to_address};
+use super::balances::address_to_string;
 use crate::codegen::{account, account_state, announcement};
 
 /// Aggregated account data with all related information
@@ -15,7 +16,6 @@ pub struct AggregatedAccount {
     pub packet_key: String,
     pub safe_address: Option<String>,
     pub multi_addresses: Vec<String>,
-    pub safe_transaction_count: u64,
 }
 
 /// Fetch all accounts with their related data using optimized batch loading
@@ -102,8 +102,6 @@ where
                 packet_key: account.packet_key,
                 safe_address: safe_address_str,
                 multi_addresses,
-                // TODO: Implement safe transaction count fetching from blockchain or database
-                safe_transaction_count: 0,
             }
         })
         .collect();
@@ -137,7 +135,15 @@ where
     }
 
     // Convert string addresses to binary for query
-    let binary_addresses: Vec<Vec<u8>> = addresses.iter().map(|a| string_to_address(a)).collect();
+    let binary_addresses: Result<Vec<Vec<u8>>, sea_orm::DbErr> = addresses
+        .iter()
+        .map(|a| {
+            Address::from_hex(a)
+                .map(|addr| addr.as_ref().to_vec())
+                .map_err(|e| sea_orm::DbErr::Custom(format!("Invalid address: {}", e)))
+        })
+        .collect();
+    let binary_addresses = binary_addresses?;
 
     // 1. Fetch accounts filtered by chain_key (1 query)
     let accounts = account::Entity::find()
@@ -208,8 +214,6 @@ where
                 packet_key: account.packet_key,
                 safe_address: safe_address_str,
                 multi_addresses,
-                // TODO: Implement safe transaction count fetching from blockchain or database
-                safe_transaction_count: 0,
             }
         })
         .collect();
@@ -307,8 +311,6 @@ where
                 packet_key: account.packet_key,
                 safe_address: safe_address_str,
                 multi_addresses,
-                // TODO: Implement safe transaction count fetching from blockchain or database
-                safe_transaction_count: 0,
             }
         })
         .collect();
@@ -352,7 +354,10 @@ where
     }
 
     if let Some(ck) = chain_key {
-        let binary_chain_key = string_to_address(&ck);
+        let binary_chain_key = Address::from_hex(&ck)
+            .map_err(|e| sea_orm::DbErr::Custom(format!("Invalid address: {}", e)))?
+            .as_ref()
+            .to_vec();
         query = query.filter(account::Column::ChainKey.eq(binary_chain_key));
     }
 
@@ -421,8 +426,6 @@ where
                 packet_key: account.packet_key,
                 safe_address: safe_address_str,
                 multi_addresses,
-                // TODO: Implement safe transaction count fetching from blockchain or database
-                safe_transaction_count: 0,
             }
         })
         .collect();

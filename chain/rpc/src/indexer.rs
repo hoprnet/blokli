@@ -152,6 +152,10 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
         self.get_hopr_balance(address).await
     }
 
+    async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64> {
+        self.get_safe_transaction_count(safe_address).await
+    }
+
     fn try_stream_logs<'a>(
         &'a self,
         start_block_number: u64,

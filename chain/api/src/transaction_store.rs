@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use chrono::{DateTime, Utc};
-use dashmap::DashMap;
+use dashmap::{DashMap, mapref::entry::Entry};
 use hopr_crypto_types::types::Hash;
 use thiserror::Error;
 use uuid::Uuid;
@@ -78,8 +78,6 @@ impl TransactionStore {
     /// # Errors
     /// Returns `TransactionStoreError::AlreadyExists` if a transaction with the same ID already exists
     pub fn insert(&self, record: TransactionRecord) -> Result<(), TransactionStoreError> {
-        use dashmap::mapref::entry::Entry;
-
         match self.transactions.entry(record.id) {
             Entry::Vacant(entry) => {
                 entry.insert(record);
@@ -105,8 +103,6 @@ impl TransactionStore {
     /// # Errors
     /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
     pub fn update(&self, record: TransactionRecord) -> Result<(), TransactionStoreError> {
-        use dashmap::mapref::entry::Entry;
-
         match self.transactions.entry(record.id) {
             Entry::Occupied(mut entry) => {
                 entry.insert(record);

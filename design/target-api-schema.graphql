@@ -420,11 +420,11 @@ type QueryRoot {
   ): SafeHoprAllowanceResult!
   """
   Retrieve Safe contract transaction count
-
+  
   This query returns the current nonce/transaction count for a HOPR Safe contract
   directly from the blockchain. The transaction count increments with each transaction
   executed by the Safe.
-
+  
   Returns Error with code INVALID_ADDRESS if address format is invalid.
   Returns Error with code QUERY_FAILED if blockchain query fails.
   """

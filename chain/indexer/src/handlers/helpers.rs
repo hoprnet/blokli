@@ -103,7 +103,6 @@ where
         packet_key: source_account.packet_key.clone(),
         safe_address: source_account.safe_address.clone(),
         multi_addresses: source_account.multi_addresses.clone(),
-        safe_transaction_count: UInt64(source_account.safe_transaction_count),
     };
 
     let dest_gql = Account {
@@ -112,7 +111,6 @@ where
         packet_key: dest_account.packet_key.clone(),
         safe_address: dest_account.safe_address.clone(),
         multi_addresses: dest_account.multi_addresses.clone(),
-        safe_transaction_count: UInt64(dest_account.safe_transaction_count),
     };
 
     Ok(ChannelUpdate {
@@ -171,6 +169,5 @@ where
         packet_key: aggregated.packet_key,
         safe_address: aggregated.safe_address,
         multi_addresses: aggregated.multi_addresses,
-        safe_transaction_count: UInt64(aggregated.safe_transaction_count),
     })
 }

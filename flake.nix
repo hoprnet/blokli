@@ -45,6 +45,7 @@
     pre-commit.url = "github:cachix/git-hooks.nix";
     flake-root.url = "github:srid/flake-root";
     foundry.url = "github:shazow/foundry.nix";
+    solc.url = "github:hellwolf/solc.nix";
 
     # Input dependency optimization
     flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
@@ -54,6 +55,7 @@
     nix-lib.inputs.rust-overlay.follows = "rust-overlay";
     rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
     foundry.inputs.nixpkgs.follows = "nixpkgs";
+    solc.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -67,6 +69,7 @@
       rust-overlay,
       pre-commit,
       foundry,
+      solc,
       ...
     }@inputs:
     flake-parts.lib.mkFlake { inherit inputs; } {
@@ -92,10 +95,11 @@
           # Filesystem utilities for source filtering
           fs = lib.fileset;
 
-          # Nixpkgs with rust-overlay and foundry overlay
+          # Nixpkgs with rust-overlay, foundry overlay, and solc overlay
           overlays = [
             rust-overlay.overlays.default
             foundry.overlay
+            solc.overlay
           ];
           pkgs = import nixpkgs {
             inherit system overlays;
@@ -251,7 +255,10 @@
             treefmtWrapper = config.treefmt.build.wrapper;
             treefmtPrograms = pkgs.lib.attrValues config.treefmt.build.programs;
             shellHook = packages.pre-commit-check.shellHook;
-            extraPackages = [ pkgs.foundry-bin ];
+            extraPackages = [
+              pkgs.foundry-bin
+              pkgs.solc
+            ];
           };
           shells = {
             default = nixLib.mkDevShell (

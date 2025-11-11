@@ -36,46 +36,6 @@ pub fn try_address_to_string(address: &[u8]) -> Result<String, &'static str> {
     }
 }
 
-/// Convert hex string address to binary (20 bytes)
-///
-/// # Arguments
-/// * `address` - A hex string (with or without 0x prefix)
-///
-/// # Returns
-/// * `Vec<u8>` - The address as 20 bytes, or empty vector if invalid
-///
-/// # Note
-/// This function returns an empty vector for invalid addresses. For error handling, use `try_string_to_address`
-/// instead.
-pub fn string_to_address(address: &str) -> Vec<u8> {
-    try_string_to_address(address)
-        .map(|arr| arr.to_vec())
-        .unwrap_or_default()
-}
-
-/// Convert hex string address to binary (20 bytes), with validation
-///
-/// # Arguments
-/// * `address` - A hex string (with or without 0x prefix)
-///
-/// # Returns
-/// * `Ok([u8; 20])` - The address as a 20-byte array
-/// * `Err(String)` - Error message if the address is invalid
-pub fn try_string_to_address(address: &str) -> Result<[u8; 20], String> {
-    let addr_str = if address.starts_with("0x") {
-        address
-    } else {
-        &format!("0x{}", address)
-    };
-
-    let parsed_addr = Address::from_hex(addr_str).map_err(|e| format!("invalid hex address: {}", e))?;
-    let bytes: [u8; 20] = parsed_addr
-        .as_ref()
-        .try_into()
-        .map_err(|_| "failed to convert address to 20 bytes".to_string())?;
-    Ok(bytes)
-}
-
 /// Convert a 12-byte balance representation to f64
 ///
 /// This function converts the 12-byte big-endian balance stored in the database
