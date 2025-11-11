@@ -1,5 +1,3 @@
-use std::ops::Add;
-
 use blokli_chain_rpc::HoprIndexerRpcOperations;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator};
 use hopr_bindings::hopr_channels::HoprChannels::HoprChannelsEvents;
@@ -248,6 +246,18 @@ where
                 let destination: Address = channel_opened.destination.into();
                 let channel_id = generate_channel_id(&source, &destination);
 
+                // Decode the packed channel state from the event
+                let decoded = decode_channel(channel_opened.channel);
+
+                trace!(
+                    %channel_id,
+                    balance = %decoded.balance,
+                    ticket_index = decoded.ticket_index,
+                    epoch = decoded.epoch,
+                    status = ?decoded.status,
+                    "ChannelOpened: decoded channel state"
+                );
+
                 let maybe_existing = match self.db.get_channel_by_id(tx.into(), &channel_id).await {
                     Ok(existing) => existing,
                     Err(e) => {
@@ -272,32 +282,30 @@ where
 
                     trace!(%source, %destination, %channel_id, "on_channel_reopened_event");
 
-                    let current_epoch = existing.channel_epoch;
-
-                    // Reopen channel: reset ticket_index, increment epoch, set status to Open
+                    // Reopen channel with state from decoded event payload
                     let reopened_channel = ChannelEntry::new(
                         source,
                         destination,
-                        existing.balance, // Keep existing balance
-                        0_u32.into(),     // Reset ticket index
-                        ChannelStatus::Open,
-                        current_epoch.add(1), // Increment epoch
+                        decoded.balance,
+                        decoded.ticket_index.into(),
+                        decoded.status,
+                        decoded.epoch.into(),
                     );
 
                     self.db
                         .upsert_channel(tx.into(), reopened_channel, block, tx_index, log_index)
                         .await?;
                 } else {
-                    // Channel doesn't exist - create new one
+                    // Channel doesn't exist - create new one with state from decoded event payload
                     trace!(%source, %destination, %channel_id, "on_channel_opened_event");
 
                     let new_channel = ChannelEntry::new(
                         source,
                         destination,
-                        0_u32.into(),
-                        0_u32.into(),
-                        ChannelStatus::Open,
-                        1_u32.into(),
+                        decoded.balance,
+                        decoded.ticket_index.into(),
+                        decoded.status,
+                        decoded.epoch.into(),
                     );
 
                     self.db
