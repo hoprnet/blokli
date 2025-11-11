@@ -123,8 +123,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         let requestor = DefaultHttpRequestor::new();
 
         // Build RPC operations
-        let rpc_operations =
-            RpcOperations::new(rpc_client, requestor, rpc_cfg, None).expect("failed to initialize RPC");
+        let rpc_operations = RpcOperations::new(rpc_client, requestor, rpc_cfg, None)?;
 
         // Create IndexerState for coordinating block processing with subscriptions
         let indexer_state = IndexerState::new(indexer_cfg.event_bus_capacity, indexer_cfg.shutdown_signal_capacity);
