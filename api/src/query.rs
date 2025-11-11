@@ -235,23 +235,38 @@ impl QueryRoot {
         // Convert to GraphQL Channel type
         let result = aggregated_channels
             .into_iter()
-            .map(|agg| {
+            .map(|agg| -> Result<Channel> {
                 // Convert status from i8 to ChannelStatus enum
                 let status = match agg.status {
                     0 => blokli_api_types::ChannelStatus::Closed,
                     1 => blokli_api_types::ChannelStatus::Open,
                     2 => blokli_api_types::ChannelStatus::PendingToClose,
-                    _ => blokli_api_types::ChannelStatus::Closed, // Default to Closed for unknown values
+                    unknown => {
+                        return Err(async_graphql::Error::new(format!(
+                            "Invalid channel status value {} in database for channel {}",
+                            unknown, agg.concrete_channel_id
+                        )));
+                    }
                 };
 
                 // Convert epoch from i64 to i32 with validation
-                // Epoch should fit in u24, so i32 should always be safe, but handle overflow
-                let epoch = i32::try_from(agg.epoch).unwrap_or(i32::MAX);
+                // Epoch should fit in u24, so i32 should always be safe, but propagate overflow errors
+                let epoch = i32::try_from(agg.epoch).map_err(|e| {
+                    async_graphql::Error::new(format!(
+                        "Channel epoch {} out of range for channel {}: {}",
+                        agg.epoch, agg.concrete_channel_id, e
+                    ))
+                })?;
 
                 // Convert ticket_index from i64 to u64 (should always be non-negative)
-                let ticket_index = blokli_api_types::UInt64(u64::try_from(agg.ticket_index).unwrap_or(0));
+                let ticket_index = blokli_api_types::UInt64(u64::try_from(agg.ticket_index).map_err(|e| {
+                    async_graphql::Error::new(format!(
+                        "Channel ticket_index {} is negative for channel {}: {}",
+                        agg.ticket_index, agg.concrete_channel_id, e
+                    ))
+                })?);
 
-                Channel {
+                Ok(Channel {
                     concrete_channel_id: agg.concrete_channel_id,
                     source: agg.source,
                     destination: agg.destination,
@@ -260,9 +275,9 @@ impl QueryRoot {
                     epoch,
                     ticket_index,
                     closure_time: agg.closure_time,
-                }
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(result)
     }
