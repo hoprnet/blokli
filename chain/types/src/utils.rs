@@ -14,8 +14,8 @@ use alloy::{
     sol_types::SolCall,
 };
 use hopr_bindings::{
-    hoprchannels::HoprChannels::HoprChannelsInstance,
-    hoprtoken::HoprToken::{self, HoprTokenInstance},
+    hopr_channels::HoprChannels::HoprChannelsInstance,
+    hopr_token::HoprToken::{self, HoprTokenInstance},
 };
 use hopr_crypto_types::prelude::*;
 use hopr_primitive_types::primitives::Address;
@@ -107,24 +107,27 @@ where
     P: alloy::contract::private::Provider<N>,
     N: alloy::providers::Network,
 {
-    let native_transfer_tx = N::TransactionRequest::default()
-        .with_to(node.into())
-        .with_value(native_token);
+    if native_token > 0 {
+        let native_transfer_tx = N::TransactionRequest::default()
+            .with_to(node.into())
+            .with_value(native_token);
 
-    // let native_transfer_tx = Eip1559TransactionRequest::new()
-    //     .to(NameOrAddress::Address(node.into()))
-    //     .value(native_token);
+        // let native_transfer_tx = Eip1559TransactionRequest::new()
+        //     .to(NameOrAddress::Address(node.into()))
+        //     .value(native_token);
 
-    let provider = hopr_token_contract.provider();
+        let provider = hopr_token_contract.provider();
 
-    provider.send_transaction(native_transfer_tx).await?.watch().await?;
-
-    hopr_token_contract
-        .transfer(node.into(), hopr_token)
-        .send()
-        .await?
-        .watch()
-        .await?;
+        provider.send_transaction(native_transfer_tx).await?.watch().await?;
+    }
+    if hopr_token > 0 {
+        hopr_token_contract
+            .transfer(node.into(), hopr_token)
+            .send()
+            .await?
+            .watch()
+            .await?;
+    }
     Ok(())
 }
 

@@ -23,7 +23,7 @@
 //! use std::path::Path;
 //! use blokli_chain_indexer::snapshot::{SnapshotResult, SnapshotManager};
 //!
-//! # async fn example(db: impl blokli_db_sql::BlokliDbGeneralModelOperations + Clone + Send + Sync + 'static) -> SnapshotResult<()> {
+//! # async fn example(db: impl blokli_db::BlokliDbGeneralModelOperations + Clone + Send + Sync + 'static) -> SnapshotResult<()> {
 //! let manager = SnapshotManager::with_db(db)?;
 //! let info = manager
 //!     .download_and_setup_snapshot(
@@ -48,7 +48,7 @@ pub(crate) mod test_utils;
 // Re-export commonly used types
 use std::{fs, path::Path};
 
-use blokli_db_sql::BlokliDbGeneralModelOperations;
+use blokli_db::BlokliDbGeneralModelOperations;
 pub use error::{SnapshotError, SnapshotResult};
 use tracing::{debug, error, info};
 pub use validate::SnapshotInfo;
@@ -186,7 +186,7 @@ where
     /// ```no_run
     /// # use blokli_chain_indexer::snapshot::{SnapshotResult, SnapshotManager};
     ///
-    /// # fn example(db: impl blokli_db_sql::BlokliDbGeneralModelOperations + Clone + Send + Sync + 'static) -> SnapshotResult<()> {
+    /// # fn example(db: impl blokli_db::BlokliDbGeneralModelOperations + Clone + Send + Sync + 'static) -> SnapshotResult<()> {
     /// let manager = SnapshotManager::with_db(db)?;
     /// # Ok(())
     /// # }
@@ -225,7 +225,7 @@ where
     /// ```no_run
     /// # use std::path::Path;
     /// # use blokli_chain_indexer::snapshot::SnapshotManager;
-    /// # async fn example(manager: SnapshotManager<impl blokli_db_sql::BlokliDbGeneralModelOperations + Clone + Send + Sync + 'static>) -> Result<(), Box<dyn std::error::Error>> {
+    /// # async fn example(manager: SnapshotManager<impl blokli_db::BlokliDbGeneralModelOperations + Clone + Send + Sync + 'static>) -> Result<(), Box<dyn std::error::Error>> {
     /// // Download from HTTPS
     /// let info = manager
     ///     .download_and_setup_snapshot("https://snapshots.hoprnet.org/logs.tar.xz", Path::new("/data"))

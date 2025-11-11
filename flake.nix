@@ -44,6 +44,7 @@
     # Development tools and quality assurance
     pre-commit.url = "github:cachix/git-hooks.nix";
     flake-root.url = "github:srid/flake-root";
+    foundry.url = "github:shazow/foundry.nix";
 
     # Input dependency optimization
     flake-parts.inputs.nixpkgs-lib.follows = "nixpkgs";
@@ -52,6 +53,7 @@
     nix-lib.inputs.crane.follows = "crane";
     nix-lib.inputs.rust-overlay.follows = "rust-overlay";
     rust-overlay.inputs.nixpkgs.follows = "nixpkgs";
+    foundry.inputs.nixpkgs.follows = "nixpkgs";
   };
 
   outputs =
@@ -64,6 +66,7 @@
       crane,
       rust-overlay,
       pre-commit,
+      foundry,
       ...
     }@inputs:
     flake-parts.lib.mkFlake { inherit inputs; } {
@@ -89,8 +92,11 @@
           # Filesystem utilities for source filtering
           fs = lib.fileset;
 
-          # Nixpkgs with rust-overlay
-          overlays = [ rust-overlay.overlays.default ];
+          # Nixpkgs with rust-overlay and foundry overlay
+          overlays = [
+            rust-overlay.overlays.default
+            foundry.overlay
+          ];
           pkgs = import nixpkgs {
             inherit system overlays;
           };
@@ -241,26 +247,28 @@
           };
 
           # Development shells using nix-lib
+          shellArgs = {
+            treefmtWrapper = config.treefmt.build.wrapper;
+            treefmtPrograms = pkgs.lib.attrValues config.treefmt.build.programs;
+            shellHook = packages.pre-commit-check.shellHook;
+            extraPackages = [ pkgs.foundry-bin ];
+          };
           shells = {
-            default = nixLib.mkDevShell {
-              rustToolchain = stableToolchain;
-              shellName = "Development";
-              treefmtWrapper = config.treefmt.build.wrapper;
-              treefmtPrograms = pkgs.lib.attrValues config.treefmt.build.programs;
-              includePostgres = true;
-              postgresPackage = pkgsUnstable.postgresql_18;
-              shellHook = packages.pre-commit-check.shellHook;
-            };
+            default = nixLib.mkDevShell (
+              {
+                rustToolchain = stableToolchain;
+                shellName = "Development";
+              }
+              // shellArgs
+            );
 
-            experiment = nixLib.mkDevShell {
-              rustToolchain = nightlyToolchain;
-              shellName = "Experimental Nightly";
-              treefmtWrapper = config.treefmt.build.wrapper;
-              treefmtPrograms = pkgs.lib.attrValues config.treefmt.build.programs;
-              includePostgres = true;
-              postgresPackage = pkgsUnstable.postgresql_18;
-              shellHook = packages.pre-commit-check.shellHook;
-            };
+            experiment = nixLib.mkDevShell (
+              {
+                rustToolchain = nightlyToolchain;
+                shellName = "Experimental Nightly";
+              }
+              // shellArgs
+            );
           };
 
           # Import checks
@@ -328,6 +336,23 @@
                   '';
                 };
                 includes = [ "design/*.graphql" ];
+              };
+              # Markdown linter
+              settings.formatter.markdownlint-cli2 = {
+                command = pkgs.writeShellApplication {
+                  name = "markdownlint-cli2";
+                  runtimeInputs = [
+                    pkgs.nodejs
+                    pkgs.nodePackages.npm
+                  ];
+                  text = ''
+                    npx --yes markdownlint-cli2 --fix "$@"
+                  '';
+                };
+                includes = [
+                  "**/*.md"
+                  "*.md"
+                ];
               };
             };
           };

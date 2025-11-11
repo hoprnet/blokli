@@ -2,15 +2,15 @@
 
 use std::collections::HashMap;
 
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder};
 
 use super::balances::{address_to_string, string_to_address};
-use crate::codegen::{account, announcement};
+use crate::codegen::{account, account_state, announcement};
 
 /// Aggregated account data with all related information
 #[derive(Debug, Clone)]
 pub struct AggregatedAccount {
-    pub keyid: i32,
+    pub keyid: i64,
     pub chain_key: String,
     pub packet_key: String,
     pub safe_address: Option<String>,
@@ -32,25 +32,51 @@ pub struct AggregatedAccount {
 ///
 /// # Returns
 /// * `Result<Vec<AggregatedAccount>, sea_orm::DbErr>` - List of aggregated accounts
-pub async fn fetch_accounts_with_balances(db: &DatabaseConnection) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr> {
+pub async fn fetch_accounts_with_balances<C>(conn: &C) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr>
+where
+    C: ConnectionTrait,
+{
     // 1. Fetch all accounts (1 query)
-    let accounts = account::Entity::find().all(db).await?;
+    let accounts = account::Entity::find().all(conn).await?;
 
     if accounts.is_empty() {
         return Ok(Vec::new());
     }
 
     // Collect all account IDs
-    let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
+    let account_ids: Vec<i64> = accounts.iter().map(|a| a.id).collect();
+
+    let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
+
+    // Batch query account_state for all accounts to get safe_address
+    let account_states = account_state::Entity::find()
+        .filter(account_state::Column::AccountId.is_in(account_ids.clone()))
+        .order_by_desc(account_state::Column::PublishedBlock)
+        .order_by_desc(account_state::Column::PublishedTxIndex)
+        .order_by_desc(account_state::Column::PublishedLogIndex)
+        .all(conn)
+        .await?;
+
+    // Build map of account_id -> safe_address (only keep latest state per account)
+    let mut safe_address_map: HashMap<i64, Vec<u8>> = HashMap::new();
+    for state in account_states {
+        if let Some(safe_addr) = state.safe_address {
+            // Only insert if we haven't seen this account yet (first occurrence is latest due to ordering)
+            safe_address_map.entry(state.account_id).or_insert(safe_addr);
+        }
+    }
+
+    // Add safe addresses to all_addresses for balance lookup
+    all_addresses.extend(safe_address_map.values().cloned());
 
     // 2. Batch fetch all announcements (1 query)
     let announcements = announcement::Entity::find()
         .filter(announcement::Column::AccountId.is_in(account_ids))
-        .all(db)
+        .all(conn)
         .await?;
 
     // Group announcements by account_id
-    let mut announcements_by_account: HashMap<i32, Vec<String>> = HashMap::new();
+    let mut announcements_by_account: HashMap<i64, Vec<String>> = HashMap::new();
     for ann in announcements {
         announcements_by_account
             .entry(ann.account_id)
@@ -68,7 +94,7 @@ pub async fn fetch_accounts_with_balances(db: &DatabaseConnection) -> Result<Vec
             let chain_key_str = address_to_string(&account.chain_key);
 
             // Convert safe_address to string if present
-            let safe_address_str = account.safe_address.as_ref().map(|addr| address_to_string(addr));
+            let safe_address_str = safe_address_map.get(&account.id).map(|addr| address_to_string(addr));
 
             AggregatedAccount {
                 keyid: account.id,
@@ -99,10 +125,13 @@ pub async fn fetch_accounts_with_balances(db: &DatabaseConnection) -> Result<Vec
 ///
 /// # Returns
 /// * `Result<Vec<AggregatedAccount>, sea_orm::DbErr>` - List of aggregated accounts matching the addresses
-pub async fn fetch_accounts_with_balances_for_addresses(
-    db: &DatabaseConnection,
+pub async fn fetch_accounts_with_balances_for_addresses<C>(
+    conn: &C,
     addresses: Vec<String>,
-) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr> {
+) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr>
+where
+    C: ConnectionTrait,
+{
     if addresses.is_empty() {
         return Ok(Vec::new());
     }
@@ -113,7 +142,7 @@ pub async fn fetch_accounts_with_balances_for_addresses(
     // 1. Fetch accounts filtered by chain_key (1 query)
     let accounts = account::Entity::find()
         .filter(account::Column::ChainKey.is_in(binary_addresses))
-        .all(db)
+        .all(conn)
         .await?;
 
     if accounts.is_empty() {
@@ -121,16 +150,39 @@ pub async fn fetch_accounts_with_balances_for_addresses(
     }
 
     // Collect all account IDs
-    let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
+    let account_ids: Vec<i64> = accounts.iter().map(|a| a.id).collect();
+
+    let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
+
+    // Batch query account_state for all accounts to get safe_address
+    let account_states = account_state::Entity::find()
+        .filter(account_state::Column::AccountId.is_in(account_ids.clone()))
+        .order_by_desc(account_state::Column::PublishedBlock)
+        .order_by_desc(account_state::Column::PublishedTxIndex)
+        .order_by_desc(account_state::Column::PublishedLogIndex)
+        .all(conn)
+        .await?;
+
+    // Build map of account_id -> safe_address (only keep latest state per account)
+    let mut safe_address_map: HashMap<i64, Vec<u8>> = HashMap::new();
+    for state in account_states {
+        if let Some(safe_addr) = state.safe_address {
+            // Only insert if we haven't seen this account yet (first occurrence is latest due to ordering)
+            safe_address_map.entry(state.account_id).or_insert(safe_addr);
+        }
+    }
+
+    // Add safe addresses to all_addresses for balance lookup
+    all_addresses.extend(safe_address_map.values().cloned());
 
     // 2. Batch fetch all announcements (1 query)
     let announcements = announcement::Entity::find()
         .filter(announcement::Column::AccountId.is_in(account_ids))
-        .all(db)
+        .all(conn)
         .await?;
 
     // Group announcements by account_id
-    let mut announcements_by_account: HashMap<i32, Vec<String>> = HashMap::new();
+    let mut announcements_by_account: HashMap<i64, Vec<String>> = HashMap::new();
     for ann in announcements {
         announcements_by_account
             .entry(ann.account_id)
@@ -148,7 +200,7 @@ pub async fn fetch_accounts_with_balances_for_addresses(
             let chain_key_str = address_to_string(&account.chain_key);
 
             // Convert safe_address to string if present
-            let safe_address_str = account.safe_address.as_ref().map(|addr| address_to_string(addr));
+            let safe_address_str = safe_address_map.get(&account.id).map(|addr| address_to_string(addr));
 
             AggregatedAccount {
                 keyid: account.id,
@@ -178,10 +230,10 @@ pub async fn fetch_accounts_with_balances_for_addresses(
 ///
 /// # Returns
 /// * `Result<Vec<AggregatedAccount>, sea_orm::DbErr>` - List of aggregated accounts matching the keyids
-pub async fn fetch_accounts_by_keyids(
-    db: &DatabaseConnection,
-    keyids: Vec<i32>,
-) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr> {
+pub async fn fetch_accounts_by_keyids<C>(conn: &C, keyids: Vec<i64>) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr>
+where
+    C: ConnectionTrait,
+{
     if keyids.is_empty() {
         return Ok(Vec::new());
     }
@@ -189,7 +241,7 @@ pub async fn fetch_accounts_by_keyids(
     // 1. Fetch accounts filtered by id (1 query)
     let accounts = account::Entity::find()
         .filter(account::Column::Id.is_in(keyids))
-        .all(db)
+        .all(conn)
         .await?;
 
     if accounts.is_empty() {
@@ -197,16 +249,39 @@ pub async fn fetch_accounts_by_keyids(
     }
 
     // Collect all account IDs
-    let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
+    let account_ids: Vec<i64> = accounts.iter().map(|a| a.id).collect();
+
+    let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
+
+    // Batch query account_state for all accounts to get safe_address
+    let account_states = account_state::Entity::find()
+        .filter(account_state::Column::AccountId.is_in(account_ids.clone()))
+        .order_by_desc(account_state::Column::PublishedBlock)
+        .order_by_desc(account_state::Column::PublishedTxIndex)
+        .order_by_desc(account_state::Column::PublishedLogIndex)
+        .all(conn)
+        .await?;
+
+    // Build map of account_id -> safe_address (only keep latest state per account)
+    let mut safe_address_map: HashMap<i64, Vec<u8>> = HashMap::new();
+    for state in account_states {
+        if let Some(safe_addr) = state.safe_address {
+            // Only insert if we haven't seen this account yet (first occurrence is latest due to ordering)
+            safe_address_map.entry(state.account_id).or_insert(safe_addr);
+        }
+    }
+
+    // Add safe addresses to all_addresses for balance lookup
+    all_addresses.extend(safe_address_map.values().cloned());
 
     // 2. Batch fetch all announcements (1 query)
     let announcements = announcement::Entity::find()
         .filter(announcement::Column::AccountId.is_in(account_ids))
-        .all(db)
+        .all(conn)
         .await?;
 
     // Group announcements by account_id
-    let mut announcements_by_account: HashMap<i32, Vec<String>> = HashMap::new();
+    let mut announcements_by_account: HashMap<i64, Vec<String>> = HashMap::new();
     for ann in announcements {
         announcements_by_account
             .entry(ann.account_id)
@@ -224,7 +299,7 @@ pub async fn fetch_accounts_by_keyids(
             let chain_key_str = address_to_string(&account.chain_key);
 
             // Convert safe_address to string if present
-            let safe_address_str = account.safe_address.as_ref().map(|addr| address_to_string(addr));
+            let safe_address_str = safe_address_map.get(&account.id).map(|addr| address_to_string(addr));
 
             AggregatedAccount {
                 keyid: account.id,
@@ -256,12 +331,15 @@ pub async fn fetch_accounts_by_keyids(
 ///
 /// # Returns
 /// * `Result<Vec<AggregatedAccount>, sea_orm::DbErr>` - List of aggregated accounts matching the filters
-pub async fn fetch_accounts_with_filters(
-    db: &DatabaseConnection,
-    keyid: Option<i32>,
+pub async fn fetch_accounts_with_filters<C>(
+    conn: &C,
+    keyid: Option<i64>,
     packet_key: Option<String>,
     chain_key: Option<String>,
-) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr> {
+) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr>
+where
+    C: ConnectionTrait,
+{
     // 1. Build query with filters (1 query)
     let mut query = account::Entity::find();
 
@@ -278,23 +356,46 @@ pub async fn fetch_accounts_with_filters(
         query = query.filter(account::Column::ChainKey.eq(binary_chain_key));
     }
 
-    let accounts = query.all(db).await?;
+    let accounts = query.all(conn).await?;
 
     if accounts.is_empty() {
         return Ok(Vec::new());
     }
 
     // Collect all account IDs
-    let account_ids: Vec<i32> = accounts.iter().map(|a| a.id).collect();
+    let account_ids: Vec<i64> = accounts.iter().map(|a| a.id).collect();
+
+    let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
+
+    // Batch query account_state for all accounts to get safe_address
+    let account_states = account_state::Entity::find()
+        .filter(account_state::Column::AccountId.is_in(account_ids.clone()))
+        .order_by_desc(account_state::Column::PublishedBlock)
+        .order_by_desc(account_state::Column::PublishedTxIndex)
+        .order_by_desc(account_state::Column::PublishedLogIndex)
+        .all(conn)
+        .await?;
+
+    // Build map of account_id -> safe_address (only keep latest state per account)
+    let mut safe_address_map: HashMap<i64, Vec<u8>> = HashMap::new();
+    for state in account_states {
+        if let Some(safe_addr) = state.safe_address {
+            // Only insert if we haven't seen this account yet (first occurrence is latest due to ordering)
+            safe_address_map.entry(state.account_id).or_insert(safe_addr);
+        }
+    }
+
+    // Add safe addresses to all_addresses for balance lookup
+    all_addresses.extend(safe_address_map.values().cloned());
 
     // 2. Batch fetch all announcements (1 query)
     let announcements = announcement::Entity::find()
         .filter(announcement::Column::AccountId.is_in(account_ids))
-        .all(db)
+        .all(conn)
         .await?;
 
     // Group announcements by account_id
-    let mut announcements_by_account: HashMap<i32, Vec<String>> = HashMap::new();
+    let mut announcements_by_account: HashMap<i64, Vec<String>> = HashMap::new();
     for ann in announcements {
         announcements_by_account
             .entry(ann.account_id)
@@ -312,7 +413,7 @@ pub async fn fetch_accounts_with_filters(
             let chain_key_str = address_to_string(&account.chain_key);
 
             // Convert safe_address to string if present
-            let safe_address_str = account.safe_address.as_ref().map(|addr| address_to_string(addr));
+            let safe_address_str = safe_address_map.get(&account.id).map(|addr| address_to_string(addr));
 
             AggregatedAccount {
                 keyid: account.id,

@@ -63,7 +63,42 @@ The `runtime-tokio` feature flag is required and automatically included in `just
 - **Documentation**: Use `//!` for module docs, `///` for item docs
 - Document public APIs comprehensively with examples when helpful
 
+### Type Annotations
+
+Always use explicit type hints for function parameters and return types to improve code clarity and enable better static analysis:
+
+```rust
+// Good: Explicit type annotations
+pub async fn fetch_block(block_number: u64, db: &DatabaseConnection) -> Result<Block, IndexerError> {
+    let block = Block::find_by_id(block_number)
+        .one(db)
+        .await?
+        .ok_or(IndexerError::BlockNotFound(block_number))?;
+    Ok(block)
+}
+
+// Bad: Missing return type (only acceptable for simple constructors)
+pub async fn fetch_block(block_number: u64, db: &DatabaseConnection) {
+    // ...
+}
+```
+
+**When to use type inference:**
+
+- Local variables where the type is obvious from context
+- Iterator chains where intermediate types are complex
+- Closures with clear context
+
+**When to use explicit annotations:**
+
+- All public function parameters and return types
+- Function parameters in private functions (unless trivial)
+- Struct field types (always required)
+- Variables where the type isn't immediately clear from the initializer
+
 ### Import Organization
+
+**IMPORTANT**: All imports must be declared at the top of the module, never inside functions, impl blocks, or other nested scopes.
 
 Group imports in this order:
 
@@ -72,6 +107,26 @@ Group imports in this order:
 3. Local crates and modules (alphabetically)
 
 **DO NOT** use wildcard imports (`use module::*;`)
+
+**Exception:** Migration files (`db/migration/src/*.rs`) may use wildcard imports for `sea_orm` and `sea_query` as these libraries are designed for this pattern in database migrations.
+
+**Avoid inline fully-qualified paths** - Use imports instead to keep code clean and readable:
+
+```rust
+// Bad: Inline fully-qualified paths
+fn process_data() -> std::collections::HashMap<String, Vec<u8>> {
+    let mut map = std::collections::HashMap::new();
+    map
+}
+
+// Good: Use imports
+use std::collections::HashMap;
+
+fn process_data() -> HashMap<String, Vec<u8>> {
+    let mut map = HashMap::new();
+    map
+}
+```
 
 Always use workspace dependencies defined in the root `Cargo.toml`:
 
@@ -82,7 +137,7 @@ tokio = { workspace = true }
 async-graphql = { workspace = true }
 ```
 
-Example:
+Example of properly organized imports:
 
 ```rust
 use std::collections::HashMap;
@@ -147,6 +202,155 @@ pub async fn index_range(from_block: u64, to_block: u64) -> Result<usize, Indexe
 - Use `Arc<RwLock<T>>` for shared mutable state
 - Avoid blocking operations in async contexts
 
+### HOPR Foundation Types
+
+The HOPR project provides three foundational crates with well-tested types that should be used whenever possible instead of creating new types from scratch. These crates are defined in the workspace `Cargo.toml` and are available to all workspace members.
+
+#### hopr-primitive-types
+
+Provides foundational blockchain types and conversion utilities:
+
+**Core Types:**
+
+- `Address` - Ethereum/blockchain addresses (20 bytes)
+- `Balance<C>` - Generic balance type with currency marker
+- `HoprBalance` - HOPR token balance type alias
+- `XDaiBalance` - xDai native token balance type alias
+- `U256` - 256-bit unsigned integer for Solidity interoperability
+- `SerializableLog` - Blockchain event log representation
+
+**Traits:**
+
+- `ToHex` - Convert types to hexadecimal string representation
+- `IntoEndian` - Handle endianness conversions for serialization
+
+**Usage Example:**
+
+```rust
+use hopr_primitive_types::prelude::{Address, HoprBalance, ToHex};
+
+pub fn format_account(address: Address, balance: HoprBalance) -> String {
+    format!("Account {} has balance {}", address.to_hex(), balance)
+}
+```
+
+#### hopr-crypto-types
+
+Provides cryptographic primitives and key management:
+
+**Core Types:**
+
+- `Hash` - Cryptographic hash type (32 bytes)
+- `OffchainPublicKey` - Ed25519 public key for off-chain operations
+- `OffchainSignature` - Ed25519 signature
+- `ChainKeypair` - ECDSA keypair for on-chain operations
+- `OffchainKeypair` - Ed25519 keypair for off-chain operations
+
+**Usage Example:**
+
+```rust
+use hopr_crypto_types::prelude::{Hash, OffchainPublicKey};
+
+pub fn verify_announcement(
+    peer_id: OffchainPublicKey,
+    hash: Hash,
+) -> Result<(), ValidationError> {
+    // Verification logic using cryptographic types
+    Ok(())
+}
+```
+
+#### hopr-internal-types
+
+Provides HOPR protocol-specific structures and abstractions:
+
+**Channel Types:**
+
+- `ChannelEntry` - Complete channel state representation
+- `ChannelStatus` - Channel lifecycle status (Open, PendingToClose, Closed)
+- `ChannelDirection` - Channel direction (Incoming/Outgoing)
+- `CorruptedChannelEntry` - Tracking for corrupted channel state
+
+**Account Types:**
+
+- `AccountEntry` - Account state with type classification
+- `AccountType` - Account classification (Announcer, NotAnnounced, etc.)
+
+**Protocol Types:**
+
+- `AcknowledgedTicket` - Payment ticket with acknowledgment
+- `WinningProbability` - Probability calculations for ticket validation
+- `KeyBinding` - Key binding verification structure
+
+**Usage Example:**
+
+```rust
+use hopr_internal_types::channels::{ChannelEntry, ChannelStatus};
+use hopr_primitive_types::prelude::Address;
+
+pub async fn process_channel(
+    channel: ChannelEntry,
+    source: Address,
+) -> Result<(), ProcessingError> {
+    match channel.status {
+        ChannelStatus::Open => {
+            // Process open channel
+        }
+        ChannelStatus::PendingToClose { closure_time } => {
+            // Handle pending closure
+        }
+        ChannelStatus::Closed => {
+            // Handle closed channel
+        }
+    }
+    Ok(())
+}
+```
+
+#### hopr-bindings
+
+Provides smart contract bindings and encoding/decoding utilities for HOPR on-chain contracts:
+
+**Purpose:**
+
+For any contract encoding/decoding or event encoding/decoding work, use the existing `hopr-bindings` crate and its modules. This crate contains generated bindings for HOPR smart contracts and provides type-safe interfaces for interacting with blockchain events and contract calls.
+
+**Getting Started:**
+
+To explore the full API and available contract bindings, generate the crate documentation:
+
+```bash
+# Build and open docs for hopr-bindings
+cargo doc --package hopr-bindings --open
+```
+
+The generated documentation will show all available contract modules, event types, and encoding/decoding utilities.
+
+#### Building Documentation
+
+To explore the full API of these crates, build their documentation:
+
+```bash
+# Build and open docs for primitive types
+cargo doc --package hopr-primitive-types --open
+
+# Build and open docs for crypto types
+cargo doc --package hopr-crypto-types --open
+
+# Build and open docs for internal types
+cargo doc --package hopr-internal-types --open
+
+# Build and open docs for contract bindings
+cargo doc --package hopr-bindings --open
+```
+
+#### Best Practices
+
+1. **Always prefer HOPR types** - Before creating a new type for addresses, balances, channels, or accounts, check if a suitable type exists in these crates
+2. **Use the prelude modules** - Import commonly used types from `hopr_primitive_types::prelude` and `hopr_crypto_types::prelude`
+3. **Leverage conversion traits** - Use `ToHex`, `IntoEndian`, and other provided traits for consistent serialization
+4. **Implement conversions** - When mapping between database models and HOPR types, implement `From`/`TryFrom` traits (see `db/entity/src/conversions/`)
+
 ## Design
 
 ### GraphQL API
@@ -172,6 +376,38 @@ pub async fn index_range(from_block: u64, to_block: u64) -> Result<usize, Indexe
 - Validate configuration at startup
 
 ## Architecture
+
+### Architecture Documentation
+
+**IMPORTANT**: The complete system architecture is documented in `design/architecture.md`. This document provides:
+
+- High-level component architecture and interactions
+- Data flow patterns and event processing pipelines
+- User flows through the GraphQL API
+- Deployment architectures and scaling considerations
+- Performance characteristics and optimization strategies
+- Security considerations and error handling patterns
+
+**Agent Responsibilities**:
+
+1. **Read the Architecture Document**: Before making significant changes to the system, read `design/architecture.md` to understand how components interact and the design principles behind the current architecture.
+
+2. **Update Architecture Documentation**: When making changes that affect the architecture, update `design/architecture.md` to reflect the new design. This includes:
+
+   - Adding new components or services
+   - Changing component interactions or data flows
+   - Modifying database schema or queries patterns
+   - Altering API endpoints or GraphQL schema structure
+   - Changing deployment models or configuration options
+   - Introducing new architectural patterns or design decisions
+
+3. **Maintain Consistency**: Ensure that architectural changes are reflected consistently across:
+   - Code implementation
+   - Architecture documentation (`design/architecture.md`)
+   - API schema documentation (`design/target-api-schema.graphql`)
+   - Database schema documentation (`design/target-db-schema.mmd`)
+
+**Note**: The architecture document focuses on high-level design and should NOT contain code examples, CLI commands, or configuration snippets. Keep it conceptual and architectural.
 
 ### Workspace Structure
 
@@ -266,13 +502,18 @@ impl Query {
 
 ## What to Avoid
 
-- ❌ Wildcard imports (`use module::*;`)
-- ❌ Unwrap/expect in production code (use proper error handling)
-- ❌ Blocking operations in async contexts
-- ❌ Hardcoded configuration values
-- ❌ Direct database queries without using SeaORM entities
-- ❌ Missing error context
-- ❌ Undocumented public APIs
+- Wildcard imports (`use module::*;`)
+- Imports inside functions, impl blocks, or other nested scopes
+- Inline fully-qualified type paths instead of imports (e.g., `std::collections::HashMap::new()`)
+- Creating custom types when HOPR foundation types exist (`hopr_primitive_types`, `hopr_crypto_types`, `hopr_internal_types`)
+- Creating custom contract encoding/decoding logic when `hopr-bindings` provides the necessary types and utilities
+- Missing type annotations on public function parameters and return types
+- Unwrap/expect in production code (use proper error handling)
+- Blocking operations in async contexts
+- Hardcoded configuration values
+- Direct database queries without using SeaORM entities
+- Missing error context
+- Undocumented public APIs
 
 ## Security Considerations
 

@@ -11,7 +11,7 @@ use std::{
 use async_signal::{Signal, Signals};
 use blokli_chain_api::{BlokliChain, SignificantChainEvent};
 use blokli_chain_types::ContractAddresses;
-use blokli_db_sql::db::{BlokliDb, BlokliDbConfig};
+use blokli_db::db::{BlokliDb, BlokliDbConfig};
 use clap::{Parser, Subcommand};
 use futures::TryStreamExt;
 use hopr_chain_config::ChainNetworkConfig;
@@ -213,6 +213,8 @@ async fn run() -> errors::Result<()> {
                 enable_logs_snapshot: cfg.indexer.enable_logs_snapshot,
                 logs_snapshot_url: cfg.indexer.logs_snapshot_url.clone(),
                 data_directory: cfg.data_directory.clone(),
+                event_bus_capacity: cfg.indexer.subscription.event_bus_capacity,
+                shutdown_signal_capacity: cfg.indexer.subscription.shutdown_signal_capacity,
             };
 
             (
@@ -258,6 +260,9 @@ async fn run() -> errors::Result<()> {
         // Create BlokliChain instance
         let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, tx_events, rpc_url)?;
 
+        // Get IndexerState for API subscriptions
+        let indexer_state = blokli_chain.indexer_state();
+
         info!("Starting BlokliChain processes");
 
         // Start all chain processes
@@ -275,6 +280,14 @@ async fn run() -> errors::Result<()> {
                 .map_err(|e| BloklidError::NonSpecific(format!("Failed to connect API database: {}", e)))?;
 
             // Construct blokli-api ApiConfig from bloklid config
+            // We need to get rpc_url and contracts from the original config
+            let (rpc_url_for_api, _contracts_for_api) = {
+                let cfg = config
+                    .read()
+                    .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
+                (cfg.rpc_url.clone(), cfg.contracts)
+            };
+
             let blokli_api_config = blokli_api::config::ApiConfig {
                 bind_address: api_config.bind_address,
                 playground_enabled: api_config.playground_enabled,
@@ -282,13 +295,25 @@ async fn run() -> errors::Result<()> {
                 tls: None,
                 cors_allowed_origins: vec!["*".to_string()], // Permissive for now
                 chain_id,
+                rpc_url: rpc_url_for_api,
                 contract_addresses: contracts,
             };
 
-            // Build API app (network comes from ChainNetworkConfig.id)
-            let api_app = blokli_api::server::build_app(api_db, network, blokli_api_config)
-                .await
-                .map_err(|e| BloklidError::NonSpecific(format!("Failed to build API app: {}", e)))?;
+            // Get RPC operations from blokli_chain for balance queries
+            let rpc_operations = Arc::new(blokli_chain.rpc().clone());
+
+            // Build API app with indexer state for subscriptions and transaction components
+            let api_app = blokli_api::server::build_app(
+                api_db,
+                network,
+                blokli_api_config,
+                indexer_state,
+                blokli_chain.transaction_executor(),
+                blokli_chain.transaction_store(),
+                rpc_operations,
+            )
+            .await
+            .map_err(|e| BloklidError::NonSpecific(format!("Failed to build API app: {}", e)))?;
 
             // Spawn API server as a background task
             let handle = tokio::spawn(async move {

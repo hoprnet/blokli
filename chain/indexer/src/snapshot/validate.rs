@@ -183,6 +183,12 @@ fn estimate_log_count(content: &str) -> Option<u64> {
 
     // Find the terminator (backslash-dot on its own line)
     let remaining = &content[data_start..];
+
+    // Handle edge case: terminator appears immediately (no data)
+    if remaining.trim_start().starts_with("\\.") {
+        return Some(0);
+    }
+
     let terminator = remaining.find("\n\\.")?;
 
     // Count newlines in the data section

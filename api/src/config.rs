@@ -33,8 +33,12 @@ pub struct ApiConfig {
     #[serde(default = "default_chain_id")]
     pub chain_id: u64,
 
-    /// Configured contract addresses
-    #[serde(skip, default = "default_contract_addresses")]
+    /// RPC URL for blockchain queries (required for balance passthrough)
+    #[serde(default = "default_rpc_url")]
+    pub rpc_url: String,
+
+    /// Contract addresses for HOPR smart contracts
+    #[serde(default = "default_contract_addresses")]
     pub contract_addresses: ContractAddresses,
 }
 
@@ -57,6 +61,7 @@ impl Default for ApiConfig {
             tls: None,
             cors_allowed_origins: default_cors_allowed_origins(),
             chain_id: default_chain_id(),
+            rpc_url: default_rpc_url(),
             contract_addresses: default_contract_addresses(),
         }
     }
@@ -92,6 +97,10 @@ fn default_chain_id() -> u64 {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(100) // Default to Gnosis Chain (chain ID 100)
+}
+
+fn default_rpc_url() -> String {
+    std::env::var("RPC_URL").unwrap_or_else(|_| "http://localhost:8545".to_string())
 }
 
 fn default_contract_addresses() -> ContractAddresses {

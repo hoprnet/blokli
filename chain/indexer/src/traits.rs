@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use alloy::primitives::B256;
 use async_trait::async_trait;
-use blokli_chain_types::{ContractAddresses, chain_events::SignificantChainEvent};
+use blokli_chain_types::ContractAddresses;
 use hopr_primitive_types::prelude::*;
 
 use crate::errors::Result;
@@ -34,18 +34,19 @@ pub trait ChainLogHandler {
     /// * `Vec<B256>` - Vector of event signature hashes (topics) for the contract
     fn contract_address_topics(&self, contract: Address) -> Vec<B256>;
 
-    /// Processes a single blockchain log and extracts significant events.
+    /// Processes a single blockchain log.
     ///
     /// This method processes individual blockchain logs, replacing the previous
     /// batch processing approach for better error isolation and granular control.
+    /// Events are published internally via the IndexerState event bus.
     ///
     /// # Arguments
     /// * `log` - The blockchain log to process
     /// * `is_synced` - Whether the indexer has completed initial synchronization
     ///
     /// # Returns
-    /// * `Result<Option<SignificantChainEvent>>` - Extracted event or None if not significant
-    async fn collect_log_event(&self, log: SerializableLog, is_synced: bool) -> Result<Option<SignificantChainEvent>>;
+    /// * `Result<()>` - Success or error
+    async fn collect_log_event(&self, log: SerializableLog, is_synced: bool) -> Result<()>;
 }
 
 #[cfg(test)]
@@ -73,6 +74,6 @@ mock! {
         fn contract_addresses(&self) -> Vec<Address>;
         fn contract_addresses_map(&self) -> Arc<ContractAddresses>;
         fn contract_address_topics(&self, contract: Address) -> Vec<B256>;
-        async fn collect_log_event(&self, log: SerializableLog, is_synced: bool) -> Result<Option<SignificantChainEvent>>;
+        async fn collect_log_event(&self, log: SerializableLog, is_synced: bool) -> Result<()>;
     }
 }

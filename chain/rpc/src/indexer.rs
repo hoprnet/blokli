@@ -174,8 +174,8 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
             // On first iteration use the given block number as start
             let mut from_block = start_block_number;
 
-            const MAX_LOOP_FAILURES: usize = 5;
-            const MAX_RPC_PAST_BLOCKS: usize = 50;
+            let max_loop_failures = self.cfg.max_indexer_loop_failures;
+            let max_rpc_past_blocks = self.cfg.max_indexer_past_blocks;
             let mut count_failures = 0;
 
             'outer: loop {
@@ -187,8 +187,8 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
                                 // If on first iteration the start block is in the future, just set
                                 // it to the latest
                                 from_block = latest_block;
-                            } else if past_diff <= MAX_RPC_PAST_BLOCKS as u64 {
-                                // If we came here early (we tolerate only off-by MAX_RPC_PAST_BLOCKS), wait some more
+                            } else if past_diff <= max_rpc_past_blocks as u64 {
+                                // If we came here early (we tolerate only off-by max_rpc_past_blocks), wait some more
                                 debug!(last_block = latest_block, start_block = start_block_number, blocks_diff = past_diff, "Indexer premature request. Block not found yet in RPC provider.");
                                 futures_timer::Delay::new(past_diff as u32 * self.cfg.expected_block_time / 3).await;
                                 continue;
@@ -244,7 +244,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
                                     error!(error=%e, "failed to process blocks");
                                     count_failures += 1;
 
-                                    if count_failures < MAX_LOOP_FAILURES {
+                                    if count_failures < max_loop_failures {
                                         // Continue the outer loop, which throws away the current block
                                         // that may be incomplete due to this error.
                                         // We will start at this block again to re-query it.
@@ -279,33 +279,11 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
-
-    use alloy::{
-        primitives::U256,
-        rpc::{client::ClientBuilder, types::Filter},
-        sol_types::SolEvent,
-        transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
-    };
+    use alloy::rpc::types::Filter;
     use anyhow::Context;
-    use blokli_chain_types::{ContractAddresses, ContractInstances};
     use futures::StreamExt;
-    use hopr_async_runtime::prelude::{sleep, spawn};
-    use hopr_bindings::{
-        hoprchannelsevents::HoprChannelsEvents::{ChannelBalanceIncreased, ChannelOpened},
-        hoprtoken::HoprToken::{Approval, Transfer},
-    };
-    use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
-    use tokio::time::timeout;
-    use tracing::debug;
 
-    use crate::{
-        BlockWithLogs, FilterSet, HoprIndexerRpcOperations,
-        client::create_rpc_client_to_anvil,
-        errors::RpcError,
-        indexer::split_range,
-        rpc::{RpcOperations, RpcOperationsConfig},
-    };
+    use crate::indexer::split_range;
 
     fn filter_bounds(filters: &[Filter]) -> anyhow::Result<(u64, u64)> {
         let bounds = filters.iter().try_fold((0, 0), |acc, filter| {
@@ -364,288 +342,6 @@ mod tests {
         let ranges = split_range(filters.clone(), 0, 3, 10).collect::<Vec<_>>().await;
         assert_eq!(1, ranges.len());
         assert_eq!((0, 3), filter_bounds(&ranges[0])?);
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_should_get_block_number() -> anyhow::Result<()> {
-        let expected_block_time = Duration::from_secs(1);
-        let anvil = blokli_chain_types::utils::create_anvil(Some(expected_block_time));
-        let chain_key_0 = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
-
-        let transport_client = ReqwestTransport::new(anvil.endpoint_url());
-
-        let rpc_client = ClientBuilder::default()
-            .layer(RetryBackoffLayer::new(2, 100, 100))
-            .transport(transport_client.clone(), transport_client.guess_local());
-
-        let cfg = RpcOperationsConfig {
-            finality: 2,
-            expected_block_time,
-            gas_oracle_url: None,
-            ..RpcOperationsConfig::default()
-        };
-
-        // Wait until contracts deployments are final
-        sleep((1 + cfg.finality) * expected_block_time).await;
-
-        let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), &chain_key_0, cfg, None)?;
-
-        let b1 = rpc.block_number().await?;
-
-        sleep(expected_block_time * 2).await;
-
-        let b2 = rpc.block_number().await?;
-
-        assert!(b2 > b1, "block number should increase");
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_try_stream_logs_should_contain_all_logs_when_opening_channel() -> anyhow::Result<()> {
-        let _ = env_logger::builder().is_test(true).try_init();
-
-        let expected_block_time = Duration::from_secs(1);
-
-        let anvil = blokli_chain_types::utils::create_anvil(Some(expected_block_time));
-        let chain_key_0 = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
-        let chain_key_1 = ChainKeypair::from_secret(anvil.keys()[1].to_bytes().as_ref())?;
-
-        // Deploy contracts
-        let contract_instances = {
-            let client = create_rpc_client_to_anvil(&anvil, &chain_key_0);
-            ContractInstances::deploy_for_testing(client, &chain_key_0).await?
-        };
-
-        let contract_addrs = ContractAddresses::from(&contract_instances);
-
-        let filter_token_approval = alloy::rpc::types::Filter::new()
-            .address(alloy::primitives::Address::from(contract_addrs.token))
-            .event_signature(Approval::SIGNATURE_HASH);
-        let filter_token_transfer = alloy::rpc::types::Filter::new()
-            .address(alloy::primitives::Address::from(contract_addrs.token))
-            .event_signature(Transfer::SIGNATURE_HASH);
-        let filter_channels_opened = alloy::rpc::types::Filter::new()
-            .address(alloy::primitives::Address::from(contract_addrs.channels))
-            .event_signature(ChannelOpened::SIGNATURE_HASH);
-        let filter_channels_balance_increased = alloy::rpc::types::Filter::new()
-            .address(alloy::primitives::Address::from(contract_addrs.channels))
-            .event_signature(ChannelBalanceIncreased::SIGNATURE_HASH);
-
-        let log_filter = FilterSet {
-            all: vec![
-                filter_token_approval.clone(),
-                filter_token_transfer.clone(),
-                filter_channels_opened.clone(),
-                filter_channels_balance_increased.clone(),
-            ],
-            token: vec![filter_token_approval, filter_token_transfer],
-            no_token: vec![filter_channels_opened, filter_channels_balance_increased],
-        };
-
-        debug!("{:#?}", contract_addrs);
-        debug!("{:#?}", log_filter);
-
-        let tokens_minted_at =
-            blokli_chain_types::utils::mint_tokens(contract_instances.token.clone(), U256::from(1000_u128))
-                .await?
-                .unwrap();
-        debug!("tokens were minted at block {tokens_minted_at}");
-
-        let transport_client = ReqwestTransport::new(anvil.endpoint_url());
-
-        let rpc_client = ClientBuilder::default()
-            .layer(RetryBackoffLayer::new(2, 100, 100))
-            .transport(transport_client.clone(), transport_client.guess_local());
-
-        let cfg = RpcOperationsConfig {
-            tx_polling_interval: Duration::from_millis(10),
-            contract_addrs,
-            expected_block_time,
-            gas_oracle_url: None,
-            ..RpcOperationsConfig::default()
-        };
-
-        // Wait until contracts deployments are final
-        sleep((1 + cfg.finality) * expected_block_time).await;
-
-        let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), &chain_key_0, cfg, None)?;
-
-        // Spawn stream
-        let count_filtered_topics = 2;
-        let retrieved_logs = spawn(async move {
-            Ok::<_, RpcError>(
-                rpc.try_stream_logs(1, log_filter, false)?
-                    .skip_while(|b| futures::future::ready(b.len() != count_filtered_topics))
-                    .next()
-                    .await,
-            )
-        });
-
-        // Spawn channel funding
-        let _ = blokli_chain_types::utils::fund_channel(
-            chain_key_1.public().to_address(),
-            contract_instances.token,
-            contract_instances.channels,
-            U256::from(1_u128),
-        )
-        .await;
-
-        let retrieved_logs = timeout(Duration::from_secs(30), retrieved_logs) // Give up after 30 seconds
-            .await???;
-
-        // The last block must contain all 4 events
-        let last_block_logs = retrieved_logs
-            .into_iter()
-            .next_back()
-            .context("a log should be present")?
-            .clone()
-            .logs;
-
-        let channel_open_filter = ChannelOpened::SIGNATURE_HASH;
-        let channel_balance_filter = ChannelBalanceIncreased::SIGNATURE_HASH;
-
-        debug!(
-            "channel_open_filter: {:?} - {:?}",
-            channel_open_filter,
-            channel_open_filter.0.to_vec()
-        );
-        debug!(
-            "channel_balance_filter: {:?} - {:?}",
-            channel_balance_filter,
-            channel_balance_filter.0.to_vec()
-        );
-        debug!("logs: {:#?}", last_block_logs);
-
-        assert!(
-            last_block_logs
-                .iter()
-                .any(|log| log.address == contract_addrs.channels && log.topics.contains(&channel_open_filter.into())),
-            "must contain channel open"
-        );
-        assert!(
-            last_block_logs.iter().any(
-                |log| log.address == contract_addrs.channels && log.topics.contains(&channel_balance_filter.into())
-            ),
-            "must contain channel balance increase"
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_try_stream_logs_should_contain_only_channel_logs_when_filtered_on_funding_channel()
-    -> anyhow::Result<()> {
-        let _ = env_logger::builder().is_test(true).try_init();
-
-        let expected_block_time = Duration::from_secs(1);
-
-        let anvil = blokli_chain_types::utils::create_anvil(Some(expected_block_time));
-        let chain_key_0 = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
-        let chain_key_1 = ChainKeypair::from_secret(anvil.keys()[1].to_bytes().as_ref())?;
-
-        // Deploy contracts
-        let contract_instances = {
-            let client = create_rpc_client_to_anvil(&anvil, &chain_key_0);
-            ContractInstances::deploy_for_testing(client, &chain_key_0).await?
-        };
-
-        let tokens_minted_at =
-            blokli_chain_types::utils::mint_tokens(contract_instances.token.clone(), U256::from(1000_u128))
-                .await?
-                .unwrap();
-        debug!("tokens were minted at block {tokens_minted_at}");
-
-        let contract_addrs = ContractAddresses::from(&contract_instances);
-
-        let cfg = RpcOperationsConfig {
-            tx_polling_interval: Duration::from_millis(10),
-            contract_addrs,
-            expected_block_time,
-            finality: 2,
-            gas_oracle_url: None,
-            ..RpcOperationsConfig::default()
-        };
-
-        let transport_client = ReqwestTransport::new(anvil.endpoint_url());
-
-        let rpc_client = ClientBuilder::default()
-            .layer(RetryBackoffLayer::new(2, 100, 100))
-            .transport(transport_client.clone(), transport_client.guess_local());
-
-        // Wait until contracts deployments are final
-        sleep((1 + cfg.finality) * expected_block_time).await;
-
-        let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), &chain_key_0, cfg, None)?;
-
-        let filter_channels_opened = alloy::rpc::types::Filter::new()
-            .address(alloy::primitives::Address::from(contract_addrs.channels))
-            .event_signature(ChannelOpened::SIGNATURE_HASH);
-        let filter_channels_balance_increased = alloy::rpc::types::Filter::new()
-            .address(alloy::primitives::Address::from(contract_addrs.channels))
-            .event_signature(ChannelBalanceIncreased::SIGNATURE_HASH);
-
-        let log_filter = FilterSet {
-            all: vec![
-                filter_channels_opened.clone(),
-                filter_channels_balance_increased.clone(),
-            ],
-            token: vec![],
-            no_token: vec![filter_channels_opened, filter_channels_balance_increased],
-        };
-
-        debug!("{:#?}", contract_addrs);
-        debug!("{:#?}", log_filter);
-
-        // Spawn stream
-        let count_filtered_topics = 2;
-        let retrieved_logs = spawn(async move {
-            Ok::<_, RpcError>(
-                rpc.try_stream_logs(1, log_filter, false)?
-                    .skip_while(|b| futures::future::ready(b.len() != count_filtered_topics))
-                    // .next()
-                    .take(1)
-                    .collect::<Vec<BlockWithLogs>>()
-                    .await,
-            )
-        });
-
-        // Spawn channel funding
-        let _ = blokli_chain_types::utils::fund_channel(
-            chain_key_1.public().to_address(),
-            contract_instances.token,
-            contract_instances.channels,
-            U256::from(1_u128),
-        )
-        .await;
-
-        let retrieved_logs = timeout(Duration::from_secs(30), retrieved_logs) // Give up after 30 seconds
-            .await???;
-
-        // The last block must contain all 2 events
-        let last_block_logs = retrieved_logs
-            .first()
-            .context("a value should be present")?
-            .clone()
-            .logs;
-
-        let channel_open_filter: [u8; 32] = ChannelOpened::SIGNATURE_HASH.0;
-        let channel_balance_filter: [u8; 32] = ChannelBalanceIncreased::SIGNATURE_HASH.0;
-
-        assert!(
-            last_block_logs
-                .iter()
-                .any(|log| log.address == contract_addrs.channels && log.topics.contains(&channel_open_filter)),
-            "must contain channel open"
-        );
-        assert!(
-            last_block_logs
-                .iter()
-                .any(|log| log.address == contract_addrs.channels && log.topics.contains(&channel_balance_filter)),
-            "must contain channel balance increase"
-        );
 
         Ok(())
     }

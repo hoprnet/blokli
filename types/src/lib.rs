@@ -5,7 +5,9 @@
 
 use std::collections::HashMap;
 
-use async_graphql::{Enum, InputValueError, NewType, Scalar, ScalarType, SimpleObject, Value};
+use async_graphql::{Enum, InputObject, InputValueError, NewType, Scalar, ScalarType, SimpleObject, Value};
+use hopr_crypto_types::types::Hash;
+use hopr_primitive_types::prelude::ToHex;
 
 /// Token value represented as a string to maintain precision
 ///
@@ -45,6 +47,18 @@ impl ScalarType for Hex32 {
 
     fn to_value(&self) -> Value {
         Value::String(self.0.clone())
+    }
+}
+
+impl From<&[u8; 32]> for Hex32 {
+    fn from(bytes: &[u8; 32]) -> Self {
+        Hex32(Hash::from(*bytes).to_hex())
+    }
+}
+
+impl From<hopr_crypto_types::types::Hash> for Hex32 {
+    fn from(hash: Hash) -> Self {
+        Hex32(hash.to_hex())
     }
 }
 
@@ -142,6 +156,16 @@ impl From<i8> for ChannelStatus {
     }
 }
 
+impl From<ChannelStatus> for i8 {
+    fn from(status: ChannelStatus) -> Self {
+        match status {
+            ChannelStatus::Closed => 0,
+            ChannelStatus::Open => 1,
+            ChannelStatus::PendingToClose => 2,
+        }
+    }
+}
+
 /// Token type for balance queries
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Token {
@@ -206,7 +230,7 @@ pub struct ChainInfo {
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Account {
     /// Unique identifier for the account
-    pub keyid: i32,
+    pub keyid: i64,
     /// Unique account on-chain address in hexadecimal format
     #[graphql(name = "chainKey")]
     pub chain_key: String,
@@ -227,8 +251,8 @@ pub struct Account {
 /// Network announcement with multiaddress information
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Announcement {
-    pub id: i32,
-    pub account_id: i32,
+    pub id: i64,
+    pub account_id: i64,
     /// Multiaddress for the node
     pub multiaddress: String,
     /// Published block as hex string
@@ -242,9 +266,9 @@ pub struct Channel {
     #[graphql(name = "concreteChannelId")]
     pub concrete_channel_id: String,
     /// Account keyid of the source node
-    pub source: i32,
+    pub source: i64,
     /// Account keyid of the destination node
-    pub destination: i32,
+    pub destination: i64,
     /// Total amount of HOPR tokens allocated to the channel
     pub balance: TokenValueString,
     /// Current state of the channel (OPEN, PENDINGTOCLOSE, or CLOSED)
@@ -257,6 +281,20 @@ pub struct Channel {
     /// Timestamp when the channel closure was initiated (null if no closure initiated)
     #[graphql(name = "closureTime")]
     pub closure_time: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Channel update event for subscriptions
+///
+/// Contains complete channel information along with source and destination account details.
+/// Used in the openedChannelsGraphStream subscription to provide real-time updates.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct ChannelUpdate {
+    /// The updated channel
+    pub channel: Channel,
+    /// Source account of the channel
+    pub source: Account,
+    /// Destination account of the channel
+    pub destination: Account,
 }
 
 /// Graph of opened payment channels with associated accounts
@@ -284,6 +322,148 @@ pub struct NativeBalance {
     pub address: String,
     /// Native token balance
     pub balance: TokenValueString,
+}
+
+// ========================================
+// Transaction Submission Types
+// ========================================
+
+/// Status of a submitted transaction
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum TransactionStatus {
+    /// Transaction is pending submission to the chain
+    #[graphql(name = "PENDING")]
+    Pending,
+    /// Transaction has been submitted and is awaiting confirmation
+    #[graphql(name = "SUBMITTED")]
+    Submitted,
+    /// Transaction has been confirmed on-chain with success
+    #[graphql(name = "CONFIRMED")]
+    Confirmed,
+    /// Transaction was included on-chain but reverted (receipt.status = 0)
+    #[graphql(name = "REVERTED")]
+    Reverted,
+    /// Transaction was not mined within timeout window
+    #[graphql(name = "TIMEOUT")]
+    Timeout,
+    /// Transaction validation failed
+    #[graphql(name = "VALIDATION_FAILED")]
+    ValidationFailed,
+    /// Transaction submission failed
+    #[graphql(name = "SUBMISSION_FAILED")]
+    SubmissionFailed,
+}
+
+/// Input for transaction submission
+#[derive(InputObject, Clone, Debug)]
+pub struct TransactionInput {
+    /// Raw signed transaction data in hexadecimal format (with or without 0x prefix)
+    #[graphql(name = "rawTransaction")]
+    pub raw_transaction: String,
+}
+
+/// Transaction submission result
+#[derive(SimpleObject, Clone, Debug)]
+pub struct Transaction {
+    /// Unique identifier for the transaction (UUID)
+    pub id: String,
+    /// Current status of the transaction
+    pub status: TransactionStatus,
+    /// Timestamp when transaction was submitted
+    #[graphql(name = "submittedAt")]
+    pub submitted_at: chrono::DateTime<chrono::Utc>,
+    /// Transaction hash (available after submission)
+    #[graphql(name = "transactionHash")]
+    pub transaction_hash: Option<Hex32>,
+}
+
+/// Success response for fire-and-forget transaction submission
+#[derive(SimpleObject, Clone, Debug)]
+pub struct SendTransactionSuccess {
+    /// Transaction hash after successful submission
+    #[graphql(name = "transactionHash")]
+    pub transaction_hash: Hex32,
+}
+
+// ========================================
+// Transaction Error Types
+// ========================================
+
+/// RPC or blockchain error during transaction submission
+#[derive(SimpleObject, Clone, Debug)]
+pub struct RpcError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+}
+
+/// Target contract not in allowlist
+#[derive(SimpleObject, Clone, Debug)]
+pub struct ContractNotAllowedError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+    /// Contract address that was rejected
+    #[graphql(name = "contractAddress")]
+    pub contract_address: String,
+}
+
+/// Function selector not allowed
+#[derive(SimpleObject, Clone, Debug)]
+pub struct FunctionNotAllowedError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+    /// Contract address
+    #[graphql(name = "contractAddress")]
+    pub contract_address: String,
+    /// Function selector that was rejected
+    #[graphql(name = "functionSelector")]
+    pub function_selector: String,
+}
+
+/// Operation timed out
+#[derive(SimpleObject, Clone, Debug)]
+pub struct TimeoutError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+}
+
+/// Transaction ID format is invalid
+#[derive(SimpleObject, Clone, Debug)]
+pub struct InvalidTransactionIdError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+    /// The invalid transaction ID that was provided
+    #[graphql(name = "transactionId")]
+    pub transaction_id: String,
+}
+
+/// Address format is invalid
+#[derive(SimpleObject, Clone, Debug)]
+pub struct InvalidAddressError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+    /// The invalid address that was provided
+    pub address: String,
+}
+
+/// Database or internal query error
+#[derive(SimpleObject, Clone, Debug)]
+pub struct QueryFailedError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
 }
 
 /// Safe HOPR token allowance information for a specific Safe address

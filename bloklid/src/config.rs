@@ -190,6 +190,28 @@ pub struct IndexerConfig {
 
     #[serde(default)]
     pub logs_snapshot_url: Option<String>,
+
+    #[serde(default)]
+    pub subscription: SubscriptionConfig,
+}
+
+/// Configuration for GraphQL subscription behavior
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
+pub struct SubscriptionConfig {
+    /// Capacity of the event bus buffer for channel events
+    /// Higher values prevent overflow but use more memory
+    #[default(1000)]
+    pub event_bus_capacity: usize,
+
+    /// Capacity of the shutdown signal buffer
+    /// Typically a small value is sufficient
+    #[default(10)]
+    pub shutdown_signal_capacity: usize,
+
+    /// Batch size for Phase 1 historical channel queries
+    /// Higher values fetch more data per query but may increase latency
+    #[default(100)]
+    pub batch_size: usize,
 }
 
 #[serde_with::serde_as]

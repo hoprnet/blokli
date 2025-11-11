@@ -1,11 +1,12 @@
 //! Axum HTTP server configuration with GraphQL support
 
-use std::sync::Arc;
+use std::{pin::Pin, sync::Arc};
 
 use async_graphql::{
-    EmptyMutation, Schema,
+    Schema,
     http::{GraphQLPlaygroundConfig, playground_source},
 };
+use async_stream::stream;
 use axum::{
     Json, Router,
     extract::State,
@@ -16,7 +17,13 @@ use axum::{
     },
     routing::get,
 };
-use futures::stream::StreamExt;
+use blokli_chain_api::{
+    DefaultHttpRequestor, rpc_adapter::RpcAdapter, transaction_executor::RawTransactionExecutor,
+    transaction_store::TransactionStore,
+};
+use blokli_chain_indexer::IndexerState;
+use blokli_chain_rpc::{rpc::RpcOperations, transport::ReqwestClient};
+use futures::stream::{Stream, StreamExt};
 use sea_orm::DatabaseConnection;
 use serde_json::Value;
 use tower_http::{
@@ -30,7 +37,8 @@ use tower_http::{
 };
 
 use crate::{
-    config::ApiConfig, errors::ApiResult, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot,
+    config::ApiConfig, errors::ApiResult, mutation::MutationRoot, query::QueryRoot, schema::build_schema,
+    subscription::SubscriptionRoot,
 };
 
 /// Predicate that excludes Server-Sent Events from compression
@@ -59,13 +67,31 @@ impl Predicate for NotSse {
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
-    pub schema: Arc<Schema<QueryRoot, EmptyMutation, SubscriptionRoot>>,
+    pub schema: Arc<Schema<QueryRoot, MutationRoot, SubscriptionRoot>>,
     pub playground_enabled: bool,
 }
 
 /// Build the Axum application router
-pub async fn build_app(db: DatabaseConnection, network: String, config: ApiConfig) -> ApiResult<Router> {
-    let schema = build_schema(db, config.chain_id, network, config.contract_addresses);
+pub async fn build_app(
+    db: DatabaseConnection,
+    network: String,
+    config: ApiConfig,
+    indexer_state: IndexerState,
+    transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
+    transaction_store: Arc<TransactionStore>,
+    rpc_operations: Arc<RpcOperations<ReqwestClient>>,
+) -> ApiResult<Router> {
+    let schema = build_schema(
+        db,
+        config.chain_id,
+        network,
+        config.contract_addresses,
+        indexer_state,
+        transaction_executor,
+        transaction_store,
+        rpc_operations,
+    );
+
     let app_state = AppState {
         schema: Arc::new(schema),
         playground_enabled: config.playground_enabled,
@@ -146,11 +172,6 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
 
     // Handle subscription requests via SSE
     if accepts_sse && is_subscription {
-        use std::pin::Pin;
-
-        use async_stream::stream;
-        use futures::stream::Stream;
-
         let schema = state.schema.clone();
         let sse_stream: Pin<Box<dyn Stream<Item = Result<Event, std::convert::Infallible>> + Send>> =
             Box::pin(stream! {

@@ -6,8 +6,8 @@
 use std::fmt::{Display, Formatter};
 
 use hopr_crypto_types::types::Hash;
-use hopr_internal_types::prelude::*;
-use hopr_primitive_types::prelude::*;
+use hopr_internal_types::{channels::ChannelEntry, tickets::AcknowledgedTicket};
+use hopr_primitive_types::prelude::{Address, HoprBalance};
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
 
@@ -26,15 +26,6 @@ impl Display for SignificantChainEvent {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "{} @ tx {}", self.event_type, self.tx_hash)
     }
-}
-
-/// Status of a node in network registry.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum NetworkRegistryStatus {
-    /// Connections to the node are allowed.
-    Allowed,
-    /// Connections to the node are not allowed.
-    Denied,
 }
 
 /// Enumeration of HOPR chain events.
@@ -65,8 +56,6 @@ pub enum ChainEventType {
     TicketRedeemed(ChannelEntry, Option<AcknowledgedTicket>),
     /// Safe has been registered with the node.
     NodeSafeRegistered(Address),
-    /// Network registry update for a node.
-    NetworkRegistryUpdate(Address, NetworkRegistryStatus),
 }
 
 impl Display for ChainEventType {
@@ -84,7 +73,6 @@ impl Display for ChainEventType {
             ChainEventType::ChannelBalanceDecreased(c, _) => write!(f, "channel decrease balance event {}", c.get_id()),
             ChainEventType::TicketRedeemed(c, _) => write!(f, "ticket redeem event in channel {}", c.get_id()),
             ChainEventType::NodeSafeRegistered(s) => write!(f, "safe registered event {s}"),
-            ChainEventType::NetworkRegistryUpdate(a, s) => write!(f, "network registry update event {a}: {s:?}"),
         }
     }
 }

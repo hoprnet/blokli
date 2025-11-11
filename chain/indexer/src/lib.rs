@@ -23,9 +23,12 @@ pub mod constants;
 pub mod errors;
 pub mod handlers;
 pub mod snapshot;
+pub mod state;
 pub mod traits;
 
 /// Configuration for the chain indexer functionality.
 ///
 /// Includes settings for fast synchronization and snapshot downloads.
 pub use config::IndexerConfig;
+/// Shared state for coordinating indexer operations with subscriptions
+pub use state::IndexerState;

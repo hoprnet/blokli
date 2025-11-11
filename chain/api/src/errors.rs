@@ -14,7 +14,7 @@ pub enum BlokliChainError {
     Indexer(#[from] blokli_chain_indexer::errors::CoreEthereumIndexerError),
 
     #[error(transparent)]
-    DbError(#[from] blokli_db_sql::errors::DbSqlError),
+    DbError(#[from] blokli_db::errors::DbSqlError),
 
     #[error("configuration error: {0}")]
     Configuration(String),

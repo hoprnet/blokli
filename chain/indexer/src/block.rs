@@ -1,4 +1,5 @@
 use std::{
+    collections::HashSet,
     path::Path,
     sync::{
         Arc,
@@ -9,20 +10,19 @@ use std::{
 use alloy::sol_types::SolEvent;
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::chain_events::SignificantChainEvent;
-use blokli_db_api::logs::BlokliDbLogOperations;
-use blokli_db_sql::{BlokliDbGeneralModelOperations, info::BlokliDbInfoOperations};
-use futures::{
-    StreamExt,
-    future::AbortHandle,
-    stream::{self},
+use blokli_db::{
+    BlokliDbGeneralModelOperations, TargetDb, api::logs::BlokliDbLogOperations, info::BlokliDbInfoOperations,
 };
-use hopr_bindings::hoprtoken::HoprToken::{Approval, Transfer};
+use blokli_db_entity::{channel_state, prelude::ChannelState};
+use futures::{StreamExt, future::AbortHandle};
+use hopr_bindings::hopr_token::HoprToken::{Approval, Transfer};
 use hopr_crypto_types::types::Hash;
-use hopr_primitive_types::prelude::*;
+use hopr_primitive_types::prelude::{Address, SerializableLog};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder};
 use tracing::{debug, error, info, trace};
 
 use crate::{
-    IndexerConfig,
+    IndexerConfig, IndexerState,
     errors::{CoreEthereumIndexerError, Result},
     snapshot::{SnapshotInfo, SnapshotManager},
     traits::ChainLogHandler,
@@ -54,6 +54,17 @@ lazy_static::lazy_static! {
 
 }
 
+/// Information about a detected blockchain reorganization.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReorgInfo {
+    /// The block number where the reorg was detected
+    pub detected_at_block: u64,
+    /// The range of blocks affected by the reorg (min, max)
+    pub affected_block_range: (u64, u64),
+    /// Number of logs that were marked as removed
+    pub removed_log_count: usize,
+}
+
 /// Indexer
 ///
 /// Accepts the RPC operational functionality [blokli_chain_rpc::HoprIndexerRpcOperations]
@@ -79,6 +90,7 @@ where
     db: Db,
     cfg: IndexerConfig,
     egress: async_channel::Sender<SignificantChainEvent>,
+    indexer_state: IndexerState,
     // If true (default), the indexer will panic if the event stream is terminated.
     // Setting it to false is useful for testing.
     panic_on_completion: bool,
@@ -96,6 +108,7 @@ where
         db: Db,
         cfg: IndexerConfig,
         egress: async_channel::Sender<SignificantChainEvent>,
+        indexer_state: IndexerState,
     ) -> Self {
         Self {
             rpc: Some(rpc),
@@ -103,6 +116,7 @@ where
             db,
             cfg,
             egress,
+            indexer_state,
             panic_on_completion: true,
         }
     }
@@ -136,7 +150,8 @@ where
         let rpc = self.rpc.take().expect("rpc should be present");
         let logs_handler = Arc::new(self.db_processor.take().expect("db_processor should be present"));
         let db = self.db.clone();
-        let tx_significant_events = self.egress.clone();
+        let _tx_significant_events = self.egress.clone();
+        let _indexer_state = self.indexer_state.clone();
         let panic_on_completion = self.panic_on_completion;
 
         let (log_filters, address_topics) = Self::generate_log_filters(&logs_handler);
@@ -228,7 +243,14 @@ where
                     "computing processed logs"
                 );
                 // Do not pollute the logs with the fast-sync progress
-                Self::process_block_by_id(&db, &logs_handler, block_number, is_synced.load(Ordering::Relaxed)).await?;
+                Self::process_block_by_id(
+                    &db,
+                    &logs_handler,
+                    block_number,
+                    is_synced.load(Ordering::Relaxed),
+                    &self.indexer_state,
+                )
+                .await?;
 
                 #[cfg(all(feature = "prometheus", not(test)))]
                 {
@@ -260,6 +282,7 @@ where
 
         info!(next_block_to_process, "Indexer start point");
 
+        let indexer_state = self.indexer_state.clone();
         let indexing_abort_handle = hopr_async_runtime::spawn_as_abortable!(async move {
             // Update the chain head once again
             debug!("Updating chain head at indexer startup");
@@ -334,27 +357,29 @@ where
                             }
                         }
                     }
-                })
-                .filter_map(|block| {
-                    let db = db.clone();
-                    let logs_handler = logs_handler.clone();
-                    let is_synced = is_synced.clone();
-                    async move {
-                        Self::process_block(&db, &logs_handler, block, false, is_synced.load(Ordering::Relaxed)).await
-                    }
-                })
-                .flat_map(stream::iter);
+                });
 
-            futures::pin_mut!(event_stream);
-            while let Some(event) = event_stream.next().await {
-                trace!(%event, "processing on-chain event");
-                // Pass the events further only once we're fully synced
-                if is_synced.load(Ordering::Relaxed) {
-                    if let Err(error) = tx_significant_events.try_send(event) {
-                        error!(%error, "failed to pass a significant chain event further");
-                    }
+            let block_processing_stream = event_stream.then(|block| {
+                let db = db.clone();
+                let logs_handler = logs_handler.clone();
+                let is_synced = is_synced.clone();
+                let indexer_state = indexer_state.clone();
+                async move {
+                    // Events are now published directly via IndexerState within handlers
+                    Self::process_block(
+                        &db,
+                        &logs_handler,
+                        block,
+                        false,
+                        is_synced.load(Ordering::Relaxed),
+                        &indexer_state,
+                    )
+                    .await;
                 }
-            }
+            });
+
+            // Process all blocks (events are published internally via IndexerState)
+            block_processing_stream.collect::<Vec<_>>().await;
 
             if panic_on_completion {
                 panic!(
@@ -472,14 +497,14 @@ where
     ///
     /// # Returns
     ///
-    /// A `Result` containing an optional vector of significant chain events if the operation succeeds or an error if it
-    /// fails.
+    /// A `Result` containing an Option with unit type if the operation succeeds or an error if it fails.
     async fn process_block_by_id(
         db: &Db,
         logs_handler: &U,
         block_id: u64,
         is_synced: bool,
-    ) -> crate::errors::Result<Option<Vec<SignificantChainEvent>>>
+        indexer_state: &IndexerState,
+    ) -> crate::errors::Result<Option<()>>
     where
         U: ChainLogHandler + 'static,
         Db: BlokliDbLogOperations + 'static,
@@ -503,12 +528,13 @@ where
             }
         }
 
-        Ok(Self::process_block(db, logs_handler, block, true, is_synced).await)
+        Ok(Self::process_block(db, logs_handler, block, true, is_synced, indexer_state).await)
     }
 
     /// Processes a block and its logs.
     ///
-    /// This function collects events from the block logs and updates the database with the processed logs.
+    /// This function processes the block logs and updates the database.
+    /// Events are published internally via IndexerState event bus.
     ///
     /// # Arguments
     ///
@@ -519,14 +545,15 @@ where
     ///
     /// # Returns
     ///
-    /// An optional vector of significant chain events if the operation succeeds.
+    /// An Option with unit type if the operation succeeds.
     async fn process_block(
         db: &Db,
         logs_handler: &U,
         block: BlockWithLogs,
         fetch_checksum_from_db: bool,
         is_synced: bool,
-    ) -> Option<Vec<SignificantChainEvent>>
+        indexer_state: &IndexerState,
+    ) -> Option<()>
     where
         U: ChainLogHandler + 'static,
         Db: BlokliDbLogOperations + 'static,
@@ -535,30 +562,57 @@ where
         let log_count = block.logs.len();
         debug!(block_id, "processing events");
 
+        // Check for blockchain reorganization before processing logs
+        if let Some(reorg_info) = Self::detect_reorg(&block) {
+            error!(
+                block_id = reorg_info.detected_at_block,
+                affected_blocks = ?reorg_info.affected_block_range,
+                removed_logs = reorg_info.removed_log_count,
+                "Blockchain reorganization detected"
+            );
+
+            // Handle the reorg by inserting corrective channel states
+            // Use the current block as the canonical block for corrective states
+            match Self::handle_reorg(db, &reorg_info, block_id, indexer_state).await {
+                Ok(corrected_count) => {
+                    info!(
+                        block_id,
+                        corrected_channels = corrected_count,
+                        "Successfully handled blockchain reorganization"
+                    );
+                }
+                Err(error) => {
+                    error!(
+                        block_id,
+                        %error,
+                        "Failed to handle blockchain reorganization, panicking to prevent data corruption"
+                    );
+                    panic!("Failed to handle blockchain reorganization: {error}");
+                }
+            }
+        }
+
         // FIXME: The block indexing and marking as processed should be done in a single
         // transaction. This is difficult since currently this would be across databases.
-        let events = stream::iter(block.logs.clone())
-            .filter_map(|log| async move {
-                match logs_handler.collect_log_event(log.clone(), is_synced).await {
-                    Ok(data) => match db.set_log_processed(log).await {
-                        Ok(_) => data,
-                        Err(error) => {
-                            error!(block_id, %error, "failed to mark log as processed, panicking to prevent data loss");
-                            panic!("failed to mark log as processed, panicking to prevent data loss")
-                        }
-                    },
-                    Err(CoreEthereumIndexerError::ProcessError(error)) => {
-                        error!(block_id, %error, "failed to process log into event, continuing indexing");
-                        None
-                    }
+        // Process all logs - events are published internally via IndexerState
+        for log in block.logs.clone() {
+            match logs_handler.collect_log_event(log.clone(), is_synced).await {
+                Ok(()) => match db.set_log_processed(log).await {
+                    Ok(_) => {}
                     Err(error) => {
-                        error!(block_id, %error, "failed to process log into event, panicking to prevent data loss");
-                        panic!("failed to process log into event, panicking to prevent data loss")
+                        error!(block_id, %error, "failed to mark log as processed, panicking to prevent data loss");
+                        panic!("failed to mark log as processed, panicking to prevent data loss")
                     }
+                },
+                Err(CoreEthereumIndexerError::ProcessError(error)) => {
+                    error!(block_id, %error, "failed to process log, continuing indexing");
                 }
-            })
-            .collect::<Vec<SignificantChainEvent>>()
-            .await;
+                Err(error) => {
+                    error!(block_id, %error, "failed to process log, panicking to prevent data loss");
+                    panic!("failed to process log, panicking to prevent data loss")
+                }
+            }
+        }
 
         // if we made it this far, no errors occurred and we can update checksums and indexer state
         match db.update_logs_checksums().await {
@@ -601,13 +655,252 @@ where
             Err(error) => error!(block_id, %error, "failed to update checksums for logs from block"),
         }
 
-        debug!(
-            block_id,
-            num_events = events.len(),
-            "processed significant chain events from block",
+        debug!(block_id, "processed block logs - events published via IndexerState",);
+
+        Some(())
+    }
+
+    /// Detects blockchain reorganization by checking for removed logs in a block.
+    ///
+    /// This function scans logs in a block to identify if any have been marked as removed
+    /// (indicating they were part of a reorganized chain). When a reorg is detected,
+    /// it returns information about which blocks and channels are affected.
+    ///
+    /// # Arguments
+    ///
+    /// * `block` - The block with logs to check for reorg indicators
+    ///
+    /// # Returns
+    ///
+    /// * `Option<ReorgInfo>` - Information about the detected reorg, or None if no reorg was detected
+    fn detect_reorg(block: &BlockWithLogs) -> Option<ReorgInfo> {
+        let removed_logs: Vec<&SerializableLog> = block.logs.iter().filter(|log| log.removed).collect();
+
+        if removed_logs.is_empty() {
+            return None;
+        }
+
+        let affected_blocks: Vec<u64> = removed_logs.iter().map(|log| log.block_number).collect();
+        let min_block = affected_blocks.iter().min().copied().unwrap_or(block.block_id);
+        let max_block = affected_blocks.iter().max().copied().unwrap_or(block.block_id);
+
+        Some(ReorgInfo {
+            detected_at_block: block.block_id,
+            affected_block_range: (min_block, max_block),
+            removed_log_count: removed_logs.len(),
+        })
+    }
+
+    /// Handle blockchain reorganization by inserting corrective states
+    ///
+    /// When a blockchain reorg occurs, this function preserves the audit trail by inserting
+    /// **corrective states** that restore affected channels to their pre-reorg state, without
+    /// deleting any historical data.
+    ///
+    /// # Algorithm
+    ///
+    /// 1. **Identify affected channels**: Query all channel states in the affected block range
+    /// 2. **Find last valid state**: For each affected channel, locate the most recent state before the reorg occurred
+    ///    (the "watermark" state)
+    /// 3. **Insert corrective state**: Create a new state at synthetic position `(canonical_block, 0, 0)` with the
+    ///    watermark state's values and `reorg_correction = true`
+    /// 4. **Skip channels without prior state**: Channels opened during the reorg are skipped (they will be re-indexed
+    ///    with the canonical chain)
+    ///
+    /// # Corrective States
+    ///
+    /// Corrective states are special state records that:
+    /// - Are inserted at **synthetic positions** `(canonical_block, 0, 0)` where `canonical_block` is the first valid
+    ///   block after the reorg
+    /// - Have the `reorg_correction` flag set to `true` to distinguish them from normal states
+    /// - Contain the same state values (balance, status, etc.) as the last valid state before the reorg
+    /// - Preserve the complete audit trail - no data is ever deleted
+    ///
+    /// The synthetic position `(block, 0, 0)` ensures corrective states are ordered before any
+    /// real events at the same block (which have `tx_index > 0` or `log_index > 0`).
+    ///
+    /// # Audit Trail Preservation
+    ///
+    /// This function follows the **never-delete principle**:
+    /// - Invalidated states from reorganized blocks remain in the database
+    /// - Temporal queries automatically use corrective states to reflect canonical chain state
+    /// - Complete history is preserved for auditing and forensic analysis
+    /// - Multiple reorgs can occur - each adds new corrective states without removing old ones
+    ///
+    /// # Arguments
+    ///
+    /// * `db` - Database connection implementing required operations
+    /// * `reorg_info` - Information about the detected reorganization:
+    ///   - `affected_block_range`: `(min_block, max_block)` range that was reorganized
+    ///   - `removed_log_count`: Number of logs removed during the reorg (for metrics)
+    /// * `canonical_block` - The first valid block number on the canonical chain after the reorg. This is where
+    ///   corrective states are positioned.
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(count)` where `count` is the number of channels that received corrective states.
+    ///
+    /// A count of 0 indicates either:
+    /// - No channels were affected by the reorg
+    /// - All affected channels were opened during the reorg (no prior state to restore)
+    ///
+    /// # Errors
+    ///
+    /// Returns `CoreEthereumIndexerError::ProcessError` if:
+    /// - Database queries fail while identifying affected channels
+    /// - Cannot query for last valid states before the reorg
+    /// - Inserting corrective states into the database fails
+    ///
+    /// On error, the function may have partially completed. Some channels may have received
+    /// corrective states while others have not. The indexer should be restarted to retry.
+    ///
+    /// # Edge Cases
+    ///
+    /// - **Channels opened during reorg**: Skipped (no prior state to restore)
+    /// - **Multiple states at same block**: Uses lexicographic ordering to find the correct watermark
+    /// - **Reorg at block boundaries**: Correctly handles inclusive/exclusive range logic
+    /// - **Repeated reorgs**: Each creates new corrective states; all history is preserved
+    /// - **Large reorgs**: Efficiently processes 100+ affected blocks with minimal overhead
+    ///
+    /// # Performance
+    ///
+    /// - Scales linearly with the number of affected channels, not the number of blocks
+    /// - Uses database indices for efficient state lookups
+    /// - Tested with reorgs affecting 50+ channels and 100+ blocks
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Reorg detected: blocks 1100-1200 were reorganized
+    /// let reorg_info = ReorgInfo {
+    ///     detected_at_block: 1250,
+    ///     affected_block_range: (1100, 1200),
+    ///     removed_log_count: 73,
+    /// };
+    ///
+    /// // Canonical chain resumes at block 1201
+    /// let corrected = handle_reorg(&db, &reorg_info, 1201).await?;
+    ///
+    /// // corrected = number of channels that received corrective states
+    /// info!(corrected, "Reorg handling complete");
+    /// ```
+    ///
+    /// # See Also
+    ///
+    /// - [`ReorgInfo`] - Structure containing reorg detection information
+    /// - [`get_channel_state_at`](blokli_db::state_queries::get_channel_state_at) - Temporal queries that work with
+    ///   corrective states
+    /// - Design document section 6.5 - Detailed reorg handling specification
+    async fn handle_reorg(
+        db: &Db,
+        reorg_info: &ReorgInfo,
+        canonical_block: u64,
+        indexer_state: &IndexerState,
+    ) -> Result<usize>
+    where
+        Db: BlokliDbGeneralModelOperations
+            + BlokliDbInfoOperations
+            + BlokliDbLogOperations
+            + Clone
+            + Send
+            + Sync
+            + 'static,
+    {
+        let (min_block, max_block) = reorg_info.affected_block_range;
+        let db_conn = db.conn(TargetDb::Index);
+
+        info!(
+            min_block,
+            max_block, canonical_block, "Processing reorg: identifying affected channels"
         );
 
-        Some(events)
+        // Step 1: Query channel_state table for all states in the affected block range
+        // This tells us which channels were affected by the reorg
+        let affected_states = ChannelState::find()
+            .filter(
+                Condition::all()
+                    .add(channel_state::Column::PublishedBlock.gte(min_block))
+                    .add(channel_state::Column::PublishedBlock.lte(max_block)),
+            )
+            .all(db_conn)
+            .await
+            .map_err(|e| {
+                CoreEthereumIndexerError::ProcessError(format!("Failed to query affected channel states: {}", e))
+            })?;
+
+        // Extract unique channel IDs
+        let affected_channel_ids: HashSet<i64> = affected_states.iter().map(|state| state.channel_id).collect();
+
+        info!(affected_count = affected_channel_ids.len(), "Found affected channels");
+
+        let mut corrected_count = 0;
+
+        // Step 2: For each affected channel, find the last valid state before the reorg
+        for channel_id in affected_channel_ids {
+            // Query for the last state before the minimum affected block
+            let last_valid_state = ChannelState::find()
+                .filter(channel_state::Column::ChannelId.eq(channel_id))
+                .filter(channel_state::Column::PublishedBlock.lt(min_block))
+                .order_by_desc(channel_state::Column::PublishedBlock)
+                .order_by_desc(channel_state::Column::PublishedTxIndex)
+                .order_by_desc(channel_state::Column::PublishedLogIndex)
+                .one(db_conn)
+                .await
+                .map_err(|e| {
+                    CoreEthereumIndexerError::ProcessError(format!(
+                        "Failed to query last valid state for channel {}: {}",
+                        channel_id, e
+                    ))
+                })?;
+
+            // If no prior state exists, the channel was opened during the reorg
+            // In this case, no correction is needed - the channel will be re-indexed
+            let Some(valid_state) = last_valid_state else {
+                debug!(channel_id, "Channel was opened during reorg, skipping correction");
+                continue;
+            };
+
+            // Step 3: Insert corrective state at synthetic position (canonical_block, 0, 0)
+            // This state represents the canonical state after reorg recovery
+            let corrective_state = channel_state::ActiveModel {
+                id: Default::default(), // Auto-increment
+                channel_id: Set(channel_id),
+                balance: Set(valid_state.balance),
+                status: Set(valid_state.status),
+                epoch: Set(valid_state.epoch),
+                ticket_index: Set(valid_state.ticket_index),
+                closure_time: Set(valid_state.closure_time),
+                corrupted_state: Set(valid_state.corrupted_state),
+                published_block: Set(canonical_block as i64),
+                published_tx_index: Set(0),  // Synthetic position
+                published_log_index: Set(0), // Synthetic position
+                reorg_correction: Set(true), // Mark as reorg correction
+            };
+
+            corrective_state.insert(db_conn).await.map_err(|e| {
+                CoreEthereumIndexerError::ProcessError(format!(
+                    "Failed to insert corrective state for channel {}: {}",
+                    channel_id, e
+                ))
+            })?;
+
+            corrected_count += 1;
+
+            debug!(channel_id, canonical_block, "Inserted corrective state");
+        }
+
+        // Signal shutdown to active subscriptions
+        // Subscriptions will detect shutdown signal and close client connections,
+        // forcing clients to reconnect and get fresh watermarks
+        if !indexer_state.signal_shutdown() {
+            error!("Failed to signal shutdown to subscriptions after reorg - channel may be closed");
+        } else {
+            info!("Signaled shutdown to active subscriptions after reorg");
+        }
+
+        info!(corrected_count, "Reorg handling complete");
+
+        Ok(corrected_count)
     }
 
     async fn update_chain_head(rpc: &T, chain_head: Arc<AtomicU64>) -> u64
@@ -780,7 +1073,7 @@ mod tests {
     use async_trait::async_trait;
     use blokli_chain_rpc::BlockWithLogs;
     use blokli_chain_types::{ContractAddresses, chain_events::ChainEventType};
-    use blokli_db_sql::{accounts::BlokliDbAccountOperations, db::BlokliDb};
+    use blokli_db::{accounts::BlokliDbAccountOperations, db::BlokliDb};
     use futures::{Stream, join};
     use hex_literal::hex;
     use hopr_crypto_types::{
@@ -827,7 +1120,7 @@ mod tests {
             logs.push(SerializableLog {
                 address,
                 block_hash: block_hash.into(),
-                topics: vec![hopr_bindings::hoprannouncementsevents::HoprAnnouncementsEvents::AddressAnnouncement::SIGNATURE_HASH.into()],
+                topics: vec![hopr_bindings::hopr_announcements_events::HoprAnnouncementsEvents::AddressAnnouncement::SIGNATURE_HASH.into()],
                 data: DynSolValue::Tuple(vec![
                     DynSolValue::Address(AlloyAddress::from_slice(address.as_ref())),
                     DynSolValue::String(test_multiaddr.to_string()),
@@ -901,6 +1194,7 @@ mod tests {
             db.clone(),
             IndexerConfig::default(),
             async_channel::unbounded().0,
+            IndexerState::default(),
         )
         .without_panic_on_completion();
 
@@ -975,6 +1269,7 @@ mod tests {
                 ..Default::default()
             },
             async_channel::unbounded().0,
+            IndexerState::default(),
         )
         .without_panic_on_completion();
 
@@ -1036,13 +1331,20 @@ mod tests {
             .expect_collect_log_event()
             // .times(2)
             .times(finalized_block.logs.len())
-            .returning(|_, _| Ok(None));
+            .returning(|_, _| Ok(()));
 
         assert!(tx.start_send(finalized_block.clone()).is_ok());
         assert!(tx.start_send(head_allowing_finalization.clone()).is_ok());
 
-        let indexer =
-            Indexer::new(rpc, handlers, db.clone(), cfg, async_channel::unbounded().0).without_panic_on_completion();
+        let indexer = Indexer::new(
+            rpc,
+            handlers,
+            db.clone(),
+            cfg,
+            async_channel::unbounded().0,
+            IndexerState::default(),
+        )
+        .without_panic_on_completion();
         let _ = join!(indexer.start(), async move {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             tx.close_channel()
@@ -1098,7 +1400,7 @@ mod tests {
                 .expect_collect_log_event()
                 .times(2)
                 .withf(move |l, _| [1, 2].contains(&l.block_number))
-                .returning(|_, _| Ok(None));
+                .returning(|_, _| Ok(()));
             handlers
                 .expect_contract_address_topics()
                 .withf(move |x| x == &addr)
@@ -1107,8 +1409,16 @@ mod tests {
                 .expect_contract_addresses_map()
                 .return_const(ContractAddresses::default());
 
-            let indexer_cfg = IndexerConfig::new(0, true, false, None, "/tmp/test_data".to_string());
-            let indexer = Indexer::new(rpc, handlers, db.clone(), indexer_cfg, tx_events).without_panic_on_completion();
+            let indexer_cfg = IndexerConfig::new(0, true, false, None, "/tmp/test_data".to_string(), 1000, 10);
+            let indexer = Indexer::new(
+                rpc,
+                handlers,
+                db.clone(),
+                indexer_cfg,
+                tx_events,
+                IndexerState::default(),
+            )
+            .without_panic_on_completion();
             let (indexing, _) = join!(indexer.start(), async move {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 tx.close_channel()
@@ -1183,7 +1493,7 @@ mod tests {
                 .expect_collect_log_event()
                 .times(2)
                 .withf(move |l, _| [3, 4].contains(&l.block_number))
-                .returning(|_, _| Ok(None));
+                .returning(|_, _| Ok(()));
             handlers
                 .expect_contract_address_topics()
                 .withf(move |x| x == &addr)
@@ -1192,8 +1502,16 @@ mod tests {
                 .expect_contract_addresses_map()
                 .return_const(ContractAddresses::default());
 
-            let indexer_cfg = IndexerConfig::new(0, true, false, None, "/tmp/test_data".to_string());
-            let indexer = Indexer::new(rpc, handlers, db.clone(), indexer_cfg, tx_events).without_panic_on_completion();
+            let indexer_cfg = IndexerConfig::new(0, true, false, None, "/tmp/test_data".to_string(), 1000, 10);
+            let indexer = Indexer::new(
+                rpc,
+                handlers,
+                db.clone(),
+                indexer_cfg,
+                tx_events,
+                IndexerState::default(),
+            )
+            .without_panic_on_completion();
             let (indexing, _) = join!(indexer.start(), async move {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 tx.close_channel()
@@ -1267,16 +1585,11 @@ mod tests {
             .expect_collect_log_event()
             .times(1)
             .withf(move |l, _| block_numbers.contains(&l.block_number))
-            .returning(|l, _| {
-                let block_number = l.block_number;
-                Ok(Some(SignificantChainEvent {
-                    tx_hash: Hash::create(&[format!("my tx hash {block_number}").as_bytes()]),
-                    event_type: RANDOM_ANNOUNCEMENT_CHAIN_EVENT.clone(),
-                }))
-            });
+            .returning(|_, _| Ok(()));
 
         let (tx_events, rx_events) = async_channel::unbounded();
-        let indexer = Indexer::new(rpc, handlers, db.clone(), cfg, tx_events).without_panic_on_completion();
+        let indexer = Indexer::new(rpc, handlers, db.clone(), cfg, tx_events, IndexerState::default())
+            .without_panic_on_completion();
         indexer.start().await?;
 
         // At this point we expect 2 events to arrive. The third event, which was generated first,
@@ -1359,11 +1672,1144 @@ mod tests {
             .expect_contract_addresses_map()
             .return_const(ContractAddresses::default());
 
-        let indexer_cfg = IndexerConfig::new(0, false, false, None, "/tmp/test_data".to_string());
+        let indexer_cfg = IndexerConfig::new(0, false, false, None, "/tmp/test_data".to_string(), 1000, 10);
 
         let (tx_events, _) = async_channel::unbounded();
-        let indexer = Indexer::new(rpc, handlers, db.clone(), indexer_cfg, tx_events).without_panic_on_completion();
+        let indexer = Indexer::new(
+            rpc,
+            handlers,
+            db.clone(),
+            indexer_cfg,
+            tx_events,
+            IndexerState::default(),
+        )
+        .without_panic_on_completion();
         indexer.start().await?;
+
+        Ok(())
+    }
+
+    // ==================== Reorg Detection Tests ====================
+
+    #[test]
+    fn test_detect_reorg_returns_none_when_no_removed_logs() {
+        // Test that blocks with all logs having removed=false return None
+        let block = BlockWithLogs {
+            block_id: 100,
+            logs: BTreeSet::from([
+                SerializableLog {
+                    address: Address::new(b"test address 1234567"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![1, 2, 3],
+                    tx_index: 0,
+                    block_number: 100,
+                    block_hash: Hash::create(&[b"block 100"]).into(),
+                    tx_hash: Hash::create(&[b"tx 0"]).into(),
+                    log_index: 0,
+                    removed: false,
+                    processed: None,
+                    checksum: None,
+                    processed_at: None,
+                },
+                SerializableLog {
+                    address: Address::new(b"test address 1234567"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![4, 5, 6],
+                    tx_index: 1,
+                    block_number: 100,
+                    block_hash: Hash::create(&[b"block 100"]).into(),
+                    tx_hash: Hash::create(&[b"tx 1"]).into(),
+                    log_index: 1,
+                    removed: false,
+                    processed: None,
+                    checksum: None,
+                    processed_at: None,
+                },
+            ]),
+        };
+
+        let result = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::detect_reorg(&block);
+        assert!(result.is_none(), "Expected None when no logs are marked as removed");
+    }
+
+    #[test]
+    fn test_detect_reorg_detects_single_removed_log() {
+        // Test that a single removed log is properly detected
+        let block = BlockWithLogs {
+            block_id: 200,
+            logs: BTreeSet::from([
+                SerializableLog {
+                    address: Address::new(b"test address 1234567"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![1, 2, 3],
+                    tx_index: 0,
+                    block_number: 199,
+                    block_hash: Hash::create(&[b"block 199"]).into(),
+                    tx_hash: Hash::create(&[b"tx 0"]).into(),
+                    log_index: 0,
+                    removed: true, // This log was reorged
+                    processed: None,
+                    checksum: None,
+                    processed_at: None,
+                },
+                SerializableLog {
+                    address: Address::new(b"test address 1234567"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![4, 5, 6],
+                    tx_index: 1,
+                    block_number: 200,
+                    block_hash: Hash::create(&[b"block 200"]).into(),
+                    tx_hash: Hash::create(&[b"tx 1"]).into(),
+                    log_index: 1,
+                    removed: false,
+                    processed: None,
+                    checksum: None,
+                    processed_at: None,
+                },
+            ]),
+        };
+
+        let result = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::detect_reorg(&block);
+        assert!(result.is_some(), "Expected Some when removed logs are present");
+
+        let reorg_info = result.unwrap();
+        assert_eq!(reorg_info.detected_at_block, 200);
+        assert_eq!(reorg_info.affected_block_range, (199, 199));
+        assert_eq!(reorg_info.removed_log_count, 1);
+    }
+
+    #[test]
+    fn test_detect_reorg_detects_multiple_removed_logs_same_block() {
+        // Test multiple removed logs from the same block
+        let block = BlockWithLogs {
+            block_id: 150,
+            logs: BTreeSet::from([
+                SerializableLog {
+                    address: Address::new(b"test address 1234567"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![1, 2, 3],
+                    tx_index: 0,
+                    block_number: 148,
+                    block_hash: Hash::create(&[b"block 148"]).into(),
+                    tx_hash: Hash::create(&[b"tx 0"]).into(),
+                    log_index: 0,
+                    removed: true,
+                    processed: None,
+                    checksum: None,
+                    processed_at: None,
+                },
+                SerializableLog {
+                    address: Address::new(b"test address 1234567"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![4, 5, 6],
+                    tx_index: 1,
+                    block_number: 148,
+                    block_hash: Hash::create(&[b"block 148"]).into(),
+                    tx_hash: Hash::create(&[b"tx 1"]).into(),
+                    log_index: 1,
+                    removed: true,
+                    processed: None,
+                    checksum: None,
+                    processed_at: None,
+                },
+                SerializableLog {
+                    address: Address::new(b"test address 1234567"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![7, 8, 9],
+                    tx_index: 2,
+                    block_number: 150,
+                    block_hash: Hash::create(&[b"block 150"]).into(),
+                    tx_hash: Hash::create(&[b"tx 2"]).into(),
+                    log_index: 2,
+                    removed: false,
+                    processed: None,
+                    checksum: None,
+                    processed_at: None,
+                },
+            ]),
+        };
+
+        let result = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::detect_reorg(&block);
+        assert!(result.is_some(), "Expected Some when removed logs are present");
+
+        let reorg_info = result.unwrap();
+        assert_eq!(reorg_info.detected_at_block, 150);
+        assert_eq!(reorg_info.affected_block_range, (148, 148));
+        assert_eq!(reorg_info.removed_log_count, 2);
+    }
+
+    #[test]
+    fn test_detect_reorg_detects_multiple_removed_logs_different_blocks() {
+        // Test removed logs from different blocks - calculates correct range
+        let block = BlockWithLogs {
+            block_id: 300,
+            logs: BTreeSet::from([
+                SerializableLog {
+                    address: Address::new(b"test address 1234567"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![1, 2, 3],
+                    tx_index: 0,
+                    block_number: 295,
+                    block_hash: Hash::create(&[b"block 295"]).into(),
+                    tx_hash: Hash::create(&[b"tx 0"]).into(),
+                    log_index: 0,
+                    removed: true,
+                    processed: None,
+                    checksum: None,
+                    processed_at: None,
+                },
+                SerializableLog {
+                    address: Address::new(b"test address 1234567"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![4, 5, 6],
+                    tx_index: 1,
+                    block_number: 297,
+                    block_hash: Hash::create(&[b"block 297"]).into(),
+                    tx_hash: Hash::create(&[b"tx 1"]).into(),
+                    log_index: 1,
+                    removed: true,
+                    processed: None,
+                    checksum: None,
+                    processed_at: None,
+                },
+                SerializableLog {
+                    address: Address::new(b"test address 1234567"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![7, 8, 9],
+                    tx_index: 2,
+                    block_number: 299,
+                    block_hash: Hash::create(&[b"block 299"]).into(),
+                    tx_hash: Hash::create(&[b"tx 2"]).into(),
+                    log_index: 2,
+                    removed: true,
+                    processed: None,
+                    checksum: None,
+                    processed_at: None,
+                },
+                SerializableLog {
+                    address: Address::new(b"test address 1234567"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![10, 11, 12],
+                    tx_index: 3,
+                    block_number: 300,
+                    block_hash: Hash::create(&[b"block 300"]).into(),
+                    tx_hash: Hash::create(&[b"tx 3"]).into(),
+                    log_index: 3,
+                    removed: false,
+                    processed: None,
+                    checksum: None,
+                    processed_at: None,
+                },
+            ]),
+        };
+
+        let result = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::detect_reorg(&block);
+        assert!(result.is_some(), "Expected Some when removed logs are present");
+
+        let reorg_info = result.unwrap();
+        assert_eq!(reorg_info.detected_at_block, 300);
+        assert_eq!(
+            reorg_info.affected_block_range,
+            (295, 299),
+            "Should span from min (295) to max (299) affected block"
+        );
+        assert_eq!(reorg_info.removed_log_count, 3);
+    }
+
+    #[test]
+    fn test_detect_reorg_calculates_correct_affected_range() {
+        // Test that min/max calculation works correctly
+        let block = BlockWithLogs {
+            block_id: 1000,
+            logs: BTreeSet::from([
+                SerializableLog {
+                    address: Address::new(b"test address 1234567"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![1],
+                    tx_index: 0,
+                    block_number: 990,
+                    block_hash: Hash::create(&[b"block 990"]).into(),
+                    tx_hash: Hash::create(&[b"tx 0"]).into(),
+                    log_index: 0,
+                    removed: true,
+                    processed: None,
+                    checksum: None,
+                    processed_at: None,
+                },
+                SerializableLog {
+                    address: Address::new(b"test address 1234567"),
+                    topics: vec![Hash::create(&[b"topic"]).into()],
+                    data: vec![2],
+                    tx_index: 1,
+                    block_number: 998,
+                    block_hash: Hash::create(&[b"block 998"]).into(),
+                    tx_hash: Hash::create(&[b"tx 1"]).into(),
+                    log_index: 1,
+                    removed: true,
+                    processed: None,
+                    checksum: None,
+                    processed_at: None,
+                },
+            ]),
+        };
+
+        let result = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::detect_reorg(&block);
+        assert!(result.is_some());
+
+        let reorg_info = result.unwrap();
+        assert_eq!(reorg_info.detected_at_block, 1000);
+        assert_eq!(reorg_info.affected_block_range, (990, 998));
+        assert_eq!(reorg_info.removed_log_count, 2);
+    }
+
+    #[test]
+    fn test_detect_reorg_empty_block() {
+        // Test that an empty block returns None
+        let block = BlockWithLogs {
+            block_id: 500,
+            logs: BTreeSet::new(),
+        };
+
+        let result = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::detect_reorg(&block);
+        assert!(result.is_none(), "Expected None for empty block");
+    }
+
+    // ==================== Reorg Handling Tests ====================
+
+    // Helper function to create a test channel
+    async fn create_test_channel(db: &BlokliDb, channel_id: i64) -> anyhow::Result<()> {
+        use blokli_db::TargetDb;
+        use blokli_db_entity::{
+            account, channel,
+            prelude::{Account, Channel},
+        };
+        use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait};
+
+        let conn = db.conn(TargetDb::Index);
+
+        // Check if channel already exists
+        let existing = Channel::find_by_id(channel_id).one(conn).await?;
+        if existing.is_some() {
+            return Ok(());
+        }
+
+        // Create source and destination accounts if they don't exist
+        let source_id: i64 = channel_id * 10;
+        let dest_id: i64 = channel_id * 10 + 1;
+
+        let source_exists = Account::find_by_id(source_id).one(conn).await?.is_some();
+        if !source_exists {
+            let source_account = account::ActiveModel {
+                id: Set(source_id),
+                chain_key: Set(vec![1u8; 20]),
+                packet_key: Set(format!("source_packet_key_{}", channel_id)),
+                published_block: Set(1),
+                published_tx_index: Set(0),
+                published_log_index: Set(0),
+            };
+            source_account.insert(conn).await?;
+        }
+
+        let dest_exists = Account::find_by_id(dest_id).one(conn).await?.is_some();
+        if !dest_exists {
+            let dest_account = account::ActiveModel {
+                id: Set(dest_id),
+                chain_key: Set(vec![3u8; 20]),
+                packet_key: Set(format!("dest_packet_key_{}", channel_id)),
+                published_block: Set(1),
+                published_tx_index: Set(0),
+                published_log_index: Set(0),
+            };
+            dest_account.insert(conn).await?;
+        }
+
+        let channel_model = channel::ActiveModel {
+            id: Set(channel_id),
+            concrete_channel_id: Set(format!("test_channel_{}", channel_id)),
+            source: Set(source_id),
+            destination: Set(dest_id),
+        };
+        channel_model.insert(conn).await?;
+        Ok(())
+    }
+
+    // Helper function to create a channel state
+    async fn create_channel_state(
+        db: &BlokliDb,
+        channel_id: i64,
+        block: u64,
+        tx_index: u64,
+        log_index: u64,
+        balance: [u8; 12],
+        status: i8,
+        reorg_correction: bool,
+    ) -> anyhow::Result<()> {
+        use blokli_db::TargetDb;
+        use blokli_db_entity::channel_state;
+        use sea_orm::{ActiveModelTrait, ActiveValue::Set};
+
+        let conn = db.conn(TargetDb::Index);
+        let state = channel_state::ActiveModel {
+            id: Default::default(),
+            channel_id: Set(channel_id),
+            balance: Set(balance.to_vec()),
+            status: Set(status),
+            epoch: Set(0),
+            ticket_index: Set(0),
+            closure_time: Set(None),
+            corrupted_state: Set(false),
+            published_block: Set(block as i64),
+            published_tx_index: Set(tx_index as i64),
+            published_log_index: Set(log_index as i64),
+            reorg_correction: Set(reorg_correction),
+        };
+        state.insert(conn).await?;
+        Ok(())
+    }
+
+    // Helper function to get all channel states for a channel
+    async fn get_channel_states(
+        db: &BlokliDb,
+        channel_id: i64,
+    ) -> anyhow::Result<Vec<blokli_db_entity::channel_state::Model>> {
+        use blokli_db::TargetDb;
+        use blokli_db_entity::{channel_state, prelude::ChannelState};
+        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+
+        let conn = db.conn(TargetDb::Index);
+        let states = ChannelState::find()
+            .filter(channel_state::Column::ChannelId.eq(channel_id))
+            .order_by_asc(channel_state::Column::PublishedBlock)
+            .order_by_asc(channel_state::Column::PublishedTxIndex)
+            .order_by_asc(channel_state::Column::PublishedLogIndex)
+            .all(conn)
+            .await?;
+        Ok(states)
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_single_affected_channel() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        // Create channel
+        create_test_channel(&db, 1).await?;
+
+        // Create channel states: block 10, block 50 (valid), block 100 (will be reorged)
+        create_channel_state(&db, 1, 10, 0, 0, [1u8; 12], 1, false).await?;
+        create_channel_state(&db, 1, 50, 0, 0, [2u8; 12], 1, false).await?;
+        create_channel_state(&db, 1, 100, 0, 0, [3u8; 12], 2, false).await?;
+
+        // Simulate reorg affecting blocks 100-100
+        let reorg_info = ReorgInfo {
+            detected_at_block: 200,
+            affected_block_range: (100, 100),
+            removed_log_count: 1,
+        };
+
+        // Handle the reorg
+        let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            200,
+            &IndexerState::default(),
+        )
+        .await?;
+
+        // Verify correction was made
+        assert_eq!(corrected_count, 1, "Expected 1 channel to be corrected");
+
+        // Verify corrective state was inserted
+        let states = get_channel_states(&db, 1).await?;
+        assert_eq!(states.len(), 4, "Expected 4 states (3 original + 1 corrective)");
+
+        // Find the corrective state
+        let corrective_state = states
+            .iter()
+            .find(|s| s.reorg_correction)
+            .expect("Corrective state not found");
+
+        assert_eq!(
+            corrective_state.published_block, 200,
+            "Corrective state should be at canonical block"
+        );
+        assert_eq!(
+            corrective_state.published_tx_index, 0,
+            "Corrective state should have synthetic tx_index"
+        );
+        assert_eq!(
+            corrective_state.published_log_index, 0,
+            "Corrective state should have synthetic log_index"
+        );
+        assert_eq!(
+            corrective_state.balance,
+            vec![2u8; 12],
+            "Corrective state should have balance from last valid state"
+        );
+        assert_eq!(
+            corrective_state.status, 1,
+            "Corrective state should have status from last valid state"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_multiple_affected_channels() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        // Create three channels
+        create_test_channel(&db, 1).await?;
+        create_test_channel(&db, 2).await?;
+        create_test_channel(&db, 3).await?;
+
+        // Channel 1: states at blocks 10, 50, 100 (reorged)
+        create_channel_state(&db, 1, 10, 0, 0, [1u8; 12], 1, false).await?;
+        create_channel_state(&db, 1, 50, 0, 0, [2u8; 12], 1, false).await?;
+        create_channel_state(&db, 1, 100, 0, 0, [3u8; 12], 2, false).await?;
+
+        // Channel 2: states at blocks 20, 90 (reorged)
+        create_channel_state(&db, 2, 20, 0, 0, [4u8; 12], 1, false).await?;
+        create_channel_state(&db, 2, 90, 0, 0, [5u8; 12], 2, false).await?;
+
+        // Channel 3: states at blocks 30, 95 (reorged), 110 (reorged)
+        create_channel_state(&db, 3, 30, 0, 0, [6u8; 12], 1, false).await?;
+        create_channel_state(&db, 3, 95, 0, 0, [7u8; 12], 2, false).await?;
+        create_channel_state(&db, 3, 110, 0, 0, [8u8; 12], 3, false).await?;
+
+        // Simulate reorg affecting blocks 90-110
+        let reorg_info = ReorgInfo {
+            detected_at_block: 150,
+            affected_block_range: (90, 110),
+            removed_log_count: 4,
+        };
+
+        // Handle the reorg
+        let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            150,
+            &IndexerState::default(),
+        )
+        .await?;
+
+        // Verify all 3 channels were corrected
+        assert_eq!(corrected_count, 3, "Expected 3 channels to be corrected");
+
+        // Verify channel 1 correction
+        let states_1 = get_channel_states(&db, 1).await?;
+        let corrective_1 = states_1
+            .iter()
+            .find(|s| s.reorg_correction)
+            .expect("Channel 1 corrective state not found");
+        assert_eq!(
+            corrective_1.balance,
+            vec![2u8; 12],
+            "Channel 1 should rollback to block 50 state"
+        );
+
+        // Verify channel 2 correction
+        let states_2 = get_channel_states(&db, 2).await?;
+        let corrective_2 = states_2
+            .iter()
+            .find(|s| s.reorg_correction)
+            .expect("Channel 2 corrective state not found");
+        assert_eq!(
+            corrective_2.balance,
+            vec![4u8; 12],
+            "Channel 2 should rollback to block 20 state"
+        );
+
+        // Verify channel 3 correction
+        let states_3 = get_channel_states(&db, 3).await?;
+        let corrective_3 = states_3
+            .iter()
+            .find(|s| s.reorg_correction)
+            .expect("Channel 3 corrective state not found");
+        assert_eq!(
+            corrective_3.balance,
+            vec![6u8; 12],
+            "Channel 3 should rollback to block 30 state"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_channel_opened_during_reorg() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        // Create two channels
+        create_test_channel(&db, 1).await?;
+        create_test_channel(&db, 2).await?;
+
+        // Channel 1: has state before reorg
+        create_channel_state(&db, 1, 10, 0, 0, [1u8; 12], 1, false).await?;
+        create_channel_state(&db, 1, 100, 0, 0, [2u8; 12], 2, false).await?;
+
+        // Channel 2: ONLY has state during reorg (opened at block 95)
+        create_channel_state(&db, 2, 95, 0, 0, [3u8; 12], 1, false).await?;
+
+        // Simulate reorg affecting blocks 90-110
+        let reorg_info = ReorgInfo {
+            detected_at_block: 150,
+            affected_block_range: (90, 110),
+            removed_log_count: 2,
+        };
+
+        // Handle the reorg
+        let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            150,
+            &IndexerState::default(),
+        )
+        .await?;
+
+        // Only channel 1 should be corrected, channel 2 was opened during reorg
+        assert_eq!(corrected_count, 1, "Only channel 1 should be corrected");
+
+        // Verify channel 1 has corrective state
+        let states_1 = get_channel_states(&db, 1).await?;
+        assert!(
+            states_1.iter().any(|s| s.reorg_correction),
+            "Channel 1 should have corrective state"
+        );
+
+        // Verify channel 2 has NO corrective state
+        let states_2 = get_channel_states(&db, 2).await?;
+        assert!(
+            !states_2.iter().any(|s| s.reorg_correction),
+            "Channel 2 should NOT have corrective state"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_no_affected_channels() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        // Create channel with states outside reorg range
+        create_test_channel(&db, 1).await?;
+        create_channel_state(&db, 1, 10, 0, 0, [1u8; 12], 1, false).await?;
+        create_channel_state(&db, 1, 50, 0, 0, [2u8; 12], 2, false).await?;
+
+        // Simulate reorg affecting blocks 100-110 (no states in this range)
+        let reorg_info = ReorgInfo {
+            detected_at_block: 150,
+            affected_block_range: (100, 110),
+            removed_log_count: 0,
+        };
+
+        // Handle the reorg
+        let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            150,
+            &IndexerState::default(),
+        )
+        .await?;
+
+        // No channels should be corrected
+        assert_eq!(corrected_count, 0, "No channels should be corrected");
+
+        // Verify no corrective states were inserted
+        let states = get_channel_states(&db, 1).await?;
+        assert!(
+            !states.iter().any(|s| s.reorg_correction),
+            "No corrective states should be inserted"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_corrective_state_fields() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        create_test_channel(&db, 1).await?;
+
+        // Create states with specific values to verify they're copied correctly
+        create_channel_state(&db, 1, 50, 1, 2, [42u8; 12], 5, false).await?;
+        create_channel_state(&db, 1, 100, 0, 0, [99u8; 12], 9, false).await?;
+
+        let reorg_info = ReorgInfo {
+            detected_at_block: 150,
+            affected_block_range: (100, 100),
+            removed_log_count: 1,
+        };
+
+        let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            200,
+            &IndexerState::default(),
+        )
+        .await?;
+
+        assert_eq!(corrected_count, 1);
+
+        let states = get_channel_states(&db, 1).await?;
+        let corrective = states
+            .iter()
+            .find(|s| s.reorg_correction)
+            .expect("Corrective state not found");
+
+        // Verify all fields from last valid state are copied
+        assert_eq!(
+            corrective.balance,
+            vec![42u8; 12],
+            "Balance should match last valid state"
+        );
+        assert_eq!(corrective.status, 5, "Status should match last valid state");
+        assert_eq!(corrective.channel_id, 1, "Channel ID should match");
+
+        // Verify synthetic position fields
+        assert_eq!(corrective.published_block, 200, "Should use canonical block");
+        assert_eq!(corrective.published_tx_index, 0, "Should use synthetic tx_index 0");
+        assert_eq!(corrective.published_log_index, 0, "Should use synthetic log_index 0");
+
+        // Verify reorg correction flag
+        assert!(corrective.reorg_correction, "reorg_correction flag should be true");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_preserves_audit_trail() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        create_test_channel(&db, 1).await?;
+
+        // Create states
+        create_channel_state(&db, 1, 10, 0, 0, [1u8; 12], 1, false).await?;
+        create_channel_state(&db, 1, 50, 0, 0, [2u8; 12], 2, false).await?;
+        create_channel_state(&db, 1, 100, 0, 0, [3u8; 12], 3, false).await?;
+
+        let states_before = get_channel_states(&db, 1).await?;
+        let count_before = states_before.len();
+
+        let reorg_info = ReorgInfo {
+            detected_at_block: 150,
+            affected_block_range: (100, 100),
+            removed_log_count: 1,
+        };
+
+        Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            200,
+            &IndexerState::default(),
+        )
+        .await?;
+
+        let states_after = get_channel_states(&db, 1).await?;
+
+        // Verify audit trail is preserved - nothing deleted, only added
+        assert_eq!(
+            states_after.len(),
+            count_before + 1,
+            "Reorg should add corrective state, not delete"
+        );
+
+        // Verify all original states still exist
+        assert!(
+            states_after.iter().any(|s| s.published_block == 10),
+            "Block 10 state should still exist"
+        );
+        assert!(
+            states_after.iter().any(|s| s.published_block == 50),
+            "Block 50 state should still exist"
+        );
+        assert!(
+            states_after.iter().any(|s| s.published_block == 100),
+            "Block 100 state should still exist"
+        );
+
+        // Verify corrective state was added
+        assert!(
+            states_after
+                .iter()
+                .any(|s| s.reorg_correction && s.published_block == 200),
+            "Corrective state should be added"
+        );
+
+        Ok(())
+    }
+
+    // ==================== Edge Case Tests ====================
+
+    #[tokio::test]
+    async fn test_handle_reorg_large_block_range() -> anyhow::Result<()> {
+        // Test reorg spanning many blocks to verify performance
+        let db = BlokliDb::new_in_memory().await?;
+
+        create_test_channel(&db, 1).await?;
+
+        // Create states before reorg range
+        create_channel_state(&db, 1, 10, 0, 0, [1u8; 12], 1, false).await?;
+
+        // Create many states in reorg range (blocks 100-200)
+        for block in 100..=200 {
+            create_channel_state(&db, 1, block, 0, 0, [2u8; 12], 1, false).await?;
+        }
+
+        let reorg_info = ReorgInfo {
+            detected_at_block: 250,
+            affected_block_range: (100, 200),
+            removed_log_count: 101,
+        };
+
+        let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            250,
+            &IndexerState::default(),
+        )
+        .await?;
+
+        assert_eq!(
+            corrected_count, 1,
+            "Should correct one channel despite many affected blocks"
+        );
+
+        let states = get_channel_states(&db, 1).await?;
+        let corrective = states
+            .iter()
+            .find(|s| s.reorg_correction)
+            .expect("Corrective state not found");
+
+        // Should use last state before reorg (block 10)
+        assert_eq!(corrective.balance, vec![1u8; 12]);
+        assert_eq!(corrective.published_block, 250);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_with_no_prior_state() -> anyhow::Result<()> {
+        // Channel opened during reorg - should be skipped
+        let db = BlokliDb::new_in_memory().await?;
+
+        create_test_channel(&db, 1).await?;
+
+        // Only create state in reorg range
+        create_channel_state(&db, 1, 100, 0, 0, [1u8; 12], 1, false).await?;
+
+        let reorg_info = ReorgInfo {
+            detected_at_block: 150,
+            affected_block_range: (95, 105),
+            removed_log_count: 1,
+        };
+
+        let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            150,
+            &IndexerState::default(),
+        )
+        .await?;
+
+        assert_eq!(
+            corrected_count, 0,
+            "Should skip channel with no prior state (opened during reorg)"
+        );
+
+        let states = get_channel_states(&db, 1).await?;
+        assert!(
+            !states.iter().any(|s| s.reorg_correction),
+            "No corrective state should be added"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_same_block_different_positions() -> anyhow::Result<()> {
+        // Test correct position ordering within same block
+        let db = BlokliDb::new_in_memory().await?;
+
+        create_test_channel(&db, 1).await?;
+
+        // Create multiple states at same block with different positions
+        create_channel_state(&db, 1, 50, 0, 5, [1u8; 12], 1, false).await?;
+        create_channel_state(&db, 1, 50, 1, 0, [2u8; 12], 1, false).await?;
+        create_channel_state(&db, 1, 50, 1, 3, [3u8; 12], 1, false).await?;
+
+        // States in reorg range
+        create_channel_state(&db, 1, 100, 0, 0, [99u8; 12], 2, false).await?;
+
+        let reorg_info = ReorgInfo {
+            detected_at_block: 150,
+            affected_block_range: (100, 100),
+            removed_log_count: 1,
+        };
+
+        Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            200,
+            &IndexerState::default(),
+        )
+        .await?;
+
+        let states = get_channel_states(&db, 1).await?;
+        let corrective = states
+            .iter()
+            .find(|s| s.reorg_correction)
+            .expect("Corrective state not found");
+
+        // Should use latest state from block 50 (tx=1, log=3)
+        assert_eq!(
+            corrective.balance,
+            vec![3u8; 12],
+            "Should use state with highest position in block 50"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_watermark_boundary() -> anyhow::Result<()> {
+        // Test reorg exactly at boundary conditions
+        let db = BlokliDb::new_in_memory().await?;
+
+        create_test_channel(&db, 1).await?;
+
+        // State just before reorg start
+        create_channel_state(&db, 1, 99, 9, 9, [1u8; 12], 1, false).await?;
+
+        // State exactly at reorg start
+        create_channel_state(&db, 1, 100, 0, 0, [2u8; 12], 2, false).await?;
+
+        // State in middle of reorg range
+        create_channel_state(&db, 1, 105, 0, 0, [3u8; 12], 2, false).await?;
+
+        // State exactly at reorg end
+        create_channel_state(&db, 1, 110, 0, 0, [4u8; 12], 2, false).await?;
+
+        let reorg_info = ReorgInfo {
+            detected_at_block: 150,
+            affected_block_range: (100, 110),
+            removed_log_count: 3,
+        };
+
+        Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            200,
+            &IndexerState::default(),
+        )
+        .await?;
+
+        let states = get_channel_states(&db, 1).await?;
+        let corrective = states
+            .iter()
+            .find(|s| s.reorg_correction)
+            .expect("Corrective state not found");
+
+        // Should use last state before reorg (block 99)
+        assert_eq!(corrective.balance, vec![1u8; 12]);
+        assert_eq!(corrective.status, 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_duplicate_correction_attempt() -> anyhow::Result<()> {
+        // Test idempotency - second correction should work or be benign
+        let db = BlokliDb::new_in_memory().await?;
+
+        create_test_channel(&db, 1).await?;
+
+        create_channel_state(&db, 1, 50, 0, 0, [1u8; 12], 1, false).await?;
+        create_channel_state(&db, 1, 100, 0, 0, [2u8; 12], 2, false).await?;
+
+        let reorg_info = ReorgInfo {
+            detected_at_block: 150,
+            affected_block_range: (100, 100),
+            removed_log_count: 1,
+        };
+
+        // First correction
+        let count1 = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            200,
+            &IndexerState::default(),
+        )
+        .await?;
+        assert_eq!(count1, 1);
+
+        let states_after_first = get_channel_states(&db, 1).await?;
+        let corrections_count = states_after_first.iter().filter(|s| s.reorg_correction).count();
+
+        // Second correction attempt at different canonical block
+        let count2 = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            201,
+            &IndexerState::default(),
+        )
+        .await?;
+        assert_eq!(count2, 1, "Second correction should also succeed");
+
+        let states_after_second = get_channel_states(&db, 1).await?;
+        let corrections_count_2 = states_after_second.iter().filter(|s| s.reorg_correction).count();
+
+        assert_eq!(
+            corrections_count_2,
+            corrections_count + 1,
+            "Should add another corrective state"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_concurrent_channels() -> anyhow::Result<()> {
+        // Test with many channels affected simultaneously
+        let db = BlokliDb::new_in_memory().await?;
+
+        let channel_count = 50; // Use moderate number for test speed
+
+        // Create many channels with states
+        for i in 1..=channel_count {
+            create_test_channel(&db, i).await?;
+            create_channel_state(&db, i, 50, 0, 0, [1u8; 12], 1, false).await?;
+            create_channel_state(&db, i, 100, 0, 0, [2u8; 12], 2, false).await?;
+        }
+
+        let reorg_info = ReorgInfo {
+            detected_at_block: 150,
+            affected_block_range: (100, 100),
+            removed_log_count: channel_count as usize,
+        };
+
+        let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            200,
+            &IndexerState::default(),
+        )
+        .await?;
+
+        assert_eq!(
+            corrected_count as i64, channel_count,
+            "Should correct all affected channels"
+        );
+
+        // Verify each channel has corrective state
+        for i in 1..=channel_count {
+            let states = get_channel_states(&db, i).await?;
+            let has_correction = states.iter().any(|s| s.reorg_correction);
+            assert!(has_correction, "Channel {} should have corrective state", i);
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_handle_reorg_with_reorg_correction_states() -> anyhow::Result<()> {
+        // Channel already has reorg correction from previous reorg
+        let db = BlokliDb::new_in_memory().await?;
+
+        create_test_channel(&db, 1).await?;
+
+        // Initial state
+        create_channel_state(&db, 1, 50, 0, 0, [1u8; 12], 1, false).await?;
+
+        // Previous reorg correction
+        create_channel_state(&db, 1, 150, 0, 0, [2u8; 12], 1, true).await?;
+
+        // New states after first reorg
+        create_channel_state(&db, 1, 200, 0, 0, [3u8; 12], 2, false).await?;
+
+        // Second reorg affecting block 200
+        let reorg_info = ReorgInfo {
+            detected_at_block: 250,
+            affected_block_range: (200, 200),
+            removed_log_count: 1,
+        };
+
+        Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            250,
+            &IndexerState::default(),
+        )
+        .await?;
+
+        let states = get_channel_states(&db, 1).await?;
+
+        // Should now have 2 corrective states
+        let correction_count = states.iter().filter(|s| s.reorg_correction).count();
+        assert_eq!(correction_count, 2, "Should have both reorg corrections");
+
+        // Latest correction should reference previous correction state
+        let latest_correction = states
+            .iter()
+            .filter(|s| s.reorg_correction)
+            .max_by_key(|s| s.published_block)
+            .unwrap();
+
+        assert_eq!(
+            latest_correction.balance,
+            vec![2u8; 12],
+            "Should use previous correction as base"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_temporal_query_at_reorg_boundary() -> anyhow::Result<()> {
+        use blokli_db::{TargetDb, events::BlockPosition, state_queries::get_channel_state_at};
+
+        // Test querying at exact reorg correction position
+        let db = BlokliDb::new_in_memory().await?;
+
+        create_test_channel(&db, 1).await?;
+
+        create_channel_state(&db, 1, 50, 0, 0, [1u8; 12], 1, false).await?;
+        create_channel_state(&db, 1, 100, 0, 0, [2u8; 12], 2, false).await?;
+
+        let reorg_info = ReorgInfo {
+            detected_at_block: 150,
+            affected_block_range: (100, 100),
+            removed_log_count: 1,
+        };
+
+        Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            200,
+            &IndexerState::default(),
+        )
+        .await?;
+
+        let conn = db.conn(TargetDb::Index);
+
+        // Query at exact corrective state position (200, 0, 0)
+        let position = BlockPosition {
+            block: 200,
+            tx_index: 0,
+            log_index: 0,
+        };
+
+        let state = get_channel_state_at(conn, 1, position).await?;
+        assert!(state.is_some(), "Should find corrective state");
+
+        let found_state = state.unwrap();
+        assert_eq!(
+            found_state.balance,
+            vec![1u8; 12],
+            "Should return corrective state balance"
+        );
+        assert!(found_state.reorg_correction, "Should be reorg correction state");
+        assert_eq!(found_state.published_block, 200, "Should be at synthetic position");
+        assert_eq!(found_state.published_tx_index, 0, "Should use synthetic tx_index 0");
+        assert_eq!(found_state.published_log_index, 0, "Should use synthetic log_index 0");
 
         Ok(())
     }

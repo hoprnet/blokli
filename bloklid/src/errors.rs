@@ -12,7 +12,7 @@ pub enum BloklidError {
     NonSpecific(String),
 
     #[error("database error: {0}")]
-    Database(#[from] blokli_db_sql::errors::DbSqlError),
+    Database(#[from] blokli_db::errors::DbSqlError),
 
     #[error("chain error: {0}")]
     Chain(#[from] blokli_chain_api::errors::BlokliChainError),

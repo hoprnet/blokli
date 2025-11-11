@@ -1,22 +1,47 @@
 //! GraphQL query root and resolver implementations
 
-use async_graphql::{Context, Object, Result};
+use std::sync::Arc;
+
+use async_graphql::{Context, Object, Result, Union};
 use blokli_api_types::{
-    Account, ChainInfo, Channel, ContractAddressMap, Hex32, HoprBalance, NativeBalance, SafeHoprAllowance,
-    TokenValueString,
+    Account, ChainInfo, Channel, ContractAddressMap, Hex32, HoprBalance, InvalidAddressError,
+    InvalidTransactionIdError, NativeBalance, QueryFailedError, SafeHoprAllowance, TokenValueString, Transaction,
 };
+use blokli_chain_api::transaction_store::TransactionStore;
+use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
 use blokli_chain_types::ContractAddresses;
-use blokli_db_entity::conversions::balances::hopr_balance_to_string;
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter};
-
-use crate::{
-    conversions::{channel_from_model, channel_status_to_i8, hopr_balance_from_model, native_balance_from_model},
-    validation::validate_eth_address,
+use blokli_db_entity::conversions::{
+    account_aggregation::fetch_accounts_with_filters,
+    balances::{hopr_balance_to_string, string_to_address},
+    channel_aggregation::fetch_channels_with_state,
 };
+use hopr_primitive_types::primitives::Address;
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
 
-/// Helper function to convert binary domain separator to Hex32 format
-fn bytes_to_hex32(bytes: &[u8]) -> Hex32 {
-    Hex32(format!("0x{}", hex::encode(bytes)))
+use crate::{mutation::TransactionResult, validation::validate_eth_address};
+
+/// Result type for HOPR balance queries
+#[derive(Union)]
+pub enum HoprBalanceResult {
+    Balance(HoprBalance),
+    InvalidAddress(InvalidAddressError),
+    QueryFailed(QueryFailedError),
+}
+
+/// Result type for native balance queries
+#[derive(Union)]
+pub enum NativeBalanceResult {
+    Balance(NativeBalance),
+    InvalidAddress(InvalidAddressError),
+    QueryFailed(QueryFailedError),
+}
+
+/// Result type for Safe HOPR allowance queries
+#[derive(Union)]
+pub enum SafeHoprAllowanceResult {
+    Allowance(SafeHoprAllowance),
+    InvalidAddress(InvalidAddressError),
+    QueryFailed(QueryFailedError),
 }
 
 /// Root query type providing read-only access to indexed blockchain data
@@ -32,12 +57,10 @@ impl QueryRoot {
     async fn accounts(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Filter by account keyid")] keyid: Option<i32>,
+        #[graphql(desc = "Filter by account keyid")] keyid: Option<i64>,
         #[graphql(desc = "Filter by packet key (peer ID format)")] packet_key: Option<String>,
         #[graphql(desc = "Filter by chain key (hexadecimal format)")] chain_key: Option<String>,
     ) -> Result<Vec<Account>> {
-        use blokli_db_entity::conversions::account_aggregation::fetch_accounts_with_filters;
-
         // Require at least one identity filter to prevent excessive data retrieval
         // Note: status alone is not sufficient as it could still return thousands of channels
         if keyid.is_none() && packet_key.is_none() && chain_key.is_none() {
@@ -81,13 +104,10 @@ impl QueryRoot {
     async fn account_count(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Filter by account keyid")] keyid: Option<i32>,
+        #[graphql(desc = "Filter by account keyid")] keyid: Option<i64>,
         #[graphql(desc = "Filter by packet key (peer ID format)")] packet_key: Option<String>,
         #[graphql(desc = "Filter by chain key (hexadecimal format)")] chain_key: Option<String>,
     ) -> Result<i32> {
-        use blokli_db_entity::conversions::balances::string_to_address;
-        use sea_orm::PaginatorTrait;
-
         // Validate chain_key before DB access
         if let Some(ref ck) = chain_key {
             validate_eth_address(ck)?;
@@ -137,8 +157,6 @@ impl QueryRoot {
             blokli_api_types::ChannelStatus,
         >,
     ) -> Result<i32> {
-        use sea_orm::PaginatorTrait;
-
         let db = ctx.data::<DatabaseConnection>()?;
 
         let mut query = blokli_db_entity::channel::Entity::find();
@@ -155,8 +173,13 @@ impl QueryRoot {
             query = query.filter(blokli_db_entity::channel::Column::ConcreteChannelId.eq(channel_id));
         }
 
-        if let Some(status_filter) = status {
-            query = query.filter(blokli_db_entity::channel::Column::Status.eq(channel_status_to_i8(status_filter)));
+        // TODO(Phase 2-3): Status filtering requires querying channel_state table
+        // Status column has been moved to channel_state table
+        if let Some(_status_filter) = status {
+            return Err(async_graphql::Error::new(
+                "Channel status filtering is temporarily unavailable during schema migration. Use other filters \
+                 (sourceKeyId, destinationKeyId, or concreteChannelId) without status.",
+            ));
         }
 
         let count_u64 = query.count(db).await?;
@@ -177,8 +200,8 @@ impl QueryRoot {
     async fn channels(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Filter by source node keyid")] source_key_id: Option<i32>,
-        #[graphql(desc = "Filter by destination node keyid")] destination_key_id: Option<i32>,
+        #[graphql(desc = "Filter by source node keyid")] source_key_id: Option<i64>,
+        #[graphql(desc = "Filter by destination node keyid")] destination_key_id: Option<i64>,
         #[graphql(desc = "Filter by concrete channel ID (hexadecimal format)")] concrete_channel_id: Option<String>,
         #[graphql(desc = "Filter by channel status (optional, combine with identity filters)")] status: Option<
             blokli_api_types::ChannelStatus,
@@ -198,85 +221,141 @@ impl QueryRoot {
 
         let db = ctx.data::<DatabaseConnection>()?;
 
-        let mut query = blokli_db_entity::channel::Entity::find();
+        // Convert GraphQL ChannelStatus to database i8 representation if status filter is provided
+        let status_i8 = status.map(|s| match s {
+            blokli_api_types::ChannelStatus::Closed => 0,
+            blokli_api_types::ChannelStatus::Open => 1,
+            blokli_api_types::ChannelStatus::PendingToClose => 2,
+        });
 
-        // Apply source filter if provided
-        if let Some(src_keyid) = source_key_id {
-            query = query.filter(blokli_db_entity::channel::Column::Source.eq(src_keyid));
-        }
+        // Fetch channels with state using optimized batch loading (2 queries total)
+        let aggregated_channels =
+            fetch_channels_with_state(db, source_key_id, destination_key_id, concrete_channel_id, status_i8).await?;
 
-        // Apply destination filter if provided
-        if let Some(dst_keyid) = destination_key_id {
-            query = query.filter(blokli_db_entity::channel::Column::Destination.eq(dst_keyid));
-        }
+        // Convert to GraphQL Channel type
+        let result = aggregated_channels
+            .into_iter()
+            .map(|agg| -> Result<Channel> {
+                // Convert status from i8 to ChannelStatus enum
+                let status = match agg.status {
+                    0 => blokli_api_types::ChannelStatus::Closed,
+                    1 => blokli_api_types::ChannelStatus::Open,
+                    2 => blokli_api_types::ChannelStatus::PendingToClose,
+                    unknown => {
+                        return Err(async_graphql::Error::new(format!(
+                            "Invalid channel status value {} in database for channel {}",
+                            unknown, agg.concrete_channel_id
+                        )));
+                    }
+                };
 
-        // Apply concrete channel ID filter if provided
-        if let Some(channel_id) = concrete_channel_id {
-            query = query.filter(blokli_db_entity::channel::Column::ConcreteChannelId.eq(channel_id));
-        }
+                // Convert epoch from i64 to i32 with validation
+                // Epoch should fit in u24, so i32 should always be safe, but propagate overflow errors
+                let epoch = i32::try_from(agg.epoch).map_err(|e| {
+                    async_graphql::Error::new(format!(
+                        "Channel epoch {} out of range for channel {}: {}",
+                        agg.epoch, agg.concrete_channel_id, e
+                    ))
+                })?;
 
-        // Apply status filter if provided
-        if let Some(status_filter) = status {
-            query = query.filter(blokli_db_entity::channel::Column::Status.eq(channel_status_to_i8(status_filter)));
-        }
+                // Convert ticket_index from i64 to u64 (should always be non-negative)
+                let ticket_index = blokli_api_types::UInt64(u64::try_from(agg.ticket_index).map_err(|e| {
+                    async_graphql::Error::new(format!(
+                        "Channel ticket_index {} is negative for channel {}: {}",
+                        agg.ticket_index, agg.concrete_channel_id, e
+                    ))
+                })?);
 
-        let channels = query.all(db).await?;
+                Ok(Channel {
+                    concrete_channel_id: agg.concrete_channel_id,
+                    source: agg.source,
+                    destination: agg.destination,
+                    balance: TokenValueString(agg.balance),
+                    status,
+                    epoch,
+                    ticket_index,
+                    closure_time: agg.closure_time,
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
 
-        Ok(channels.into_iter().map(channel_from_model).collect())
+        Ok(result)
     }
 
     /// Retrieve HOPR token balance for a specific address
     ///
-    /// Returns None if no balance exists for the address.
+    /// This query makes a direct RPC call to the blockchain to get the current HOPR token balance.
+    /// No database storage is used - balance is fetched directly from the chain.
     #[graphql(name = "hoprBalance")]
     async fn hopr_balance(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "On-chain address to query (hexadecimal format)")] address: String,
-    ) -> Result<Option<HoprBalance>> {
-        use blokli_db_entity::conversions::balances::string_to_address;
-
+    ) -> Result<HoprBalanceResult> {
         // Validate address format
-        validate_eth_address(&address)?;
+        if let Err(e) = validate_eth_address(&address) {
+            return Ok(HoprBalanceResult::InvalidAddress(InvalidAddressError {
+                code: "INVALID_ADDRESS".to_string(),
+                message: e.message,
+                address,
+            }));
+        }
 
-        let db = ctx.data::<DatabaseConnection>()?;
+        // Convert hex string address to Address type
+        let parsed_address = Address::new(&string_to_address(&address));
 
-        // Convert hex string address to binary for database query
-        let binary_address = string_to_address(&address);
+        // Get RPC operations from context - using ReqwestClient as the concrete type
+        let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
 
-        let balance = blokli_db_entity::hopr_balance::Entity::find()
-            .filter(blokli_db_entity::hopr_balance::Column::Address.eq(binary_address))
-            .one(db)
-            .await?;
-
-        Ok(balance.map(hopr_balance_from_model))
+        // Make RPC call to get balance from blockchain
+        match rpc.get_hopr_balance(parsed_address).await {
+            Ok(balance) => Ok(HoprBalanceResult::Balance(HoprBalance {
+                address,
+                balance: TokenValueString(balance.to_string()),
+            })),
+            Err(e) => Ok(HoprBalanceResult::QueryFailed(QueryFailedError {
+                code: "QUERY_FAILED".to_string(),
+                message: format!("Failed to query HOPR balance from RPC: {}", e),
+            })),
+        }
     }
 
     /// Retrieve native token balance for a specific address
     ///
-    /// Returns None if no balance exists for the address.
+    /// This query makes a direct RPC call to the blockchain to get the current native token (xDAI) balance.
+    /// No database storage is used - balance is fetched directly from the chain.
     #[graphql(name = "nativeBalance")]
     async fn native_balance(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "On-chain address to query (hexadecimal format)")] address: String,
-    ) -> Result<Option<NativeBalance>> {
-        use blokli_db_entity::conversions::balances::string_to_address;
-
+    ) -> Result<NativeBalanceResult> {
         // Validate address format
-        validate_eth_address(&address)?;
+        if let Err(e) = validate_eth_address(&address) {
+            return Ok(NativeBalanceResult::InvalidAddress(InvalidAddressError {
+                code: "INVALID_ADDRESS".to_string(),
+                message: e.message,
+                address,
+            }));
+        }
 
-        let db = ctx.data::<DatabaseConnection>()?;
+        // Convert hex string address to Address type
+        let parsed_address = Address::new(&string_to_address(&address));
 
-        // Convert hex string address to binary for database query
-        let binary_address = string_to_address(&address);
+        // Get RPC operations from context - using ReqwestClient as the concrete type
+        let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
 
-        let balance = blokli_db_entity::native_balance::Entity::find()
-            .filter(blokli_db_entity::native_balance::Column::Address.eq(binary_address))
-            .one(db)
-            .await?;
-
-        Ok(balance.map(native_balance_from_model))
+        // Make RPC call to get native balance from blockchain
+        match rpc.get_xdai_balance(parsed_address).await {
+            Ok(balance) => Ok(NativeBalanceResult::Balance(NativeBalance {
+                address,
+                balance: TokenValueString(balance.to_string()),
+            })),
+            Err(e) => Ok(NativeBalanceResult::QueryFailed(QueryFailedError {
+                code: "QUERY_FAILED".to_string(),
+                message: format!("Failed to query native balance from RPC: {}", e),
+            })),
+        }
     }
 
     /// Retrieve Safe HOPR token allowance for a specific Safe address
@@ -284,30 +363,44 @@ impl QueryRoot {
     /// Returns the wxHOPR token allowance that the specified Safe contract has granted
     /// to the HOPR channels contract.
     ///
-    /// **Note:** Currently returns None as indexer/database support is not yet implemented.
-    /// Returns None if no allowance data exists for the address.
+    /// This query makes a direct RPC call to the blockchain to get the current allowance.
+    /// No database storage is used - allowance is fetched directly from the chain.
     #[graphql(name = "safeHoprAllowance")]
     async fn safe_hopr_allowance(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Safe contract address to query (hexadecimal format)")] address: String,
-    ) -> Result<Option<SafeHoprAllowance>> {
+    ) -> Result<SafeHoprAllowanceResult> {
         // Validate address format
-        validate_eth_address(&address)?;
+        if let Err(e) = validate_eth_address(&address) {
+            return Ok(SafeHoprAllowanceResult::InvalidAddress(InvalidAddressError {
+                code: "INVALID_ADDRESS".to_string(),
+                message: e.message,
+                address,
+            }));
+        }
 
-        // Prevent unused variable warning
-        let _db = ctx.data::<DatabaseConnection>()?;
+        // Convert hex string address to Address type
+        let safe_address = Address::new(&string_to_address(&address));
 
-        // FIXME: Implement allowance fetching once indexer and database support is added
-        // The indexer needs to be extended to fetch and store Safe allowances for arbitrary addresses
-        // Database schema needs a table to store allowance data indexed by Safe address
-        //
-        // Implementation should:
-        // 1. Query allowance table by Safe address
-        // 2. Return SafeHoprAllowance { address, allowance } if data exists
-        // 3. Return None if no allowance data exists for the address
+        // Get contract addresses from context to access channels contract
+        let contract_addresses = ctx.data::<ContractAddresses>()?;
+        let channels_address = contract_addresses.channels;
 
-        Ok(None)
+        // Get RPC operations from context - using ReqwestClient as the concrete type
+        let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
+
+        // Make RPC call to get allowance from blockchain
+        match rpc.get_hopr_allowance(safe_address, channels_address).await {
+            Ok(allowance) => Ok(SafeHoprAllowanceResult::Allowance(SafeHoprAllowance {
+                address,
+                allowance: TokenValueString(allowance.to_string()),
+            })),
+            Err(e) => Ok(SafeHoprAllowanceResult::QueryFailed(QueryFailedError {
+                code: "QUERY_FAILED".to_string(),
+                message: format!("Failed to query HOPR allowance from RPC: {}", e),
+            })),
+        }
     }
 
     /// Retrieve chain information
@@ -348,9 +441,36 @@ impl QueryRoot {
         let min_ticket_winning_probability = chain_info.min_incoming_ticket_win_prob as f64;
 
         // Convert domain separators from binary to hex strings
-        let channel_dst = chain_info.channels_dst.as_ref().map(|b| bytes_to_hex32(b));
-        let ledger_dst = chain_info.ledger_dst.as_ref().map(|b| bytes_to_hex32(b));
-        let safe_registry_dst = chain_info.safe_registry_dst.as_ref().map(|b| bytes_to_hex32(b));
+        let channel_dst = chain_info
+            .channels_dst
+            .as_ref()
+            .map(|b| -> Result<Hex32> {
+                let bytes: &[u8; 32] = b.as_slice().try_into().map_err(|_| {
+                    async_graphql::Error::new(format!("channels_dst must be 32 bytes, got {} bytes", b.len()))
+                })?;
+                Ok(Hex32::from(bytes))
+            })
+            .transpose()?;
+        let ledger_dst = chain_info
+            .ledger_dst
+            .as_ref()
+            .map(|b| -> Result<Hex32> {
+                let bytes: &[u8; 32] = b.as_slice().try_into().map_err(|_| {
+                    async_graphql::Error::new(format!("ledger_dst must be 32 bytes, got {} bytes", b.len()))
+                })?;
+                Ok(Hex32::from(bytes))
+            })
+            .transpose()?;
+        let safe_registry_dst = chain_info
+            .safe_registry_dst
+            .as_ref()
+            .map(|b| -> Result<Hex32> {
+                let bytes: &[u8; 32] = b.as_slice().try_into().map_err(|_| {
+                    async_graphql::Error::new(format!("safe_registry_dst must be 32 bytes, got {} bytes", b.len()))
+                })?;
+                Ok(Hex32::from(bytes))
+            })
+            .transpose()?;
 
         // Convert channel closure grace period from i64 to u64 with validation
         let channel_closure_grace_period = chain_info
@@ -391,6 +511,43 @@ impl QueryRoot {
     /// Returns the current version of the blokli-api package
     async fn version(&self) -> &str {
         env!("CARGO_PKG_VERSION")
+    }
+
+    /// Retrieve transaction status by ID
+    ///
+    /// Returns the current status of a previously submitted transaction.
+    /// Returns Error with code INVALID_TRANSACTION_ID if ID format is invalid.
+    /// Returns None if transaction ID is not found.
+    async fn transaction(&self, ctx: &Context<'_>, id: async_graphql::ID) -> Result<Option<TransactionResult>> {
+        // Parse UUID from ID string
+        let uuid = match uuid::Uuid::parse_str(id.as_str()) {
+            Ok(uuid) => uuid,
+            Err(_) => {
+                return Ok(Some(TransactionResult::InvalidId(InvalidTransactionIdError {
+                    code: "INVALID_TRANSACTION_ID".to_string(),
+                    message: format!("Invalid transaction ID format: {}", id.as_str()),
+                    transaction_id: id.to_string(),
+                })));
+            }
+        };
+
+        // Get transaction store from context
+        let store = ctx.data::<Arc<TransactionStore>>()?;
+
+        // Try to retrieve the transaction
+        match store.get(uuid) {
+            Ok(record) => {
+                // Convert to GraphQL Transaction type
+                let transaction = Transaction {
+                    id: record.id.to_string(),
+                    status: crate::conversions::store_status_to_graphql(record.status),
+                    submitted_at: record.submitted_at,
+                    transaction_hash: record.transaction_hash.map(Into::into),
+                };
+                Ok(Some(TransactionResult::Transaction(transaction)))
+            }
+            Err(_) => Ok(None), // Transaction not found
+        }
     }
 }
 

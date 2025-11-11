@@ -5,21 +5,19 @@ resolver = "2"
 members = [
   "api",
   "bloklid",
-  "chain/actions",
   "chain/api",
   "chain/indexer",
   "chain/rpc",
   "chain/types",
   "client",
-  "db/api",
+  "db",
   "db/entity",
   "db/migration",
-  "db/sql",
   "types",
 ]
 
 [workspace.dependencies]
-alloy = { version = "=1.0.37", default-features = false, features = [
+alloy = { version = "1.0.42", default-features = false, features = [
   "contract",
   "essentials",
   "json-rpc",
@@ -42,16 +40,15 @@ axum = { version = "0.8.4", features = ["http2", "ws"] }
 axum-extra = { version = "0.10.1", features = ["query"] }
 backon = { version = "1.5.2", default-features = false }
 bincode = "2.0.1"
+blokli-api = { path = "api" }
 blokli-api-types = { path = "types" }
-blokli-chain-actions = { path = "chain/actions" }
 blokli-chain-api = { path = "chain/api" }
 blokli-chain-indexer = { path = "chain/indexer" }
 blokli-chain-rpc = { path = "chain/rpc" }
 blokli-chain-types = { path = "chain/types" }
-blokli-db-api = { path = "db/api" }
+blokli-db = { path = "db" }
 blokli-db-entity = { path = "db/entity" }
 blokli-db-migration = { path = "db/migration" }
-blokli-db-sql = { path = "db/sql" }
 chrono = "0.4.42"
 clap = { version = "4.5.47", features = ["derive", "env", "string"] }
 cynic = "3.12.0"
@@ -65,7 +62,7 @@ futures-util = "0.3.31"
 hex = "0.4.3"
 hex-literal = "1.0.0"
 hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet" }
-hopr-bindings = { git = "https://github.com/hoprnet/hoprnet" }
+hopr-bindings = { git = "https://github.com/hoprnet/contracts", branch = "main" }
 hopr-chain-config = { git = "https://github.com/hoprnet/hoprnet" }
 hopr-crypto-packet = { git = "https://github.com/hoprnet/hoprnet" }
 hopr-crypto-random = { git = "https://github.com/hoprnet/hoprnet" }
@@ -91,10 +88,11 @@ moka = { version = "0.12.10", features = ["future"] }
 multiaddr = "0.18.2"
 num_enum = "0.7.4"
 parking_lot = "0.12.5"
-primitive-types = { version = "0.13.1", features = ["serde"] }
+primitive-types = { version = "0.14.0", features = ["serde"] }
 rand = "0.9.2" # ignored in renovate, cannot be updated, dependencies reference old ones
 reqwest = { version = "0.12.23", features = ["json"] }
 ringbuffer = "0.16.0"
+rstest = "0.26.1"
 rust-stream-ext-concurrent = "1.0.0"
 rustls = { version = "0.23", default-features = false, features = ["std"] }
 rustls-pemfile = "2.1"
@@ -115,10 +113,8 @@ sea-orm-migration = { version = "2.0.0-rc.9", default-features = false, features
   "with-chrono",
 ] }
 sea-query = { version = "1.0.0-rc.14", default-features = false }
-sea-query-binder = { version = "0.8.0-rc.7", default-features = false, features = [
-  "sqlx-postgres",
-  "with-chrono",
-] }
+# Removed: sea-query-binder is incompatible with sea-query 1.0.0-rc.14
+# SeaORM 2.0.0-rc.9 uses its own internal sea-query-sqlx for database integration
 seaography = { version = "2.0.0-rc.2", features = ["with-chrono"] }
 semver = "1.0.26"
 serde = { version = "1.0", features = ["derive"] }
@@ -159,6 +155,7 @@ tracing-subscriber = { version = "0.3.20", features = [
 ] }
 tracing-test = { version = "0.2.5", features = ["no-env-filter"] }
 url = { version = "2.5.7", features = ["serde"] }
+uuid = { version = "1.11.0", features = ["serde", "v4"] }
 validator = { version = "0.20.0", features = ["derive"] }
 
 [profile.dev]
@@ -194,5 +191,5 @@ cast_sign_loss           = "deny"
 
 # faster insta test runs
 [profile.dev.package]
-insta.opt-level = 3
+insta.opt-level   = 3
 similar.opt-level = 3

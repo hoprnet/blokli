@@ -14,7 +14,7 @@ runtime-tokio = [
   "blokli-chain-api/runtime-tokio",
   "blokli-chain-indexer/runtime-tokio",
   "blokli-chain-rpc/runtime-tokio",
-  "blokli-db-sql/runtime-tokio",
+  "blokli-db/runtime-tokio",
 ]
 
 [dependencies]
@@ -39,13 +39,12 @@ url                = { workspace = true }
 validator          = { workspace = true }
 
 # Local dependencies
-blokli-api           = { path = "../api" }
-blokli-chain-api     = { path = "../chain/api" }
-blokli-chain-indexer = { path = "../chain/indexer" }
-blokli-chain-rpc     = { path = "../chain/rpc" }
-blokli-chain-types   = { path = "../chain/types" }
-blokli-db-api        = { path = "../db/api" }
-blokli-db-sql        = { path = "../db/sql" }
+blokli-api           = { workspace = true }
+blokli-chain-api     = { workspace = true }
+blokli-chain-indexer = { workspace = true }
+blokli-chain-rpc     = { workspace = true }
+blokli-chain-types   = { workspace = true }
+blokli-db            = { workspace = true }
 
 # HOPR dependencies
 hopr-chain-config    = { workspace = true }

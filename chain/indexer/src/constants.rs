@@ -7,19 +7,15 @@ pub const LOGS_SNAPSHOT_DOWNLOADER_MAX_RETRIES: u32 = 3;
 pub mod topics {
     use alloy::{primitives::B256, sol_types::SolEvent};
     use hopr_bindings::{
-        hoprannouncementsevents::HoprAnnouncementsEvents::{AddressAnnouncement, KeyBinding, RevokeAnnouncement},
-        hoprchannels::HoprChannels::LedgerDomainSeparatorUpdated,
-        hoprchannelsevents::HoprChannelsEvents::{
+        hopr_announcements_events::HoprAnnouncementsEvents::{AddressAnnouncement, KeyBinding, RevokeAnnouncement},
+        hopr_channels::HoprChannels::LedgerDomainSeparatorUpdated,
+        hopr_channels_events::HoprChannelsEvents::{
             ChannelBalanceDecreased, ChannelBalanceIncreased, ChannelClosed, ChannelOpened, DomainSeparatorUpdated,
             OutgoingChannelClosureInitiated, TicketRedeemed,
         },
-        hoprnetworkregistryevents::HoprNetworkRegistryEvents::{
-            Deregistered, DeregisteredByManager, EligibilityUpdated, NetworkRegistryStatusUpdated, Registered,
-            RegisteredByManager, RequirementUpdated,
-        },
-        hoprnodesaferegistryevents::HoprNodeSafeRegistryEvents::{DergisteredNodeSafe, RegisteredNodeSafe},
-        hoprticketpriceoracleevents::HoprTicketPriceOracleEvents::TicketPriceUpdated,
-        hoprwinningprobabilityoracleevents::HoprWinningProbabilityOracleEvents::WinProbUpdated,
+        hopr_node_safe_registry_events::HoprNodeSafeRegistryEvents::{DeregisteredNodeSafe, RegisteredNodeSafe},
+        hopr_ticket_price_oracle_events::HoprTicketPriceOracleEvents::TicketPriceUpdated,
+        hopr_winning_probability_oracle_events::HoprWinningProbabilityOracleEvents::WinProbUpdated,
     };
 
     pub fn channel() -> Vec<B256> {
@@ -35,18 +31,6 @@ pub mod topics {
         ]
     }
 
-    pub fn network_registry() -> Vec<B256> {
-        vec![
-            DeregisteredByManager::SIGNATURE_HASH,
-            Deregistered::SIGNATURE_HASH,
-            EligibilityUpdated::SIGNATURE_HASH,
-            NetworkRegistryStatusUpdated::SIGNATURE_HASH,
-            RegisteredByManager::SIGNATURE_HASH,
-            Registered::SIGNATURE_HASH,
-            RequirementUpdated::SIGNATURE_HASH,
-        ]
-    }
-
     pub fn announcement() -> Vec<B256> {
         vec![
             AddressAnnouncement::SIGNATURE_HASH,
@@ -58,8 +42,8 @@ pub mod topics {
     pub fn node_safe_registry() -> Vec<B256> {
         vec![
             RegisteredNodeSafe::SIGNATURE_HASH,
-            DergisteredNodeSafe::SIGNATURE_HASH,
-            hopr_bindings::hoprnodesaferegistryevents::HoprNodeSafeRegistryEvents::DomainSeparatorUpdated::SIGNATURE_HASH,
+            DeregisteredNodeSafe::SIGNATURE_HASH,
+            hopr_bindings::hopr_node_safe_registry_events::HoprNodeSafeRegistryEvents::DomainSeparatorUpdated::SIGNATURE_HASH,
         ]
     }
 
@@ -69,6 +53,25 @@ pub mod topics {
 
     pub fn winning_prob_oracle() -> Vec<B256> {
         vec![WinProbUpdated::SIGNATURE_HASH]
+    }
+
+    pub fn token() -> Vec<B256> {
+        use hopr_bindings::hopr_token::HoprToken::{
+            Approval, AuthorizedOperator, Burned, Minted, RevokedOperator, RoleAdminChanged, RoleGranted, RoleRevoked,
+            Sent, Transfer,
+        };
+        vec![
+            Transfer::SIGNATURE_HASH,
+            Approval::SIGNATURE_HASH,
+            AuthorizedOperator::SIGNATURE_HASH,
+            Burned::SIGNATURE_HASH,
+            Minted::SIGNATURE_HASH,
+            RevokedOperator::SIGNATURE_HASH,
+            RoleAdminChanged::SIGNATURE_HASH,
+            RoleGranted::SIGNATURE_HASH,
+            RoleRevoked::SIGNATURE_HASH,
+            Sent::SIGNATURE_HASH,
+        ]
     }
 
     pub fn module_implementation() -> Vec<B256> {
