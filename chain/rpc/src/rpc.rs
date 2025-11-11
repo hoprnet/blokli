@@ -233,8 +233,11 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         // Call nonce() method on Safe contract
         let nonce = safe_contract.nonce().call().await?;
 
-        // Convert U256 to u64 (nonce should always fit in u64)
-        Ok(nonce.to())
+        // Convert U256 to u64 with explicit overflow handling
+        // While practically impossible (requires ~584 billion years at 1 tx/sec to reach u64::MAX),
+        // proper error handling follows Rust best practices and avoids potential panics
+        let nonce_u64 = nonce.try_into().map_err(|_| RpcError::SafeNonceOverflow(nonce))?;
+        Ok(nonce_u64)
     }
 }
 

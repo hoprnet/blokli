@@ -7,6 +7,18 @@ use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder
 
 use crate::codegen::{account, account_state, announcement};
 
+fn bytes_to_address_hex(bytes: &[u8]) -> Result<String, sea_orm::DbErr> {
+    if bytes.len() != 20 {
+        return Err(sea_orm::DbErr::Custom(format!(
+            "Invalid address length: expected 20 bytes, got {}",
+            bytes.len()
+        )));
+    }
+    let mut addr_bytes = [0u8; 20];
+    addr_bytes.copy_from_slice(bytes);
+    Ok(Address::new(&addr_bytes).to_hex())
+}
+
 /// Aggregated account data with all related information
 #[derive(Debug, Clone)]
 pub struct AggregatedAccount {
@@ -84,30 +96,27 @@ where
     }
 
     // 3. Aggregate all data
-    let result = accounts
+    accounts
         .into_iter()
         .map(|account| {
             let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
 
-            // Convert chain_key to string
-            let chain_key_str = Address::new(&account.chain_key).to_hex();
+            let chain_key_str = bytes_to_address_hex(&account.chain_key)?;
 
-            // Convert safe_address to string if present
             let safe_address_str = safe_address_map
                 .get(&account.id)
-                .map(|addr| Address::new(addr).to_hex());
+                .map(|addr| bytes_to_address_hex(addr))
+                .transpose()?;
 
-            AggregatedAccount {
+            Ok(AggregatedAccount {
                 keyid: account.id,
                 chain_key: chain_key_str,
                 packet_key: account.packet_key,
                 safe_address: safe_address_str,
                 multi_addresses,
-            }
+            })
         })
-        .collect();
-
-    Ok(result)
+        .collect()
 }
 
 /// Fetch accounts for specific addresses with their related data using optimized batch loading
@@ -198,30 +207,27 @@ where
     }
 
     // 3. Aggregate all data
-    let result = accounts
+    accounts
         .into_iter()
         .map(|account| {
             let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
 
-            // Convert chain_key to string
-            let chain_key_str = Address::new(&account.chain_key).to_hex();
+            let chain_key_str = bytes_to_address_hex(&account.chain_key)?;
 
-            // Convert safe_address to string if present
             let safe_address_str = safe_address_map
                 .get(&account.id)
-                .map(|addr| Address::new(addr).to_hex());
+                .map(|addr| bytes_to_address_hex(addr))
+                .transpose()?;
 
-            AggregatedAccount {
+            Ok(AggregatedAccount {
                 keyid: account.id,
                 chain_key: chain_key_str,
                 packet_key: account.packet_key,
                 safe_address: safe_address_str,
                 multi_addresses,
-            }
+            })
         })
-        .collect();
-
-    Ok(result)
+        .collect()
 }
 
 /// Fetch accounts by their keyids with optimized batch loading
@@ -297,30 +303,27 @@ where
     }
 
     // 3. Aggregate all data
-    let result = accounts
+    accounts
         .into_iter()
         .map(|account| {
             let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
 
-            // Convert chain_key to string
-            let chain_key_str = Address::new(&account.chain_key).to_hex();
+            let chain_key_str = bytes_to_address_hex(&account.chain_key)?;
 
-            // Convert safe_address to string if present
             let safe_address_str = safe_address_map
                 .get(&account.id)
-                .map(|addr| Address::new(addr).to_hex());
+                .map(|addr| bytes_to_address_hex(addr))
+                .transpose()?;
 
-            AggregatedAccount {
+            Ok(AggregatedAccount {
                 keyid: account.id,
                 chain_key: chain_key_str,
                 packet_key: account.packet_key,
                 safe_address: safe_address_str,
                 multi_addresses,
-            }
+            })
         })
-        .collect();
-
-    Ok(result)
+        .collect()
 }
 
 /// Fetch accounts with optional filters using optimized batch loading
@@ -414,30 +417,27 @@ where
     }
 
     // 3. Aggregate all data
-    let result = accounts
+    accounts
         .into_iter()
         .map(|account| {
             let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
 
-            // Convert chain_key to string
-            let chain_key_str = Address::new(&account.chain_key).to_hex();
+            let chain_key_str = bytes_to_address_hex(&account.chain_key)?;
 
-            // Convert safe_address to string if present
             let safe_address_str = safe_address_map
                 .get(&account.id)
-                .map(|addr| Address::new(addr).to_hex());
+                .map(|addr| bytes_to_address_hex(addr))
+                .transpose()?;
 
-            AggregatedAccount {
+            Ok(AggregatedAccount {
                 keyid: account.id,
                 chain_key: chain_key_str,
                 packet_key: account.packet_key,
                 safe_address: safe_address_str,
                 multi_addresses,
-            }
+            })
         })
-        .collect();
-
-    Ok(result)
+        .collect()
 }
 
 #[cfg(test)]

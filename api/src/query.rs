@@ -481,7 +481,7 @@ impl QueryRoot {
             .ticket_price
             .as_ref()
             .map(|bytes| TokenValueString(PrimitiveHoprBalance::from_be_bytes(bytes).amount().to_string()))
-            .unwrap_or_else(|| TokenValueString(PrimitiveHoprBalance::from_be_bytes([]).amount().to_string()));
+            .unwrap_or_else(|| TokenValueString(PrimitiveHoprBalance::zero().amount().to_string()));
 
         // Convert last_indexed_block from i64 to i32 with validation
         let block_number = i32::try_from(chain_info.last_indexed_block).map_err(|_| {

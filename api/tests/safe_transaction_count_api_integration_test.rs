@@ -321,11 +321,10 @@ async fn test_safe_transaction_count_eoa_address_returns_error() -> anyhow::Resu
         result["message"].is_string(),
         "Expected message field in error response"
     );
-    // Error message should mention that it's not a contract
     let message = result["message"].as_str().unwrap();
     assert!(
-        message.contains("not be a contract") || message.contains("no data"),
-        "Error message should indicate address is not a Safe contract, got: {}",
+        message.starts_with("Failed to query Safe transaction count from RPC:"),
+        "Error message should use standard resolver prefix, got: {}",
         message
     );
 

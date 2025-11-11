@@ -87,25 +87,29 @@ impl BlokliTestState {
         self.channels.get_mut(channel_id)
     }
 
-    /// Convenience method to return a reference to Safe balance corresponding to the given [`ChainAddress`] of the [`Account`].
+    /// Convenience method to return a reference to Safe balance corresponding to the given [`ChainAddress`] of the
+    /// [`Account`].
     pub fn get_account_safe_token_balance(&self, chain_key: &ChainAddress) -> Option<&HoprBalance> {
         let account = self.get_account(chain_key)?;
         self.token_balances.get(account.safe_address.as_ref()?)
     }
 
-    /// Convenience method to return a mutable reference to Safe balance corresponding to the given [`ChainAddress`] of the [`Account`].
+    /// Convenience method to return a mutable reference to Safe balance corresponding to the given [`ChainAddress`] of
+    /// the [`Account`].
     pub fn get_account_safe_token_balance_mut(&mut self, chain_key: &ChainAddress) -> Option<&mut HoprBalance> {
         let account = self.get_account(chain_key).and_then(|a| a.safe_address.clone())?;
         self.token_balances.get_mut(&account)
     }
 
-    /// Convenience method to return a reference to Safe allowance corresponding to the given [`ChainAddress`] of the [`Account`].
+    /// Convenience method to return a reference to Safe allowance corresponding to the given [`ChainAddress`] of the
+    /// [`Account`].
     pub fn get_account_safe_allowance(&self, chain_key: &ChainAddress) -> Option<&SafeHoprAllowance> {
         let account = self.get_account(chain_key)?;
         self.safe_allowances.get(account.safe_address.as_ref()?)
     }
 
-    /// Convenience method to return a mutable  reference to Safe allowance corresponding to the given [`ChainAddress`] of the [`Account`].
+    /// Convenience method to return a mutable  reference to Safe allowance corresponding to the given [`ChainAddress`]
+    /// of the [`Account`].
     pub fn get_account_safe_allowance_mut(&mut self, chain_key: &ChainAddress) -> Option<&mut SafeHoprAllowance> {
         let account = self.get_account(chain_key).and_then(|a| a.safe_address.clone())?;
         self.safe_allowances.get_mut(&account)
@@ -582,7 +586,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
                 submitted_at: DateTime(
                     chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now()).to_rfc3339(),
                 ),
-                transaction_hash: Some(Hex32(tx_hash)),
+                transaction_hash: Hex32(tx_hash),
             },
         );
 
