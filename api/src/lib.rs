@@ -94,7 +94,7 @@ pub async fn start_server(network: String, config: ApiConfig) -> ApiResult<()> {
     let transaction_validator = Arc::new(TransactionValidator::new());
 
     // Create RPC connection for balance queries
-    info!("Connecting to RPC: {}", config.rpc_url);
+    info!("Connecting to RPC: {}", redact_url(&config.rpc_url));
     let transport_client = alloy::transports::http::ReqwestTransport::new(
         url::Url::parse(&config.rpc_url).expect("Failed to parse RPC URL"),
     );
