@@ -208,8 +208,15 @@ async fn query_channels_at_watermark(
             destination: channel.destination,
             balance: TokenValueString(balance_to_string(&state.balance)),
             status: state.status.into(),
-            epoch: i32::try_from(state.epoch).unwrap_or(i32::MAX),
-            ticket_index: blokli_api_types::UInt64(u64::try_from(state.ticket_index).unwrap_or(0)),
+            epoch: i32::try_from(state.epoch).map_err(|e| {
+                async_graphql::Error::new(format!("Channel epoch {} out of range for i32: {}", state.epoch, e))
+            })?,
+            ticket_index: blokli_api_types::UInt64(u64::try_from(state.ticket_index).map_err(|e| {
+                async_graphql::Error::new(format!(
+                    "Channel ticket_index {} is negative or out of range: {}",
+                    state.ticket_index, e
+                ))
+            })?),
             closure_time: state.closure_time,
         };
 
@@ -571,17 +578,26 @@ impl SubscriptionRoot {
         // Convert to GraphQL Channel type
         let channels: Vec<Channel> = aggregated_channels
             .iter()
-            .map(|agg| Channel {
-                concrete_channel_id: agg.concrete_channel_id.clone(),
-                source: agg.source,
-                destination: agg.destination,
-                balance: TokenValueString(agg.balance.clone()),
-                status: agg.status.into(),
-                epoch: i32::try_from(agg.epoch).unwrap_or(i32::MAX),
-                ticket_index: UInt64(u64::try_from(agg.ticket_index).unwrap_or(0)),
-                closure_time: agg.closure_time,
+            .map(|agg| -> Result<Channel, sea_orm::DbErr> {
+                Ok(Channel {
+                    concrete_channel_id: agg.concrete_channel_id.clone(),
+                    source: agg.source,
+                    destination: agg.destination,
+                    balance: TokenValueString(agg.balance.clone()),
+                    status: agg.status.into(),
+                    epoch: i32::try_from(agg.epoch).map_err(|e| {
+                        sea_orm::DbErr::Custom(format!("Channel epoch {} out of range for i32: {}", agg.epoch, e))
+                    })?,
+                    ticket_index: UInt64(u64::try_from(agg.ticket_index).map_err(|e| {
+                        sea_orm::DbErr::Custom(format!(
+                            "Channel ticket_index {} is negative or out of range: {}",
+                            agg.ticket_index, e
+                        ))
+                    })?),
+                    closure_time: agg.closure_time,
+                })
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()?;
 
         // 2. Collect unique keyids from source and destination
         let mut keyids = HashSet::new();

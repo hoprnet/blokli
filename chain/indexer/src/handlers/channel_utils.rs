@@ -21,7 +21,7 @@ use tracing::error;
 #[allow(dead_code)]
 pub(super) struct DecodedChannel {
     pub balance: HoprBalance,
-    pub ticket_index: u32,
+    pub ticket_index: u64,
     pub closure_time: u32,
     // TODO(Phase 3): Use epoch when channel update API is refactored to support channel_state table
     #[allow(dead_code)]
@@ -49,10 +49,9 @@ pub(super) fn decode_channel(channel: B256) -> DecodedChannel {
     let balance = HoprBalance::from_be_bytes(balance_bytes);
 
     // Extract ticketIndex (bytes 18-23, 48 bits = 6 bytes)
-    // Convert to u32 (only use lower 32 bits, as u48 would need u64)
     let mut ticket_index_bytes = [0u8; 8];
     ticket_index_bytes[2..8].copy_from_slice(&bytes[18..24]);
-    let ticket_index = u64::from_be_bytes(ticket_index_bytes) as u32;
+    let ticket_index = u64::from_be_bytes(ticket_index_bytes);
 
     // Extract closureTime (bytes 24-27, 32 bits = 4 bytes)
     let mut closure_time_bytes = [0u8; 4];
@@ -130,7 +129,7 @@ mod tests {
         let decoded = super::decode_channel(packed);
 
         assert_eq!(decoded.balance, HoprBalance::from(balance));
-        assert_eq!(decoded.ticket_index, ticket_index as u32);
+        assert_eq!(decoded.ticket_index, ticket_index);
         assert_eq!(decoded.closure_time, closure_time);
         assert_eq!(decoded.epoch, epoch);
         assert!(matches!(decoded.status, ChannelStatus::Open));
@@ -149,7 +148,7 @@ mod tests {
         let decoded = super::decode_channel(packed);
 
         assert_eq!(decoded.balance, HoprBalance::from(balance));
-        assert_eq!(decoded.ticket_index, ticket_index as u32);
+        assert_eq!(decoded.ticket_index, ticket_index);
         assert_eq!(decoded.closure_time, closure_time);
         assert_eq!(decoded.epoch, epoch);
         assert!(matches!(decoded.status, ChannelStatus::Closed));
@@ -168,7 +167,7 @@ mod tests {
         let decoded = super::decode_channel(packed);
 
         assert_eq!(decoded.balance, HoprBalance::from(balance));
-        assert_eq!(decoded.ticket_index, ticket_index as u32);
+        assert_eq!(decoded.ticket_index, ticket_index);
         assert_eq!(decoded.closure_time, closure_time);
         assert_eq!(decoded.epoch, epoch);
 
@@ -241,8 +240,7 @@ mod tests {
         let decoded = super::decode_channel(packed);
 
         assert_eq!(decoded.balance, HoprBalance::from(max_balance_96bit));
-        // Note: ticket_index is cast to u32, so we need to verify the u32 cast behavior
-        assert_eq!(decoded.ticket_index, max_ticket_index_48bit as u32);
+        assert_eq!(decoded.ticket_index, max_ticket_index_48bit);
         assert_eq!(decoded.closure_time, max_closure_time);
         assert_eq!(decoded.epoch, max_epoch_24bit);
         assert!(matches!(decoded.status, ChannelStatus::Open));
@@ -273,7 +271,7 @@ mod tests {
 
         // Verify each field is correctly extracted
         assert_eq!(decoded.balance, HoprBalance::from(balance));
-        assert_eq!(decoded.ticket_index, ticket_index as u32);
+        assert_eq!(decoded.ticket_index, ticket_index);
         assert_eq!(decoded.closure_time, closure_time);
         assert_eq!(decoded.epoch, epoch);
         assert!(matches!(decoded.status, ChannelStatus::Open));

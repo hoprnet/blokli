@@ -82,8 +82,18 @@ where
         destination: channel.destination,
         balance: TokenValueString(balance_to_string(&state.balance)),
         status: state.status.into(),
-        epoch: i32::try_from(state.epoch).unwrap_or(i32::MAX),
-        ticket_index: UInt64(u64::try_from(state.ticket_index).unwrap_or(0)),
+        epoch: i32::try_from(state.epoch).map_err(|e| {
+            CoreEthereumIndexerError::ValidationError(format!(
+                "Channel epoch {} out of range for i32: {}",
+                state.epoch, e
+            ))
+        })?,
+        ticket_index: UInt64(u64::try_from(state.ticket_index).map_err(|e| {
+            CoreEthereumIndexerError::ValidationError(format!(
+                "Channel ticket_index {} is negative or out of range: {}",
+                state.ticket_index, e
+            ))
+        })?),
         closure_time: state.closure_time,
     };
 
