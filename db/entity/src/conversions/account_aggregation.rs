@@ -7,13 +7,6 @@ use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder
 
 use crate::codegen::{account, account_state, announcement};
 
-/// Convert 20-byte address to hexadecimal string
-fn bytes_to_address_hex(bytes: &[u8]) -> String {
-    let mut addr_bytes = [0u8; 20];
-    addr_bytes.copy_from_slice(bytes);
-    Address::new(&addr_bytes).to_hex()
-}
-
 /// Aggregated account data with all related information
 #[derive(Debug, Clone)]
 pub struct AggregatedAccount {
@@ -97,10 +90,12 @@ where
             let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
 
             // Convert chain_key to string
-            let chain_key_str = bytes_to_address_hex(&account.chain_key);
+            let chain_key_str = Address::new(&account.chain_key).to_hex();
 
             // Convert safe_address to string if present
-            let safe_address_str = safe_address_map.get(&account.id).map(|addr| bytes_to_address_hex(addr));
+            let safe_address_str = safe_address_map
+                .get(&account.id)
+                .map(|addr| Address::new(addr).to_hex());
 
             AggregatedAccount {
                 keyid: account.id,
@@ -209,10 +204,12 @@ where
             let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
 
             // Convert chain_key to string
-            let chain_key_str = bytes_to_address_hex(&account.chain_key);
+            let chain_key_str = Address::new(&account.chain_key).to_hex();
 
             // Convert safe_address to string if present
-            let safe_address_str = safe_address_map.get(&account.id).map(|addr| bytes_to_address_hex(addr));
+            let safe_address_str = safe_address_map
+                .get(&account.id)
+                .map(|addr| Address::new(addr).to_hex());
 
             AggregatedAccount {
                 keyid: account.id,
@@ -306,10 +303,12 @@ where
             let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
 
             // Convert chain_key to string
-            let chain_key_str = bytes_to_address_hex(&account.chain_key);
+            let chain_key_str = Address::new(&account.chain_key).to_hex();
 
             // Convert safe_address to string if present
-            let safe_address_str = safe_address_map.get(&account.id).map(|addr| bytes_to_address_hex(addr));
+            let safe_address_str = safe_address_map
+                .get(&account.id)
+                .map(|addr| Address::new(addr).to_hex());
 
             AggregatedAccount {
                 keyid: account.id,
@@ -421,10 +420,12 @@ where
             let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
 
             // Convert chain_key to string
-            let chain_key_str = bytes_to_address_hex(&account.chain_key);
+            let chain_key_str = Address::new(&account.chain_key).to_hex();
 
             // Convert safe_address to string if present
-            let safe_address_str = safe_address_map.get(&account.id).map(|addr| bytes_to_address_hex(addr));
+            let safe_address_str = safe_address_map
+                .get(&account.id)
+                .map(|addr| Address::new(addr).to_hex());
 
             AggregatedAccount {
                 keyid: account.id,

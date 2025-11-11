@@ -11,13 +11,6 @@ use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder
 
 use crate::errors::{CoreEthereumIndexerError, Result};
 
-/// Convert 12-byte HOPR balance to decimal string
-fn bytes_to_hopr_balance_string(bytes: &[u8]) -> String {
-    let mut padded = [0u8; 32];
-    padded[20..].copy_from_slice(bytes);
-    HoprBalance::from_be_bytes(padded).amount().to_string()
-}
-
 /// Helper function to construct a complete ChannelUpdate from database channel_id
 ///
 /// This function queries the database for the channel, its latest state, and both
@@ -84,7 +77,7 @@ where
         concrete_channel_id: channel.concrete_channel_id,
         source: channel.source,
         destination: channel.destination,
-        balance: TokenValueString(bytes_to_hopr_balance_string(&state.balance)),
+        balance: TokenValueString(HoprBalance::from_be_bytes(&state.balance).amount().to_string()),
         status: state.status.into(),
         epoch: i32::try_from(state.epoch).map_err(|e| {
             CoreEthereumIndexerError::ValidationError(format!(

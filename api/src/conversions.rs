@@ -8,20 +8,6 @@ use blokli_api_types::{Announcement, HoprBalance, NativeBalance, TokenValueStrin
 use blokli_chain_api::transaction_store::TransactionStatus as StoreStatus;
 use hopr_primitive_types::prelude::{Address, HoprBalance as PrimitiveHoprBalance, IntoEndian, ToHex};
 
-/// Convert 20-byte address to hexadecimal string
-fn bytes_to_address_hex(bytes: &[u8]) -> String {
-    let mut addr_bytes = [0u8; 20];
-    addr_bytes.copy_from_slice(bytes);
-    Address::new(&addr_bytes).to_hex()
-}
-
-/// Convert 12-byte HOPR balance to decimal string
-fn bytes_to_hopr_balance_string(bytes: &[u8]) -> String {
-    let mut padded = [0u8; 32];
-    padded[20..].copy_from_slice(bytes);
-    PrimitiveHoprBalance::from_be_bytes(padded).amount().to_string()
-}
-
 /// Convert store TransactionStatus to GraphQL TransactionStatus
 pub fn store_status_to_graphql(status: StoreStatus) -> TransactionStatus {
     match status {
@@ -48,16 +34,16 @@ pub fn announcement_from_model(model: blokli_db_entity::announcement::Model) -> 
 /// Convert database HOPR balance model to GraphQL type
 pub fn hopr_balance_from_model(model: blokli_db_entity::hopr_balance::Model) -> HoprBalance {
     HoprBalance {
-        address: bytes_to_address_hex(&model.address),
-        balance: TokenValueString(bytes_to_hopr_balance_string(&model.balance)),
+        address: Address::new(&model.address).to_hex(),
+        balance: TokenValueString(PrimitiveHoprBalance::from_be_bytes(&model.balance).amount().to_string()),
     }
 }
 
 /// Convert database native balance model to GraphQL type
 pub fn native_balance_from_model(model: blokli_db_entity::native_balance::Model) -> NativeBalance {
     NativeBalance {
-        address: bytes_to_address_hex(&model.address),
-        balance: TokenValueString(bytes_to_hopr_balance_string(&model.balance)),
+        address: Address::new(&model.address).to_hex(),
+        balance: TokenValueString(PrimitiveHoprBalance::from_be_bytes(&model.balance).amount().to_string()),
     }
 }
 

@@ -30,13 +30,6 @@ use tokio::time::sleep;
 
 use crate::conversions::{hopr_balance_from_model, native_balance_from_model};
 
-/// Convert 12-byte HOPR balance to decimal string
-fn bytes_to_hopr_balance_string(bytes: &[u8]) -> String {
-    let mut padded = [0u8; 32];
-    padded[20..].copy_from_slice(bytes);
-    PrimitiveHoprBalance::from_be_bytes(padded).amount().to_string()
-}
-
 /// Watermark representing the last fully processed blockchain position
 ///
 /// This marks a point in the blockchain (block, transaction, log) that has been
@@ -217,7 +210,7 @@ async fn query_channels_at_watermark(
             concrete_channel_id: channel.concrete_channel_id,
             source: channel.source,
             destination: channel.destination,
-            balance: TokenValueString(bytes_to_hopr_balance_string(&state.balance)),
+            balance: TokenValueString(PrimitiveHoprBalance::from_be_bytes(&state.balance).amount().to_string()),
             status: state.status.into(),
             epoch: i32::try_from(state.epoch).map_err(|e| {
                 async_graphql::Error::new(format!("Channel epoch {} out of range for i32: {}", state.epoch, e))

@@ -23,13 +23,6 @@ use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, Quer
 
 use crate::{mutation::TransactionResult, validation::validate_eth_address};
 
-/// Convert 12-byte HOPR balance to decimal string
-fn bytes_to_hopr_balance_string(bytes: &[u8]) -> String {
-    let mut padded = [0u8; 32];
-    padded[20..].copy_from_slice(bytes);
-    PrimitiveHoprBalance::from_be_bytes(padded).amount().to_string()
-}
-
 /// Result type for HOPR balance queries
 #[derive(Union)]
 pub enum HoprBalanceResult {
@@ -487,8 +480,8 @@ impl QueryRoot {
         let ticket_price = chain_info
             .ticket_price
             .as_ref()
-            .map(|bytes| TokenValueString(bytes_to_hopr_balance_string(bytes)))
-            .unwrap_or_else(|| TokenValueString(bytes_to_hopr_balance_string(&[])));
+            .map(|bytes| TokenValueString(PrimitiveHoprBalance::from_be_bytes(bytes).amount().to_string()))
+            .unwrap_or_else(|| TokenValueString(PrimitiveHoprBalance::from_be_bytes([]).amount().to_string()));
 
         // Convert last_indexed_block from i64 to i32 with validation
         let block_number = i32::try_from(chain_info.last_indexed_block).map_err(|_| {
