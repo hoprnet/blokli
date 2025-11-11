@@ -236,8 +236,7 @@ async fn test_try_stream_logs_should_contain_only_channel_logs_when_filtered_on_
         Ok::<_, RpcError>(
             rpc.try_stream_logs(1, log_filter, false)?
                 .skip_while(|b| futures::future::ready(b.len() != count_filtered_topics))
-                .take(1)
-                .collect::<Vec<BlockWithLogs>>()
+                .next()
                 .await,
         )
     });
@@ -255,25 +254,21 @@ async fn test_try_stream_logs_should_contain_only_channel_logs_when_filtered_on_
         .await???;
 
     // The last block must contain all 2 events
-    let last_block_logs = retrieved_logs
-        .first()
-        .context("a value should be present")?
-        .clone()
-        .logs;
+    let last_block_logs = retrieved_logs.context("log stream yielded no blocks")?.logs;
 
-    let channel_open_filter: [u8; 32] = ChannelOpened::SIGNATURE_HASH.0;
-    let channel_balance_filter: [u8; 32] = ChannelBalanceIncreased::SIGNATURE_HASH.0;
+    let channel_open_filter = ChannelOpened::SIGNATURE_HASH;
+    let channel_balance_filter = ChannelBalanceIncreased::SIGNATURE_HASH;
 
     assert!(
         last_block_logs
             .iter()
-            .any(|log| log.address == contract_addrs.channels && log.topics.contains(&channel_open_filter)),
+            .any(|log| log.address == contract_addrs.channels && log.topics.contains(&channel_open_filter.into())),
         "must contain channel open"
     );
     assert!(
         last_block_logs
             .iter()
-            .any(|log| log.address == contract_addrs.channels && log.topics.contains(&channel_balance_filter)),
+            .any(|log| log.address == contract_addrs.channels && log.topics.contains(&channel_balance_filter.into())),
         "must contain channel balance increase"
     );
 
