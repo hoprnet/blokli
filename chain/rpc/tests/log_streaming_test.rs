@@ -116,13 +116,13 @@ async fn test_try_stream_logs_should_contain_all_logs_when_opening_channel() -> 
     });
 
     // Spawn channel funding
-    let _ = blokli_chain_types::utils::fund_channel(
+    blokli_chain_types::utils::fund_channel(
         chain_key_1.public().to_address(),
         contract_instances.token,
         contract_instances.channels,
         U256::from(1_u128),
     )
-    .await;
+    .await?;
 
     let retrieved_logs = timeout(Duration::from_secs(30), retrieved_logs) // Give up after 30 seconds
         .await
@@ -243,13 +243,13 @@ async fn test_try_stream_logs_should_contain_only_channel_logs_when_filtered_on_
     });
 
     // Spawn channel funding
-    let _ = blokli_chain_types::utils::fund_channel(
+    blokli_chain_types::utils::fund_channel(
         chain_key_1.public().to_address(),
         contract_instances.token,
         contract_instances.channels,
         U256::from(1_u128),
     )
-    .await;
+    .await?;
 
     let retrieved_logs = timeout(Duration::from_secs(30), retrieved_logs) // Give up after 30 seconds
         .await???;
