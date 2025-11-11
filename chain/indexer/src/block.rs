@@ -243,7 +243,14 @@ where
                     "computing processed logs"
                 );
                 // Do not pollute the logs with the fast-sync progress
-                Self::process_block_by_id(&db, &logs_handler, block_number, is_synced.load(Ordering::Relaxed)).await?;
+                Self::process_block_by_id(
+                    &db,
+                    &logs_handler,
+                    block_number,
+                    is_synced.load(Ordering::Relaxed),
+                    &self.indexer_state,
+                )
+                .await?;
 
                 #[cfg(all(feature = "prometheus", not(test)))]
                 {
@@ -275,6 +282,7 @@ where
 
         info!(next_block_to_process, "Indexer start point");
 
+        let indexer_state = self.indexer_state.clone();
         let indexing_abort_handle = hopr_async_runtime::spawn_as_abortable!(async move {
             // Update the chain head once again
             debug!("Updating chain head at indexer startup");
@@ -355,9 +363,18 @@ where
                 let db = db.clone();
                 let logs_handler = logs_handler.clone();
                 let is_synced = is_synced.clone();
+                let indexer_state = indexer_state.clone();
                 async move {
                     // Events are now published directly via IndexerState within handlers
-                    Self::process_block(&db, &logs_handler, block, false, is_synced.load(Ordering::Relaxed)).await;
+                    Self::process_block(
+                        &db,
+                        &logs_handler,
+                        block,
+                        false,
+                        is_synced.load(Ordering::Relaxed),
+                        &indexer_state,
+                    )
+                    .await;
                 }
             });
 
@@ -486,6 +503,7 @@ where
         logs_handler: &U,
         block_id: u64,
         is_synced: bool,
+        indexer_state: &IndexerState,
     ) -> crate::errors::Result<Option<()>>
     where
         U: ChainLogHandler + 'static,
@@ -510,7 +528,7 @@ where
             }
         }
 
-        Ok(Self::process_block(db, logs_handler, block, true, is_synced).await)
+        Ok(Self::process_block(db, logs_handler, block, true, is_synced, indexer_state).await)
     }
 
     /// Processes a block and its logs.
@@ -534,6 +552,7 @@ where
         block: BlockWithLogs,
         fetch_checksum_from_db: bool,
         is_synced: bool,
+        indexer_state: &IndexerState,
     ) -> Option<()>
     where
         U: ChainLogHandler + 'static,
@@ -554,7 +573,7 @@ where
 
             // Handle the reorg by inserting corrective channel states
             // Use the current block as the canonical block for corrective states
-            match Self::handle_reorg(db, &reorg_info, block_id).await {
+            match Self::handle_reorg(db, &reorg_info, block_id, indexer_state).await {
                 Ok(corrected_count) => {
                     info!(
                         block_id,
@@ -654,7 +673,6 @@ where
     /// # Returns
     ///
     /// * `Option<ReorgInfo>` - Information about the detected reorg, or None if no reorg was detected
-    #[allow(dead_code)]
     fn detect_reorg(block: &BlockWithLogs) -> Option<ReorgInfo> {
         let removed_logs: Vec<&SerializableLog> = block.logs.iter().filter(|log| log.removed).collect();
 
@@ -673,7 +691,6 @@ where
         })
     }
 
-    #[allow(dead_code)]
     /// Handle blockchain reorganization by inserting corrective states
     ///
     /// When a blockchain reorg occurs, this function preserves the audit trail by inserting
@@ -774,7 +791,12 @@ where
     /// - [`get_channel_state_at`](blokli_db::state_queries::get_channel_state_at) - Temporal queries that work with
     ///   corrective states
     /// - Design document section 6.5 - Detailed reorg handling specification
-    async fn handle_reorg(db: &Db, reorg_info: &ReorgInfo, canonical_block: u64) -> Result<usize>
+    async fn handle_reorg(
+        db: &Db,
+        reorg_info: &ReorgInfo,
+        canonical_block: u64,
+        indexer_state: &IndexerState,
+    ) -> Result<usize>
     where
         Db: BlokliDbGeneralModelOperations
             + BlokliDbInfoOperations
@@ -867,11 +889,14 @@ where
             debug!(channel_id, canonical_block, "Inserted corrective state");
         }
 
-        // TODO(Phase 2.2): Signal shutdown to active subscriptions
-        // This requires passing IndexerState to this function:
-        //   indexer_state.signal_shutdown().await;
+        // Signal shutdown to active subscriptions
         // Subscriptions will detect shutdown signal and close client connections,
         // forcing clients to reconnect and get fresh watermarks
+        if !indexer_state.signal_shutdown() {
+            error!("Failed to signal shutdown to subscriptions after reorg - channel may be closed");
+        } else {
+            info!("Signaled shutdown to active subscriptions after reorg");
+        }
 
         info!(corrected_count, "Reorg handling complete");
 
@@ -2082,8 +2107,13 @@ mod tests {
         };
 
         // Handle the reorg
-        let corrected_count =
-            Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 200).await?;
+        let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            200,
+            &IndexerState::default(),
+        )
+        .await?;
 
         // Verify correction was made
         assert_eq!(corrected_count, 1, "Expected 1 channel to be corrected");
@@ -2154,8 +2184,13 @@ mod tests {
         };
 
         // Handle the reorg
-        let corrected_count =
-            Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 150).await?;
+        let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            150,
+            &IndexerState::default(),
+        )
+        .await?;
 
         // Verify all 3 channels were corrected
         assert_eq!(corrected_count, 3, "Expected 3 channels to be corrected");
@@ -2222,8 +2257,13 @@ mod tests {
         };
 
         // Handle the reorg
-        let corrected_count =
-            Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 150).await?;
+        let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            150,
+            &IndexerState::default(),
+        )
+        .await?;
 
         // Only channel 1 should be corrected, channel 2 was opened during reorg
         assert_eq!(corrected_count, 1, "Only channel 1 should be corrected");
@@ -2262,8 +2302,13 @@ mod tests {
         };
 
         // Handle the reorg
-        let corrected_count =
-            Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 150).await?;
+        let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            150,
+            &IndexerState::default(),
+        )
+        .await?;
 
         // No channels should be corrected
         assert_eq!(corrected_count, 0, "No channels should be corrected");
@@ -2294,8 +2339,13 @@ mod tests {
             removed_log_count: 1,
         };
 
-        let corrected_count =
-            Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 200).await?;
+        let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            200,
+            &IndexerState::default(),
+        )
+        .await?;
 
         assert_eq!(corrected_count, 1);
 
@@ -2345,7 +2395,13 @@ mod tests {
             removed_log_count: 1,
         };
 
-        Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 200).await?;
+        Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            200,
+            &IndexerState::default(),
+        )
+        .await?;
 
         let states_after = get_channel_states(&db, 1).await?;
 
@@ -2404,8 +2460,13 @@ mod tests {
             removed_log_count: 101,
         };
 
-        let corrected_count =
-            Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 250).await?;
+        let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            250,
+            &IndexerState::default(),
+        )
+        .await?;
 
         assert_eq!(
             corrected_count, 1,
@@ -2441,8 +2502,13 @@ mod tests {
             removed_log_count: 1,
         };
 
-        let corrected_count =
-            Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 150).await?;
+        let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            150,
+            &IndexerState::default(),
+        )
+        .await?;
 
         assert_eq!(
             corrected_count, 0,
@@ -2479,7 +2545,13 @@ mod tests {
             removed_log_count: 1,
         };
 
-        Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 200).await?;
+        Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            200,
+            &IndexerState::default(),
+        )
+        .await?;
 
         let states = get_channel_states(&db, 1).await?;
         let corrective = states
@@ -2522,7 +2594,13 @@ mod tests {
             removed_log_count: 3,
         };
 
-        Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 200).await?;
+        Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            200,
+            &IndexerState::default(),
+        )
+        .await?;
 
         let states = get_channel_states(&db, 1).await?;
         let corrective = states
@@ -2554,16 +2632,26 @@ mod tests {
         };
 
         // First correction
-        let count1 =
-            Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 200).await?;
+        let count1 = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            200,
+            &IndexerState::default(),
+        )
+        .await?;
         assert_eq!(count1, 1);
 
         let states_after_first = get_channel_states(&db, 1).await?;
         let corrections_count = states_after_first.iter().filter(|s| s.reorg_correction).count();
 
         // Second correction attempt at different canonical block
-        let count2 =
-            Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 201).await?;
+        let count2 = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            201,
+            &IndexerState::default(),
+        )
+        .await?;
         assert_eq!(count2, 1, "Second correction should also succeed");
 
         let states_after_second = get_channel_states(&db, 1).await?;
@@ -2598,8 +2686,13 @@ mod tests {
             removed_log_count: channel_count as usize,
         };
 
-        let corrected_count =
-            Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 200).await?;
+        let corrected_count = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            200,
+            &IndexerState::default(),
+        )
+        .await?;
 
         assert_eq!(
             corrected_count as i64, channel_count,
@@ -2639,7 +2732,13 @@ mod tests {
             removed_log_count: 1,
         };
 
-        Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 250).await?;
+        Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            250,
+            &IndexerState::default(),
+        )
+        .await?;
 
         let states = get_channel_states(&db, 1).await?;
 
@@ -2681,7 +2780,13 @@ mod tests {
             removed_log_count: 1,
         };
 
-        Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(&db, &reorg_info, 200).await?;
+        Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::handle_reorg(
+            &db,
+            &reorg_info,
+            200,
+            &IndexerState::default(),
+        )
+        .await?;
 
         let conn = db.conn(TargetDb::Index);
 
