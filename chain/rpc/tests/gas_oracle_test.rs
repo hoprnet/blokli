@@ -21,12 +21,20 @@ use blokli_chain_rpc::client::{
 };
 use blokli_chain_types::utils::create_anvil;
 
+/// Tests that GasOracleFiller handles EIP-1559 transactions using fallback fees.
+///
+/// **Note**: GasOracleFiller does NOT query the gas oracle for EIP-1559 transactions.
+/// Due to Foundry/Anvil limitations with EIP-1559 fee estimation, it returns hardcoded
+/// fallback values instead. This test verifies that behavior by expecting 0 oracle calls.
+///
+/// See: https://github.com/foundry-rs/foundry/issues/5709
 #[tokio::test]
-async fn test_client_should_call_on_gas_oracle_for_eip1559_tx() -> anyhow::Result<()> {
+async fn test_client_should_use_fallback_for_eip1559_tx() -> anyhow::Result<()> {
     let _ = env_logger::builder().is_test(true).try_init();
 
     let mut server = mockito::Server::new_async().await;
 
+    // Expect 0 calls - GasOracleFiller uses fallback fees for EIP-1559, doesn't query oracle
     let m = server
         .mock("GET", "/gasapi.ashx?apikey=key&method=gasoracle")
         .with_status(http::StatusCode::ACCEPTED.as_u16().into())
@@ -46,6 +54,7 @@ async fn test_client_should_call_on_gas_oracle_for_eip1559_tx() -> anyhow::Resul
     let provider = ProviderBuilder::new()
         .disable_recommended_fillers()
         .wallet(signer)
+        .filler(ChainIdFiller::default())
         .filler(NonceFiller::new(CachedNonceManager::default()))
         .filler(GasOracleFiller::new(
             transport_client.client().clone(),
@@ -57,7 +66,6 @@ async fn test_client_should_call_on_gas_oracle_for_eip1559_tx() -> anyhow::Resul
         .connect_client(rpc_client);
 
     let tx = TransactionRequest::default()
-        .with_chain_id(provider.get_chain_id().await?)
         .to(address!("d8dA6BF26964aF9D7eEd9e03E53415D37aA96045"))
         .value(U256::from(100))
         .transaction_type(2);
