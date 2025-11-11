@@ -134,8 +134,17 @@ impl MutationRoot {
         // Decode hex transaction data
         let raw_tx = hex_to_bytes(&input.raw_transaction)?;
 
-        // Convert i32 to u64 for confirmations (negative values become 0)
-        let confirmations = confirmations.map(|c| u64::try_from(c).unwrap_or(0));
+        // Validate and convert confirmations value
+        let confirmations = match confirmations {
+            Some(c) if c < 0 => {
+                return Err(async_graphql::Error::new(format!(
+                    "Invalid confirmations value: {}. Must be non-negative (default: 8, max: 64)",
+                    c
+                )));
+            }
+            Some(c) => Some(u64::try_from(c).unwrap()), // Safe: already validated c >= 0
+            None => None,
+        };
 
         // Execute transaction in sync mode
         match executor.send_raw_transaction_sync(raw_tx, confirmations).await {
