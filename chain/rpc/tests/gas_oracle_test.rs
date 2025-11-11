@@ -114,7 +114,7 @@ async fn test_client_should_call_on_gas_oracle_for_legacy_tx() -> anyhow::Result
         .filler(BlobGasFiller)
         .connect_client(rpc_client);
 
-    // GasEstimationLayer requires chain_id to be set to handle EIP-1559 tx
+    // ChainIdFiller is required for proper legacy transaction handling with gas_price
     let tx = TransactionRequest::default()
         .with_to(address!("d8dA6BF26964aF9D7eEd9e03E53415D37aA96045"))
         .with_value(U256::from(100))
