@@ -27,6 +27,9 @@ pub struct TransactionMonitorConfig {
     pub poll_interval: Duration,
     /// Maximum time to wait before marking a transaction as timed out
     pub timeout: Duration,
+    /// Delay between RPC calls when checking multiple transactions
+    /// This prevents overwhelming the RPC endpoint with burst requests
+    pub per_transaction_delay: Duration,
 }
 
 impl Default for TransactionMonitorConfig {
@@ -34,6 +37,7 @@ impl Default for TransactionMonitorConfig {
         Self {
             poll_interval: Duration::from_secs(5),
             timeout: Duration::from_secs(300), // 5 minutes
+            per_transaction_delay: Duration::from_millis(100),
         }
     }
 }
@@ -88,11 +92,13 @@ impl<R: ReceiptProvider> TransactionMonitor<R> {
                 let elapsed = chrono::Utc::now().signed_duration_since(record.submitted_at);
                 if elapsed.to_std().ok() > Some(self.config.timeout) {
                     info!("Transaction {} timed out", record.id);
-                    let _ = self.transaction_store.update_status(
+                    if let Err(e) = self.transaction_store.update_status(
                         record.id,
                         TransactionStatus::Timeout,
                         Some("Transaction timed out waiting for confirmation".to_string()),
-                    );
+                    ) {
+                        error!("Failed to update transaction {} status to Timeout: {}", record.id, e);
+                    }
                     continue;
                 }
 
@@ -100,17 +106,22 @@ impl<R: ReceiptProvider> TransactionMonitor<R> {
                 match self.receipt_provider.get_transaction_status(tx_hash).await {
                     Ok(Some(true)) => {
                         info!("Transaction {} confirmed", record.id);
-                        let _ = self
-                            .transaction_store
-                            .update_status(record.id, TransactionStatus::Confirmed, None);
+                        if let Err(e) =
+                            self.transaction_store
+                                .update_status(record.id, TransactionStatus::Confirmed, None)
+                        {
+                            error!("Failed to update transaction {} status to Confirmed: {}", record.id, e);
+                        }
                     }
                     Ok(Some(false)) => {
                         info!("Transaction {} reverted", record.id);
-                        let _ = self.transaction_store.update_status(
+                        if let Err(e) = self.transaction_store.update_status(
                             record.id,
                             TransactionStatus::Reverted,
                             Some("Transaction reverted on-chain".to_string()),
-                        );
+                        ) {
+                            error!("Failed to update transaction {} status to Reverted: {}", record.id, e);
+                        }
                     }
                     Ok(None) => {
                         // Still pending, continue monitoring
@@ -120,6 +131,9 @@ impl<R: ReceiptProvider> TransactionMonitor<R> {
                         error!("Error checking transaction {}: {}", record.id, e);
                     }
                 }
+
+                // Rate limit RPC calls to prevent overwhelming the endpoint
+                sleep(self.config.per_transaction_delay).await;
             }
         }
 

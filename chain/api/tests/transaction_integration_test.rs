@@ -105,6 +105,7 @@ async fn setup_test_environment(
     let monitor_config = TransactionMonitorConfig {
         poll_interval: Duration::from_millis(200),
         timeout: Duration::from_secs(300),
+        per_transaction_delay: Duration::from_millis(100),
     };
 
     let transaction_monitor = Arc::new(TransactionMonitor::new(
