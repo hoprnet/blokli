@@ -3,13 +3,10 @@ use std::collections::HashMap;
 use blokli_api_types::{Account, Channel, ChannelUpdate, TokenValueString, UInt64};
 use blokli_db_entity::{
     codegen::{account, channel, channel_state},
-    conversions::{
-        account_aggregation,
-        balances::{address_to_string, balance_to_string},
-    },
+    conversions::account_aggregation,
 };
 use hopr_crypto_types::prelude::Hash;
-use hopr_primitive_types::prelude::{Address, ToHex};
+use hopr_primitive_types::prelude::{Address, HoprBalance, IntoEndian, ToHex};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder};
 
 use crate::errors::{CoreEthereumIndexerError, Result};
@@ -80,7 +77,7 @@ where
         concrete_channel_id: channel.concrete_channel_id,
         source: channel.source,
         destination: channel.destination,
-        balance: TokenValueString(balance_to_string(&state.balance)),
+        balance: TokenValueString(HoprBalance::from_be_bytes(&state.balance).amount().to_string()),
         status: state.status.into(),
         epoch: i32::try_from(state.epoch).map_err(|e| {
             CoreEthereumIndexerError::ValidationError(format!(
@@ -103,7 +100,6 @@ where
         packet_key: source_account.packet_key.clone(),
         safe_address: source_account.safe_address.clone(),
         multi_addresses: source_account.multi_addresses.clone(),
-        safe_transaction_count: UInt64(source_account.safe_transaction_count),
     };
 
     let dest_gql = Account {
@@ -112,7 +108,6 @@ where
         packet_key: dest_account.packet_key.clone(),
         safe_address: dest_account.safe_address.clone(),
         multi_addresses: dest_account.multi_addresses.clone(),
-        safe_transaction_count: UInt64(dest_account.safe_transaction_count),
     };
 
     Ok(ChannelUpdate {
@@ -150,9 +145,7 @@ where
         .one(conn)
         .await
         .map_err(|e| CoreEthereumIndexerError::ProcessError(format!("Failed to query account: {}", e)))?
-        .ok_or_else(|| {
-            CoreEthereumIndexerError::ProcessError(format!("Account {} not found", address_to_string(&address_bytes)))
-        })?;
+        .ok_or_else(|| CoreEthereumIndexerError::ProcessError(format!("Account {} not found", address.to_hex())))?;
 
     // 2. Fetch complete account data using the optimized aggregation function
     let accounts_result = account_aggregation::fetch_accounts_by_keyids(conn, vec![account.id])
@@ -171,6 +164,5 @@ where
         packet_key: aggregated.packet_key,
         safe_address: aggregated.safe_address,
         multi_addresses: aggregated.multi_addresses,
-        safe_transaction_count: UInt64(aggregated.safe_transaction_count),
     })
 }

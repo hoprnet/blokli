@@ -24,7 +24,6 @@ use blokli_chain_rpc::{
     transport::ReqwestClient,
 };
 use blokli_chain_types::ContractAddresses;
-pub use blokli_chain_types::chain_events::SignificantChainEvent;
 use blokli_db::BlokliDbAllOperations;
 use futures::future::AbortHandle;
 use hopr_async_runtime::spawn_as_abortable;
@@ -72,7 +71,6 @@ pub enum BlokliChainProcess {
 pub struct BlokliChain<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug> {
     contract_addresses: ContractAddresses,
     indexer_cfg: IndexerConfig,
-    indexer_events_tx: async_channel::Sender<SignificantChainEvent>,
     indexer_state: IndexerState,
     db: T,
     rpc_operations: RpcOperations<DefaultHttpRequestor>,
@@ -82,13 +80,11 @@ pub struct BlokliChain<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt
 }
 
 impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static> BlokliChain<T> {
-    #[allow(clippy::too_many_arguments)] // TODO: refactor this function into a reasonable group of components once fully rearchitected
     pub fn new(
         db: T,
         chain_config: ChainNetworkConfig,
         contract_addresses: ContractAddresses,
         indexer_cfg: IndexerConfig,
-        indexer_events_tx: async_channel::Sender<SignificantChainEvent>,
         rpc_url: String,
     ) -> Result<Self> {
         // TODO: extract this from the global config type
@@ -149,7 +145,6 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         Ok(Self {
             contract_addresses,
             indexer_cfg,
-            indexer_events_tx,
             indexer_state,
             db,
             rpc_operations,
@@ -183,7 +178,6 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
                 ),
                 self.db.clone(),
                 self.indexer_cfg.clone(),
-                self.indexer_events_tx.clone(),
                 self.indexer_state.clone(),
             )
             .start()

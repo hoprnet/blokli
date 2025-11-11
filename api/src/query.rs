@@ -5,17 +5,20 @@ use std::sync::Arc;
 use async_graphql::{Context, Object, Result, Union};
 use blokli_api_types::{
     Account, ChainInfo, Channel, ContractAddressMap, Hex32, HoprBalance, InvalidAddressError,
-    InvalidTransactionIdError, NativeBalance, QueryFailedError, SafeHoprAllowance, TokenValueString, Transaction,
+    InvalidTransactionIdError, NativeBalance, QueryFailedError, SafeHoprAllowance, SafeTransactionCount,
+    TokenValueString, Transaction, UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
 use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::conversions::{
-    account_aggregation::fetch_accounts_with_filters,
-    balances::{hopr_balance_to_string, string_to_address},
-    channel_aggregation::fetch_channels_with_state,
+    account_aggregation::fetch_accounts_with_filters, channel_aggregation::fetch_channels_with_state,
 };
-use hopr_primitive_types::primitives::Address;
+use hopr_primitive_types::{
+    prelude::HoprBalance as PrimitiveHoprBalance,
+    primitives::Address,
+    traits::{IntoEndian, ToHex},
+};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
 
 use crate::{mutation::TransactionResult, validation::validate_eth_address};
@@ -40,6 +43,14 @@ pub enum NativeBalanceResult {
 #[derive(Union)]
 pub enum SafeHoprAllowanceResult {
     Allowance(SafeHoprAllowance),
+    InvalidAddress(InvalidAddressError),
+    QueryFailed(QueryFailedError),
+}
+
+/// Result type for Safe transaction count queries
+#[derive(Union)]
+pub enum SafeTransactionCountResult {
+    TransactionCount(SafeTransactionCount),
     InvalidAddress(InvalidAddressError),
     QueryFailed(QueryFailedError),
 }
@@ -89,7 +100,6 @@ impl QueryRoot {
                 packet_key: agg.packet_key,
                 safe_address: agg.safe_address,
                 multi_addresses: agg.multi_addresses,
-                safe_transaction_count: blokli_api_types::UInt64(agg.safe_transaction_count),
             })
             .collect();
 
@@ -128,7 +138,10 @@ impl QueryRoot {
 
         if let Some(ck) = chain_key {
             // Convert hex string address to binary for database query
-            let binary_chain_key = string_to_address(&ck);
+            let binary_chain_key = Address::from_hex(&ck)
+                .map_err(|e| async_graphql::Error::new(format!("Invalid address: {}", e)))?
+                .as_ref()
+                .to_vec();
             query = query.filter(blokli_db_entity::account::Column::ChainKey.eq(binary_chain_key));
         }
 
@@ -302,7 +315,8 @@ impl QueryRoot {
         }
 
         // Convert hex string address to Address type
-        let parsed_address = Address::new(&string_to_address(&address));
+        let parsed_address =
+            Address::from_hex(&address).map_err(|e| async_graphql::Error::new(format!("Invalid address: {}", e)))?;
 
         // Get RPC operations from context - using ReqwestClient as the concrete type
         let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
@@ -340,7 +354,8 @@ impl QueryRoot {
         }
 
         // Convert hex string address to Address type
-        let parsed_address = Address::new(&string_to_address(&address));
+        let parsed_address =
+            Address::from_hex(&address).map_err(|e| async_graphql::Error::new(format!("Invalid address: {}", e)))?;
 
         // Get RPC operations from context - using ReqwestClient as the concrete type
         let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
@@ -381,7 +396,8 @@ impl QueryRoot {
         }
 
         // Convert hex string address to Address type
-        let safe_address = Address::new(&string_to_address(&address));
+        let safe_address =
+            Address::from_hex(&address).map_err(|e| async_graphql::Error::new(format!("Invalid address: {}", e)))?;
 
         // Get contract addresses from context to access channels contract
         let contract_addresses = ctx.data::<ContractAddresses>()?;
@@ -399,6 +415,49 @@ impl QueryRoot {
             Err(e) => Ok(SafeHoprAllowanceResult::QueryFailed(QueryFailedError {
                 code: "QUERY_FAILED".to_string(),
                 message: format!("Failed to query HOPR allowance from RPC: {}", e),
+            })),
+        }
+    }
+
+    /// Retrieve Safe contract transaction count
+    ///
+    /// Returns the current nonce/transaction count for a HOPR Safe contract directly
+    /// from the blockchain. The transaction count increments with each transaction
+    /// executed by the Safe.
+    ///
+    /// This query makes a direct RPC call to the blockchain to get the current nonce.
+    /// No database storage is used - the count is fetched directly from the chain.
+    #[graphql(name = "safeTransactionCount")]
+    async fn safe_transaction_count(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Safe contract address to query (hexadecimal format)")] address: String,
+    ) -> Result<SafeTransactionCountResult> {
+        // Validate address format
+        if let Err(e) = validate_eth_address(&address) {
+            return Ok(SafeTransactionCountResult::InvalidAddress(InvalidAddressError {
+                code: "INVALID_ADDRESS".to_string(),
+                message: e.message,
+                address,
+            }));
+        }
+
+        // Convert hex string address to Address type
+        let safe_address =
+            Address::from_hex(&address).map_err(|e| async_graphql::Error::new(format!("Invalid address: {}", e)))?;
+
+        // Get RPC operations from context - using ReqwestClient as the concrete type
+        let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
+
+        // Make RPC call to get transaction count from blockchain
+        match rpc.get_safe_transaction_count(safe_address).await {
+            Ok(count) => Ok(SafeTransactionCountResult::TransactionCount(SafeTransactionCount {
+                address,
+                count: UInt64(count),
+            })),
+            Err(e) => Ok(SafeTransactionCountResult::QueryFailed(QueryFailedError {
+                code: "QUERY_FAILED".to_string(),
+                message: format!("Failed to query Safe transaction count from RPC: {}", e),
             })),
         }
     }
@@ -421,8 +480,8 @@ impl QueryRoot {
         let ticket_price = chain_info
             .ticket_price
             .as_ref()
-            .map(|bytes| TokenValueString(hopr_balance_to_string(bytes)))
-            .unwrap_or_else(|| TokenValueString(hopr_balance_to_string(&[])));
+            .map(|bytes| TokenValueString(PrimitiveHoprBalance::from_be_bytes(bytes).amount().to_string()))
+            .unwrap_or_else(|| TokenValueString(PrimitiveHoprBalance::zero().amount().to_string()));
 
         // Convert last_indexed_block from i64 to i32 with validation
         let block_number = i32::try_from(chain_info.last_indexed_block).map_err(|_| {
@@ -542,7 +601,7 @@ impl QueryRoot {
                     id: record.id.to_string(),
                     status: crate::conversions::store_status_to_graphql(record.status),
                     submitted_at: record.submitted_at,
-                    transaction_hash: record.transaction_hash.map(Into::into),
+                    transaction_hash: record.transaction_hash.into(),
                 };
                 Ok(Some(TransactionResult::Transaction(transaction)))
             }

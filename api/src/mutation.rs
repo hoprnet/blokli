@@ -166,7 +166,7 @@ fn record_to_graphql(record: TransactionRecord) -> Transaction {
         id: record.id.to_string(),
         status: crate::conversions::store_status_to_graphql(record.status),
         submitted_at: record.submitted_at,
-        transaction_hash: record.transaction_hash.map(Into::into),
+        transaction_hash: record.transaction_hash.into(),
     }
 }
 

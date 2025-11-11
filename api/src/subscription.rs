@@ -16,11 +16,15 @@ use blokli_db_entity::{
     channel, channel_state,
     conversions::{
         account_aggregation::{fetch_accounts_by_keyids, fetch_accounts_with_filters},
-        balances::{balance_to_string, string_to_address},
         channel_aggregation::fetch_channels_with_state,
     },
 };
 use futures::Stream;
+use hopr_primitive_types::{
+    prelude::HoprBalance as PrimitiveHoprBalance,
+    primitives::Address,
+    traits::{IntoEndian, ToHex},
+};
 use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use tokio::time::sleep;
 
@@ -206,7 +210,7 @@ async fn query_channels_at_watermark(
             concrete_channel_id: channel.concrete_channel_id,
             source: channel.source,
             destination: channel.destination,
-            balance: TokenValueString(balance_to_string(&state.balance)),
+            balance: TokenValueString(PrimitiveHoprBalance::from_be_bytes(&state.balance).amount().to_string()),
             status: state.status.into(),
             epoch: i32::try_from(state.epoch).map_err(|e| {
                 async_graphql::Error::new(format!("Channel epoch {} out of range for i32: {}", state.epoch, e))
@@ -226,7 +230,6 @@ async fn query_channels_at_watermark(
             packet_key: source_account.packet_key.clone(),
             safe_address: source_account.safe_address.clone(),
             multi_addresses: source_account.multi_addresses.clone(),
-            safe_transaction_count: UInt64(source_account.safe_transaction_count),
         };
 
         let dest_gql = Account {
@@ -235,7 +238,6 @@ async fn query_channels_at_watermark(
             packet_key: dest_account.packet_key.clone(),
             safe_address: dest_account.safe_address.clone(),
             multi_addresses: dest_account.multi_addresses.clone(),
-            safe_transaction_count: UInt64(dest_account.safe_transaction_count),
         };
 
         results.push(ChannelUpdate {
@@ -486,7 +488,10 @@ impl SubscriptionRoot {
         address: &str,
     ) -> Result<Option<NativeBalance>, sea_orm::DbErr> {
         // Convert hex string address to binary for database query
-        let binary_address = string_to_address(address);
+        let binary_address = Address::from_hex(address)
+            .map_err(|e| sea_orm::DbErr::Custom(format!("Invalid address: {}", e)))?
+            .as_ref()
+            .to_vec();
 
         let balance = blokli_db_entity::native_balance::Entity::find()
             .filter(blokli_db_entity::native_balance::Column::Address.eq(binary_address))
@@ -498,7 +503,10 @@ impl SubscriptionRoot {
 
     async fn fetch_hopr_balance(db: &DatabaseConnection, address: &str) -> Result<Option<HoprBalance>, sea_orm::DbErr> {
         // Convert hex string address to binary for database query
-        let binary_address = string_to_address(address);
+        let binary_address = Address::from_hex(address)
+            .map_err(|e| sea_orm::DbErr::Custom(format!("Invalid address: {}", e)))?
+            .as_ref()
+            .to_vec();
 
         let balance = blokli_db_entity::hopr_balance::Entity::find()
             .filter(blokli_db_entity::hopr_balance::Column::Address.eq(binary_address))
@@ -564,7 +572,6 @@ impl SubscriptionRoot {
                 packet_key: agg.packet_key,
                 safe_address: agg.safe_address,
                 multi_addresses: agg.multi_addresses,
-                safe_transaction_count: UInt64(agg.safe_transaction_count),
             })
             .collect();
 
@@ -619,7 +626,6 @@ impl SubscriptionRoot {
                 packet_key: agg.packet_key,
                 safe_address: agg.safe_address,
                 multi_addresses: agg.multi_addresses,
-                safe_transaction_count: blokli_api_types::UInt64(agg.safe_transaction_count),
             })
             .collect();
 
@@ -766,7 +772,6 @@ mod tests {
             packet_key: "peer1".to_string(),
             safe_address: None,
             multi_addresses: vec![],
-            safe_transaction_count: UInt64(0),
         };
 
         // Publish event to bus
@@ -1008,8 +1013,8 @@ mod tests {
 
         // Should return channel with latest balance (2 wei, not 2 HOPR)
         assert_eq!(result.len(), 1);
-        // Balance is 2 wei which displays as 0.000000000000000002 HOPR
-        assert_eq!(result[0].channel.balance.0, "0.000000000000000002 wxHOPR");
+        // Balance is 2 wei (raw decimal value)
+        assert_eq!(result[0].channel.balance.0, "2");
     }
 
     #[tokio::test]

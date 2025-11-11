@@ -39,6 +39,7 @@ sol!(
     #![sol(rpc)]
     contract SafeSingleton {
         function isModuleEnabled(address module) public view returns (bool);
+        function nonce() public view returns (uint256);
     }
 );
 
@@ -219,6 +220,25 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
                 .to_be_bytes::<32>(),
         ))
     }
+
+    pub(crate) async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64> {
+        let safe_address_alloy = alloy::primitives::Address::from(safe_address);
+
+        // Get provider from any contract instance (they all share the same provider)
+        let provider = self.contract_instances.token.provider();
+
+        // Create Safe contract instance
+        let safe_contract = SafeSingleton::new(safe_address_alloy, provider);
+
+        // Call nonce() method on Safe contract
+        let nonce = safe_contract.nonce().call().await?;
+
+        // Convert U256 to u64 with explicit overflow handling
+        // While practically impossible (requires ~584 billion years at 1 tx/sec to reach u64::MAX),
+        // proper error handling follows Rust best practices and avoids potential panics
+        let nonce_u64 = nonce.try_into().map_err(|_| RpcError::SafeNonceOverflow(nonce))?;
+        Ok(nonce_u64)
+    }
 }
 
 #[async_trait]
@@ -237,6 +257,10 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
 
     async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> Result<HoprBalance> {
         self.get_hopr_allowance(owner, spender).await
+    }
+
+    async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64> {
+        self.get_safe_transaction_count(safe_address).await
     }
 
     async fn get_minimum_network_winning_probability(&self) -> Result<WinningProbability> {

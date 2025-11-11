@@ -1,5 +1,6 @@
 use alloy::{
     contract::Error as AlloyContractError,
+    primitives::U256,
     providers::{MulticallError, PendingTransactionError},
     transports::{RpcError as AlloyRpcError, TransportErrorKind},
 };
@@ -39,6 +40,9 @@ pub enum RpcError {
 
     #[error("transaction submission to the RPC provider timed out")]
     Timeout,
+
+    #[error("Safe nonce value {0} exceeds maximum u64 value")]
+    SafeNonceOverflow(U256),
 
     #[error("unknown error: {0}")]
     Other(String),

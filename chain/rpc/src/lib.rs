@@ -266,6 +266,16 @@ pub trait HoprRpcOperations {
     /// Retrieves the wxHOPR token allowance for the given owner and spender.
     async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> Result<HoprBalance>;
 
+    /// Retrieves the transaction count (nonce) for a Safe contract.
+    ///
+    /// # Arguments
+    /// * `safe_address` - The Safe contract address
+    ///
+    /// # Returns
+    /// * `Ok(u64)` - The current transaction count/nonce
+    /// * `Err(RpcError)` - If the call fails or address is not a Safe contract
+    async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64>;
+
     /// Retrieves the minimum incoming ticket winning probability by directly
     /// calling the network's winning probability oracle.
     async fn get_minimum_network_winning_probability(&self) -> Result<WinningProbability>;
@@ -356,6 +366,16 @@ pub trait HoprIndexerRpcOperations {
     /// # Returns
     /// * `Result<HoprBalance>` - The current HOPR token balance
     async fn get_hopr_balance(&self, address: Address) -> Result<HoprBalance>;
+
+    /// Retrieves the transaction count (nonce) for a Safe contract.
+    ///
+    /// # Arguments
+    /// * `safe_address` - The Safe contract address
+    ///
+    /// # Returns
+    /// * `Ok(u64)` - The current transaction count/nonce
+    /// * `Err(RpcError)` - If the call fails or address is not a Safe contract
+    async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64>;
 
     /// Streams blockchain logs using selective filtering based on synchronization state.
     ///

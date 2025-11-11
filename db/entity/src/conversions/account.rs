@@ -1,16 +1,19 @@
-use std::str::FromStr;
-
 use hopr_crypto_types::types::OffchainPublicKey;
 use hopr_primitive_types::{primitives::Address, traits::ToHex};
-
-use super::balances::address_to_string;
 
 impl TryFrom<crate::codegen::account::Model> for Address {
     type Error = crate::errors::DbEntityError;
 
     fn try_from(value: crate::codegen::account::Model) -> std::result::Result<Self, Self::Error> {
-        let chain_key_hex = address_to_string(&value.chain_key);
-        Ok(Address::from_str(&chain_key_hex).map_err(|e| Self::Error::Conversion(format!("{e}")))?)
+        if value.chain_key.len() != 20 {
+            return Err(Self::Error::Conversion(format!(
+                "Invalid chain_key length: expected 20 bytes, got {}",
+                value.chain_key.len()
+            )));
+        }
+        let mut addr_bytes = [0u8; 20];
+        addr_bytes.copy_from_slice(&value.chain_key);
+        Ok(Address::new(&addr_bytes))
     }
 }
 

@@ -9,7 +9,6 @@ use std::{
 
 use alloy::sol_types::SolEvent;
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
-use blokli_chain_types::chain_events::SignificantChainEvent;
 use blokli_db::{
     BlokliDbGeneralModelOperations, TargetDb, api::logs::BlokliDbLogOperations, info::BlokliDbInfoOperations,
 };
@@ -89,7 +88,6 @@ where
     db_processor: Option<U>,
     db: Db,
     cfg: IndexerConfig,
-    egress: async_channel::Sender<SignificantChainEvent>,
     indexer_state: IndexerState,
     // If true (default), the indexer will panic if the event stream is terminated.
     // Setting it to false is useful for testing.
@@ -102,20 +100,12 @@ where
     U: ChainLogHandler + Send + Sync + 'static,
     Db: BlokliDbGeneralModelOperations + BlokliDbInfoOperations + BlokliDbLogOperations + Clone + Send + Sync + 'static,
 {
-    pub fn new(
-        rpc: T,
-        db_processor: U,
-        db: Db,
-        cfg: IndexerConfig,
-        egress: async_channel::Sender<SignificantChainEvent>,
-        indexer_state: IndexerState,
-    ) -> Self {
+    pub fn new(rpc: T, db_processor: U, db: Db, cfg: IndexerConfig, indexer_state: IndexerState) -> Self {
         Self {
             rpc: Some(rpc),
             db_processor: Some(db_processor),
             db,
             cfg,
-            egress,
             indexer_state,
             panic_on_completion: true,
         }
@@ -150,8 +140,6 @@ where
         let rpc = self.rpc.take().expect("rpc should be present");
         let logs_handler = Arc::new(self.db_processor.take().expect("db_processor should be present"));
         let db = self.db.clone();
-        let _tx_significant_events = self.egress.clone();
-        let _indexer_state = self.indexer_state.clone();
         let panic_on_completion = self.panic_on_completion;
 
         let (log_filters, address_topics) = Self::generate_log_filters(&logs_handler);
@@ -1146,6 +1134,7 @@ mod tests {
             async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
             async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance>;
             async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
+            async fn get_safe_transaction_count(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<u64>;
 
             fn try_stream_logs<'a>(
                 &'a self,
@@ -1193,7 +1182,6 @@ mod tests {
             handlers,
             db.clone(),
             IndexerConfig::default(),
-            async_channel::unbounded().0,
             IndexerState::default(),
         )
         .without_panic_on_completion();
@@ -1268,7 +1256,6 @@ mod tests {
                 fast_sync: false,
                 ..Default::default()
             },
-            async_channel::unbounded().0,
             IndexerState::default(),
         )
         .without_panic_on_completion();
@@ -1336,15 +1323,8 @@ mod tests {
         assert!(tx.start_send(finalized_block.clone()).is_ok());
         assert!(tx.start_send(head_allowing_finalization.clone()).is_ok());
 
-        let indexer = Indexer::new(
-            rpc,
-            handlers,
-            db.clone(),
-            cfg,
-            async_channel::unbounded().0,
-            IndexerState::default(),
-        )
-        .without_panic_on_completion();
+        let indexer =
+            Indexer::new(rpc, handlers, db.clone(), cfg, IndexerState::default()).without_panic_on_completion();
         let _ = join!(indexer.start(), async move {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             tx.close_channel()
@@ -1380,7 +1360,6 @@ mod tests {
             assert_eq!(db.get_logs_block_numbers(None, None, Some(false)).await?.len(), 2);
 
             let (tx, rx) = futures::channel::mpsc::unbounded::<BlockWithLogs>();
-            let (tx_events, _) = async_channel::unbounded();
 
             let head_block = 5;
             let mut rpc = MockHoprIndexerOps::new();
@@ -1410,15 +1389,8 @@ mod tests {
                 .return_const(ContractAddresses::default());
 
             let indexer_cfg = IndexerConfig::new(0, true, false, None, "/tmp/test_data".to_string(), 1000, 10);
-            let indexer = Indexer::new(
-                rpc,
-                handlers,
-                db.clone(),
-                indexer_cfg,
-                tx_events,
-                IndexerState::default(),
-            )
-            .without_panic_on_completion();
+            let indexer = Indexer::new(rpc, handlers, db.clone(), indexer_cfg, IndexerState::default())
+                .without_panic_on_completion();
             let (indexing, _) = join!(indexer.start(), async move {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 tx.close_channel()
@@ -1472,7 +1444,6 @@ mod tests {
             assert_eq!(db.get_logs_block_numbers(None, None, Some(false)).await?.len(), 2);
 
             let (tx, rx) = futures::channel::mpsc::unbounded::<BlockWithLogs>();
-            let (tx_events, _) = async_channel::unbounded();
 
             let head_block = 5;
             let mut rpc = MockHoprIndexerOps::new();
@@ -1503,15 +1474,8 @@ mod tests {
                 .return_const(ContractAddresses::default());
 
             let indexer_cfg = IndexerConfig::new(0, true, false, None, "/tmp/test_data".to_string(), 1000, 10);
-            let indexer = Indexer::new(
-                rpc,
-                handlers,
-                db.clone(),
-                indexer_cfg,
-                tx_events,
-                IndexerState::default(),
-            )
-            .without_panic_on_completion();
+            let indexer = Indexer::new(rpc, handlers, db.clone(), indexer_cfg, IndexerState::default())
+                .without_panic_on_completion();
             let (indexing, _) = join!(indexer.start(), async move {
                 tokio::time::sleep(std::time::Duration::from_millis(200)).await;
                 tx.close_channel()
@@ -1587,18 +1551,12 @@ mod tests {
             .withf(move |l, _| block_numbers.contains(&l.block_number))
             .returning(|_, _| Ok(()));
 
-        let (tx_events, rx_events) = async_channel::unbounded();
-        let indexer = Indexer::new(rpc, handlers, db.clone(), cfg, tx_events, IndexerState::default())
-            .without_panic_on_completion();
+        let indexer =
+            Indexer::new(rpc, handlers, db.clone(), cfg, IndexerState::default()).without_panic_on_completion();
         indexer.start().await?;
 
-        // At this point we expect 2 events to arrive. The third event, which was generated first,
-        // should be dropped because it was generated before the indexer was in sync with head.
-        let _first = rx_events.recv();
-        let _second = rx_events.recv();
-        let third = rx_events.try_recv();
-
-        assert!(third.is_err());
+        // Test validates that indexer processes blocks correctly once past events are indexed
+        // Event publishing behavior is now handled separately through IndexerState
 
         Ok(())
     }
@@ -1674,16 +1632,8 @@ mod tests {
 
         let indexer_cfg = IndexerConfig::new(0, false, false, None, "/tmp/test_data".to_string(), 1000, 10);
 
-        let (tx_events, _) = async_channel::unbounded();
-        let indexer = Indexer::new(
-            rpc,
-            handlers,
-            db.clone(),
-            indexer_cfg,
-            tx_events,
-            IndexerState::default(),
-        )
-        .without_panic_on_completion();
+        let indexer =
+            Indexer::new(rpc, handlers, db.clone(), indexer_cfg, IndexerState::default()).without_panic_on_completion();
         indexer.start().await?;
 
         Ok(())
