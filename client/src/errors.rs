@@ -4,6 +4,13 @@ use cynic::http::CynicReqwestError;
 #[derive(Debug)]
 pub struct BlokliClientError(Box<ErrorKind>);
 
+impl BlokliClientError {
+    /// Returns the reference to [`ErrorKind`].
+    pub fn kind(&self) -> &ErrorKind {
+        self.0.as_ref()
+    }
+}
+
 impl From<ErrorKind> for BlokliClientError {
     fn from(kind: ErrorKind) -> Self {
         Self(Box::new(kind))
@@ -40,7 +47,7 @@ pub enum TrackingErrorKind {
 pub enum ErrorKind {
     #[error("no data returned from blokli unexpectedly")]
     NoData,
-    #[error("blokli: {kind} ({code}): {message}")]
+    #[error("remote blokli error: {kind} ({code}): {message}")]
     BlokliError {
         kind: &'static str,
         code: String,
