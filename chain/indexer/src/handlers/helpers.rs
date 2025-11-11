@@ -3,16 +3,20 @@ use std::collections::HashMap;
 use blokli_api_types::{Account, Channel, ChannelUpdate, TokenValueString, UInt64};
 use blokli_db_entity::{
     codegen::{account, channel, channel_state},
-    conversions::{
-        account_aggregation,
-        balances::{address_to_string, balance_to_string},
-    },
+    conversions::account_aggregation,
 };
 use hopr_crypto_types::prelude::Hash;
-use hopr_primitive_types::prelude::{Address, ToHex};
+use hopr_primitive_types::prelude::{Address, HoprBalance, IntoEndian, ToHex};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder};
 
 use crate::errors::{CoreEthereumIndexerError, Result};
+
+/// Convert 12-byte HOPR balance to decimal string
+fn bytes_to_hopr_balance_string(bytes: &[u8]) -> String {
+    let mut padded = [0u8; 32];
+    padded[20..].copy_from_slice(bytes);
+    HoprBalance::from_be_bytes(padded).amount().to_string()
+}
 
 /// Helper function to construct a complete ChannelUpdate from database channel_id
 ///
@@ -80,7 +84,7 @@ where
         concrete_channel_id: channel.concrete_channel_id,
         source: channel.source,
         destination: channel.destination,
-        balance: TokenValueString(balance_to_string(&state.balance)),
+        balance: TokenValueString(bytes_to_hopr_balance_string(&state.balance)),
         status: state.status.into(),
         epoch: i32::try_from(state.epoch).map_err(|e| {
             CoreEthereumIndexerError::ValidationError(format!(
@@ -148,9 +152,7 @@ where
         .one(conn)
         .await
         .map_err(|e| CoreEthereumIndexerError::ProcessError(format!("Failed to query account: {}", e)))?
-        .ok_or_else(|| {
-            CoreEthereumIndexerError::ProcessError(format!("Account {} not found", address_to_string(&address_bytes)))
-        })?;
+        .ok_or_else(|| CoreEthereumIndexerError::ProcessError(format!("Account {} not found", address.to_hex())))?;
 
     // 2. Fetch complete account data using the optimized aggregation function
     let accounts_result = account_aggregation::fetch_accounts_by_keyids(conn, vec![account.id])

@@ -12,13 +12,23 @@ use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
 use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::conversions::{
-    account_aggregation::fetch_accounts_with_filters, balances::hopr_balance_to_string,
-    channel_aggregation::fetch_channels_with_state,
+    account_aggregation::fetch_accounts_with_filters, channel_aggregation::fetch_channels_with_state,
 };
-use hopr_primitive_types::{primitives::Address, traits::ToHex};
+use hopr_primitive_types::{
+    prelude::HoprBalance as PrimitiveHoprBalance,
+    primitives::Address,
+    traits::{IntoEndian, ToHex},
+};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
 
 use crate::{mutation::TransactionResult, validation::validate_eth_address};
+
+/// Convert 12-byte HOPR balance to decimal string
+fn bytes_to_hopr_balance_string(bytes: &[u8]) -> String {
+    let mut padded = [0u8; 32];
+    padded[20..].copy_from_slice(bytes);
+    PrimitiveHoprBalance::from_be_bytes(padded).amount().to_string()
+}
 
 /// Result type for HOPR balance queries
 #[derive(Union)]
@@ -477,8 +487,8 @@ impl QueryRoot {
         let ticket_price = chain_info
             .ticket_price
             .as_ref()
-            .map(|bytes| TokenValueString(hopr_balance_to_string(bytes)))
-            .unwrap_or_else(|| TokenValueString(hopr_balance_to_string(&[])));
+            .map(|bytes| TokenValueString(bytes_to_hopr_balance_string(bytes)))
+            .unwrap_or_else(|| TokenValueString(bytes_to_hopr_balance_string(&[])));
 
         // Convert last_indexed_block from i64 to i32 with validation
         let block_number = i32::try_from(chain_info.last_indexed_block).map_err(|_| {

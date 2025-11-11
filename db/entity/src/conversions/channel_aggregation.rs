@@ -3,10 +3,17 @@
 use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
+use hopr_primitive_types::prelude::{HoprBalance, IntoEndian};
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 
-use super::balances::hopr_balance_to_string;
 use crate::codegen::{channel, channel_state};
+
+/// Convert 12-byte HOPR balance to decimal string
+fn bytes_to_hopr_balance_string(bytes: &[u8]) -> String {
+    let mut padded = [0u8; 32];
+    padded[20..].copy_from_slice(bytes);
+    HoprBalance::from_be_bytes(padded).amount().to_string()
+}
 
 /// Aggregated channel data with state information
 #[derive(Debug, Clone)]
@@ -102,7 +109,7 @@ pub async fn fetch_channels_with_state(
                 concrete_channel_id: channel.concrete_channel_id,
                 source: channel.source,
                 destination: channel.destination,
-                balance: hopr_balance_to_string(&state.balance),
+                balance: bytes_to_hopr_balance_string(&state.balance),
                 status: state.status,
                 epoch: state.epoch,
                 ticket_index: state.ticket_index,
