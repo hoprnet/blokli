@@ -229,7 +229,6 @@ mod tests {
             packet_key: "peer123".to_string(),
             safe_address: None,
             multi_addresses: vec![],
-            safe_transaction_count: blokli_api_types::UInt64(0),
         };
 
         // Publish an event
@@ -273,7 +272,6 @@ mod tests {
             packet_key: "peer456".to_string(),
             safe_address: None,
             multi_addresses: vec![],
-            safe_transaction_count: blokli_api_types::UInt64(0),
         };
 
         // Publish event

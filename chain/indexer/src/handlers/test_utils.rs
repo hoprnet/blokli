@@ -50,6 +50,8 @@ pub(super) mod test_helpers {
 
         async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
 
+        async fn get_safe_transaction_count(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<u64>;
+
         fn try_stream_logs<'a>(
             &'a self,
             start_block_number: u64,
@@ -84,6 +86,10 @@ pub(super) mod test_helpers {
 
         async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance> {
             self.inner.get_hopr_balance(address).await
+        }
+
+        async fn get_safe_transaction_count(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<u64> {
+            self.inner.get_safe_transaction_count(safe_address).await
         }
 
         fn try_stream_logs<'a>(

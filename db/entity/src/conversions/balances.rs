@@ -57,11 +57,11 @@ pub fn balance_to_f64(balance: &[u8]) -> f64 {
     }
 }
 
-/// Convert a 12-byte balance representation to String (human-readable format for HOPR)
+/// Convert a 12-byte balance representation to decimal string
 ///
 /// This function converts the 12-byte big-endian balance stored in the database
-/// to a human-readable string representation using the HoprBalance type.
-/// The output format is like "10 wxHOPR" or "10.5 wxHOPR".
+/// to a decimal string representation using the HoprBalance type.
+/// The output is a raw decimal value without units (e.g., "1000000000000000000").
 ///
 /// The 12-byte balance is padded to 32 bytes before conversion to Balance type.
 ///
@@ -69,34 +69,34 @@ pub fn balance_to_f64(balance: &[u8]) -> f64 {
 /// * `balance` - A slice containing the 12-byte balance
 ///
 /// # Returns
-/// * `String` - The balance as a human-readable string (e.g., "10 wxHOPR"), or "0 wxHOPR" if the slice is not 12 bytes
+/// * `String` - The balance as a decimal string (e.g., "1000"), or "0" if the slice is not 12 bytes
 pub fn balance_to_string(balance: &[u8]) -> String {
     hopr_balance_to_string(balance)
 }
 
-/// Convert a 12-byte HOPR balance to human-readable string
+/// Convert a 12-byte HOPR balance to decimal string
 pub fn hopr_balance_to_string(balance: &[u8]) -> String {
     if balance.len() == 12 {
         // Pad 12 bytes to 32 bytes for Balance type
         let mut bytes = [0u8; 32];
         bytes[20..].copy_from_slice(balance);
         let hopr_balance = HoprBalance::from_be_bytes(&bytes);
-        hopr_balance.to_string()
+        hopr_balance.amount().to_string()
     } else {
-        HoprBalance::zero().to_string()
+        "0".to_string()
     }
 }
 
-/// Convert a 12-byte native balance to human-readable string
+/// Convert a 12-byte native balance to decimal string
 pub fn native_balance_to_string(balance: &[u8]) -> String {
     if balance.len() == 12 {
         // Pad 12 bytes to 32 bytes for Balance type
         let mut bytes = [0u8; 32];
         bytes[20..].copy_from_slice(balance);
         let native_balance = XDaiBalance::from_be_bytes(&bytes);
-        native_balance.to_string()
+        native_balance.amount().to_string()
     } else {
-        XDaiBalance::zero().to_string()
+        "0".to_string()
     }
 }
 

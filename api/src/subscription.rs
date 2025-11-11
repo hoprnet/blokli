@@ -1010,8 +1010,8 @@ mod tests {
 
         // Should return channel with latest balance (2 wei, not 2 HOPR)
         assert_eq!(result.len(), 1);
-        // Balance is 2 wei which displays as 0.000000000000000002 HOPR
-        assert_eq!(result[0].channel.balance.0, "0.000000000000000002 wxHOPR");
+        // Balance is 2 wei (raw decimal value)
+        assert_eq!(result[0].channel.balance.0, "2");
     }
 
     #[tokio::test]
