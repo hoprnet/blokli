@@ -33,7 +33,7 @@ impl Default for BlokliTestState {
             chain_info: ChainInfo {
                 channel_closure_grace_period: Some(Uint64("300".into())),
                 channel_dst: Some("0000000000000000000000000000000000000000000000000000000000000000".into()),
-                block_number: 100,
+                block_number: 1,
                 chain_id: 100,
                 ledger_dst: Some("0000000000000000000000000000000000000000000000000000000000000000".into()),
                 min_ticket_winning_probability: 1.0,
@@ -63,41 +63,49 @@ impl Default for BlokliTestState {
 }
 
 impl BlokliTestState {
+    /// Convenience method to return a reference to an [`Account`] with a given [`ChainAddress`].
     pub fn get_account(&self, chain_key: &ChainAddress) -> Option<&Account> {
         self.accounts
             .values()
             .find(|acc| acc.chain_key == hex::encode(chain_key))
     }
 
+    /// Convenience method to return a mutable reference to an [`Account`] with a given [`ChainAddress`].
     pub fn get_account_mut(&mut self, chain_key: &ChainAddress) -> Option<&mut Account> {
         self.accounts
             .values_mut()
             .find(|acc| acc.chain_key == hex::encode(chain_key))
     }
 
+    /// Convenience method to return a reference to a [`Channel`] with a given [` ChannelId `].
     pub fn get_channel_by_id(&self, channel_id: &ChannelId) -> Option<&Channel> {
         self.channels.get(channel_id)
     }
 
+    /// Convenience method to return a mutable reference to a [`Channel`] with a given [` ChannelId `].
     pub fn get_channel_by_id_mut(&mut self, channel_id: &ChannelId) -> Option<&mut Channel> {
         self.channels.get_mut(channel_id)
     }
 
+    /// Convenience method to return a reference to Safe balance corresponding to the given [`ChainAddress`] of the [`Account`].
     pub fn get_account_safe_token_balance(&self, chain_key: &ChainAddress) -> Option<&HoprBalance> {
         let account = self.get_account(chain_key)?;
         self.token_balances.get(account.safe_address.as_ref()?)
     }
 
+    /// Convenience method to return a mutable reference to Safe balance corresponding to the given [`ChainAddress`] of the [`Account`].
     pub fn get_account_safe_token_balance_mut(&mut self, chain_key: &ChainAddress) -> Option<&mut HoprBalance> {
         let account = self.get_account(chain_key).and_then(|a| a.safe_address.clone())?;
         self.token_balances.get_mut(&account)
     }
 
+    /// Convenience method to return a reference to Safe allowance corresponding to the given [`ChainAddress`] of the [`Account`].
     pub fn get_account_safe_allowance(&self, chain_key: &ChainAddress) -> Option<&SafeHoprAllowance> {
         let account = self.get_account(chain_key)?;
         self.safe_allowances.get(account.safe_address.as_ref()?)
     }
 
+    /// Convenience method to return a mutable  reference to Safe allowance corresponding to the given [`ChainAddress`] of the [`Account`].
     pub fn get_account_safe_allowance_mut(&mut self, chain_key: &ChainAddress) -> Option<&mut SafeHoprAllowance> {
         let account = self.get_account(chain_key).and_then(|a| a.safe_address.clone())?;
         self.safe_allowances.get_mut(&account)
@@ -108,7 +116,7 @@ impl BlokliTestState {
 pub trait BlokliTestStateMutator {
     /// Updates the state given the signed transaction.
     ///
-    /// Mutations that remove accounts or channels are not allowed.
+    /// Mutations that remove anything from the state are not allowed.
     fn update_state(&self, signed_tx: &[u8], state: &mut BlokliTestState) -> Result<()>;
 }
 
