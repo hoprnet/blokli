@@ -112,7 +112,7 @@ async fn capture_watermark_synchronized(
 async fn query_channels_at_watermark(
     db: &DatabaseConnection,
     watermark: &Watermark,
-    batch_size: usize,
+    _batch_size: usize,
 ) -> Result<Vec<ChannelUpdate>> {
     // Query all channels (identity table has no temporal component)
     let channels = channel::Entity::find()
@@ -236,10 +236,6 @@ async fn query_channels_at_watermark(
             source: source_gql,
             destination: dest_gql,
         });
-
-        if results.len() >= batch_size {
-            break;
-        }
     }
 
     Ok(results)
@@ -1001,7 +997,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_query_channels_at_watermark_respects_batch_size() {
+    async fn test_query_channels_at_watermark_returns_all_channels() {
         let db = BlokliDb::new_in_memory().await.unwrap();
 
         // Create 5 open channels
@@ -1049,13 +1045,13 @@ mod tests {
             log_index: 0,
         };
 
-        // Query with batch_size = 3
+        // Query with batch_size = 3 (parameter is ignored, all channels returned)
         let result = query_channels_at_watermark(db.conn(blokli_db::TargetDb::Index), &watermark, 3)
             .await
             .unwrap();
 
-        // Should return only 3 channels despite 5 existing
-        assert_eq!(result.len(), 3);
+        // Should return all 5 channels (batch_size is now unused)
+        assert_eq!(result.len(), 5);
     }
 
     // Tests for fetch_channel_update removed - events now contain complete data
