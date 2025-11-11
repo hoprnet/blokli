@@ -55,6 +55,25 @@ pub mod topics {
         vec![WinProbUpdated::SIGNATURE_HASH]
     }
 
+    pub fn token() -> Vec<B256> {
+        use hopr_bindings::hopr_token::HoprToken::{
+            Approval, AuthorizedOperator, Burned, Minted, RevokedOperator, RoleAdminChanged, RoleGranted, RoleRevoked,
+            Sent, Transfer,
+        };
+        vec![
+            Transfer::SIGNATURE_HASH,
+            Approval::SIGNATURE_HASH,
+            AuthorizedOperator::SIGNATURE_HASH,
+            Burned::SIGNATURE_HASH,
+            Minted::SIGNATURE_HASH,
+            RevokedOperator::SIGNATURE_HASH,
+            RoleAdminChanged::SIGNATURE_HASH,
+            RoleGranted::SIGNATURE_HASH,
+            RoleRevoked::SIGNATURE_HASH,
+            Sent::SIGNATURE_HASH,
+        ]
+    }
+
     pub fn module_implementation() -> Vec<B256> {
         vec![]
     }

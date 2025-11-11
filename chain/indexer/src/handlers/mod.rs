@@ -215,6 +215,8 @@ where
             crate::constants::topics::winning_prob_oracle()
         } else if contract.eq(&self.addresses.node_safe_registry) {
             crate::constants::topics::node_safe_registry()
+        } else if contract.eq(&self.addresses.token) {
+            crate::constants::topics::token()
         } else {
             panic!("use of unsupported contract address: {contract}");
         }
