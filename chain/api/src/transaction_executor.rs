@@ -143,54 +143,43 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     ///
     /// This mode:
     /// - Validates the transaction
-    /// - Creates transaction record in store
-    /// - Submits to RPC
-    /// - Updates store with transaction hash
+    /// - Submits to RPC and obtains transaction hash
+    /// - Creates transaction record in store with hash
     /// - Returns UUID for later querying
     /// - Background monitor handles confirmation tracking
     pub async fn send_raw_transaction_async(&self, raw_tx: Vec<u8>) -> Result<Uuid, TransactionExecutorError> {
         // Validate transaction
         self.validator.validate_raw_transaction(&raw_tx)?;
 
-        // Create transaction record
+        // Submit to RPC first to get transaction hash
+        let tx_hash = self
+            .rpc_client
+            .send_raw_transaction(raw_tx.clone())
+            .await
+            .map_err(TransactionExecutorError::RpcError)?;
+
+        // Create transaction record with hash and Submitted status
         let id = Uuid::new_v4();
         let record = TransactionRecord {
             id,
-            raw_transaction: raw_tx.clone(),
-            transaction_hash: None,
-            status: TransactionStatus::Pending,
+            raw_transaction: raw_tx,
+            transaction_hash: tx_hash,
+            status: TransactionStatus::Submitted,
             submitted_at: Utc::now(),
             confirmed_at: None,
             error_message: None,
         };
 
         self.transaction_store.insert(record)?;
-
-        // Submit to RPC
-        match self.rpc_client.send_raw_transaction(raw_tx).await {
-            Ok(tx_hash) => {
-                // Update store with transaction hash and status
-                self.transaction_store.update_transaction_hash(id, tx_hash)?;
-                self.transaction_store
-                    .update_status(id, TransactionStatus::Submitted, None)?;
-                Ok(id)
-            }
-            Err(e) => {
-                // Update store with error
-                self.transaction_store
-                    .update_status(id, TransactionStatus::SubmissionFailed, Some(e.clone()))?;
-                Err(TransactionExecutorError::RpcError(e))
-            }
-        }
+        Ok(id)
     }
 
     /// Sync mode: Submit transaction and wait for confirmations
     ///
     /// This mode:
     /// - Validates the transaction
-    /// - Creates transaction record in store
     /// - Submits to RPC and waits for confirmations
-    /// - Updates store with final status
+    /// - Creates transaction record in store with result
     /// - Returns complete transaction record
     pub async fn send_raw_transaction_sync(
         &self,
@@ -202,49 +191,27 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
 
         let confirmations = confirmations.unwrap_or(self.config.default_confirmations);
 
-        // Create transaction record
+        // Submit to RPC with confirmation wait
+        let tx_hash = self
+            .rpc_client
+            .send_raw_transaction_with_confirm(raw_tx.clone(), confirmations, Some(self.config.confirmation_timeout))
+            .await
+            .map_err(TransactionExecutorError::RpcError)?;
+
+        // Create transaction record with confirmed status
         let id = Uuid::new_v4();
         let record = TransactionRecord {
             id,
-            raw_transaction: raw_tx.clone(),
-            transaction_hash: None,
-            status: TransactionStatus::Pending,
+            raw_transaction: raw_tx,
+            transaction_hash: tx_hash,
+            status: TransactionStatus::Confirmed,
             submitted_at: Utc::now(),
-            confirmed_at: None,
+            confirmed_at: Some(Utc::now()),
             error_message: None,
         };
 
-        self.transaction_store.insert(record)?;
-
-        // Submit to RPC with confirmation wait
-        match self
-            .rpc_client
-            .send_raw_transaction_with_confirm(raw_tx, confirmations, Some(self.config.confirmation_timeout))
-            .await
-        {
-            Ok(tx_hash) => {
-                // Update store with success
-                self.transaction_store.update_transaction_hash(id, tx_hash)?;
-                self.transaction_store
-                    .update_status(id, TransactionStatus::Confirmed, None)?;
-
-                // Return updated record
-                Ok(self.transaction_store.get(id)?)
-            }
-            Err(e) => {
-                // Update store with error
-                let status = if e.contains("timeout") {
-                    TransactionStatus::Timeout
-                } else if e.contains("reverted") {
-                    TransactionStatus::Reverted
-                } else {
-                    TransactionStatus::SubmissionFailed
-                };
-
-                self.transaction_store.update_status(id, status, Some(e.clone()))?;
-                Err(TransactionExecutorError::RpcError(e))
-            }
-        }
+        self.transaction_store.insert(record.clone())?;
+        Ok(record)
     }
 
     /// Get transaction store for querying
@@ -391,7 +358,7 @@ mod tests {
         let record = executor.transaction_store().get(uuid).unwrap();
         assert_eq!(record.id, uuid);
         assert_eq!(record.status, TransactionStatus::Submitted);
-        assert!(record.transaction_hash.is_some());
+        assert_eq!(record.transaction_hash, Hash::default());
     }
 
     #[tokio::test]
@@ -402,12 +369,8 @@ mod tests {
         let result = executor.send_raw_transaction_async(raw_tx).await;
         assert!(matches!(result, Err(TransactionExecutorError::RpcError(_))));
 
-        // Verify error was recorded
-        let records = executor
-            .transaction_store()
-            .list_by_status(TransactionStatus::SubmissionFailed);
-        assert_eq!(records.len(), 1);
-        assert!(records[0].error_message.is_some());
+        // Verify no record was created on RPC failure
+        assert_eq!(executor.transaction_store().count(), 0);
     }
 
     #[tokio::test]
@@ -420,7 +383,7 @@ mod tests {
 
         let record = result.unwrap();
         assert_eq!(record.status, TransactionStatus::Confirmed);
-        assert!(record.transaction_hash.is_some());
+        assert_eq!(record.transaction_hash, Hash::default());
         assert!(record.confirmed_at.is_some());
     }
 
@@ -432,9 +395,8 @@ mod tests {
         let result = executor.send_raw_transaction_sync(raw_tx, None).await;
         assert!(matches!(result, Err(TransactionExecutorError::RpcError(_))));
 
-        // Verify timeout status was recorded
-        let records = executor.transaction_store().list_by_status(TransactionStatus::Timeout);
-        assert_eq!(records.len(), 1);
+        // Verify no record was created on RPC failure
+        assert_eq!(executor.transaction_store().count(), 0);
     }
 
     #[tokio::test]

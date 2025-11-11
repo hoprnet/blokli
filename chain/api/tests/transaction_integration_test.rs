@@ -259,7 +259,7 @@ async fn test_async_mode_returns_uuid_and_tracks() -> anyhow::Result<()> {
     // Verify UUID is returned and transaction is in store
     let record = ctx.store.get(uuid)?;
     assert_eq!(record.status, TransactionStatus::Submitted);
-    assert!(record.transaction_hash.is_some());
+    assert_ne!(record.transaction_hash, Hash::default());
 
     // Wait for monitor to update status
     wait_for_condition(Duration::from_secs(3), "transaction to be confirmed", || {
@@ -385,7 +385,7 @@ async fn test_sync_mode_waits_for_confirmations() -> anyhow::Result<()> {
 
     // Should be confirmed
     assert_eq!(record.status, TransactionStatus::Confirmed);
-    assert!(record.transaction_hash.is_some());
+    assert_ne!(record.transaction_hash, Hash::default());
 
     Ok(())
 }

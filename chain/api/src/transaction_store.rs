@@ -47,8 +47,8 @@ pub struct TransactionRecord {
     pub id: Uuid,
     /// Raw signed transaction data
     pub raw_transaction: Vec<u8>,
-    /// Transaction hash (available after submission)
-    pub transaction_hash: Option<Hash>,
+    /// Transaction hash from successful blockchain submission
+    pub transaction_hash: Hash,
     /// Current status of the transaction
     pub status: TransactionStatus,
     /// Timestamp when transaction was submitted
@@ -141,19 +141,6 @@ impl TransactionStore {
             .ok_or(TransactionStoreError::NotFound(id))
     }
 
-    /// Update the transaction hash
-    ///
-    /// # Errors
-    /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
-    pub fn update_transaction_hash(&self, id: Uuid, transaction_hash: Hash) -> Result<(), TransactionStoreError> {
-        self.transactions
-            .get_mut(&id)
-            .map(|mut entry| {
-                entry.value_mut().transaction_hash = Some(transaction_hash);
-            })
-            .ok_or(TransactionStoreError::NotFound(id))
-    }
-
     /// List all transactions with a specific status
     pub fn list_by_status(&self, status: TransactionStatus) -> Vec<TransactionRecord> {
         self.transactions
@@ -188,8 +175,8 @@ mod tests {
         let record = TransactionRecord {
             id: Uuid::new_v4(),
             raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: None,
-            status: TransactionStatus::Pending,
+            transaction_hash: Hash::default(),
+            status: TransactionStatus::Submitted,
             submitted_at: Utc::now(),
             confirmed_at: None,
             error_message: None,
@@ -202,7 +189,7 @@ mod tests {
         // Verify we can retrieve it
         let retrieved = store.get(id).unwrap();
         assert_eq!(retrieved.id, id);
-        assert_eq!(retrieved.status, TransactionStatus::Pending);
+        assert_eq!(retrieved.status, TransactionStatus::Submitted);
     }
 
     #[test]
@@ -213,8 +200,8 @@ mod tests {
         let record = TransactionRecord {
             id,
             raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: None,
-            status: TransactionStatus::Pending,
+            transaction_hash: Hash::default(),
+            status: TransactionStatus::Submitted,
             submitted_at: Utc::now(),
             confirmed_at: None,
             error_message: None,
@@ -243,8 +230,8 @@ mod tests {
         let record = TransactionRecord {
             id: Uuid::new_v4(),
             raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: None,
-            status: TransactionStatus::Pending,
+            transaction_hash: Hash::default(),
+            status: TransactionStatus::Submitted,
             submitted_at: Utc::now(),
             confirmed_at: None,
             error_message: None,
@@ -253,9 +240,7 @@ mod tests {
         let id = record.id;
         store.insert(record).unwrap();
 
-        // Update status to Submitted
-        store.update_status(id, TransactionStatus::Submitted, None).unwrap();
-
+        // Verify initial status
         let retrieved = store.get(id).unwrap();
         assert_eq!(retrieved.status, TransactionStatus::Submitted);
         assert!(retrieved.confirmed_at.is_none());
@@ -266,30 +251,6 @@ mod tests {
         let retrieved = store.get(id).unwrap();
         assert_eq!(retrieved.status, TransactionStatus::Confirmed);
         assert!(retrieved.confirmed_at.is_some());
-    }
-
-    #[test]
-    fn test_update_transaction_hash() {
-        let store = TransactionStore::new();
-
-        let record = TransactionRecord {
-            id: Uuid::new_v4(),
-            raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: None,
-            status: TransactionStatus::Pending,
-            submitted_at: Utc::now(),
-            confirmed_at: None,
-            error_message: None,
-        };
-
-        let id = record.id;
-        store.insert(record).unwrap();
-
-        let tx_hash = Hash::default();
-        store.update_transaction_hash(id, tx_hash).unwrap();
-
-        let retrieved = store.get(id).unwrap();
-        assert_eq!(retrieved.transaction_hash, Some(tx_hash));
     }
 
     #[test]
@@ -308,15 +269,15 @@ mod tests {
         // Insert transactions with different statuses
         for i in 0..5 {
             let status = if i % 2 == 0 {
-                TransactionStatus::Pending
-            } else {
                 TransactionStatus::Submitted
+            } else {
+                TransactionStatus::Confirmed
             };
 
             let record = TransactionRecord {
                 id: Uuid::new_v4(),
                 raw_transaction: vec![i as u8],
-                transaction_hash: None,
+                transaction_hash: Hash::default(),
                 status,
                 submitted_at: Utc::now(),
                 confirmed_at: None,
@@ -326,11 +287,11 @@ mod tests {
             store.insert(record).unwrap();
         }
 
-        let pending = store.list_by_status(TransactionStatus::Pending);
-        assert_eq!(pending.len(), 3); // 0, 2, 4
-
         let submitted = store.list_by_status(TransactionStatus::Submitted);
-        assert_eq!(submitted.len(), 2); // 1, 3
+        assert_eq!(submitted.len(), 3); // 0, 2, 4
+
+        let confirmed = store.list_by_status(TransactionStatus::Confirmed);
+        assert_eq!(confirmed.len(), 2); // 1, 3
     }
 
     #[test]
@@ -345,8 +306,8 @@ mod tests {
                 let record = TransactionRecord {
                     id: Uuid::new_v4(),
                     raw_transaction: vec![i],
-                    transaction_hash: None,
-                    status: TransactionStatus::Pending,
+                    transaction_hash: Hash::default(),
+                    status: TransactionStatus::Submitted,
                     submitted_at: Utc::now(),
                     confirmed_at: None,
                     error_message: None,
@@ -361,8 +322,8 @@ mod tests {
                 let record = TransactionRecord {
                     id: Uuid::new_v4(),
                     raw_transaction: vec![i],
-                    transaction_hash: None,
-                    status: TransactionStatus::Pending,
+                    transaction_hash: Hash::default(),
+                    status: TransactionStatus::Submitted,
                     submitted_at: Utc::now(),
                     confirmed_at: None,
                     error_message: None,
@@ -385,8 +346,8 @@ mod tests {
         let record = TransactionRecord {
             id: Uuid::new_v4(),
             raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: None,
-            status: TransactionStatus::Pending,
+            transaction_hash: Hash::default(),
+            status: TransactionStatus::Submitted,
             submitted_at: Utc::now(),
             confirmed_at: None,
             error_message: None,
@@ -399,7 +360,7 @@ mod tests {
         let updated_record = TransactionRecord {
             id,
             raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: Some(Hash::default()),
+            transaction_hash: Hash::default(),
             status: TransactionStatus::Confirmed,
             submitted_at: Utc::now(),
             confirmed_at: Some(Utc::now()),
@@ -410,7 +371,7 @@ mod tests {
 
         let retrieved = store.get(id).unwrap();
         assert_eq!(retrieved.status, TransactionStatus::Confirmed);
-        assert!(retrieved.transaction_hash.is_some());
+        assert_eq!(retrieved.transaction_hash, Hash::default());
         assert!(retrieved.confirmed_at.is_some());
     }
 }

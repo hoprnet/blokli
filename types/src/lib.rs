@@ -243,9 +243,6 @@ pub struct Account {
     /// List of multiaddresses associated with the packet key
     #[graphql(name = "multiAddresses")]
     pub multi_addresses: Vec<String>,
-    /// HOPR Safe contract transaction count
-    #[graphql(name = "safeTransactionCount")]
-    pub safe_transaction_count: UInt64,
 }
 
 /// Network announcement with multiaddress information
@@ -372,9 +369,9 @@ pub struct Transaction {
     /// Timestamp when transaction was submitted
     #[graphql(name = "submittedAt")]
     pub submitted_at: chrono::DateTime<chrono::Utc>,
-    /// Transaction hash (available after submission)
+    /// Transaction hash from successful blockchain submission
     #[graphql(name = "transactionHash")]
-    pub transaction_hash: Option<Hex32>,
+    pub transaction_hash: Hex32,
 }
 
 /// Success response for fire-and-forget transaction submission
@@ -473,6 +470,15 @@ pub struct SafeHoprAllowance {
     pub address: String,
     /// wxHOPR token allowance granted by the safe to the channels contract
     pub allowance: TokenValueString,
+}
+
+/// Safe contract transaction count information
+#[derive(SimpleObject, Clone, Debug)]
+pub struct SafeTransactionCount {
+    /// Safe contract address
+    pub address: String,
+    /// Current transaction count (nonce) for the Safe contract
+    pub count: UInt64,
 }
 
 impl From<&blokli_chain_types::ContractAddresses> for ContractAddressMap {

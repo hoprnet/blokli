@@ -22,8 +22,6 @@ type Account {
   packetKey: String!
   "HOPR Safe contract address to which the account is linked (null if no Safe is linked)"
   safeAddress: String
-  "HOPR Safe contract transaction count"
-  safeTransactionCount: UInt64
 }
 
 """Success response for accounts query"""
@@ -191,7 +189,7 @@ type MutationRoot {
   
   Validates the pre-signed raw transaction data and submits it to the chain.
   Returns the transaction hash immediately after submission.
-  Does not wait for confirmation and does not track transaction status in database.
+  Does not wait for confirmation and does not track transaction status.
   Use this mode for maximum performance when you don't need confirmation tracking.
   """
   sendTransaction(
@@ -214,7 +212,7 @@ type MutationRoot {
   
   Validates the pre-signed raw transaction data, submits it to the chain, and waits for
   the specified number of confirmations (default: 8 blocks) before returning.
-  Transaction is persisted to database and can be queried later.
+  Transaction can be queried later.
   """
   sendTransactionSync(
     "Number of block confirmations to wait for (default: 8, max: 64)"
@@ -261,7 +259,7 @@ type OpenedChannelsGraphEntry {
   source: Account!
 }
 
-"""Database or internal query error"""
+"""Internal query error"""
 type QueryFailedError {
   "Error code"
   code: String!
@@ -287,7 +285,7 @@ type QueryRoot {
     packetKey: String
   ): CountResult!
   """
-  Retrieve accounts from the database with required filtering
+  Retrieve accounts with required filtering
   
   **At least one filter parameter must be provided** (keyid, packetKey, or chainKey).
   Returns Error with code MISSING_REQUIRED_FILTER if no filters are specified.
@@ -359,7 +357,7 @@ type QueryRoot {
   - Any other Ethereum-compatible address
   
   Returns Error with code INVALID_ADDRESS if address format is invalid.
-  Returns Error with code QUERY_FAILED if database query fails.
+  Returns Error with code QUERY_FAILED if query fails.
   Returns None if no balance exists for the address.
   
   Example (querying a Safe balance requires two separate requests):
@@ -399,7 +397,7 @@ type QueryRoot {
   - Any other Ethereum-compatible address
   
   Returns Error with code INVALID_ADDRESS if address format is invalid.
-  Returns Error with code QUERY_FAILED if database query fails.
+  Returns Error with code QUERY_FAILED if query fails.
   Returns None if no balance exists for the address.
   """
   nativeBalance(
@@ -413,7 +411,7 @@ type QueryRoot {
   has granted to the HOPR channels contract.
   
   Returns Error with code INVALID_ADDRESS if address format is invalid.
-  Returns Error with code QUERY_FAILED if database query fails.
+  Returns Error with code QUERY_FAILED if query fails.
   Returns None if no allowance data exists for the address.
   """
   safeHoprAllowance(
@@ -421,11 +419,25 @@ type QueryRoot {
     address: String!
   ): SafeHoprAllowanceResult!
   """
+  Retrieve Safe contract transaction count
+
+  This query returns the current nonce/transaction count for a HOPR Safe contract
+  directly from the blockchain. The transaction count increments with each transaction
+  executed by the Safe.
+
+  Returns Error with code INVALID_ADDRESS if address format is invalid.
+  Returns Error with code QUERY_FAILED if blockchain query fails.
+  """
+  safeTransactionCount(
+    "Safe contract address to query (hexadecimal format)"
+    address: String!
+  ): SafeTransactionCountResult!
+  """
   Retrieve transaction status by ID
   
   Returns the current status of a previously submitted transaction.
   Returns Error with code INVALID_TRANSACTION_ID if ID format is invalid.
-  Returns Error with code QUERY_FAILED if database query fails.
+  Returns Error with code QUERY_FAILED if query fails.
   Returns None if transaction ID is not found.
   """
   transaction(
@@ -458,6 +470,17 @@ type SafeHoprAllowance {
 
 """Result type for Safe HOPR allowance queries"""
 union SafeHoprAllowanceResult = SafeHoprAllowance | InvalidAddressError | QueryFailedError
+
+"""Safe contract transaction count information"""
+type SafeTransactionCount {
+  "Safe contract address"
+  address: String!
+  "Current transaction count (nonce) for the Safe contract"
+  count: UInt64!
+}
+
+"""Result type for Safe transaction count queries"""
+union SafeTransactionCountResult = SafeTransactionCount | InvalidAddressError | QueryFailedError
 
 """Result type for asynchronous transaction submission"""
 union SendTransactionAsyncResult = Transaction | ContractNotAllowedError | FunctionNotAllowedError | RpcError
@@ -576,8 +599,8 @@ type Transaction {
   status: TransactionStatus!
   "Timestamp when transaction was submitted"
   submittedAt: DateTime!
-  "Transaction hash (available after submission)"
-  transactionHash: Hex32
+  "Transaction hash from successful blockchain submission"
+  transactionHash: Hex32!
 }
 
 """Input for transaction submission"""
