@@ -20,7 +20,7 @@ This document provides comprehensive guidance for testing the Blokli indexer and
 just test
 
 # Run tests for a specific package
-just test-package blokli-db-sql
+just test-package blokli-db
 
 # Run with debug output (single-threaded, shows println!)
 just test-debug
@@ -66,7 +66,7 @@ Follow this structure for new tests:
 #[cfg(test)]
 mod tests {
     use super::*;
-    use blokli_db_sql::db::BlokliDb;
+    use blokli_db::db::BlokliDb;
     use blokli_db_entity::codegen::{channel, channel_state};
     use sea_orm::{ActiveValue, EntityTrait, ActiveModelTrait};
 
