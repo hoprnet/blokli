@@ -46,6 +46,23 @@ impl TransactionValidator {
     /// Currently only checks that the transaction is not empty.
     /// Future implementations will add more comprehensive validation.
     ///
+    /// # Examples
+    ///
+    /// ```
+    /// use blokli_chain_api::transaction_validator::{TransactionValidator, ValidationError};
+    ///
+    /// let validator = TransactionValidator::new();
+    ///
+    /// // Valid transaction with non-empty data
+    /// let valid_tx = vec![0x01, 0x02, 0x03];
+    /// assert!(validator.validate_raw_transaction(&valid_tx).is_ok());
+    ///
+    /// // Invalid empty transaction
+    /// let empty_tx: &[u8] = &[];
+    /// let result = validator.validate_raw_transaction(empty_tx);
+    /// assert_eq!(result, Err(ValidationError::EmptyTransaction));
+    /// ```
+    ///
     /// # Errors
     /// Returns `ValidationError::EmptyTransaction` if the transaction data is empty
     pub fn validate_raw_transaction(&self, raw_tx: &[u8]) -> Result<(), ValidationError> {
