@@ -441,18 +441,36 @@ impl QueryRoot {
         let min_ticket_winning_probability = chain_info.min_incoming_ticket_win_prob as f64;
 
         // Convert domain separators from binary to hex strings
-        let channel_dst = chain_info.channels_dst.as_ref().map(|b| {
-            let bytes: &[u8; 32] = b.as_slice().try_into().expect("channels_dst must be 32 bytes");
-            Hex32::from(bytes)
-        });
-        let ledger_dst = chain_info.ledger_dst.as_ref().map(|b| {
-            let bytes: &[u8; 32] = b.as_slice().try_into().expect("ledger_dst must be 32 bytes");
-            Hex32::from(bytes)
-        });
-        let safe_registry_dst = chain_info.safe_registry_dst.as_ref().map(|b| {
-            let bytes: &[u8; 32] = b.as_slice().try_into().expect("safe_registry_dst must be 32 bytes");
-            Hex32::from(bytes)
-        });
+        let channel_dst = chain_info
+            .channels_dst
+            .as_ref()
+            .map(|b| -> Result<Hex32> {
+                let bytes: &[u8; 32] = b.as_slice().try_into().map_err(|_| {
+                    async_graphql::Error::new(format!("channels_dst must be 32 bytes, got {} bytes", b.len()))
+                })?;
+                Ok(Hex32::from(bytes))
+            })
+            .transpose()?;
+        let ledger_dst = chain_info
+            .ledger_dst
+            .as_ref()
+            .map(|b| -> Result<Hex32> {
+                let bytes: &[u8; 32] = b.as_slice().try_into().map_err(|_| {
+                    async_graphql::Error::new(format!("ledger_dst must be 32 bytes, got {} bytes", b.len()))
+                })?;
+                Ok(Hex32::from(bytes))
+            })
+            .transpose()?;
+        let safe_registry_dst = chain_info
+            .safe_registry_dst
+            .as_ref()
+            .map(|b| -> Result<Hex32> {
+                let bytes: &[u8; 32] = b.as_slice().try_into().map_err(|_| {
+                    async_graphql::Error::new(format!("safe_registry_dst must be 32 bytes, got {} bytes", b.len()))
+                })?;
+                Ok(Hex32::from(bytes))
+            })
+            .transpose()?;
 
         // Convert channel closure grace period from i64 to u64 with validation
         let channel_closure_grace_period = chain_info
