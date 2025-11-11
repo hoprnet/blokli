@@ -117,7 +117,7 @@ pub async fn start_server(network: String, config: ApiConfig) -> ApiResult<()> {
         },
         None,
     )
-    .expect("Failed to create RPC operations");
+    .map_err(|e| ApiError::ConfigError(format!("Failed to create RPC operations: {}", e)))?;
 
     let rpc_adapter = Arc::new(RpcAdapter::new(rpc_operations.clone()));
 
