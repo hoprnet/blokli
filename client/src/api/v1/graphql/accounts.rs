@@ -1,6 +1,6 @@
 use hex::ToHex;
 
-use super::{CountResult, MissingFilterError, QueryFailedError, schema};
+use super::{CountResult, InvalidAddressError, MissingFilterError, QueryFailedError, Uint64, schema};
 use crate::{
     api::v1::AccountSelector,
     errors::{BlokliClientError, ErrorKind},
@@ -90,6 +90,46 @@ impl From<AccountsResult> for Result<Vec<Account>, BlokliClientError> {
             AccountsResult::MissingFilterError(e) => Err(e.into()),
             AccountsResult::QueryFailedError(e) => Err(e.into()),
             AccountsResult::Unknown => Err(ErrorKind::NoData.into()),
+        }
+    }
+}
+
+#[derive(cynic::QueryVariables, Debug)]
+pub struct TxCountVariables {
+    pub address: String,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+pub struct SafeTransactionCount {
+    pub __typename: String,
+    pub count: Uint64,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "QueryRoot", variables = "TxCountVariables")]
+pub struct QueryTxCount {
+    #[arguments(address: $address)]
+    pub safe_transaction_count: SafeTransactionCountResult,
+}
+
+#[derive(cynic::InlineFragments, Debug)]
+pub enum SafeTransactionCountResult {
+    SafeTransactionCount(SafeTransactionCount),
+    InvalidAddressError(InvalidAddressError),
+    QueryFailedError(QueryFailedError),
+    #[cynic(fallback)]
+    Unknown,
+}
+
+impl From<SafeTransactionCountResult> for Result<u64, BlokliClientError> {
+    fn from(value: SafeTransactionCountResult) -> Self {
+        match value {
+            SafeTransactionCountResult::SafeTransactionCount(count) => {
+                Ok(count.count.0.parse().map_err(|_| ErrorKind::ParseError)?)
+            }
+            SafeTransactionCountResult::InvalidAddressError(e) => Err(e.into()),
+            SafeTransactionCountResult::QueryFailedError(e) => Err(e.into()),
+            SafeTransactionCountResult::Unknown => Err(ErrorKind::NoData.into()),
         }
     }
 }

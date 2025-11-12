@@ -50,6 +50,17 @@ impl BlokliQueryClient for BlokliClient {
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(address = hex::encode(address)))]
+    async fn query_transaction_count(&self, address: &ChainAddress) -> Result<u64> {
+        let resp = self
+            .build_query(QueryTxCount::build(TxCountVariables {
+                address: address.encode_hex(),
+            }))?
+            .await?;
+
+        response_to_data(resp)?.safe_transaction_count.into()
+    }
+
+    #[tracing::instrument(level = "debug", skip(self), fields(address = hex::encode(address)))]
     async fn query_safe_allowance(&self, address: &ChainAddress) -> Result<SafeHoprAllowance> {
         let resp = self
             .build_query(QuerySafeAllowance::build(BalanceVariables {
