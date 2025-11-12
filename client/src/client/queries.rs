@@ -49,6 +49,7 @@ impl BlokliQueryClient for BlokliClient {
         response_to_data(resp)?.hopr_balance.into()
     }
 
+    #[tracing::instrument(level = "debug", skip(self), fields(address = hex::encode(address)))]
     async fn query_transaction_count(&self, address: &ChainAddress) -> Result<u64> {
         let resp = self
             .build_query(QueryTxCount::build(TxCountVariables {
