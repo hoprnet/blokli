@@ -1,16 +1,24 @@
 use std::{ops::Div, sync::Arc, time::Duration};
 
-use async_broadcast::TrySendError;
-use futures::{Stream, StreamExt};
-use indexmap::IndexMap;
-
 use crate::{
     api::{types::*, *},
     errors::{BlokliClientError, ErrorKind},
 };
+use async_broadcast::TrySendError;
+use futures::{Stream, StreamExt};
+use indexmap::IndexMap;
+
+fn serialize_as_empty_map<K, V, S>(_: &IndexMap<K, V>, serializer: S) -> std::result::Result<S::Ok, S::Error>
+where
+    K: serde::Serialize,
+    V: serde::Serialize,
+    S: serde::Serializer,
+{
+    serde::Serialize::serialize(&IndexMap::<K, V>::new(), serializer)
+}
 
 /// Represents a state for [`BlokliTestClient`].
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BlokliTestState {
     pub accounts: IndexMap<u32, Account>,
     pub native_balances: IndexMap<String, NativeBalance>,
@@ -21,7 +29,24 @@ pub struct BlokliTestState {
     pub chain_info: ChainInfo,
     pub version: String,
     pub health: String,
+    // Always serialize as empty, because the data are non-deterministic and do not make sense to compare.
+    #[serde(serialize_with = "serialize_as_empty_map")]
     pub active_txs: IndexMap<TxId, Transaction>,
+}
+
+impl PartialEq for BlokliTestState {
+    fn eq(&self, other: &Self) -> bool {
+        // Skip active_txs because they are non-deterministic.
+        self.accounts == other.accounts
+            && self.native_balances == other.native_balances
+            && self.token_balances == other.token_balances
+            && self.safe_allowances == other.safe_allowances
+            && self.tx_counts == other.tx_counts
+            && self.channels == other.channels
+            && self.chain_info == other.chain_info
+            && self.version == other.version
+            && self.health == other.health
+    }
 }
 
 impl Default for BlokliTestState {
@@ -41,7 +66,7 @@ impl Default for BlokliTestState {
                 ledger_dst: Some("0000000000000000000000000000000000000000000000000000000000000000".into()),
                 min_ticket_winning_probability: 1.0,
                 safe_registry_dst: Some("0000000000000000000000000000000000000000000000000000000000000000".into()),
-                ticket_price: TokenValueString("1".into()),
+                ticket_price: TokenValueString("1 wxHOPR".into()),
                 network: "rotsee".into(),
                 contract_addresses: ContractAddressMap(
                     r#"
@@ -167,6 +192,12 @@ impl BlokliTestStateSnapshot {
     }
 }
 
+impl AsRef<BlokliTestState> for BlokliTestStateSnapshot {
+    fn as_ref(&self) -> &BlokliTestState {
+        &self.snapshot
+    }
+}
+
 impl std::ops::Deref for BlokliTestStateSnapshot {
     type Target = BlokliTestState;
 
@@ -234,6 +265,13 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
             accounts_channel: (accounts_tx, accounts_rx.deactivate()),
             channels_channel: (channels_tx, channels_rx.deactivate()),
         }
+    }
+
+    /// Allows changing the mutator on the instance for another one of the same type.
+    #[must_use]
+    pub fn with_mutator(mut self, mutator: M) -> Self {
+        self.mutator = mutator;
+        self
     }
 
     /// Returns the current snapshot of the internal state.
