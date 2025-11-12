@@ -5,7 +5,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-client"
 repository  = "https://github.com/hoprnet/blokli"
-version     = "0.6.0"
+version     = "0.6.1"
 
 [dependencies]
 anyhow = { workspace = true }
@@ -17,6 +17,7 @@ eventsource-client = { workspace = true }
 futures = { workspace = true }
 futures-time = { workspace = true }
 hex = { workspace = true }
+indexmap = { workspace = true, optional = true}
 parking_lot = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 reqwest = { workspace = true, features = [
@@ -34,10 +35,11 @@ tracing = { workspace = true }
 url = { workspace = true }
 
 [features]
-serde = ["dep:serde"]
+serde = ["dep:serde", "indexmap/serde"]
 testing = [
   "dep:async-broadcast",
   "dep:chrono",
+  "dep:indexmap",
   "dep:parking_lot",
   "dep:rand",
   "serde",
