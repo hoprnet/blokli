@@ -16,7 +16,7 @@ pub struct BlokliTestState {
     pub token_balances: HashMap<String, HoprBalance>,
     pub safe_allowances: HashMap<String, SafeHoprAllowance>,
     pub tx_counts: HashMap<String, u64>,
-    pub channels: HashMap<ChannelId, Channel>,
+    pub channels: HashMap<String, Channel>,
     pub chain_info: ChainInfo,
     pub version: String,
     pub health: String,
@@ -81,12 +81,12 @@ impl BlokliTestState {
 
     /// Convenience method to return a reference to a [`Channel`] with a given [` ChannelId `].
     pub fn get_channel_by_id(&self, channel_id: &ChannelId) -> Option<&Channel> {
-        self.channels.get(channel_id)
+        self.channels.get(&hex::encode(channel_id))
     }
 
     /// Convenience method to return a mutable reference to a [`Channel`] with a given [` ChannelId `].
     pub fn get_channel_by_id_mut(&mut self, channel_id: &ChannelId) -> Option<&mut Channel> {
-        self.channels.get_mut(channel_id)
+        self.channels.get_mut(&hex::encode(channel_id))
     }
 
     /// Convenience method to return a reference to Safe balance corresponding to the given [`ChainAddress`] of the
