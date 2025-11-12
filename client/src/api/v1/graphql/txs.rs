@@ -61,7 +61,7 @@ pub struct Transaction {
     pub id: cynic::Id,
     pub status: TransactionStatus,
     pub submitted_at: DateTime,
-    pub transaction_hash: Option<Hex32>,
+    pub transaction_hash: Hex32,
 }
 
 #[derive(cynic::QueryFragment, Debug)]

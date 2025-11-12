@@ -13,7 +13,9 @@ pub mod types {
 
 pub(crate) mod internal {
     pub use super::graphql::{
-        accounts::{AccountVariables, QueryAccountCount, QueryAccounts, SubscribeAccounts},
+        accounts::{
+            AccountVariables, QueryAccountCount, QueryAccounts, QueryTxCount, SubscribeAccounts, TxCountVariables,
+        },
         balances::{BalanceVariables, QueryHoprBalance, QueryNativeBalance, QuerySafeAllowance},
         channels::{ChannelsVariables, QueryChannelCount, QueryChannels, SubscribeChannels},
         graph::SubscribeGraph,
@@ -78,6 +80,8 @@ pub trait BlokliQueryClient {
     async fn query_native_balance(&self, address: &ChainAddress) -> Result<types::NativeBalance>;
     /// Queries the token balance of the given account.
     async fn query_token_balance(&self, address: &ChainAddress) -> Result<types::HoprBalance>;
+    /// Queries the number of transactions sent from the given account.
+    async fn query_transaction_count(&self, address: &ChainAddress) -> Result<u64>;
     /// Queries the safe allowance of the given account.
     async fn query_safe_allowance(&self, address: &ChainAddress) -> Result<types::SafeHoprAllowance>;
     /// Counts the number of channels optionally matching the given [`selector`](ChannelSelector).

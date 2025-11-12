@@ -52,11 +52,9 @@ impl BlokliTransactionClient for BlokliClient {
 
         let tx: Result<Transaction> = response_to_data(resp)?.send_transaction_sync.into();
 
-        Ok(tx?.transaction_hash.ok_or(ErrorKind::NoData).and_then(|d| {
-            hex::decode(d.0)
-                .map_err(|_| ErrorKind::ParseError)
-                .and_then(|d| d.try_into().map_err(|_| ErrorKind::ParseError))
-        })?)
+        Ok(hex::decode(tx?.transaction_hash.0)
+            .map_err(|_| ErrorKind::ParseError)
+            .and_then(|d| d.try_into().map_err(|_| ErrorKind::ParseError))?)
     }
 
     async fn track_transaction(&self, tx_id: TxId, client_timeout: Duration) -> Result<Transaction> {

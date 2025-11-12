@@ -15,6 +15,7 @@ pub struct BlokliTestState {
     pub native_balances: HashMap<String, NativeBalance>,
     pub token_balances: HashMap<String, HoprBalance>,
     pub safe_allowances: HashMap<String, SafeHoprAllowance>,
+    pub tx_counts: HashMap<String, u64>,
     pub channels: HashMap<ChannelId, Channel>,
     pub chain_info: ChainInfo,
     pub version: String,
@@ -29,6 +30,7 @@ impl Default for BlokliTestState {
             native_balances: Default::default(),
             token_balances: Default::default(),
             safe_allowances: Default::default(),
+            tx_counts: Default::default(),
             channels: Default::default(),
             chain_info: ChainInfo {
                 channel_closure_grace_period: Some(Uint64("300".into())),
@@ -298,6 +300,17 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
             .get(&address)
             .cloned()
             .ok_or_else(|| ErrorKind::NoData.into())
+    }
+
+    async fn query_transaction_count(&self, address: &ChainAddress) -> Result<u64> {
+        let address = hex::encode(address);
+        let state = self.state.upgradable_read();
+        if let Some(value) = state.tx_counts.get(&address) {
+            return Ok(*value);
+        }
+
+        let mut state = parking_lot::RwLockUpgradableReadGuard::upgrade(state);
+        Ok(*state.tx_counts.entry(address).or_default())
     }
 
     async fn query_safe_allowance(&self, address: &ChainAddress) -> Result<SafeHoprAllowance> {
