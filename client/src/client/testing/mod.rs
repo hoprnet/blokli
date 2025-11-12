@@ -1,7 +1,8 @@
-use std::{collections::HashMap, ops::Div, sync::Arc, time::Duration};
+use std::{ops::Div, sync::Arc, time::Duration};
 
 use async_broadcast::TrySendError;
 use futures::{Stream, StreamExt};
+use indexmap::IndexMap;
 
 use crate::{
     api::{types::*, *},
@@ -11,16 +12,16 @@ use crate::{
 /// Represents a state for [`BlokliTestClient`].
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct BlokliTestState {
-    pub accounts: HashMap<u32, Account>,
-    pub native_balances: HashMap<String, NativeBalance>,
-    pub token_balances: HashMap<String, HoprBalance>,
-    pub safe_allowances: HashMap<String, SafeHoprAllowance>,
-    pub tx_counts: HashMap<String, u64>,
-    pub channels: HashMap<String, Channel>,
+    pub accounts: IndexMap<u32, Account>,
+    pub native_balances: IndexMap<String, NativeBalance>,
+    pub token_balances: IndexMap<String, HoprBalance>,
+    pub safe_allowances: IndexMap<String, SafeHoprAllowance>,
+    pub tx_counts: IndexMap<String, u64>,
+    pub channels: IndexMap<String, Channel>,
     pub chain_info: ChainInfo,
     pub version: String,
     pub health: String,
-    pub active_txs: HashMap<TxId, Transaction>,
+    pub active_txs: IndexMap<TxId, Transaction>,
 }
 
 impl Default for BlokliTestState {
@@ -496,7 +497,7 @@ fn simulate_tx_execution(
     state
         .accounts
         .iter()
-        .filter(|(new_id, new_account)| {
+        .filter(|&(new_id, new_account)| {
             old_state.accounts.get(new_id).is_none_or(|old_account| {
                 // Change is notified only if safe address or multi addresses changed
                 old_account.safe_address != new_account.safe_address
@@ -633,7 +634,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
         self.state
             .write()
             .active_txs
-            .remove(&tx_id)
+            .shift_remove(&tx_id)
             .ok_or_else(|| ErrorKind::NoData.into())
     }
 }

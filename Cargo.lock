@@ -1869,7 +1869,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-client"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1881,6 +1881,7 @@ dependencies = [
  "futures",
  "futures-time",
  "hex",
+ "indexmap 2.12.0",
  "insta",
  "mockito",
  "parking_lot",
