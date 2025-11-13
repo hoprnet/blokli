@@ -24,3 +24,30 @@ jobs:
           egress-policy: audit
       - name: Checkout hoprnet repository
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+  build-binaries:
+    strategy:
+      matrix:
+        binary:
+          - architecture: x86_64-linux
+            runner: ubuntu-24.04
+          - architecture: aarch64-linux
+            runner: ubuntu-24.04
+          - architecture: aarch64-darwin
+            runner: macos-15
+          - architecture: x86_64-darwin
+            runner: macos-15
+    name: Build
+    uses: ./.github/workflows/build-binaries.yaml
+    with:
+      branch: ${{ github.event.pull_request.head.ref }}
+      runner: ${{ matrix.binary.runner }}
+      architecture: ${{ matrix.binary.architecture }}
+      version_type: "commit"
+    secrets: inherit
+  build-docker:
+    name: Build
+    uses: ./.github/workflows/build-docker.yaml
+    with:
+      branch: ${{ github.event.pull_request.head.ref }}
+      version_type: "commit"
+    secrets: inherit

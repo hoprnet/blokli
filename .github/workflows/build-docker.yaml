@@ -7,7 +7,7 @@ permissions:
 on:
   workflow_call:
     inputs:
-      source_branch:
+      branch:
         required: true
         type: string
       version_type:
@@ -29,7 +29,7 @@ jobs:
       - name: Checkout hoprnet repository
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
-          ref: ${{ inputs.source_branch }}
+          ref: ${{ inputs.branch }}
       - name: Install Nix
         uses: cachix/install-nix-action@7be5dee1421f63d07e71ce6e0a9f8a4b07c2a487 # v31
       - name: Use Nix Cache
@@ -53,20 +53,24 @@ jobs:
           current_version=$(grep -E '^version\s*=' bloklid/Cargo.toml | awk -F\" '{print $2}')
           if [[ "${{ inputs.version_type }}" == "commit" ]]; then
             bump_version=${current_version}+commit.$(git rev-parse --short HEAD)
-            echo "bump_version=${bump_version}" | tee -a $GITHUB_OUTPUT
           elif [[ "${{ inputs.version_type }}" == "pr" ]]; then
             bump_version=${current_version}+pr.${{ github.event.pull_request.number }}
-            echo "bump_version=${bump_version}" | tee -a $GITHUB_OUTPUT
           elif [[ "${{ inputs.version_type }}" == "release" ]]; then
-            echo "bump_version=${current_version}" | tee -a $GITHUB_OUTPUT
+            bump_version=${current_version}
           else
             echo "Invalid version type"
             exit 1
           fi
           sed -i.bak -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" bloklid/Cargo.toml
-          nix develop --command cargo generate-lockfile
+          ## TODO Need to regenerate the lockfile in nix
+          #nix develop --command cargo generate-lockfile
           rm bloklid/Cargo.toml.bak
-          echo "DOCKER_TAG=${bump_version/+/-}" | tee -a $GITHUB_OUTPUT
+          bump_version=${bump_version/+/-} # Replace + with - for docker tag compatibility
+          if [[ "${{ inputs.version_type }}" == "pr" ]]; then
+            echo "DOCKER_TAG="${{ vars.DOCKER_IMAGE_REGISTRY }}"/bloklid:${bump_version},${{ vars.DOCKER_IMAGE_REGISTRY}}/bloklid:latest" | tee -a $GITHUB_OUTPUT
+          else
+            echo "DOCKER_TAG="${{ vars.DOCKER_IMAGE_REGISTRY }}"/bloklid:${bump_version}" | tee -a $GITHUB_OUTPUT
+          fi
       - name: Build docker image
         run: nix run -L .#bloklid-docker-build-and-upload
         env:
