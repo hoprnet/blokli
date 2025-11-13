@@ -527,9 +527,9 @@
           packages = packages // {
             # Docker images - x86_64-linux
             inherit (bloklidDocker)
-              bloklid-docker
-              bloklid-dev-docker
-              bloklid-profile-docker
+              bloklid-docker-amd64
+              bloklid-dev-docker-amd64
+              bloklid-profile-docker-amd64
               ;
 
             # Docker images - aarch64-linux
