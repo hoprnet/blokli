@@ -221,9 +221,6 @@ impl std::ops::Deref for BlokliTestStateSnapshot {
 ///
 /// Cloning the client will create a new client that shares the same state with the previous one.
 /// This makes sense, however, only when the `mutator` can perform actual changes on the shared state.
-///
-/// Arbitrary (out-of-transaction) state updates can be done via [`BlokliTestClient::update_state`]
-/// with all consistency checks disabled.
 #[derive(Clone)]
 pub struct BlokliTestClient<M> {
     state: Arc<parking_lot::RwLock<BlokliTestState>>,
@@ -292,16 +289,17 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
         }
     }
 
-    /// Updates the state outside mutator's scope.
+    /// Allows updating the minimum ticket price and minimum ticket-winning probability.
     ///
-    /// This allows for arbitrary state updates without any consistency checks or an
-    /// encoded transaction.
-    ///
-    /// If the client has multiple clones with the same state, the change takes
-    /// effect for everyone.
-    pub fn update_state(&self, update_fn: impl FnOnce(&mut BlokliTestState)) {
-        let mut state = self.state.write();
-        update_fn(&mut state);
+    /// These changes are not broadcasted as events but take effect on the shared state
+    /// for all clones of the client.
+    pub fn update_price_and_win_prob(&self, new_price: Option<TokenValueString>, new_win_prob: Option<f64>) {
+        if let Some(new_price) = new_price {
+            self.state.write().chain_info.ticket_price = new_price;
+        }
+        if let Some(new_win_prob) = new_win_prob {
+            self.state.write().chain_info.min_ticket_winning_probability = new_win_prob;
+        }
     }
 
     fn do_query_channels(&self, selector: ChannelSelector) -> Result<Vec<Channel>> {
