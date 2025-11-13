@@ -62,14 +62,14 @@ jobs:
             # It can be triggered by the build, merge or release pipelines
             branch=${{ inputs.branch }}
             architecture=${{ inputs.architecture }}
-            if [[ "${{ inputs.runner }}" =~ ".*-macos" ]]; then
+            if [[ "${{ inputs.runner }}" =~ "macos-.*" ]]; then
               requires_nix='true'
             fi
           else
             echo "The workflow is triggered manually"
             branch=${{ github.ref_name }}
             architecture=${{ github.event.inputs.architecture }}
-            if [[ "${{ github.event.inputs.runner }}" =~ ".*-macos" ]]; then
+            if [[ "${{ github.event.inputs.runner }}" =~ "macos-.*" ]]; then
               requires_nix='true'
             fi
           fi
