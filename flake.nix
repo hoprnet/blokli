@@ -195,17 +195,17 @@
           # Docker images using nix-lib
           bloklidDocker = {
             # x86_64-linux Docker images
-            bloklid-docker = nixLib.mkDockerImage {
+            bloklid-docker-amd64 = nixLib.mkDockerImage {
               name = "bloklid";
               Entrypoint = [ "${bloklidPackages.bloklid-x86_64-linux}/bin/bloklid" ];
               pkgsLinux = pkgsLinux;
             };
-            bloklid-dev-docker = nixLib.mkDockerImage {
+            bloklid-dev-docker-amd64 = nixLib.mkDockerImage {
               name = "bloklid-dev";
               Entrypoint = [ "${bloklidPackages.bloklid-x86_64-linux-dev}/bin/bloklid" ];
               pkgsLinux = pkgsLinux;
             };
-            bloklid-profile-docker = nixLib.mkDockerImage {
+            bloklid-profile-docker-amd64 = nixLib.mkDockerImage {
               name = "bloklid-profile";
               Entrypoint = [ "${bloklidPackages.bloklid-x86_64-linux-profile}/bin/bloklid" ];
               pkgsLinux = pkgsLinux;
@@ -307,14 +307,14 @@
           };
 
           # Multi-architecture Docker manifests using nix-lib
-          bloklidMultiArch = {
+          bloklidDockerMultiArch = {
             # Production multi-arch manifest
-            bloklid-manifest = nixLib.mkMultiArchManifest {
+            bloklid-docker-manifest = nixLib.mkMultiArchManifest {
               name = "bloklid";
               tag = bloklidCrateInfo.version;
               images = [
                 {
-                  image = bloklidDocker.bloklid-docker;
+                  image = bloklidDocker.bloklid-docker-amd64;
                   platform = "linux/amd64";
                 }
                 {
@@ -325,12 +325,12 @@
             };
 
             # Development multi-arch manifest
-            bloklid-dev-manifest = nixLib.mkMultiArchManifest {
+            bloklid-dev-docker-manifest = nixLib.mkMultiArchManifest {
               name = "bloklid-dev";
               tag = bloklidCrateInfo.version;
               images = [
                 {
-                  image = bloklidDocker.bloklid-dev-docker;
+                  image = bloklidDocker.bloklid-dev-docker-amd64;
                   platform = "linux/amd64";
                 }
                 {
@@ -341,12 +341,12 @@
             };
 
             # Profile multi-arch manifest
-            bloklid-profile-manifest = nixLib.mkMultiArchManifest {
+            bloklid-profile-docker-manifest = nixLib.mkMultiArchManifest {
               name = "bloklid-profile";
               tag = bloklidCrateInfo.version;
               images = [
                 {
-                  image = bloklidDocker.bloklid-profile-docker;
+                  image = bloklidDocker.bloklid-profile-docker-amd64;
                   platform = "linux/amd64";
                 }
                 {
@@ -360,9 +360,9 @@
           # Application definitions using nix-lib
           # Multi-arch manifest upload apps - always use these to ensure both architectures are available
           dockerUploadApps = {
-            bloklid-manifest-upload = nixLib.mkMultiArchUploadApp bloklidMultiArch.bloklid-manifest;
-            bloklid-dev-manifest-upload = nixLib.mkMultiArchUploadApp bloklidMultiArch.bloklid-dev-manifest;
-            bloklid-profile-manifest-upload = nixLib.mkMultiArchUploadApp bloklidMultiArch.bloklid-profile-manifest;
+            bloklid-docker-manifest-upload = nixLib.mkMultiArchUploadApp bloklidDockerMultiArch.bloklid-docker-manifest;
+            bloklid-dev-docker-manifest-upload = nixLib.mkMultiArchUploadApp bloklidDockerMultiArch.bloklid-dev-docker-manifest;
+            bloklid-profile-docker-manifest-upload = nixLib.mkMultiArchUploadApp bloklidDockerMultiArch.bloklid-profile-docker-manifest;
           };
 
           utilityApps = {

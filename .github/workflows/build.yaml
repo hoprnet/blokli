@@ -40,9 +40,7 @@ jobs:
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
         env:
           USER: runner
-      - name: Check formatting
-        run: nix develop --command just fmt
-      - name: Check linting
-        run: nix develop --command just clippy
+      - name: Check formatting and linting
+        run: nix develop --command just quick
       - name: Run unit tests
         run: nix develop --command just test

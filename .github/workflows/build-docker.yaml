@@ -33,7 +33,7 @@ jobs:
         include:
           - arch: amd64
             nix_arch: x86_64-linux
-            nix_package: bloklid-docker
+            nix_package: bloklid-docker-amd64
           - arch: arm64
             nix_arch: aarch64-linux
             nix_package: bloklid-docker-aarch64
@@ -137,9 +137,9 @@ jobs:
         run: |
           set -x
           bump_version="${{ needs.build-docker-images.outputs.image_tag }}"
-          sed -i.bak -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" bloklid/Cargo.toml
+          sed -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" bloklid/Cargo.toml > bloklid/Cargo.toml.new
+          mv bloklid/Cargo.toml.new bloklid/Cargo.toml
           nix develop --command cargo generate-lockfile
-          rm bloklid/Cargo.toml.bak
       - name: Upload multi-arch manifest and images
         run: |
           # Use nix-lib multi-arch upload app to:
