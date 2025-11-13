@@ -358,18 +358,8 @@
           };
 
           # Application definitions using nix-lib
+          # Multi-arch manifest upload apps - always use these to ensure both architectures are available
           dockerUploadApps = {
-            # x86_64-linux upload apps (single arch - for backwards compatibility)
-            bloklid-docker-build-and-upload = nixLib.mkDockerUploadApp bloklidDocker.bloklid-docker;
-            bloklid-dev-docker-build-and-upload = nixLib.mkDockerUploadApp bloklidDocker.bloklid-dev-docker;
-            bloklid-profile-docker-build-and-upload = nixLib.mkDockerUploadApp bloklidDocker.bloklid-profile-docker;
-
-            # aarch64-linux upload apps (single arch - for backwards compatibility)
-            bloklid-docker-aarch64-build-and-upload = nixLib.mkDockerUploadApp bloklidDocker.bloklid-docker-aarch64;
-            bloklid-dev-docker-aarch64-build-and-upload = nixLib.mkDockerUploadApp bloklidDocker.bloklid-dev-docker-aarch64;
-            bloklid-profile-docker-aarch64-build-and-upload = nixLib.mkDockerUploadApp bloklidDocker.bloklid-profile-docker-aarch64;
-
-            # Multi-arch manifest upload apps (recommended for new deployments)
             bloklid-manifest-upload = nixLib.mkMultiArchUploadApp bloklidMultiArch.bloklid-manifest;
             bloklid-dev-manifest-upload = nixLib.mkMultiArchUploadApp bloklidMultiArch.bloklid-dev-manifest;
             bloklid-profile-manifest-upload = nixLib.mkMultiArchUploadApp bloklidMultiArch.bloklid-profile-manifest;

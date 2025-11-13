@@ -9,43 +9,9 @@ concurrency:
   cancel-in-progress: false
 jobs:
   build-docker:
-    name: Build
+    name: Build Docker
     uses: ./.github/workflows/build-docker.yaml
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
-      version_type: "pr"
-    secrets: inherit
-  security-scan-amd64:
-    name: Security Scan (amd64)
-    needs: build-docker
-    uses: ./.github/workflows/security-scan.yaml
-    with:
-      image_url: ${{ needs.build-docker.outputs.image_url_amd64 }}
-      architecture: amd64
-    secrets: inherit
-  security-scan-arm64:
-    name: Security Scan (arm64)
-    needs: build-docker
-    uses: ./.github/workflows/security-scan.yaml
-    with:
-      image_url: ${{ needs.build-docker.outputs.image_url_arm64 }}
-      architecture: arm64
-    secrets: inherit
-  build-binaries:
-    strategy:
-      matrix:
-        binary:
-          - architecture: x86_64-linux
-            runner: self-hosted-hoprnet-bigger
-          - architecture: aarch64-darwin
-            runner: macos-15
-          - architecture: x86_64-darwin
-            runner: macos-13
-    name: Binary ${{ matrix.binary.architecture }}
-    uses: ./.github/workflows/build-binaries.yaml
-    with:
-      branch: ${{ github.event.pull_request.head.ref }}
-      runner: ${{ matrix.binary.runner }}
-      architecture: ${{ matrix.binary.architecture }}
       version_type: "pr"
     secrets: inherit

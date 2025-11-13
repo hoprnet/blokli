@@ -559,28 +559,6 @@ Three image variants are available for each architecture:
 
 ### Building and Uploading Docker Images
 
-#### Single Architecture (Individual Images)
-
-Using Nix apps for individual architecture images (backwards compatibility):
-
-```bash
-# Build and push amd64 production image
-nix run .#bloklid-docker-build-and-upload
-
-# Build and push arm64 production image
-nix run .#bloklid-docker-aarch64-build-and-upload
-
-# Build and push amd64 dev image
-nix run .#bloklid-dev-docker-build-and-upload
-
-# Build and push arm64 dev image
-nix run .#bloklid-dev-docker-aarch64-build-and-upload
-```
-
-**Note**: Set `IMAGE_TARGET` and `GOOGLE_ACCESS_TOKEN` environment variables before running upload commands.
-
-#### Multi-Architecture (Recommended)
-
 Using nix-lib multi-arch helpers to build and upload all architectures with automatic manifest creation:
 
 ```bash
@@ -613,12 +591,23 @@ Docker images are automatically built in GitHub Actions for:
 - **Merged PRs** - PR-tagged images (e.g., `1.0.0-pr.42`)
 - **Releases** - Version-tagged images (e.g., `1.0.0`)
 
-The build workflow uses nix-lib multi-arch helpers to:
+The build workflow follows a three-stage process:
 
-1. Build Docker images for both amd64 and arm64 architectures
-2. Upload platform-specific images with suffixes (`-linux-amd64`, `-linux-arm64`)
-3. Create and push an OCI manifest list for automatic platform selection
-4. Trigger security scans and SBOM generation
+**Stage 1: Build Images (Parallel)**
+- Builds Docker images for both amd64 and arm64 architectures in parallel
+- Uses Nix to ensure reproducible builds
+- Stores built images as artifacts
+
+**Stage 2: Upload Manifest (Sequential)**
+- Uses nix-lib multi-arch helper to build OCI manifest
+- Uploads platform-specific images with suffixes (`-linux-amd64`, `-linux-arm64`)
+- Creates and pushes multi-arch manifest list
+
+**Stage 3: Security Scanning (Parallel)**
+- Runs Trivy vulnerability scans for both architectures
+- Generates SBOMs in SPDX and CycloneDX formats
+- Performs smoke tests on uploaded images
+- Uploads results to GitHub Security
 
 #### Multi-Architecture Manifest
 
@@ -702,11 +691,10 @@ Automated security scanning in CI:
 
 ### Workflow Files
 
-- `.github/workflows/build-docker.yaml` - Multi-arch Docker build using nix-lib helpers
-- `.github/workflows/security-scan.yaml` - Nix-based security scanning and SBOM generation
-- `.github/workflows/build.yaml` - PR validation workflow
-- `.github/workflows/merge.yaml` - Post-merge workflow
-- `.github/workflows/release.yaml` - Release workflow
+- `.github/workflows/build-docker.yaml` - Multi-arch Docker build with integrated security scanning and SBOM generation
+- `.github/workflows/build.yaml` - PR validation (Docker + code quality checks)
+- `.github/workflows/merge.yaml` - Post-merge Docker builds
+- `.github/workflows/release.yaml` - Release workflow with Docker builds
 
 ### Image Tagging Strategy
 
