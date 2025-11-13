@@ -144,11 +144,14 @@ impl BlokliTestState {
     }
 }
 
-/// Mutator for the [`BlokliTestState`].
+/// Mutator for the [`BlokliTestState`] based on signed transactions.
 pub trait BlokliTestStateMutator {
     /// Updates the state given the signed transaction.
     ///
-    /// Mutations that remove anything from the state are not allowed.
+    /// [`BlokliTestClient`] makes several consistency checks on the updates.
+    /// For example, all mutations that remove anything from the state are not allowed.
+    ///
+    /// For arbitrary state updates via the client, see [`BlokliTestClient::update_state`].
     fn update_state(&self, signed_tx: &[u8], state: &mut BlokliTestState) -> Result<()>;
 }
 
@@ -213,7 +216,8 @@ impl std::ops::Deref for BlokliTestStateSnapshot {
 ///
 /// Later transactions done using the client can [mutate](BlokliTestStateMutator) the state and
 /// changes are propagated to the subscribers.
-/// Mutations that remove accounts or channels are not allowed.
+/// Mutations that remove accounts or channels are not allowed, so that a transaction cannot
+/// make the state inconsistent.
 ///
 /// Cloning the client will create a new client that shares the same state with the previous one.
 /// This makes sense, however, only when the `mutator` can perform actual changes on the shared state.
@@ -282,6 +286,19 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
         BlokliTestStateSnapshot {
             state: self.state.clone(),
             snapshot: state.clone(),
+        }
+    }
+
+    /// Allows updating the minimum ticket price and minimum ticket-winning probability.
+    ///
+    /// These changes are not broadcasted as events but take effect on the shared state
+    /// for all clones of the client.
+    pub fn update_price_and_win_prob(&self, new_price: Option<TokenValueString>, new_win_prob: Option<f64>) {
+        if let Some(new_price) = new_price {
+            self.state.write().chain_info.ticket_price = new_price;
+        }
+        if let Some(new_win_prob) = new_win_prob {
+            self.state.write().chain_info.min_ticket_winning_probability = new_win_prob;
         }
     }
 
