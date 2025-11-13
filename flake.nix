@@ -556,10 +556,10 @@
               ;
 
             # Multi-arch manifests
-            inherit (bloklidMultiArch)
-              bloklid-manifest
-              bloklid-dev-manifest
-              bloklid-profile-manifest
+            inherit (bloklidDockerMultiArch)
+              bloklid-docker-manifest
+              bloklid-dev-docker-manifest
+              bloklid-profile-docker-manifest
               ;
 
             # Set default package
