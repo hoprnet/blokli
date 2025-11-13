@@ -375,6 +375,80 @@ cargo doc --package hopr-bindings --open
 - Support configuration reload via SIGHUP signal
 - Validate configuration at startup
 
+#### Configuration Files
+
+The project maintains two key configuration files:
+
+- `bloklid/src/config.rs` - Rust configuration struct definitions with defaults and validation
+- `bloklid/example-config.toml` - Example configuration file showing all available options
+
+**IMPORTANT**: These files must be kept in sync. The example configuration serves as both user documentation and a working example of all available configuration options.
+
+#### Agent Responsibilities for Configuration Changes
+
+**When modifying configuration code (`bloklid/src/config.rs`)**, you MUST update the example configuration file:
+
+1. **Adding New Configuration Options**:
+
+   - Add the new option to `bloklid/example-config.toml` with appropriate comments
+   - Include the default value from the code (check the `#[default(...)]` attribute)
+   - Document what the option does and when to use it
+   - If it's a complex option, provide usage examples in comments
+
+2. **Removing Configuration Options**:
+
+   - Remove the option from `bloklid/example-config.toml`
+   - Ensure any related documentation comments are also removed
+
+3. **Changing Default Values**:
+
+   - Update the default value in `bloklid/example-config.toml`
+   - Update any comments that reference the default value
+
+4. **Adding New Configuration Sections**:
+
+   - Add the entire section to `bloklid/example-config.toml`
+   - Include all fields in the section with their defaults
+   - Add a descriptive header comment explaining the section's purpose
+   - Group related options together logically
+
+5. **Changing Configuration Structure**:
+   - If moving options between sections, update `bloklid/example-config.toml` accordingly
+   - If renaming fields, update all references in the example file
+   - Ensure the TOML structure matches the serde attributes in the Rust code
+
+#### Configuration Documentation Requirements
+
+When adding or modifying configuration options, ensure:
+
+- **Defaults are visible**: Every option in the example config should show its default value
+- **Purpose is clear**: Comments should explain what the option controls and why you might change it
+- **Type is obvious**: The value format should make the expected type clear (string, number, boolean, etc.)
+- **Validation rules**: If there are constraints (e.g., "must be > 0"), document them
+- **Related options**: If options affect each other, note this in comments
+- **Database type handling**: Remember that `protocols` section is auto-generated and should NOT be in the example config
+
+#### Example Config Best Practices
+
+- Use inline comments for brief explanations: `max_connections = 10  # Maximum database connections`
+- Use block comments for complex options or sections that need more explanation
+- Show commented-out alternatives to demonstrate different configuration approaches
+- Keep the example config focused on user-configurable options only
+- Exclude options marked with `#[serde(skip)]` in the Rust code
+- Document units (e.g., "seconds", "milliseconds", "bytes") in comments
+- For enum types, show all valid values in comments
+
+#### Verification Checklist
+
+Before committing configuration changes, verify:
+
+- [ ] All fields in `Config`, `IndexerConfig`, `ApiConfig`, `SubscriptionConfig`, `DatabaseConfig` structs are represented in `example-config.toml` (except `#[serde(skip)]` fields)
+- [ ] Default values in the example config match the `#[default(...)]` attributes in the code
+- [ ] All sections and subsections are properly documented with comments
+- [ ] The TOML file is valid (can be parsed by a TOML parser)
+- [ ] Database configuration shows both PostgreSQL and SQLite examples
+- [ ] No internal-only options (like `protocols`) are included in the example
+
 ## Architecture
 
 ### Architecture Documentation
@@ -593,17 +667,20 @@ Docker images are automatically built in GitHub Actions for:
 
 The build workflow follows a three-stage process:
 
-**Stage 1: Build Images (Parallel)**
+##### Stage 1: Build Images (Parallel)
+
 - Builds Docker images for both amd64 and arm64 architectures in parallel
 - Uses Nix to ensure reproducible builds
 - Stores built images as artifacts
 
-**Stage 2: Upload Manifest (Sequential)**
+##### Stage 2: Upload Manifest (Sequential)
+
 - Uses nix-lib multi-arch helper to build OCI manifest
 - Uploads platform-specific images with suffixes (`-linux-amd64`, `-linux-arm64`)
 - Creates and pushes multi-arch manifest list
 
-**Stage 3: Security Scanning (Parallel)**
+##### Stage 3: Security Scanning (Parallel)
+
 - Runs Trivy vulnerability scans for both architectures
 - Generates SBOMs in SPDX and CycloneDX formats
 - Performs smoke tests on uploaded images
