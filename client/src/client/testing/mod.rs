@@ -144,11 +144,14 @@ impl BlokliTestState {
     }
 }
 
-/// Mutator for the [`BlokliTestState`].
+/// Mutator for the [`BlokliTestState`] based on signed transactions.
 pub trait BlokliTestStateMutator {
     /// Updates the state given the signed transaction.
     ///
-    /// Mutations that remove anything from the state are not allowed.
+    /// [`BlokliTestClient`] makes several consistency checks on the updates.
+    /// For example, all mutations that remove anything from the state are not allowed.
+    ///
+    /// For arbitrary state updates via the client, see [`BlokliTestClient::update_state`].
     fn update_state(&self, signed_tx: &[u8], state: &mut BlokliTestState) -> Result<()>;
 }
 
@@ -213,10 +216,14 @@ impl std::ops::Deref for BlokliTestStateSnapshot {
 ///
 /// Later transactions done using the client can [mutate](BlokliTestStateMutator) the state and
 /// changes are propagated to the subscribers.
-/// Mutations that remove accounts or channels are not allowed.
+/// Mutations that remove accounts or channels are not allowed, so that a transaction cannot
+/// make the state inconsistent.
 ///
 /// Cloning the client will create a new client that shares the same state with the previous one.
 /// This makes sense, however, only when the `mutator` can perform actual changes on the shared state.
+///
+/// Arbitrary (out-of-transaction) state updates can be done via [`BlokliTestClient::update_state`]
+/// with all consistency checks disabled.
 #[derive(Clone)]
 pub struct BlokliTestClient<M> {
     state: Arc<parking_lot::RwLock<BlokliTestState>>,
@@ -283,6 +290,18 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
             state: self.state.clone(),
             snapshot: state.clone(),
         }
+    }
+
+    /// Updates the state outside mutator's scope.
+    ///
+    /// This allows for arbitrary state updates without any consistency checks or an
+    /// encoded transaction.
+    ///
+    /// If the client has multiple clones with the same state, the change takes
+    /// effect for everyone.
+    pub fn update_state(&self, update_fn: impl FnOnce(&mut BlokliTestState)) {
+        let mut state = self.state.write();
+        update_fn(&mut state);
     }
 
     fn do_query_channels(&self, selector: ChannelSelector) -> Result<Vec<Channel>> {
