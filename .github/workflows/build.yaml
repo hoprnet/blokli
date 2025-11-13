@@ -13,8 +13,15 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
 jobs:
-  build:
+  build-docker:
     name: Build
+    uses: ./.github/workflows/build-docker.yaml
+    with:
+      branch: ${{ github.event.pull_request.head.ref || github.ref }}
+      version_type: "commit"
+    secrets: inherit
+  checks:
+    name: Checks
     runs-on: self-hosted-hoprnet-bigger
     steps:
       - name: Harden Runner
@@ -42,12 +49,5 @@ jobs:
       branch: ${{ github.event.pull_request.head.ref }}
       runner: ${{ matrix.binary.runner }}
       architecture: ${{ matrix.binary.architecture }}
-      version_type: "commit"
-    secrets: inherit
-  build-docker:
-    name: Build
-    uses: ./.github/workflows/build-docker.yaml
-    with:
-      branch: ${{ github.event.pull_request.head.ref }}
       version_type: "commit"
     secrets: inherit
