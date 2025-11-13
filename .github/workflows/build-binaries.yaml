@@ -84,11 +84,11 @@ jobs:
           ref: ${{ steps.vars.outputs.branch }}
 
       - name: Install Nix
-        if: steps.vars.outputs.requires_nix == 'true'
+        if: steps.vars.outputs.requires_nix
         uses: cachix/install-nix-action@7be5dee1421f63d07e71ce6e0a9f8a4b07c2a487 # v31
 
       - name: Use Nix Cache
-        if: steps.vars.outputs.requires_nix == 'true'
+        if: steps.vars.outputs.requires_nix
         uses: cachix/cachix-action@0fc020193b5a1fa3ac4575aa3a7d3aa6a35435ad # v16
         with:
           name: blokli
