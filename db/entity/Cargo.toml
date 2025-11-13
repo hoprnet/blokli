@@ -7,6 +7,9 @@ name        = "blokli-db-entity"
 repository  = "https://github.com/hoprnet/blokli"
 version     = "0.1.0"
 
+[lints]
+workspace = true
+
 [features]
 default = ["sqlite"]
 runtime-tokio = [
@@ -17,20 +20,35 @@ runtime-tokio = [
 sqlite = []
 
 [build-dependencies]
-anyhow            = { workspace = true }
-clap              = { workspace = true }
-futures           = { workspace = true }
-sea-orm           = { workspace = true }
-sea-orm-cli       = { workspace = true }
-sea-orm-migration = { workspace = true }
-tokio             = { workspace = true }
+anyhow  = { workspace = true }
+clap    = { workspace = true }
+futures = { workspace = true }
+# Override workspace sea-orm to add SQLite support for build script
+sea-orm = { version = "2.0.0-rc.9", default-features = false, features = [
+  "debug-print",
+  "macros",
+  "runtime-tokio-rustls",
+  "sqlx-postgres",
+  "sqlx-sqlite",
+  "with-chrono",
+] }
+sea-orm-cli = { workspace = true }
+sea-orm-migration = { version = "2.0.0-rc.9", default-features = false, features = [
+  "cli",
+  "sqlx-postgres",
+  "sqlx-sqlite",
+  "with-chrono",
+] }
+tokio = { workspace = true }
 
 blokli-db-migration = { workspace = true }
 
 [dependencies]
 chrono    = { workspace = true }
+hex       = { workspace = true }
 sea-orm   = { workspace = true }
 thiserror = { workspace = true }
+tokio     = { workspace = true }
 
 hopr-crypto-types    = { workspace = true }
 hopr-internal-types  = { workspace = true }

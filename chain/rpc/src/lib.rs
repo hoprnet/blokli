@@ -266,6 +266,16 @@ pub trait HoprRpcOperations {
     /// Retrieves the wxHOPR token allowance for the given owner and spender.
     async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> Result<HoprBalance>;
 
+    /// Retrieves the transaction count (nonce) for a Safe contract.
+    ///
+    /// # Arguments
+    /// * `safe_address` - The Safe contract address
+    ///
+    /// # Returns
+    /// * `Ok(u64)` - The current transaction count/nonce
+    /// * `Err(RpcError)` - If the call fails or address is not a Safe contract
+    async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64>;
+
     /// Retrieves the minimum incoming ticket winning probability by directly
     /// calling the network's winning probability oracle.
     async fn get_minimum_network_winning_probability(&self) -> Result<WinningProbability>;
@@ -274,23 +284,11 @@ pub trait HoprRpcOperations {
     /// ticket price oracle.
     async fn get_minimum_network_ticket_price(&self) -> Result<HoprBalance>;
 
-    /// Retrieves the node's eligibility status
-    async fn get_eligibility_status(&self, address: Address) -> Result<bool>;
-
-    /// Retrieves information of the given node module's target.
-    async fn get_node_management_module_target_info(&self, target: Address) -> Result<Option<U256>>;
-
     /// Retrieves the safe address of the given node address from the registry.
     async fn get_safe_from_node_safe_registry(&self, node: Address) -> Result<Address>;
 
-    /// Retrieves the target address of the node module.
-    async fn get_module_target_address(&self) -> Result<Address>;
-
     /// Retrieves the notice period of channel closure from the Channels contract.
     async fn get_channel_closure_notice_period(&self) -> Result<Duration>;
-
-    /// Retrieves the on-chain status of node, safe, and module.
-    async fn check_node_safe_module_status(&self, node_address: Address) -> Result<NodeSafeModuleStatus>;
 
     /// Sends transaction to the RPC provider, does not await confirmation.
     async fn send_transaction(&self, tx: TransactionRequest) -> Result<PendingTransaction>;
@@ -369,6 +367,16 @@ pub trait HoprIndexerRpcOperations {
     /// * `Result<HoprBalance>` - The current HOPR token balance
     async fn get_hopr_balance(&self, address: Address) -> Result<HoprBalance>;
 
+    /// Retrieves the transaction count (nonce) for a Safe contract.
+    ///
+    /// # Arguments
+    /// * `safe_address` - The Safe contract address
+    ///
+    /// # Returns
+    /// * `Ok(u64)` - The current transaction count/nonce
+    /// * `Err(RpcError)` - If the call fails or address is not a Safe contract
+    async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64>;
+
     /// Streams blockchain logs using selective filtering based on synchronization state.
     ///
     /// This method intelligently selects which log filters to use based on whether
@@ -393,4 +401,246 @@ pub trait HoprIndexerRpcOperations {
         filters: FilterSet,
         is_synced: bool,
     ) -> Result<Pin<Box<dyn Stream<Item = BlockWithLogs> + Send + 'a>>>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn create_test_log(block_number: u64, tx_index: u64, log_index: u64) -> Log {
+        Log {
+            address: Address::default(),
+            topics: vec![Hash::default()],
+            data: vec![1, 2, 3].into(),
+            tx_index,
+            block_number,
+            block_hash: Hash::default(),
+            log_index: log_index.into(),
+            tx_hash: Hash::default(),
+            removed: false,
+        }
+    }
+
+    #[test]
+    fn test_log_conversion_to_raw_log() {
+        let log = create_test_log(100, 5, 10);
+
+        let raw_log: alloy::rpc::types::RawLog = log.clone().into();
+
+        // Verify the raw log has the expected topics and data
+        assert_eq!(raw_log.topics.len(), 1);
+        assert_eq!(raw_log.data.len(), 3);
+    }
+
+    #[test]
+    fn test_log_conversion_from_alloy_success() {
+        let alloy_log = alloy::rpc::types::Log {
+            inner: alloy::primitives::Log {
+                address: alloy::primitives::Address::ZERO,
+                data: alloy::primitives::LogData::new_unchecked(
+                    vec![alloy::primitives::B256::ZERO],
+                    vec![1, 2, 3].into(),
+                ),
+            },
+            block_hash: Some(alloy::primitives::B256::ZERO),
+            block_number: Some(200),
+            block_timestamp: None,
+            transaction_hash: Some(alloy::primitives::B256::ZERO),
+            transaction_index: Some(3),
+            log_index: Some(7),
+            removed: false,
+        };
+
+        let result: std::result::Result<Log, LogConversionError> = alloy_log.try_into();
+        assert!(result.is_ok());
+
+        let log = result.unwrap();
+        assert_eq!(log.block_number, 200);
+        assert_eq!(log.tx_index, 3);
+        assert_eq!(log.log_index, primitive_types::U256::from(7));
+        assert_eq!(log.removed, false);
+    }
+
+    #[test]
+    fn test_log_conversion_missing_block_number_fails() {
+        let alloy_log = alloy::rpc::types::Log {
+            inner: alloy::primitives::Log {
+                address: alloy::primitives::Address::ZERO,
+                data: alloy::primitives::LogData::new_unchecked(
+                    vec![alloy::primitives::B256::ZERO],
+                    vec![1, 2, 3].into(),
+                ),
+            },
+            block_hash: Some(alloy::primitives::B256::ZERO),
+            block_number: None, // Missing block number
+            block_timestamp: None,
+            transaction_hash: Some(alloy::primitives::B256::ZERO),
+            transaction_index: Some(3),
+            log_index: Some(7),
+            removed: false,
+        };
+
+        let result: std::result::Result<Log, LogConversionError> = alloy_log.try_into();
+        assert!(result.is_err());
+
+        if let Err(e) = result {
+            assert!(matches!(e, LogConversionError::MissingBlockNumber));
+        }
+    }
+
+    #[test]
+    fn test_log_conversion_missing_tx_index_fails() {
+        let alloy_log = alloy::rpc::types::Log {
+            inner: alloy::primitives::Log {
+                address: alloy::primitives::Address::ZERO,
+                data: alloy::primitives::LogData::new_unchecked(
+                    vec![alloy::primitives::B256::ZERO],
+                    vec![1, 2, 3].into(),
+                ),
+            },
+            block_hash: Some(alloy::primitives::B256::ZERO),
+            block_number: Some(200),
+            block_timestamp: None,
+            transaction_hash: Some(alloy::primitives::B256::ZERO),
+            transaction_index: None, // Missing tx index
+            log_index: Some(7),
+            removed: false,
+        };
+
+        let result: std::result::Result<Log, LogConversionError> = alloy_log.try_into();
+        assert!(result.is_err());
+
+        if let Err(e) = result {
+            assert!(matches!(e, LogConversionError::MissingTransactionIndex));
+        }
+    }
+
+    #[test]
+    fn test_log_conversion_missing_log_index_fails() {
+        let alloy_log = alloy::rpc::types::Log {
+            inner: alloy::primitives::Log {
+                address: alloy::primitives::Address::ZERO,
+                data: alloy::primitives::LogData::new_unchecked(
+                    vec![alloy::primitives::B256::ZERO],
+                    vec![1, 2, 3].into(),
+                ),
+            },
+            block_hash: Some(alloy::primitives::B256::ZERO),
+            block_number: Some(200),
+            block_timestamp: None,
+            transaction_hash: Some(alloy::primitives::B256::ZERO),
+            transaction_index: Some(3),
+            log_index: None, // Missing log index
+            removed: false,
+        };
+
+        let result: std::result::Result<Log, LogConversionError> = alloy_log.try_into();
+        assert!(result.is_err());
+
+        if let Err(e) = result {
+            assert!(matches!(e, LogConversionError::MissingLogIndex));
+        }
+    }
+
+    #[test]
+    fn test_log_to_serializable() {
+        let log = create_test_log(150, 8, 12);
+
+        let serializable: SerializableLog = log.clone().into();
+
+        assert_eq!(serializable.block_number, 150);
+        assert_eq!(serializable.tx_index, 8);
+        assert_eq!(serializable.log_index, 12);
+        assert_eq!(serializable.removed, false);
+        assert!(serializable.processed.is_none());
+        assert!(serializable.processed_at.is_none());
+        assert!(serializable.checksum.is_none());
+    }
+
+    #[test]
+    fn test_log_ordering_by_block() {
+        let log1 = create_test_log(100, 0, 0);
+        let log2 = create_test_log(101, 0, 0);
+
+        assert!(log1 < log2);
+        assert!(log2 > log1);
+    }
+
+    #[test]
+    fn test_log_ordering_by_tx_index() {
+        let log1 = create_test_log(100, 0, 0);
+        let log2 = create_test_log(100, 1, 0);
+
+        assert!(log1 < log2);
+        assert!(log2 > log1);
+    }
+
+    #[test]
+    fn test_log_ordering_by_log_index() {
+        let log1 = create_test_log(100, 0, 0);
+        let log2 = create_test_log(100, 0, 1);
+
+        assert!(log1 < log2);
+        assert!(log2 > log1);
+    }
+
+    #[test]
+    fn test_log_ordering_complex() {
+        let log1 = create_test_log(100, 0, 0);
+        let log2 = create_test_log(100, 0, 1);
+        let log3 = create_test_log(100, 1, 0);
+        let log4 = create_test_log(101, 0, 0);
+
+        assert!(log1 < log2);
+        assert!(log2 < log3);
+        assert!(log3 < log4);
+
+        // Test transitivity
+        assert!(log1 < log3);
+        assert!(log1 < log4);
+        assert!(log2 < log4);
+    }
+
+    #[test]
+    fn test_log_equality() {
+        let log1 = create_test_log(100, 5, 10);
+        let log2 = create_test_log(100, 5, 10);
+
+        assert_eq!(log1, log2);
+        assert!(!(log1 < log2));
+        assert!(!(log1 > log2));
+    }
+
+    #[test]
+    fn test_log_display() {
+        let log = create_test_log(100, 5, 10);
+        let display_str = format!("{}", log);
+
+        assert!(display_str.contains("log #10"));
+        assert!(display_str.contains("tx #5"));
+        assert!(display_str.contains("block #100"));
+    }
+
+    #[test]
+    fn test_block_with_logs_is_empty() {
+        let block = BlockWithLogs {
+            block_id: 100,
+            logs: BTreeSet::new(),
+        };
+
+        assert!(block.is_empty());
+        assert_eq!(block.len(), 0);
+    }
+
+    #[test]
+    fn test_block_with_logs_display() {
+        let block = BlockWithLogs {
+            block_id: 100,
+            logs: BTreeSet::new(),
+        };
+
+        let display_str = format!("{}", block);
+        assert!(display_str.contains("block #100"));
+        assert!(display_str.contains("0 logs"));
+    }
 }

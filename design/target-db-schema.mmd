@@ -1,0 +1,142 @@
+erDiagram
+    account {
+        bigint keyid PK "Custom incremental unique identifier, Primary key"
+        binary(20) chain_key UK "Chain key (40-character hex string in bytes, UNIQUE, NOT NULL)"
+        binary(32) packet_key "Packet key (NOT NULL)"
+        binary(8) published_block "Published block (original u64 stored in bytes to preserve precision, NOT NULL)"
+        binary(8) published_tx_index "Published tx index (original u64 stored in bytes to preserve precision, NOT NULL)"
+        binary(8) published_log_index "Published log index (original u64 stored in bytes to preserve precision, NOT NULL)"
+    }
+
+    account_state {
+        int id PK "Primary key, autoincrement"
+        bigint account_id FK "Foreign key to account.keyid (NOT NULL)"
+        binary(20) safe_address "key to hopr safe (40-character hex string in bytes, NULL)"
+        binary(8) published_block "Published block (original u64 stored in bytes to preserve precision, NOT NULL)"
+        binary(8) published_tx_index "Published tx index (original u64 stored in bytes to preserve precision, NOT NULL)"
+        binary(8) published_log_index "Published log index (original u64 stored in bytes to preserve precision, NOT NULL)"
+    }
+    %% Composite unique constraint: UNIQUE(account_id, published_block, published_tx_index, published_log_index)
+    %% Index: idx_account_state_position (account_id, published_block DESC, published_tx_index DESC, published_log_index DESC)
+
+    announcement {
+        int id PK "Primary key"
+        bigint account_keyid FK "Foreign key to account keyid (NOT NULL)"
+        string multiaddress "Multiaddress (NOT NULL)"
+        binary(8) published_block "Published block (original u64 stored in bytes to preserve precision, NOT NULL)"
+        binary(8) published_tx_index "Published tx index (original u64 stored in bytes to preserve precision, NOT NULL)"
+        binary(8) published_log_index "Published log index (original u64 stored in bytes to preserve precision, NOT NULL)"
+    }
+    %% Index: idx_announcement_position (published_block, published_tx_index, published_log_index)
+
+    channel {
+        int id PK "Primary key"
+        binary(32) concrete_channel_id UK "Unique channel identifier (64-character hex string in bytes, NOT NULL)"
+        bigint source_account_keyid FK "Source account (Foreign key to account.keyid, NOT NULL)"
+        bigint destination_account_keyid FK "Destination account (Foreign key to account.keyid, NOT NULL)"
+    }
+
+    channel_state {
+        int id PK "Primary key, autoincrement"
+        bigint channel_id FK "Foreign key to channel.id (NOT NULL)"
+        binary(12) balance "Channel balance (original u96 stored in bytes to preserve precision, NOT NULL)"
+        int status "Channel status (NOT NULL)"
+        binary(3) epoch "Epoch (original u24 stored in bytes to preserve precision, NOT NULL, default is 1)"
+        binary(6) ticket_index "Ticket index (original u48 stored in bytes to preserve precision, NOT NULL, default is 0)"
+        datetime closure_time "Closure timestamp (NULL)"
+        bool corrupted_state "Corrupted state flag (NOT NULL, default is false)"
+        binary(8) published_block "Published block (original u64 stored in bytes to preserve precision, NOT NULL)"
+        binary(8) published_tx_index "Published tx index (original u64 stored in bytes to preserve precision, NOT NULL)"
+        binary(8) published_log_index "Published log index (original u64 stored in bytes to preserve precision, NOT NULL)"
+    }
+    %% Composite unique constraint: UNIQUE(channel_id, published_block, published_tx_index, published_log_index)
+    %% Index: idx_channel_state_position (channel_id, published_block DESC, published_tx_index DESC, published_log_index DESC)
+    %% Index: idx_channel_state_status (status)
+
+    hopr_balance {
+        int id PK "Primary key"
+        binary(20) address UK "Unique address (40-character hex string in bytes, NOT NULL)"
+        bigint account_keyid FK UK "Foreign key to account.keyid (UNIQUE, enforces 0..1)"
+        binary(32) balance "wxHOPR token balance (original u256 stored in bytes to preserve precision, NOT NULL)"
+        binary(8) last_changed_block "Last changed block (original u64 stored in bytes to preserve precision, NOT NULL)"
+        binary(8) last_changed_tx_index "Last changed tx index (original u64 stored in bytes to preserve precision, NOT NULL)"
+        binary(8) last_changed_log_index "Last changed log index (original u64 stored in bytes to preserve precision, NOT NULL)"
+    }
+
+    native_balance {
+        int id PK "Primary key"
+        binary(20) address UK "Unique address (40-character hex string in bytes, NOT NULL)"
+        bigint account_keyid FK UK "Foreign key to account.keyid (UNIQUE, enforces 0..1)"
+        binary(32) balance "Native token balance (original u256 stored in bytes to preserve precision, NOT NULL)"
+        binary(8) last_changed_block "Last changed block (original u64 stored in bytes to preserve precision, NOT NULL)"
+        binary(8) last_changed_tx_index "Last changed tx index (original u64 stored in bytes to preserve precision, NOT NULL)"
+        binary(8) last_changed_log_index "Last changed log index (original u64 stored in bytes to preserve precision, NOT NULL)"
+    }
+
+    chain_info {
+        int id PK "Primary key"
+        binary(8) last_indexed_block "Last indexed block (original u64 stored in bytes to preserve precision)"
+        binary(8) last_indexed_tx_index "Last indexed tx index (original u64 stored in bytes to preserve precision)"
+        binary(8) last_indexed_log_index "Last indexed log index (original u64 stored in bytes to preserve precision)"
+        binary(12) ticket_price "Ticket price"
+        binary(32) channels_dst "Channels destination"
+        binary(32) ledger_dst "Ledger destination"
+        binary(32) safe_registry_dst "Safe registry destination"
+        float min_incoming_ticket_win_prob "Min incoming ticket win probability"
+    }
+
+    log {
+        int id PK "Primary key"
+        binary(8) block "block number (original u64 stored in bytes to preserve precision, NOT NULL)"
+        binary(8) tx_index "tx index (original u64 stored in bytes to preserve precision, NOT NULL)"
+        binary(8) log_index "log index (original u64 stored in bytes to preserve precision, NOT NULL)"
+        binary(32) block_hash "Block hash (NOT NULL)"
+        binary(32) transaction_hash "Transaction hash (NOT NULL)"
+        binary(20) address "Address (40-character hex string in bytes, NOT NULL)"
+        binary(32)[] topics "Topics (array of 0..4 items, each 32 bytes; NOT NULL)"
+        binary data "Data (variable length bytes, NOT NULL)"
+        bool removed "Removed flag (default is false)"
+    }
+    %% Composite unique constraint: UNIQUE(block, tx_index, log_index)
+
+    log_status {
+        int id PK "Primary key"
+        int log_id FK UK "Foreign key to log (UNIQUE, enforces 1:0..1, NOT NULL)"
+        bool processed "Processed flag (default is false)"
+        datetime processed_at "Processing timestamp"
+        binary(32) checksum "Checksum"
+    }
+
+    log_topic_info {
+        int id PK "Primary key"
+        binary(20) address "Address (40-character hex string in bytes, NOT NULL)"
+        binary(32) topic "Topic hash (32 bytes; NOT NULL)"
+    }
+
+    hopr_safe_contract {
+        int id PK "Primary key"
+        binary(20) address UK "Unique contract address (40-character hex string in bytes, NOT NULL)"
+        binary(8) deployed_block "block number (original u64 stored in bytes to preserve precision, NOT NULL)"
+        binary(8) deployed_tx_index "tx index (original u64 stored in bytes to preserve precision, NOT NULL)"
+        binary(8) deployed_log_index "log index (original u64 stored in bytes to preserve precision, NOT NULL)"
+    }
+
+    %% ========================================
+    %% RELATIONSHIPS
+    %% ========================================
+
+    account ||--o{ announcement : "has many"
+    account ||--o{ account_state : "has version history"
+    account ||--o| hopr_balance : "has 0 or 1"
+    account ||--o| native_balance : "has 0 or 1"
+    account ||--o{ channel : "source of many"
+    account ||--o{ channel : "destination of many"
+    account ||--o| hopr_safe_contract : "has 0 or 1"
+    channel ||--o{ channel_state : "has version history"
+    log ||--o| log_status : "has 0 or 1"
+
+    %% ========================================
+    %% VIEWS (for current state queries)
+    %% ========================================
+    %% account_current: Latest account state (account + most recent account_state)
+    %% channel_current: Latest channel state (channel + most recent channel_state)

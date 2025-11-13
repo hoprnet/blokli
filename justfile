@@ -1,85 +1,231 @@
-# Shows available commands
+# ============================================================================
+# Default Command
+# ============================================================================
+
+# Show available commands
 default:
     @just --list
 
-# Check all code in workspace
-check:
-    cargo check --workspace -F runtime-tokio
-
-# Build the project with runtime-tokio feature
-build:
-    cargo build -F runtime-tokio
-
-# Build in release mode
-build-release:
-    cargo build --release -F runtime-tokio
-
-# Run all tests with runtime-tokio feature
-test:
-    cargo test -F runtime-tokio
-
-# Run tests for a specific package
-test-package package:
-    cargo test -p {{package}} -F runtime-tokio
-
-# Run tests in single thread mode (useful for debugging)
-test-debug:
-    cargo test -F runtime-tokio -- --test-threads=1 --nocapture
-
-# Clean build artifacts
-clean:
-    cargo clean
-
-# Format code
-fmt:
-    nix fmt
-
-# Run clippy lints
-clippy:
-    cargo clippy -F runtime-tokio -- -D warnings
-
-# Run clippy on all targets
-clippy-all:
-    cargo clippy --all-targets -F runtime-tokio -- -D warnings
-
-# Fix clippy warnings automatically
-clippy-fix:
-    cargo clippy --fix -F runtime-tokio --allow-dirty --allow-staged
+# ============================================================================
+# Quick Workflows
+# ============================================================================
 
 # Quick check - format, clippy, and check
 quick: fmt clippy check
 
-# Development build and test cycle
+# Development build and test cycle - format, check, and test
 dev: fmt check test
 
-# Watch for changes and run checks
+# Watch for changes and run checks continuously
 watch:
-    cargo watch -x "check -F runtime-tokio" -x "test -p bloklid -F runtime-tokio"
+    cargo watch -x "check --workspace" -x "test -p bloklid"
 
-# Run bloklid daemon
+# ============================================================================
+# Build Commands
+# ============================================================================
+
+# Build all workspace packages in debug mode
+build:
+    cargo build --workspace
+
+# Build all workspace packages in release mode with full optimizations
+build-release:
+    cargo build --workspace --release
+
+# Check all workspace code without building binaries
+check:
+    cargo check --workspace
+
+# Clean all build artifacts
+clean:
+    cargo clean
+
+# ============================================================================
+# Test Commands
+# ============================================================================
+
+# Run all tests in workspace
+test:
+    cargo test --workspace
+
+# Run tests for a specific package
+test-package package:
+    cargo test -p {{ package }}
+
+# Run tests in single thread mode with output (useful for debugging)
+test-debug:
+    cargo test --workspace -- --test-threads=1 --nocapture
+
+# ============================================================================
+# Code Quality
+# ============================================================================
+
+# Format all code with nix formatter
+fmt:
+    nix fmt
+
+# Run clippy lints with warnings as errors
+clippy:
+    cargo clippy --workspace -- -D warnings
+
+# Run clippy on all targets (lib, bin, tests, benches, examples)
+clippy-all:
+    cargo clippy --workspace --all-targets -- -D warnings
+
+# Automatically fix clippy warnings
+clippy-fix:
+    cargo clippy --workspace --fix --allow-dirty --allow-staged
+
+# ============================================================================
+# Run Commands - bloklid daemon
+# ============================================================================
+
+# Run bloklid daemon in debug mode with default configuration
 run:
-    cargo run --bin bloklid -F runtime-tokio
+    cargo run --bin bloklid
 
-# Run bloklid daemon with custom config
+# Run bloklid daemon with custom configuration file
 run-config config_path:
-    cargo run --bin bloklid -F runtime-tokio -- -c {{config_path}}
+    cargo run --bin bloklid -- -c {{ config_path }}
 
-# Run bloklid daemon in release mode
+# Run bloklid daemon in release mode with full optimizations
 run-release:
     cargo run --release --bin bloklid -F runtime-tokio
 
-# Generate documentation
+# Run bloklid in debug mode against rotsee network with log output
+run-local-rotsee:
+    cargo run -p bloklid -- -c config.toml | tee rotsee.logs
+
+# Run bloklid daemon with SQLite database (local testing)
+run-sqlite:
+    cargo run --bin bloklid -- -c config-sqlite.toml
+
+# Clean SQLite database files (removes both index and logs databases)
+clean-sqlite:
+    rm -f data/bloklid-index.db data/bloklid-logs.db
+    @echo "SQLite databases removed"
+
+# ============================================================================
+# Run Commands - blokli-api server
+# ============================================================================
+
+# Run blokli-api server in debug mode
+run-api:
+    cargo run --bin blokli-api
+
+# Run blokli-api server in release mode with full optimizations
+run-api-release:
+    cargo run --release --bin blokli-api
+
+# Export GraphQL schema to file (requires database URL)
+export-schema database_url output="schema.graphql":
+    cargo run --bin blokli-api -- export-schema -d {{ database_url }} -o {{ output }}
+
+# Export GraphQL schema using SQLite database
+export-schema-sqlite output="schema.graphql":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Create data directory if it doesn't exist
+    mkdir -p data
+    # Run migrations to create/update the database schema
+    # Note: ?mode=rwc allows SQLite to create the database file if it doesn't exist
+    cargo run --bin migration -- up -u "sqlite://data/bloklid-index.db?mode=rwc"
+    # Export the GraphQL schema
+    cargo run --bin blokli-api -- export-schema -d "sqlite://data/bloklid-index.db" -o {{ output }}
+    echo "GraphQL schema exported to {{ output }}"
+
+# ============================================================================
+# Documentation
+# ============================================================================
+
+# Generate and open documentation for workspace packages only
 doc:
     cargo doc --no-deps -F runtime-tokio --open
 
-# Generate documentation for all dependencies
+# Generate and open documentation including all dependencies
 doc-all:
     cargo doc -F runtime-tokio --open
 
-# Update dependencies
+# ============================================================================
+# Dependency Management
+# ============================================================================
+
+# Update all dependencies to latest compatible versions
 update:
     cargo update
 
-# Show outdated dependencies
+# Show outdated dependencies that have newer versions available
 outdated:
     cargo outdated
+
+# Check for unused dependencies
+cargo-udeps:
+    nix develop .#experiment -c bash -c 'cargo udeps'
+
+# ============================================================================
+# Docker Compose Commands
+# ============================================================================
+
+# Start PostgreSQL and bloklid with Docker Compose
+docker-up:
+    docker-compose -f docker/docker-compose.yml up -d
+
+# Stop Docker Compose services
+docker-down:
+    docker-compose -f docker/docker-compose.yml down
+
+# Stop and remove all data (WARNING: destroys database)
+docker-down-volumes:
+    docker-compose -f docker/docker-compose.yml down -v
+
+# View Docker Compose logs (optionally specify service name)
+docker-logs service="":
+    #!/usr/bin/env bash
+    if [ -z "{{ service }}" ]; then
+        docker-compose -f docker/docker-compose.yml logs -f
+    else
+        docker-compose -f docker/docker-compose.yml logs -f {{ service }}
+    fi
+
+# Build bloklid Docker image from Nix
+docker-build:
+    nix build .#bloklid-docker
+    docker load < result
+
+# Rebuild bloklid and restart Docker Compose
+docker-restart: docker-build
+    docker-compose -f docker/docker-compose.yml down
+    docker-compose -f docker/docker-compose.yml up -d
+
+# Connect to PostgreSQL database with psql
+docker-db:
+    docker-compose -f docker/docker-compose.yml exec postgres psql -U bloklid -d bloklid
+
+# Reset database (WARNING: deletes all data)
+docker-db-reset:
+    docker-compose -f docker/docker-compose.yml down -v
+    docker-compose -f docker/docker-compose.yml up -d postgres
+    @echo "Waiting for PostgreSQL to be ready..."
+    @sleep 5
+    docker-compose -f docker/docker-compose.yml up -d bloklid
+
+# Show database tables
+docker-db-tables:
+    docker-compose -f docker/docker-compose.yml exec postgres psql -U bloklid -d bloklid -c "\\dt"
+
+# Backup database to file
+docker-db-backup file="backup.sql":
+    docker-compose -f docker/docker-compose.yml exec -T postgres pg_dump -U bloklid bloklid > {{ file }}
+    @echo "Database backed up to {{ file }}"
+
+# Restore database from file
+docker-db-restore file="backup.sql":
+    docker-compose -f docker/docker-compose.yml exec -T postgres psql -U bloklid -d bloklid < {{ file }}
+    @echo "Database restored from {{ file }}"
+
+# Generate SVG for target db schema
+generate-target-db-schema-svg:
+    docker run --rm -u $(id -u):$(id -g) -v ./design:/data \
+      ghcr.io/mermaid-js/mermaid-cli/mermaid-cli \
+      -i target-db-schema.mmd -o target-db-schema.svg
+    @echo "SVG stored at ./design/target-db-schema.svg"

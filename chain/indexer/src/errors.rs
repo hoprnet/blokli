@@ -8,10 +8,10 @@ pub enum CoreEthereumIndexerError {
     ProcessError(String),
 
     #[error(transparent)]
-    DbApiError(#[from] blokli_db_sql::errors::DbSqlError),
+    DbApiError(#[from] blokli_db::errors::DbSqlError),
 
     #[error(transparent)]
-    DbError(#[from] blokli_db_sql::api::errors::DbError),
+    DbError(#[from] blokli_db::api::errors::DbError),
 
     #[error(transparent)]
     DbEntityError(#[from] blokli_db_entity::errors::DbEntityError),

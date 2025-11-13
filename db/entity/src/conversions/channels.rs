@@ -1,14 +1,13 @@
-use hopr_internal_types::{
-    channels::{ChannelId, ChannelStatus, CorruptedChannelEntry},
-    prelude::ChannelEntry,
-};
-use hopr_primitive_types::{
-    balance::HoprBalance,
-    prelude::{IntoEndian, ToHex, U256},
-};
+// Allow casts for Solidity types that fit safely in i64:
+// - epoch is uint24 (max 16,777,215)
+// - ticket_index is uint48 (max 281,474,976,710,655)
+#![allow(clippy::cast_possible_wrap)]
+
+use hopr_internal_types::{channels::ChannelStatus, prelude::ChannelEntry};
+use hopr_primitive_types::prelude::ToHex;
 use sea_orm::Set;
 
-use crate::{channel, corrupted_channel, errors::DbEntityError};
+use crate::{channel, errors::DbEntityError};
 
 /// Extension trait for updating [ChannelStatus] inside [channel::ActiveModel].
 /// This is needed as `status` maps to two model members.
@@ -18,43 +17,34 @@ pub trait ChannelStatusUpdate {
 }
 
 impl ChannelStatusUpdate for channel::ActiveModel {
-    fn set_status(&mut self, new_status: ChannelStatus) {
-        self.status = Set(i8::from(new_status));
-        if let ChannelStatus::PendingToClose(t) = new_status {
-            self.closure_time = Set(Some(chrono::DateTime::<chrono::Utc>::from(t)))
-        }
+    fn set_status(&mut self, _new_status: ChannelStatus) {
+        // TODO(Phase 2-3): Update to work with channel_state table
+        // Status is now stored in channel_state, not channel
+        panic!("Channel status updates must now go through channel_state table - not yet implemented");
     }
 }
 
 impl TryFrom<&channel::Model> for ChannelStatus {
     type Error = DbEntityError;
 
-    fn try_from(value: &channel::Model) -> Result<Self, Self::Error> {
-        match value.status {
-            0 => Ok(ChannelStatus::Closed),
-            1 => Ok(ChannelStatus::Open),
-            2 => value
-                .closure_time
-                .ok_or(DbEntityError::Conversion(
-                    "channel is pending to close but without closure time".into(),
-                ))
-                .map(|time| ChannelStatus::PendingToClose(time.into())),
-            _ => Err(DbEntityError::Conversion("invalid channel status value".into())),
-        }
+    fn try_from(_value: &channel::Model) -> Result<Self, Self::Error> {
+        // TODO(Phase 2-3): Update to query channel_state table for current status
+        // Channel status is now stored in channel_state, not channel
+        Err(DbEntityError::Conversion(
+            "Channel status conversion requires querying channel_state table - not yet implemented".into(),
+        ))
     }
 }
 
 impl TryFrom<&channel::Model> for ChannelEntry {
     type Error = DbEntityError;
 
-    fn try_from(value: &channel::Model) -> Result<Self, Self::Error> {
-        Ok(ChannelEntry::new(
-            value.source.parse()?,
-            value.destination.parse()?,
-            HoprBalance::from(U256::from_be_bytes(&value.balance)),
-            U256::from_be_bytes(&value.ticket_index),
-            value.try_into()?,
-            U256::from_be_bytes(&value.epoch),
+    fn try_from(_value: &channel::Model) -> Result<Self, Self::Error> {
+        // TODO: After schema change to use foreign keys, this conversion requires
+        // database access to look up account addresses from keyids.
+        // This needs to be refactored to use a separate function that takes a database connection.
+        Err(DbEntityError::Conversion(
+            "ChannelEntry conversion from database model requires account lookup - use fetch function instead".into(),
         ))
     }
 }
@@ -69,43 +59,17 @@ impl TryFrom<channel::Model> for ChannelEntry {
 
 impl From<ChannelEntry> for channel::ActiveModel {
     fn from(value: ChannelEntry) -> Self {
-        let mut ret = channel::ActiveModel {
+        // TODO(Phase 2-3): After schema change, channel identity and state are separate
+        // - channel table stores only: concrete_channel_id, source, destination (identity)
+        // - channel_state table stores: balance, status, epoch, ticket_index, closure_time (mutable state)
+        // This conversion needs to be refactored to:
+        // 1. Create channel identity record
+        // 2. Create initial channel_state record
+        // For now, only create the identity part
+        channel::ActiveModel {
             concrete_channel_id: Set(value.get_id().to_hex()),
-            source: Set(value.source.to_hex()),
-            destination: Set(value.destination.to_hex()),
-            balance: Set(value.balance.amount().to_be_bytes().into()),
-            epoch: Set(value.channel_epoch.to_be_bytes().into()),
-            ticket_index: Set(value.ticket_index.to_be_bytes().into()),
-            ..Default::default()
-        };
-        ret.set_status(value.status);
-        ret
-    }
-}
-
-impl TryFrom<&corrupted_channel::Model> for CorruptedChannelEntry {
-    type Error = DbEntityError;
-
-    fn try_from(value: &corrupted_channel::Model) -> Result<Self, Self::Error> {
-        let channel_id = ChannelId::from_hex(value.concrete_channel_id.as_str())
-            .map_err(|_| DbEntityError::Conversion("invalid channel ID".into()))?;
-
-        Ok(channel_id.into())
-    }
-}
-
-impl TryFrom<corrupted_channel::Model> for CorruptedChannelEntry {
-    type Error = DbEntityError;
-
-    fn try_from(value: corrupted_channel::Model) -> Result<Self, Self::Error> {
-        (&value).try_into()
-    }
-}
-
-impl From<CorruptedChannelEntry> for corrupted_channel::ActiveModel {
-    fn from(value: CorruptedChannelEntry) -> Self {
-        corrupted_channel::ActiveModel {
-            concrete_channel_id: Set(value.channel_id().to_hex()),
+            source: Set(0),      // TODO: Need to lookup/create account for value.source address
+            destination: Set(0), // TODO: Need to lookup/create account for value.destination address
             ..Default::default()
         }
     }

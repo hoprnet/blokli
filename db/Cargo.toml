@@ -1,0 +1,78 @@
+[package]
+description = "BLOKLI database implementation with SQL backend"
+edition     = "2021"
+homepage    = "https://hoprnet.org/"
+license     = "GPL-3.0-only"
+name        = "blokli-db"
+repository  = "https://github.com/hoprnet/blokli"
+version     = "0.1.0"
+
+[lints]
+workspace = true
+
+[features]
+default = ["sqlite", "traits"]
+prometheus = ["dep:hopr-metrics", "dep:lazy_static"]
+runtime-tokio = [
+  "hopr-async-runtime/runtime-tokio",
+  "sea-orm/runtime-tokio",
+  "sea-orm/runtime-tokio-rustls",
+]
+sqlite = ["sea-orm/sqlx-sqlite", "sea-query/backend-sqlite"]
+traits = []
+
+[dependencies]
+async-broadcast = { workspace = true }
+async-lock = { workspace = true }
+async-stream = { workspace = true }
+async-trait = { workspace = true }
+bincode = { workspace = true }
+chrono = { workspace = true }
+dashmap = { workspace = true }
+futures = { workspace = true }
+hex = { workspace = true }
+lazy_static = { workspace = true, optional = true }
+libp2p-identity = { workspace = true }
+moka = { workspace = true, features = ["sync"] }
+multiaddr = { workspace = true }
+num_enum = { workspace = true }
+ringbuffer = { workspace = true }
+sea-orm = { workspace = true }
+sea-query = { workspace = true, default-features = false, features = [
+  "attr",
+  "derive",
+  "with-chrono",
+] }
+smart-default = { workspace = true }
+strum = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+validator = { workspace = true }
+
+blokli-db-entity     = { workspace = true }
+blokli-db-migration  = { workspace = true }
+hopr-async-runtime   = { workspace = true }
+hopr-crypto-packet   = { workspace = true }
+hopr-crypto-types    = { workspace = true }
+hopr-internal-types  = { workspace = true }
+hopr-metrics         = { workspace = true, optional = true }
+hopr-network-types   = { workspace = true }
+hopr-parallelize     = { workspace = true, features = ["rayon"] }
+hopr-path            = { workspace = true }
+hopr-platform        = { workspace = true }
+hopr-primitive-types = { workspace = true }
+
+[dev-dependencies]
+anyhow      = { workspace = true }
+hex-literal = { workspace = true }
+lazy_static = { workspace = true }
+rand        = { workspace = true }
+sea-orm     = { workspace = true }
+tokio       = { workspace = true }
+
+hopr-async-runtime = { workspace = true, features = ["runtime-tokio"] }
+hopr-crypto-random = { workspace = true }
+
+[package.metadata.cargo-machete]
+ignored = ["blokli-db-migration"]

@@ -16,7 +16,7 @@ Bloklid is a daemon for indexing HOPR on-chain events and executing HOPR-related
 bloklid
 
 # Run with custom configuration file
-bloklid -c config.yaml
+bloklid -c config.toml
 
 # Increase verbosity
 bloklid -v    # debug level
@@ -25,7 +25,7 @@ bloklid -vv   # trace level
 
 ## Configuration
 
-See `example-config.yaml` for a complete configuration example. Key settings include:
+See `example-config.toml` for a complete configuration example. Key settings include:
 
 - `host`: API server bind address (default: "0.0.0.0:3064")
 - `database_path`: Path to SQLite database file

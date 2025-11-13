@@ -1,0 +1,27 @@
+[package]
+authors     = ["HOPR Association <tech@hoprnet.org>"]
+description = "GraphQL type definitions for HOPR blokli API"
+edition     = "2024"
+homepage    = "https://hoprnet.org/"
+license     = "GPL-3.0-only"
+name        = "blokli-api-types"
+repository  = "https://github.com/hoprnet/hoprnet"
+version     = "0.1.0"
+
+[dependencies]
+# GraphQL
+async-graphql = { workspace = true }
+
+# Date/Time
+chrono = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+
+# Encoding
+hex = { workspace = true }
+
+# Internal dependencies
+blokli-chain-types   = { workspace = true }
+hopr-crypto-types    = { workspace = true }
+hopr-primitive-types = { workspace = true }

@@ -1,25 +1,21 @@
 mod config;
+mod constants;
 mod errors;
 
 use std::{
-    path::{Path, PathBuf},
+    path::PathBuf,
     sync::{Arc, RwLock},
     time::Duration,
 };
 
-use alloy::{rpc::client::RpcClient, transports::http::Http};
 use async_signal::{Signal, Signals};
-use blokli_chain_indexer::{block::Indexer, handlers::ContractEventHandlers};
-use blokli_chain_rpc::{
-    rpc::{RpcOperations, RpcOperationsConfig},
-    transport::ReqwestClient,
-};
+use blokli_chain_api::BlokliChain;
 use blokli_chain_types::ContractAddresses;
-use blokli_db_sql::db::{BlokliDb, BlokliDbConfig};
-use clap::Parser;
+use blokli_db::db::{BlokliDb, BlokliDbConfig};
+use clap::{Parser, Subcommand};
 use futures::TryStreamExt;
-use hopr_crypto_types::prelude::*;
-use hopr_primitive_types::prelude::*;
+use hopr_chain_config::ChainNetworkConfig;
+use sea_orm::Database;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
 use validator::Validate;
@@ -33,16 +29,37 @@ use crate::{
 #[derive(Debug, Parser)]
 #[command(
     name = "bloklid",
-    about = "Daemon for indexing HOPR on-chain events and executing HOPR-related on-chain transactions"
+    about = "Daemon for indexing HOPR on-chain events and executing HOPR-related on-chain transactions",
+    version = crate::constants::APP_VERSION_COERCED
 )]
 struct Args {
     /// Increase output verbosity (-v, -vv)
-    #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count)]
+    #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count, global = true)]
     verbose: u8,
 
     /// Optional path to a configuration file
-    #[arg(short = 'c', long = "config", value_name = "FILE")]
+    #[arg(short = 'c', long = "config", value_name = "FILE", global = true)]
     config: Option<PathBuf>,
+
+    /// Command to execute
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Debug, Subcommand)]
+enum Command {
+    /// Generate a template configuration file
+    GenerateConfig {
+        /// Path where the configuration file should be created
+        #[arg(value_name = "FILE")]
+        output: PathBuf,
+    },
+}
+
+/// Generates a template configuration file using the embedded example config
+fn generate_config_template() -> String {
+    // Embed the example config file at compile time
+    include_str!("../example-config.toml").to_string()
 }
 
 impl Args {
@@ -56,10 +73,55 @@ impl Args {
             return Ok(Config::default());
         }
 
-        let config: Config = serde_yaml::from_reader(std::fs::File::open(
-            self.config.as_ref().ok_or(ConfigError::NoConfiguration)?,
-        )?)
-        .map_err(|e| ConfigError::Parse(e.to_string()))?;
+        let config_content = std::fs::read_to_string(self.config.as_ref().ok_or(ConfigError::NoConfiguration)?)?;
+        let mut config: Config = toml::from_str(&config_content).map_err(|e| ConfigError::Parse(e.to_string()))?;
+
+        config.validate().map_err(ConfigError::Validation)?;
+
+        // coerce with protocol config
+        let chain_network_config = ChainNetworkConfig::new_no_version_check(
+            &config.network,
+            Some(&config.rpc_url),
+            Some(config.max_rpc_requests_per_sec),
+            &mut config.protocols,
+        )
+        .map_err(|e| {
+            let available_networks: Vec<String> = config.protocols.networks.keys().cloned().collect();
+
+            if e.contains("Could not find network") {
+                BloklidError::NonSpecific(format!(
+                    "Failed to resolve blockchain environment: {e}\n\nSupported networks: {}",
+                    available_networks.join(", ")
+                ))
+            } else if e.contains("unsupported network error") {
+                BloklidError::NonSpecific(format!(
+                    "Failed to resolve blockchain environment: {e}\n\nThis network exists but is not compatible with \
+                     version {} of bloklid.\nSupported networks: {}",
+                    crate::constants::APP_VERSION_COERCED,
+                    available_networks.join(", ")
+                ))
+            } else {
+                BloklidError::NonSpecific(format!("Failed to resolve blockchain environment: {e}"))
+            }
+        })?;
+
+        config.chain_network = Some(chain_network_config.clone());
+
+        let contract_addresses = ContractAddresses {
+            token: chain_network_config.token,
+            channels: chain_network_config.channels,
+            announcements: chain_network_config.announcements,
+            node_safe_registry: chain_network_config.node_safe_registry,
+            ticket_price_oracle: chain_network_config.ticket_price_oracle,
+            winning_probability_oracle: chain_network_config.winning_probability_oracle,
+            node_stake_v2_factory: chain_network_config.node_stake_v2_factory,
+        };
+        config.contracts = contract_addresses;
+
+        info!(
+            contract_addresses = ?contract_addresses,
+            "Resolved contract addresses",
+        );
 
         config.validate().map_err(ConfigError::Validation)?;
         Ok(config)
@@ -67,7 +129,14 @@ impl Args {
 }
 
 #[tokio::main]
-async fn main() -> errors::Result<()> {
+async fn main() {
+    if let Err(error) = run().await {
+        eprintln!("Error: {}", error);
+        std::process::exit(1);
+    }
+}
+
+async fn run() -> errors::Result<()> {
     let args = Args::parse();
 
     // Initialize tracing subscriber. Precedence: RUST_LOG env > -v flag > default info
@@ -89,6 +158,33 @@ async fn main() -> errors::Result<()> {
         .compact()
         .init();
 
+    // Handle subcommands
+    if let Some(command) = args.command {
+        match command {
+            Command::GenerateConfig { output } => {
+                info!("Generating configuration template at: {}", output.display());
+
+                // Generate the template content
+                let template = generate_config_template();
+
+                // Create parent directories if they don't exist
+                if let Some(parent) = output.parent() {
+                    std::fs::create_dir_all(parent).map_err(|e| {
+                        BloklidError::NonSpecific(format!("Failed to create parent directories: {}", e))
+                    })?;
+                }
+
+                // Write the template to the specified file
+                std::fs::write(&output, template)
+                    .map_err(|e| BloklidError::NonSpecific(format!("Failed to write configuration template: {}", e)))?;
+
+                info!("Configuration template successfully written to: {}", output.display());
+                return Ok(());
+            }
+        }
+    }
+
+    // Normal daemon operation
     info!(
         verbosity = args.verbose,
         config = args.config.as_ref().map(|p| p.display().to_string()).as_deref(),
@@ -99,115 +195,148 @@ async fn main() -> errors::Result<()> {
     let config = Arc::new(RwLock::new(args.load_config(true)?));
 
     // Initialize components
-    let (_chain_key, _db, _rpc_operations, indexer_handle) = {
-        // Extract all needed values from config before any await
-        let (private_key, database_path, rpc_url_str, indexer_cfg, data_directory) = {
+    let (process_handles, api_handle) = {
+        let (database_path, logs_database_path, chain_network, contracts, indexer_config, rpc_url, api_config) = {
             let cfg = config
                 .read()
                 .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
 
+            let chain_network = cfg
+                .chain_network
+                .as_ref()
+                .ok_or_else(|| BloklidError::NonSpecific("Chain network not configured".into()))?
+                .clone();
+
+            let indexer_config = blokli_chain_indexer::IndexerConfig {
+                start_block_number: chain_network.channel_contract_deploy_block as u64,
+                fast_sync: cfg.indexer.fast_sync,
+                enable_logs_snapshot: cfg.indexer.enable_logs_snapshot,
+                logs_snapshot_url: cfg.indexer.logs_snapshot_url.clone(),
+                data_directory: cfg.data_directory.clone(),
+                event_bus_capacity: cfg.indexer.subscription.event_bus_capacity,
+                shutdown_signal_capacity: cfg.indexer.subscription.shutdown_signal_capacity,
+            };
+
             (
-                cfg.private_key.clone(),
-                cfg.database_path.clone(),
+                cfg.database.to_url(),
+                cfg.database.to_logs_url(),
+                chain_network,
+                cfg.contracts,
+                indexer_config,
                 cfg.rpc_url.clone(),
-                cfg.indexer.clone(),
-                cfg.data_directory.clone(),
+                cfg.api.clone(),
             )
         };
 
-        // Parse private key
-        let private_key_bytes = hex::decode(private_key.trim_start_matches("0x"))
-            .map_err(|e| BloklidError::Crypto(format!("Failed to decode private key: {}", e)))?;
-        let chain_key = ChainKeypair::from_secret(&private_key_bytes)
-            .map_err(|e| BloklidError::Crypto(format!("Failed to parse private key: {}", e)))?;
-
-        info!("Initializing database at: {}", database_path);
+        if let Some(logs_path) = &logs_database_path {
+            info!("Initializing dual-database setup:");
+            info!("  Index database: {}", database_path);
+            info!("  Logs database: {}", logs_path);
+        } else {
+            info!("Initializing single database: {}", database_path);
+        }
 
         // Initialize database
         let db_config = BlokliDbConfig {
-            create_if_missing: true,
-            force_create: false,
+            max_connections: {
+                let cfg = config
+                    .read()
+                    .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
+                cfg.database.max_connections()
+            },
             log_slow_queries: Duration::from_secs(1),
         };
-        let db_path = Path::new(&database_path);
-        let db = BlokliDb::new(db_path, chain_key.clone(), db_config).await?;
+        let db = BlokliDb::new(&database_path, logs_database_path.as_deref(), db_config).await?;
 
-        info!("Connecting to RPC endpoint: {}", rpc_url_str);
+        info!("Connecting to RPC endpoint: {}", rpc_url);
 
-        // Initialize RPC client
-        let rpc_config = RpcOperationsConfig {
-            chain_id: 100, // Gnosis chain
-            contract_addrs: ContractAddresses {
-                token: Address::default(),
-                channels: Address::default(),
-                announcements: Address::default(),
-                network_registry: Address::default(),
-                network_registry_proxy: Address::default(),
-                safe_registry: Address::default(),
-                price_oracle: Address::default(),
-                win_prob_oracle: Address::default(),
-                stake_factory: Address::default(),
-                module_implementation: Address::default(),
-            },
-            module_address: Address::default(),
-            safe_address: chain_key.public().to_address(),
-            ..Default::default()
+        // Extract chain_id and network before chain_network is moved
+        let chain_id = chain_network.chain.chain_id as u64;
+        let network = chain_network.id.clone();
+
+        // Create BlokliChain instance
+        let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, rpc_url)?;
+
+        // Get IndexerState for API subscriptions
+        let indexer_state = blokli_chain.indexer_state();
+
+        info!("Starting BlokliChain processes");
+
+        // Start all chain processes
+        let process_handles = blokli_chain.start().await?;
+
+        info!("BlokliChain started successfully");
+
+        // Start API server if enabled
+        let api_handle = if api_config.enabled {
+            info!("Starting blokli-api server on {}", api_config.bind_address);
+
+            // Connect to database for API server
+            let api_db = Database::connect(&database_path)
+                .await
+                .map_err(|e| BloklidError::NonSpecific(format!("Failed to connect API database: {}", e)))?;
+
+            // Construct blokli-api ApiConfig from bloklid config
+            // We need to get rpc_url and contracts from the original config
+            let (rpc_url_for_api, _contracts_for_api) = {
+                let cfg = config
+                    .read()
+                    .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
+                (cfg.rpc_url.clone(), cfg.contracts)
+            };
+
+            let blokli_api_config = blokli_api::config::ApiConfig {
+                bind_address: api_config.bind_address,
+                playground_enabled: api_config.playground_enabled,
+                database_url: database_path.clone(),
+                tls: None,
+                cors_allowed_origins: vec!["*".to_string()], // Permissive for now
+                chain_id,
+                rpc_url: rpc_url_for_api,
+                contract_addresses: contracts,
+            };
+
+            // Get RPC operations from blokli_chain for balance queries
+            let rpc_operations = Arc::new(blokli_chain.rpc().clone());
+
+            // Build API app with indexer state for subscriptions and transaction components
+            let api_app = blokli_api::server::build_app(
+                api_db,
+                network,
+                blokli_api_config,
+                indexer_state,
+                blokli_chain.transaction_executor(),
+                blokli_chain.transaction_store(),
+                rpc_operations,
+            )
+            .await
+            .map_err(|e| BloklidError::NonSpecific(format!("Failed to build API app: {}", e)))?;
+
+            // Spawn API server as a background task
+            let handle = tokio::spawn(async move {
+                let listener = tokio::net::TcpListener::bind(api_config.bind_address)
+                    .await
+                    .expect("Failed to bind API server");
+
+                info!("API server listening on {}", api_config.bind_address);
+                if api_config.playground_enabled {
+                    info!(
+                        "GraphQL Playground available at http://{}/graphql",
+                        api_config.bind_address
+                    );
+                }
+
+                axum::serve(listener, api_app).await.expect("API server failed");
+            });
+
+            info!("API server started successfully");
+            Some(handle)
+        } else {
+            info!("API server disabled in configuration");
+            None
         };
 
-        let rpc_url = rpc_url_str
-            .parse::<url::Url>()
-            .map_err(|e| BloklidError::Crypto(format!("Failed to parse RPC URL: {}", e)))?;
-        let reqwest_client = ReqwestClient::new();
-        let http = Http::<ReqwestClient>::with_client(reqwest_client.clone(), rpc_url);
-        let rpc_client = RpcClient::new(http, true);
-
-        let rpc_operations = RpcOperations::new(rpc_client, reqwest_client, &chain_key, rpc_config, None)?;
-
-        // Create channel for chain events
-        let (tx_events, _rx_events) = async_channel::unbounded();
-
-        // Initialize contract event handlers
-        let contract_addresses = ContractAddresses {
-            token: Address::default(),
-            channels: Address::default(),
-            announcements: Address::default(),
-            network_registry: Address::default(),
-            network_registry_proxy: Address::default(),
-            safe_registry: Address::default(),
-            price_oracle: Address::default(),
-            win_prob_oracle: Address::default(),
-            stake_factory: Address::default(),
-            module_implementation: Address::default(),
-        };
-
-        let safe_address = chain_key.public().to_address();
-        let handlers = ContractEventHandlers::new(
-            contract_addresses,
-            safe_address,
-            chain_key.clone(),
-            db.clone(),
-            rpc_operations.clone(),
-        );
-
-        // Configure indexer
-        let indexer_config = blokli_chain_indexer::IndexerConfig {
-            start_block_number: indexer_cfg.start_block_number,
-            fast_sync: indexer_cfg.fast_sync,
-            enable_logs_snapshot: indexer_cfg.enable_logs_snapshot,
-            logs_snapshot_url: indexer_cfg.logs_snapshot_url,
-            data_directory,
-        };
-
-        info!("Starting indexer from block {}", indexer_config.start_block_number);
-
-        // Create and start indexer
-        let indexer = Indexer::new(rpc_operations.clone(), handlers, db.clone(), indexer_config, tx_events);
-
-        let indexer_handle = indexer.start().await?;
-
-        info!("Indexer started successfully");
-
-        (chain_key, db, rpc_operations, indexer_handle)
+        (process_handles, api_handle)
     };
 
     info!("daemon running; send SIGHUP to reload config, SIGINT/SIGTERM to stop");
@@ -238,9 +367,19 @@ async fn main() -> errors::Result<()> {
         }
     }
 
-    // Abort indexer
-    indexer_handle.abort();
-    info!("Indexer stopped");
+    // Abort all chain processes
+    for (process_type, handle) in process_handles {
+        info!("Stopping {:?} process", process_type);
+        handle.abort();
+    }
+    info!("All BlokliChain processes stopped");
+
+    // Stop API server if it was started
+    if let Some(handle) = api_handle {
+        info!("Stopping API server");
+        handle.abort();
+        info!("API server stopped");
+    }
 
     info!("bloklid stopped gracefully");
     Ok(())

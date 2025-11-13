@@ -1,0 +1,12 @@
+---
+source: client/tests/query_tests.rs
+expression: recorder.requests()
+---
+- method: POST
+  path_and_query: /graphql
+  body:
+    Json:
+      operationName: QueryNativeBalance
+      query: "query QueryNativeBalance($address: String!) {\n  nativeBalance(address: $address) {\n    __typename\n    ... on NativeBalance {\n      __typename\n      balance\n    }\n    ... on InvalidAddressError {\n      __typename\n      code\n      message\n    }\n    ... on QueryFailedError {\n      __typename\n      message\n      code\n    }\n  }\n}\n"
+      variables:
+        address: "0101010101010101010101010101010101010101"

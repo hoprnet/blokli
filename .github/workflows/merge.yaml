@@ -8,28 +8,15 @@ concurrency:
   group: merge
   cancel-in-progress: false
 jobs:
-  build-docker:
-    name: Build
-    uses: ./.github/workflows/build-docker.yaml
-    with:
-      source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
-      version_type: "pr"
-    secrets: inherit
-  build-binaries:
-    strategy:
-      matrix:
-        binary:
-          - architecture: x86_64-linux
-            runner: self-hosted-hoprnet-bigger
-          - architecture: aarch64-darwin
-            runner: macos-15
-          - architecture: x86_64-darwin
-            runner: macos-13
-    name: Binary ${{ matrix.binary.architecture }}
-    uses: ./.github/workflows/build-binaries.yaml
-    with:
-      branch: ${{ github.event.pull_request.head.ref }}
-      runner: ${{ matrix.binary.runner }}
-      architecture: ${{ matrix.binary.architecture }}
-      version_type: "pr"
-    secrets: inherit
+  build-binary:
+    name: Build binary
+    runs-on: self-hosted-hoprnet-small
+    if: github.event.pull_request.merged == true
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
+        with:
+          disable-sudo: true
+          egress-policy: audit
+      - name: Checkout hoprnet repository
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0

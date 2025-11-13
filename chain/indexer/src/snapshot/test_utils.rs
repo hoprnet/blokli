@@ -3,10 +3,6 @@ use std::{fs, io::Cursor, path::Path};
 use async_compression::futures::bufread::XzEncoder;
 use async_tar::Builder;
 use futures_util::io::{AllowStdIo, AsyncReadExt, BufReader as FuturesBufReader};
-use sqlx::{
-    Connection, Executor,
-    sqlite::{SqliteConnectOptions, SqliteConnection},
-};
 use tempfile::TempDir;
 use tracing::debug;
 
@@ -76,123 +72,85 @@ impl SnapshotInstaller for TestSnapshotManager {
     }
 }
 
-/// Creates a test SQLite database for testing
-pub async fn create_test_sqlite_db(path: &std::path::Path) -> Result<(), Box<dyn std::error::Error>> {
-    // Remove any existing file
-    if fs::metadata(path).is_ok() {
-        fs::remove_file(path)?;
-    }
+/// Creates a test SQL dump file for testing
+pub fn create_test_sql_dump(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    let sql_content = r#"
+--
+-- PostgreSQL database dump
+--
 
-    let options = SqliteConnectOptions::new().filename(path).create_if_missing(true);
+SET statement_timeout = 0;
+SET lock_timeout = 0;
+SET idle_in_transaction_session_timeout = 0;
+SET client_encoding = 'UTF8';
 
-    let mut conn = SqliteConnection::connect_with(&options).await?;
+CREATE TABLE log (
+    transaction_index BIGINT NOT NULL,
+    log_index BIGINT NOT NULL,
+    block_number BIGINT NOT NULL,
+    block_hash BYTEA NOT NULL,
+    transaction_hash BYTEA NOT NULL,
+    address BYTEA NOT NULL,
+    topics BYTEA NOT NULL,
+    data BYTEA NOT NULL,
+    removed BOOLEAN NOT NULL
+);
 
-    // Create test tables matching the actual snapshot schema
-    conn.execute(
-        "CREATE TABLE log (
-            transaction_index blob(8) NOT NULL,
-            log_index blob(8) NOT NULL,
-            block_number blob(8) NOT NULL,
-            block_hash blob(32) NOT NULL,
-            transaction_hash blob(32) NOT NULL,
-            address blob(20) NOT NULL,
-            topics blob(1) NOT NULL,
-            data blob(1) NOT NULL,
-            removed boolean NOT NULL
-        )",
-    )
-    .await?;
+CREATE TABLE log_status (
+    id SERIAL PRIMARY KEY,
+    status TEXT NOT NULL
+);
 
-    conn.execute(
-        "CREATE TABLE log_status (
-            id INTEGER PRIMARY KEY,
-            status TEXT NOT NULL
-        )",
-    )
-    .await?;
+CREATE TABLE log_topic_info (
+    id SERIAL PRIMARY KEY,
+    topic_hash TEXT NOT NULL
+);
 
-    conn.execute(
-        "CREATE TABLE log_topic_info (
-            id INTEGER PRIMARY KEY,
-            topic_hash TEXT NOT NULL
-        )",
-    )
-    .await?;
+--
+-- Data for Name: log; Type: TABLE DATA; Schema: public; Owner: -
+--
 
-    conn.execute(
-        "CREATE TABLE seaql_migrations (
-            version TEXT PRIMARY KEY,
-            applied_at INTEGER NOT NULL
-        )",
-    )
-    .await?;
+COPY log (transaction_index, log_index, block_number, block_hash, transaction_hash, address, topics, data, removed) FROM stdin;
+1	1	1	\\x0000000000000000000000000000000000000000000000000000000000000000	\\x0000000000000000000000000000000000000000000000000000000000000000	\\x0000000000000000000000000000000000000000	\\x00	\\x00	f
+2	2	2	\\x0000000000000000000000000000000000000000000000000000000000000000	\\x0000000000000000000000000000000000000000000000000000000000000000	\\x0000000000000000000000000000000000000000	\\x00	\\x00	f
+\.
 
-    // Insert test data with proper blob format (8-byte big-endian for block numbers)
-    let block_1_bytes = 1i64.to_be_bytes().to_vec();
-    let block_2_bytes = 2i64.to_be_bytes().to_vec();
-    let dummy_blob = vec![0u8];
-    let dummy_hash32 = vec![0u8; 32];
-    let dummy_hash20 = vec![0u8; 20];
+--
+-- Data for Name: log_status; Type: TABLE DATA; Schema: public; Owner: -
+--
 
-    sqlx::query(
-        "INSERT INTO log (transaction_index, log_index, block_number, block_hash, transaction_hash, address, topics, \
-         data, removed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&block_1_bytes) // transaction_index
-    .bind(&block_1_bytes) // log_index
-    .bind(&block_1_bytes) // block_number
-    .bind(&dummy_hash32) // block_hash
-    .bind(&dummy_hash32) // transaction_hash
-    .bind(&dummy_hash20) // address
-    .bind(&dummy_blob) // topics
-    .bind(&dummy_blob) // data
-    .bind(false) // removed
-    .execute(&mut conn)
-    .await?;
+COPY log_status (id, status) FROM stdin;
+1	active
+\.
 
-    sqlx::query(
-        "INSERT INTO log (transaction_index, log_index, block_number, block_hash, transaction_hash, address, topics, \
-         data, removed) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-    )
-    .bind(&block_2_bytes) // transaction_index
-    .bind(&block_2_bytes) // log_index
-    .bind(&block_2_bytes) // block_number
-    .bind(&dummy_hash32) // block_hash
-    .bind(&dummy_hash32) // transaction_hash
-    .bind(&dummy_hash20) // address
-    .bind(&dummy_blob) // topics
-    .bind(&dummy_blob) // data
-    .bind(false) // removed
-    .execute(&mut conn)
-    .await?;
+--
+-- Data for Name: log_topic_info; Type: TABLE DATA; Schema: public; Owner: -
+--
 
-    conn.execute("INSERT INTO log_status (status) VALUES ('active')")
-        .await?;
+COPY log_topic_info (id, topic_hash) FROM stdin;
+1	0x123
+\.
+"#;
 
-    conn.execute("INSERT INTO log_topic_info (topic_hash) VALUES ('0x123')")
-        .await?;
-
-    conn.execute("INSERT INTO seaql_migrations (version, applied_at) VALUES ('v1', 1234567890)")
-        .await?;
-
+    fs::write(path, sql_content)?;
     Ok(())
 }
 
-/// Creates a test tar.xz archive containing a SQLite database
+/// Creates a test tar.xz archive containing a PostgreSQL SQL dump
 pub(crate) async fn create_test_archive(
     temp_dir: &TempDir,
-    db_target_path: Option<String>,
+    sql_target_path: Option<String>,
 ) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
-    // Create the database
-    let db_target_path_final = db_target_path.unwrap_or_else(|| "hopr_logs.db".to_string());
-    let db_path = temp_dir.path().join("hopr_logs.db");
-    create_test_sqlite_db(&db_path).await?;
+    // Create the SQL dump
+    let sql_target_path_final = sql_target_path.unwrap_or_else(|| "hopr_logs.sql".to_string());
+    let sql_path = temp_dir.path().join("hopr_logs.sql");
+    create_test_sql_dump(&sql_path)?;
 
     // First create uncompressed tar in memory
     let mut tar_data = Vec::new();
     {
         let mut tar = Builder::new(&mut tar_data);
-        tar.append_path_with_name(&db_path, db_target_path_final).await?;
+        tar.append_path_with_name(&sql_path, sql_target_path_final).await?;
         tar.into_inner().await?;
     }
 
@@ -209,8 +167,8 @@ pub(crate) async fn create_test_archive(
     let archive_path = temp_dir.path().join("test_snapshot.tar.xz");
     fs::write(&archive_path, compressed_data)?;
 
-    // Clean up the temporary database file to avoid test interference
-    fs::remove_file(&db_path)?;
+    // Clean up the temporary SQL file to avoid test interference
+    fs::remove_file(&sql_path)?;
 
     Ok(archive_path)
 }

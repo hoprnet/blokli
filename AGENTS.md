@@ -1,5 +1,23 @@
 # Agent Guidelines for HOPR Blokli
 
+This repository contains Blokli: On-chain Indexer of HOPR smart contracts and on-chain operations provider.
+
+## Project Overview
+
+Blokli is a Rust workspace project with two main components:
+
+- `bloklid` - Daemon for indexing HOPR on-chain events
+- `blokli-api` - GraphQL API server for querying indexed data
+
+## Technology Stack
+
+- **Language**: Rust (edition 2021)
+- **Async Runtime**: Tokio
+- **Web Framework**: Axum with async-graphql
+- **Database**: PostgreSQL (via SeaORM)
+- **Build System**: Nix Flakes with `just` command runner
+- **Blockchain**: Ethereum/Gnosis Chain via Alloy
+
 ## Quick Reference
 
 **Post-Changes Check**: Always run `just quick` after making code changes to ensure:
@@ -10,12 +28,21 @@
 
 ## Build Commands
 
-- `just build` - Build with runtime-tokio feature
+- `just build` - Build all workspace packages
 - `just test` - Run all tests
-- `just test-indexer` - Run indexer integration tests
 - `just test-package <name>` - Run tests for specific package
+- `just test-indexer` - Run integration tests
+- `just test-debug` - Single-threaded test execution with output
 - `just clippy` - Run linter
-- `just fmt` - Format code
+- `just fmt` - Format code (uses nix fmt)
+- `just check` - Check compilation
+- `just quick` - Run fmt, clippy, and check (recommended after changes)
+- `just run` - Run bloklid daemon
+- `just run-api` - Run blokli-api GraphQL server
+- `just doc` - Generate documentation
+- `just export-schema-sqlite` - Generate GraphQL schema to verify against target
+
+**Note**: All `just` commands must be run within `nix develop` shell or the nix dev environment.
 
 Legacy cargo commands (prefer using `just` instead):
 
@@ -24,28 +51,485 @@ Legacy cargo commands (prefer using `just` instead):
 - `cargo test <test_name> -F runtime-tokio` - Run specific test
 - `cargo test --package <package_name> -F runtime-tokio` - Run tests for specific package
 
-## Code Style
+The `runtime-tokio` feature flag is required and automatically included in `just` commands.
 
-- **Imports**: Use workspace dependencies, group std/external/local imports separately
-- **Error Handling**: Use `thiserror::Error` for custom errors, return `Result<T>`
+## Code Style Guidelines
+
+### General Rust Conventions
+
 - **Naming**: snake_case for functions/variables, PascalCase for types/enums
+- **Types**: Prefer explicit types over type inference when it improves clarity
+- **Formatting**: 4 spaces for indentation, no trailing commas in single-line constructs
 - **Documentation**: Use `//!` for module docs, `///` for item docs
-- **Formatting**: Use `cargo fmt` - 4 spaces, no trailing commas in single-line
-- **Types**: Prefer explicit types, use `prelude` modules for common imports
+- Document public APIs comprehensively with examples when helpful
+
+### Type Annotations
+
+Always use explicit type hints for function parameters and return types to improve code clarity and enable better static analysis:
+
+```rust
+// Good: Explicit type annotations
+pub async fn fetch_block(block_number: u64, db: &DatabaseConnection) -> Result<Block, IndexerError> {
+    let block = Block::find_by_id(block_number)
+        .one(db)
+        .await?
+        .ok_or(IndexerError::BlockNotFound(block_number))?;
+    Ok(block)
+}
+
+// Bad: Missing return type (only acceptable for simple constructors)
+pub async fn fetch_block(block_number: u64, db: &DatabaseConnection) {
+    // ...
+}
+```
+
+**When to use type inference:**
+
+- Local variables where the type is obvious from context
+- Iterator chains where intermediate types are complex
+- Closures with clear context
+
+**When to use explicit annotations:**
+
+- All public function parameters and return types
+- Function parameters in private functions (unless trivial)
+- Struct field types (always required)
+- Variables where the type isn't immediately clear from the initializer
+
+### Import Organization
+
+**IMPORTANT**: All imports must be declared at the top of the module, never inside functions, impl blocks, or other nested scopes.
+
+Group imports in this order:
+
+1. Standard library (`std::`)
+2. External crates (alphabetically)
+3. Local crates and modules (alphabetically)
+
+**DO NOT** use wildcard imports (`use module::*;`)
+
+**Exception:** Migration files (`db/migration/src/*.rs`) may use wildcard imports for `sea_orm` and `sea_query` as these libraries are designed for this pattern in database migrations.
+
+**Avoid inline fully-qualified paths** - Use imports instead to keep code clean and readable:
+
+```rust
+// Bad: Inline fully-qualified paths
+fn process_data() -> std::collections::HashMap<String, Vec<u8>> {
+    let mut map = std::collections::HashMap::new();
+    map
+}
+
+// Good: Use imports
+use std::collections::HashMap;
+
+fn process_data() -> HashMap<String, Vec<u8>> {
+    let mut map = HashMap::new();
+    map
+}
+```
+
+Always use workspace dependencies defined in the root `Cargo.toml`:
+
+```toml
+# In Cargo.toml of a workspace member
+[dependencies]
+tokio = { workspace = true }
+async-graphql = { workspace = true }
+```
+
+Example of properly organized imports:
+
+```rust
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use async_trait::async_trait;
+use tokio::sync::RwLock;
+
+use crate::config::Config;
+use crate::indexer::BlockIndexer;
+```
+
+### Error Handling
+
+- Use `thiserror::Error` for custom error types
+- Always return `Result<T>` for fallible operations
+- Use `anyhow::Result` for application-level errors
+- Provide meaningful error messages with context
+
+Example:
+
+```rust
+use thiserror::Error;
+
+#[derive(Error, Debug)]
+pub enum IndexerError {
+    #[error("Block {0} not found")]
+    BlockNotFound(u64),
+    #[error("Database error: {0}")]
+    Database(#[from] sea_orm::DbErr),
+}
+```
+
+### Documentation
+
+Use standard Rust documentation patterns with examples:
+
+```rust
+/// Indexes blockchain events for a specific block range.
+///
+/// # Arguments
+///
+/// * `from_block` - Starting block number (inclusive)
+/// * `to_block` - Ending block number (inclusive)
+///
+/// # Returns
+///
+/// Returns the number of events indexed.
+///
+/// # Errors
+///
+/// Returns `IndexerError::BlockNotFound` if any block in the range doesn't exist.
+pub async fn index_range(from_block: u64, to_block: u64) -> Result<usize, IndexerError> {
+    // Implementation
+}
+```
+
+### Async Code
+
+- Use `async/await` syntax
+- Prefer `tokio::spawn` for concurrent tasks
+- Use `Arc<RwLock<T>>` for shared mutable state
+- Avoid blocking operations in async contexts
+
+### HOPR Foundation Types
+
+The HOPR project provides three foundational crates with well-tested types that should be used whenever possible instead of creating new types from scratch. These crates are defined in the workspace `Cargo.toml` and are available to all workspace members.
+
+#### hopr-primitive-types
+
+Provides foundational blockchain types and conversion utilities:
+
+**Core Types:**
+
+- `Address` - Ethereum/blockchain addresses (20 bytes)
+- `Balance<C>` - Generic balance type with currency marker
+- `HoprBalance` - HOPR token balance type alias
+- `XDaiBalance` - xDai native token balance type alias
+- `U256` - 256-bit unsigned integer for Solidity interoperability
+- `SerializableLog` - Blockchain event log representation
+
+**Traits:**
+
+- `ToHex` - Convert types to hexadecimal string representation
+- `IntoEndian` - Handle endianness conversions for serialization
+
+**Usage Example:**
+
+```rust
+use hopr_primitive_types::prelude::{Address, HoprBalance, ToHex};
+
+pub fn format_account(address: Address, balance: HoprBalance) -> String {
+    format!("Account {} has balance {}", address.to_hex(), balance)
+}
+```
+
+#### hopr-crypto-types
+
+Provides cryptographic primitives and key management:
+
+**Core Types:**
+
+- `Hash` - Cryptographic hash type (32 bytes)
+- `OffchainPublicKey` - Ed25519 public key for off-chain operations
+- `OffchainSignature` - Ed25519 signature
+- `ChainKeypair` - ECDSA keypair for on-chain operations
+- `OffchainKeypair` - Ed25519 keypair for off-chain operations
+
+**Usage Example:**
+
+```rust
+use hopr_crypto_types::prelude::{Hash, OffchainPublicKey};
+
+pub fn verify_announcement(
+    peer_id: OffchainPublicKey,
+    hash: Hash,
+) -> Result<(), ValidationError> {
+    // Verification logic using cryptographic types
+    Ok(())
+}
+```
+
+#### hopr-internal-types
+
+Provides HOPR protocol-specific structures and abstractions:
+
+**Channel Types:**
+
+- `ChannelEntry` - Complete channel state representation
+- `ChannelStatus` - Channel lifecycle status (Open, PendingToClose, Closed)
+- `ChannelDirection` - Channel direction (Incoming/Outgoing)
+- `CorruptedChannelEntry` - Tracking for corrupted channel state
+
+**Account Types:**
+
+- `AccountEntry` - Account state with type classification
+- `AccountType` - Account classification (Announcer, NotAnnounced, etc.)
+
+**Protocol Types:**
+
+- `AcknowledgedTicket` - Payment ticket with acknowledgment
+- `WinningProbability` - Probability calculations for ticket validation
+- `KeyBinding` - Key binding verification structure
+
+**Usage Example:**
+
+```rust
+use hopr_internal_types::channels::{ChannelEntry, ChannelStatus};
+use hopr_primitive_types::prelude::Address;
+
+pub async fn process_channel(
+    channel: ChannelEntry,
+    source: Address,
+) -> Result<(), ProcessingError> {
+    match channel.status {
+        ChannelStatus::Open => {
+            // Process open channel
+        }
+        ChannelStatus::PendingToClose { closure_time } => {
+            // Handle pending closure
+        }
+        ChannelStatus::Closed => {
+            // Handle closed channel
+        }
+    }
+    Ok(())
+}
+```
+
+#### hopr-bindings
+
+Provides smart contract bindings and encoding/decoding utilities for HOPR on-chain contracts:
+
+**Purpose:**
+
+For any contract encoding/decoding or event encoding/decoding work, use the existing `hopr-bindings` crate and its modules. This crate contains generated bindings for HOPR smart contracts and provides type-safe interfaces for interacting with blockchain events and contract calls.
+
+**Getting Started:**
+
+To explore the full API and available contract bindings, generate the crate documentation:
+
+```bash
+# Build and open docs for hopr-bindings
+cargo doc --package hopr-bindings --open
+```
+
+The generated documentation will show all available contract modules, event types, and encoding/decoding utilities.
+
+#### Building Documentation
+
+To explore the full API of these crates, build their documentation:
+
+```bash
+# Build and open docs for primitive types
+cargo doc --package hopr-primitive-types --open
+
+# Build and open docs for crypto types
+cargo doc --package hopr-crypto-types --open
+
+# Build and open docs for internal types
+cargo doc --package hopr-internal-types --open
+
+# Build and open docs for contract bindings
+cargo doc --package hopr-bindings --open
+```
+
+#### Best Practices
+
+1. **Always prefer HOPR types** - Before creating a new type for addresses, balances, channels, or accounts, check if a suitable type exists in these crates
+2. **Use the prelude modules** - Import commonly used types from `hopr_primitive_types::prelude` and `hopr_crypto_types::prelude`
+3. **Leverage conversion traits** - Use `ToHex`, `IntoEndian`, and other provided traits for consistent serialization
+4. **Implement conversions** - When mapping between database models and HOPR types, implement `From`/`TryFrom` traits (see `db/entity/src/conversions/`)
+
+## Design
+
+### GraphQL API
+
+- The target schema is defined in `design/target-api-schema.graphql`
+- Ensure any changes in code are made in accordance with the schema
+- The actual schema can be generated using `just export-schema-sqlite` and will be stored in `schema.graphql`
+- Use async-graphql resolvers with proper error handling
+- Implement DataLoader pattern for N+1 query prevention
+- Support GraphQL subscriptions via Server-Sent Events (SSE)
+
+### Database
+
+- The target database schema is defined in `design/target-db-schema.mmd`
+- Ensure any changes in code are made in accordance with the schema
+- Database attribute names must match the target schema to minimize mapping code and avoid confusion
+- Use SeaORM entities generated in `db/entity/src/codegen/`
+
+### Configuration
+
+- Use TOML configuration files
+- Support configuration reload via SIGHUP signal
+- Validate configuration at startup
 
 ## Architecture
 
-- Workspace with `bloklid` daemon and `db/` modules (api, entity, migration, sql)
-- Async/await with tokio runtime
-- Database abstraction via traits in `db/api`
-- Signal handling for config reload (SIGHUP) and shutdown (SIGINT/SIGTERM)
+### Architecture Documentation
+
+**IMPORTANT**: The complete system architecture is documented in `design/architecture.md`. This document provides:
+
+- High-level component architecture and interactions
+- Data flow patterns and event processing pipelines
+- User flows through the GraphQL API
+- Deployment architectures and scaling considerations
+- Performance characteristics and optimization strategies
+- Security considerations and error handling patterns
+
+**Agent Responsibilities**:
+
+1. **Read the Architecture Document**: Before making significant changes to the system, read `design/architecture.md` to understand how components interact and the design principles behind the current architecture.
+
+2. **Update Architecture Documentation**: When making changes that affect the architecture, update `design/architecture.md` to reflect the new design. This includes:
+
+   - Adding new components or services
+   - Changing component interactions or data flows
+   - Modifying database schema or queries patterns
+   - Altering API endpoints or GraphQL schema structure
+   - Changing deployment models or configuration options
+   - Introducing new architectural patterns or design decisions
+
+3. **Maintain Consistency**: Ensure that architectural changes are reflected consistently across:
+   - Code implementation
+   - Architecture documentation (`design/architecture.md`)
+   - API schema documentation (`design/target-api-schema.graphql`)
+   - Database schema documentation (`design/target-db-schema.mmd`)
+
+**Note**: The architecture document focuses on high-level design and should NOT contain code examples, CLI commands, or configuration snippets. Keep it conceptual and architectural.
+
+### Workspace Structure
+
+- `bloklid` - Daemon for indexing HOPR on-chain events
+
+  - Signal handling for config reload (SIGHUP) and shutdown (SIGINT/SIGTERM)
+  - Configuration via TOML files
+  - Uses tokio async runtime
+
+- `blokli-api` - GraphQL API server
+
+  - Built with Axum and async-graphql
+  - HTTP/2 support
+  - TLS 1.3 support (when configured)
+  - Zstandard compression for responses >1KB
+  - Server-Sent Events (SSE) for GraphQL subscriptions
+  - GraphQL Playground for development
+
+- `db/` - Database modules
+  - Database abstraction via traits in `db/api`
+  - SeaORM entities in `db/entity`
+  - Migrations in `db/migration`
 
 ## Testing
 
-- Tests in modules with `#[cfg(test)]`
-- Use `just test-package <package_name>` for specific package tests
-- Use `just test-indexer` to run integration tests
-- Use `just test-debug` for single-threaded test execution with output
+- Write unit tests in the same file using `#[cfg(test)]`
+- Use `#[tokio::test]` for async tests
+- Mock external dependencies (blockchain RPC, database)
+- Test error paths as well as happy paths
+- All tests use tokio async runtime
+
+Example:
+
+```rust
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_index_block() {
+        // Test implementation
+    }
+}
+```
+
+## Common Patterns
+
+### Signal Handling
+
+```rust
+use async_signal::{Signal, Signals};
+
+let mut signals = Signals::new([Signal::Int, Signal::Term, Signal::Hup])?;
+while let Some(signal) = signals.next().await {
+    match signal {
+        Signal::Hup => reload_config().await?,
+        Signal::Int | Signal::Term => break,
+        _ => {}
+    }
+}
+```
+
+### Database Queries
+
+```rust
+use sea_orm::{EntityTrait, QueryFilter, ColumnTrait};
+use db_entity::codegen::prelude::*;
+
+let blocks = Block::find()
+    .filter(block::Column::Number.gte(from_block))
+    .filter(block::Column::Number.lte(to_block))
+    .all(&db)
+    .await?;
+```
+
+### GraphQL Resolvers
+
+```rust
+use async_graphql::{Context, Object, Result};
+
+#[Object]
+impl Query {
+    async fn block(&self, ctx: &Context<'_>, number: u64) -> Result<Block> {
+        let db = ctx.data::<DatabaseConnection>()?;
+        Block::find_by_id(number)
+            .one(db)
+            .await?
+            .ok_or_else(|| "Block not found".into())
+    }
+}
+```
+
+## What to Avoid
+
+- Wildcard imports (`use module::*;`)
+- Imports inside functions, impl blocks, or other nested scopes
+- Inline fully-qualified type paths instead of imports (e.g., `std::collections::HashMap::new()`)
+- Creating custom types when HOPR foundation types exist (`hopr_primitive_types`, `hopr_crypto_types`, `hopr_internal_types`)
+- Creating custom contract encoding/decoding logic when `hopr-bindings` provides the necessary types and utilities
+- Missing type annotations on public function parameters and return types
+- Unwrap/expect in production code (use proper error handling)
+- Blocking operations in async contexts
+- Hardcoded configuration values
+- Direct database queries without using SeaORM entities
+- Missing error context
+- Undocumented public APIs
+
+## Security Considerations
+
+- Validate all external inputs
+- Use parameterized queries (SeaORM handles this)
+- Don't log sensitive information
+- Handle rate limiting for external API calls
+- Use TLS for production deployments
+
+## Performance
+
+- Use connection pooling for database
+- Implement proper pagination for large result sets
+- Use DataLoader for GraphQL to prevent N+1 queries
+- Cache frequently accessed data when appropriate
+- Use streaming for large responses (Zstandard compression enabled for >1KB)
 
 ## Development Workflow
 
@@ -54,4 +538,9 @@ Legacy cargo commands (prefer using `just` instead):
 3. Run `just test` or specific tests as needed
 4. If all checks pass, commit your changes
 
-**Note**: The `runtime-tokio` feature flag is required for most operations and is automatically included in all `just` commands.
+## Additional Resources
+
+- [SeaORM Documentation](https://www.sea-ql.org/SeaORM/)
+- [async-graphql Guide](https://async-graphql.github.io/async-graphql/)
+- [Axum Documentation](https://docs.rs/axum/)
+- [Alloy Documentation](https://alloy.rs/)

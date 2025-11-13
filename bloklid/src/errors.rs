@@ -12,7 +12,7 @@ pub enum BloklidError {
     NonSpecific(String),
 
     #[error("database error: {0}")]
-    Database(#[from] blokli_db_sql::errors::DbSqlError),
+    Database(#[from] blokli_db::errors::DbSqlError),
 
     #[error("chain error: {0}")]
     Chain(#[from] blokli_chain_api::errors::BlokliChainError),
@@ -22,9 +22,6 @@ pub enum BloklidError {
 
     #[error("indexer error: {0}")]
     Indexer(#[from] blokli_chain_indexer::errors::CoreEthereumIndexerError),
-
-    #[error("crypto error: {0}")]
-    Crypto(String),
 }
 
 #[derive(Debug, thiserror::Error)]

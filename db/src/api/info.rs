@@ -1,0 +1,43 @@
+use hopr_crypto_types::prelude::Hash;
+use hopr_internal_types::prelude::WinningProbability;
+use hopr_primitive_types::prelude::HoprBalance;
+
+/// Contains various on-chain information collected by Indexer,
+/// such as domain separators, ticket price, ...etc.
+#[derive(Clone, Copy, Debug)]
+pub struct IndexerData {
+    /// Ledger smart contract domain separator
+    pub ledger_dst: Option<Hash>,
+    /// Node safe registry smart contract domain separator
+    pub safe_registry_dst: Option<Hash>,
+    /// Channels smart contract domain separator
+    pub channels_dst: Option<Hash>,
+    /// Current ticket price
+    pub ticket_price: Option<HoprBalance>,
+    /// Minimum winning probability
+    pub minimum_incoming_ticket_winning_prob: WinningProbability,
+    /// Channel closure grace period in seconds
+    pub channel_closure_grace_period: Option<u64>,
+}
+
+impl IndexerData {
+    /// Convenience method to retrieve domain separator according to the [DomainSeparator] enum.
+    pub fn domain_separator(&self, dst_type: DomainSeparator) -> Option<Hash> {
+        match dst_type {
+            DomainSeparator::Ledger => self.ledger_dst,
+            DomainSeparator::SafeRegistry => self.safe_registry_dst,
+            DomainSeparator::Channel => self.channels_dst,
+        }
+    }
+}
+
+/// Enumerates different domain separators
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum DomainSeparator {
+    /// Ledger smart contract domain separator
+    Ledger,
+    /// Node safe registry smart contract domain separator
+    SafeRegistry,
+    /// Channels smart contract domain separator
+    Channel,
+}

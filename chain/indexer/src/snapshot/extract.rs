@@ -31,17 +31,11 @@ pub struct SnapshotExtractor {
 impl SnapshotExtractor {
     /// Creates a new extractor with predefined expected files.
     ///
-    /// Expected files include SQLite database and WAL files:
-    /// - `hopr_logs.db` - Main database file
-    /// - `hopr_logs.db-wal` - Write-Ahead Log file
-    /// - `hopr_logs.db-shm` - Shared memory file
+    /// Expected files include PostgreSQL SQL dump:
+    /// - `hopr_logs.sql` - SQL dump file from pg_dump
     pub fn new() -> Self {
         Self {
-            expected_files: vec![
-                "hopr_logs.db".to_string(),
-                "hopr_logs.db-wal".to_string(),
-                "hopr_logs.db-shm".to_string(),
-            ],
+            expected_files: vec!["hopr_logs.sql".to_string()],
         }
     }
 
@@ -125,10 +119,10 @@ impl SnapshotExtractor {
             }
         }
 
-        // Verify we got the main database file
-        if !extracted_files.contains(&"hopr_logs.db".to_string()) {
+        // Verify we got the SQL dump file
+        if !extracted_files.contains(&"hopr_logs.sql".to_string()) {
             return Err(SnapshotError::InvalidFormat(
-                "Archive does not contain hopr_logs.db".to_string(),
+                "Archive does not contain hopr_logs.sql".to_string(),
             ));
         }
 
@@ -199,8 +193,8 @@ mod tests {
 
         assert!(result.is_ok(), "Extraction should succeed");
         let files = result.unwrap();
-        assert!(files.contains(&"hopr_logs.db".to_string()));
-        assert!(extract_dir.join("hopr_logs.db").exists());
+        assert!(files.contains(&"hopr_logs.sql".to_string()));
+        assert!(extract_dir.join("hopr_logs.sql").exists());
     }
 
     #[tokio::test]
@@ -214,7 +208,7 @@ mod tests {
         let extract_dir = temp_dir.path().join("extract");
 
         // verify files before extraction
-        assert!(!extract_dir.parent().unwrap().join("hopr_logs.db").exists());
+        assert!(!extract_dir.parent().unwrap().join("hopr_logs.sql").exists());
 
         let result = extractor.extract_snapshot(&archive_path, &extract_dir).await;
 
@@ -222,8 +216,8 @@ mod tests {
 
         // verify files after extraction
         let extracted_files = result.unwrap();
-        assert!(extracted_files.contains(&"hopr_logs.db".to_string()));
-        assert!(!extract_dir.parent().unwrap().join("hopr_logs.db").exists());
+        assert!(extracted_files.contains(&"hopr_logs.sql".to_string()));
+        assert!(!extract_dir.parent().unwrap().join("hopr_logs.sql").exists());
     }
 
     #[tokio::test]

@@ -14,36 +14,40 @@ runtime-tokio = [
   "blokli-chain-api/runtime-tokio",
   "blokli-chain-indexer/runtime-tokio",
   "blokli-chain-rpc/runtime-tokio",
-  "blokli-db-sql/runtime-tokio",
+  "blokli-db/runtime-tokio",
 ]
 
 [dependencies]
 alloy              = { workspace = true }
 async-channel      = { workspace = true }
 async-signal       = { workspace = true }
+axum               = { workspace = true }
 clap               = { workspace = true }
 futures            = { workspace = true }
 hex                = { workspace = true }
+sea-orm            = { workspace = true }
 serde              = { workspace = true }
 serde_with         = { workspace = true }
 serde_yaml         = { workspace = true }
 smart-default      = { workspace = true }
 thiserror          = { workspace = true }
 tokio              = { workspace = true }
+toml               = { workspace = true }
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }
 url                = { workspace = true }
 validator          = { workspace = true }
 
 # Local dependencies
-blokli-chain-api     = { path = "../chain/api" }
-blokli-chain-indexer = { path = "../chain/indexer" }
-blokli-chain-rpc     = { path = "../chain/rpc" }
-blokli-chain-types   = { path = "../chain/types" }
-blokli-db-api        = { path = "../db/api" }
-blokli-db-sql        = { path = "../db/sql" }
+blokli-api           = { workspace = true }
+blokli-chain-api     = { workspace = true }
+blokli-chain-indexer = { workspace = true }
+blokli-chain-rpc     = { workspace = true }
+blokli-chain-types   = { workspace = true }
+blokli-db            = { workspace = true }
 
 # HOPR dependencies
+hopr-chain-config    = { workspace = true }
 hopr-crypto-types    = { workspace = true }
 hopr-internal-types  = { workspace = true }
 hopr-primitive-types = { workspace = true }
@@ -53,4 +57,6 @@ anyhow      = { workspace = true }
 async-trait = { workspace = true }
 mockall     = { workspace = true }
 tempfile    = { workspace = true }
+thiserror   = { workspace = true }
 tokio       = { workspace = true, features = ["full"] }
+validator   = { workspace = true }

@@ -15,7 +15,7 @@ impl MigrationTrait for Migration {
                     .table(LogStatus::Table)
                     .col(LogStatus::Processed)
                     .col(LogStatus::BlockNumber)
-                    .col(LogStatus::TransactionIndex)
+                    .col(LogStatus::TxIndex)
                     .col(LogStatus::LogIndex)
                     .to_owned(),
             )
@@ -66,7 +66,7 @@ impl MigrationTrait for Migration {
 enum LogStatus {
     Table,
     BlockNumber,
-    TransactionIndex,
+    TxIndex,
     LogIndex,
     Processed,
 }

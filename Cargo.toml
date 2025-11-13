@@ -3,30 +3,34 @@
 resolver = "2"
 
 members = [
+  "api",
   "bloklid",
-  "chain/actions",
   "chain/api",
   "chain/indexer",
   "chain/rpc",
   "chain/types",
-  "db/api",
+  "client",
+  "db",
   "db/entity",
   "db/migration",
-  "db/sql",
+  "types",
 ]
 
 [workspace.dependencies]
-alloy = { version = "=1.0.31", default-features = false, features = [
+alloy = { version = "1.0.42", default-features = false, features = [
   "contract",
   "essentials",
   "json-rpc",
   "k256",
   "node-bindings",
   "std",
-] } # pinned to 1.0.16 due to many breaking changes in patch releases
+] }
 anyhow = "1.0.99"
+async-broadcast = "0.7.2"
 async-channel = "2.5.0"
 async-compression = "0.4.30"
+async-graphql = { version = "7.0.14", features = ["chrono", "dataloader"] }
+async-graphql-axum = "7.0.14"
 async-lock = "3.4.1"
 async-signal = "0.2.12"
 async-stream = "0.3.6"
@@ -36,26 +40,29 @@ axum = { version = "0.8.4", features = ["http2", "ws"] }
 axum-extra = { version = "0.10.1", features = ["query"] }
 backon = { version = "1.5.2", default-features = false }
 bincode = "2.0.1"
-blokli-chain-actions = { path = "chain/actions" }
+blokli-api = { path = "api" }
+blokli-api-types = { path = "types" }
 blokli-chain-api = { path = "chain/api" }
 blokli-chain-indexer = { path = "chain/indexer" }
 blokli-chain-rpc = { path = "chain/rpc" }
 blokli-chain-types = { path = "chain/types" }
-blokli-db-api = { path = "db/api" }
+blokli-db = { path = "db" }
 blokli-db-entity = { path = "db/entity" }
 blokli-db-migration = { path = "db/migration" }
-blokli-db-sql = { path = "db/sql" }
 chrono = "0.4.42"
 clap = { version = "4.5.47", features = ["derive", "env", "string"] }
+cynic = "3.12.0"
 dashmap = "6.1.0"
 env_logger = "0.11.8"
+eventsource-client = "0.15.1"
 futures = "0.3.31"
+futures-time = "3.0.0"
 futures-timer = "3.0.3"
 futures-util = "0.3.31"
 hex = "0.4.3"
 hex-literal = "1.0.0"
 hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet" }
-hopr-bindings = { git = "https://github.com/hoprnet/hoprnet" }
+hopr-bindings = { git = "https://github.com/hoprnet/contracts", branch = "main" }
 hopr-chain-config = { git = "https://github.com/hoprnet/hoprnet" }
 hopr-crypto-packet = { git = "https://github.com/hoprnet/hoprnet" }
 hopr-crypto-random = { git = "https://github.com/hoprnet/hoprnet" }
@@ -68,6 +75,8 @@ hopr-path = { git = "https://github.com/hoprnet/hoprnet" }
 hopr-platform = { git = "https://github.com/hoprnet/hoprnet" }
 hopr-primitive-types = { git = "https://github.com/hoprnet/hoprnet" }
 http = "1.3.1"
+indexmap = "2.12.0"
+insta = "1.43.2"
 lazy_static = "1.5.0"
 libp2p-identity = { version = "0.2.12", features = [
   "ed25519",
@@ -79,41 +88,41 @@ mockito = "1.7.0"
 moka = { version = "0.12.10", features = ["future"] }
 multiaddr = "0.18.2"
 num_enum = "0.7.4"
-primitive-types = { version = "0.13.1", features = ["serde"] }
+parking_lot = "0.12.5"
+primitive-types = { version = "0.14.0", features = ["serde"] }
 rand = "0.9.2" # ignored in renovate, cannot be updated, dependencies reference old ones
 reqwest = { version = "0.12.23", features = ["json"] }
 ringbuffer = "0.16.0"
+rstest = "0.26.1"
 rust-stream-ext-concurrent = "1.0.0"
-sea-orm = { version = "1.1.14", default-features = false, features = [
+rustls = { version = "0.23", default-features = false, features = ["std"] }
+rustls-pemfile = "2.1"
+sea-orm = { version = "2.0.0-rc.9", default-features = false, features = [
   "debug-print",
-  "sqlx-sqlite",
+  "macros",
+  "runtime-tokio-rustls",
+  "sqlx-postgres",
   "with-chrono",
-  "with-json",
 ] }
-sea-orm-cli = { version = "1.1.14", default-features = false, features = [
+sea-orm-cli = { version = "2.0.0-rc.9", default-features = false, features = [
   "codegen",
+  "runtime-tokio-rustls",
 ] }
-sea-orm-migration = { version = "1.1.14", default-features = false, features = [
+sea-orm-migration = { version = "2.0.0-rc.9", default-features = false, features = [
   "cli",
-  "sqlx-sqlite",
+  "sqlx-postgres",
   "with-chrono",
 ] }
-sea-query = { version = "0.32.7", default-features = false }
-sea-query-binder = { version = "0.7.0", default-features = false, features = [
-  "sqlx-sqlite",
-  "with-chrono",
-] }
+sea-query = { version = "1.0.0-rc.14", default-features = false }
+# Removed: sea-query-binder is incompatible with sea-query 1.0.0-rc.14
+# SeaORM 2.0.0-rc.9 uses its own internal sea-query-sqlx for database integration
+seaography = { version = "2.0.0-rc.2", features = ["with-chrono"] }
 semver = "1.0.26"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.143"
 serde_with = { version = "3.14.0" }
 serde_yaml = "0.9"
 smart-default = "0.7.1"
-sqlx = { version = "0.8.6", default-features = false, features = [
-  "macros",
-  "migrate",
-  "sqlite",
-] }
 strum = { version = "0.27.2", features = ["derive"] }
 sysinfo = "0.37.0"
 tempfile = "3.22.0"
@@ -127,7 +136,17 @@ tokio = { version = "1.47.1", features = [
   "time",
   "tracing",
 ] }
+tokio-rustls = { version = "0.26", default-features = false, features = [
+  "ring",
+] }
+tokio-test = "0.4"
+toml = "0.8.19"
 tower = { version = "0.5.2", default-features = false, features = ["util"] }
+tower-http = { version = "0.6.2", features = [
+  "compression-zstd",
+  "cors",
+  "trace",
+] }
 tracing = { version = "0.1.41" }
 tracing-subscriber = { version = "0.3.20", features = [
   "env-filter",
@@ -137,6 +156,7 @@ tracing-subscriber = { version = "0.3.20", features = [
 ] }
 tracing-test = { version = "0.2.5", features = ["no-env-filter"] }
 url = { version = "2.5.7", features = ["serde"] }
+uuid = { version = "1.11.0", features = ["serde", "v4"] }
 validator = { version = "0.20.0", features = ["derive"] }
 
 [profile.dev]
@@ -162,3 +182,15 @@ lto           = "fat"
 opt-level     = 3
 panic         = "abort"
 strip         = true
+
+# Workspace-level lints to prevent common issues
+[workspace.lints.clippy]
+# Prevent lossy numeric casts that can cause data corruption
+cast_possible_truncation = "deny"
+cast_possible_wrap       = "deny"
+cast_sign_loss           = "deny"
+
+# faster insta test runs
+[profile.dev.package]
+insta.opt-level   = 3
+similar.opt-level = 3

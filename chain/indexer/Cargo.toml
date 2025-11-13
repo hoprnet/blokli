@@ -15,12 +15,12 @@ crate-type = ["rlib"]
 default = []
 prometheus = [
   "blokli-chain-rpc/prometheus",
-  "blokli-db-sql/prometheus",
+  "blokli-db/prometheus",
   "dep:hopr-metrics",
 ]
 runtime-tokio = [
   "blokli-chain-rpc/runtime-tokio",
-  "blokli-db-sql/runtime-tokio",
+  "blokli-db/runtime-tokio",
   "hopr-async-runtime/runtime-tokio",
 ]
 
@@ -30,6 +30,7 @@ alloy = { workspace = true, default-features = false, features = [
   "json-rpc",
   "node-bindings",
 ] }
+async-broadcast = { workspace = true }
 async-channel = { workspace = true }
 async-compression = { workspace = true, features = [
   "futures-io",
@@ -44,18 +45,19 @@ futures-util = { workspace = true }
 lazy_static = { workspace = true }
 multiaddr = { workspace = true }
 reqwest = { workspace = true, features = ["brotli", "json", "stream", "zstd"] }
+sea-orm = { workspace = true }
 smart-default = { workspace = true }
-sqlx = { workspace = true }
 sysinfo = { workspace = true }
 tempfile = { workspace = true }
 thiserror = { workspace = true }
+tokio = { workspace = true }
 tracing = { workspace = true }
 
+blokli-api-types     = { workspace = true }
 blokli-chain-rpc     = { workspace = true }
 blokli-chain-types   = { workspace = true }
-blokli-db-api        = { workspace = true }
+blokli-db            = { workspace = true }
 blokli-db-entity     = { workspace = true }
-blokli-db-sql        = { workspace = true }
 hopr-async-runtime   = { workspace = true }
 hopr-bindings        = { workspace = true }
 hopr-crypto-types    = { workspace = true }
@@ -72,5 +74,5 @@ test-log        = { workspace = true }
 tokio           = { workspace = true }
 
 blokli-chain-rpc   = { workspace = true, features = ["runtime-tokio"] }
-blokli-db-sql      = { workspace = true, features = ["runtime-tokio"] }
+blokli-db          = { workspace = true, features = ["runtime-tokio"] }
 hopr-crypto-random = { workspace = true }
