@@ -13,13 +13,31 @@ on:
       version_type:
         required: true
         type: string
+    outputs:
+      image_tag:
+        description: "Docker image tag (without architecture suffix)"
+        value: ${{ jobs.build-and-push-multiarch.outputs.image_tag }}
+      image_url_amd64:
+        description: "Full Docker image URL for amd64"
+        value: ${{ jobs.build-and-push-multiarch.outputs.image_url_amd64 }}
+      image_url_arm64:
+        description: "Full Docker image URL for arm64"
+        value: ${{ jobs.build-and-push-multiarch.outputs.image_url_arm64 }}
+      manifest_url:
+        description: "Multi-arch manifest URL"
+        value: ${{ jobs.build-and-push-multiarch.outputs.manifest_url }}
 concurrency:
   group: ${{ github.ref }}-build-docker
   cancel-in-progress: true
 jobs:
-  build-docker:
-    name: Docker
+  build-and-push-multiarch:
+    name: Build and Push Multi-Arch Docker Images
     runs-on: self-hosted-hoprnet-bigger
+    outputs:
+      image_tag: ${{ steps.bump.outputs.bump_version }}
+      image_url_amd64: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ steps.bump.outputs.DOCKER_TAG }}-linux-amd64
+      image_url_arm64: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ steps.bump.outputs.DOCKER_TAG }}-linux-arm64
+      manifest_url: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ steps.bump.outputs.DOCKER_TAG }}
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
@@ -67,8 +85,13 @@ jobs:
           nix develop --command cargo generate-lockfile
           rm bloklid/Cargo.toml.bak
           echo "DOCKER_TAG=${bump_version/+/-}" | tee -a $GITHUB_OUTPUT
-      - name: Build docker image
-        run: nix run -L .#bloklid-docker-build-and-upload
+      - name: Build and push multi-arch Docker images with manifest
+        run: |
+          # Use nix-lib multi-arch upload app to handle:
+          # 1. Building both amd64 and arm64 images
+          # 2. Uploading platform-specific images
+          # 3. Creating and pushing OCI manifest list
+          nix run -L .#bloklid-manifest-upload
         env:
           GOOGLE_ACCESS_TOKEN: ${{ steps.gcp.outputs.access_token }}
           IMAGE_TARGET: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ steps.bump.outputs.DOCKER_TAG }}

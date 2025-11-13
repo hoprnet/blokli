@@ -35,7 +35,7 @@
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # HOPR Nix Library (provides flake-utils and reusable build functions)
-    nix-lib.url = "github:hoprnet/nix-lib";
+    nix-lib.url = "github:hoprnet/nix-lib/tb/202511-docker-security";
 
     # Rust build system
     crane.url = "github:ipetkov/crane";
@@ -187,8 +187,14 @@
             inherit overlays;
           };
 
+          pkgsLinuxAarch64 = import nixpkgs {
+            system = "aarch64-linux";
+            inherit overlays;
+          };
+
           # Docker images using nix-lib
           bloklidDocker = {
+            # x86_64-linux Docker images
             bloklid-docker = nixLib.mkDockerImage {
               name = "bloklid";
               Entrypoint = [ "${bloklidPackages.bloklid-x86_64-linux}/bin/bloklid" ];
@@ -204,13 +210,169 @@
               Entrypoint = [ "${bloklidPackages.bloklid-x86_64-linux-profile}/bin/bloklid" ];
               pkgsLinux = pkgsLinux;
             };
+
+            # aarch64-linux Docker images
+            bloklid-docker-aarch64 = nixLib.mkDockerImage {
+              name = "bloklid";
+              Entrypoint = [ "${bloklidPackages.bloklid-aarch64-linux}/bin/bloklid" ];
+              pkgsLinux = pkgsLinuxAarch64;
+            };
+            bloklid-dev-docker-aarch64 = nixLib.mkDockerImage {
+              name = "bloklid-dev";
+              Entrypoint = [ "${bloklidPackages.bloklid-aarch64-linux-dev}/bin/bloklid" ];
+              pkgsLinux = pkgsLinuxAarch64;
+            };
+            bloklid-profile-docker-aarch64 = nixLib.mkDockerImage {
+              name = "bloklid-profile";
+              Entrypoint = [ "${bloklidPackages.bloklid-aarch64-linux-profile}/bin/bloklid" ];
+              pkgsLinux = pkgsLinuxAarch64;
+            };
+          };
+
+          # Docker security scanning using nix-lib
+          # Trivy vulnerability scans for each architecture
+          bloklidSecurity = {
+            # x86_64-linux security scans
+            bloklid-docker-amd64-scan = nixLib.mkTrivyScan {
+              image = bloklidDocker.bloklid-docker;
+              name = "bloklid-trivy-scan-amd64";
+              severity = "HIGH,CRITICAL";
+              format = "sarif";
+              exitCode = 1;
+            };
+
+            bloklid-dev-docker-amd64-scan = nixLib.mkTrivyScan {
+              image = bloklidDocker.bloklid-dev-docker;
+              name = "bloklid-dev-trivy-scan-amd64";
+              severity = "HIGH,CRITICAL";
+              format = "sarif";
+              exitCode = 0; # Don't fail dev builds on vulnerabilities
+            };
+
+            # aarch64-linux security scans
+            bloklid-docker-arm64-scan = nixLib.mkTrivyScan {
+              image = bloklidDocker.bloklid-docker-aarch64;
+              name = "bloklid-trivy-scan-arm64";
+              severity = "HIGH,CRITICAL";
+              format = "sarif";
+              exitCode = 1;
+            };
+
+            bloklid-dev-docker-arm64-scan = nixLib.mkTrivyScan {
+              image = bloklidDocker.bloklid-dev-docker-aarch64;
+              name = "bloklid-dev-trivy-scan-arm64";
+              severity = "HIGH,CRITICAL";
+              format = "sarif";
+              exitCode = 0; # Don't fail dev builds on vulnerabilities
+            };
+
+            # SBOM generation for each architecture
+            # x86_64-linux SBOMs
+            bloklid-docker-amd64-sbom = nixLib.mkSBOM {
+              image = bloklidDocker.bloklid-docker;
+              name = "bloklid-sbom-amd64";
+              formats = [
+                "spdx-json"
+                "cyclonedx-json"
+              ];
+            };
+
+            bloklid-dev-docker-amd64-sbom = nixLib.mkSBOM {
+              image = bloklidDocker.bloklid-dev-docker;
+              name = "bloklid-dev-sbom-amd64";
+              formats = [
+                "spdx-json"
+                "cyclonedx-json"
+              ];
+            };
+
+            # aarch64-linux SBOMs
+            bloklid-docker-arm64-sbom = nixLib.mkSBOM {
+              image = bloklidDocker.bloklid-docker-aarch64;
+              name = "bloklid-sbom-arm64";
+              formats = [
+                "spdx-json"
+                "cyclonedx-json"
+              ];
+            };
+
+            bloklid-dev-docker-arm64-sbom = nixLib.mkSBOM {
+              image = bloklidDocker.bloklid-dev-docker-aarch64;
+              name = "bloklid-dev-sbom-arm64";
+              formats = [
+                "spdx-json"
+                "cyclonedx-json"
+              ];
+            };
+          };
+
+          # Multi-architecture Docker manifests using nix-lib
+          bloklidMultiArch = {
+            # Production multi-arch manifest
+            bloklid-manifest = nixLib.mkMultiArchManifest {
+              name = "bloklid";
+              tag = bloklidCrateInfo.version;
+              images = [
+                {
+                  image = bloklidDocker.bloklid-docker;
+                  platform = "linux/amd64";
+                }
+                {
+                  image = bloklidDocker.bloklid-docker-aarch64;
+                  platform = "linux/arm64";
+                }
+              ];
+            };
+
+            # Development multi-arch manifest
+            bloklid-dev-manifest = nixLib.mkMultiArchManifest {
+              name = "bloklid-dev";
+              tag = bloklidCrateInfo.version;
+              images = [
+                {
+                  image = bloklidDocker.bloklid-dev-docker;
+                  platform = "linux/amd64";
+                }
+                {
+                  image = bloklidDocker.bloklid-dev-docker-aarch64;
+                  platform = "linux/arm64";
+                }
+              ];
+            };
+
+            # Profile multi-arch manifest
+            bloklid-profile-manifest = nixLib.mkMultiArchManifest {
+              name = "bloklid-profile";
+              tag = bloklidCrateInfo.version;
+              images = [
+                {
+                  image = bloklidDocker.bloklid-profile-docker;
+                  platform = "linux/amd64";
+                }
+                {
+                  image = bloklidDocker.bloklid-profile-docker-aarch64;
+                  platform = "linux/arm64";
+                }
+              ];
+            };
           };
 
           # Application definitions using nix-lib
           dockerUploadApps = {
+            # x86_64-linux upload apps (single arch - for backwards compatibility)
             bloklid-docker-build-and-upload = nixLib.mkDockerUploadApp bloklidDocker.bloklid-docker;
             bloklid-dev-docker-build-and-upload = nixLib.mkDockerUploadApp bloklidDocker.bloklid-dev-docker;
             bloklid-profile-docker-build-and-upload = nixLib.mkDockerUploadApp bloklidDocker.bloklid-profile-docker;
+
+            # aarch64-linux upload apps (single arch - for backwards compatibility)
+            bloklid-docker-aarch64-build-and-upload = nixLib.mkDockerUploadApp bloklidDocker.bloklid-docker-aarch64;
+            bloklid-dev-docker-aarch64-build-and-upload = nixLib.mkDockerUploadApp bloklidDocker.bloklid-dev-docker-aarch64;
+            bloklid-profile-docker-aarch64-build-and-upload = nixLib.mkDockerUploadApp bloklidDocker.bloklid-profile-docker-aarch64;
+
+            # Multi-arch manifest upload apps (recommended for new deployments)
+            bloklid-manifest-upload = nixLib.mkMultiArchUploadApp bloklidMultiArch.bloklid-manifest;
+            bloklid-dev-manifest-upload = nixLib.mkMultiArchUploadApp bloklidMultiArch.bloklid-dev-manifest;
+            bloklid-profile-manifest-upload = nixLib.mkMultiArchUploadApp bloklidMultiArch.bloklid-profile-manifest;
           };
 
           utilityApps = {
@@ -258,6 +420,7 @@
             extraPackages = [
               pkgs.foundry-bin
               pkgs.solc
+              pkgs.kubernetes-helm
             ];
           };
           shells = {
@@ -372,8 +535,42 @@
 
           # Export packages
           packages = packages // {
-            # Docker images
-            inherit (bloklidDocker) bloklid-docker bloklid-dev-docker bloklid-profile-docker;
+            # Docker images - x86_64-linux
+            inherit (bloklidDocker)
+              bloklid-docker
+              bloklid-dev-docker
+              bloklid-profile-docker
+              ;
+
+            # Docker images - aarch64-linux
+            inherit (bloklidDocker)
+              bloklid-docker-aarch64
+              bloklid-dev-docker-aarch64
+              bloklid-profile-docker-aarch64
+              ;
+
+            # Security scans - Trivy vulnerability scanning
+            inherit (bloklidSecurity)
+              bloklid-docker-amd64-scan
+              bloklid-docker-arm64-scan
+              bloklid-dev-docker-amd64-scan
+              bloklid-dev-docker-arm64-scan
+              ;
+
+            # SBOMs - Software Bill of Materials
+            inherit (bloklidSecurity)
+              bloklid-docker-amd64-sbom
+              bloklid-docker-arm64-sbom
+              bloklid-dev-docker-amd64-sbom
+              bloklid-dev-docker-arm64-sbom
+              ;
+
+            # Multi-arch manifests
+            inherit (bloklidMultiArch)
+              bloklid-manifest
+              bloklid-dev-manifest
+              bloklid-profile-manifest
+              ;
 
             # Set default package
             default = bloklidPackages.bloklid;

@@ -538,6 +538,186 @@ impl Query {
 3. Run `just test` or specific tests as needed
 4. If all checks pass, commit your changes
 
+## Docker Images and Multi-Architecture Support
+
+### Overview
+
+The project uses Nix with nix-lib helpers to build reproducible Docker images for the `bloklid` daemon. Images are built for multiple architectures, scanned for security vulnerabilities, and pushed to Google Artifact Registry with automatic multi-arch manifest creation.
+
+### Supported Architectures
+
+- **amd64** (x86_64-linux) - Intel/AMD 64-bit processors
+- **arm64** (aarch64-linux) - ARM 64-bit processors (AWS Graviton, Apple Silicon servers, etc.)
+
+### Image Variants
+
+Three image variants are available for each architecture:
+
+1. **bloklid-docker** - Production build (release profile, optimized)
+2. **bloklid-dev-docker** - Development build (dev profile, faster compilation)
+3. **bloklid-profile-docker** - Profiling build (with debug symbols)
+
+### Building and Uploading Docker Images
+
+#### Single Architecture (Individual Images)
+
+Using Nix apps for individual architecture images (backwards compatibility):
+
+```bash
+# Build and push amd64 production image
+nix run .#bloklid-docker-build-and-upload
+
+# Build and push arm64 production image
+nix run .#bloklid-docker-aarch64-build-and-upload
+
+# Build and push amd64 dev image
+nix run .#bloklid-dev-docker-build-and-upload
+
+# Build and push arm64 dev image
+nix run .#bloklid-dev-docker-aarch64-build-and-upload
+```
+
+**Note**: Set `IMAGE_TARGET` and `GOOGLE_ACCESS_TOKEN` environment variables before running upload commands.
+
+#### Multi-Architecture (Recommended)
+
+Using nix-lib multi-arch helpers to build and upload all architectures with automatic manifest creation:
+
+```bash
+# Build, upload all architectures, and create multi-arch manifest
+IMAGE_TARGET=gcr.io/project/bloklid:1.0.0 \
+GOOGLE_ACCESS_TOKEN=$TOKEN \
+nix run .#bloklid-manifest-upload
+
+# Development variant
+nix run .#bloklid-dev-manifest-upload
+
+# Profile variant
+nix run .#bloklid-profile-manifest-upload
+```
+
+This approach:
+
+1. Builds Docker images for both amd64 and arm64
+2. Uploads platform-specific images with suffixes (`-linux-amd64`, `-linux-arm64`)
+3. Creates and pushes an OCI manifest list for automatic platform selection
+4. Enables users to pull the correct architecture automatically
+
+### CI/CD Workflows
+
+#### Automated Docker Builds
+
+Docker images are automatically built in GitHub Actions for:
+
+- **Pull Requests** - Commit-tagged images (e.g., `1.0.0-commit.abc123`)
+- **Merged PRs** - PR-tagged images (e.g., `1.0.0-pr.42`)
+- **Releases** - Version-tagged images (e.g., `1.0.0`)
+
+The build workflow uses nix-lib multi-arch helpers to:
+
+1. Build Docker images for both amd64 and arm64 architectures
+2. Upload platform-specific images with suffixes (`-linux-amd64`, `-linux-arm64`)
+3. Create and push an OCI manifest list for automatic platform selection
+4. Trigger security scans and SBOM generation
+
+#### Multi-Architecture Manifest
+
+The CI/CD system creates Docker manifests that allow pulling the correct architecture automatically:
+
+```bash
+# Pulls the correct architecture for your platform
+docker pull <registry>/bloklid:1.0.0
+
+# Explicitly pull specific architecture
+docker pull <registry>/bloklid:1.0.0-linux-amd64
+docker pull <registry>/bloklid:1.0.0-linux-arm64
+```
+
+### Security Scanning
+
+All Docker images undergo automated security scanning using nix-lib helpers with offline Trivy database.
+
+#### Local Security Scanning
+
+You can run security scans locally before pushing to CI:
+
+```bash
+# Scan production images
+nix build .#bloklid-docker-amd64-scan  # Scans amd64 image
+nix build .#bloklid-docker-arm64-scan  # Scans arm64 image
+
+# View scan results
+cat result/scan-report.sarif  # SARIF format for tools
+cat result/scan-summary.txt   # Human-readable summary
+
+# Scan development images (non-failing)
+nix build .#bloklid-dev-docker-amd64-scan
+nix build .#bloklid-dev-docker-arm64-scan
+```
+
+**Benefits of Nix-based scanning:**
+
+- **Offline**: Uses pre-fetched Trivy database (no internet required)
+- **Reproducible**: Same results locally and in CI
+- **Fast**: Database pre-cached in Nix store
+- **Consistent**: Exact same Trivy version everywhere
+
+#### Local SBOM Generation
+
+Generate Software Bill of Materials locally:
+
+```bash
+# Generate SBOM for production images
+nix build .#bloklid-docker-amd64-sbom  # amd64 SBOM
+nix build .#bloklid-docker-arm64-sbom  # arm64 SBOM
+
+# View SBOM files
+ls result/
+# sbom.spdx.json       - SPDX JSON format
+# sbom.cyclonedx.json  - CycloneDX JSON format
+```
+
+#### CI Security Workflow
+
+Automated security scanning in CI:
+
+- **Trivy Vulnerability Scanner**
+
+  - Uses Nix derivations with pre-fetched database
+  - Scans for HIGH and CRITICAL severity vulnerabilities
+  - Uploads results to GitHub Security tab (SARIF format)
+  - Fails build if critical vulnerabilities are found in production images
+
+- **Smoke Tests**
+
+  - Verifies container starts successfully
+  - Tests entrypoint functionality with `--help` flag
+  - Ensures binary is functional inside container
+
+- **SBOM Generation**
+  - Uses Nix derivations with Syft
+  - Generates SPDX JSON and CycloneDX JSON formats
+  - Stored as workflow artifacts (90-day retention)
+  - Available for supply chain security analysis
+
+### Workflow Files
+
+- `.github/workflows/build-docker.yaml` - Multi-arch Docker build using nix-lib helpers
+- `.github/workflows/security-scan.yaml` - Nix-based security scanning and SBOM generation
+- `.github/workflows/build.yaml` - PR validation workflow
+- `.github/workflows/merge.yaml` - Post-merge workflow
+- `.github/workflows/release.yaml` - Release workflow
+
+### Image Tagging Strategy
+
+| Version Type | Format                | Platform Images                         | Manifest              | Use Case              |
+| ------------ | --------------------- | --------------------------------------- | --------------------- | --------------------- |
+| Commit       | `version-commit.hash` | `1.0.0-commit.abc123-linux-amd64/arm64` | `1.0.0-commit.abc123` | Development testing   |
+| PR           | `version-pr.number`   | `1.0.0-pr.42-linux-amd64/arm64`         | `1.0.0-pr.42`         | Pre-merge validation  |
+| Release      | `version`             | `1.0.0-linux-amd64/arm64`               | `1.0.0`               | Production deployment |
+
+**Note**: The manifest tag (without architecture suffix) automatically selects the correct platform image based on the Docker client's architecture.
+
 ## Additional Resources
 
 - [SeaORM Documentation](https://www.sea-ql.org/SeaORM/)
