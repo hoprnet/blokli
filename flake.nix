@@ -234,7 +234,7 @@
           bloklidSecurity = {
             # x86_64-linux security scans
             bloklid-docker-amd64-scan = nixLib.mkTrivyScan {
-              image = bloklidDocker.bloklid-docker;
+              image = bloklidDocker.bloklid-docker-amd64;
               name = "bloklid-trivy-scan-amd64";
               severity = "HIGH,CRITICAL";
               format = "sarif";
@@ -242,7 +242,7 @@
             };
 
             bloklid-dev-docker-amd64-scan = nixLib.mkTrivyScan {
-              image = bloklidDocker.bloklid-dev-docker;
+              image = bloklidDocker.bloklid-dev-docker-amd64;
               name = "bloklid-dev-trivy-scan-amd64";
               severity = "HIGH,CRITICAL";
               format = "sarif";
@@ -269,7 +269,7 @@
             # SBOM generation for each architecture
             # x86_64-linux SBOMs
             bloklid-docker-amd64-sbom = nixLib.mkSBOM {
-              image = bloklidDocker.bloklid-docker;
+              image = bloklidDocker.bloklid-docker-amd64;
               name = "bloklid-sbom-amd64";
               formats = [
                 "spdx-json"
@@ -278,7 +278,7 @@
             };
 
             bloklid-dev-docker-amd64-sbom = nixLib.mkSBOM {
-              image = bloklidDocker.bloklid-dev-docker;
+              image = bloklidDocker.bloklid-dev-docker-amd64;
               name = "bloklid-dev-sbom-amd64";
               formats = [
                 "spdx-json"
@@ -307,8 +307,9 @@
           };
 
           # Multi-architecture Docker manifests using nix-lib
+          # Note: aarch64 temporarily disabled until GitHub runner supports it
           bloklidDockerMultiArch = {
-            # Production multi-arch manifest
+            # Production multi-arch manifest (amd64 only until runner supports aarch64)
             bloklid-docker-manifest = nixLib.mkMultiArchManifest {
               name = "bloklid";
               tag = bloklidCrateInfo.version;
@@ -317,14 +318,15 @@
                   image = bloklidDocker.bloklid-docker-amd64;
                   platform = "linux/amd64";
                 }
-                {
-                  image = bloklidDocker.bloklid-docker-aarch64;
-                  platform = "linux/arm64";
-                }
+                # Disabled until GitHub runner supports aarch64
+                # {
+                #   image = bloklidDocker.bloklid-docker-aarch64;
+                #   platform = "linux/arm64";
+                # }
               ];
             };
 
-            # Development multi-arch manifest
+            # Development multi-arch manifest (amd64 only until runner supports aarch64)
             bloklid-dev-docker-manifest = nixLib.mkMultiArchManifest {
               name = "bloklid-dev";
               tag = bloklidCrateInfo.version;
@@ -333,14 +335,15 @@
                   image = bloklidDocker.bloklid-dev-docker-amd64;
                   platform = "linux/amd64";
                 }
-                {
-                  image = bloklidDocker.bloklid-dev-docker-aarch64;
-                  platform = "linux/arm64";
-                }
+                # Disabled until GitHub runner supports aarch64
+                # {
+                #   image = bloklidDocker.bloklid-dev-docker-aarch64;
+                #   platform = "linux/arm64";
+                # }
               ];
             };
 
-            # Profile multi-arch manifest
+            # Profile multi-arch manifest (amd64 only until runner supports aarch64)
             bloklid-profile-docker-manifest = nixLib.mkMultiArchManifest {
               name = "bloklid-profile";
               tag = bloklidCrateInfo.version;
@@ -349,10 +352,11 @@
                   image = bloklidDocker.bloklid-profile-docker-amd64;
                   platform = "linux/amd64";
                 }
-                {
-                  image = bloklidDocker.bloklid-profile-docker-aarch64;
-                  platform = "linux/arm64";
-                }
+                # Disabled until GitHub runner supports aarch64
+                # {
+                #   image = bloklidDocker.bloklid-profile-docker-aarch64;
+                #   platform = "linux/arm64";
+                # }
               ];
             };
           };
