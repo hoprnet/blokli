@@ -75,7 +75,7 @@ impl Default for BlokliTestState {
                     "channels": "0x77C9414043d27fdC98A6A2d73fc77b9b383092a7",
                     "module_implementation": "0x32863c4974fBb6253E338a0cb70C382DCeD2eFCb",
                     "node_safe_registry": "0x4F7C7dE3BA2B29ED8B2448dF2213cA43f94E45c0",
-                    "node_stake_v2_factory": "0x791d190b2c95397F4BcE7bD8032FD67dCEA7a5F2",
+                    "node_stake_factory": "0x791d190b2c95397F4BcE7bD8032FD67dCEA7a5F2",
                     "token": "0xD4fdec44DB9D44B8f2b6d529620f9C0C7066A2c1",
                     "ticket_price_oracle": "0x442df1d946303fB088C9377eefdaeA84146DA0A6",
                     "winning_probability_oracle": "0xC15675d4CCa538D91a91a8D3EcFBB8499C3B0471"
