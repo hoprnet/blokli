@@ -2,7 +2,7 @@ use std::{ops::Div, sync::Arc, time::Duration};
 
 use crate::{
     api::{types::*, *},
-    errors::{BlokliClientError, ErrorKind},
+    errors::{BlokliClientError, ErrorKind, TrackingErrorKind},
 };
 use async_broadcast::TrySendError;
 use futures::{Stream, StreamExt};
@@ -687,10 +687,17 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
 
     async fn track_transaction(&self, tx_id: TxId, client_timeout: Duration) -> Result<Transaction> {
         futures_time::task::sleep(client_timeout.div(10).into()).await;
-        self.state
+        let tx = self
+            .state
             .write()
             .active_txs
             .shift_remove(&tx_id)
-            .ok_or_else(|| ErrorKind::NoData.into())
+            .ok_or_else(|| BlokliClientError::from(ErrorKind::NoData))?;
+
+        if tx.status == TransactionStatus::Confirmed {
+            Ok(tx)
+        } else {
+            Err(ErrorKind::TrackingError(TrackingErrorKind::Reverted).into())
+        }
     }
 }
