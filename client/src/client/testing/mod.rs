@@ -694,10 +694,17 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
             .shift_remove(&tx_id)
             .ok_or_else(|| BlokliClientError::from(ErrorKind::NoData))?;
 
-        if tx.status == TransactionStatus::Confirmed {
-            Ok(tx)
-        } else {
-            Err(ErrorKind::TrackingError(TrackingErrorKind::Reverted).into())
+        match tx.status {
+            TransactionStatus::Confirmed => Ok(tx),
+            TransactionStatus::Timeout => Err(ErrorKind::TrackingError(TrackingErrorKind::Timeout).into()),
+            TransactionStatus::SubmissionFailed => {
+                Err(ErrorKind::TrackingError(TrackingErrorKind::SubmissionFailed).into())
+            }
+            TransactionStatus::ValidationFailed => {
+                Err(ErrorKind::TrackingError(TrackingErrorKind::ValidationFailed).into())
+            }
+            TransactionStatus::Reverted => Err(ErrorKind::TrackingError(TrackingErrorKind::Reverted).into()),
+            _ => Err(ErrorKind::MockClientError(anyhow::anyhow!("unexpected transaction status")).into()),
         }
     }
 }
