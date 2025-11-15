@@ -4,17 +4,32 @@
 # Host address and port for the daemon to listen on
 host = "0.0.0.0:3064"
 
-# PostgreSQL database configuration
+# Database configuration - supports PostgreSQL or SQLite
 [database]
+# PostgreSQL configuration (recommended for production)
+type = "postgresql"
+
 # Option 1: Simple connection URL (recommended)
 url = "postgresql://bloklid:password@localhost:5432/bloklid"
 
-# Option 2: Detailed configuration (comment out url above to use this)
+# Option 2: Detailed configuration (comment out url above and uncomment below)
+# type = "postgresql"
 # host = "localhost"
 # port = 5432
 # username = "bloklid"
 # password = "password"
 # database = "bloklid"
+# max_connections = 10
+
+# SQLite configuration (alternative to PostgreSQL)
+# SQLite uses two separate database files to avoid write lock contention:
+# - Index database: accounts, channels, announcements, node_info, chain_info
+# - Logs database: log, log_status, log_topic_info tables
+# Uncomment the section below to use SQLite instead of PostgreSQL
+# [database]
+# type = "sqlite"
+# index_path = "data/bloklid-index.db"  # Use ":memory:" for in-memory database
+# logs_path = "data/bloklid-logs.db"    # Use ":memory:" for in-memory database
 # max_connections = 10
 
 # Directory for storing data files
@@ -39,3 +54,28 @@ enable_logs_snapshot = false
 
 # URL to download logs snapshot from (optional)
 logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
+
+# GraphQL subscription behavior configuration
+[indexer.subscription]
+# Capacity of the event bus buffer for channel events
+# Higher values prevent overflow but use more memory (default: 1000)
+event_bus_capacity = 1000
+
+# Capacity of the shutdown signal buffer
+# Typically a small value is sufficient (default: 10)
+shutdown_signal_capacity = 10
+
+# Batch size for Phase 1 historical channel queries
+# Higher values fetch more data per query but may increase latency (default: 100)
+batch_size = 100
+
+# API server configuration
+[api]
+# Enable or disable the GraphQL API server (default: true)
+enabled = true
+
+# Address and port for the API server to bind to (default: "0.0.0.0:8080")
+bind_address = "0.0.0.0:8080"
+
+# Enable GraphQL Playground for development and testing (default: true)
+playground_enabled = true

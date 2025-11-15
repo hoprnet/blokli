@@ -80,6 +80,16 @@ in
     })
   );
 
+  bloklid-aarch64-linux-dev = builders.aarch64-linux.callPackage nixLib.mkRustPackage (
+    (mkbloklidBuildArgs {
+      src = sources.main;
+      depsSrc = sources.deps;
+    })
+    // {
+      CARGO_PROFILE = "dev";
+    }
+  );
+
   # macOS builds - require building from Darwin systems
   # x86_64 macOS (Intel Macs)
   bloklid-x86_64-darwin =

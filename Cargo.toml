@@ -62,7 +62,7 @@ futures-util = "0.3.31"
 hex = "0.4.3"
 hex-literal = "1.0.0"
 hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet" }
-hopr-bindings = { git = "https://github.com/hoprnet/contracts", branch = "main" }
+hopr-bindings = { git = "https://github.com/hoprnet/contracts", branch = "tb/202511-build-script" }
 hopr-chain-config = { git = "https://github.com/hoprnet/hoprnet" }
 hopr-crypto-packet = { git = "https://github.com/hoprnet/hoprnet" }
 hopr-crypto-random = { git = "https://github.com/hoprnet/hoprnet" }
