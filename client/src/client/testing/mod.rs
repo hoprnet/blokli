@@ -1,12 +1,13 @@
 use std::{ops::Div, sync::Arc, time::Duration};
 
+use async_broadcast::TrySendError;
+use futures::{Stream, StreamExt};
+use indexmap::IndexMap;
+
 use crate::{
     api::{types::*, *},
     errors::{BlokliClientError, ErrorKind, TrackingErrorKind},
 };
-use async_broadcast::TrySendError;
-use futures::{Stream, StreamExt};
-use indexmap::IndexMap;
 
 fn serialize_as_empty_map<K, V, S>(_: &IndexMap<K, V>, serializer: S) -> std::result::Result<S::Ok, S::Error>
 where
@@ -20,15 +21,29 @@ where
 /// Represents a state for [`BlokliTestClient`].
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BlokliTestState {
+    /// Contains KeyID -> Account
     pub accounts: IndexMap<u32, Account>,
+    /// Contains ChainAddress -> SafeAddress that are not paired with any account yet.
+    pub unpaired_safes: IndexMap<String, String>,
+    /// Contains native balances for addresses.
     pub native_balances: IndexMap<String, NativeBalance>,
+    /// Contains token balances for addresses.
     pub token_balances: IndexMap<String, HoprBalance>,
+    /// Contains safe allowances for addresses.
     pub safe_allowances: IndexMap<String, SafeHoprAllowance>,
+    /// Contains transaction counts for addresses.
     pub tx_counts: IndexMap<String, u64>,
+    /// Contains ChannelId -> Channel.
     pub channels: IndexMap<String, Channel>,
+    /// Contains chain info.
     pub chain_info: ChainInfo,
+    /// Version of the Blokli server.
     pub version: String,
+    /// Health of the Blokli server.
     pub health: String,
+    /// Active transactions.
+    ///
+    /// This field is transient and not serialized.
     // Always serialize as empty, because the data are non-deterministic and do not make sense to compare.
     #[serde(serialize_with = "serialize_as_empty_map")]
     pub active_txs: IndexMap<TxId, Transaction>,
@@ -38,6 +53,7 @@ impl PartialEq for BlokliTestState {
     fn eq(&self, other: &Self) -> bool {
         // Skip active_txs because they are non-deterministic.
         self.accounts == other.accounts
+            && self.unpaired_safes == other.unpaired_safes
             && self.native_balances == other.native_balances
             && self.token_balances == other.token_balances
             && self.safe_allowances == other.safe_allowances
@@ -53,6 +69,7 @@ impl Default for BlokliTestState {
     fn default() -> Self {
         Self {
             accounts: Default::default(),
+            unpaired_safes: Default::default(),
             native_balances: Default::default(),
             token_balances: Default::default(),
             safe_allowances: Default::default(),
