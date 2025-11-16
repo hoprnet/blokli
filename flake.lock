@@ -193,31 +193,32 @@
         "treefmt-nix": "treefmt-nix"
       },
       "locked": {
-        "lastModified": 1761048816,
-        "narHash": "sha256-Z+GOlrLeh7f9+2WE3KwdN8HcTJ4+Rwfmo8PGyiGRays=",
+        "lastModified": 1763039628,
+        "narHash": "sha256-z+noK5FvsUiy70TDLlgvN6ZVGMivCAPxy7r4yiEhZxI=",
         "owner": "hoprnet",
         "repo": "nix-lib",
-        "rev": "66a3b3cdd0999bf63a68edc34de73d6f544aa418",
+        "rev": "a4fc8d4c2ef9b1d2982dcc55327134bcedb01667",
         "type": "github"
       },
       "original": {
         "owner": "hoprnet",
+        "ref": "tb/202511-docker-security",
         "repo": "nix-lib",
         "type": "github"
       }
     },
     "nixpkgs": {
       "locked": {
-        "lastModified": 1760596604,
-        "narHash": "sha256-J/i5K6AAz/y5dBePHQOuzC7MbhyTOKsd/GLezSbEFiM=",
-        "owner": "nixos",
+        "lastModified": 1762756533,
+        "narHash": "sha256-HiRDeUOD1VLklHeOmaKDzf+8Hb7vSWPVFcWwaTrpm+U=",
+        "owner": "NixOS",
         "repo": "nixpkgs",
-        "rev": "3cbe716e2346710d6e1f7c559363d14e11c32a43",
+        "rev": "c2448301fb856e351aab33e64c33a3fc8bcf637d",
         "type": "github"
       },
       "original": {
-        "owner": "nixos",
-        "ref": "nixpkgs-unstable",
+        "owner": "NixOS",
+        "ref": "release-25.05",
         "repo": "nixpkgs",
         "type": "github"
       }
@@ -253,22 +254,6 @@
         "type": "github"
       }
     },
-    "nixpkgs_2": {
-      "locked": {
-        "lastModified": 1762756533,
-        "narHash": "sha256-HiRDeUOD1VLklHeOmaKDzf+8Hb7vSWPVFcWwaTrpm+U=",
-        "owner": "NixOS",
-        "repo": "nixpkgs",
-        "rev": "c2448301fb856e351aab33e64c33a3fc8bcf637d",
-        "type": "github"
-      },
-      "original": {
-        "owner": "NixOS",
-        "ref": "release-25.05",
-        "repo": "nixpkgs",
-        "type": "github"
-      }
-    },
     "pre-commit": {
       "inputs": {
         "flake-compat": "flake-compat",
@@ -298,7 +283,7 @@
         "flake-root": "flake-root",
         "foundry": "foundry",
         "nix-lib": "nix-lib",
-        "nixpkgs": "nixpkgs_2",
+        "nixpkgs": "nixpkgs",
         "nixpkgs-unstable": "nixpkgs-unstable",
         "pre-commit": "pre-commit",
         "rust-overlay": "rust-overlay",
@@ -391,7 +376,10 @@
     },
     "treefmt-nix": {
       "inputs": {
-        "nixpkgs": "nixpkgs"
+        "nixpkgs": [
+          "nix-lib",
+          "nixpkgs"
+        ]
       },
       "locked": {
         "lastModified": 1760945191,
