@@ -535,7 +535,7 @@ mod tests {
         let solidity_balance: HoprBalance = primitive_types::U256::from((1u128 << 96) - 1).into();
         let channel_state = encode_channel_state(
             solidity_balance,
-            channel.ticket_index.as_u32(),
+            channel.ticket_index.as_u64(),
             0,
             channel.channel_epoch.as_u32(),
             channel.status,
@@ -636,7 +636,7 @@ mod tests {
         let solidity_balance: HoprBalance = primitive_types::U256::from((1u128 << 96) - 2).into();
         let channel_state = encode_channel_state(
             solidity_balance,
-            channel.ticket_index.as_u32(),
+            channel.ticket_index.as_u64(),
             0,
             channel.channel_epoch.as_u32(),
             channel.status,
@@ -882,7 +882,7 @@ mod tests {
         db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let channel_id = generate_channel_id(&SELF_CHAIN_ADDRESS, &COUNTERPARTY_CHAIN_ADDRESS);
-        let channel_state = encode_channel_state(HoprBalance::zero(), 0, 0, 1, ChannelStatus::Open);
+        let channel_state = encode_channel_state(HoprBalance::zero(), 0, 0, 4, ChannelStatus::Open);
 
         // Create ChannelOpened event using bindings (reopening is a ChannelOpened event)
         let event = ChannelOpened {
@@ -1296,16 +1296,22 @@ mod tests {
 
         db.upsert_channel(None, channel, 1, 0, 0).await?;
 
-        let ticket_redeemed_log = SerializableLog {
-            address: handlers.addresses.channels,
-            topics: vec![
-                hopr_bindings::hopr_channels::HoprChannels::TicketRedeemed::SIGNATURE_HASH.into(),
-                // TicketRedeemedFilter::signature().into(),
-                H256::from_slice(channel.get_id().as_ref()).into(),
-            ],
-            data: Vec::from(next_ticket_index.to_be_bytes()),
-            ..test_log()
+        let channel_id = generate_channel_id(&SELF_CHAIN_ADDRESS, &COUNTERPARTY_CHAIN_ADDRESS);
+        let channel_state = encode_channel_state(
+            channel.balance,
+            next_ticket_index.as_u64(),
+            0, // closure_time
+            channel.channel_epoch.as_u32(),
+            ChannelStatus::Open,
+        );
+
+        // Create TicketRedeemed event using bindings
+        let event = TicketRedeemed {
+            channelId: FixedBytes::from_slice(channel_id.as_ref()),
+            channel: channel_state,
         };
+
+        let ticket_redeemed_log = event_to_log(event, handlers.addresses.channels);
 
         db.begin_transaction()
             .await?
@@ -1364,16 +1370,22 @@ mod tests {
 
         let next_ticket_index = primitive_types::U256::from((1u128 << 48) - 1);
 
-        let ticket_redeemed_log = SerializableLog {
-            address: handlers.addresses.channels,
-            topics: vec![
-                hopr_bindings::hopr_channels::HoprChannels::TicketRedeemed::SIGNATURE_HASH.into(),
-                // TicketRedeemedFilter::signature().into(),
-                H256::from_slice(channel.get_id().as_ref()).into(),
-            ],
-            data: Vec::from(next_ticket_index.to_be_bytes()),
-            ..test_log()
+        let channel_id = generate_channel_id(&COUNTERPARTY_CHAIN_ADDRESS, &SELF_CHAIN_ADDRESS);
+        let channel_state = encode_channel_state(
+            channel.balance,
+            next_ticket_index.as_u64(),
+            0, // closure_time
+            channel.channel_epoch.as_u32(),
+            ChannelStatus::Open,
+        );
+
+        // Create TicketRedeemed event using bindings
+        let event = TicketRedeemed {
+            channelId: FixedBytes::from_slice(channel_id.as_ref()),
+            channel: channel_state,
         };
+
+        let ticket_redeemed_log = event_to_log(event, handlers.addresses.channels);
 
         db.begin_transaction()
             .await?
@@ -1432,7 +1444,7 @@ mod tests {
         let next_ticket_index = primitive_types::U256::from((1u128 << 48) - 1);
         let channel_state = encode_channel_state(
             channel.balance,
-            next_ticket_index.as_u32(),
+            next_ticket_index.as_u64(),
             0,
             channel.channel_epoch.as_u32(),
             channel.status,
@@ -1490,20 +1502,24 @@ mod tests {
         db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let timestamp = SystemTime::now();
+        let closure_time_secs = timestamp.as_unix_timestamp().as_secs() as u32;
 
-        let encoded_data = (U256::from(timestamp.as_unix_timestamp().as_secs())).abi_encode();
+        let channel_id = generate_channel_id(&SELF_CHAIN_ADDRESS, &COUNTERPARTY_CHAIN_ADDRESS);
+        let channel_state = encode_channel_state(
+            channel.balance,
+            0, // ticket_index
+            closure_time_secs,
+            channel.channel_epoch.as_u32(),
+            ChannelStatus::PendingToClose(timestamp),
+        );
 
-        let closure_initiated_log = SerializableLog {
-            address: handlers.addresses.channels,
-            topics: vec![
-                hopr_bindings::hopr_channels::HoprChannels::OutgoingChannelClosureInitiated::SIGNATURE_HASH.into(),
-                // OutgoingChannelClosureInitiatedFilter::signature().into(),
-                H256::from_slice(channel.get_id().as_ref()).into(),
-            ],
-            data: encoded_data,
-            // data: Vec::from(U256::from(timestamp.as_unix_timestamp().as_secs()).to_be_bytes()).into(),
-            ..test_log()
+        // Create OutgoingChannelClosureInitiated event using bindings
+        let event = OutgoingChannelClosureInitiated {
+            channelId: FixedBytes::from_slice(channel_id.as_ref()),
+            channel: channel_state,
         };
+
+        let closure_initiated_log = event_to_log(event, handlers.addresses.channels);
 
         db.begin_transaction()
             .await?

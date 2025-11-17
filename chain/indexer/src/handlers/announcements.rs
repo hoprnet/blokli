@@ -203,7 +203,7 @@ mod tests {
 
     use alloy::{
         dyn_abi::DynSolValue,
-        primitives::Address as AlloyAddress,
+        primitives::{Address as AlloyAddress, FixedBytes},
         sol_types::{SolEvent, SolValue},
     };
     use anyhow::Context;
@@ -212,6 +212,7 @@ mod tests {
         accounts::{BlokliDbAccountOperations, ChainOrPacketKey},
         db::BlokliDb,
     };
+    use hopr_bindings::hopr_announcements_events::HoprAnnouncementsEvents::KeyBinding as KeyBindingEvent;
     use hopr_crypto_types::keypairs::Keypair;
     use hopr_internal_types::{
         account::{AccountEntry, AccountType},
@@ -237,25 +238,27 @@ mod tests {
 
         let keybinding = KeyBinding::new(*SELF_CHAIN_ADDRESS, &SELF_PRIV_KEY);
 
-        let keybinding_log = SerializableLog {
-            address: handlers.addresses.announcements,
-            topics: vec![
-                hopr_bindings::hopr_announcements_events::HoprAnnouncementsEvents::KeyBinding::SIGNATURE_HASH.into(),
-            ],
-            data: DynSolValue::Tuple(vec![
-                DynSolValue::Bytes(keybinding.signature.as_ref().to_vec()),
-                DynSolValue::Bytes(keybinding.packet_key.as_ref().to_vec()),
-                DynSolValue::FixedBytes(AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref()).into_word(), 32),
-            ])
-            .abi_encode_packed(),
-            ..test_log()
+        // KeyBinding event has 4 non-indexed parameters: chain_key, ed25519_pub_key, ed25519_sig_0, ed25519_sig_1
+        // ed25519_pub_key and signatures are bytes32
+        let packet_key_bytes = keybinding.packet_key.as_ref();
+        let sig_bytes = keybinding.signature.as_ref();
+
+        // Create KeyBinding event using bindings
+        let event = KeyBindingEvent {
+            key_id: alloy::primitives::U256::ZERO,
+            chain_key: AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref()),
+            ed25519_pub_key: FixedBytes::<32>::from_slice(packet_key_bytes),
+            ed25519_sig_0: FixedBytes::<32>::from_slice(&sig_bytes[..32]),
+            ed25519_sig_1: FixedBytes::<32>::from_slice(&sig_bytes[32..64]),
         };
+
+        let keybinding_log = event_to_log(event, handlers.addresses.announcements);
 
         let account_entry = AccountEntry {
             public_key: *SELF_PRIV_KEY.public(),
             chain_addr: *SELF_CHAIN_ADDRESS,
             entry_type: AccountType::NotAnnounced,
-            published_at: 0,
+            published_at: 10, // Matches event_to_log default block number
         };
 
         db.begin_transaction()
@@ -264,7 +267,10 @@ mod tests {
             .await?;
 
         // Verify AccountUpdated event was published
-        let _event = try_recv_event(&mut event_receiver).expect("Expected AccountUpdated event to be published");
+        let _event = tokio::time::timeout(std::time::Duration::from_millis(100), event_receiver.recv())
+            .await
+            .expect("Timeout waiting for AccountUpdated event")
+            .expect("Expected AccountUpdated event to be published");
 
         assert_eq!(
             db.get_account(None, ChainOrPacketKey::ChainKey(*SELF_CHAIN_ADDRESS))
