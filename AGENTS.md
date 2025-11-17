@@ -782,11 +782,11 @@ Automated security scanning in CI:
 
 ### Image Tagging Strategy
 
-| Version Type | Format                | Platform Image                   | Manifest              | Use Case              |
-| ------------ | --------------------- | -------------------------------- | --------------------- | --------------------- |
-| Commit       | `version-commit.hash` | `1.0.0-commit.abc123-linux-amd64`| `1.0.0-commit.abc123` | Development testing   |
-| PR           | `version-pr.number`   | `1.0.0-pr.42-linux-amd64`        | `1.0.0-pr.42`         | Pre-merge validation  |
-| Release      | `version`             | `1.0.0-linux-amd64`              | `1.0.0`               | Production deployment |
+| Version Type | Format                | Platform Image                    | Manifest              | Use Case              |
+| ------------ | --------------------- | --------------------------------- | --------------------- | --------------------- |
+| Commit       | `version-commit.hash` | `1.0.0-commit.abc123-linux-amd64` | `1.0.0-commit.abc123` | Development testing   |
+| PR           | `version-pr.number`   | `1.0.0-pr.42-linux-amd64`         | `1.0.0-pr.42`         | Pre-merge validation  |
+| Release      | `version`             | `1.0.0-linux-amd64`               | `1.0.0`               | Production deployment |
 
 **Note:** Currently only AMD64 images are available. ARM64 will be re-enabled when GitHub runner supports aarch64. The manifest tag (without architecture suffix) points to the amd64 image.
 
