@@ -113,9 +113,9 @@ dependencies = [
 
 [[package]]
 name = "alloy-chains"
-version = "0.2.18"
+version = "0.2.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bfaa9ea039a6f9304b4a593d780b1f23e1ae183acdee938b11b38795acacc9f1"
+checksum = "3ef6e7627b842406f449f83ae1a437a01cd244bc246d66f102cee9c0435ce10d"
 dependencies = [
  "alloy-primitives",
  "num_enum",
@@ -3671,7 +3671,7 @@ dependencies = [
 [[package]]
 name = "hopr-async-runtime"
 version = "0.3.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-downgrade-alloy#61f80c03f169c16a7c0ebbb3fddfb70bd6f096d4"
+source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-fix-call-selector#291c0044aeb1fa5dd8c5647c2514934ac3d4152d"
 dependencies = [
  "futures",
  "tokio",
@@ -3680,7 +3680,7 @@ dependencies = [
 [[package]]
 name = "hopr-bindings"
 version = "0.2.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-downgrade-alloy#61f80c03f169c16a7c0ebbb3fddfb70bd6f096d4"
+source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-fix-call-selector#291c0044aeb1fa5dd8c5647c2514934ac3d4152d"
 dependencies = [
  "alloy",
  "anyhow",
@@ -3703,7 +3703,7 @@ dependencies = [
 [[package]]
 name = "hopr-chain-config"
 version = "1.1.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-downgrade-alloy#61f80c03f169c16a7c0ebbb3fddfb70bd6f096d4"
+source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-fix-call-selector#291c0044aeb1fa5dd8c5647c2514934ac3d4152d"
 dependencies = [
  "anyhow",
  "hopr-chain-types",
@@ -3720,7 +3720,7 @@ dependencies = [
 [[package]]
 name = "hopr-chain-types"
 version = "0.10.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-downgrade-alloy#61f80c03f169c16a7c0ebbb3fddfb70bd6f096d4"
+source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-fix-call-selector#291c0044aeb1fa5dd8c5647c2514934ac3d4152d"
 dependencies = [
  "alloy",
  "hex-literal",
@@ -3741,7 +3741,7 @@ dependencies = [
 [[package]]
 name = "hopr-crypto-packet"
 version = "1.0.1"
-source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-downgrade-alloy#61f80c03f169c16a7c0ebbb3fddfb70bd6f096d4"
+source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-fix-call-selector#291c0044aeb1fa5dd8c5647c2514934ac3d4152d"
 dependencies = [
  "flagset",
  "hex",
@@ -3760,7 +3760,7 @@ dependencies = [
 [[package]]
 name = "hopr-crypto-random"
 version = "0.2.2"
-source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-downgrade-alloy#61f80c03f169c16a7c0ebbb3fddfb70bd6f096d4"
+source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-fix-call-selector#291c0044aeb1fa5dd8c5647c2514934ac3d4152d"
 dependencies = [
  "generic-array 1.3.5",
  "rand 0.8.5",
@@ -3769,7 +3769,7 @@ dependencies = [
 [[package]]
 name = "hopr-crypto-sphinx"
 version = "0.10.1"
-source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-downgrade-alloy#61f80c03f169c16a7c0ebbb3fddfb70bd6f096d4"
+source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-fix-call-selector#291c0044aeb1fa5dd8c5647c2514934ac3d4152d"
 dependencies = [
  "bimap",
  "curve25519-dalek",
@@ -3787,7 +3787,7 @@ dependencies = [
 [[package]]
 name = "hopr-crypto-types"
 version = "0.7.3"
-source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-downgrade-alloy#61f80c03f169c16a7c0ebbb3fddfb70bd6f096d4"
+source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-fix-call-selector#291c0044aeb1fa5dd8c5647c2514934ac3d4152d"
 dependencies = [
  "aes",
  "blake3",
@@ -3818,7 +3818,7 @@ dependencies = [
 [[package]]
 name = "hopr-internal-types"
 version = "0.12.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-downgrade-alloy#61f80c03f169c16a7c0ebbb3fddfb70bd6f096d4"
+source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-fix-call-selector#291c0044aeb1fa5dd8c5647c2514934ac3d4152d"
 dependencies = [
  "aquamarine",
  "hex-literal",
@@ -3836,7 +3836,7 @@ dependencies = [
 [[package]]
 name = "hopr-metrics"
 version = "1.3.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-downgrade-alloy#61f80c03f169c16a7c0ebbb3fddfb70bd6f096d4"
+source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-fix-call-selector#291c0044aeb1fa5dd8c5647c2514934ac3d4152d"
 dependencies = [
  "prometheus",
 ]
@@ -3844,7 +3844,7 @@ dependencies = [
 [[package]]
 name = "hopr-network-types"
 version = "1.1.2"
-source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-downgrade-alloy#61f80c03f169c16a7c0ebbb3fddfb70bd6f096d4"
+source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-fix-call-selector#291c0044aeb1fa5dd8c5647c2514934ac3d4152d"
 dependencies = [
  "arrayvec",
  "cfg-if",
@@ -3870,7 +3870,7 @@ dependencies = [
 [[package]]
 name = "hopr-parallelize"
 version = "0.1.1"
-source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-downgrade-alloy#61f80c03f169c16a7c0ebbb3fddfb70bd6f096d4"
+source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-fix-call-selector#291c0044aeb1fa5dd8c5647c2514934ac3d4152d"
 dependencies = [
  "futures",
  "rayon",
@@ -3879,7 +3879,7 @@ dependencies = [
 [[package]]
 name = "hopr-path"
 version = "0.9.0"
-source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-downgrade-alloy#61f80c03f169c16a7c0ebbb3fddfb70bd6f096d4"
+source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-fix-call-selector#291c0044aeb1fa5dd8c5647c2514934ac3d4152d"
 dependencies = [
  "async-lock",
  "async-trait",
@@ -3896,7 +3896,7 @@ dependencies = [
 [[package]]
 name = "hopr-platform"
 version = "0.2.1"
-source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-downgrade-alloy#61f80c03f169c16a7c0ebbb3fddfb70bd6f096d4"
+source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-fix-call-selector#291c0044aeb1fa5dd8c5647c2514934ac3d4152d"
 dependencies = [
  "thiserror 2.0.17",
 ]
@@ -3904,7 +3904,7 @@ dependencies = [
 [[package]]
 name = "hopr-primitive-types"
 version = "0.9.1"
-source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-downgrade-alloy#61f80c03f169c16a7c0ebbb3fddfb70bd6f096d4"
+source = "git+https://github.com/hoprnet/hoprnet?branch=tb%2F202511-fix-call-selector#291c0044aeb1fa5dd8c5647c2514934ac3d4152d"
 dependencies = [
  "alloy",
  "bigdecimal",

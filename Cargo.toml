@@ -61,19 +61,19 @@ futures-timer = "3.0.3"
 futures-util = "0.3.31"
 hex = "0.4.3"
 hex-literal = "1.0.0"
-hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-downgrade-alloy" }
+hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-fix-call-selector" }
 hopr-bindings = { git = "https://github.com/hoprnet/contracts", branch = "tb/202511-build-script" }
-hopr-chain-config = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-downgrade-alloy" }
-hopr-crypto-packet = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-downgrade-alloy" }
-hopr-crypto-random = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-downgrade-alloy" }
-hopr-crypto-types = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-downgrade-alloy" }
-hopr-internal-types = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-downgrade-alloy" }
-hopr-metrics = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-downgrade-alloy" }
-hopr-network-types = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-downgrade-alloy" }
-hopr-parallelize = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-downgrade-alloy" }
-hopr-path = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-downgrade-alloy" }
-hopr-platform = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-downgrade-alloy" }
-hopr-primitive-types = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-downgrade-alloy" }
+hopr-chain-config = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-fix-call-selector" }
+hopr-crypto-packet = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-fix-call-selector" }
+hopr-crypto-random = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-fix-call-selector" }
+hopr-crypto-types = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-fix-call-selector" }
+hopr-internal-types = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-fix-call-selector" }
+hopr-metrics = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-fix-call-selector" }
+hopr-network-types = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-fix-call-selector" }
+hopr-parallelize = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-fix-call-selector" }
+hopr-path = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-fix-call-selector" }
+hopr-platform = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-fix-call-selector" }
+hopr-primitive-types = { git = "https://github.com/hoprnet/hoprnet" , branch = "tb/202511-fix-call-selector" }
 http = "1.3.1"
 insta = "1.43.2"
 lazy_static = "1.5.0"
