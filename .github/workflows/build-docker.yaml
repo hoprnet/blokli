@@ -147,7 +147,7 @@ jobs:
           # 1. Build manifest with both architectures
           # 2. Upload platform-specific images (linux-amd64, linux-arm64)
           # 3. Create and push OCI manifest list
-          nix run -L .#bloklid-manifest-upload
+          nix run -L .#bloklid-docker-manifest-upload
         env:
           GOOGLE_ACCESS_TOKEN: ${{ steps.gcp.outputs.access_token }}
           IMAGE_TARGET: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ needs.build-docker-images.outputs.docker_tag }}
