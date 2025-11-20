@@ -320,7 +320,8 @@ curl https://blokli.example.com/graphql
 
 - **GraphQL API**: `/graphql`
 - **GraphQL Subscriptions (SSE)**: `/graphql/subscriptions`
-- **Health Check**: `/health`
+- **Health Check (liveness)**: `/healthz`
+- **Health Check (readiness)**: `/readyz`
 - **GraphQL Playground**: `/graphql` (in browser)
 
 ## Testing the Deployment

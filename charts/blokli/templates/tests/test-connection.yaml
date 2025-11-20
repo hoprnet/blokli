@@ -15,5 +15,5 @@ spec:
     args:
       - '--spider'
       - '--timeout=10'
-      - '{{ include "blokli.fullname" . }}:{{ .Values.service.port }}/health'
+      - '{{ include "blokli.fullname" . }}:{{ .Values.service.port }}/healthz'
   restartPolicy: Never
