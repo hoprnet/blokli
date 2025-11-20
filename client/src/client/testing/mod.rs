@@ -323,11 +323,24 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
     /// These changes are not broadcasted as events but take effect on the shared state
     /// for all clones of the client.
     pub fn update_price_and_win_prob(&self, new_price: Option<TokenValueString>, new_win_prob: Option<f64>) {
+        let mut updated = false;
         if let Some(new_price) = new_price {
             self.state.write().chain_info.ticket_price = new_price;
+            updated = true;
         }
         if let Some(new_win_prob) = new_win_prob {
             self.state.write().chain_info.min_ticket_winning_probability = new_win_prob;
+            updated = true;
+        }
+
+        if updated {
+            let state = self.state.read().clone();
+            if let Err(error) = self.ticket_channel.0.try_broadcast(TicketParameters {
+                min_ticket_winning_probability: state.chain_info.min_ticket_winning_probability,
+                ticket_price: state.chain_info.ticket_price,
+            }) {
+                tracing::error!(%error, "failed to broadcast ticket parameters update");
+            }
         }
     }
 
