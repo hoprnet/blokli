@@ -647,13 +647,13 @@ Using nix-lib multi-arch helpers to build and upload all architectures with auto
 # Build, upload all architectures, and create multi-arch manifest
 IMAGE_TARGET=gcr.io/project/bloklid:1.0.0 \
 GOOGLE_ACCESS_TOKEN=$TOKEN \
-nix run .#bloklid-manifest-upload
+nix run .#bloklid-docker-manifest-upload
 
 # Development variant
-nix run .#bloklid-dev-manifest-upload
+nix run .#bloklid-dev-docker-manifest-upload
 
 # Profile variant
-nix run .#bloklid-profile-manifest-upload
+nix run .#bloklid-profile-docker-manifest-upload
 ```
 
 This approach:
@@ -733,7 +733,7 @@ nix build .#bloklid-dev-docker-arm64-scan
 - **Offline**: Uses pre-fetched Trivy database (no internet required)
 - **Reproducible**: Same results locally and in CI
 - **Fast**: Database pre-cached in Nix store
-- **Consistent**: Exact same Trivy version everywhere
+- **Consistent**: The same Trivy version everywhere
 
 #### Local SBOM Generation
 

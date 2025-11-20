@@ -34,10 +34,10 @@ jobs:
           - arch: amd64
             nix_arch: x86_64-linux
             nix_package: bloklid-docker-amd64
-          # Disabled until GitHub runner supports aarch64
-          # - arch: arm64
-          #   nix_arch: aarch64-linux
-          #   nix_package: bloklid-docker-aarch64
+            # Disabled until GitHub runner supports aarch64
+            # - arch: arm64
+            #   nix_arch: aarch64-linux
+            #   nix_package: bloklid-docker-aarch64
     outputs:
       image_tag: ${{ steps.bump.outputs.bump_version }}
       docker_tag: ${{ steps.bump.outputs.DOCKER_TAG }}
@@ -97,7 +97,6 @@ jobs:
           name: docker-image-${{ matrix.arch }}
           path: docker-images/${{ matrix.arch }}.tar.gz
           retention-days: 1
-
   upload-manifest:
     name: Upload Multi-Arch Manifest
     runs-on: self-hosted-hoprnet-bigger
@@ -107,7 +106,8 @@ jobs:
       docker_tag: ${{ needs.build-docker-images.outputs.docker_tag }}
       manifest_url: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ needs.build-docker-images.outputs.docker_tag }}
       image_url_amd64: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ needs.build-docker-images.outputs.docker_tag }}-linux-amd64
-      image_url_arm64: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ needs.build-docker-images.outputs.docker_tag }}-linux-arm64
+      # image_url_arm64: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ needs.build-docker-images.outputs.docker_tag }}-linux-arm64
+      # Re-enable when aarch64 runner is available
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
@@ -151,14 +151,13 @@ jobs:
         env:
           GOOGLE_ACCESS_TOKEN: ${{ steps.gcp.outputs.access_token }}
           IMAGE_TARGET: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ needs.build-docker-images.outputs.docker_tag }}
-
   security-scan:
     name: Security Scan (${{ matrix.arch }})
     runs-on: self-hosted-hoprnet-bigger
     needs: upload-manifest
     strategy:
       matrix:
-        arch: [amd64]  # Only amd64 until runner supports aarch64
+        arch: [amd64] # Only amd64 until runner supports aarch64
         # arch: [amd64, arm64]  # Re-enable when aarch64 runner available
     steps:
       - name: Harden Runner
