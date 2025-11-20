@@ -320,14 +320,38 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
 
     /// Allows updating the minimum ticket price and minimum ticket-winning probability.
     ///
-    /// These changes are not broadcasted as events but take effect on the shared state
+    /// These changes are also broadcasted as events and take effect on the shared state
     /// for all clones of the client.
     pub fn update_price_and_win_prob(&self, new_price: Option<TokenValueString>, new_win_prob: Option<f64>) {
-        if let Some(new_price) = new_price {
-            self.state.write().chain_info.ticket_price = new_price;
-        }
-        if let Some(new_win_prob) = new_win_prob {
-            self.state.write().chain_info.min_ticket_winning_probability = new_win_prob;
+        let mut updated = false;
+        let (new_price_param, new_win_prob_param) = {
+            let mut state = self.state.write();
+
+            let mut new_price_param = state.chain_info.ticket_price.clone();
+            if let Some(new_price) = new_price {
+                state.chain_info.ticket_price = new_price.clone();
+
+                new_price_param = new_price;
+                updated = true;
+            }
+
+            let mut new_win_prob_param = state.chain_info.min_ticket_winning_probability;
+            if let Some(new_win_prob) = new_win_prob {
+                state.chain_info.min_ticket_winning_probability = new_win_prob;
+
+                new_win_prob_param = new_win_prob;
+                updated = true;
+            }
+            (new_price_param, new_win_prob_param)
+        };
+
+        if updated
+            && let Err(error) = self.ticket_channel.0.try_broadcast(TicketParameters {
+                min_ticket_winning_probability: new_win_prob_param,
+                ticket_price: new_price_param,
+            })
+        {
+            tracing::error!(%error, "failed to broadcast ticket parameters update");
         }
     }
 
