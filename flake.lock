@@ -193,16 +193,16 @@
         "treefmt-nix": "treefmt-nix"
       },
       "locked": {
-        "lastModified": 1763120578,
-        "narHash": "sha256-6Fe3YUW0nfV3eCRhH5j7dHTghabd2YEnOu5WIYk0R5M=",
+        "lastModified": 1763630544,
+        "narHash": "sha256-dTwHow5onb+wePVRxTMV7wnwb/FB7Gj4OfD44yjicQc=",
         "owner": "hoprnet",
         "repo": "nix-lib",
-        "rev": "aeba8bf67d22039bd62446f5931c73960c8c5ca6",
+        "rev": "f6ec31bb20bd1719cee31d0cc8fcf2b1784c9988",
         "type": "github"
       },
       "original": {
         "owner": "hoprnet",
-        "ref": "tb/202511-docker-security",
+        "ref": "tb/202511-fix-manifest",
         "repo": "nix-lib",
         "type": "github"
       }

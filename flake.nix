@@ -35,7 +35,7 @@
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # HOPR Nix Library (provides flake-utils and reusable build functions)
-    nix-lib.url = "github:hoprnet/nix-lib/tb/202511-docker-security";
+    nix-lib.url = "github:hoprnet/nix-lib/tb/202511-fix-manifest";
 
     # Rust build system
     crane.url = "github:ipetkov/crane";
