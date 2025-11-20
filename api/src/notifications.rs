@@ -14,7 +14,7 @@ use futures::Stream;
 use sea_orm::{DatabaseBackend, DatabaseConnection};
 use sqlx::postgres::PgListener;
 use tokio::time::sleep;
-use tracing::error;
+use tracing::{error, warn};
 
 use crate::errors::ApiError;
 
@@ -115,10 +115,13 @@ async fn create_sqlite_notification_stream(
                                 yield ();
                             }
                         }
-                        Err(e) => {
-                            // Channel closed or lagged
-                            error!("Error receiving SQLite notification: {:?}", e);
-                            // Brief delay before continuing
+                        Err(tokio::sync::broadcast::error::RecvError::Closed) => {
+                            // Channel closed, end the stream
+                            break;
+                        }
+                        Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                            // Receiver lagged behind, some messages were skipped
+                            warn!("SQLite notification receiver lagged, skipped {} messages", n);
                             sleep(Duration::from_millis(100)).await;
                         }
                     }
@@ -126,8 +129,8 @@ async fn create_sqlite_notification_stream(
             }))
         }
         None => {
-            // Fallback to polling if no manager available (shouldn't happen in normal operation)
-            error!("No SQLite notification manager provided, falling back to polling");
+            // Fallback to polling if no manager available (expected for PostgreSQL deployments)
+            warn!("No SQLite notification manager provided, falling back to polling");
             Ok(Box::pin(stream! {
                 loop {
                     sleep(Duration::from_secs(1)).await;

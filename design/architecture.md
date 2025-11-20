@@ -687,14 +687,29 @@ API subscription queries latest values from database
 Streams update to GraphQL clients via SSE
 ```
 
-**SQLite Polling (Tests/Development)**:
+**SQLite Update Hooks (Tests/Development)**:
 
-SQLite environments use polling as a fallback since update hooks require raw connection access not exposed through SeaORM's connection pool:
+SQLite environments use native update hooks via `SqliteNotificationManager` for event-driven notifications:
 
-- Poll interval: 1 second
-- Query chain_info for latest values
-- Compare with previous values to detect changes
-- Stream updates to clients when detected
+```
+Chain Info Update (ticket price or winning probability changes)
+    ↓
+SQLite update hook fires on chain_info table modification
+    ↓
+SqliteHookSender sends to sync channel
+    ↓
+Bridge thread forwards to async broadcast channel
+    ↓
+Subscribed streams receive notification
+    ↓
+API subscription queries latest values from database
+    ↓
+Streams update to GraphQL clients via SSE
+```
+
+- Event-driven via SQLite's `set_update_hook()` callback
+- Sync-to-async bridge using mpsc → broadcast channels
+- Zero polling overhead (same as PostgreSQL)
 
 **Notification Channels**:
 
@@ -704,7 +719,7 @@ SQLite environments use polling as a fallback since update hooks require raw con
 
 **Scalability Benefits**:
 
-- **Zero polling overhead** on PostgreSQL (event-driven)
+- **Zero polling overhead** (event-driven for both PostgreSQL and SQLite)
 - **Multiple API instances** can all LISTEN to same channel
 - **Database-level fan-out** handles notification distribution
 - **Atomic with writes** - notifications only sent on successful commit
@@ -712,8 +727,9 @@ SQLite environments use polling as a fallback since update hooks require raw con
 
 **Implementation Details**:
 
-- Migration: `m017_add_ticket_params_notify_trigger.rs`
+- Migration: `m017_add_ticket_params_notify_trigger.rs` (PostgreSQL trigger)
 - Trigger Function: `notify_ticket_params_changed()` (PostgreSQL only)
+- SQLite Manager: `db/src/notifications.rs::SqliteNotificationManager`
 - Notification Module: `api/src/notifications.rs` (unified abstraction)
 - Subscription: `api/src/subscription.rs::ticket_parameters_updated`
 
