@@ -10,7 +10,7 @@ metadata:
 spec:
   containers:
   - name: wget
-    image: busybox:latest
+    image: busybox:1.36
     command: ['wget']
     args:
       - '--spider'

@@ -123,6 +123,11 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.indexer.enableLogsSnapshot` | Enable logs snapshot                      | `false`                     |
 | `config.indexer.logsSnapshotUrl`    | Logs snapshot URL                         | `""`                        |
 | `config.logging.level`              | Rust log level                            | `"info"`                    |
+| `config.api.enabled`                | Enable GraphQL API server                 | `true`                      |
+| `config.api.bindAddress`            | API server bind address                   | `"0.0.0.0:8080"`            |
+| `config.api.playgroundEnabled`      | Enable GraphQL Playground                 | `false`                     |
+| `config.api.health.maxIndexerLag`   | Max indexer lag before readiness fails    | `10`                        |
+| `config.api.health.timeoutMs`       | Health check timeout (ms)                 | `5000`                      |
 
 ### Persistence Parameters
 
