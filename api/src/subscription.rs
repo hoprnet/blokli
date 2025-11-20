@@ -9,9 +9,11 @@ use async_broadcast::Receiver;
 use async_graphql::{Context, Result, Subscription};
 use async_stream::stream;
 use blokli_api_types::{
-    Account, Channel, ChannelUpdate, HoprBalance, NativeBalance, OpenedChannelsGraph, TokenValueString, UInt64,
+    Account, Channel, ChannelUpdate, HoprBalance, NativeBalance, OpenedChannelsGraph, TicketParameters,
+    TokenValueString, UInt64,
 };
 use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
+use blokli_db::notifications::SqliteNotificationManager;
 use blokli_db_entity::{
     channel, channel_state,
     conversions::{
@@ -19,7 +21,7 @@ use blokli_db_entity::{
         channel_aggregation::fetch_channels_with_state,
     },
 };
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use hopr_primitive_types::{
     prelude::HoprBalance as PrimitiveHoprBalance,
     primitives::Address,
@@ -479,6 +481,62 @@ impl SubscriptionRoot {
             }
         })
     }
+
+    /// Subscribe to real-time updates of ticket price and winning probability
+    ///
+    /// Provides updates whenever there is a change in the ticket price or minimum
+    /// winning probability on-chain. These values are essential for ticket validation
+    /// and payment channel operation.
+    ///
+    /// Uses database-native notifications:
+    /// - PostgreSQL: LISTEN/NOTIFY via database trigger
+    /// - SQLite: Polling (1-second interval for tests)
+    #[graphql(name = "ticketParametersUpdated")]
+    async fn ticket_parameters_updated(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = TicketParameters>> {
+        let db = ctx.data::<DatabaseConnection>()?.clone();
+        let sqlite_manager = ctx.data::<Option<SqliteNotificationManager>>()?.clone();
+
+        Ok(stream! {
+            // Track last emitted value to avoid duplicate emissions
+            let mut last_params: Option<TicketParameters> = None;
+
+            // Create notification stream FIRST to ensure we don't miss any updates
+            // that occur between emitting initial value and waiting for notifications
+            let mut notifications = match crate::notifications::create_ticket_params_notification_stream(&db, sqlite_manager.as_ref()).await {
+                Ok(stream) => stream,
+                Err(e) => {
+                    tracing::error!("Failed to create notification stream: {:?}", e);
+                    return;
+                }
+            };
+
+            // Emit current value
+            match Self::fetch_ticket_parameters(&db).await {
+                Ok(Some(params)) => {
+                    last_params = Some(params.clone());
+                    yield params;
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    tracing::error!("Failed to fetch ticket parameters: {:?}", e);
+                }
+            }
+
+            // Stream updates when notified, only if value changed
+            while (notifications.next().await).is_some() {
+                match Self::fetch_ticket_parameters(&db).await {
+                    Ok(Some(params)) if last_params.as_ref() != Some(&params) => {
+                        last_params = Some(params.clone());
+                        yield params;
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        tracing::error!("Failed to fetch ticket parameters: {:?}", e);
+                    }
+                }
+            }
+        })
+    }
 }
 
 // Helper methods for fetching data
@@ -514,6 +572,25 @@ impl SubscriptionRoot {
             .await?;
 
         Ok(balance.map(hopr_balance_from_model))
+    }
+
+    async fn fetch_ticket_parameters(db: &DatabaseConnection) -> Result<Option<TicketParameters>, sea_orm::DbErr> {
+        use blokli_db_entity::chain_info;
+
+        let chain_info = chain_info::Entity::find().one(db).await?;
+
+        Ok(chain_info.map(|info| {
+            let ticket_price = if let Some(price_bytes) = info.ticket_price {
+                PrimitiveHoprBalance::from_be_bytes(&price_bytes).amount().to_string()
+            } else {
+                "0".to_string()
+            };
+
+            TicketParameters {
+                min_ticket_winning_probability: info.min_incoming_ticket_win_prob as f64,
+                ticket_price: TokenValueString(ticket_price),
+            }
+        }))
     }
 
     async fn fetch_filtered_channels(
@@ -1022,17 +1099,17 @@ mod tests {
         let db = BlokliDb::new_in_memory().await.unwrap();
 
         // Create 5 open channels
-        for i in 0..5 {
+        for i in 0u8..5 {
             let source_id = create_test_account(
                 db.conn(blokli_db::TargetDb::Index),
-                vec![i as u8; 20],
+                vec![i; 20],
                 &format!("peer{}_src", i),
             )
             .await
             .unwrap();
             let dest_id = create_test_account(
                 db.conn(blokli_db::TargetDb::Index),
-                vec![(i + 10) as u8; 20],
+                vec![i + 10; 20],
                 &format!("peer{}_dst", i),
             )
             .await

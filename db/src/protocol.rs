@@ -2,7 +2,7 @@ use std::ops::{Mul, Sub};
 
 use async_trait::async_trait;
 #[cfg(all(feature = "prometheus", not(test)))]
-use hopr_metrics::metrics::SimpleHistogram;
+use hopr_metrics::SimpleHistogram;
 use hopr_network_types::prelude::ResolvedTransportRouting;
 use hopr_parallelize::cpu::spawn_fifo_blocking;
 use hopr_path::{Path, PathAddressResolver, ValidatedPath, errors::PathError};

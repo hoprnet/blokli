@@ -7,6 +7,7 @@ pub mod config;
 pub mod conversions;
 pub mod errors;
 pub mod mutation;
+pub mod notifications;
 pub mod query;
 pub mod schema;
 pub mod server;
@@ -129,6 +130,8 @@ pub async fn start_server(network: String, config: ApiConfig) -> ApiResult<()> {
     ));
 
     // Build the application
+    // Note: SQLite notification manager is None in standalone mode since we use Database::connect
+    // Real-time notifications will fall back to polling for SQLite databases
     let app = server::build_app(
         db,
         network,
@@ -137,6 +140,7 @@ pub async fn start_server(network: String, config: ApiConfig) -> ApiResult<()> {
         transaction_executor,
         transaction_store,
         Arc::new(rpc_operations),
+        None, // No SQLite notification manager in standalone mode
     )
     .await?;
 
