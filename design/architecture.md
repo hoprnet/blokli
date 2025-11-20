@@ -661,6 +661,62 @@ Subscribed Clients
 3. **Selector Validation**: Only permits calls to approved function selectors
 4. **Rate Limiting**: Prevents flooding RPC endpoint or blockchain network
 
+### Database Change Notifications
+
+Blokli uses database-native notification mechanisms to provide real-time updates for GraphQL subscriptions without polling overhead.
+
+**PostgreSQL LISTEN/NOTIFY (Production)**:
+
+When running on PostgreSQL, database triggers automatically send notifications when critical data changes:
+
+```
+Chain Info Update (ticket price or winning probability changes)
+    ↓
+PostgreSQL Trigger: trigger_notify_ticket_params
+    ↓
+Function: notify_ticket_params_changed()
+    - Checks if ticket_price changed
+    - Checks if min_incoming_ticket_win_prob changed
+    ↓
+If changed: pg_notify('ticket_params_updated', '')
+    ↓
+All LISTEN connections receive notification
+    ↓
+API subscription queries latest values from database
+    ↓
+Streams update to GraphQL clients via SSE
+```
+
+**SQLite Polling (Tests/Development)**:
+
+SQLite environments use polling as a fallback since update hooks require raw connection access not exposed through SeaORM's connection pool:
+
+- Poll interval: 1 second
+- Query chain_info for latest values
+- Compare with previous values to detect changes
+- Stream updates to clients when detected
+
+**Notification Channels**:
+
+| Channel Name            | Trigger Condition                                                              | Payload | Subscribers                                    |
+| ----------------------- | ------------------------------------------------------------------------------ | ------- | ---------------------------------------------- |
+| `ticket_params_updated` | `chain_info.ticket_price` OR `chain_info.min_incoming_ticket_win_prob` changed | Empty   | `ticketParametersUpdated` GraphQL subscription |
+
+**Scalability Benefits**:
+
+- **Zero polling overhead** on PostgreSQL (event-driven)
+- **Multiple API instances** can all LISTEN to same channel
+- **Database-level fan-out** handles notification distribution
+- **Atomic with writes** - notifications only sent on successful commit
+- **No application code** required to maintain notification logic
+
+**Implementation Details**:
+
+- Migration: `m017_add_ticket_params_notify_trigger.rs`
+- Trigger Function: `notify_ticket_params_changed()` (PostgreSQL only)
+- Notification Module: `api/src/notifications.rs` (unified abstraction)
+- Subscription: `api/src/subscription.rs::ticket_parameters_updated`
+
 ## Deployment Architectures
 
 ### Architecture 1: Unified Deployment

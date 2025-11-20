@@ -362,6 +362,39 @@ cargo doc --package hopr-bindings --open
 - Implement DataLoader pattern for N+1 query prevention
 - Support GraphQL subscriptions via Server-Sent Events (SSE)
 
+### Database Notifications
+
+Blokli uses database-native notification mechanisms for real-time GraphQL subscriptions:
+
+**PostgreSQL (Production)**:
+
+- Database triggers automatically send NOTIFY when data changes
+- API subscriptions use LISTEN to receive notifications
+- Zero polling overhead - fully event-driven
+- Supports horizontal scaling (multiple API instances can LISTEN to same channel)
+- Example: `ticket_params_updated` channel notifies when ticket price or winning probability changes
+
+**SQLite (Tests/Development)**:
+
+- Falls back to polling with 1-second interval
+- Used in test environments via `BlokliDb::new_in_memory()`
+- Simplified implementation for fast test execution
+
+**Implementation Pattern**:
+
+When adding new subscriptions that need real-time updates:
+
+1. Create PostgreSQL trigger in a new migration (see `m017_add_ticket_params_notify_trigger.rs`)
+2. Create notification stream abstraction in `api/src/notifications.rs`
+3. Use the stream in your subscription resolver
+4. Test with SQLite polling in integration tests
+
+**Key Files**:
+
+- `db/migration/src/m017_add_ticket_params_notify_trigger.rs` - PostgreSQL trigger example
+- `api/src/notifications.rs` - Notification stream abstraction
+- `db/src/notifications.rs` - SQLite notification manager (foundation for future hook integration)
+
 ### Database
 
 - The target database schema is defined in `design/target-db-schema.mmd`

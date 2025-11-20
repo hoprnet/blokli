@@ -7,6 +7,7 @@ pub mod config;
 pub mod conversions;
 pub mod errors;
 pub mod mutation;
+pub mod notifications;
 pub mod query;
 pub mod schema;
 pub mod server;

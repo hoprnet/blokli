@@ -12,7 +12,10 @@ use blokli_chain_api::{
     transaction_validator::TransactionValidator,
 };
 use blokli_chain_indexer::IndexerState;
-use blokli_chain_rpc::{rpc::RpcOperations, rpc::RpcOperationsConfig, transport::ReqwestClient};
+use blokli_chain_rpc::{
+    rpc::{RpcOperations, RpcOperationsConfig},
+    transport::ReqwestClient,
+};
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 use futures::StreamExt;
@@ -282,4 +285,244 @@ async fn test_ticket_parameters_subscription_handles_max_values() {
     assert_eq!(params["ticketPrice"].as_str().unwrap(), "18446744073709551615");
     let prob = params["minTicketWinningProbability"].as_f64().unwrap();
     assert!((prob - 1.0).abs() < 0.001);
+}
+
+#[tokio::test]
+async fn test_subscription_receives_ticket_price_update() {
+    let db = BlokliDb::new_in_memory().await.unwrap();
+
+    // Initialize with initial value
+    init_chain_info_with_params(db.conn(TargetDb::Index), 100, HoprBalance::from(1000_u64), 0.5)
+        .await
+        .unwrap();
+
+    let schema = create_test_schema(db.conn(TargetDb::Index).clone());
+
+    let query = r#"
+        subscription {
+            ticketParametersUpdated {
+                minTicketWinningProbability
+                ticketPrice
+            }
+        }
+    "#;
+
+    let mut stream = schema.execute_stream(query).boxed();
+
+    // Receive initial value
+    let initial = tokio::time::timeout(Duration::from_secs(2), stream.next())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(initial.errors.is_empty());
+    let initial_data = initial.data.into_json().unwrap();
+    assert_eq!(
+        initial_data["ticketParametersUpdated"]["ticketPrice"].as_str().unwrap(),
+        "1000"
+    );
+    assert_eq!(
+        initial_data["ticketParametersUpdated"]["minTicketWinningProbability"]
+            .as_f64()
+            .unwrap(),
+        0.5
+    );
+
+    // Update ticket price in database
+    init_chain_info_with_params(db.conn(TargetDb::Index), 110, HoprBalance::from(2000_u64), 0.5)
+        .await
+        .unwrap();
+
+    // Should receive update (polling will pick it up within 2 seconds)
+    let updated = tokio::time::timeout(Duration::from_secs(3), stream.next())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(updated.errors.is_empty());
+    let updated_data = updated.data.into_json().unwrap();
+    assert_eq!(
+        updated_data["ticketParametersUpdated"]["ticketPrice"].as_str().unwrap(),
+        "2000"
+    );
+    assert_eq!(
+        updated_data["ticketParametersUpdated"]["minTicketWinningProbability"]
+            .as_f64()
+            .unwrap(),
+        0.5
+    );
+}
+
+#[tokio::test]
+async fn test_subscription_receives_winning_probability_update() {
+    let db = BlokliDb::new_in_memory().await.unwrap();
+
+    // Initialize with initial value
+    init_chain_info_with_params(db.conn(TargetDb::Index), 100, HoprBalance::from(1000_u64), 0.5)
+        .await
+        .unwrap();
+
+    let schema = create_test_schema(db.conn(TargetDb::Index).clone());
+
+    let query = r#"
+        subscription {
+            ticketParametersUpdated {
+                minTicketWinningProbability
+                ticketPrice
+            }
+        }
+    "#;
+
+    let mut stream = schema.execute_stream(query).boxed();
+
+    // Receive initial value
+    let initial = tokio::time::timeout(Duration::from_secs(2), stream.next())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(initial.errors.is_empty());
+    let initial_data = initial.data.into_json().unwrap();
+    assert_eq!(
+        initial_data["ticketParametersUpdated"]["minTicketWinningProbability"]
+            .as_f64()
+            .unwrap(),
+        0.5
+    );
+
+    // Update winning probability in database
+    init_chain_info_with_params(db.conn(TargetDb::Index), 110, HoprBalance::from(1000_u64), 0.9)
+        .await
+        .unwrap();
+
+    // Should receive update (polling will pick it up within 2 seconds)
+    let updated = tokio::time::timeout(Duration::from_secs(3), stream.next())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(updated.errors.is_empty());
+    let updated_data = updated.data.into_json().unwrap();
+    let prob = updated_data["ticketParametersUpdated"]["minTicketWinningProbability"]
+        .as_f64()
+        .unwrap();
+    assert!((prob - 0.9).abs() < 0.01, "Expected ~0.9, got {}", prob);
+    assert_eq!(
+        updated_data["ticketParametersUpdated"]["ticketPrice"].as_str().unwrap(),
+        "1000"
+    );
+}
+
+#[tokio::test]
+async fn test_subscription_receives_both_parameters_update() {
+    let db = BlokliDb::new_in_memory().await.unwrap();
+
+    // Initialize with initial values
+    init_chain_info_with_params(db.conn(TargetDb::Index), 100, HoprBalance::from(500_u64), 0.3)
+        .await
+        .unwrap();
+
+    let schema = create_test_schema(db.conn(TargetDb::Index).clone());
+
+    let query = r#"
+        subscription {
+            ticketParametersUpdated {
+                minTicketWinningProbability
+                ticketPrice
+            }
+        }
+    "#;
+
+    let mut stream = schema.execute_stream(query).boxed();
+
+    // Receive initial value
+    let initial = tokio::time::timeout(Duration::from_secs(2), stream.next())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(initial.errors.is_empty());
+
+    // Update both parameters simultaneously
+    init_chain_info_with_params(db.conn(TargetDb::Index), 110, HoprBalance::from(3000_u64), 0.95)
+        .await
+        .unwrap();
+
+    // Should receive update with both new values
+    let updated = tokio::time::timeout(Duration::from_secs(3), stream.next())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(updated.errors.is_empty());
+    let updated_data = updated.data.into_json().unwrap();
+    assert_eq!(
+        updated_data["ticketParametersUpdated"]["ticketPrice"].as_str().unwrap(),
+        "3000"
+    );
+    let prob = updated_data["ticketParametersUpdated"]["minTicketWinningProbability"]
+        .as_f64()
+        .unwrap();
+    assert!((prob - 0.95).abs() < 0.01, "Expected ~0.95, got {}", prob);
+}
+
+#[tokio::test]
+async fn test_subscription_receives_multiple_updates() {
+    let db = BlokliDb::new_in_memory().await.unwrap();
+
+    // Initialize
+    init_chain_info_with_params(db.conn(TargetDb::Index), 100, HoprBalance::from(100_u64), 0.1)
+        .await
+        .unwrap();
+
+    let schema = create_test_schema(db.conn(TargetDb::Index).clone());
+
+    let query = r#"
+        subscription {
+            ticketParametersUpdated {
+                ticketPrice
+            }
+        }
+    "#;
+
+    let mut stream = schema.execute_stream(query).boxed();
+
+    // Receive initial
+    let initial = tokio::time::timeout(Duration::from_secs(2), stream.next())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(initial.errors.is_empty());
+
+    // Update 1
+    init_chain_info_with_params(db.conn(TargetDb::Index), 110, HoprBalance::from(200_u64), 0.1)
+        .await
+        .unwrap();
+
+    let update1 = tokio::time::timeout(Duration::from_secs(3), stream.next())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        update1.data.into_json().unwrap()["ticketParametersUpdated"]["ticketPrice"]
+            .as_str()
+            .unwrap(),
+        "200"
+    );
+
+    // Update 2
+    init_chain_info_with_params(db.conn(TargetDb::Index), 120, HoprBalance::from(300_u64), 0.1)
+        .await
+        .unwrap();
+
+    let update2 = tokio::time::timeout(Duration::from_secs(3), stream.next())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        update2.data.into_json().unwrap()["ticketParametersUpdated"]["ticketPrice"]
+            .as_str()
+            .unwrap(),
+        "300"
+    );
 }

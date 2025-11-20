@@ -20,7 +20,7 @@ use blokli_db_entity::{
         channel_aggregation::fetch_channels_with_state,
     },
 };
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use hopr_primitive_types::{
     prelude::HoprBalance as PrimitiveHoprBalance,
     primitives::Address,
@@ -486,17 +486,31 @@ impl SubscriptionRoot {
     /// Provides updates whenever there is a change in the ticket price or minimum
     /// winning probability on-chain. These values are essential for ticket validation
     /// and payment channel operation.
+    ///
+    /// Uses database-native notifications:
+    /// - PostgreSQL: LISTEN/NOTIFY via database trigger
+    /// - SQLite: Polling (1-second interval for tests)
     #[graphql(name = "ticketParametersUpdated")]
     async fn ticket_parameters_updated(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = TicketParameters>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
 
         Ok(stream! {
-            loop {
-                // TODO: Replace with actual database change notifications
-                // For now, poll the database periodically
-                sleep(Duration::from_secs(1)).await;
+            // Emit current value first
+            if let Ok(Some(params)) = Self::fetch_ticket_parameters(&db).await {
+                yield params;
+            }
 
-                // Query the latest ticket parameters from chain_info
+            // Listen for database change notifications
+            let mut notifications = match crate::notifications::create_ticket_params_notification_stream(&db).await {
+                Ok(stream) => stream,
+                Err(e) => {
+                    tracing::error!("Failed to create notification stream: {:?}", e);
+                    return;
+                }
+            };
+
+            // Stream updates when notified
+            while (notifications.next().await).is_some() {
                 if let Ok(Some(params)) = Self::fetch_ticket_parameters(&db).await {
                     yield params;
                 }
