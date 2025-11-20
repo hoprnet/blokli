@@ -297,6 +297,10 @@ async fn run() -> errors::Result<()> {
                 chain_id,
                 rpc_url: rpc_url_for_api,
                 contract_addresses: contracts,
+                health: blokli_api::config::HealthConfig {
+                    max_indexer_lag: api_config.health.max_indexer_lag,
+                    timeout_ms: api_config.health.timeout_ms,
+                },
             };
 
             // Get RPC operations from blokli_chain for balance queries

@@ -1159,13 +1159,18 @@ Enhanced logging for operational insights:
 - Query performance logging with execution plans
 
 **Health Checks**:
-Comprehensive health monitoring:
+Kubernetes-compatible health endpoints for operational monitoring:
 
-- Indexer lag from chain head
-- Database connection health
-- RPC endpoint availability
-- API server responsiveness
-- Background process health (transaction monitor)
+- `/healthz` - Liveness probe: minimal check that process is alive, returns version and status
+- `/readyz` - Readiness probe: comprehensive check for service readiness with:
+  - Database connectivity (queries chain_info table)
+  - RPC endpoint availability (fetches current block number)
+  - Indexer lag calculation (blocks behind chain head, configurable threshold default: 10 blocks)
+
+Health check configuration:
+
+- `max_indexer_lag` - Maximum allowed lag before readiness fails
+- `timeout_ms` - Timeout for health check operations
 
 ## Design Principles and Patterns
 

@@ -442,8 +442,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
     // Note: These tests would require a test database setup
     // For now, we just ensure the module compiles
     #[test]

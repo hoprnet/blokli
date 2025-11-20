@@ -227,6 +227,20 @@ pub struct ApiConfig {
 
     #[default(true)]
     pub playground_enabled: bool,
+
+    #[serde(default)]
+    pub health: HealthConfig,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
+pub struct HealthConfig {
+    /// Maximum allowed indexer lag (in blocks) before readiness check fails
+    #[default(10)]
+    pub max_indexer_lag: u64,
+
+    /// Timeout for health check queries (in milliseconds)
+    #[default(5000)]
+    pub timeout_ms: u64,
 }
 
 fn default_api_bind_address() -> std::net::SocketAddr {

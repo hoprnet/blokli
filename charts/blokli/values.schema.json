@@ -1,0 +1,230 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "required": ["database", "config"],
+  "properties": {
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of replicas for bloklid deployment"
+    },
+    "image": {
+      "type": "object",
+      "properties": {
+        "registry": {
+          "type": "string",
+          "description": "Container image registry"
+        },
+        "repository": {
+          "type": "string",
+          "description": "Container image repository"
+        },
+        "pullPolicy": {
+          "type": "string",
+          "enum": ["Always", "IfNotPresent", "Never"],
+          "description": "Container image pull policy"
+        },
+        "tag": {
+          "type": "string",
+          "description": "Container image tag"
+        }
+      }
+    },
+    "database": {
+      "type": "object",
+      "required": ["host", "port", "database", "username"],
+      "properties": {
+        "host": {
+          "type": "string",
+          "minLength": 1,
+          "description": "PostgreSQL host"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "PostgreSQL port"
+        },
+        "database": {
+          "type": "string",
+          "minLength": 1,
+          "description": "PostgreSQL database name"
+        },
+        "username": {
+          "type": "string",
+          "minLength": 1,
+          "description": "PostgreSQL username"
+        },
+        "password": {
+          "type": "string",
+          "description": "PostgreSQL password"
+        },
+        "existingSecret": {
+          "type": "string",
+          "description": "Name of existing secret containing database credentials"
+        },
+        "maxConnections": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum number of database connections"
+        }
+      }
+    },
+    "config": {
+      "type": "object",
+      "required": ["network", "rpcUrl", "dataDirectory"],
+      "properties": {
+        "network": {
+          "type": "string",
+          "minLength": 1,
+          "description": "HOPR network to index"
+        },
+        "rpcUrl": {
+          "type": "string",
+          "minLength": 1,
+          "format": "uri",
+          "description": "Blockchain RPC URL"
+        },
+        "maxRpcRequestsPerSec": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Maximum RPC requests per second"
+        },
+        "dataDirectory": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Data directory path"
+        },
+        "indexer": {
+          "type": "object",
+          "properties": {
+            "fastSync": {
+              "type": "boolean",
+              "description": "Enable fast sync mode"
+            },
+            "enableLogsSnapshot": {
+              "type": "boolean",
+              "description": "Enable logs snapshot feature"
+            },
+            "logsSnapshotUrl": {
+              "type": "string",
+              "description": "URL for logs snapshot download"
+            }
+          }
+        },
+        "logging": {
+          "type": "object",
+          "properties": {
+            "level": {
+              "type": "string",
+              "description": "Rust log level configuration"
+            }
+          }
+        }
+      }
+    },
+    "service": {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["ClusterIP", "NodePort", "LoadBalancer"],
+          "description": "Service type"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535,
+          "description": "Service port"
+        }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable ingress"
+        },
+        "className": {
+          "type": "string",
+          "description": "Ingress class name"
+        },
+        "hosts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["host"],
+            "properties": {
+              "host": {
+                "type": "string",
+                "format": "hostname"
+              },
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["path", "pathType"],
+                  "properties": {
+                    "path": {
+                      "type": "string"
+                    },
+                    "pathType": {
+                      "type": "string",
+                      "enum": ["Prefix", "Exact", "ImplementationSpecific"]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "properties": {
+        "enabled": {
+          "type": "boolean",
+          "description": "Enable persistence"
+        },
+        "storageClass": {
+          "type": "string",
+          "description": "Storage class"
+        },
+        "size": {
+          "type": "string",
+          "pattern": "^[0-9]+[KMGT]i$",
+          "description": "PVC size"
+        }
+      }
+    },
+    "resources": {
+      "type": "object",
+      "properties": {
+        "limits": {
+          "type": "object",
+          "properties": {
+            "cpu": {
+              "type": "string"
+            },
+            "memory": {
+              "type": "string"
+            }
+          }
+        },
+        "requests": {
+          "type": "object",
+          "properties": {
+            "cpu": {
+              "type": "string"
+            },
+            "memory": {
+              "type": "string"
+            }
+          }
+        }
+      }
+    }
+  }
+}
