@@ -195,6 +195,11 @@ type GraphEvents = (
     async_broadcast::InactiveReceiver<(Account, Channel, Account)>,
 );
 
+type TicketParamEvents = (
+    async_broadcast::Sender<TicketParameters>,
+    async_broadcast::InactiveReceiver<TicketParameters>,
+);
+
 /// Represents a snapshot of the [`BlokliTestState`] inside a [`BlokliTestClient`].
 #[derive(Clone)]
 pub struct BlokliTestStateSnapshot {
@@ -245,6 +250,7 @@ pub struct BlokliTestClient<M> {
     mutator: M,
     accounts_channel: AccountEvents,
     channels_channel: GraphEvents,
+    ticket_channel: TicketParamEvents,
 }
 
 fn channel_matches(channel: &Channel, selector: &ChannelSelector) -> bool {
@@ -281,11 +287,16 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
         channels_tx.set_await_active(false);
         channels_tx.set_overflow(false);
 
+        let (mut tickets_tx, tickets_rx) = async_broadcast::broadcast(1024);
+        tickets_tx.set_await_active(false);
+        tickets_tx.set_overflow(false);
+
         Self {
             state: Arc::new(parking_lot::RwLock::new(initial_state)),
             mutator,
             accounts_channel: (accounts_tx, accounts_rx.deactivate()),
             channels_channel: (channels_tx, channels_rx.deactivate()),
+            ticket_channel: (tickets_tx, tickets_rx.deactivate()),
         }
     }
 
@@ -521,6 +532,16 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliSubscriptionClient for Blokl
                 }),
         ))
     }
+
+    fn subscribe_ticket_params(&self) -> Result<impl Stream<Item = Result<TicketParameters>> + Send> {
+        let info = self.state.read().chain_info.clone();
+        Ok(futures::stream::once(futures::future::ready(TicketParameters {
+            min_ticket_winning_probability: info.min_ticket_winning_probability,
+            ticket_price: info.ticket_price,
+        }))
+        .chain(self.ticket_channel.1.activate_cloned())
+        .map(Ok))
+    }
 }
 
 fn simulate_tx_execution(
@@ -529,6 +550,7 @@ fn simulate_tx_execution(
     mutator: &dyn BlokliTestStateMutator,
     accounts_channel: &async_broadcast::Sender<Account>,
     channels_channel: &async_broadcast::Sender<(Account, Channel, Account)>,
+    ticket_channel: &async_broadcast::Sender<TicketParameters>,
 ) -> Result<()> {
     let old_state = state.clone();
     if let Err(error) = mutator.update_state(signed_tx, state) {
@@ -618,6 +640,23 @@ fn simulate_tx_execution(
             }
         });
 
+    if state.chain_info.min_ticket_winning_probability != old_state.chain_info.min_ticket_winning_probability
+        || state.chain_info.ticket_price != old_state.chain_info.ticket_price
+    {
+        match ticket_channel.try_broadcast(TicketParameters {
+            min_ticket_winning_probability: state.chain_info.min_ticket_winning_probability,
+            ticket_price: state.chain_info.ticket_price.clone(),
+        }) {
+            Err(TrySendError::Full(_)) => {
+                tracing::error!("failed to broadcast ticket params change - channel is full");
+            }
+            Err(TrySendError::Closed(_)) => {
+                tracing::error!("failed to broadcast ticket params change - channel is closed");
+            }
+            _ => {}
+        }
+    }
+
     Ok(())
 }
 
@@ -634,6 +673,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
             &self.mutator,
             &self.accounts_channel.0,
             &self.channels_channel.0,
+            &self.ticket_channel.0,
         ) {
             tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction, state reverted");
         } else {
@@ -655,6 +695,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
             &self.mutator,
             &self.accounts_channel.0,
             &self.channels_channel.0,
+            &self.ticket_channel.0,
         )
         .map(|_| {
             tracing::debug!("transaction execution succeeded");
@@ -693,6 +734,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
             &self.mutator,
             &self.accounts_channel.0,
             &self.channels_channel.0,
+            &self.ticket_channel.0,
         )
         .inspect_err(|error| {
             tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction, state reverted");
