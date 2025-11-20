@@ -35,8 +35,8 @@ use blokli_chain_rpc::{
     transport::ReqwestClient,
 };
 use blokli_chain_types::{ContractAddresses, ContractInstances, utils::create_anvil};
-use migration::{Migrator, MigratorTrait};
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
+use migration::{Migrator, MigratorTrait};
 use sea_orm::{Database, DatabaseConnection, Set};
 use tower::ServiceExt;
 
@@ -61,9 +61,8 @@ async fn setup_test_environment() -> anyhow::Result<TestContext> {
     let anvil = create_anvil(Some(expected_block_time));
 
     // Create test accounts from Anvil's deterministic keys
-    let test_accounts = vec![
-        ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref()).expect("Failed to create test account 0"),
-    ];
+    let test_accounts =
+        vec![ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref()).expect("Failed to create test account 0")];
 
     // Deploy HOPR contracts
     let contract_instances = {
@@ -84,9 +83,7 @@ async fn setup_test_environment() -> anyhow::Result<TestContext> {
         .expect("Failed to create test database");
 
     // Run migrations to create chain_info table
-    Migrator::up(&db, None)
-        .await
-        .expect("Failed to run migrations");
+    Migrator::up(&db, None).await.expect("Failed to run migrations");
 
     // Create RPC operations for health checks
     let transport_client = ReqwestTransport::new(anvil.endpoint_url());
@@ -326,10 +323,12 @@ async fn test_readyz_no_chain_info() -> anyhow::Result<()> {
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     assert_eq!(json["status"], "not_ready");
     assert_eq!(json["checks"]["database"]["status"], "unhealthy");
-    assert!(json["checks"]["database"]["error"]
-        .as_str()
-        .unwrap()
-        .contains("No chain info found"));
+    assert!(
+        json["checks"]["database"]["error"]
+            .as_str()
+            .unwrap()
+            .contains("No chain info found")
+    );
 
     Ok(())
 }
