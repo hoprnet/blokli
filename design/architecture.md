@@ -661,6 +661,78 @@ Subscribed Clients
 3. **Selector Validation**: Only permits calls to approved function selectors
 4. **Rate Limiting**: Prevents flooding RPC endpoint or blockchain network
 
+### Database Change Notifications
+
+Blokli uses database-native notification mechanisms to provide real-time updates for GraphQL subscriptions without polling overhead.
+
+**PostgreSQL LISTEN/NOTIFY (Production)**:
+
+When running on PostgreSQL, database triggers automatically send notifications when critical data changes:
+
+```
+Chain Info Update (ticket price or winning probability changes)
+    ↓
+PostgreSQL Trigger: trigger_notify_ticket_params
+    ↓
+Function: notify_ticket_params_changed()
+    - Checks if ticket_price changed
+    - Checks if min_incoming_ticket_win_prob changed
+    ↓
+If changed: pg_notify('ticket_params_updated', '')
+    ↓
+All LISTEN connections receive notification
+    ↓
+API subscription queries latest values from database
+    ↓
+Streams update to GraphQL clients via SSE
+```
+
+**SQLite Update Hooks (Tests/Development)**:
+
+SQLite environments use native update hooks via `SqliteNotificationManager` for event-driven notifications:
+
+```
+Chain Info Update (ticket price or winning probability changes)
+    ↓
+SQLite update hook fires on chain_info table modification
+    ↓
+SqliteHookSender sends to sync channel
+    ↓
+Bridge thread forwards to async broadcast channel
+    ↓
+Subscribed streams receive notification
+    ↓
+API subscription queries latest values from database
+    ↓
+Streams update to GraphQL clients via SSE
+```
+
+- Event-driven via SQLite's `set_update_hook()` callback
+- Sync-to-async bridge using mpsc → broadcast channels
+- Zero polling overhead (same as PostgreSQL)
+
+**Notification Channels**:
+
+| Channel Name            | Trigger Condition                                                              | Payload | Subscribers                                    |
+| ----------------------- | ------------------------------------------------------------------------------ | ------- | ---------------------------------------------- |
+| `ticket_params_updated` | `chain_info.ticket_price` OR `chain_info.min_incoming_ticket_win_prob` changed | Empty   | `ticketParametersUpdated` GraphQL subscription |
+
+**Scalability Benefits**:
+
+- **Zero polling overhead** (event-driven for both PostgreSQL and SQLite)
+- **Multiple API instances** can all LISTEN to same channel
+- **Database-level fan-out** handles notification distribution
+- **Atomic with writes** - notifications only sent on successful commit
+- **No application code** required to maintain notification logic
+
+**Implementation Details**:
+
+- Migration: `m017_add_ticket_params_notify_trigger.rs` (PostgreSQL trigger)
+- Trigger Function: `notify_ticket_params_changed()` (PostgreSQL only)
+- SQLite Manager: `db/src/notifications.rs::SqliteNotificationManager`
+- Notification Module: `api/src/notifications.rs` (unified abstraction)
+- Subscription: `api/src/subscription.rs::ticket_parameters_updated`
+
 ## Deployment Architectures
 
 ### Architecture 1: Unified Deployment

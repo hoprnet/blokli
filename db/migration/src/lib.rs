@@ -17,6 +17,7 @@ mod m013_alter_chain_info_add_watermark_indices;
 mod m014_add_announcement_position_index;
 mod m015_create_current_state_views;
 mod m016_add_channel_state_reorg_correction;
+mod m017_add_ticket_params_notify_trigger;
 
 #[derive(PartialEq)]
 pub enum BackendType {
@@ -48,6 +49,7 @@ impl MigratorTrait for Migrator {
             Box::new(m014_add_announcement_position_index::Migration),
             Box::new(m015_create_current_state_views::Migration),
             Box::new(m016_add_channel_state_reorg_correction::Migration),
+            Box::new(m017_add_ticket_params_notify_trigger::Migration),
         ]
     }
 }
@@ -77,6 +79,7 @@ impl MigratorTrait for MigratorIndex {
             Box::new(m014_add_announcement_position_index::Migration),
             Box::new(m015_create_current_state_views::Migration),
             Box::new(m016_add_channel_state_reorg_correction::Migration),
+            Box::new(m017_add_ticket_params_notify_trigger::Migration),
         ]
     }
 }

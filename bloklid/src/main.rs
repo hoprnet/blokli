@@ -248,6 +248,9 @@ async fn run() -> errors::Result<()> {
         };
         let db = BlokliDb::new(&database_path, logs_database_path.as_deref(), db_config).await?;
 
+        // Clone notification manager for API before db is moved to BlokliChain
+        let sqlite_notification_manager = db.sqlite_notification_manager().cloned();
+
         info!("Connecting to RPC endpoint: {}", rpc_url);
 
         // Extract chain_id and network before chain_network is moved
@@ -312,6 +315,7 @@ async fn run() -> errors::Result<()> {
                 blokli_chain.transaction_executor(),
                 blokli_chain.transaction_store(),
                 rpc_operations,
+                sqlite_notification_manager,
             )
             .await
             .map_err(|e| BloklidError::NonSpecific(format!("Failed to build API app: {}", e)))?;

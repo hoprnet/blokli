@@ -50,6 +50,7 @@ thiserror = { workspace = true }
 
 # Database
 sea-orm = { workspace = true }
+sqlx    = { workspace = true }
 
 # Encoding
 chrono = { workspace = true }

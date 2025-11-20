@@ -52,7 +52,7 @@ pub const EIP1559_FEE_ESTIMATION_DEFAULT_MAX_FEE_GNOSIS: u128 = 3_000_000_000;
 pub const EIP1559_FEE_ESTIMATION_DEFAULT_PRIORITY_FEE_GNOSIS: u128 = 100_000_000;
 
 #[cfg(all(feature = "prometheus", not(test)))]
-use hopr_metrics::metrics::{MultiCounter, MultiHistogram};
+use hopr_metrics::{MultiCounter, MultiHistogram};
 
 use crate::{rpc::DEFAULT_GAS_ORACLE_URL, transport::HttpRequestor};
 

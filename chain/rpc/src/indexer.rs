@@ -14,7 +14,7 @@ use async_stream::stream;
 use async_trait::async_trait;
 use futures::{Stream, StreamExt, stream::BoxStream};
 #[cfg(all(feature = "prometheus", not(test)))]
-use hopr_metrics::metrics::SimpleGauge;
+use hopr_metrics::SimpleGauge;
 use hopr_primitive_types::prelude::*;
 use rust_stream_ext_concurrent::then_concurrent::StreamThenConcurrentExt;
 use tracing::{debug, error, trace, warn};
