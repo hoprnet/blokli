@@ -17,7 +17,7 @@ eventsource-client = { workspace = true }
 futures = { workspace = true }
 futures-time = { workspace = true }
 hex = { workspace = true }
-indexmap = { workspace = true, optional = true}
+indexmap = { workspace = true, optional = true }
 parking_lot = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 reqwest = { workspace = true, features = [

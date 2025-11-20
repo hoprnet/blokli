@@ -15,8 +15,17 @@ concurrency:
   group: release
   cancel-in-progress: false
 jobs:
+  build-docker:
+    name: Build Docker
+    uses: ./.github/workflows/build-docker.yaml
+    with:
+      source_branch: ${{ github.ref }}
+      version_type: "release"
+    secrets: inherit
   release:
     name: Close release
+    needs:
+      - build-docker
     runs-on: self-hosted-hoprnet-small
     steps:
       - name: Harden Runner
@@ -26,3 +35,67 @@ jobs:
           egress-policy: audit
       - name: Checkout hoprnet repository
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Setup GCP
+        id: gcp
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@master
+        with:
+          google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
+          install-sdk: "true"
+      - name: Create release and publish binaries
+        id: environment
+        run: |
+          release_version=$(grep -E '^version\s*=' bloklid/Cargo.toml | awk -F\" '{print $2}')
+          echo "release_version=${release_version}" >> $GITHUB_OUTPUT
+          gh release create v${release_version} --generate-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Update Version
+        id: bump
+        shell: bash
+        run: |
+          current_version=$(grep -E '^version\s*=' bloklid/Cargo.toml | awk -F\" '{print $2}')
+          # Extract parts without IFS or read
+          IFS='.' read -r major_version minor_version patch_version <<< "${current_version}"
+          echo "Current version $major_version $minor_version $patch_version"
+
+          # Bump the appropriate part
+          echo "Bumping ${{ inputs.release_type }} version"
+          case "${{ inputs.release_type }}" in
+              major)
+                  major_version=$((major_version+1))
+                  minor_version=0
+                  patch_version=0
+                  ;;
+              minor)
+                  minor_version=$((minor_version+1))
+                  patch_version=0
+                  ;;
+              patch)
+                  patch_version=$((patch_version+1))
+                  ;;
+              *)
+                  echo "Invalid release type"
+                  exit 1
+                  ;;
+          esac
+          echo "New version: ${major_version}.${minor_version}.${patch_version}"
+
+          bump_version="${major_version}.${minor_version}.${patch_version}"
+          echo "Updating version from $current_version to $bump_version"
+
+          # Update the version in bloklid/Cargo.toml
+          # capture group 1: version = "
+          # capture group 2: the version number
+          # capture group 3: "
+          sed -i.bak -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" bloklid/Cargo.toml
+          rm bloklid/Cargo.toml.bak
+          nix develop --command cargo generate-lockfile
+          echo "bump_version=${bump_version}" >> $GITHUB_OUTPUT
+          echo v${current_version} > LATEST
+          echo "LATEST updated to v${current_version}"
+      - uses: EndBug/add-and-commit@v9
+        with:
+          add: '["Cargo.*", "LATEST" ]'
+          new_branch: main
+          message: "Bump to version ${{ steps.bump.outputs.bump_version }}"
+          pathspec_error_handling: exitImmediately

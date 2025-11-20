@@ -32,7 +32,7 @@
 //!     )
 //!     .await?;
 //!
-//! println!("Installed snapshot: {} logs, latest block {}", info.log_count, info.latest_block.unwrap_or(0));
+//! println!("Installed snapshot: {} logs, latest block {}", info.log_count.unwrap_or(0), info.latest_block.unwrap_or(0));
 //! # Ok(())
 //! # }
 //! ```

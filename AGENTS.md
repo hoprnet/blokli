@@ -375,6 +375,80 @@ cargo doc --package hopr-bindings --open
 - Support configuration reload via SIGHUP signal
 - Validate configuration at startup
 
+#### Configuration Files
+
+The project maintains two key configuration files:
+
+- `bloklid/src/config.rs` - Rust configuration struct definitions with defaults and validation
+- `bloklid/example-config.toml` - Example configuration file showing all available options
+
+**IMPORTANT**: These files must be kept in sync. The example configuration serves as both user documentation and a working example of all available configuration options.
+
+#### Agent Responsibilities for Configuration Changes
+
+**When modifying configuration code (`bloklid/src/config.rs`)**, you MUST update the example configuration file:
+
+1. **Adding New Configuration Options**:
+
+   - Add the new option to `bloklid/example-config.toml` with appropriate comments
+   - Include the default value from the code (check the `#[default(...)]` attribute)
+   - Document what the option does and when to use it
+   - If it's a complex option, provide usage examples in comments
+
+2. **Removing Configuration Options**:
+
+   - Remove the option from `bloklid/example-config.toml`
+   - Ensure any related documentation comments are also removed
+
+3. **Changing Default Values**:
+
+   - Update the default value in `bloklid/example-config.toml`
+   - Update any comments that reference the default value
+
+4. **Adding New Configuration Sections**:
+
+   - Add the entire section to `bloklid/example-config.toml`
+   - Include all fields in the section with their defaults
+   - Add a descriptive header comment explaining the section's purpose
+   - Group related options together logically
+
+5. **Changing Configuration Structure**:
+   - If moving options between sections, update `bloklid/example-config.toml` accordingly
+   - If renaming fields, update all references in the example file
+   - Ensure the TOML structure matches the serde attributes in the Rust code
+
+#### Configuration Documentation Requirements
+
+When adding or modifying configuration options, ensure:
+
+- **Defaults are visible**: Every option in the example config should show its default value
+- **Purpose is clear**: Comments should explain what the option controls and why you might change it
+- **Type is obvious**: The value format should make the expected type clear (string, number, boolean, etc.)
+- **Validation rules**: If there are constraints (e.g., "must be > 0"), document them
+- **Related options**: If options affect each other, note this in comments
+- **Database type handling**: Remember that `protocols` section is auto-generated and should NOT be in the example config
+
+#### Example Config Best Practices
+
+- Use inline comments for brief explanations: `max_connections = 10  # Maximum database connections`
+- Use block comments for complex options or sections that need more explanation
+- Show commented-out alternatives to demonstrate different configuration approaches
+- Keep the example config focused on user-configurable options only
+- Exclude options marked with `#[serde(skip)]` in the Rust code
+- Document units (e.g., "seconds", "milliseconds", "bytes") in comments
+- For enum types, show all valid values in comments
+
+#### Verification Checklist
+
+Before committing configuration changes, verify:
+
+- [ ] All fields in `Config`, `IndexerConfig`, `ApiConfig`, `SubscriptionConfig`, `DatabaseConfig` structs are represented in `example-config.toml` (except `#[serde(skip)]` fields)
+- [ ] Default values in the example config match the `#[default(...)]` attributes in the code
+- [ ] All sections and subsections are properly documented with comments
+- [ ] The TOML file is valid (can be parsed by a TOML parser)
+- [ ] Database configuration shows both PostgreSQL and SQLite examples
+- [ ] No internal-only options (like `protocols`) are included in the example
+
 ## Architecture
 
 ### Architecture Documentation
@@ -537,6 +611,184 @@ impl Query {
 2. Run `just quick` to format, lint, and check compilation
 3. Run `just test` or specific tests as needed
 4. If all checks pass, commit your changes
+
+## Docker Images and Multi-Architecture Support
+
+**Current Limitation:** ARM64 (aarch64) builds are temporarily disabled in CI due to GitHub runner limitations. Only AMD64 images are currently built and deployed via CI. The multi-arch manifest structure is maintained for easy re-enablement.
+
+Local builds for all architectures remain fully functional:
+
+- `nix build .#bloklid-docker-amd64` - AMD64 Docker image
+- `nix build .#bloklid-docker-aarch64` - ARM64 Docker image (local build only)
+- `nix run .#bloklid-docker-manifest-upload` - Multi-arch manifest (amd64 only in CI)
+
+### Overview
+
+The project uses Nix with nix-lib helpers to build reproducible Docker images for the `bloklid` daemon. Images are built for multiple architectures, scanned for security vulnerabilities, and pushed to Google Artifact Registry with automatic multi-arch manifest creation.
+
+### Supported Architectures
+
+- **amd64** (x86_64-linux) - Intel/AMD 64-bit processors ✅ Available in CI
+- **arm64** (aarch64-linux) - ARM 64-bit processors (AWS Graviton, Apple Silicon servers) 🔄 Local builds only
+
+### Image Variants
+
+Three image variants are available for each architecture:
+
+1. **bloklid-docker** - Production build (release profile, optimized)
+2. **bloklid-dev-docker** - Development build (dev profile, faster compilation)
+3. **bloklid-profile-docker** - Profiling build (with debug symbols)
+
+### Building and Uploading Docker Images
+
+Using nix-lib multi-arch helpers to build and upload all architectures with automatic manifest creation:
+
+```bash
+# Build, upload all architectures, and create multi-arch manifest
+IMAGE_TARGET=gcr.io/project/bloklid:1.0.0 \
+GOOGLE_ACCESS_TOKEN=$TOKEN \
+nix run .#bloklid-docker-manifest-upload
+
+# Development variant
+nix run .#bloklid-dev-docker-manifest-upload
+
+# Profile variant
+nix run .#bloklid-profile-docker-manifest-upload
+```
+
+This approach:
+
+1. Builds Docker image for amd64 (arm64 disabled until runner supports it)
+2. Uploads platform-specific image with suffix (`-linux-amd64`)
+3. Creates and pushes an OCI manifest list
+4. Ready to support multiple architectures when aarch64 runner is available
+
+### CI/CD Workflows
+
+#### Automated Docker Builds
+
+Docker images are automatically built in GitHub Actions for:
+
+- **Pull Requests** - Commit-tagged images (e.g., `1.0.0-commit.abc123`)
+- **Merged PRs** - PR-tagged images (e.g., `1.0.0-pr.42`)
+- **Releases** - Version-tagged images (e.g., `1.0.0`)
+
+The build workflow follows a three-stage process:
+
+##### Stage 1: Build Images
+
+- Builds Docker image for amd64 architecture (arm64 disabled until runner supports it)
+- Uses Nix to ensure reproducible builds
+- Stores built image as artifact
+
+##### Stage 2: Upload Manifest (Sequential)
+
+- Uses nix-lib multi-arch helper to build OCI manifest
+- Uploads platform-specific image with suffix (`-linux-amd64`)
+- Creates and pushes manifest list (currently single-platform)
+
+##### Stage 3: Security Scanning
+
+- Runs Trivy vulnerability scan for amd64
+- Generates SBOM in SPDX and CycloneDX formats
+- Performs smoke test on uploaded image
+- Uploads results to GitHub Security
+
+#### Multi-Architecture Manifest
+
+The CI/CD system creates Docker manifests for platform selection (currently amd64 only):
+
+```bash
+# Pulls the image (currently amd64 only)
+docker pull <registry>/bloklid:1.0.0
+
+# Explicitly pull amd64 image
+docker pull <registry>/bloklid:1.0.0-linux-amd64
+```
+
+### Security Scanning
+
+All Docker images undergo automated security scanning using nix-lib helpers with offline Trivy database.
+
+#### Local Security Scanning
+
+You can run security scans locally before pushing to CI:
+
+```bash
+# Scan production images
+nix build .#bloklid-docker-amd64-scan  # Scans amd64 image
+nix build .#bloklid-docker-aarch64-scan  # Scans arm64 image
+
+# View scan results
+cat result/scan-report.sarif  # SARIF format for tools
+cat result/scan-summary.txt   # Human-readable summary
+
+# Scan development images (non-failing)
+nix build .#bloklid-dev-docker-amd64-scan
+nix build .#bloklid-dev-docker-aarch64-scan
+```
+
+**Benefits of Nix-based scanning:**
+
+- **Offline**: Uses pre-fetched Trivy database (no internet required)
+- **Reproducible**: Same results locally and in CI
+- **Fast**: Database pre-cached in Nix store
+- **Consistent**: The same Trivy version everywhere
+
+#### Local SBOM Generation
+
+Generate Software Bill of Materials locally:
+
+```bash
+# Generate SBOM for production images
+nix build .#bloklid-docker-amd64-sbom  # amd64 SBOM
+nix build .#bloklid-docker-aarch64-sbom  # arm64 SBOM
+
+# View SBOM files
+ls result/
+# sbom.spdx.json       - SPDX JSON format
+# sbom.cyclonedx.json  - CycloneDX JSON format
+```
+
+#### CI Security Workflow
+
+Automated security scanning in CI:
+
+- **Trivy Vulnerability Scanner**
+
+  - Uses Nix derivations with pre-fetched database
+  - Scans for HIGH and CRITICAL severity vulnerabilities
+  - Uploads results to GitHub Security tab (SARIF format)
+  - Fails build if critical vulnerabilities are found in production images
+
+- **Smoke Tests**
+
+  - Verifies container starts successfully
+  - Tests entrypoint functionality with `--help` flag
+  - Ensures binary is functional inside container
+
+- **SBOM Generation**
+  - Uses Nix derivations with Syft
+  - Generates SPDX JSON and CycloneDX JSON formats
+  - Stored as workflow artifacts (90-day retention)
+  - Available for supply chain security analysis
+
+### Workflow Files
+
+- `.github/workflows/build-docker.yaml` - Multi-arch Docker build with integrated security scanning and SBOM generation
+- `.github/workflows/build.yaml` - PR validation (Docker + code quality checks)
+- `.github/workflows/merge.yaml` - Post-merge Docker builds
+- `.github/workflows/release.yaml` - Release workflow with Docker builds
+
+### Image Tagging Strategy
+
+| Version Type | Format                | Platform Image                    | Manifest              | Use Case              |
+| ------------ | --------------------- | --------------------------------- | --------------------- | --------------------- |
+| Commit       | `version-commit.hash` | `1.0.0-commit.abc123-linux-amd64` | `1.0.0-commit.abc123` | Development testing   |
+| PR           | `version-pr.number`   | `1.0.0-pr.42-linux-amd64`         | `1.0.0-pr.42`         | Pre-merge validation  |
+| Release      | `version`             | `1.0.0-linux-amd64`               | `1.0.0`               | Production deployment |
+
+**Note:** Currently only AMD64 images are available. ARM64 will be re-enabled when GitHub runner supports aarch64. The manifest tag (without architecture suffix) points to the amd64 image.
 
 ## Additional Resources
 
