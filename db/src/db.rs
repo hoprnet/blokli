@@ -264,9 +264,8 @@ impl BlokliDb {
 
     /// Create an in-memory SQLite database for testing.
     ///
-    /// Uses SQLite's in-memory mode with shared cache for fast testing without requiring
-    /// external database services. Uses dual in-memory databases (one for index, one for logs)
-    /// to match production behavior.
+    /// Uses SQLite's in-memory mode for fast testing without requiring external database services.
+    /// Uses dual in-memory databases (one for index, one for logs) to match production behavior.
     ///
     /// # Returns
     ///
@@ -276,21 +275,11 @@ impl BlokliDb {
     ///
     /// Returns `DbSqlError` if connection or initialization fails
     pub async fn new_in_memory() -> Result<Self> {
-        use std::sync::atomic::{AtomicU64, Ordering};
-
-        // Atomic counter for unique database names across parallel test runs
-        static DB_COUNTER: AtomicU64 = AtomicU64::new(0);
-        let id = DB_COUNTER.fetch_add(1, Ordering::SeqCst);
-
-        // Use SQLite in-memory databases with shared cache for testing
-        // The shared cache mode allows multiple connections in the pool to access
-        // the same in-memory database, which is essential for:
-        // 1. Data visibility across connections
-        // 2. Update hooks firing when any connection modifies data
-        // Unique names (using counter) ensure test isolation in parallel runs
-        let index_url = format!("sqlite:file:index_{}?mode=memory&cache=shared", id);
-        let logs_url = format!("sqlite:file:logs_{}?mode=memory&cache=shared", id);
-        Self::new(&index_url, Some(&logs_url), Default::default()).await
+        // Use SQLite in-memory databases for testing (dual databases like production)
+        // Each call to :memory: creates a separate private database
+        let index_url = "sqlite::memory:";
+        let logs_url = "sqlite::memory:";
+        Self::new(index_url, Some(logs_url), Default::default()).await
     }
 
     /// Get the appropriate database connection for log-related operations.

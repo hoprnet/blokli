@@ -1089,17 +1089,17 @@ mod tests {
         let db = BlokliDb::new_in_memory().await.unwrap();
 
         // Create 5 open channels
-        for i in 0..5 {
+        for i in 0u8..5 {
             let source_id = create_test_account(
                 db.conn(blokli_db::TargetDb::Index),
-                vec![i as u8; 20],
+                vec![i; 20],
                 &format!("peer{}_src", i),
             )
             .await
             .unwrap();
             let dest_id = create_test_account(
                 db.conn(blokli_db::TargetDb::Index),
-                vec![(i + 10) as u8; 20],
+                vec![i + 10; 20],
                 &format!("peer{}_dst", i),
             )
             .await
