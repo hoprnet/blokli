@@ -1687,6 +1687,7 @@ dependencies = [
  "blokli-chain-types",
  "blokli-db",
  "blokli-db-entity",
+ "blokli-db-migration",
  "chrono",
  "clap",
  "env_logger",
