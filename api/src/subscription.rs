@@ -9,7 +9,8 @@ use async_broadcast::Receiver;
 use async_graphql::{Context, Result, Subscription};
 use async_stream::stream;
 use blokli_api_types::{
-    Account, Channel, ChannelUpdate, HoprBalance, NativeBalance, OpenedChannelsGraph, TokenValueString, UInt64,
+    Account, Channel, ChannelUpdate, HoprBalance, NativeBalance, OpenedChannelsGraph, TicketParameters,
+    TokenValueString, UInt64,
 };
 use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
 use blokli_db_entity::{
@@ -479,6 +480,29 @@ impl SubscriptionRoot {
             }
         })
     }
+
+    /// Subscribe to real-time updates of ticket price and winning probability
+    ///
+    /// Provides updates whenever there is a change in the ticket price or minimum
+    /// winning probability on-chain. These values are essential for ticket validation
+    /// and payment channel operation.
+    #[graphql(name = "ticketParametersUpdated")]
+    async fn ticket_parameters_updated(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = TicketParameters>> {
+        let db = ctx.data::<DatabaseConnection>()?.clone();
+
+        Ok(stream! {
+            loop {
+                // TODO: Replace with actual database change notifications
+                // For now, poll the database periodically
+                sleep(Duration::from_secs(1)).await;
+
+                // Query the latest ticket parameters from chain_info
+                if let Ok(Some(params)) = Self::fetch_ticket_parameters(&db).await {
+                    yield params;
+                }
+            }
+        })
+    }
 }
 
 // Helper methods for fetching data
@@ -514,6 +538,25 @@ impl SubscriptionRoot {
             .await?;
 
         Ok(balance.map(hopr_balance_from_model))
+    }
+
+    async fn fetch_ticket_parameters(db: &DatabaseConnection) -> Result<Option<TicketParameters>, sea_orm::DbErr> {
+        use blokli_db_entity::chain_info;
+
+        let chain_info = chain_info::Entity::find().one(db).await?;
+
+        Ok(chain_info.map(|info| {
+            let ticket_price = if let Some(price_bytes) = info.ticket_price {
+                PrimitiveHoprBalance::from_be_bytes(&price_bytes).amount().to_string()
+            } else {
+                "0".to_string()
+            };
+
+            TicketParameters {
+                min_ticket_winning_probability: info.min_incoming_ticket_win_prob as f64,
+                ticket_price: TokenValueString(ticket_price),
+            }
+        }))
     }
 
     async fn fetch_filtered_channels(

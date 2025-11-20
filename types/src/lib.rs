@@ -481,6 +481,17 @@ pub struct SafeTransactionCount {
     pub count: UInt64,
 }
 
+/// Ticket price and winning probability parameters
+#[derive(SimpleObject, Clone, Debug)]
+pub struct TicketParameters {
+    /// Current minimum ticket winning probability (decimal value between 0.0 and 1.0)
+    #[graphql(name = "minTicketWinningProbability")]
+    pub min_ticket_winning_probability: f64,
+    /// Current HOPR token price
+    #[graphql(name = "ticketPrice")]
+    pub ticket_price: TokenValueString,
+}
+
 impl From<&blokli_chain_types::ContractAddresses> for ContractAddressMap {
     fn from(addresses: &blokli_chain_types::ContractAddresses) -> Self {
         let map = [
