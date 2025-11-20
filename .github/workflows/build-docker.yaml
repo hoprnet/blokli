@@ -198,7 +198,7 @@ jobs:
             nix build -L .#bloklid-docker-amd64-scan
             SCAN_PATH="./result"
           else
-            nix build -L .#bloklid-docker-arm64-scan
+            nix build -L .#bloklid-docker-aarch64-scan
             SCAN_PATH="./result"
           fi
 
@@ -270,7 +270,7 @@ jobs:
             nix build -L .#bloklid-docker-amd64-sbom
             SBOM_PATH="./result"
           else
-            nix build -L .#bloklid-docker-arm64-sbom
+            nix build -L .#bloklid-docker-aarch64-sbom
             SBOM_PATH="./result"
           fi
 

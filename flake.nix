@@ -250,7 +250,7 @@
             };
 
             # aarch64-linux security scans
-            bloklid-docker-arm64-scan = nixLib.mkTrivyScan {
+            bloklid-docker-aarch64-scan = nixLib.mkTrivyScan {
               image = bloklidDocker.bloklid-docker-aarch64;
               name = "bloklid-trivy-scan-arm64";
               severity = "HIGH,CRITICAL";
@@ -258,7 +258,7 @@
               exitCode = 1;
             };
 
-            bloklid-dev-docker-arm64-scan = nixLib.mkTrivyScan {
+            bloklid-dev-docker-aarch64-scan = nixLib.mkTrivyScan {
               image = bloklidDocker.bloklid-dev-docker-aarch64;
               name = "bloklid-dev-trivy-scan-arm64";
               severity = "HIGH,CRITICAL";
@@ -287,7 +287,7 @@
             };
 
             # aarch64-linux SBOMs
-            bloklid-docker-arm64-sbom = nixLib.mkSBOM {
+            bloklid-docker-aarch64-sbom = nixLib.mkSBOM {
               image = bloklidDocker.bloklid-docker-aarch64;
               name = "bloklid-sbom-arm64";
               formats = [
@@ -296,7 +296,7 @@
               ];
             };
 
-            bloklid-dev-docker-arm64-sbom = nixLib.mkSBOM {
+            bloklid-dev-docker-aarch64-sbom = nixLib.mkSBOM {
               image = bloklidDocker.bloklid-dev-docker-aarch64;
               name = "bloklid-dev-sbom-arm64";
               formats = [
@@ -546,17 +546,17 @@
             # Security scans - Trivy vulnerability scanning
             inherit (bloklidSecurity)
               bloklid-docker-amd64-scan
-              bloklid-docker-arm64-scan
+              bloklid-docker-aarch64-scan
               bloklid-dev-docker-amd64-scan
-              bloklid-dev-docker-arm64-scan
+              bloklid-dev-docker-aarch64-scan
               ;
 
             # SBOMs - Software Bill of Materials
             inherit (bloklidSecurity)
               bloklid-docker-amd64-sbom
-              bloklid-docker-arm64-sbom
+              bloklid-docker-aarch64-sbom
               bloklid-dev-docker-amd64-sbom
-              bloklid-dev-docker-arm64-sbom
+              bloklid-dev-docker-aarch64-sbom
               ;
 
             # Multi-arch manifests

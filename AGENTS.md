@@ -717,7 +717,7 @@ You can run security scans locally before pushing to CI:
 ```bash
 # Scan production images
 nix build .#bloklid-docker-amd64-scan  # Scans amd64 image
-nix build .#bloklid-docker-arm64-scan  # Scans arm64 image
+nix build .#bloklid-docker-aarch64-scan  # Scans arm64 image
 
 # View scan results
 cat result/scan-report.sarif  # SARIF format for tools
@@ -725,7 +725,7 @@ cat result/scan-summary.txt   # Human-readable summary
 
 # Scan development images (non-failing)
 nix build .#bloklid-dev-docker-amd64-scan
-nix build .#bloklid-dev-docker-arm64-scan
+nix build .#bloklid-dev-docker-aarch64-scan
 ```
 
 **Benefits of Nix-based scanning:**
@@ -742,7 +742,7 @@ Generate Software Bill of Materials locally:
 ```bash
 # Generate SBOM for production images
 nix build .#bloklid-docker-amd64-sbom  # amd64 SBOM
-nix build .#bloklid-docker-arm64-sbom  # arm64 SBOM
+nix build .#bloklid-docker-aarch64-sbom  # arm64 SBOM
 
 # View SBOM files
 ls result/
