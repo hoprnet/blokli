@@ -23,8 +23,10 @@ use blokli_chain_api::{
 };
 use blokli_chain_indexer::IndexerState;
 use blokli_chain_rpc::{rpc::RpcOperations, transport::ReqwestClient};
+use blokli_db_entity::codegen::prelude::ChainInfo;
 use futures::stream::{Stream, StreamExt};
-use sea_orm::DatabaseConnection;
+use sea_orm::{DatabaseConnection, EntityTrait};
+use serde::Serialize;
 use serde_json::Value;
 use tower_http::{
     CompressionLevel,
@@ -37,9 +39,66 @@ use tower_http::{
 };
 
 use crate::{
-    config::ApiConfig, errors::ApiResult, mutation::MutationRoot, query::QueryRoot, schema::build_schema,
+    config::{ApiConfig, HealthConfig},
+    errors::ApiResult,
+    mutation::MutationRoot,
+    query::QueryRoot,
+    schema::build_schema,
     subscription::SubscriptionRoot,
 };
+
+/// Health check response for liveness probe
+#[derive(Serialize)]
+struct HealthResponse {
+    status: String,
+    version: &'static str,
+}
+
+/// Readiness check response
+#[derive(Serialize)]
+struct ReadinessResponse {
+    status: String,
+    version: &'static str,
+    checks: ReadinessChecks,
+}
+
+/// Individual readiness checks
+#[derive(Serialize)]
+struct ReadinessChecks {
+    database: CheckStatus,
+    rpc: RpcCheckStatus,
+    indexer: IndexerCheckStatus,
+}
+
+/// Generic check status
+#[derive(Serialize)]
+struct CheckStatus {
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// RPC check status with block number
+#[derive(Serialize)]
+struct RpcCheckStatus {
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    block_number: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
+
+/// Indexer check status with lag information
+#[derive(Serialize)]
+struct IndexerCheckStatus {
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    last_indexed_block: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    lag: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error: Option<String>,
+}
 
 /// Predicate that excludes Server-Sent Events from compression
 ///
@@ -69,6 +128,9 @@ impl Predicate for NotSse {
 pub struct AppState {
     pub schema: Arc<Schema<QueryRoot, MutationRoot, SubscriptionRoot>>,
     pub playground_enabled: bool,
+    pub db: DatabaseConnection,
+    pub rpc_operations: Arc<RpcOperations<ReqwestClient>>,
+    pub health_config: HealthConfig,
 }
 
 /// Build the Axum application router
@@ -82,19 +144,22 @@ pub async fn build_app(
     rpc_operations: Arc<RpcOperations<ReqwestClient>>,
 ) -> ApiResult<Router> {
     let schema = build_schema(
-        db,
+        db.clone(),
         config.chain_id,
         network,
         config.contract_addresses,
         indexer_state,
         transaction_executor,
         transaction_store,
-        rpc_operations,
+        rpc_operations.clone(),
     );
 
     let app_state = AppState {
         schema: Arc::new(schema),
         playground_enabled: config.playground_enabled,
+        db,
+        rpc_operations,
+        health_config: config.health,
     };
 
     // Configure CORS based on allowed origins
@@ -123,8 +188,9 @@ pub async fn build_app(
     Ok(Router::new()
         // GraphQL endpoint (queries, mutations, and SSE subscriptions)
         .route("/graphql", get(graphql_playground).post(graphql_handler))
-        // Health check
-        .route("/health", get(health_handler))
+        // Health check endpoints for Kubernetes probes
+        .route("/healthz", get(healthz_handler))
+        .route("/readyz", get(readyz_handler))
         .layer(cors_layer)
         // Use zstd compression only with high quality, only for responses > 1KB
         // Exclude SSE responses to preserve real-time streaming
@@ -211,14 +277,110 @@ async fn graphql_playground(State(state): State<AppState>) -> impl IntoResponse 
     }
 }
 
-/// Health check endpoint
-async fn health_handler() -> impl IntoResponse {
-    "ok"
+/// Liveness probe endpoint - minimal check that process is alive
+async fn healthz_handler() -> impl IntoResponse {
+    Json(HealthResponse {
+        status: "healthy".to_string(),
+        version: env!("CARGO_PKG_VERSION"),
+    })
+}
+
+/// Readiness probe endpoint - comprehensive check for service readiness
+async fn readyz_handler(State(state): State<AppState>) -> impl IntoResponse {
+    let mut all_healthy = true;
+    let mut checks = ReadinessChecks {
+        database: CheckStatus {
+            status: "healthy".to_string(),
+            error: None,
+        },
+        rpc: RpcCheckStatus {
+            status: "healthy".to_string(),
+            block_number: None,
+            error: None,
+        },
+        indexer: IndexerCheckStatus {
+            status: "healthy".to_string(),
+            last_indexed_block: None,
+            lag: None,
+            error: None,
+        },
+    };
+
+    // 1. Check database connectivity by querying chain_info
+    let db_result = ChainInfo::find().one(&state.db).await;
+    let indexed_block = match db_result {
+        Ok(Some(info)) => Some(info.last_indexed_block),
+        Ok(None) => {
+            // No chain info yet - indexer hasn't started
+            all_healthy = false;
+            checks.database = CheckStatus {
+                status: "unhealthy".to_string(),
+                error: Some("No chain info found - indexer may not have started".to_string()),
+            };
+            None
+        }
+        Err(e) => {
+            all_healthy = false;
+            checks.database = CheckStatus {
+                status: "unhealthy".to_string(),
+                error: Some(e.to_string()),
+            };
+            None
+        }
+    };
+
+    // 2. Check RPC connectivity and get current block
+    let rpc_block = match state.rpc_operations.get_block_number().await {
+        Ok(block) => {
+            checks.rpc.block_number = Some(block);
+            Some(block)
+        }
+        Err(e) => {
+            all_healthy = false;
+            checks.rpc = RpcCheckStatus {
+                status: "unhealthy".to_string(),
+                block_number: None,
+                error: Some(e.to_string()),
+            };
+            None
+        }
+    };
+
+    // 3. Check indexer lag
+    if let (Some(indexed), Some(rpc_block)) = (indexed_block, rpc_block) {
+        let lag = rpc_block.saturating_sub(indexed as u64);
+        checks.indexer.last_indexed_block = Some(indexed);
+        checks.indexer.lag = Some(lag);
+
+        if lag > state.health_config.max_indexer_lag {
+            all_healthy = false;
+            checks.indexer.status = "unhealthy".to_string();
+            checks.indexer.error = Some(format!(
+                "indexer lag exceeds threshold ({} > {} blocks)",
+                lag, state.health_config.max_indexer_lag
+            ));
+        }
+    } else if indexed_block.is_some() {
+        // We have indexed block but no RPC block - already marked RPC as unhealthy
+        checks.indexer.last_indexed_block = indexed_block;
+    }
+
+    let response = ReadinessResponse {
+        status: if all_healthy { "ready" } else { "not_ready" }.to_string(),
+        version: env!("CARGO_PKG_VERSION"),
+        checks,
+    };
+
+    if all_healthy {
+        (StatusCode::OK, Json(response)).into_response()
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, Json(response)).into_response()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use axum::http::{HeaderValue, Response};
+    use axum::http::{HeaderValue, Response, StatusCode};
 
     use super::*;
 
@@ -231,6 +393,228 @@ mod tests {
         }
 
         builder.body(String::new()).unwrap()
+    }
+
+    // Unit tests for HealthResponse serialization
+    #[test]
+    fn test_health_response_serialization() {
+        let response = HealthResponse {
+            status: "healthy".to_string(),
+            version: "1.0.0",
+        };
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["status"], "healthy");
+        assert_eq!(json["version"], "1.0.0");
+    }
+
+    #[test]
+    fn test_readiness_response_all_healthy() {
+        let checks = ReadinessChecks {
+            database: CheckStatus {
+                status: "healthy".to_string(),
+                error: None,
+            },
+            rpc: RpcCheckStatus {
+                status: "healthy".to_string(),
+                block_number: Some(12345),
+                error: None,
+            },
+            indexer: IndexerCheckStatus {
+                status: "healthy".to_string(),
+                last_indexed_block: Some(12340),
+                lag: Some(5),
+                error: None,
+            },
+        };
+
+        let response = ReadinessResponse {
+            status: "ready".to_string(),
+            version: "1.0.0",
+            checks,
+        };
+
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["status"], "ready");
+        assert_eq!(json["checks"]["database"]["status"], "healthy");
+        assert_eq!(json["checks"]["rpc"]["block_number"], 12345);
+        assert_eq!(json["checks"]["indexer"]["lag"], 5);
+        // Verify error fields are not present when None
+        assert!(json["checks"]["database"]["error"].is_null());
+    }
+
+    #[test]
+    fn test_readiness_response_database_failure() {
+        let checks = ReadinessChecks {
+            database: CheckStatus {
+                status: "unhealthy".to_string(),
+                error: Some("Connection refused".to_string()),
+            },
+            rpc: RpcCheckStatus {
+                status: "healthy".to_string(),
+                block_number: Some(12345),
+                error: None,
+            },
+            indexer: IndexerCheckStatus {
+                status: "healthy".to_string(),
+                last_indexed_block: None,
+                lag: None,
+                error: None,
+            },
+        };
+
+        let response = ReadinessResponse {
+            status: "not_ready".to_string(),
+            version: "1.0.0",
+            checks,
+        };
+
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["status"], "not_ready");
+        assert_eq!(json["checks"]["database"]["status"], "unhealthy");
+        assert_eq!(json["checks"]["database"]["error"], "Connection refused");
+    }
+
+    #[test]
+    fn test_readiness_response_rpc_failure() {
+        let checks = ReadinessChecks {
+            database: CheckStatus {
+                status: "healthy".to_string(),
+                error: None,
+            },
+            rpc: RpcCheckStatus {
+                status: "unhealthy".to_string(),
+                block_number: None,
+                error: Some("RPC endpoint unreachable".to_string()),
+            },
+            indexer: IndexerCheckStatus {
+                status: "healthy".to_string(),
+                last_indexed_block: Some(12340),
+                lag: None,
+                error: None,
+            },
+        };
+
+        let response = ReadinessResponse {
+            status: "not_ready".to_string(),
+            version: "1.0.0",
+            checks,
+        };
+
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["status"], "not_ready");
+        assert_eq!(json["checks"]["rpc"]["status"], "unhealthy");
+        assert!(json["checks"]["rpc"]["block_number"].is_null());
+        assert_eq!(json["checks"]["rpc"]["error"], "RPC endpoint unreachable");
+    }
+
+    #[test]
+    fn test_readiness_response_indexer_lag_exceeded() {
+        let checks = ReadinessChecks {
+            database: CheckStatus {
+                status: "healthy".to_string(),
+                error: None,
+            },
+            rpc: RpcCheckStatus {
+                status: "healthy".to_string(),
+                block_number: Some(12345),
+                error: None,
+            },
+            indexer: IndexerCheckStatus {
+                status: "unhealthy".to_string(),
+                last_indexed_block: Some(12300),
+                lag: Some(45),
+                error: Some("indexer lag exceeds threshold (45 > 10 blocks)".to_string()),
+            },
+        };
+
+        let response = ReadinessResponse {
+            status: "not_ready".to_string(),
+            version: "1.0.0",
+            checks,
+        };
+
+        let json = serde_json::to_value(&response).unwrap();
+        assert_eq!(json["status"], "not_ready");
+        assert_eq!(json["checks"]["indexer"]["status"], "unhealthy");
+        assert_eq!(json["checks"]["indexer"]["lag"], 45);
+        assert!(
+            json["checks"]["indexer"]["error"]
+                .as_str()
+                .unwrap()
+                .contains("exceeds threshold")
+        );
+    }
+
+    #[test]
+    fn test_check_status_skips_none_error() {
+        let status = CheckStatus {
+            status: "healthy".to_string(),
+            error: None,
+        };
+
+        let json = serde_json::to_value(&status).unwrap();
+        // skip_serializing_if should exclude the error field
+        assert!(!json.as_object().unwrap().contains_key("error"));
+    }
+
+    #[test]
+    fn test_rpc_check_status_skips_none_fields() {
+        let status = RpcCheckStatus {
+            status: "unhealthy".to_string(),
+            block_number: None,
+            error: Some("error".to_string()),
+        };
+
+        let json = serde_json::to_value(&status).unwrap();
+        let obj = json.as_object().unwrap();
+        // skip_serializing_if should exclude None fields
+        assert!(!obj.contains_key("block_number"));
+        assert!(obj.contains_key("error"));
+    }
+
+    #[test]
+    fn test_indexer_check_status_skips_none_fields() {
+        let status = IndexerCheckStatus {
+            status: "healthy".to_string(),
+            last_indexed_block: Some(100),
+            lag: None,
+            error: None,
+        };
+
+        let json = serde_json::to_value(&status).unwrap();
+        let obj = json.as_object().unwrap();
+        assert!(obj.contains_key("last_indexed_block"));
+        assert!(!obj.contains_key("lag"));
+        assert!(!obj.contains_key("error"));
+    }
+
+    // Test healthz handler directly
+    #[tokio::test]
+    async fn test_healthz_handler_returns_healthy() {
+        let response = healthz_handler().await;
+        let response = response.into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+
+        // Extract and verify body
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        assert_eq!(json["status"], "healthy");
+        assert!(json["version"].is_string());
+    }
+
+    // Test that healthz handler uses correct CARGO_PKG_VERSION
+    #[tokio::test]
+    async fn test_healthz_handler_version() {
+        let response = healthz_handler().await;
+        let response = response.into_response();
+
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&body).unwrap();
+
+        // Version should match the package version
+        assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
     }
 
     #[test]
