@@ -5,8 +5,7 @@
 //! - PostgreSQL: Uses LISTEN/NOTIFY
 //! - SQLite: Uses update hooks with async channels
 
-use std::pin::Pin;
-use std::time::Duration;
+use std::{pin::Pin, time::Duration};
 
 use anyhow::anyhow;
 use async_stream::stream;

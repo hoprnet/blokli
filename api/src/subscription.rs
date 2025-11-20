@@ -495,8 +495,12 @@ impl SubscriptionRoot {
         let db = ctx.data::<DatabaseConnection>()?.clone();
 
         Ok(stream! {
+            // Track last emitted value to avoid duplicate emissions
+            let mut last_params: Option<TicketParameters> = None;
+
             // Emit current value first
             if let Ok(Some(params)) = Self::fetch_ticket_parameters(&db).await {
+                last_params = Some(params.clone());
                 yield params;
             }
 
@@ -509,9 +513,12 @@ impl SubscriptionRoot {
                 }
             };
 
-            // Stream updates when notified
+            // Stream updates when notified, only if value changed
             while (notifications.next().await).is_some() {
-                if let Ok(Some(params)) = Self::fetch_ticket_parameters(&db).await {
+                if let Ok(Some(params)) = Self::fetch_ticket_parameters(&db).await
+                    && last_params.as_ref() != Some(&params)
+                {
+                    last_params = Some(params.clone());
                     yield params;
                 }
             }

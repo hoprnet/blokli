@@ -14,7 +14,7 @@ use hopr_primitive_types::prelude::ToHex;
 /// This scalar type represents token amounts as decimal strings to avoid
 /// floating-point precision issues. Values are typically represented in
 /// the token's base unit (e.g., wei for native tokens, smallest unit for HOPR).
-#[derive(Debug, Clone, NewType)]
+#[derive(Debug, Clone, PartialEq, Eq, NewType)]
 pub struct TokenValueString(pub String);
 
 /// 32-byte hexadecimal string scalar type (with optional 0x prefix)
@@ -482,7 +482,7 @@ pub struct SafeTransactionCount {
 }
 
 /// Ticket price and winning probability parameters
-#[derive(SimpleObject, Clone, Debug)]
+#[derive(SimpleObject, Clone, Debug, PartialEq)]
 pub struct TicketParameters {
     /// Current minimum ticket winning probability (decimal value between 0.0 and 1.0)
     #[graphql(name = "minTicketWinningProbability")]
