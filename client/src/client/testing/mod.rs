@@ -1,32 +1,75 @@
-use std::{collections::HashMap, ops::Div, sync::Arc, time::Duration};
+use std::{ops::Div, sync::Arc, time::Duration};
 
 use async_broadcast::TrySendError;
 use futures::{Stream, StreamExt};
+use indexmap::IndexMap;
 
 use crate::{
     api::{types::*, *},
-    errors::{BlokliClientError, ErrorKind},
+    errors::{BlokliClientError, ErrorKind, TrackingErrorKind},
 };
 
+fn serialize_as_empty_map<K, V, S>(_: &IndexMap<K, V>, serializer: S) -> std::result::Result<S::Ok, S::Error>
+where
+    K: serde::Serialize,
+    V: serde::Serialize,
+    S: serde::Serializer,
+{
+    serde::Serialize::serialize(&IndexMap::<K, V>::new(), serializer)
+}
+
 /// Represents a state for [`BlokliTestClient`].
-#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BlokliTestState {
-    pub accounts: HashMap<u32, Account>,
-    pub native_balances: HashMap<String, NativeBalance>,
-    pub token_balances: HashMap<String, HoprBalance>,
-    pub safe_allowances: HashMap<String, SafeHoprAllowance>,
-    pub tx_counts: HashMap<String, u64>,
-    pub channels: HashMap<String, Channel>,
+    /// Contains KeyID -> Account
+    pub accounts: IndexMap<u32, Account>,
+    /// Contains ChainAddress -> SafeAddress that are not paired with any account yet.
+    pub unpaired_safes: IndexMap<String, String>,
+    /// Contains native balances for addresses.
+    pub native_balances: IndexMap<String, NativeBalance>,
+    /// Contains token balances for addresses.
+    pub token_balances: IndexMap<String, HoprBalance>,
+    /// Contains safe allowances for addresses.
+    pub safe_allowances: IndexMap<String, SafeHoprAllowance>,
+    /// Contains transaction counts for addresses.
+    pub tx_counts: IndexMap<String, u64>,
+    /// Contains ChannelId -> Channel.
+    pub channels: IndexMap<String, Channel>,
+    /// Contains chain info.
     pub chain_info: ChainInfo,
+    /// Version of the Blokli server.
     pub version: String,
+    /// Health of the Blokli server.
     pub health: String,
-    pub active_txs: HashMap<TxId, Transaction>,
+    /// Active transactions.
+    ///
+    /// This field is transient and not serialized.
+    // Always serialize as empty, because the data are non-deterministic and do not make sense to compare.
+    #[serde(serialize_with = "serialize_as_empty_map")]
+    pub active_txs: IndexMap<TxId, Transaction>,
+}
+
+impl PartialEq for BlokliTestState {
+    fn eq(&self, other: &Self) -> bool {
+        // Skip active_txs because they are non-deterministic.
+        self.accounts == other.accounts
+            && self.unpaired_safes == other.unpaired_safes
+            && self.native_balances == other.native_balances
+            && self.token_balances == other.token_balances
+            && self.safe_allowances == other.safe_allowances
+            && self.tx_counts == other.tx_counts
+            && self.channels == other.channels
+            && self.chain_info == other.chain_info
+            && self.version == other.version
+            && self.health == other.health
+    }
 }
 
 impl Default for BlokliTestState {
     fn default() -> Self {
         Self {
             accounts: Default::default(),
+            unpaired_safes: Default::default(),
             native_balances: Default::default(),
             token_balances: Default::default(),
             safe_allowances: Default::default(),
@@ -40,7 +83,7 @@ impl Default for BlokliTestState {
                 ledger_dst: Some("0000000000000000000000000000000000000000000000000000000000000000".into()),
                 min_ticket_winning_probability: 1.0,
                 safe_registry_dst: Some("0000000000000000000000000000000000000000000000000000000000000000".into()),
-                ticket_price: TokenValueString("1".into()),
+                ticket_price: TokenValueString("1 wxHOPR".into()),
                 network: "rotsee".into(),
                 contract_addresses: ContractAddressMap(
                     r#"
@@ -49,7 +92,8 @@ impl Default for BlokliTestState {
                     "channels": "0x77C9414043d27fdC98A6A2d73fc77b9b383092a7",
                     "module_implementation": "0x32863c4974fBb6253E338a0cb70C382DCeD2eFCb",
                     "node_safe_registry": "0x4F7C7dE3BA2B29ED8B2448dF2213cA43f94E45c0",
-                    "node_stake_v2_factory": "0x791d190b2c95397F4BcE7bD8032FD67dCEA7a5F2",
+                    "node_stake_factory": "0x791d190b2c95397F4BcE7bD8032FD67dCEA7a5F2",
+                    "node_safe_migration": "0x0000000000000000000000000000000000000000",
                     "token": "0xD4fdec44DB9D44B8f2b6d529620f9C0C7066A2c1",
                     "ticket_price_oracle": "0x442df1d946303fB088C9377eefdaeA84146DA0A6",
                     "winning_probability_oracle": "0xC15675d4CCa538D91a91a8D3EcFBB8499C3B0471"
@@ -118,11 +162,14 @@ impl BlokliTestState {
     }
 }
 
-/// Mutator for the [`BlokliTestState`].
+/// Mutator for the [`BlokliTestState`] based on signed transactions.
 pub trait BlokliTestStateMutator {
     /// Updates the state given the signed transaction.
     ///
-    /// Mutations that remove anything from the state are not allowed.
+    /// [`BlokliTestClient`] makes several consistency checks on the updates.
+    /// For example, all mutations that remove anything from the state are not allowed.
+    ///
+    /// For arbitrary state updates via the client, see [`BlokliTestClient::update_state`].
     fn update_state(&self, signed_tx: &[u8], state: &mut BlokliTestState) -> Result<()>;
 }
 
@@ -166,6 +213,12 @@ impl BlokliTestStateSnapshot {
     }
 }
 
+impl AsRef<BlokliTestState> for BlokliTestStateSnapshot {
+    fn as_ref(&self) -> &BlokliTestState {
+        &self.snapshot
+    }
+}
+
 impl std::ops::Deref for BlokliTestStateSnapshot {
     type Target = BlokliTestState;
 
@@ -181,7 +234,8 @@ impl std::ops::Deref for BlokliTestStateSnapshot {
 ///
 /// Later transactions done using the client can [mutate](BlokliTestStateMutator) the state and
 /// changes are propagated to the subscribers.
-/// Mutations that remove accounts or channels are not allowed.
+/// Mutations that remove accounts or channels are not allowed, so that a transaction cannot
+/// make the state inconsistent.
 ///
 /// Cloning the client will create a new client that shares the same state with the previous one.
 /// This makes sense, however, only when the `mutator` can perform actual changes on the shared state.
@@ -235,6 +289,13 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
         }
     }
 
+    /// Allows changing the mutator on the instance for another one of the same type.
+    #[must_use]
+    pub fn with_mutator(mut self, mutator: M) -> Self {
+        self.mutator = mutator;
+        self
+    }
+
     /// Returns the current snapshot of the internal state.
     ///
     /// The snapshot can be repeatedly [refreshed](BlokliTestStateSnapshot::refresh) to get the latest state.
@@ -243,6 +304,19 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
         BlokliTestStateSnapshot {
             state: self.state.clone(),
             snapshot: state.clone(),
+        }
+    }
+
+    /// Allows updating the minimum ticket price and minimum ticket-winning probability.
+    ///
+    /// These changes are not broadcasted as events but take effect on the shared state
+    /// for all clones of the client.
+    pub fn update_price_and_win_prob(&self, new_price: Option<TokenValueString>, new_win_prob: Option<f64>) {
+        if let Some(new_price) = new_price {
+            self.state.write().chain_info.ticket_price = new_price;
+        }
+        if let Some(new_win_prob) = new_win_prob {
+            self.state.write().chain_info.min_ticket_winning_probability = new_win_prob;
         }
     }
 
@@ -496,7 +570,7 @@ fn simulate_tx_execution(
     state
         .accounts
         .iter()
-        .filter(|(new_id, new_account)| {
+        .filter(|&(new_id, new_account)| {
             old_state.accounts.get(new_id).is_none_or(|old_account| {
                 // Change is notified only if safe address or multi addresses changed
                 old_account.safe_address != new_account.safe_address
@@ -630,10 +704,24 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
 
     async fn track_transaction(&self, tx_id: TxId, client_timeout: Duration) -> Result<Transaction> {
         futures_time::task::sleep(client_timeout.div(10).into()).await;
-        self.state
+        let tx = self
+            .state
             .write()
             .active_txs
-            .remove(&tx_id)
-            .ok_or_else(|| ErrorKind::NoData.into())
+            .shift_remove(&tx_id)
+            .ok_or_else(|| BlokliClientError::from(ErrorKind::NoData))?;
+
+        match tx.status {
+            TransactionStatus::Confirmed => Ok(tx),
+            TransactionStatus::Timeout => Err(ErrorKind::TrackingError(TrackingErrorKind::Timeout).into()),
+            TransactionStatus::SubmissionFailed => {
+                Err(ErrorKind::TrackingError(TrackingErrorKind::SubmissionFailed).into())
+            }
+            TransactionStatus::ValidationFailed => {
+                Err(ErrorKind::TrackingError(TrackingErrorKind::ValidationFailed).into())
+            }
+            TransactionStatus::Reverted => Err(ErrorKind::TrackingError(TrackingErrorKind::Reverted).into()),
+            _ => Err(ErrorKind::MockClientError(anyhow::anyhow!("unexpected transaction status")).into()),
+        }
     }
 }
