@@ -193,16 +193,15 @@
         "treefmt-nix": "treefmt-nix"
       },
       "locked": {
-        "lastModified": 1763637596,
+        "lastModified": 1763642174,
         "narHash": "sha256-bo1S0goLfzSTYjQmjwIpCJk5+4L9TU7ZgzEhn5lZqtk=",
         "owner": "hoprnet",
         "repo": "nix-lib",
-        "rev": "01c738548e6bc52cd78fffdde684cb096385cc9f",
+        "rev": "7e983d6394550902d6de5f1e38ebe2cf60212661",
         "type": "github"
       },
       "original": {
         "owner": "hoprnet",
-        "ref": "tb/202511-fix-manifest",
         "repo": "nix-lib",
         "type": "github"
       }
