@@ -53,7 +53,7 @@ async fn init_chain_info_with_params(
 }
 
 /// Create a minimal GraphQL schema for testing subscriptions
-fn create_test_schema(db: sea_orm::DatabaseConnection) -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
+fn create_test_schema(db: &BlokliDb) -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
     let indexer_state = IndexerState::new(10, 100);
     let transaction_store = Arc::new(TransactionStore::new());
     let transaction_validator = Arc::new(TransactionValidator::new());
@@ -87,7 +87,7 @@ fn create_test_schema(db: sea_orm::DatabaseConnection) -> Schema<QueryRoot, Muta
     ));
 
     build_schema(
-        db,
+        db.conn(TargetDb::Index).clone(),
         1,
         "test-network".to_string(),
         ContractAddresses::default(),
@@ -95,6 +95,7 @@ fn create_test_schema(db: sea_orm::DatabaseConnection) -> Schema<QueryRoot, Muta
         transaction_executor,
         transaction_store,
         rpc_ops,
+        db.sqlite_notification_manager().cloned(),
     )
 }
 
@@ -111,7 +112,7 @@ async fn test_ticket_parameters_subscription_emits_initial_values() {
         .unwrap();
 
     // Create GraphQL schema
-    let schema = create_test_schema(db.conn(TargetDb::Index).clone());
+    let schema = create_test_schema(&db);
 
     // Execute subscription query
     let query = r#"
@@ -176,7 +177,7 @@ async fn test_ticket_parameters_subscription_handles_missing_ticket_price() {
     chain_info.insert(db.conn(TargetDb::Index)).await.unwrap();
 
     // Create GraphQL schema
-    let schema = create_test_schema(db.conn(TargetDb::Index).clone());
+    let schema = create_test_schema(&db);
 
     // Execute subscription query
     let query = r#"
@@ -217,7 +218,7 @@ async fn test_ticket_parameters_subscription_handles_zero_values() {
         .unwrap();
 
     // Create GraphQL schema
-    let schema = create_test_schema(db.conn(TargetDb::Index).clone());
+    let schema = create_test_schema(&db);
 
     // Execute subscription query
     let query = r#"
@@ -257,7 +258,7 @@ async fn test_ticket_parameters_subscription_handles_max_values() {
         .unwrap();
 
     // Create GraphQL schema
-    let schema = create_test_schema(db.conn(TargetDb::Index).clone());
+    let schema = create_test_schema(&db);
 
     // Execute subscription query
     let query = r#"
@@ -296,7 +297,7 @@ async fn test_subscription_receives_ticket_price_update() {
         .await
         .unwrap();
 
-    let schema = create_test_schema(db.conn(TargetDb::Index).clone());
+    let schema = create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -333,7 +334,7 @@ async fn test_subscription_receives_ticket_price_update() {
         .await
         .unwrap();
 
-    // Should receive update (polling will pick it up within 2 seconds)
+    // Should receive update
     let updated = tokio::time::timeout(Duration::from_secs(3), stream.next())
         .await
         .unwrap()
@@ -362,7 +363,7 @@ async fn test_subscription_receives_winning_probability_update() {
         .await
         .unwrap();
 
-    let schema = create_test_schema(db.conn(TargetDb::Index).clone());
+    let schema = create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -422,7 +423,7 @@ async fn test_subscription_receives_both_parameters_update() {
         .await
         .unwrap();
 
-    let schema = create_test_schema(db.conn(TargetDb::Index).clone());
+    let schema = create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -475,7 +476,7 @@ async fn test_subscription_receives_multiple_updates() {
         .await
         .unwrap();
 
-    let schema = create_test_schema(db.conn(TargetDb::Index).clone());
+    let schema = create_test_schema(&db);
 
     let query = r#"
         subscription {

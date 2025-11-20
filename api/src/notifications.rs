@@ -9,6 +9,7 @@ use std::{pin::Pin, time::Duration};
 
 use anyhow::anyhow;
 use async_stream::stream;
+use blokli_db::notifications::{SqliteNotification, SqliteNotificationManager};
 use futures::Stream;
 use sea_orm::{DatabaseBackend, DatabaseConnection};
 use sqlx::postgres::PgListener;
@@ -27,22 +28,24 @@ use crate::errors::ApiError;
 /// - **PostgreSQL**: Uses LISTEN on the `ticket_params_updated` channel. Notifications are sent by a database trigger
 ///   when chain_info is updated.
 ///
-/// - **SQLite**: Falls back to polling with 1-second interval since SQLite update hooks require access to the
-///   underlying sqlx connection which is not easily accessible through SeaORM's connection pool.
+/// - **SQLite**: Uses update hooks via the SqliteNotificationManager to receive real-time notifications when the
+///   chain_info table is modified.
 ///
 /// # Arguments
 ///
 /// * `db` - Database connection (SeaORM)
+/// * `sqlite_manager` - Optional SQLite notification manager (required for SQLite, None for PostgreSQL)
 ///
 /// # Returns
 ///
 /// A stream that yields `()` on each notification
 pub async fn create_ticket_params_notification_stream(
     db: &DatabaseConnection,
+    sqlite_manager: Option<&SqliteNotificationManager>,
 ) -> Result<Pin<Box<dyn Stream<Item = ()> + Send>>, ApiError> {
     match db.get_database_backend() {
         DatabaseBackend::Postgres => create_postgres_notification_stream(db).await,
-        DatabaseBackend::Sqlite => create_sqlite_notification_stream(db).await,
+        DatabaseBackend::Sqlite => create_sqlite_notification_stream(sqlite_manager).await,
         backend => Err(ApiError::ConfigError(format!(
             "Unsupported database backend: {:?}",
             backend
@@ -94,20 +97,45 @@ async fn create_postgres_notification_stream(
     }))
 }
 
-/// Create SQLite polling notification stream
+/// Create SQLite notification stream using update hooks
 ///
-/// Since SQLite update hooks require raw sqlx connection access which is not
-/// easily available through SeaORM's connection pool, we fall back to polling
-/// for simplicity in tests and development environments.
+/// Uses the SqliteNotificationManager to receive real-time notifications when
+/// the chain_info table is modified via SQLite update hooks.
 async fn create_sqlite_notification_stream(
-    _db: &DatabaseConnection,
+    manager: Option<&SqliteNotificationManager>,
 ) -> Result<Pin<Box<dyn Stream<Item = ()> + Send>>, ApiError> {
-    Ok(Box::pin(stream! {
-        loop {
-            sleep(Duration::from_secs(1)).await;
-            yield ();
+    match manager {
+        Some(manager) => {
+            let mut rx = manager.subscribe();
+            Ok(Box::pin(stream! {
+                loop {
+                    match rx.recv().await {
+                        Ok(notification) => {
+                            if matches!(notification, SqliteNotification::ChainInfoUpdated) {
+                                yield ();
+                            }
+                        }
+                        Err(e) => {
+                            // Channel closed or lagged
+                            error!("Error receiving SQLite notification: {:?}", e);
+                            // Brief delay before continuing
+                            sleep(Duration::from_millis(100)).await;
+                        }
+                    }
+                }
+            }))
         }
-    }))
+        None => {
+            // Fallback to polling if no manager available (shouldn't happen in normal operation)
+            error!("No SQLite notification manager provided, falling back to polling");
+            Ok(Box::pin(stream! {
+                loop {
+                    sleep(Duration::from_secs(1)).await;
+                    yield ();
+                }
+            }))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -119,7 +147,8 @@ mod tests {
     #[tokio::test]
     async fn test_create_sqlite_notification_stream() {
         let db = BlokliDb::new_in_memory().await.unwrap();
-        let result = create_ticket_params_notification_stream(db.conn(TargetDb::Index)).await;
+        let manager = db.sqlite_notification_manager();
+        let result = create_ticket_params_notification_stream(db.conn(TargetDb::Index), manager).await;
         assert!(result.is_ok());
     }
 }

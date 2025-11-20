@@ -13,6 +13,7 @@ use blokli_api_types::{
     TokenValueString, UInt64,
 };
 use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
+use blokli_db::notifications::SqliteNotificationManager;
 use blokli_db_entity::{
     channel, channel_state,
     conversions::{
@@ -493,25 +494,27 @@ impl SubscriptionRoot {
     #[graphql(name = "ticketParametersUpdated")]
     async fn ticket_parameters_updated(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = TicketParameters>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
+        let sqlite_manager = ctx.data::<Option<SqliteNotificationManager>>()?.clone();
 
         Ok(stream! {
             // Track last emitted value to avoid duplicate emissions
             let mut last_params: Option<TicketParameters> = None;
 
-            // Emit current value first
-            if let Ok(Some(params)) = Self::fetch_ticket_parameters(&db).await {
-                last_params = Some(params.clone());
-                yield params;
-            }
-
-            // Listen for database change notifications
-            let mut notifications = match crate::notifications::create_ticket_params_notification_stream(&db).await {
+            // Create notification stream FIRST to ensure we don't miss any updates
+            // that occur between emitting initial value and waiting for notifications
+            let mut notifications = match crate::notifications::create_ticket_params_notification_stream(&db, sqlite_manager.as_ref()).await {
                 Ok(stream) => stream,
                 Err(e) => {
                     tracing::error!("Failed to create notification stream: {:?}", e);
                     return;
                 }
             };
+
+            // Emit current value
+            if let Ok(Some(params)) = Self::fetch_ticket_parameters(&db).await {
+                last_params = Some(params.clone());
+                yield params;
+            }
 
             // Stream updates when notified, only if value changed
             while (notifications.next().await).is_some() {

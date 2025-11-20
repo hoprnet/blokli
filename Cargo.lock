@@ -1938,6 +1938,7 @@ dependencies = [
  "sea-orm",
  "sea-query",
  "smart-default",
+ "sqlx",
  "strum 0.27.2",
  "thiserror 2.0.17",
  "tokio",

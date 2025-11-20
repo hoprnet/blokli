@@ -44,6 +44,7 @@ sea-query = { workspace = true, default-features = false, features = [
   "with-chrono",
 ] }
 smart-default = { workspace = true }
+sqlx = { workspace = true }
 strum = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }

@@ -23,6 +23,7 @@ use blokli_chain_api::{
 };
 use blokli_chain_indexer::IndexerState;
 use blokli_chain_rpc::{rpc::RpcOperations, transport::ReqwestClient};
+use blokli_db::notifications::SqliteNotificationManager;
 use futures::stream::{Stream, StreamExt};
 use sea_orm::DatabaseConnection;
 use serde_json::Value;
@@ -72,6 +73,7 @@ pub struct AppState {
 }
 
 /// Build the Axum application router
+#[allow(clippy::too_many_arguments)]
 pub async fn build_app(
     db: DatabaseConnection,
     network: String,
@@ -80,6 +82,7 @@ pub async fn build_app(
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
     rpc_operations: Arc<RpcOperations<ReqwestClient>>,
+    sqlite_notification_manager: Option<SqliteNotificationManager>,
 ) -> ApiResult<Router> {
     let schema = build_schema(
         db,
@@ -90,6 +93,7 @@ pub async fn build_app(
         transaction_executor,
         transaction_store,
         rpc_operations,
+        sqlite_notification_manager,
     );
 
     let app_state = AppState {

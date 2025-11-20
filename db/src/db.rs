@@ -2,7 +2,8 @@ use std::time::Duration;
 
 use blokli_db_entity::prelude::{Account, Announcement};
 use migration::{MigratorChainLogs, MigratorIndex, MigratorTrait};
-use sea_orm::{ConnectOptions, Database, EntityTrait};
+use sea_orm::{ConnectOptions, Database, EntityTrait, SqlxSqliteConnector};
+use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tracing::log::LevelFilter;
 use validator::Validate;
 
@@ -11,6 +12,7 @@ use crate::{
     accounts::model_to_account_entry,
     errors::{DbSqlError, Result},
     events::EventBus,
+    notifications::{SqliteHookSender, SqliteNotification, SqliteNotificationManager},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, smart_default::SmartDefault, validator::Validate)]
@@ -43,6 +45,9 @@ pub struct BlokliDb {
     /// Event bus for broadcasting state changes
     pub(crate) event_bus: EventBus,
 
+    /// SQLite notification manager for update hooks (None for PostgreSQL)
+    pub(crate) sqlite_notification_manager: Option<SqliteNotificationManager>,
+
     #[allow(dead_code)]
     pub(crate) cfg: BlokliDbConfig,
 }
@@ -53,6 +58,7 @@ impl std::fmt::Debug for BlokliDb {
             .field("db", &self.db)
             .field("logs_db", &self.logs_db)
             .field("event_bus_subscribers", &self.event_bus.subscriber_count())
+            .field("sqlite_notification_manager", &self.sqlite_notification_manager)
             .field("cfg", &self.cfg)
             .finish()
     }
@@ -115,7 +121,7 @@ impl BlokliDb {
             ensure_sqlite_dir(logs_url)?;
         }
 
-        // Helper function to create connection options
+        // Helper function to create connection options for PostgreSQL
         let create_connection_opts = |url: &str| -> ConnectOptions {
             let mut opt = ConnectOptions::new(url.to_string());
             opt.max_connections(cfg.max_connections)
@@ -128,20 +134,81 @@ impl BlokliDb {
             opt
         };
 
-        // Establish primary database connection (index for SQLite, all tables for PostgreSQL)
-        let db = Database::connect(create_connection_opts(database_url))
-            .await
-            .map_err(|e| DbSqlError::Construction(format!("failed to connect to index database: {e}")))?;
+        // Create database connections with notification support
+        let (db, logs_db, sqlite_notification_manager) = if is_sqlite {
+            // Create SQLite notification manager
+            let (manager, sync_sender) = SqliteNotificationManager::new(100);
+            let hook_sender = SqliteHookSender::new(sync_sender);
 
-        // Establish logs database connection (only for SQLite)
-        let logs_db = if let Some(logs_url) = logs_database_url {
-            Some(
-                Database::connect(create_connection_opts(logs_url))
+            // Helper to create SQLite pool with update hooks
+            let create_sqlite_pool = |url: String, sender: SqliteHookSender| async move {
+                // Parse URL to extract path and mode
+                let connect_opts: SqliteConnectOptions = url
+                    .parse()
+                    .map_err(|e| DbSqlError::Construction(format!("invalid SQLite URL: {e}")))?;
+
+                let pool = SqlitePoolOptions::new()
+                    .max_connections(cfg.max_connections)
+                    .min_connections(1)
+                    .acquire_timeout(Duration::from_secs(8))
+                    .idle_timeout(Duration::from_secs(300))
+                    .max_lifetime(Duration::from_secs(1800))
+                    .after_connect({
+                        let sender = sender.clone();
+                        move |conn, _meta| {
+                            let sender = sender.clone();
+                            Box::pin(async move {
+                                let mut handle = conn
+                                    .lock_handle()
+                                    .await
+                                    .map_err(|e| sqlx::Error::Protocol(format!("failed to lock handle: {e}")))?;
+
+                                // Set up update hook to notify on chain_info changes
+                                handle.set_update_hook(move |result| {
+                                    if result.table == "chain_info" {
+                                        sender.send(SqliteNotification::ChainInfoUpdated);
+                                    }
+                                });
+
+                                Ok(())
+                            })
+                        }
+                    })
+                    .connect_with(connect_opts)
                     .await
-                    .map_err(|e| DbSqlError::Construction(format!("failed to connect to logs database: {e}")))?,
-            )
+                    .map_err(|e| DbSqlError::Construction(format!("failed to connect: {e}")))?;
+
+                Ok::<_, DbSqlError>(SqlxSqliteConnector::from_sqlx_sqlite_pool(pool))
+            };
+
+            // Create index database with hooks
+            let index_db = create_sqlite_pool(database_url.to_string(), hook_sender.clone()).await?;
+
+            // Create logs database with hooks (if provided)
+            let logs_db = if let Some(logs_url) = logs_database_url {
+                Some(create_sqlite_pool(logs_url.to_string(), hook_sender).await?)
+            } else {
+                None
+            };
+
+            (index_db, logs_db, Some(manager))
         } else {
-            None
+            // PostgreSQL: use standard SeaORM connection (uses LISTEN/NOTIFY instead)
+            let db = Database::connect(create_connection_opts(database_url))
+                .await
+                .map_err(|e| DbSqlError::Construction(format!("failed to connect to index database: {e}")))?;
+
+            let logs_db = if let Some(logs_url) = logs_database_url {
+                Some(
+                    Database::connect(create_connection_opts(logs_url))
+                        .await
+                        .map_err(|e| DbSqlError::Construction(format!("failed to connect to logs database: {e}")))?,
+                )
+            } else {
+                None
+            };
+
+            (db, logs_db, None)
         };
 
         // Apply migrations based on database backend
@@ -190,14 +257,16 @@ impl BlokliDb {
             db,
             logs_db,
             event_bus,
+            sqlite_notification_manager,
             cfg,
         })
     }
 
     /// Create an in-memory SQLite database for testing.
     ///
-    /// Uses SQLite's in-memory mode for fast testing without requiring external database services.
-    /// Uses dual in-memory databases (one for index, one for logs) to match production behavior.
+    /// Uses SQLite's in-memory mode with shared cache for fast testing without requiring
+    /// external database services. Uses dual in-memory databases (one for index, one for logs)
+    /// to match production behavior.
     ///
     /// # Returns
     ///
@@ -207,11 +276,21 @@ impl BlokliDb {
     ///
     /// Returns `DbSqlError` if connection or initialization fails
     pub async fn new_in_memory() -> Result<Self> {
-        // Use SQLite in-memory databases for testing (dual databases like production)
-        // Each call to :memory: creates a separate private database
-        let index_url = "sqlite::memory:";
-        let logs_url = "sqlite::memory:";
-        Self::new(index_url, Some(logs_url), Default::default()).await
+        use std::sync::atomic::{AtomicU64, Ordering};
+
+        // Atomic counter for unique database names across parallel test runs
+        static DB_COUNTER: AtomicU64 = AtomicU64::new(0);
+        let id = DB_COUNTER.fetch_add(1, Ordering::SeqCst);
+
+        // Use SQLite in-memory databases with shared cache for testing
+        // The shared cache mode allows multiple connections in the pool to access
+        // the same in-memory database, which is essential for:
+        // 1. Data visibility across connections
+        // 2. Update hooks firing when any connection modifies data
+        // Unique names (using counter) ensure test isolation in parallel runs
+        let index_url = format!("sqlite:file:index_{}?mode=memory&cache=shared", id);
+        let logs_url = format!("sqlite:file:logs_{}?mode=memory&cache=shared", id);
+        Self::new(&index_url, Some(&logs_url), Default::default()).await
     }
 
     /// Get the appropriate database connection for log-related operations.
@@ -238,6 +317,25 @@ impl BlokliDb {
     /// ```
     pub fn event_bus(&self) -> &EventBus {
         &self.event_bus
+    }
+
+    /// Get a reference to the SQLite notification manager.
+    ///
+    /// Returns `Some` for SQLite databases (including in-memory), `None` for PostgreSQL.
+    /// Use this to subscribe to real-time table change notifications.
+    ///
+    /// # Example
+    ///
+    /// ```rust,ignore
+    /// if let Some(manager) = db.sqlite_notification_manager() {
+    ///     let mut rx = manager.subscribe();
+    ///     while let Ok(notification) = rx.recv().await {
+    ///         // Handle notification
+    ///     }
+    /// }
+    /// ```
+    pub fn sqlite_notification_manager(&self) -> Option<&SqliteNotificationManager> {
+        self.sqlite_notification_manager.as_ref()
     }
 }
 
