@@ -183,6 +183,13 @@ jobs:
           google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
           login-artifact-registry: 'true'
           install-sdk: 'false'
+      - name: Update version (for security scans)
+        run: |
+          set -x
+          bump_version="${{ needs.upload-manifest.outputs.image_tag }}"
+          sed -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" bloklid/Cargo.toml > bloklid/Cargo.toml.new
+          mv bloklid/Cargo.toml.new bloklid/Cargo.toml
+          nix develop --command cargo generate-lockfile
       - name: Run Trivy vulnerability scanner (Nix-based)
         run: |
           # Use nix-lib Trivy scan with pre-fetched database
