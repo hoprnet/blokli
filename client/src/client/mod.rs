@@ -5,7 +5,7 @@ mod testing;
 mod transactions;
 
 use cynic::GraphQlResponse;
-use futures::{TryFutureExt, TryStreamExt};
+use futures::{StreamExt, TryFutureExt, TryStreamExt};
 #[cfg(feature = "testing")]
 pub use testing::{
     BlokliTestClient, BlokliTestState, BlokliTestStateMutator, BlokliTestStateSnapshot, NopStateMutator,
@@ -88,6 +88,7 @@ impl BlokliClient {
 
         Ok(client
             .stream()
+            .fuse()
             .map_err(ErrorKind::from)
             .try_filter_map(move |item| {
                 futures::future::ready(match item {
