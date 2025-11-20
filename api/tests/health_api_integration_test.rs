@@ -162,6 +162,7 @@ async fn setup_test_environment() -> anyhow::Result<TestContext> {
         transaction_executor,
         transaction_store,
         rpc_operations,
+        None, // SQLite notification manager not needed for tests
     )
     .await
     .expect("Failed to build app");
