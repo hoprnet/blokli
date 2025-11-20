@@ -456,6 +456,9 @@
               # Documentation and test data
               "docs/*"
 
+              # Helm templates (contain Go template syntax that yamlfmt can't parse)
+              "charts/blokli/templates/*"
+
               # Other specific files
               "bloklid/.dockerignore"
               "tests/pytest.ini"

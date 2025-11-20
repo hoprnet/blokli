@@ -1,11 +1,9 @@
 # Default values for blokli
 # This is a YAML-formatted file.
 # Declare variables to be passed into your templates.
-
 # -- Number of replicas for bloklid deployment
 # Note: bloklid is a singleton indexer and should typically run as 1 replica
 replicaCount: 1
-
 image:
   # -- Container image registry
   # Leave empty if using a registry path in repository (e.g., "ghcr.io/org/image")
@@ -17,17 +15,14 @@ image:
   pullPolicy: IfNotPresent
   # -- Container image tag (defaults to chart appVersion if not specified)
   tag: ""
-
 # -- Image pull secrets for private registries
 imagePullSecrets: []
 # - name: my-registry-secret
 
 # -- Override the chart name
 nameOverride: ""
-
 # -- Override the full release name
 fullnameOverride: ""
-
 serviceAccount:
   # -- Specifies whether a service account should be created
   create: true
@@ -36,27 +31,23 @@ serviceAccount:
   # -- The name of the service account to use.
   # If not set and create is true, a name is generated using the fullname template
   name: ""
-
 # -- Annotations to add to the pod
 podAnnotations: {}
-
 # -- Security context for the pod
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65532
   runAsGroup: 65532
   fsGroup: 65532
-
 # -- Security context for the bloklid container
 securityContext:
   allowPrivilegeEscalation: false
   capabilities:
     drop:
-    - ALL
+      - ALL
   readOnlyRootFilesystem: true
   runAsNonRoot: true
   runAsUser: 65532
-
 service:
   # -- Service type
   type: ClusterIP
@@ -64,7 +55,6 @@ service:
   port: 8080
   # -- Service annotations
   annotations: {}
-
 ingress:
   # -- Enable ingress for GraphQL API
   enabled: false
@@ -72,8 +62,8 @@ ingress:
   className: ""
   # -- Ingress annotations
   annotations: {}
-    # cert-manager.io/cluster-issuer: letsencrypt-prod
-    # nginx.ingress.kubernetes.io/ssl-redirect: "true"
+  # cert-manager.io/cluster-issuer: letsencrypt-prod
+  # nginx.ingress.kubernetes.io/ssl-redirect: "true"
   hosts:
     # -- Hostname for the GraphQL API
     - host: blokli.example.com
@@ -85,7 +75,6 @@ ingress:
   #  - secretName: blokli-tls
   #    hosts:
   #      - blokli.example.com
-
 # -- Resource requests and limits
 # Sizing guidance:
 #   Small (dev/test):     requests: 250m/512Mi, limits: 1000m/2Gi
@@ -98,7 +87,6 @@ resources:
   requests:
     cpu: 500m
     memory: 1Gi
-
 # Liveness probe configuration
 livenessProbe:
   # -- Enable liveness probe
@@ -116,7 +104,6 @@ livenessProbe:
   successThreshold: 1
   # -- Failure threshold for liveness probe
   failureThreshold: 3
-
 # Readiness probe configuration
 readinessProbe:
   # -- Enable readiness probe
@@ -134,7 +121,6 @@ readinessProbe:
   successThreshold: 1
   # -- Failure threshold for readiness probe
   failureThreshold: 3
-
 # Startup probe configuration
 startupProbe:
   # -- Enable startup probe
@@ -152,16 +138,12 @@ startupProbe:
   successThreshold: 1
   # -- Failure threshold for startup probe (allows up to 5 minutes for startup)
   failureThreshold: 30
-
 # -- Node selector for pod assignment
 nodeSelector: {}
-
 # -- Tolerations for pod assignment
 tolerations: []
-
 # -- Affinity rules for pod assignment
 affinity: {}
-
 # Persistence configuration for data directory
 persistence:
   # -- Enable persistence for data directory
@@ -179,7 +161,6 @@ persistence:
   annotations: {}
   # -- Selector for existing PV (optional)
   selector: {}
-
 # Database configuration
 database:
   # -- PostgreSQL host
@@ -197,7 +178,6 @@ database:
   existingSecret: ""
   # -- Maximum number of database connections
   maxConnections: 10
-
 # Bloklid configuration
 config:
   # -- HOPR network to index (e.g., dufour, rotsee)
@@ -208,7 +188,6 @@ config:
   maxRpcRequestsPerSec: 0
   # -- Data directory path (should match persistence mount path)
   dataDirectory: "/data"
-
   # Indexer settings
   indexer:
     # -- Enable fast sync mode
@@ -217,7 +196,6 @@ config:
     enableLogsSnapshot: false
     # -- URL for logs snapshot download (optional)
     logsSnapshotUrl: ""
-
     # Subscription behavior configuration
     subscription:
       # -- Capacity of the event bus buffer for channel events
@@ -229,7 +207,6 @@ config:
       # -- Batch size for Phase 1 historical channel queries
       # Higher values fetch more data per query but may increase latency
       batchSize: 100
-
   # API server configuration
   api:
     # -- Enable or disable the GraphQL API server
@@ -239,20 +216,17 @@ config:
     # -- Enable GraphQL Playground for development and testing
     # Recommended to set to false for production deployments
     playgroundEnabled: false
-
     # Health check configuration
     health:
       # -- Maximum indexer lag (blocks) before readiness fails
       maxIndexerLag: 10
       # -- Timeout for health check operations (ms)
       timeoutMs: 5000
-
   # Logging configuration
   logging:
     # -- Rust log level configuration
     # Examples: "info", "debug", "info,blokli_chain_indexer=debug"
     level: "info"
-
 # Monitoring configuration
 monitoring:
   # ServiceMonitor for Prometheus Operator
@@ -269,7 +243,6 @@ monitoring:
     scrapeTimeout: 10s
     # -- Metrics path (update when metrics endpoint is implemented)
     path: /metrics
-
 # Pod Disruption Budget
 podDisruptionBudget:
   # -- Enable PodDisruptionBudget
@@ -279,7 +252,6 @@ podDisruptionBudget:
   minAvailable: 1
   # -- Maximum unavailable pods
   # maxUnavailable: 1
-
 # Additional environment variables
 extraEnv: []
 # - name: CUSTOM_VAR

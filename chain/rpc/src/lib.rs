@@ -458,7 +458,7 @@ mod tests {
         assert_eq!(log.block_number, 200);
         assert_eq!(log.tx_index, 3);
         assert_eq!(log.log_index, primitive_types::U256::from(7));
-        assert_eq!(log.removed, false);
+        assert!(!log.removed);
     }
 
     #[test]
@@ -551,7 +551,7 @@ mod tests {
         assert_eq!(serializable.block_number, 150);
         assert_eq!(serializable.tx_index, 8);
         assert_eq!(serializable.log_index, 12);
-        assert_eq!(serializable.removed, false);
+        assert!(!serializable.removed);
         assert!(serializable.processed.is_none());
         assert!(serializable.processed_at.is_none());
         assert!(serializable.checksum.is_none());
@@ -607,8 +607,8 @@ mod tests {
         let log2 = create_test_log(100, 5, 10);
 
         assert_eq!(log1, log2);
-        assert!(!(log1 < log2));
-        assert!(!(log1 > log2));
+        assert!(log1 >= log2);
+        assert!(log1 <= log2);
     }
 
     #[test]

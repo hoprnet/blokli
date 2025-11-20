@@ -348,7 +348,8 @@ async fn readyz_handler(State(state): State<AppState>) -> impl IntoResponse {
 
     // 3. Check indexer lag
     if let (Some(indexed), Some(rpc_block)) = (indexed_block, rpc_block) {
-        let lag = rpc_block.saturating_sub(indexed as u64);
+        let indexed_u64 = u64::try_from(indexed).unwrap_or(0);
+        let lag = rpc_block.saturating_sub(indexed_u64);
         checks.indexer.last_indexed_block = Some(indexed);
         checks.indexer.lag = Some(lag);
 
