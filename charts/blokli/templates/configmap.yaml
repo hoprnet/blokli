@@ -23,7 +23,7 @@ data:
 
     # Network configuration
     network = "{{ .Values.config.network }}"
-    rpc_url = "{{ .Values.config.rpcUrl }}"
+    rpc_url = "{{ required "config.rpcUrl is required" .Values.config.rpcUrl }}"
     max_rpc_requests_per_sec = {{ .Values.config.maxRpcRequestsPerSec }}
 
     # Indexer settings
@@ -31,9 +31,7 @@ data:
     fast_sync = {{ .Values.config.indexer.fastSync }}
     {{- if .Values.config.indexer.enableLogsSnapshot }}
     enable_logs_snapshot = {{ .Values.config.indexer.enableLogsSnapshot }}
-    {{- if .Values.config.indexer.logsSnapshotUrl }}
-    logs_snapshot_url = "{{ .Values.config.indexer.logsSnapshotUrl }}"
-    {{- end }}
+    logs_snapshot_url = "{{ required "config.indexer.logsSnapshotUrl is required" .Values.config.indexer.logsSnapshotUrl }}"
     {{- end }}
 
     # Indexer subscription configuration

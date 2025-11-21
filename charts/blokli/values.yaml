@@ -1,268 +1,333 @@
 # Default values for blokli
-# This is a YAML-formatted file.
-# Declare variables to be passed into your templates.
-# -- Number of replicas for bloklid deployment
-# Note: bloklid is a singleton indexer and should typically run as 1 replica
-replicaCount: 1
+
+## @section Global Configuration ###
 image:
-  # -- Container image registry
-  # Leave empty if using a registry path in repository (e.g., "ghcr.io/org/image")
-  registry: ""
-  # -- Container image repository
-  # Example: "us-docker.pkg.dev/my-project/blokli/bloklid"
-  repository: ""
-  # -- Container image pull policy
-  pullPolicy: IfNotPresent
-  # -- Container image tag (defaults to chart appVersion if not specified)
+  ## @param image.registry Container image registry
+  ##
+  registry: "europe-west3-docker.pkg.dev/hoprassociation/docker-images"
+  ## @param image.repository Container image repository
+  ##
+  repository: "bloklid"
+  ## @param image.pullPolicy Container image pull policy
+  ##
+  pullPolicy: Always
+  ## @param image.tag Container image tag (defaults to chart appVersion if not specified)
+  ##
   tag: ""
-# -- Image pull secrets for private registries
+## @param imagePullSecrets Image pull secrets for private registries
+##
 imagePullSecrets: []
 # - name: my-registry-secret
 
-# -- Override the chart name
+## @param nameOverride Override the chart name
+##
 nameOverride: ""
-# -- Override the full release name
+## @param fullnameOverride Override the full release name
+##
 fullnameOverride: ""
 serviceAccount:
-  # -- Specifies whether a service account should be created
+  ## @param serviceAccount.create Specifies whether a service account should be created
+  ##
   create: true
-  # -- Annotations to add to the service account
+  ## @param serviceAccount.annotations Annotations to add to the service account
+  ##
   annotations: {}
-  # -- The name of the service account to use.
-  # If not set and create is true, a name is generated using the fullname template
+  ## @param serviceAccount.name The name of the service account to use. If not set and create is true, a name is generated using the fullname template
+  ##
   name: ""
-# -- Annotations to add to the pod
+## @param podAnnotations Annotations to add to the pod
 podAnnotations: {}
-# -- Security context for the pod
+
 podSecurityContext:
+
+  ## @param podSecurityContext.runAsNonRoot Run container as non-root user
+  ##
   runAsNonRoot: true
+  ## @param podSecurityContext.runAsUser User ID to run the container
+  ##
   runAsUser: 65532
+  ## @param podSecurityContext.runAsGroup Group ID to run the container
+  ##
   runAsGroup: 65532
+  ## @param podSecurityContext.fsGroup File system group ID
+  ##
   fsGroup: 65532
-# -- Security context for the bloklid container
+
 securityContext:
+  ## @param securityContext.allowPrivilegeEscalation Prevent privilege escalation
+  ##
   allowPrivilegeEscalation: false
   capabilities:
+    ## @param securityContext.capabilities.drop Capabilities to drop
+    ##
     drop:
       - ALL
+  ## @param securityContext.readOnlyRootFilesystem Mount root filesystem as read-only
+  ##
   readOnlyRootFilesystem: true
+  ## @param securityContext.runAsNonRoot Run container as non-root user
+  ##
   runAsNonRoot: true
+  ## @param securityContext.runAsUser User ID to run the container
+  ##
   runAsUser: 65532
 service:
-  # -- Service type
+  ## @param service.type Service type
+  ##
   type: ClusterIP
-  # -- Service port for GraphQL API
+  ## @param service.port Service port for GraphQL API
+  ##
   port: 8080
-  # -- Service annotations
+  ## @param service.annotations Service annotations
+  ##
   annotations: {}
 ingress:
-  # -- Enable ingress for GraphQL API
+  ## @param ingress.enabled Enable ingress for GraphQL API
+  ##
   enabled: false
-  # -- Ingress class name
+  ## @param ingress.className Ingress class name
+  ##
   className: ""
-  # -- Ingress annotations
+  ## @param ingress.annotations Ingress annotations
+  ##
   annotations: {}
   # cert-manager.io/cluster-issuer: letsencrypt-prod
-  # nginx.ingress.kubernetes.io/ssl-redirect: "true"
-  hosts:
-    # -- Hostname for the GraphQL API
-    - host: blokli.example.com
-      paths:
-        - path: /
-          pathType: Prefix
-  # -- TLS configuration for ingress
-  tls: []
-  #  - secretName: blokli-tls
-  #    hosts:
-  #      - blokli.example.com
-# -- Resource requests and limits
+
+  ## @param ingress.hostname Hostnames for the GraphQL API
+  ##
+  hostname: ""
+
+  ## @param ingress.tls Enable TLS configuration for ingress. It will reference a secret named <hostname>-tls. Where hostname dots are replaced with dashes.
+  ##
+  tls: true
+
+## @param resources Resource requests and limits
+##
 # Sizing guidance:
 #   Small (dev/test):     requests: 250m/512Mi, limits: 1000m/2Gi
 #   Medium (production):  requests: 500m/1Gi,   limits: 2000m/4Gi
 #   Large (high traffic): requests: 1000m/2Gi,  limits: 4000m/8Gi
-resources:
-  limits:
-    cpu: 2000m
-    memory: 4Gi
-  requests:
-    cpu: 500m
-    memory: 1Gi
+resources: {}
+
 # Liveness probe configuration
 livenessProbe:
-  # -- Enable liveness probe
+  ## @param livenessProbe.enabled Enable liveness probe
+  ##
   enabled: true
-  httpGet:
-    path: /healthz
-    port: http
-  # -- Initial delay before liveness probe starts
+  ## @param livenessProbe.initialDelaySeconds Initial delay before liveness probe starts
+  ##
   initialDelaySeconds: 30
-  # -- Period between liveness probe checks
+  ## @param livenessProbe.periodSeconds Period between liveness probe checks
+  ##
   periodSeconds: 10
-  # -- Timeout for liveness probe
+  ## @param livenessProbe.timeoutSeconds Timeout for liveness probe
+  ##
   timeoutSeconds: 5
-  # -- Success threshold for liveness probe
+  ## @param livenessProbe.successThreshold Success threshold for liveness probe
+  ##
   successThreshold: 1
-  # -- Failure threshold for liveness probe
+  ## @param livenessProbe.failureThreshold Failure threshold for liveness probe
+  ##
   failureThreshold: 3
 # Readiness probe configuration
 readinessProbe:
-  # -- Enable readiness probe
+  ## @param readinessProbe.enabled Enable readiness probe
+  ##
   enabled: true
-  httpGet:
-    path: /readyz
-    port: http
-  # -- Initial delay before readiness probe starts
+  ## @param readinessProbe.initialDelaySeconds Initial delay before readiness probe starts
+  ##
   initialDelaySeconds: 10
-  # -- Period between readiness probe checks
+  ## @param readinessProbe.periodSeconds Period between readiness probe checks
+  ##
   periodSeconds: 5
-  # -- Timeout for readiness probe
+  ## @param readinessProbe.timeoutSeconds Timeout for readiness probe
+  ##
   timeoutSeconds: 3
-  # -- Success threshold for readiness probe
+  ## @param readinessProbe.successThreshold Success threshold for readiness probe
+  ##
   successThreshold: 1
-  # -- Failure threshold for readiness probe
+  ## @param readinessProbe.failureThreshold Failure threshold for readiness probe
+  ##
   failureThreshold: 3
 # Startup probe configuration
 startupProbe:
-  # -- Enable startup probe
+  ## @param startupProbe.enabled Enable startup probe
+  ##
   enabled: true
-  httpGet:
-    path: /healthz
-    port: http
-  # -- Initial delay before startup probe starts
+  ## @param startupProbe.initialDelaySeconds Initial delay before startup probe starts
+  ##
   initialDelaySeconds: 0
-  # -- Period between startup probe checks
+  ## @param startupProbe.periodSeconds Period between startup probe checks
+  ##
   periodSeconds: 10
-  # -- Timeout for startup probe
+  ## @param startupProbe.timeoutSeconds Timeout for startup probe
+  ##
   timeoutSeconds: 3
-  # -- Success threshold for startup probe
+  ## @param startupProbe.successThreshold Success threshold for startup probe
+  ##
   successThreshold: 1
-  # -- Failure threshold for startup probe (allows up to 5 minutes for startup)
+  ## @param startupProbe.failureThreshold Failure threshold for startup probe (allows up to 5 minutes for startup)
+  ##
   failureThreshold: 30
-# -- Node selector for pod assignment
+## @param nodeSelector Node selector for pod assignment
+##
 nodeSelector: {}
-# -- Tolerations for pod assignment
+## @param tolerations Tolerations for pod assignment
+##
 tolerations: []
-# -- Affinity rules for pod assignment
+## @param affinity Affinity rules for pod assignment
+##
 affinity: {}
-# Persistence configuration for data directory
-persistence:
-  # -- Enable persistence for data directory
-  enabled: true
-  # -- Storage class for PVC
-  # If undefined (the default) or set to null, no storageClassName spec is set,
-  # choosing the default provisioner
-  storageClass: ""
-  # -- Access mode for PVC
-  accessModes:
-    - ReadWriteOnce
-  # -- Size of the PVC
-  size: 10Gi
-  # -- Annotations for the PVC
-  annotations: {}
-  # -- Selector for existing PV (optional)
-  selector: {}
-# Database configuration
-database:
-  # -- PostgreSQL host
-  host: "postgresql"
-  # -- PostgreSQL port
-  port: 5432
-  # -- PostgreSQL database name
-  database: "bloklid"
-  # -- PostgreSQL username
-  username: "bloklid"
-  # -- PostgreSQL password (ignored if existingSecret is set)
-  password: ""
-  # -- Name of existing secret containing database credentials
-  # Secret should contain keys: DB_USERNAME and DB_PASSWORD
-  existingSecret: ""
-  # -- Maximum number of database connections
-  maxConnections: 10
-# Bloklid configuration
-config:
-  # -- HOPR network to index (e.g., dufour, rotsee)
-  network: "dufour"
-  # -- Blockchain RPC URL
-  rpcUrl: "https://rpc.example.com"
-  # -- Maximum RPC requests per second (0 = unlimited)
-  maxRpcRequestsPerSec: 0
-  # -- Data directory path (should match persistence mount path)
-  dataDirectory: "/data"
-  # Indexer settings
-  indexer:
-    # -- Enable fast sync mode
-    fastSync: true
-    # -- Enable logs snapshot feature
-    enableLogsSnapshot: false
-    # -- URL for logs snapshot download (optional)
-    logsSnapshotUrl: ""
-    # Subscription behavior configuration
-    subscription:
-      # -- Capacity of the event bus buffer for channel events
-      # Higher values prevent overflow but use more memory
-      eventBusCapacity: 1000
-      # -- Capacity of the shutdown signal buffer
-      # Typically a small value is sufficient
-      shutdownSignalCapacity: 10
-      # -- Batch size for Phase 1 historical channel queries
-      # Higher values fetch more data per query but may increase latency
-      batchSize: 100
-  # API server configuration
-  api:
-    # -- Enable or disable the GraphQL API server
-    enabled: true
-    # -- Address and port for the API server to bind to
-    bindAddress: "0.0.0.0:8080"
-    # -- Enable GraphQL Playground for development and testing
-    # Recommended to set to false for production deployments
-    playgroundEnabled: false
-    # Health check configuration
-    health:
-      # -- Maximum indexer lag (blocks) before readiness fails
-      maxIndexerLag: 10
-      # -- Timeout for health check operations (ms)
-      timeoutMs: 5000
-  # Logging configuration
-  logging:
-    # -- Rust log level configuration
-    # Examples: "info", "debug", "info,blokli_chain_indexer=debug"
-    level: "info"
+
 # Monitoring configuration
 monitoring:
-  # ServiceMonitor for Prometheus Operator
   serviceMonitor:
-    # -- Enable ServiceMonitor creation
+    ## @param monitoring.serviceMonitor.enabled Enable ServiceMonitor creation
+    ##
     enabled: false
-    # -- ServiceMonitor namespace (defaults to release namespace)
+    ## @param monitoring.serviceMonitor.namespace ServiceMonitor namespace (defaults to release namespace)
+    ##
     namespace: ""
-    # -- ServiceMonitor labels
+    ## @param monitoring.serviceMonitor.labels ServiceMonitor labels
+    ##
     labels: {}
-    # -- Scrape interval
+    ## @param monitoring.serviceMonitor.interval Scrape interval
+    ##
     interval: 30s
-    # -- Scrape timeout
+    ## @param monitoring.serviceMonitor.scrapeTimeout Scrape timeout
+    ##
     scrapeTimeout: 10s
-    # -- Metrics path (update when metrics endpoint is implemented)
+    ## @param monitoring.serviceMonitor.path Metrics path (update when metrics endpoint is implemented)
+    ##
     path: /metrics
-# Pod Disruption Budget
-podDisruptionBudget:
-  # -- Enable PodDisruptionBudget
-  enabled: false
-  # -- Minimum available pods
-  # Set minAvailable OR maxUnavailable, not both
-  minAvailable: 1
-  # -- Maximum unavailable pods
-  # maxUnavailable: 1
-# Additional environment variables
+
+## @param extraEnv Additional environment variables
+##
 extraEnv: []
 # - name: CUSTOM_VAR
 #   value: "custom-value"
 
-# Additional volumes
+## @param extraVolumes Additional volumes
+##
 extraVolumes: []
 # - name: custom-volume
 #   emptyDir: {}
 
-# Additional volume mounts
+## @param extraVolumeMounts Additional volume mounts
+##
 extraVolumeMounts: []
 # - name: custom-volume
 #   mountPath: /custom-path
+
+## @section Blokli Application Configuration ###
+
+# Persistence configuration for data directory
+persistence:
+  ## @param persistence.enabled Enable persistence for data directory
+  ##
+  enabled: true
+  ## @param persistence.storageClass Storage class for PVC
+  ##
+  # If undefined (the default) or set to null, no storageClassName spec is set,
+  # choosing the default provisioner
+  storageClass: ""
+  ## @param persistence.accessModes Access mode for PVC
+  ##
+  accessModes:
+    - ReadWriteOnce
+  ## @param persistence.size Size of the PVC
+  ##
+  size: 10Gi
+  ## @param persistence.annotations Annotations for the PVC
+  ##
+  annotations: {}
+  ## @param persistence.selector Selector for existing PV (optional)
+  ##
+  selector: {}
+# Database configuration
+database:
+  ## @param database.host PostgreSQL host
+  ##
+  host: "postgresql"
+  ## @param database.port PostgreSQL port
+  ##
+  port: 5432
+  ## @param database.database PostgreSQL database name
+  ##
+  database: "bloklid"
+  ## @param database.username PostgreSQL username
+  ##
+  username: "bloklid"
+  ## @param database.password PostgreSQL password (ignored if existingSecret is set)
+  ##
+  password: ""
+  ## @param database.existingSecret Name of existing secret containing database credentials
+  ##
+  ## Secret should contain keys: DB_USERNAME and DB_PASSWORD
+  existingSecret: ""
+  ## @param database.maxConnections Maximum number of database connections
+  ##
+  maxConnections: 10
+# Bloklid configuration
+config:
+  ## @param config.network HOPR network to index (e.g., dufour, rotsee)
+  ##
+  network: "dufour"
+  ## @param config.rpcUrl Blockchain RPC URL
+  ##
+  rpcUrl: ""
+  ## @param config.maxRpcRequestsPerSec Maximum RPC requests per second (0 = unlimited)
+  ##
+  maxRpcRequestsPerSec: 0
+  ## @param config.dataDirectory Data directory path (should match persistence mount path)
+  ##
+  dataDirectory: "/data"
+  # Indexer settings
+  indexer:
+    ## @param config.indexer.fastSync Enable fast sync mode
+    ##
+    fastSync: true
+    ## @param config.indexer.enableLogsSnapshot Enable logs snapshot feature
+    ##
+    enableLogsSnapshot: false
+    ## @param config.indexer.logsSnapshotUrl URL for logs snapshot download (optional)
+    ##
+    logsSnapshotUrl: ""
+    # Subscription behavior configuration
+    subscription:
+      ## @param config.indexer.subscription.eventBusCapacity Capacity of the event bus buffer for channel events
+      ##
+      # Higher values prevent overflow but use more memory
+      eventBusCapacity: 1000
+      ## @param config.indexer.subscription.shutdownSignalCapacity Capacity of the shutdown signal buffer
+      ##
+      # Typically a small value is sufficient
+      shutdownSignalCapacity: 10
+      ## @param config.indexer.subscription.batchSize Batch size for Phase 1 historical channel queries
+      ##
+      # Higher values fetch more data per query but may increase latency
+      batchSize: 100
+  # API server configuration
+  api:
+    ## @param config.api.enabled Enable or disable the GraphQL API server
+    ##
+    enabled: true
+    ## @param config.api.bindAddress Address and port for the API server to bind to
+    ##
+    bindAddress: "0.0.0.0:8080"
+    ## @param config.api.playgroundEnabled Enable GraphQL Playground for development and testing. Recommended to set to false for production deployments
+    ##
+    playgroundEnabled: false
+    # Health check configuration
+    health:
+      ## @param config.api.health.maxIndexerLag Maximum indexer lag (blocks) before readiness fails
+      ##
+      maxIndexerLag: 10
+      ## @param config.api.health.timeoutMs Timeout for health check operations (ms)
+      ##
+      timeoutMs: 5000
+  # Logging configuration
+  logging:
+    ## @param config.logging.level Rust log level configuration. Examples: "info", "debug", "info,blokli_chain_indexer=debug"
+    ##
+    level: "info"

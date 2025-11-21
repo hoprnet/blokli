@@ -229,3 +229,31 @@ generate-target-db-schema-svg:
       ghcr.io/mermaid-js/mermaid-cli/mermaid-cli \
       -i target-db-schema.mmd -o target-db-schema.svg
     @echo "SVG stored at ./design/target-db-schema.svg"
+
+
+# ============================================================================
+# Helm Chart Commands
+# ============================================================================
+
+# Template Helm chart to YAML files
+helm-template:
+    helm template blokli ./charts/blokli -f ./charts/blokli/values-testing.yaml
+
+# Lint Helm chart for issues
+helm-lint:
+    helm lint ./charts/blokli -f ./charts/blokli/values-testing.yaml
+
+helm-docs:
+    $HOME/.npm-global/bin/readme-generator  --values ./charts/blokli/values.yaml --readme ./charts/blokli/README.md --schema "/tmp/schema.json" 
+
+# Package Helm chart for distribution
+helm-package:
+    helm package ./charts/blokli
+
+helm-login:
+  #!/usr/bin/env bash
+  token=$(gcloud auth print-access-token)
+  helm registry login -u oauth2accesstoken --password "$token" https://europe-west3-docker.pkg.dev
+
+helm-push:
+    @echo "Pushing Helm chart to repository (not implemented)"

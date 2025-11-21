@@ -5,7 +5,7 @@ metadata:
   labels:
     {{- include "blokli.labels" . | nindent 4 }}
 spec:
-  replicas: {{ .Values.replicaCount }}
+  replicas: 1
   selector:
     matchLabels:
       {{- include "blokli.selectorLabels" . | nindent 6 }}
@@ -24,7 +24,7 @@ spec:
       imagePullSecrets:
         {{- toYaml . | nindent 8 }}
       {{- end }}
-      serviceAccountName: {{ include "blokli.serviceAccountName" . }}
+      serviceAccountName: {{ include "blokli.serviceAccountName" . }}-sa
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
       containers:
@@ -61,8 +61,8 @@ spec:
         {{- if .Values.livenessProbe.enabled }}
         livenessProbe:
           httpGet:
-            path: {{ .Values.livenessProbe.httpGet.path }}
-            port: {{ .Values.livenessProbe.httpGet.port }}
+            path: /healthz
+            port: http
           initialDelaySeconds: {{ .Values.livenessProbe.initialDelaySeconds }}
           periodSeconds: {{ .Values.livenessProbe.periodSeconds }}
           timeoutSeconds: {{ .Values.livenessProbe.timeoutSeconds }}
@@ -72,8 +72,8 @@ spec:
         {{- if .Values.readinessProbe.enabled }}
         readinessProbe:
           httpGet:
-            path: {{ .Values.readinessProbe.httpGet.path }}
-            port: {{ .Values.readinessProbe.httpGet.port }}
+            path: /readyz
+            port: http
           initialDelaySeconds: {{ .Values.readinessProbe.initialDelaySeconds }}
           periodSeconds: {{ .Values.readinessProbe.periodSeconds }}
           timeoutSeconds: {{ .Values.readinessProbe.timeoutSeconds }}
@@ -83,8 +83,8 @@ spec:
         {{- if .Values.startupProbe.enabled }}
         startupProbe:
           httpGet:
-            path: {{ .Values.startupProbe.httpGet.path }}
-            port: {{ .Values.startupProbe.httpGet.port }}
+            path: /healthz
+            port: http
           initialDelaySeconds: {{ .Values.startupProbe.initialDelaySeconds }}
           periodSeconds: {{ .Values.startupProbe.periodSeconds }}
           timeoutSeconds: {{ .Values.startupProbe.timeoutSeconds }}
@@ -92,7 +92,16 @@ spec:
           failureThreshold: {{ .Values.startupProbe.failureThreshold }}
         {{- end }}
         resources:
+        {{- if .Values.resources -}}
           {{- toYaml .Values.resources | nindent 10 }}
+        {{- else }}
+          limits:
+            cpu: 2000m
+            memory: 4Gi
+          requests:
+            cpu: 500m
+            memory: 1Gi
+        {{- end }}
         volumeMounts:
         - name: config
           mountPath: /etc/blokli
