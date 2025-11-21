@@ -4,8 +4,11 @@ use futures::{Stream, TryStreamExt};
 use super::BlokliClient;
 use crate::api::{
     AccountSelector, BlokliSubscriptionClient, ChannelSelector, Result,
-    internal::{AccountVariables, ChannelsVariables, SubscribeAccounts, SubscribeChannels, SubscribeGraph},
-    types::{Account, Channel, OpenedChannelsGraphEntry},
+    internal::{
+        AccountVariables, ChannelsVariables, SubscribeAccounts, SubscribeChannels, SubscribeGraph,
+        SubscribeTicketParams,
+    },
+    types::{Account, Channel, OpenedChannelsGraphEntry, TicketParameters},
 };
 
 impl BlokliSubscriptionClient for BlokliClient {
@@ -34,5 +37,12 @@ impl BlokliSubscriptionClient for BlokliClient {
         Ok(self
             .build_subscription_stream(SubscribeGraph::build(()))?
             .try_filter_map(|item| futures::future::ok(Some(item.opened_channel_graph_updated))))
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    fn subscribe_ticket_params(&self) -> Result<impl Stream<Item = Result<TicketParameters>> + Send> {
+        Ok(self
+            .build_subscription_stream(SubscribeTicketParams::build(()))?
+            .try_filter_map(|item| futures::future::ok(Some(item.ticket_parameters_updated))))
     }
 }

@@ -4,32 +4,120 @@ env:
   CARGO_TERM_COLOR: always
 permissions:
   contents: read
+  security-events: write
 on:
   workflow_call:
     inputs:
-      branch:
+      source_branch:
         required: true
         type: string
       version_type:
         required: true
         type: string
+    outputs:
+      image_tag:
+        description: "Docker image tag (without architecture suffix)"
+        value: ${{ jobs.upload-manifest.outputs.image_tag }}
+      manifest_url:
+        description: "Multi-arch manifest URL"
+        value: ${{ jobs.upload-manifest.outputs.manifest_url }}
 concurrency:
   group: ${{ github.ref }}-build-docker
   cancel-in-progress: true
 jobs:
-  build-docker:
-    name: Docker
+  build-docker-images:
+    name: Build Docker (${{ matrix.arch }})
     runs-on: self-hosted-hoprnet-bigger
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            nix_arch: x86_64-linux
+            nix_package: bloklid-docker-amd64
+            # Disabled until GitHub runner supports aarch64
+            # - arch: arm64
+            #   nix_arch: aarch64-linux
+            #   nix_package: bloklid-docker-aarch64
+    outputs:
+      image_tag: ${{ steps.bump.outputs.bump_version }}
+      docker_tag: ${{ steps.bump.outputs.DOCKER_TAG }}
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
         with:
           disable-sudo: true
           egress-policy: audit
-      - name: Checkout hoprnet repository
+      - name: Checkout repository
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
-          ref: ${{ inputs.branch }}
+          ref: ${{ inputs.source_branch }}
+      - name: Install Nix
+        uses: cachix/install-nix-action@7be5dee1421f63d07e71ce6e0a9f8a4b07c2a487 # v31
+      - name: Use Nix Cache
+        uses: cachix/cachix-action@0fc020193b5a1fa3ac4575aa3a7d3aa6a35435ad # v16
+        with:
+          name: blokli
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+        env:
+          USER: runner
+      - name: Update version
+        id: bump
+        run: |
+          set -x
+          current_version=$(grep -E '^version\s*=' bloklid/Cargo.toml | awk -F\" '{print $2}')
+          if [[ "${{ inputs.version_type }}" == "commit" ]]; then
+            bump_version=${current_version}+commit.$(git rev-parse --short HEAD)
+            echo "bump_version=${bump_version}" | tee -a $GITHUB_OUTPUT
+          elif [[ "${{ inputs.version_type }}" == "pr" ]]; then
+            bump_version=${current_version}+pr.${{ github.event.pull_request.number }}
+            echo "bump_version=${bump_version}" | tee -a $GITHUB_OUTPUT
+          elif [[ "${{ inputs.version_type }}" == "release" ]]; then
+            echo "bump_version=${current_version}" | tee -a $GITHUB_OUTPUT
+          else
+            echo "Invalid version type"
+            exit 1
+          fi
+          sed -i.bak -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" bloklid/Cargo.toml
+          nix develop --command cargo generate-lockfile
+          rm bloklid/Cargo.toml.bak
+          echo "DOCKER_TAG=${bump_version/+/-}" | tee -a $GITHUB_OUTPUT
+      - name: Build Docker image
+        run: |
+          # Build Docker image for this architecture
+          nix build -L .#${{ matrix.nix_package }}
+
+          # Create output directory for artifacts
+          mkdir -p docker-images
+
+          # Copy the built image
+          cp result docker-images/${{ matrix.arch }}.tar.gz
+      - name: Upload Docker image artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image-${{ matrix.arch }}
+          path: docker-images/${{ matrix.arch }}.tar.gz
+          retention-days: 1
+  upload-manifest:
+    name: Upload Multi-Arch Manifest
+    runs-on: self-hosted-hoprnet-bigger
+    needs: build-docker-images
+    outputs:
+      image_tag: ${{ needs.build-docker-images.outputs.image_tag }}
+      docker_tag: ${{ needs.build-docker-images.outputs.docker_tag }}
+      manifest_url: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ needs.build-docker-images.outputs.docker_tag }}
+      image_url_amd64: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ needs.build-docker-images.outputs.docker_tag }}-linux-amd64
+      # image_url_arm64: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ needs.build-docker-images.outputs.docker_tag }}-linux-arm64
+      # Re-enable when aarch64 runner is available
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
+        with:
+          disable-sudo: true
+          egress-policy: audit
+      - name: Checkout repository
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+        with:
+          ref: ${{ inputs.source_branch }}
       - name: Install Nix
         uses: cachix/install-nix-action@7be5dee1421f63d07e71ce6e0a9f8a4b07c2a487 # v31
       - name: Use Nix Cache
@@ -46,33 +134,154 @@ jobs:
           google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
           login-artifact-registry: 'true'
           install-sdk: 'false'
-      - name: Update version
-        id: bump
+      - name: Update version (for manifest build)
         run: |
           set -x
-          current_version=$(grep -E '^version\s*=' bloklid/Cargo.toml | awk -F\" '{print $2}')
-          if [[ "${{ inputs.version_type }}" == "commit" ]]; then
-            bump_version=${current_version}+commit.$(git rev-parse --short HEAD)
-          elif [[ "${{ inputs.version_type }}" == "pr" ]]; then
-            bump_version=${current_version}+pr.${{ github.event.pull_request.number }}
-          elif [[ "${{ inputs.version_type }}" == "release" ]]; then
-            bump_version=${current_version}
-          else
-            echo "Invalid version type"
-            exit 1
-          fi
-          sed -i.bak -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" bloklid/Cargo.toml
-          ## TODO Need to regenerate the lockfile in nix
-          #nix develop --command cargo generate-lockfile
-          rm bloklid/Cargo.toml.bak
-          bump_version=${bump_version/+/-} # Replace + with - for docker tag compatibility
-          if [[ "${{ inputs.version_type }}" == "pr" ]]; then
-            echo "DOCKER_TAG="${{ vars.DOCKER_IMAGE_REGISTRY }}"/bloklid:${bump_version},${{ vars.DOCKER_IMAGE_REGISTRY}}/bloklid:latest" | tee -a $GITHUB_OUTPUT
-          else
-            echo "DOCKER_TAG="${{ vars.DOCKER_IMAGE_REGISTRY }}"/bloklid:${bump_version}" | tee -a $GITHUB_OUTPUT
-          fi
-      - name: Build docker image
-        run: nix run -L .#bloklid-docker-build-and-upload
+          bump_version="${{ needs.build-docker-images.outputs.image_tag }}"
+          sed -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" bloklid/Cargo.toml > bloklid/Cargo.toml.new
+          mv bloklid/Cargo.toml.new bloklid/Cargo.toml
+          nix develop --command cargo generate-lockfile
+      - name: Upload multi-arch manifest and images
+        run: |
+          # Use nix-lib multi-arch upload app to:
+          # 1. Build manifest with both architectures
+          # 2. Upload platform-specific images (linux-amd64, linux-arm64)
+          # 3. Create and push OCI manifest list
+          nix run -L .#bloklid-docker-manifest-upload
         env:
           GOOGLE_ACCESS_TOKEN: ${{ steps.gcp.outputs.access_token }}
-          IMAGE_TARGET: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ steps.bump.outputs.DOCKER_TAG }}
+          IMAGE_TARGET: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ needs.build-docker-images.outputs.docker_tag }}
+  security-scan:
+    name: Security Scan (${{ matrix.arch }})
+    runs-on: self-hosted-hoprnet-bigger
+    needs: upload-manifest
+    strategy:
+      matrix:
+        arch: [amd64] # Only amd64 until runner supports aarch64
+        # arch: [amd64, arm64]  # Re-enable when aarch64 runner available
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
+        with:
+          disable-sudo: true
+          egress-policy: audit
+      - name: Checkout repository
+        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
+      - name: Install Nix
+        uses: cachix/install-nix-action@7be5dee1421f63d07e71ce6e0a9f8a4b07c2a487 # v31
+      - name: Use Nix Cache
+        uses: cachix/cachix-action@0fc020193b5a1fa3ac4575aa3a7d3aa6a35435ad # v16
+        with:
+          name: blokli
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+        env:
+          USER: runner
+      - name: Setup GCP
+        id: gcp
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@12c56020e16036982e6cc529848edeedfc705865 # master
+        with:
+          google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
+          login-artifact-registry: 'true'
+          install-sdk: 'false'
+      - name: Update version (for security scans)
+        run: |
+          set -x
+          bump_version="${{ needs.upload-manifest.outputs.image_tag }}"
+          sed -i.bak -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" bloklid/Cargo.toml
+          nix develop --command cargo generate-lockfile
+          rm bloklid/Cargo.toml.bak
+      - name: Run Trivy vulnerability scanner (Nix-based)
+        run: |
+          # Use nix-lib Trivy scan with pre-fetched database
+          # This generates both SARIF and table reports
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            nix build -L .#bloklid-docker-amd64-scan
+            SCAN_PATH="./result"
+          else
+            nix build -L .#bloklid-docker-aarch64-scan
+            SCAN_PATH="./result"
+          fi
+
+          # Copy SARIF report for upload
+          cp "$SCAN_PATH/scan-report.sarif" trivy-results-${{ matrix.arch }}.sarif
+
+          # Display table summary
+          echo "=== Trivy Scan Summary ==="
+          cat "$SCAN_PATH/scan-summary.txt" || echo "No vulnerabilities summary available"
+          echo "=========================="
+      - name: Upload Trivy results to GitHub Security
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-results-${{ matrix.arch }}.sarif
+          category: trivy-${{ matrix.arch }}
+      - name: Smoke test - Verify container starts
+        run: |
+          # Determine image URL based on architecture
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            IMAGE_URL="${{ needs.upload-manifest.outputs.image_url_amd64 }}"
+          else
+            IMAGE_URL="${{ needs.upload-manifest.outputs.image_url_arm64 }}"
+          fi
+
+          # Pull the image for smoke testing
+          docker pull "$IMAGE_URL"
+
+          # Start container in background with --help flag
+          # This verifies the entrypoint works and binary is functional
+          container_id=$(docker run -d "$IMAGE_URL" --help)
+
+          # Wait for container to complete (max 30 seconds)
+          timeout=30
+          elapsed=0
+          while [ $elapsed -lt $timeout ]; do
+            status=$(docker inspect --format='{{.State.Status}}' $container_id)
+            if [ "$status" = "exited" ]; then
+              break
+            fi
+            sleep 1
+            elapsed=$((elapsed + 1))
+          done
+
+          # Check exit code
+          exit_code=$(docker inspect --format='{{.State.ExitCode}}' $container_id)
+
+          # Show logs for debugging
+          echo "=== Container logs ==="
+          docker logs $container_id
+          echo "======================"
+
+          # Cleanup
+          docker rm $container_id
+
+          # Verify success
+          if [ "$exit_code" -ne 0 ]; then
+            echo "Error: Container exited with code $exit_code"
+            exit 1
+          fi
+
+          echo "✓ Smoke test passed - container started successfully"
+      - name: Generate SBOM (Nix-based)
+        if: always()
+        run: |
+          # Use nix-lib SBOM generation with Syft
+          # Generates both SPDX and CycloneDX formats
+          if [ "${{ matrix.arch }}" = "amd64" ]; then
+            nix build -L .#bloklid-docker-amd64-sbom
+            SBOM_PATH="./result"
+          else
+            nix build -L .#bloklid-docker-aarch64-sbom
+            SBOM_PATH="./result"
+          fi
+
+          # Copy CycloneDX SBOM for compatibility
+          cp "$SBOM_PATH/sbom.cyclonedx.json" sbom-${{ matrix.arch }}.json
+      - name: Upload SBOM artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom-${{ matrix.arch }}
+          path: |
+            sbom-${{ matrix.arch }}.json
+            result/sbom.*.json
+          retention-days: 90

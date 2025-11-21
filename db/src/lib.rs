@@ -14,6 +14,7 @@ pub mod errors;
 pub mod events;
 pub mod info;
 pub mod logs;
+pub mod notifications;
 pub mod state_queries;
 
 use std::path::PathBuf;

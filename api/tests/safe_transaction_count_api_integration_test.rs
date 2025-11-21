@@ -188,6 +188,7 @@ async fn setup_test_environment() -> anyhow::Result<TestContext> {
         transaction_executor,
         transaction_store,
         rpc_operations,
+        None, // No SQLite notification manager for safe tx count tests
     );
 
     Ok(TestContext {

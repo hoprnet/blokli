@@ -40,6 +40,10 @@ pub struct ApiConfig {
     /// Contract addresses for HOPR smart contracts
     #[serde(default = "default_contract_addresses")]
     pub contract_addresses: ContractAddresses,
+
+    /// Health check configuration
+    #[serde(default)]
+    pub health: HealthConfig,
 }
 
 /// TLS configuration
@@ -50,6 +54,35 @@ pub struct TlsConfig {
 
     /// Path to TLS private key file
     pub key_path: PathBuf,
+}
+
+/// Health check configuration
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HealthConfig {
+    /// Maximum allowed indexer lag (in blocks) before readiness check fails
+    #[serde(default = "default_max_indexer_lag")]
+    pub max_indexer_lag: u64,
+
+    /// Timeout for health check queries (in milliseconds)
+    #[serde(default = "default_health_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+impl Default for HealthConfig {
+    fn default() -> Self {
+        Self {
+            max_indexer_lag: default_max_indexer_lag(),
+            timeout_ms: default_health_timeout_ms(),
+        }
+    }
+}
+
+fn default_max_indexer_lag() -> u64 {
+    10
+}
+
+fn default_health_timeout_ms() -> u64 {
+    5000
 }
 
 impl Default for ApiConfig {
@@ -63,6 +96,7 @@ impl Default for ApiConfig {
             chain_id: default_chain_id(),
             rpc_url: default_rpc_url(),
             contract_addresses: default_contract_addresses(),
+            health: HealthConfig::default(),
         }
     }
 }

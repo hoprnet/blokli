@@ -362,6 +362,39 @@ cargo doc --package hopr-bindings --open
 - Implement DataLoader pattern for N+1 query prevention
 - Support GraphQL subscriptions via Server-Sent Events (SSE)
 
+### Database Notifications
+
+Blokli uses database-native notification mechanisms for real-time GraphQL subscriptions:
+
+**PostgreSQL (Production)**:
+
+- Database triggers automatically send NOTIFY when data changes
+- API subscriptions use LISTEN to receive notifications
+- Zero polling overhead - fully event-driven
+- Supports horizontal scaling (multiple API instances can LISTEN to same channel)
+- Example: `ticket_params_updated` channel notifies when ticket price or winning probability changes
+
+**SQLite (Tests/Development)**:
+
+- Falls back to polling with 1-second interval
+- Used in test environments via `BlokliDb::new_in_memory()`
+- Simplified implementation for fast test execution
+
+**Implementation Pattern**:
+
+When adding new subscriptions that need real-time updates:
+
+1. Create PostgreSQL trigger in a new migration (see `m017_add_ticket_params_notify_trigger.rs`)
+2. Create notification stream abstraction in `api/src/notifications.rs`
+3. Use the stream in your subscription resolver
+4. Test with SQLite polling in integration tests
+
+**Key Files**:
+
+- `db/migration/src/m017_add_ticket_params_notify_trigger.rs` - PostgreSQL trigger example
+- `api/src/notifications.rs` - Notification stream abstraction
+- `db/src/notifications.rs` - SQLite notification manager (foundation for future hook integration)
+
 ### Database
 
 - The target database schema is defined in `design/target-db-schema.mmd`
@@ -614,14 +647,22 @@ impl Query {
 
 ## Docker Images and Multi-Architecture Support
 
+**Current Limitation:** ARM64 (aarch64) builds are temporarily disabled in CI due to GitHub runner limitations. Only AMD64 images are currently built and deployed via CI. The multi-arch manifest structure is maintained for easy re-enablement.
+
+Local builds for all architectures remain fully functional:
+
+- `nix build .#bloklid-docker-amd64` - AMD64 Docker image
+- `nix build .#bloklid-docker-aarch64` - ARM64 Docker image (local build only)
+- `nix run .#bloklid-docker-manifest-upload` - Multi-arch manifest (amd64 only in CI)
+
 ### Overview
 
 The project uses Nix with nix-lib helpers to build reproducible Docker images for the `bloklid` daemon. Images are built for multiple architectures, scanned for security vulnerabilities, and pushed to Google Artifact Registry with automatic multi-arch manifest creation.
 
 ### Supported Architectures
 
-- **amd64** (x86_64-linux) - Intel/AMD 64-bit processors
-- **arm64** (aarch64-linux) - ARM 64-bit processors (AWS Graviton, Apple Silicon servers, etc.)
+- **amd64** (x86_64-linux) - Intel/AMD 64-bit processors ✅ Available in CI
+- **arm64** (aarch64-linux) - ARM 64-bit processors (AWS Graviton, Apple Silicon servers) 🔄 Local builds only
 
 ### Image Variants
 
@@ -639,21 +680,21 @@ Using nix-lib multi-arch helpers to build and upload all architectures with auto
 # Build, upload all architectures, and create multi-arch manifest
 IMAGE_TARGET=gcr.io/project/bloklid:1.0.0 \
 GOOGLE_ACCESS_TOKEN=$TOKEN \
-nix run .#bloklid-manifest-upload
+nix run .#bloklid-docker-manifest-upload
 
 # Development variant
-nix run .#bloklid-dev-manifest-upload
+nix run .#bloklid-dev-docker-manifest-upload
 
 # Profile variant
-nix run .#bloklid-profile-manifest-upload
+nix run .#bloklid-profile-docker-manifest-upload
 ```
 
 This approach:
 
-1. Builds Docker images for both amd64 and arm64
-2. Uploads platform-specific images with suffixes (`-linux-amd64`, `-linux-arm64`)
-3. Creates and pushes an OCI manifest list for automatic platform selection
-4. Enables users to pull the correct architecture automatically
+1. Builds Docker image for amd64 (arm64 disabled until runner supports it)
+2. Uploads platform-specific image with suffix (`-linux-amd64`)
+3. Creates and pushes an OCI manifest list
+4. Ready to support multiple architectures when aarch64 runner is available
 
 ### CI/CD Workflows
 
@@ -667,36 +708,35 @@ Docker images are automatically built in GitHub Actions for:
 
 The build workflow follows a three-stage process:
 
-##### Stage 1: Build Images (Parallel)
+##### Stage 1: Build Images
 
-- Builds Docker images for both amd64 and arm64 architectures in parallel
+- Builds Docker image for amd64 architecture (arm64 disabled until runner supports it)
 - Uses Nix to ensure reproducible builds
-- Stores built images as artifacts
+- Stores built image as artifact
 
 ##### Stage 2: Upload Manifest (Sequential)
 
 - Uses nix-lib multi-arch helper to build OCI manifest
-- Uploads platform-specific images with suffixes (`-linux-amd64`, `-linux-arm64`)
-- Creates and pushes multi-arch manifest list
+- Uploads platform-specific image with suffix (`-linux-amd64`)
+- Creates and pushes manifest list (currently single-platform)
 
-##### Stage 3: Security Scanning (Parallel)
+##### Stage 3: Security Scanning
 
-- Runs Trivy vulnerability scans for both architectures
-- Generates SBOMs in SPDX and CycloneDX formats
-- Performs smoke tests on uploaded images
+- Runs Trivy vulnerability scan for amd64
+- Generates SBOM in SPDX and CycloneDX formats
+- Performs smoke test on uploaded image
 - Uploads results to GitHub Security
 
 #### Multi-Architecture Manifest
 
-The CI/CD system creates Docker manifests that allow pulling the correct architecture automatically:
+The CI/CD system creates Docker manifests for platform selection (currently amd64 only):
 
 ```bash
-# Pulls the correct architecture for your platform
+# Pulls the image (currently amd64 only)
 docker pull <registry>/bloklid:1.0.0
 
-# Explicitly pull specific architecture
+# Explicitly pull amd64 image
 docker pull <registry>/bloklid:1.0.0-linux-amd64
-docker pull <registry>/bloklid:1.0.0-linux-arm64
 ```
 
 ### Security Scanning
@@ -710,7 +750,7 @@ You can run security scans locally before pushing to CI:
 ```bash
 # Scan production images
 nix build .#bloklid-docker-amd64-scan  # Scans amd64 image
-nix build .#bloklid-docker-arm64-scan  # Scans arm64 image
+nix build .#bloklid-docker-aarch64-scan  # Scans arm64 image
 
 # View scan results
 cat result/scan-report.sarif  # SARIF format for tools
@@ -718,7 +758,7 @@ cat result/scan-summary.txt   # Human-readable summary
 
 # Scan development images (non-failing)
 nix build .#bloklid-dev-docker-amd64-scan
-nix build .#bloklid-dev-docker-arm64-scan
+nix build .#bloklid-dev-docker-aarch64-scan
 ```
 
 **Benefits of Nix-based scanning:**
@@ -726,7 +766,7 @@ nix build .#bloklid-dev-docker-arm64-scan
 - **Offline**: Uses pre-fetched Trivy database (no internet required)
 - **Reproducible**: Same results locally and in CI
 - **Fast**: Database pre-cached in Nix store
-- **Consistent**: Exact same Trivy version everywhere
+- **Consistent**: The same Trivy version everywhere
 
 #### Local SBOM Generation
 
@@ -735,7 +775,7 @@ Generate Software Bill of Materials locally:
 ```bash
 # Generate SBOM for production images
 nix build .#bloklid-docker-amd64-sbom  # amd64 SBOM
-nix build .#bloklid-docker-arm64-sbom  # arm64 SBOM
+nix build .#bloklid-docker-aarch64-sbom  # arm64 SBOM
 
 # View SBOM files
 ls result/
@@ -775,13 +815,13 @@ Automated security scanning in CI:
 
 ### Image Tagging Strategy
 
-| Version Type | Format                | Platform Images                         | Manifest              | Use Case              |
-| ------------ | --------------------- | --------------------------------------- | --------------------- | --------------------- |
-| Commit       | `version-commit.hash` | `1.0.0-commit.abc123-linux-amd64/arm64` | `1.0.0-commit.abc123` | Development testing   |
-| PR           | `version-pr.number`   | `1.0.0-pr.42-linux-amd64/arm64`         | `1.0.0-pr.42`         | Pre-merge validation  |
-| Release      | `version`             | `1.0.0-linux-amd64/arm64`               | `1.0.0`               | Production deployment |
+| Version Type | Format                | Platform Image                    | Manifest              | Use Case              |
+| ------------ | --------------------- | --------------------------------- | --------------------- | --------------------- |
+| Commit       | `version-commit.hash` | `1.0.0-commit.abc123-linux-amd64` | `1.0.0-commit.abc123` | Development testing   |
+| PR           | `version-pr.number`   | `1.0.0-pr.42-linux-amd64`         | `1.0.0-pr.42`         | Pre-merge validation  |
+| Release      | `version`             | `1.0.0-linux-amd64`               | `1.0.0`               | Production deployment |
 
-**Note**: The manifest tag (without architecture suffix) automatically selects the correct platform image based on the Docker client's architecture.
+**Note:** Currently only AMD64 images are available. ARM64 will be re-enabled when GitHub runner supports aarch64. The manifest tag (without architecture suffix) points to the amd64 image.
 
 ## Additional Resources
 

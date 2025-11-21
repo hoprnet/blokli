@@ -115,6 +115,8 @@ impl IndexerConfig {
     ///     true,
     ///     Some("https://example.com/snapshot.tar.xz".to_string()),
     ///     "/tmp/hopr_data".to_string(),
+    ///     100,
+    ///     10,
     /// );
     ///
     /// assert!(config.validate().is_ok());

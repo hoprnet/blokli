@@ -152,7 +152,12 @@ pub(super) mod test_helpers {
     }
 
     pub fn test_log() -> SerializableLog {
-        SerializableLog { ..Default::default() }
+        SerializableLog {
+            block_number: 10,
+            tx_index: 0,
+            log_index: 0,
+            ..Default::default()
+        }
     }
 
     /// Converts an Alloy event struct into a SerializableLog for testing.
@@ -160,12 +165,30 @@ pub(super) mod test_helpers {
     /// This helper uses the contract bindings' IntoLogData trait to properly encode
     /// indexed parameters as topics and non-indexed parameters as data, matching
     /// the actual on-chain event structure.
+    ///
+    /// By default, the log is set to block 10 to ensure it appears "later" than typical
+    /// test setup data (which usually uses block 1). This ensures proper ordering when
+    /// querying for the latest state.
     pub fn event_to_log<E: IntoLogData>(event: E, contract_address: Address) -> SerializableLog {
+        event_to_log_at_block(event, contract_address, 10, 0, 0)
+    }
+
+    /// Converts an Alloy event struct into a SerializableLog at a specific block/tx/log index.
+    pub fn event_to_log_at_block<E: IntoLogData>(
+        event: E,
+        contract_address: Address,
+        block_number: u64,
+        tx_index: u64,
+        log_index: u64,
+    ) -> SerializableLog {
         let log_data = event.to_log_data();
         SerializableLog {
             address: contract_address,
             topics: log_data.topics().iter().map(|t| t.0).collect(),
             data: log_data.data.to_vec(),
+            block_number,
+            tx_index,
+            log_index,
             ..Default::default()
         }
     }
@@ -190,7 +213,7 @@ pub(super) mod test_helpers {
     /// Encodes channel state into bytes32 format as emitted by contract events
     pub fn encode_channel_state(
         balance: HoprBalance,
-        ticket_index: u32,
+        ticket_index: u64, // 48-bit value (6 bytes)
         closure_time: u32,
         epoch: u32,
         status: ChannelStatus,
@@ -201,8 +224,8 @@ pub(super) mod test_helpers {
         let balance_bytes = balance.to_be_bytes();
         bytes[6..18].copy_from_slice(&balance_bytes[20..32]);
 
-        // Ticket index (bytes 18-23)
-        let ticket_index_bytes = (ticket_index as u64).to_be_bytes();
+        // Ticket index (bytes 18-23) - 48 bits (6 bytes)
+        let ticket_index_bytes = ticket_index.to_be_bytes();
         bytes[18..24].copy_from_slice(&ticket_index_bytes[2..8]);
 
         // Closure time (bytes 24-27)

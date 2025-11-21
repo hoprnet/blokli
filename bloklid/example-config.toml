@@ -12,8 +12,7 @@ type = "postgresql"
 # Option 1: Simple connection URL (recommended)
 url = "postgresql://bloklid:password@localhost:5432/bloklid"
 
-# Option 2: Detailed configuration (comment out url above and uncomment below)
-# type = "postgresql"
+# Option 2: Detailed configuration (comment out url above and uncomment fields below)
 # host = "localhost"
 # port = 5432
 # username = "bloklid"
@@ -25,7 +24,7 @@ url = "postgresql://bloklid:password@localhost:5432/bloklid"
 # SQLite uses two separate database files to avoid write lock contention:
 # - Index database: accounts, channels, announcements, node_info, chain_info
 # - Logs database: log, log_status, log_topic_info tables
-# Uncomment the section below to use SQLite instead of PostgreSQL
+# To use SQLite: comment out the PostgreSQL [database] section above, then uncomment this block
 # [database]
 # type = "sqlite"
 # index_path = "data/bloklid-index.db"  # Use ":memory:" for in-memory database
@@ -79,3 +78,10 @@ bind_address = "0.0.0.0:8080"
 
 # Enable GraphQL Playground for development and testing (default: true)
 playground_enabled = true
+
+# Health check configuration for Kubernetes probes
+[api.health]
+# Maximum allowed indexer lag (in blocks) before readiness check fails (default: 10)
+max_indexer_lag = 10
+# Timeout for health check queries in milliseconds (default: 5000)
+timeout_ms = 5000

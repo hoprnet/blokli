@@ -234,7 +234,7 @@
           bloklidSecurity = {
             # x86_64-linux security scans
             bloklid-docker-amd64-scan = nixLib.mkTrivyScan {
-              image = bloklidDocker.bloklid-docker;
+              image = bloklidDocker.bloklid-docker-amd64;
               name = "bloklid-trivy-scan-amd64";
               severity = "HIGH,CRITICAL";
               format = "sarif";
@@ -242,7 +242,7 @@
             };
 
             bloklid-dev-docker-amd64-scan = nixLib.mkTrivyScan {
-              image = bloklidDocker.bloklid-dev-docker;
+              image = bloklidDocker.bloklid-dev-docker-amd64;
               name = "bloklid-dev-trivy-scan-amd64";
               severity = "HIGH,CRITICAL";
               format = "sarif";
@@ -250,7 +250,7 @@
             };
 
             # aarch64-linux security scans
-            bloklid-docker-arm64-scan = nixLib.mkTrivyScan {
+            bloklid-docker-aarch64-scan = nixLib.mkTrivyScan {
               image = bloklidDocker.bloklid-docker-aarch64;
               name = "bloklid-trivy-scan-arm64";
               severity = "HIGH,CRITICAL";
@@ -258,7 +258,7 @@
               exitCode = 1;
             };
 
-            bloklid-dev-docker-arm64-scan = nixLib.mkTrivyScan {
+            bloklid-dev-docker-aarch64-scan = nixLib.mkTrivyScan {
               image = bloklidDocker.bloklid-dev-docker-aarch64;
               name = "bloklid-dev-trivy-scan-arm64";
               severity = "HIGH,CRITICAL";
@@ -269,7 +269,7 @@
             # SBOM generation for each architecture
             # x86_64-linux SBOMs
             bloklid-docker-amd64-sbom = nixLib.mkSBOM {
-              image = bloklidDocker.bloklid-docker;
+              image = bloklidDocker.bloklid-docker-amd64;
               name = "bloklid-sbom-amd64";
               formats = [
                 "spdx-json"
@@ -278,7 +278,7 @@
             };
 
             bloklid-dev-docker-amd64-sbom = nixLib.mkSBOM {
-              image = bloklidDocker.bloklid-dev-docker;
+              image = bloklidDocker.bloklid-dev-docker-amd64;
               name = "bloklid-dev-sbom-amd64";
               formats = [
                 "spdx-json"
@@ -287,7 +287,7 @@
             };
 
             # aarch64-linux SBOMs
-            bloklid-docker-arm64-sbom = nixLib.mkSBOM {
+            bloklid-docker-aarch64-sbom = nixLib.mkSBOM {
               image = bloklidDocker.bloklid-docker-aarch64;
               name = "bloklid-sbom-arm64";
               formats = [
@@ -296,7 +296,7 @@
               ];
             };
 
-            bloklid-dev-docker-arm64-sbom = nixLib.mkSBOM {
+            bloklid-dev-docker-aarch64-sbom = nixLib.mkSBOM {
               image = bloklidDocker.bloklid-dev-docker-aarch64;
               name = "bloklid-dev-sbom-arm64";
               formats = [
@@ -307,8 +307,9 @@
           };
 
           # Multi-architecture Docker manifests using nix-lib
+          # Note: aarch64 temporarily disabled until GitHub runner supports it
           bloklidDockerMultiArch = {
-            # Production multi-arch manifest
+            # Production multi-arch manifest (amd64 only until runner supports aarch64)
             bloklid-docker-manifest = nixLib.mkMultiArchManifest {
               name = "bloklid";
               tag = bloklidCrateInfo.version;
@@ -317,14 +318,15 @@
                   image = bloklidDocker.bloklid-docker-amd64;
                   platform = "linux/amd64";
                 }
-                {
-                  image = bloklidDocker.bloklid-docker-aarch64;
-                  platform = "linux/arm64";
-                }
+                # Disabled until GitHub runner supports aarch64
+                # {
+                #   image = bloklidDocker.bloklid-docker-aarch64;
+                #   platform = "linux/arm64";
+                # }
               ];
             };
 
-            # Development multi-arch manifest
+            # Development multi-arch manifest (amd64 only until runner supports aarch64)
             bloklid-dev-docker-manifest = nixLib.mkMultiArchManifest {
               name = "bloklid-dev";
               tag = bloklidCrateInfo.version;
@@ -333,14 +335,15 @@
                   image = bloklidDocker.bloklid-dev-docker-amd64;
                   platform = "linux/amd64";
                 }
-                {
-                  image = bloklidDocker.bloklid-dev-docker-aarch64;
-                  platform = "linux/arm64";
-                }
+                # Disabled until GitHub runner supports aarch64
+                # {
+                #   image = bloklidDocker.bloklid-dev-docker-aarch64;
+                #   platform = "linux/arm64";
+                # }
               ];
             };
 
-            # Profile multi-arch manifest
+            # Profile multi-arch manifest (amd64 only until runner supports aarch64)
             bloklid-profile-docker-manifest = nixLib.mkMultiArchManifest {
               name = "bloklid-profile";
               tag = bloklidCrateInfo.version;
@@ -349,10 +352,11 @@
                   image = bloklidDocker.bloklid-profile-docker-amd64;
                   platform = "linux/amd64";
                 }
-                {
-                  image = bloklidDocker.bloklid-profile-docker-aarch64;
-                  platform = "linux/arm64";
-                }
+                # Disabled until GitHub runner supports aarch64
+                # {
+                #   image = bloklidDocker.bloklid-profile-docker-aarch64;
+                #   platform = "linux/arm64";
+                # }
               ];
             };
           };
@@ -452,6 +456,9 @@
               # Documentation and test data
               "docs/*"
 
+              # Helm templates (contain Go template syntax that yamlfmt can't parse)
+              "charts/blokli/templates/*"
+
               # Other specific files
               "bloklid/.dockerignore"
               "tests/pytest.ini"
@@ -542,17 +549,17 @@
             # Security scans - Trivy vulnerability scanning
             inherit (bloklidSecurity)
               bloklid-docker-amd64-scan
-              bloklid-docker-arm64-scan
+              bloklid-docker-aarch64-scan
               bloklid-dev-docker-amd64-scan
-              bloklid-dev-docker-arm64-scan
+              bloklid-dev-docker-aarch64-scan
               ;
 
             # SBOMs - Software Bill of Materials
             inherit (bloklidSecurity)
               bloklid-docker-amd64-sbom
-              bloklid-docker-arm64-sbom
+              bloklid-docker-aarch64-sbom
               bloklid-dev-docker-amd64-sbom
-              bloklid-dev-docker-arm64-sbom
+              bloklid-dev-docker-aarch64-sbom
               ;
 
             # Multi-arch manifests

@@ -561,6 +561,14 @@ type SubscriptionRoot {
   """
   openedChannelGraphUpdated: OpenedChannelsGraphEntry!
   """
+  Subscribe to real-time updates of ticket price and winning probability
+  
+  Provides updates whenever there is a change in the ticket price or minimum
+  winning probability on-chain. These values are essential for ticket validation
+  and payment channel operation.
+  """
+  ticketParametersUpdated: TicketParameters!
+  """
   Subscribe to real-time updates of a specific transaction
   
   Provides updates whenever the status of the specified transaction changes,
@@ -570,6 +578,14 @@ type SubscriptionRoot {
     "Transaction ID to monitor (UUID)"
     id: ID!
   ): Transaction!
+}
+
+"""Ticket price and winning probability parameters"""
+type TicketParameters {
+  "Current minimum ticket winning probability (decimal value between 0.0 and 1.0)"
+  minTicketWinningProbability: Float!
+  "Current HOPR token price"
+  ticketPrice: TokenValueString!
 }
 
 """Operation timed out"""

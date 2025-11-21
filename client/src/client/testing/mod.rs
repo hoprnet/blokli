@@ -1,12 +1,13 @@
 use std::{ops::Div, sync::Arc, time::Duration};
 
-use crate::{
-    api::{types::*, *},
-    errors::{BlokliClientError, ErrorKind},
-};
 use async_broadcast::TrySendError;
 use futures::{Stream, StreamExt};
 use indexmap::IndexMap;
+
+use crate::{
+    api::{types::*, *},
+    errors::{BlokliClientError, ErrorKind, TrackingErrorKind},
+};
 
 fn serialize_as_empty_map<K, V, S>(_: &IndexMap<K, V>, serializer: S) -> std::result::Result<S::Ok, S::Error>
 where
@@ -20,15 +21,29 @@ where
 /// Represents a state for [`BlokliTestClient`].
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct BlokliTestState {
+    /// Contains KeyID -> Account
     pub accounts: IndexMap<u32, Account>,
+    /// Contains ChainAddress -> SafeAddress that are not paired with any account yet.
+    pub unpaired_safes: IndexMap<String, String>,
+    /// Contains native balances for addresses.
     pub native_balances: IndexMap<String, NativeBalance>,
+    /// Contains token balances for addresses.
     pub token_balances: IndexMap<String, HoprBalance>,
+    /// Contains safe allowances for addresses.
     pub safe_allowances: IndexMap<String, SafeHoprAllowance>,
+    /// Contains transaction counts for addresses.
     pub tx_counts: IndexMap<String, u64>,
+    /// Contains ChannelId -> Channel.
     pub channels: IndexMap<String, Channel>,
+    /// Contains chain info.
     pub chain_info: ChainInfo,
+    /// Version of the Blokli server.
     pub version: String,
+    /// Health of the Blokli server.
     pub health: String,
+    /// Active transactions.
+    ///
+    /// This field is transient and not serialized.
     // Always serialize as empty, because the data are non-deterministic and do not make sense to compare.
     #[serde(serialize_with = "serialize_as_empty_map")]
     pub active_txs: IndexMap<TxId, Transaction>,
@@ -38,6 +53,7 @@ impl PartialEq for BlokliTestState {
     fn eq(&self, other: &Self) -> bool {
         // Skip active_txs because they are non-deterministic.
         self.accounts == other.accounts
+            && self.unpaired_safes == other.unpaired_safes
             && self.native_balances == other.native_balances
             && self.token_balances == other.token_balances
             && self.safe_allowances == other.safe_allowances
@@ -53,6 +69,7 @@ impl Default for BlokliTestState {
     fn default() -> Self {
         Self {
             accounts: Default::default(),
+            unpaired_safes: Default::default(),
             native_balances: Default::default(),
             token_balances: Default::default(),
             safe_allowances: Default::default(),
@@ -75,7 +92,8 @@ impl Default for BlokliTestState {
                     "channels": "0x77C9414043d27fdC98A6A2d73fc77b9b383092a7",
                     "module_implementation": "0x32863c4974fBb6253E338a0cb70C382DCeD2eFCb",
                     "node_safe_registry": "0x4F7C7dE3BA2B29ED8B2448dF2213cA43f94E45c0",
-                    "node_stake_v2_factory": "0x791d190b2c95397F4BcE7bD8032FD67dCEA7a5F2",
+                    "node_stake_factory": "0x791d190b2c95397F4BcE7bD8032FD67dCEA7a5F2",
+                    "node_safe_migration": "0x0000000000000000000000000000000000000000",
                     "token": "0xD4fdec44DB9D44B8f2b6d529620f9C0C7066A2c1",
                     "ticket_price_oracle": "0x442df1d946303fB088C9377eefdaeA84146DA0A6",
                     "winning_probability_oracle": "0xC15675d4CCa538D91a91a8D3EcFBB8499C3B0471"
@@ -177,6 +195,11 @@ type GraphEvents = (
     async_broadcast::InactiveReceiver<(Account, Channel, Account)>,
 );
 
+type TicketParamEvents = (
+    async_broadcast::Sender<TicketParameters>,
+    async_broadcast::InactiveReceiver<TicketParameters>,
+);
+
 /// Represents a snapshot of the [`BlokliTestState`] inside a [`BlokliTestClient`].
 #[derive(Clone)]
 pub struct BlokliTestStateSnapshot {
@@ -227,6 +250,7 @@ pub struct BlokliTestClient<M> {
     mutator: M,
     accounts_channel: AccountEvents,
     channels_channel: GraphEvents,
+    ticket_channel: TicketParamEvents,
 }
 
 fn channel_matches(channel: &Channel, selector: &ChannelSelector) -> bool {
@@ -263,11 +287,16 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
         channels_tx.set_await_active(false);
         channels_tx.set_overflow(false);
 
+        let (mut tickets_tx, tickets_rx) = async_broadcast::broadcast(1024);
+        tickets_tx.set_await_active(false);
+        tickets_tx.set_overflow(false);
+
         Self {
             state: Arc::new(parking_lot::RwLock::new(initial_state)),
             mutator,
             accounts_channel: (accounts_tx, accounts_rx.deactivate()),
             channels_channel: (channels_tx, channels_rx.deactivate()),
+            ticket_channel: (tickets_tx, tickets_rx.deactivate()),
         }
     }
 
@@ -291,14 +320,38 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
 
     /// Allows updating the minimum ticket price and minimum ticket-winning probability.
     ///
-    /// These changes are not broadcasted as events but take effect on the shared state
+    /// These changes are also broadcasted as events and take effect on the shared state
     /// for all clones of the client.
     pub fn update_price_and_win_prob(&self, new_price: Option<TokenValueString>, new_win_prob: Option<f64>) {
-        if let Some(new_price) = new_price {
-            self.state.write().chain_info.ticket_price = new_price;
-        }
-        if let Some(new_win_prob) = new_win_prob {
-            self.state.write().chain_info.min_ticket_winning_probability = new_win_prob;
+        let mut updated = false;
+        let (new_price_param, new_win_prob_param) = {
+            let mut state = self.state.write();
+
+            let mut new_price_param = state.chain_info.ticket_price.clone();
+            if let Some(new_price) = new_price {
+                state.chain_info.ticket_price = new_price.clone();
+
+                new_price_param = new_price;
+                updated = true;
+            }
+
+            let mut new_win_prob_param = state.chain_info.min_ticket_winning_probability;
+            if let Some(new_win_prob) = new_win_prob {
+                state.chain_info.min_ticket_winning_probability = new_win_prob;
+
+                new_win_prob_param = new_win_prob;
+                updated = true;
+            }
+            (new_price_param, new_win_prob_param)
+        };
+
+        if updated
+            && let Err(error) = self.ticket_channel.0.try_broadcast(TicketParameters {
+                min_ticket_winning_probability: new_win_prob_param,
+                ticket_price: new_price_param,
+            })
+        {
+            tracing::error!(%error, "failed to broadcast ticket parameters update");
         }
     }
 
@@ -503,6 +556,16 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliSubscriptionClient for Blokl
                 }),
         ))
     }
+
+    fn subscribe_ticket_params(&self) -> Result<impl Stream<Item = Result<TicketParameters>> + Send> {
+        let info = self.state.read().chain_info.clone();
+        Ok(futures::stream::once(futures::future::ready(TicketParameters {
+            min_ticket_winning_probability: info.min_ticket_winning_probability,
+            ticket_price: info.ticket_price,
+        }))
+        .chain(self.ticket_channel.1.activate_cloned())
+        .map(Ok))
+    }
 }
 
 fn simulate_tx_execution(
@@ -511,6 +574,7 @@ fn simulate_tx_execution(
     mutator: &dyn BlokliTestStateMutator,
     accounts_channel: &async_broadcast::Sender<Account>,
     channels_channel: &async_broadcast::Sender<(Account, Channel, Account)>,
+    ticket_channel: &async_broadcast::Sender<TicketParameters>,
 ) -> Result<()> {
     let old_state = state.clone();
     if let Err(error) = mutator.update_state(signed_tx, state) {
@@ -600,6 +664,23 @@ fn simulate_tx_execution(
             }
         });
 
+    if state.chain_info.min_ticket_winning_probability != old_state.chain_info.min_ticket_winning_probability
+        || state.chain_info.ticket_price != old_state.chain_info.ticket_price
+    {
+        match ticket_channel.try_broadcast(TicketParameters {
+            min_ticket_winning_probability: state.chain_info.min_ticket_winning_probability,
+            ticket_price: state.chain_info.ticket_price.clone(),
+        }) {
+            Err(TrySendError::Full(_)) => {
+                tracing::error!("failed to broadcast ticket params change - channel is full");
+            }
+            Err(TrySendError::Closed(_)) => {
+                tracing::error!("failed to broadcast ticket params change - channel is closed");
+            }
+            _ => {}
+        }
+    }
+
     Ok(())
 }
 
@@ -616,6 +697,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
             &self.mutator,
             &self.accounts_channel.0,
             &self.channels_channel.0,
+            &self.ticket_channel.0,
         ) {
             tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction, state reverted");
         } else {
@@ -637,6 +719,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
             &self.mutator,
             &self.accounts_channel.0,
             &self.channels_channel.0,
+            &self.ticket_channel.0,
         )
         .map(|_| {
             tracing::debug!("transaction execution succeeded");
@@ -675,6 +758,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
             &self.mutator,
             &self.accounts_channel.0,
             &self.channels_channel.0,
+            &self.ticket_channel.0,
         )
         .inspect_err(|error| {
             tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction, state reverted");
@@ -686,10 +770,24 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
 
     async fn track_transaction(&self, tx_id: TxId, client_timeout: Duration) -> Result<Transaction> {
         futures_time::task::sleep(client_timeout.div(10).into()).await;
-        self.state
+        let tx = self
+            .state
             .write()
             .active_txs
             .shift_remove(&tx_id)
-            .ok_or_else(|| ErrorKind::NoData.into())
+            .ok_or_else(|| BlokliClientError::from(ErrorKind::NoData))?;
+
+        match tx.status {
+            TransactionStatus::Confirmed => Ok(tx),
+            TransactionStatus::Timeout => Err(ErrorKind::TrackingError(TrackingErrorKind::Timeout).into()),
+            TransactionStatus::SubmissionFailed => {
+                Err(ErrorKind::TrackingError(TrackingErrorKind::SubmissionFailed).into())
+            }
+            TransactionStatus::ValidationFailed => {
+                Err(ErrorKind::TrackingError(TrackingErrorKind::ValidationFailed).into())
+            }
+            TransactionStatus::Reverted => Err(ErrorKind::TrackingError(TrackingErrorKind::Reverted).into()),
+            _ => Err(ErrorKind::MockClientError(anyhow::anyhow!("unexpected transaction status")).into()),
+        }
     }
 }

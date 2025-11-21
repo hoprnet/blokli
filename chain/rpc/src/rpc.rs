@@ -179,7 +179,8 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         })
     }
 
-    pub(crate) async fn get_block_number(&self) -> Result<u64> {
+    /// Get the current block number from the RPC endpoint, adjusted for finality
+    pub async fn get_block_number(&self) -> Result<u64> {
         Ok(self
             .provider
             .get_block_number()

@@ -43,6 +43,18 @@ impl From<ChainInfoResult> for Result<ChainInfo, crate::errors::BlokliClientErro
 }
 
 #[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "SubscriptionRoot")]
+pub struct SubscribeTicketParams {
+    pub ticket_parameters_updated: TicketParameters,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone, PartialEq)]
+pub struct TicketParameters {
+    pub min_ticket_winning_probability: f64,
+    pub ticket_price: TokenValueString,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "QueryRoot")]
 pub struct QueryVersion {
     pub version: String,

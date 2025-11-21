@@ -6,7 +6,7 @@ pub mod types {
         balances::{HoprBalance, NativeBalance, SafeHoprAllowance},
         channels::Channel,
         graph::OpenedChannelsGraphEntry,
-        info::{ChainInfo, ContractAddressMap},
+        info::{ChainInfo, ContractAddressMap, TicketParameters},
         txs::{Transaction, TransactionStatus},
     };
 }
@@ -19,7 +19,7 @@ pub(crate) mod internal {
         balances::{BalanceVariables, QueryHoprBalance, QueryNativeBalance, QuerySafeAllowance},
         channels::{ChannelsVariables, QueryChannelCount, QueryChannels, SubscribeChannels},
         graph::SubscribeGraph,
-        info::{QueryChainInfo, QueryHealth, QueryVersion},
+        info::{QueryChainInfo, QueryHealth, QueryVersion, SubscribeTicketParams},
         txs::{
             ConfirmTransactionVariables, MutateConfirmTransaction, MutateSendTransaction, MutateTrackTransaction,
             QueryTransaction, SendTransactionVariables, SubscribeTransaction, TransactionsVariables,
@@ -117,6 +117,9 @@ pub trait BlokliSubscriptionClient {
     ) -> Result<impl futures::Stream<Item = Result<types::Account>> + Send>;
     /// Subscribes to updates of the entire channel graph.
     fn subscribe_graph(&self) -> Result<impl futures::Stream<Item = Result<types::OpenedChannelsGraphEntry>> + Send>;
+
+    /// Subscribes to updates of the ticket parameters.
+    fn subscribe_ticket_params(&self) -> Result<impl futures::Stream<Item = Result<types::TicketParameters>> + Send>;
 }
 
 /// Trait defining Blokli API for signed transaction submission to the chain.

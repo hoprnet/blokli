@@ -6,7 +6,7 @@ on:
       - synchronize
       - reopened
       - ready_for_review
-      - lableled
+      - labeled
 concurrency:
   group: ${{ github.ref }}-build
   cancel-in-progress: true
@@ -14,10 +14,10 @@ env:
   CARGO_TERM_COLOR: always
 jobs:
   build-docker:
-    name: Build
+    name: Build Docker
     uses: ./.github/workflows/build-docker.yaml
     with:
-      branch: ${{ github.event.pull_request.head.ref || github.ref }}
+      source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       version_type: "commit"
     secrets: inherit
   checks:
@@ -31,23 +31,16 @@ jobs:
           egress-policy: audit
       - name: Checkout hoprnet repository
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-  build-binaries:
-    strategy:
-      matrix:
-        binary:
-          - architecture: x86_64-linux
-            runner: ubuntu-24.04
-          - architecture: aarch64-linux
-            runner: ubuntu-24.04
-          - architecture: aarch64-darwin
-            runner: macos-15
-          - architecture: x86_64-darwin
-            runner: macos-15
-    name: Build
-    uses: ./.github/workflows/build-binaries.yaml
-    with:
-      branch: ${{ github.event.pull_request.head.ref }}
-      runner: ${{ matrix.binary.runner }}
-      architecture: ${{ matrix.binary.architecture }}
-      version_type: "commit"
-    secrets: inherit
+      - name: Install Nix
+        uses: cachix/install-nix-action@7be5dee1421f63d07e71ce6e0a9f8a4b07c2a487 # v31
+      - name: Use Nix Cache
+        uses: cachix/cachix-action@0fc020193b5a1fa3ac4575aa3a7d3aa6a35435ad # v16
+        with:
+          name: blokli
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+        env:
+          USER: runner
+      - name: Check formatting and linting
+        run: nix develop --command just quick
+      - name: Run unit tests
+        run: nix develop --command just test
