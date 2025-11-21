@@ -202,7 +202,6 @@
       },
       "original": {
         "owner": "hoprnet",
-        "ref": "tb/202511-docker-security",
         "repo": "nix-lib",
         "type": "github"
       }
