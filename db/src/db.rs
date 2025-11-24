@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use blokli_db_entity::prelude::{Account, Announcement};
-use migration::{MigratorChainLogs, MigratorIndex, MigratorTrait};
+use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait};
 use sea_orm::{ConnectOptions, Database, EntityTrait, SqlxSqliteConnector};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tracing::log::LevelFilter;
@@ -223,13 +223,11 @@ impl BlokliDb {
                 .map_err(|e| DbSqlError::Construction(format!("cannot apply logs migrations: {e}")))?;
         } else {
             // For PostgreSQL (or legacy single-file SQLite): run all migrations on single database
-            MigratorIndex::up(&db, None)
+            // Use unified Migrator to avoid SeaORM validation errors when migrations from one
+            // migrator are recorded but not present in another migrator's list
+            Migrator::up(&db, None)
                 .await
-                .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
-
-            MigratorChainLogs::up(&db, None)
-                .await
-                .map_err(|e| DbSqlError::Construction(format!("cannot apply logs migrations: {e}")))?;
+                .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
         }
 
         // Initialize KeyId mapping for accounts
