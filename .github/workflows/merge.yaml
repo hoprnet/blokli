@@ -13,6 +13,6 @@ jobs:
     if: github.event.pull_request.merged == true
     uses: ./.github/workflows/build-docker.yaml
     with:
-      source_branch: ${{ github.event.pull_request.merge_commit_sha }}
+      source_branch: ${{ github.event.pull_request.base.ref }}
       version_type: "pr"
     secrets: inherit
