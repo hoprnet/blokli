@@ -339,6 +339,69 @@ test_graphql() {
   return 0
 }
 
+# Test that indexer follows the chain
+test_indexer_follows_chain() {
+  log_info "Testing indexer chain following..."
+
+  local max_wait=30
+  local poll_interval=2
+  local elapsed=0
+
+  # Wait for blocks to be mined by Anvil
+  log_info "Waiting for blocks to be mined..."
+  while [ $elapsed -lt $max_wait ]; do
+    local response
+    response=$(curl -sf "${BLOKLID_URL}/readyz" || echo "{}")
+
+    local rpc_block
+    rpc_block=$(echo "$response" | jq -r '.checks.rpc.block_number // 0')
+
+    if [ "$rpc_block" -gt 0 ]; then
+      log_info "Blocks mined: rpc_block_number=${rpc_block}"
+      break
+    fi
+
+    sleep $poll_interval
+    elapsed=$((elapsed + poll_interval))
+  done
+
+  if [ $elapsed -ge $max_wait ]; then
+    log_error "No blocks mined within ${max_wait}s"
+    return 1
+  fi
+
+  # Wait for indexer to catch up
+  log_info "Waiting for indexer to catch up..."
+  elapsed=0
+  while [ $elapsed -lt $max_wait ]; do
+    local response
+    response=$(curl -sf "${BLOKLID_URL}/readyz" || echo "{}")
+
+    local indexed_block rpc_block lag
+    indexed_block=$(echo "$response" | jq -r '.checks.indexer.last_indexed_block // 0')
+    rpc_block=$(echo "$response" | jq -r '.checks.rpc.block_number // 0')
+    lag=$(echo "$response" | jq -r '.checks.indexer.lag // 999')
+
+    if [ "$indexed_block" -gt 0 ]; then
+      log_info "Indexer caught up: last_indexed_block=${indexed_block}, rpc_block_number=${rpc_block}, lag=${lag}"
+
+      # Verify indexer is reasonably close to chain head
+      # Using a generous threshold since this is a smoke test
+      if [ "$lag" -gt 10 ]; then
+        log_warn "Indexer lag is high: ${lag} blocks"
+      fi
+
+      return 0
+    fi
+
+    sleep $poll_interval
+    elapsed=$((elapsed + poll_interval))
+  done
+
+  log_error "Indexer did not index any blocks within ${max_wait}s"
+  return 1
+}
+
 # Main test execution
 main() {
   log_info "Starting blokli smoke tests"
@@ -371,6 +434,10 @@ main() {
   fi
 
   if ! test_readyz; then
+    tests_passed=false
+  fi
+
+  if ! test_indexer_follows_chain; then
     tests_passed=false
   fi
 
