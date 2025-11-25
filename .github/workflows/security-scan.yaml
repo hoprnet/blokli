@@ -22,21 +22,12 @@ jobs:
     runs-on: self-hosted-hoprnet-bigger
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
+        uses: step-security/harden-runner@95d9a5deda9de15063e7595e9719c11c38c90ae2 # v2.13.2
         with:
           disable-sudo: true
           egress-policy: audit
       - name: Checkout repository
-        uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
-      - name: Install Nix
-        uses: cachix/install-nix-action@7be5dee1421f63d07e71ce6e0a9f8a4b07c2a487 # v31
-      - name: Use Nix Cache
-        uses: cachix/cachix-action@0fc020193b5a1fa3ac4575aa3a7d3aa6a35435ad # v16
-        with:
-          name: blokli
-          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
-        env:
-          USER: runner
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
       - name: Setup GCP
         id: gcp
         uses: hoprnet/hopr-workflows/actions/setup-gcp@12c56020e16036982e6cc529848edeedfc705865 # master
@@ -44,28 +35,21 @@ jobs:
           google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
           login-artifact-registry: 'true'
           install-sdk: 'false'
-      - name: Run Trivy vulnerability scanner (Nix-based)
+      - name: Run Trivy vulnerability scanner
         run: |
-          # Use nix-lib Trivy scan with pre-fetched database
-          # This generates both SARIF and table reports
-          if [ "${{ inputs.architecture }}" = "amd64" ]; then
-            nix build -L .#bloklid-docker-amd64-scan
-            SCAN_PATH="./result"
-          else
-            nix build -L .#bloklid-docker-arm64-scan
-            SCAN_PATH="./result"
-          fi
-
-          # Copy SARIF report for upload
-          cp "$SCAN_PATH/scan-report.sarif" trivy-results-${{ inputs.architecture }}.sarif
-
-          # Display table summary
-          echo "=== Trivy Scan Summary ==="
-          cat "$SCAN_PATH/scan-summary.txt" || echo "No vulnerabilities summary available"
-          echo "=========================="
+          # Run Trivy using Docker to avoid dependency issues on self-hosted runner
+          docker run --rm \
+            -v "$(pwd):/output" \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:0.67.2 image \
+            --format sarif \
+            --output "/output/trivy-results-${{ inputs.architecture }}.sarif" \
+            --severity HIGH,CRITICAL \
+            --exit-code 1 \
+            "${{ inputs.image_url }}"
       - name: Upload Trivy results to GitHub Security
         if: always()
-        uses: github/codeql-action/upload-sarif@v3
+        uses: github/codeql-action/upload-sarif@d3ced5c96c16c4332e2a61eb6f3649d6f1b20bb8 # v3.31.5
         with:
           sarif_file: trivy-results-${{ inputs.architecture }}.sarif
           category: trivy-${{ inputs.architecture }}
@@ -82,7 +66,7 @@ jobs:
           timeout=30
           elapsed=0
           while [ $elapsed -lt $timeout ]; do
-            status=$(docker inspect --format='{{.State.Status}}' $container_id)
+            status=$(docker inspect --format='{{.State.Status}}' "$container_id")
             if [ "$status" = "exited" ]; then
               break
             fi
@@ -91,15 +75,15 @@ jobs:
           done
 
           # Check exit code
-          exit_code=$(docker inspect --format='{{.State.ExitCode}}' $container_id)
+          exit_code=$(docker inspect --format='{{.State.ExitCode}}' "$container_id")
 
           # Show logs for debugging
           echo "=== Container logs ==="
-          docker logs $container_id
+          docker logs "$container_id"
           echo "======================"
 
           # Cleanup
-          docker rm $container_id
+          docker rm "$container_id"
 
           # Verify success
           if [ "$exit_code" -ne 0 ]; then
@@ -108,27 +92,21 @@ jobs:
           fi
 
           echo "✓ Smoke test passed - container started successfully"
-      - name: Generate SBOM (Nix-based)
+      - name: Generate SBOM
         if: always()
         run: |
-          # Use nix-lib SBOM generation with Syft
-          # Generates both SPDX and CycloneDX formats
-          if [ "${{ inputs.architecture }}" = "amd64" ]; then
-            nix build -L .#bloklid-docker-amd64-sbom
-            SBOM_PATH="./result"
-          else
-            nix build -L .#bloklid-docker-arm64-sbom
-            SBOM_PATH="./result"
-          fi
-
-          # Copy CycloneDX SBOM for compatibility
-          cp "$SBOM_PATH/sbom.cyclonedx.json" sbom-${{ inputs.architecture }}.json
+          # Generate SBOM using Trivy via Docker
+          docker run --rm \
+            -v "$(pwd):/output" \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:0.67.2 image \
+            --format cyclonedx \
+            --output "/output/sbom-${{ inputs.architecture }}.json" \
+            "${{ inputs.image_url }}"
       - name: Upload SBOM artifacts
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: sbom-${{ inputs.architecture }}
-          path: |
-            sbom-${{ inputs.architecture }}.json
-            result/sbom.*.json
+          path: sbom-${{ inputs.architecture }}.json
           retention-days: 90

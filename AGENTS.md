@@ -741,58 +741,38 @@ docker pull <registry>/bloklid:1.0.0-linux-amd64
 
 ### Security Scanning
 
-All Docker images undergo automated security scanning using nix-lib helpers with offline Trivy database.
+All Docker images undergo automated security scanning in CI using the official Trivy GitHub Action.
 
 #### Local Security Scanning
 
-You can run security scans locally before pushing to CI:
+For local security scanning, use Trivy directly:
 
 ```bash
-# Scan production images
-nix build .#bloklid-docker-amd64-scan  # Scans amd64 image
-nix build .#bloklid-docker-aarch64-scan  # Scans arm64 image
+# Install Trivy (if not already installed)
+# macOS: brew install trivy
+# Linux: See https://aquasecurity.github.io/trivy/latest/getting-started/installation/
 
-# View scan results
-cat result/scan-report.sarif  # SARIF format for tools
-cat result/scan-summary.txt   # Human-readable summary
+# Scan a local Docker image
+trivy image --severity HIGH,CRITICAL <image-name>:<tag>
 
-# Scan development images (non-failing)
-nix build .#bloklid-dev-docker-amd64-scan
-nix build .#bloklid-dev-docker-aarch64-scan
-```
+# Generate SARIF report
+trivy image --format sarif --output trivy-results.sarif <image-name>:<tag>
 
-**Benefits of Nix-based scanning:**
-
-- **Offline**: Uses pre-fetched Trivy database (no internet required)
-- **Reproducible**: Same results locally and in CI
-- **Fast**: Database pre-cached in Nix store
-- **Consistent**: The same Trivy version everywhere
-
-#### Local SBOM Generation
-
-Generate Software Bill of Materials locally:
-
-```bash
-# Generate SBOM for production images
-nix build .#bloklid-docker-amd64-sbom  # amd64 SBOM
-nix build .#bloklid-docker-aarch64-sbom  # arm64 SBOM
-
-# View SBOM files
-ls result/
-# sbom.spdx.json       - SPDX JSON format
-# sbom.cyclonedx.json  - CycloneDX JSON format
+# Generate SBOM
+trivy image --format cyclonedx --output sbom.json <image-name>:<tag>
 ```
 
 #### CI Security Workflow
 
-Automated security scanning in CI:
+Automated security scanning in CI using `aquasecurity/trivy-action`:
 
 - **Trivy Vulnerability Scanner**
 
-  - Uses Nix derivations with pre-fetched database
+  - Uses official Trivy GitHub Action
   - Scans for HIGH and CRITICAL severity vulnerabilities
   - Uploads results to GitHub Security tab (SARIF format)
   - Fails build if critical vulnerabilities are found in production images
+  - Automatic vulnerability database updates
 
 - **Smoke Tests**
 
@@ -801,8 +781,8 @@ Automated security scanning in CI:
   - Ensures binary is functional inside container
 
 - **SBOM Generation**
-  - Uses Nix derivations with Syft
-  - Generates SPDX JSON and CycloneDX JSON formats
+  - Uses Trivy GitHub Action
+  - Generates CycloneDX JSON format
   - Stored as workflow artifacts (90-day retention)
   - Available for supply chain security analysis
 

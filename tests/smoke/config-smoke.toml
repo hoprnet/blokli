@@ -1,0 +1,49 @@
+# Smoke test configuration for bloklid
+# This configuration is used for smoke testing with Docker Compose
+# It connects to PostgreSQL and Anvil services in the same Docker network
+
+# Host address and port for the daemon to listen on
+host = "0.0.0.0:3064"
+
+# Directory for storing data files
+data_directory = "/data"
+
+# Network identifier - using "debug-staging" for local testing
+network = "debug-staging"
+
+# RPC endpoint URL - connects to Anvil service
+rpc_url = "http://anvil:8545"
+
+# Maximum number of RPC requests per second (0 for unlimited)
+max_rpc_requests_per_sec = 0
+
+# PostgreSQL database configuration
+[database]
+type = "postgresql"
+url  = "postgresql://bloklid:bloklid_smoke_test@postgres:5432/bloklid"
+
+# Indexer configuration
+[indexer]
+# Disable fast sync for smoke tests - we want to test normal startup
+fast_sync = false
+
+# Disable logs snapshot for smoke tests
+enable_logs_snapshot = false
+
+# GraphQL subscription configuration
+[indexer.subscription]
+batch_size               = 50
+event_bus_capacity       = 100
+shutdown_signal_capacity = 10
+
+# API server configuration
+[api]
+bind_address       = "0.0.0.0:3064"
+enabled            = true
+playground_enabled = true
+
+# Health check configuration
+[api.health]
+# Allow higher lag for smoke tests since we're starting from scratch
+max_indexer_lag = 100
+timeout_ms      = 5000

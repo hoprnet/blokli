@@ -444,11 +444,11 @@ impl BlokliDbLogOperations for BlokliDb {
                         LogTopicInfo::insert_many(contract_address_topics.into_iter().map(|(addr, topic)| {
                             log_topic_info::ActiveModel {
                                 address: Set(addr.as_ref().to_vec()),
-                                topic: Set(topic.to_string()),
+                                topic: Set(topic.as_ref().to_vec()),
                                 ..Default::default()
                             }
                         }))
-                        .exec(tx.as_ref())
+                        .exec_without_returning(tx.as_ref())
                         .await
                         .map_err(|e| DbError::from(DbSqlError::from(e)))?;
                     } else {
@@ -456,7 +456,7 @@ impl BlokliDbLogOperations for BlokliDb {
                         for (addr, topic) in contract_address_topics {
                             let log_topic_count = LogTopicInfo::find()
                                 .filter(log_topic_info::Column::Address.eq(addr.as_ref().to_vec()))
-                                .filter(log_topic_info::Column::Topic.eq(topic.to_string()))
+                                .filter(log_topic_info::Column::Topic.eq(topic.as_ref().to_vec()))
                                 .count(tx.as_ref())
                                 .await
                                 .map_err(|e| DbError::from(DbSqlError::from(e)))?;

@@ -229,3 +229,14 @@ generate-target-db-schema-svg:
       ghcr.io/mermaid-js/mermaid-cli/mermaid-cli \
       -i target-db-schema.mmd -o target-db-schema.svg
     @echo "SVG stored at ./design/target-db-schema.svg"
+
+# ============================================================================
+# Smoke Tests
+# ============================================================================
+
+# Run smoke tests with Docker Compose (PostgreSQL + Anvil)
+smoke-test:
+    ./tests/smoke/run-smoke-test.sh
+
+# Build Docker image and run smoke tests
+smoke-test-full: docker-build smoke-test
