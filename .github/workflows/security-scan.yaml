@@ -36,15 +36,17 @@ jobs:
           login-artifact-registry: 'true'
           install-sdk: 'false'
       - name: Run Trivy vulnerability scanner
-        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
-        with:
-          scan-type: 'image'
-          image-ref: ${{ inputs.image_url }}
-          format: 'sarif'
-          output: 'trivy-results-${{ inputs.architecture }}.sarif'
-          severity: 'HIGH,CRITICAL'
-          exit-code: '1'
-          limit-severities-for-sarif: true
+        run: |
+          # Run Trivy using Docker to avoid dependency issues on self-hosted runner
+          docker run --rm \
+            -v "$(pwd):/output" \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasecurity/trivy:latest image \
+            --format sarif \
+            --output "/output/trivy-results-${{ inputs.architecture }}.sarif" \
+            --severity HIGH,CRITICAL \
+            --exit-code 1 \
+            "${{ inputs.image_url }}"
       - name: Upload Trivy results to GitHub Security
         if: always()
         uses: github/codeql-action/upload-sarif@d3ced5c96c16c4332e2a61eb6f3649d6f1b20bb8 # v3.31.5
@@ -92,12 +94,15 @@ jobs:
           echo "✓ Smoke test passed - container started successfully"
       - name: Generate SBOM
         if: always()
-        uses: aquasecurity/trivy-action@b6643a29fecd7f34b3597bc6acb0a98b03d33ff8 # v0.33.1
-        with:
-          scan-type: 'image'
-          image-ref: ${{ inputs.image_url }}
-          format: 'cyclonedx'
-          output: 'sbom-${{ inputs.architecture }}.json'
+        run: |
+          # Generate SBOM using Trivy via Docker
+          docker run --rm \
+            -v "$(pwd):/output" \
+            -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasecurity/trivy:latest image \
+            --format cyclonedx \
+            --output "/output/sbom-${{ inputs.architecture }}.json" \
+            "${{ inputs.image_url }}"
       - name: Upload SBOM artifacts
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
