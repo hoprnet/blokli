@@ -41,7 +41,7 @@ jobs:
           docker run --rm \
             -v "$(pwd):/output" \
             -v /var/run/docker.sock:/var/run/docker.sock \
-            aquasec/trivy:latest image \
+            aquasec/trivy:0.67.2 image \
             --format sarif \
             --output "/output/trivy-results-${{ inputs.architecture }}.sarif" \
             --severity HIGH,CRITICAL \
@@ -99,7 +99,7 @@ jobs:
           docker run --rm \
             -v "$(pwd):/output" \
             -v /var/run/docker.sock:/var/run/docker.sock \
-            aquasec/trivy:latest image \
+            aquasec/trivy:0.67.2 image \
             --format cyclonedx \
             --output "/output/sbom-${{ inputs.architecture }}.json" \
             "${{ inputs.image_url }}"
