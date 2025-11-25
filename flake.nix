@@ -229,83 +229,6 @@
             };
           };
 
-          # Docker security scanning using nix-lib
-          # Trivy vulnerability scans for each architecture
-          bloklidSecurity = {
-            # x86_64-linux security scans
-            bloklid-docker-amd64-scan = nixLib.mkTrivyScan {
-              image = bloklidDocker.bloklid-docker-amd64;
-              name = "bloklid-trivy-scan-amd64";
-              severity = "HIGH,CRITICAL";
-              format = "sarif";
-              exitCode = 1;
-            };
-
-            bloklid-dev-docker-amd64-scan = nixLib.mkTrivyScan {
-              image = bloklidDocker.bloklid-dev-docker-amd64;
-              name = "bloklid-dev-trivy-scan-amd64";
-              severity = "HIGH,CRITICAL";
-              format = "sarif";
-              exitCode = 0; # Don't fail dev builds on vulnerabilities
-            };
-
-            # aarch64-linux security scans
-            bloklid-docker-aarch64-scan = nixLib.mkTrivyScan {
-              image = bloklidDocker.bloklid-docker-aarch64;
-              name = "bloklid-trivy-scan-arm64";
-              severity = "HIGH,CRITICAL";
-              format = "sarif";
-              exitCode = 1;
-            };
-
-            bloklid-dev-docker-aarch64-scan = nixLib.mkTrivyScan {
-              image = bloklidDocker.bloklid-dev-docker-aarch64;
-              name = "bloklid-dev-trivy-scan-arm64";
-              severity = "HIGH,CRITICAL";
-              format = "sarif";
-              exitCode = 0; # Don't fail dev builds on vulnerabilities
-            };
-
-            # SBOM generation for each architecture
-            # x86_64-linux SBOMs
-            bloklid-docker-amd64-sbom = nixLib.mkSBOM {
-              image = bloklidDocker.bloklid-docker-amd64;
-              name = "bloklid-sbom-amd64";
-              formats = [
-                "spdx-json"
-                "cyclonedx-json"
-              ];
-            };
-
-            bloklid-dev-docker-amd64-sbom = nixLib.mkSBOM {
-              image = bloklidDocker.bloklid-dev-docker-amd64;
-              name = "bloklid-dev-sbom-amd64";
-              formats = [
-                "spdx-json"
-                "cyclonedx-json"
-              ];
-            };
-
-            # aarch64-linux SBOMs
-            bloklid-docker-aarch64-sbom = nixLib.mkSBOM {
-              image = bloklidDocker.bloklid-docker-aarch64;
-              name = "bloklid-sbom-arm64";
-              formats = [
-                "spdx-json"
-                "cyclonedx-json"
-              ];
-            };
-
-            bloklid-dev-docker-aarch64-sbom = nixLib.mkSBOM {
-              image = bloklidDocker.bloklid-dev-docker-aarch64;
-              name = "bloklid-dev-sbom-arm64";
-              formats = [
-                "spdx-json"
-                "cyclonedx-json"
-              ];
-            };
-          };
-
           # Multi-architecture Docker manifests using nix-lib
           # Note: aarch64 temporarily disabled until GitHub runner supports it
           bloklidDockerMultiArch = {
@@ -555,22 +478,6 @@
               bloklid-docker-aarch64
               bloklid-dev-docker-aarch64
               bloklid-profile-docker-aarch64
-              ;
-
-            # Security scans - Trivy vulnerability scanning
-            inherit (bloklidSecurity)
-              bloklid-docker-amd64-scan
-              bloklid-docker-aarch64-scan
-              bloklid-dev-docker-amd64-scan
-              bloklid-dev-docker-aarch64-scan
-              ;
-
-            # SBOMs - Software Bill of Materials
-            inherit (bloklidSecurity)
-              bloklid-docker-amd64-sbom
-              bloklid-docker-aarch64-sbom
-              bloklid-dev-docker-amd64-sbom
-              bloklid-dev-docker-aarch64-sbom
               ;
 
             # Multi-arch manifests
