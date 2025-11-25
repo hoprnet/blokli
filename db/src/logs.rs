@@ -448,7 +448,7 @@ impl BlokliDbLogOperations for BlokliDb {
                                 ..Default::default()
                             }
                         }))
-                        .exec(tx.as_ref())
+                        .exec_without_returning(tx.as_ref())
                         .await
                         .map_err(|e| DbError::from(DbSqlError::from(e)))?;
                     } else {
