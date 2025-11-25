@@ -15,7 +15,6 @@ data:
     # Database configuration
     [database]
     type = "postgresql"
-    url = "{{ include "blokli.databaseUrl" . }}"
     max_connections = {{ .Values.database.maxConnections }}
 
     # Data storage
