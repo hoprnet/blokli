@@ -14,7 +14,6 @@ impl MigrationTrait for Migration {
 
         match manager.get_database_backend() {
             sea_orm::DatabaseBackend::Postgres => {
-                // PostgreSQL: ALTER COLUMN TYPE from INTEGER to BIGINT
                 manager
                     .get_connection()
                     .execute_unprepared("ALTER TABLE chain_info ALTER COLUMN id TYPE BIGINT")
@@ -27,18 +26,6 @@ impl MigrationTrait for Migration {
             }
             sea_orm::DatabaseBackend::Sqlite => {
                 // SQLite: INTEGER is already 64-bit, no change needed
-            }
-            sea_orm::DatabaseBackend::MySql => {
-                // MySQL: Not supported in this project, but for completeness
-                manager
-                    .get_connection()
-                    .execute_unprepared("ALTER TABLE chain_info MODIFY COLUMN id BIGINT NOT NULL AUTO_INCREMENT")
-                    .await?;
-
-                manager
-                    .get_connection()
-                    .execute_unprepared("ALTER TABLE node_info MODIFY COLUMN id BIGINT NOT NULL AUTO_INCREMENT")
-                    .await?;
             }
             _ => {
                 // Unknown database backend, skip migration
@@ -66,17 +53,6 @@ impl MigrationTrait for Migration {
             }
             sea_orm::DatabaseBackend::Sqlite => {
                 // SQLite: No change needed
-            }
-            sea_orm::DatabaseBackend::MySql => {
-                manager
-                    .get_connection()
-                    .execute_unprepared("ALTER TABLE node_info MODIFY COLUMN id INT NOT NULL AUTO_INCREMENT")
-                    .await?;
-
-                manager
-                    .get_connection()
-                    .execute_unprepared("ALTER TABLE chain_info MODIFY COLUMN id INT NOT NULL AUTO_INCREMENT")
-                    .await?;
             }
             _ => {
                 // Unknown database backend, skip migration

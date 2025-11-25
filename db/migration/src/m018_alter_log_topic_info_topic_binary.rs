@@ -9,12 +9,6 @@ impl MigrationTrait for Migration {
         // Change topic column from varchar(64) to binary(32)
         // Hash values are 32 bytes and should be stored as binary, not hex strings
         //
-        // SQLite doesn't support ALTER TABLE MODIFY COLUMN, so we need to:
-        // 1. Create a new table with the correct schema
-        // 2. Copy data (this migration runs on empty tables, so no data conversion needed)
-        // 3. Drop old table
-        // 4. Rename new table
-
         // Both PostgreSQL and SQLite need to recreate the table because:
         // - SQLite doesn't support ALTER TABLE MODIFY COLUMN
         // - PostgreSQL can't automatically cast varchar to bytea
