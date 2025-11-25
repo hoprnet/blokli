@@ -44,16 +44,9 @@ spec:
         - name: RUST_LOG
           value: {{ .Values.config.logging.level | quote }}
         {{- if .Values.database.existingSecret }}
-        - name: DB_USERNAME
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.database.existingSecret }}
-              key: DB_USERNAME
-        - name: DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: {{ .Values.database.existingSecret }}
-              key: DB_PASSWORD
+        envFrom:
+        - secretRef:
+            name: {{ .Values.database.existingSecret }}
         {{- end }}
         {{- with .Values.extraEnv }}
         {{- toYaml . | nindent 8 }}

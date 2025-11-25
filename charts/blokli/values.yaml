@@ -263,7 +263,7 @@ database:
   password: ""
   ## @param database.existingSecret Name of existing secret containing database credentials
   ##
-  ## Secret should contain keys: DB_USERNAME and DB_PASSWORD
+  ## Secret should contain key DATABASE_URL with the full database URL in the format: postgresql://username:password@host:port/database
   existingSecret: ""
   ## @param database.maxConnections Maximum number of database connections
   ##
