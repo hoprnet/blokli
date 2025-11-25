@@ -3,6 +3,24 @@ use sea_orm_migration::prelude::*;
 #[derive(DeriveMigrationName)]
 pub struct Migration;
 
+/// WARNING: This migration is ONLY for fresh databases with no existing data.
+///
+/// This migration converts the LogTopicInfo.topic column from varchar(64) to binary(32)
+/// to properly store 32-byte hash values as binary data instead of hex strings.
+///
+/// BREAKING CHANGE: This migration drops and recreates the LogTopicInfo table, which
+/// will DELETE ALL EXISTING ROWS. This is acceptable only because:
+/// 1. This migration was introduced before any production deployments
+/// 2. The database schema is still in active development
+/// 3. Existing development/test databases can be recreated from chain data
+///
+/// If you have an existing database with data you need to preserve, DO NOT run this
+/// migration. Instead, either:
+/// - Re-index from scratch (recommended for development)
+/// - Manually migrate data using custom SQL that converts hex strings to binary
+///
+/// For future migrations on production systems, data preservation MUST be implemented
+/// using temporary tables and data transformation.
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -12,7 +30,8 @@ impl MigrationTrait for Migration {
         // Both PostgreSQL and SQLite need to recreate the table because:
         // - SQLite doesn't support ALTER TABLE MODIFY COLUMN
         // - PostgreSQL can't automatically cast varchar to bytea
-        // Since this runs on fresh databases (no existing data), we can safely drop and recreate
+        //
+        // DESTRUCTIVE: This drops existing data. Only safe for fresh databases.
 
         // Drop the old index first (ignore error if it doesn't exist)
         let _ = manager

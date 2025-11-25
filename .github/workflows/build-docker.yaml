@@ -67,20 +67,20 @@ jobs:
           current_version=$(grep -E '^version\s*=' bloklid/Cargo.toml | awk -F\" '{print $2}')
           if [[ "${{ inputs.version_type }}" == "commit" ]]; then
             bump_version=${current_version}+commit.$(git rev-parse --short HEAD)
-            echo "bump_version=${bump_version}" | tee -a $GITHUB_OUTPUT
+            echo "bump_version=${bump_version}" | tee -a "$GITHUB_OUTPUT"
           elif [[ "${{ inputs.version_type }}" == "pr" ]]; then
             bump_version=${current_version}+pr.${{ github.event.pull_request.number }}
-            echo "bump_version=${bump_version}" | tee -a $GITHUB_OUTPUT
+            echo "bump_version=${bump_version}" | tee -a "$GITHUB_OUTPUT"
           elif [[ "${{ inputs.version_type }}" == "release" ]]; then
-            echo "bump_version=${current_version}" | tee -a $GITHUB_OUTPUT
+            echo "bump_version=${current_version}" | tee -a "$GITHUB_OUTPUT"
           else
             echo "Invalid version type"
             exit 1
           fi
           sed -i.bak -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" bloklid/Cargo.toml
           nix develop -c cargo generate-lockfile
-          rm bloklid/Cargo.toml.bak
-          echo "DOCKER_TAG=${bump_version/+/-}" | tee -a $GITHUB_OUTPUT
+          rm "bloklid/Cargo.toml.bak"
+          echo "DOCKER_TAG=${bump_version/+/-}" | tee -a "$GITHUB_OUTPUT"
       - name: Build Docker image
         run: |
           # Build Docker image for this architecture
@@ -217,12 +217,8 @@ jobs:
           category: trivy-${{ matrix.arch }}
       - name: Smoke test - Verify container starts
         run: |
-          # Determine image URL based on architecture
-          if [ "${{ matrix.arch }}" = "amd64" ]; then
-            IMAGE_URL="${{ needs.upload-manifest.outputs.image_url_amd64 }}"
-          else
-            IMAGE_URL="${{ needs.upload-manifest.outputs.image_url_arm64 }}"
-          fi
+          # Use manifest URL - Docker will automatically pull the correct architecture
+          IMAGE_URL="${{ needs.upload-manifest.outputs.manifest_url }}"
 
           # Pull the image for smoke testing
           docker pull "$IMAGE_URL"
@@ -235,7 +231,7 @@ jobs:
           timeout=30
           elapsed=0
           while [ $elapsed -lt $timeout ]; do
-            status=$(docker inspect --format='{{.State.Status}}' $container_id)
+            status=$(docker inspect --format='{{.State.Status}}' "$container_id")
             if [ "$status" = "exited" ]; then
               break
             fi
@@ -244,15 +240,15 @@ jobs:
           done
 
           # Check exit code
-          exit_code=$(docker inspect --format='{{.State.ExitCode}}' $container_id)
+          exit_code=$(docker inspect --format='{{.State.ExitCode}}' "$container_id")
 
           # Show logs for debugging
           echo "=== Container logs ==="
-          docker logs $container_id
+          docker logs "$container_id"
           echo "======================"
 
           # Cleanup
-          docker rm $container_id
+          docker rm "$container_id"
 
           # Verify success
           if [ "$exit_code" -ne 0 ]; then

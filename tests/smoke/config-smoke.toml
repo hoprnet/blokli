@@ -8,7 +8,7 @@ host = "0.0.0.0:3064"
 # Directory for storing data files
 data_directory = "/data"
 
-# Network identifier - using "anvil" for local testing
+# Network identifier - using "debug-staging" for local testing
 network = "debug-staging"
 
 # RPC endpoint URL - connects to Anvil service

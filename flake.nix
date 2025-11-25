@@ -521,6 +521,17 @@
                   "*.md"
                 ];
               };
+              # GitHub Actions workflow linter
+              settings.formatter.actionlint = {
+                command = pkgs.writeShellApplication {
+                  name = "actionlint";
+                  runtimeInputs = [ pkgs.actionlint ];
+                  text = ''
+                    actionlint "$@"
+                  '';
+                };
+                includes = [ ".github/workflows/*.yaml" ];
+              };
             };
           };
 

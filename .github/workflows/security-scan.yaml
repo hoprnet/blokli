@@ -82,7 +82,7 @@ jobs:
           timeout=30
           elapsed=0
           while [ $elapsed -lt $timeout ]; do
-            status=$(docker inspect --format='{{.State.Status}}' $container_id)
+            status=$(docker inspect --format='{{.State.Status}}' "$container_id")
             if [ "$status" = "exited" ]; then
               break
             fi
@@ -91,15 +91,15 @@ jobs:
           done
 
           # Check exit code
-          exit_code=$(docker inspect --format='{{.State.ExitCode}}' $container_id)
+          exit_code=$(docker inspect --format='{{.State.ExitCode}}' "$container_id")
 
           # Show logs for debugging
           echo "=== Container logs ==="
-          docker logs $container_id
+          docker logs "$container_id"
           echo "======================"
 
           # Cleanup
-          docker rm $container_id
+          docker rm "$container_id"
 
           # Verify success
           if [ "$exit_code" -ne 0 ]; then
