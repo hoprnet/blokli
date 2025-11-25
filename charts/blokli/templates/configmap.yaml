@@ -22,7 +22,6 @@ data:
 
     # Network configuration
     network = "{{ .Values.config.network }}"
-    rpc_url = "{{ required "config.rpcUrl is required" .Values.config.rpcUrl }}"
     max_rpc_requests_per_sec = {{ .Values.config.maxRpcRequestsPerSec }}
 
     # Indexer settings
