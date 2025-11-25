@@ -20,6 +20,13 @@ jobs:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       version_type: "commit"
     secrets: inherit
+  smoke-test:
+    name: Smoke Test
+    needs: build-docker
+    uses: ./.github/workflows/smoke-test.yaml
+    with:
+      image: ${{ needs.build-docker.outputs.manifest_url }}
+    secrets: inherit
   checks:
     name: Checks
     runs-on: self-hosted-hoprnet-bigger

@@ -78,7 +78,7 @@ jobs:
             exit 1
           fi
           sed -i.bak -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" bloklid/Cargo.toml
-          nix develop --command cargo generate-lockfile
+          nix develop -c cargo generate-lockfile
           rm bloklid/Cargo.toml.bak
           echo "DOCKER_TAG=${bump_version/+/-}" | tee -a $GITHUB_OUTPUT
       - name: Build Docker image
@@ -96,7 +96,7 @@ jobs:
         with:
           name: docker-image-${{ matrix.arch }}
           path: docker-images/${{ matrix.arch }}.tar.gz
-          retention-days: 1
+          retention-days: 7
   upload-manifest:
     name: Upload Multi-Arch Manifest
     runs-on: self-hosted-hoprnet-bigger
