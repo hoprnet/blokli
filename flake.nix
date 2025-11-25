@@ -426,6 +426,7 @@
               pkgs.foundry-bin
               pkgs.solc
               pkgs.kubernetes-helm
+              pkgs.yq
             ];
           };
           shells = {

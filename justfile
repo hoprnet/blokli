@@ -256,4 +256,7 @@ helm-login:
   helm registry login -u oauth2accesstoken --password "$token" https://europe-west3-docker.pkg.dev
 
 helm-push:
-    @echo "Pushing Helm chart to repository (not implemented)"
+  #!/usr/bin/env bash
+  set -euo pipefail
+  version=$(yq -r '.version' ./charts/blokli/Chart.yaml)
+  helm push "blokli-${version}.tgz" oci://europe-west3-docker.pkg.dev/hoprassociation/helm-charts
