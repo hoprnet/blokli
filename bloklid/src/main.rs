@@ -8,6 +8,8 @@ use std::{
     time::Duration,
 };
 
+// Import config crate to avoid conflict with module `config`
+use ::config as config_rs;
 use async_signal::{Signal, Signals};
 use blokli_chain_api::BlokliChain;
 use blokli_chain_types::ContractAddresses;
@@ -24,9 +26,6 @@ use crate::{
     config::Config,
     errors::{BloklidError, ConfigError},
 };
-
-// Import config crate to avoid conflict with module `config`
-use ::config as config_rs;
 
 /// Bloklid: Daemon for indexing HOPR on-chain events and executing HOPR-related on-chain transactions
 #[derive(Debug, Parser)]
@@ -75,76 +74,83 @@ impl Args {
 
         // Layer 1: File (if provided)
         if let Some(config_path) = &self.config {
-             builder = builder.add_source(config_rs::File::from(config_path.clone()));
+            builder = builder.add_source(config_rs::File::from(config_path.clone()));
         } else if use_default {
-             warn!("no configuration file specified; using defaults and environment variables");
+            warn!("no configuration file specified; using defaults and environment variables");
         } else {
-             return Err(ConfigError::NoConfiguration.into());
+            return Err(ConfigError::NoConfiguration.into());
         }
 
         // Layer 2: Environment Variables (Manual Mapping)
         // We manually map env vars to config keys to ensure precedence and specific naming
         let env_mappings = [
-             // Root
-             ("BLOKLI_HOST", "host"),
-             ("BLOKLI_DATA_DIRECTORY", "data_directory"),
-             ("BLOKLI_NETWORK", "network"),
-             ("BLOKLI_RPC_URL", "rpc_url"),
-             ("BLOKLI_MAX_RPC_REQUESTS_PER_SEC", "max_rpc_requests_per_sec"),
-
-             // Database - Canonical
-             ("DATABASE_URL", "database.url"),
-             ("PGHOST", "database.host"),
-             ("POSTGRES_HOST", "database.host"),
-             ("PGPORT", "database.port"),
-             ("POSTGRES_PORT", "database.port"),
-             ("PGUSER", "database.username"),
-             ("POSTGRES_USER", "database.username"),
-             ("PGPASSWORD", "database.password"),
-             ("POSTGRES_PASSWORD", "database.password"),
-             ("PGDATABASE", "database.database"),
-             ("POSTGRES_DB", "database.database"),
-
-             // Database - BLOKLI
-             ("BLOKLI_DATABASE_TYPE", "database.type"),
-             ("BLOKLI_DATABASE_URL", "database.url"),
-             ("BLOKLI_DATABASE_HOST", "database.host"),
-             ("BLOKLI_DATABASE_PORT", "database.port"),
-             ("BLOKLI_DATABASE_USERNAME", "database.username"),
-             ("BLOKLI_DATABASE_PASSWORD", "database.password"),
-             ("BLOKLI_DATABASE_DATABASE", "database.database"),
-             ("BLOKLI_DATABASE_MAX_CONNECTIONS", "database.max_connections"),
-             ("BLOKLI_DATABASE_INDEX_PATH", "database.index_path"),
-             ("BLOKLI_DATABASE_LOGS_PATH", "database.logs_path"),
-
-             // Indexer
-             ("BLOKLI_INDEXER_FAST_SYNC", "indexer.fast_sync"),
-             ("BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT", "indexer.enable_logs_snapshot"),
-             ("BLOKLI_INDEXER_LOGS_SNAPSHOT_URL", "indexer.logs_snapshot_url"),
-
-             // Indexer Subscription
-             ("BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY", "indexer.subscription.event_bus_capacity"),
-             ("BLOKLI_INDEXER_SUBSCRIPTION_SHUTDOWN_SIGNAL_CAPACITY", "indexer.subscription.shutdown_signal_capacity"),
-             ("BLOKLI_INDEXER_SUBSCRIPTION_BATCH_SIZE", "indexer.subscription.batch_size"),
-
-             // API
-             ("BLOKLI_API_ENABLED", "api.enabled"),
-             ("BLOKLI_API_BIND_ADDRESS", "api.bind_address"),
-             ("BLOKLI_API_PLAYGROUND_ENABLED", "api.playground_enabled"),
-
-             // API Health
-             ("BLOKLI_API_HEALTH_MAX_INDEXER_LAG", "api.health.max_indexer_lag"),
-             ("BLOKLI_API_HEALTH_TIMEOUT_MS", "api.health.timeout_ms"),
+            // Root
+            ("BLOKLI_HOST", "host"),
+            ("BLOKLI_DATA_DIRECTORY", "data_directory"),
+            ("BLOKLI_NETWORK", "network"),
+            ("BLOKLI_RPC_URL", "rpc_url"),
+            ("BLOKLI_MAX_RPC_REQUESTS_PER_SEC", "max_rpc_requests_per_sec"),
+            // Database - Canonical
+            ("DATABASE_URL", "database.url"),
+            ("PGHOST", "database.host"),
+            ("POSTGRES_HOST", "database.host"),
+            ("PGPORT", "database.port"),
+            ("POSTGRES_PORT", "database.port"),
+            ("PGUSER", "database.username"),
+            ("POSTGRES_USER", "database.username"),
+            ("PGPASSWORD", "database.password"),
+            ("POSTGRES_PASSWORD", "database.password"),
+            ("PGDATABASE", "database.database"),
+            ("POSTGRES_DB", "database.database"),
+            // Database - BLOKLI
+            ("BLOKLI_DATABASE_TYPE", "database.type"),
+            ("BLOKLI_DATABASE_URL", "database.url"),
+            ("BLOKLI_DATABASE_HOST", "database.host"),
+            ("BLOKLI_DATABASE_PORT", "database.port"),
+            ("BLOKLI_DATABASE_USERNAME", "database.username"),
+            ("BLOKLI_DATABASE_PASSWORD", "database.password"),
+            ("BLOKLI_DATABASE_DATABASE", "database.database"),
+            ("BLOKLI_DATABASE_MAX_CONNECTIONS", "database.max_connections"),
+            ("BLOKLI_DATABASE_INDEX_PATH", "database.index_path"),
+            ("BLOKLI_DATABASE_LOGS_PATH", "database.logs_path"),
+            // Indexer
+            ("BLOKLI_INDEXER_FAST_SYNC", "indexer.fast_sync"),
+            ("BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT", "indexer.enable_logs_snapshot"),
+            ("BLOKLI_INDEXER_LOGS_SNAPSHOT_URL", "indexer.logs_snapshot_url"),
+            // Indexer Subscription
+            (
+                "BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY",
+                "indexer.subscription.event_bus_capacity",
+            ),
+            (
+                "BLOKLI_INDEXER_SUBSCRIPTION_SHUTDOWN_SIGNAL_CAPACITY",
+                "indexer.subscription.shutdown_signal_capacity",
+            ),
+            (
+                "BLOKLI_INDEXER_SUBSCRIPTION_BATCH_SIZE",
+                "indexer.subscription.batch_size",
+            ),
+            // API
+            ("BLOKLI_API_ENABLED", "api.enabled"),
+            ("BLOKLI_API_BIND_ADDRESS", "api.bind_address"),
+            ("BLOKLI_API_PLAYGROUND_ENABLED", "api.playground_enabled"),
+            // API Health
+            ("BLOKLI_API_HEALTH_MAX_INDEXER_LAG", "api.health.max_indexer_lag"),
+            ("BLOKLI_API_HEALTH_TIMEOUT_MS", "api.health.timeout_ms"),
         ];
 
         for (env_var, config_key) in env_mappings {
             if let Ok(val) = std::env::var(env_var) {
-                builder = builder.set_override(config_key, val).map_err(|e| ConfigError::Parse(e.to_string()))?;
+                builder = builder
+                    .set_override(config_key, val)
+                    .map_err(|e| ConfigError::Parse(e.to_string()))?;
             }
         }
 
         let config_rs_config = builder.build().map_err(|e| ConfigError::Parse(e.to_string()))?;
-        let mut config: Config = config_rs_config.try_deserialize().map_err(|e| ConfigError::Parse(e.to_string()))?;
+        let mut config: Config = config_rs_config
+            .try_deserialize()
+            .map_err(|e| ConfigError::Parse(e.to_string()))?;
 
         config.validate().map_err(ConfigError::Validation)?;
 
@@ -465,8 +471,9 @@ async fn run() -> errors::Result<()> {
 
 #[cfg(test)]
 mod env_tests {
-    use super::*;
     use std::io::Write;
+
+    use super::*;
 
     // Helper to safely run env var tests
     fn run_env_test<F>(test: F)
@@ -477,9 +484,9 @@ mod env_tests {
         // Note: This only protects against other tests using this helper
         static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
         let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        
+
         let result = std::panic::catch_unwind(test);
-        
+
         // Clean up commonly used env vars
         unsafe {
             std::env::remove_var("BLOKLI_HOST");
@@ -487,7 +494,7 @@ mod env_tests {
             std::env::remove_var("DATABASE_URL");
             std::env::remove_var("BLOKLI_API_ENABLED");
         }
-        
+
         if let Err(err) = result {
             std::panic::resume_unwind(err);
         }
@@ -498,14 +505,18 @@ mod env_tests {
         run_env_test(|| {
             // Create a temp config file with .toml extension
             let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-            writeln!(file, r#"
+            writeln!(
+                file,
+                r#"
                 host = "127.0.0.1:3000"
                 network = "dufour"
                 rpc_url = "http://localhost:8545"
                 [database]
                 type = "postgresql"
                 url = "postgres://file:5432/db"
-            "#).unwrap();
+            "#
+            )
+            .unwrap();
             let path = file.path().to_path_buf();
 
             // Set env vars
@@ -525,26 +536,30 @@ mod env_tests {
             assert_eq!(config.host.to_string(), "127.0.0.1:4000"); // Env override
             match config.database {
                 crate::config::DatabaseConfig::PostgreSql(crate::config::PostgreSqlConfig::Url(c)) => {
-                     assert_eq!(c.url, "postgres://env:5432/db");
+                    assert_eq!(c.url, "postgres://env:5432/db");
                 }
                 _ => panic!("Wrong db type"),
             }
         });
     }
-    
+
     #[test]
     fn test_canonical_env_var_override() {
         run_env_test(|| {
-             // Create a temp config file with .toml extension
+            // Create a temp config file with .toml extension
             let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-            writeln!(file, r#"
+            writeln!(
+                file,
+                r#"
                 host = "127.0.0.1:3000"
                 network = "dufour"
                 rpc_url = "http://localhost:8545"
                 [database]
                 type = "postgresql"
                 url = "postgres://file:5432/db"
-            "#).unwrap();
+            "#
+            )
+            .unwrap();
             let path = file.path().to_path_buf();
 
             // Set canonical env var
@@ -562,11 +577,10 @@ mod env_tests {
 
             match config.database {
                 crate::config::DatabaseConfig::PostgreSql(crate::config::PostgreSqlConfig::Url(c)) => {
-                     assert_eq!(c.url, "postgres://canonical:5432/db");
+                    assert_eq!(c.url, "postgres://canonical:5432/db");
                 }
                 _ => panic!("Wrong db type"),
             }
         });
     }
 }
-

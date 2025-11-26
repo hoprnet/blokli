@@ -46,7 +46,7 @@ testing = [
 ]
 
 [build-dependencies]
-cynic-codegen = { version = "3" }
+cynic-codegen = { workspace = true }
 
 [dev-dependencies]
 anyhow      = { workspace = true }
