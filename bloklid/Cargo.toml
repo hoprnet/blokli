@@ -51,6 +51,7 @@ hopr-chain-config    = { workspace = true }
 hopr-crypto-types    = { workspace = true }
 hopr-internal-types  = { workspace = true }
 hopr-primitive-types = { workspace = true }
+config = "0.15.19"
 
 [dev-dependencies]
 anyhow      = { workspace = true }
