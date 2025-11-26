@@ -129,19 +129,33 @@
             );
           };
 
+          # blokli-client crate information
+          blokliClientCrateInfoOriginal = craneLib.crateNameFromCargoToml {
+            cargoToml = ./client/Cargo.toml;
+          };
+          blokliClientCrateInfo = {
+            pname = "blokli-client";
+            # Normalize version to major.minor.patch for consistent caching
+            version = pkgs.lib.strings.concatStringsSep "." (
+              pkgs.lib.lists.take 3 (builtins.splitVersion blokliClientCrateInfoOriginal.version)
+            );
+          };
+
           # Create source trees for different build contexts using nix-lib
           sources = {
             main = nixLib.mkSrc {
-              root = ./.;
               inherit fs;
+              root = ./.;
+              extraExtensions = [ "graphql" ];
             };
             test = nixLib.mkTestSrc {
-              root = ./.;
               inherit fs;
+              root = ./.;
+              extraExtensions = [ "graphql" ];
             };
             deps = nixLib.mkDepsSrc {
-              root = ./.;
               inherit fs;
+              root = ./.;
             };
           };
 
@@ -163,22 +177,36 @@
               ;
           };
 
-          # Combine all packages
-          packages = bloklidPackages // {
-            # Additional standalone packages
-
-            # Pre-commit hooks check
-            pre-commit-check = pkgs.callPackage ./nix/packages/pre-commit-check.nix {
-              inherit pre-commit system config;
-            };
-
-            # Man pages
-            bloklid-man = nixLib.mkManPage {
-              pname = "bloklid";
-              binary = bloklidPackages.bloklid-dev;
-              description = "BLOKLID node executable";
-            };
+          blokliClientPackages = import ./nix/packages/blokli-client.nix {
+            inherit
+              lib
+              builders
+              sources
+              blokliClientCrateInfo
+              rev
+              nixLib
+              ;
           };
+
+          # Combine all packages
+          packages =
+            bloklidPackages
+            // blokliClientPackages
+            // {
+              # Additional standalone packages
+
+              # Pre-commit hooks check
+              pre-commit-check = pkgs.callPackage ./nix/packages/pre-commit-check.nix {
+                inherit pre-commit system config;
+              };
+
+              # Man pages
+              bloklid-man = nixLib.mkManPage {
+                pname = "bloklid";
+                binary = bloklidPackages.bloklid-dev;
+                description = "BLOKLID node executable";
+              };
+            };
 
           # Import Docker configurations
           # Docker images need Linux packages, even when building on macOS
