@@ -1,0 +1,19 @@
+id: no-use-in-functions
+language: rust
+severity: error
+message: Import statements (use) must be at module top level, not inside functions or impl blocks
+note: |
+  Move the use statement to the top of the file, organized according to AGENTS.md:
+  1. Standard library (std::)
+  2. External crates (alphabetically)
+  3. Local crates and modules (alphabetically)
+
+  See AGENTS.md "Import Organization" section for details.
+rule:
+  kind: use_declaration
+  inside:
+    kind: block
+    inside:
+      any:
+        - kind: function_item
+        - kind: impl_item

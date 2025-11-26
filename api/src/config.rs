@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 /// API server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ApiConfig {
     /// Address to bind the server to
     #[serde(default = "default_bind_address")]
@@ -48,6 +49,7 @@ pub struct ApiConfig {
 
 /// TLS configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TlsConfig {
     /// Path to TLS certificate file
     pub cert_path: PathBuf,
@@ -58,6 +60,7 @@ pub struct TlsConfig {
 
 /// Health check configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HealthConfig {
     /// Maximum allowed indexer lag (in blocks) before readiness check fails
     #[serde(default = "default_max_indexer_lag")]

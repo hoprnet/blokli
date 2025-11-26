@@ -1061,7 +1061,14 @@ mod tests {
     use async_trait::async_trait;
     use blokli_chain_rpc::BlockWithLogs;
     use blokli_chain_types::{ContractAddresses, chain_events::ChainEventType};
-    use blokli_db::{accounts::BlokliDbAccountOperations, db::BlokliDb};
+    use blokli_db::{
+        TargetDb, accounts::BlokliDbAccountOperations, db::BlokliDb, events::BlockPosition,
+        state_queries::get_channel_state_at,
+    };
+    use blokli_db_entity::{
+        account, channel,
+        prelude::{Account, Channel},
+    };
     use futures::{Stream, join};
     use hex_literal::hex;
     use hopr_crypto_types::{
@@ -1928,13 +1935,6 @@ mod tests {
 
     // Helper function to create a test channel
     async fn create_test_channel(db: &BlokliDb, channel_id: i64) -> anyhow::Result<()> {
-        use blokli_db::TargetDb;
-        use blokli_db_entity::{
-            account, channel,
-            prelude::{Account, Channel},
-        };
-        use sea_orm::{ActiveModelTrait, ActiveValue::Set, EntityTrait};
-
         let conn = db.conn(TargetDb::Index);
 
         // Check if channel already exists
@@ -1994,10 +1994,6 @@ mod tests {
         status: i8,
         reorg_correction: bool,
     ) -> anyhow::Result<()> {
-        use blokli_db::TargetDb;
-        use blokli_db_entity::channel_state;
-        use sea_orm::{ActiveModelTrait, ActiveValue::Set};
-
         let conn = db.conn(TargetDb::Index);
         let state = channel_state::ActiveModel {
             id: Default::default(),
@@ -2022,10 +2018,6 @@ mod tests {
         db: &BlokliDb,
         channel_id: i64,
     ) -> anyhow::Result<Vec<blokli_db_entity::channel_state::Model>> {
-        use blokli_db::TargetDb;
-        use blokli_db_entity::{channel_state, prelude::ChannelState};
-        use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
-
         let conn = db.conn(TargetDb::Index);
         let states = ChannelState::find()
             .filter(channel_state::Column::ChannelId.eq(channel_id))
@@ -2714,8 +2706,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_temporal_query_at_reorg_boundary() -> anyhow::Result<()> {
-        use blokli_db::{TargetDb, events::BlockPosition, state_queries::get_channel_state_at};
-
         // Test querying at exact reorg correction position
         let db = BlokliDb::new_in_memory().await?;
 

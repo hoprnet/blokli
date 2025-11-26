@@ -330,7 +330,7 @@ impl BlokliDbAllOperations for BlokliDb {}
 
 #[cfg(test)]
 mod tests {
-    use migration::MigratorTrait;
+    use migration::{Migrator, MigratorTrait};
 
     use crate::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 
@@ -339,7 +339,6 @@ mod tests {
         let db = BlokliDb::new_in_memory().await?;
 
         // For SQLite, check the unified Migrator status
-        use migration::Migrator;
         Migrator::status(db.conn(TargetDb::Index)).await?;
 
         Ok(())

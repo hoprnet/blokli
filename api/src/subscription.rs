@@ -15,7 +15,7 @@ use blokli_api_types::{
 use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
 use blokli_db::notifications::SqliteNotificationManager;
 use blokli_db_entity::{
-    channel, channel_state,
+    chain_info, channel, channel_state,
     conversions::{
         account_aggregation::{fetch_accounts_by_keyids, fetch_accounts_with_filters},
         channel_aggregation::fetch_channels_with_state,
@@ -575,8 +575,6 @@ impl SubscriptionRoot {
     }
 
     async fn fetch_ticket_parameters(db: &DatabaseConnection) -> Result<Option<TicketParameters>, sea_orm::DbErr> {
-        use blokli_db_entity::chain_info;
-
         let chain_info = chain_info::Entity::find().one(db).await?;
 
         Ok(chain_info.map(|info| {
@@ -782,9 +780,6 @@ mod tests {
 
     // Helper: Initialize chain_info with watermark
     async fn init_chain_info(db: &DatabaseConnection, block: i64, tx_index: i64, log_index: i64) -> anyhow::Result<()> {
-        use blokli_db_entity::chain_info;
-        use sea_orm::EntityTrait;
-
         // Delete any existing chain_info to ensure test isolation
         chain_info::Entity::delete_many().exec(db).await?;
 
@@ -861,9 +856,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_capture_watermark_fails_when_chain_info_missing() {
-        use blokli_db_entity::chain_info;
-        use sea_orm::EntityTrait;
-
         let db = BlokliDb::new_in_memory().await.unwrap();
         let indexer_state = IndexerState::new(10, 100);
 

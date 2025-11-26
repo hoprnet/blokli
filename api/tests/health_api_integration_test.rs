@@ -35,9 +35,10 @@ use blokli_chain_rpc::{
     transport::ReqwestClient,
 };
 use blokli_chain_types::{ContractAddresses, ContractInstances, utils::create_anvil};
+use blokli_db_entity::codegen::chain_info;
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
 use migration::{Migrator, MigratorTrait};
-use sea_orm::{Database, DatabaseConnection, Set};
+use sea_orm::{Database, DatabaseConnection, EntityTrait, Set, sea_query::OnConflict};
 use tower::ServiceExt;
 
 /// Test context containing all components needed for health API testing
@@ -197,9 +198,6 @@ async fn make_request(app: Router, path: &str) -> (StatusCode, serde_json::Value
 /// Update chain_info record with specified block number
 /// The migration seeds initial data with id=1, so we update it
 async fn update_chain_info(db: &DatabaseConnection, block_number: i64) -> anyhow::Result<()> {
-    use blokli_db_entity::codegen::chain_info;
-    use sea_orm::{EntityTrait, sea_query::OnConflict};
-
     // Use upsert to handle both cases (existing or not)
     let chain_info = chain_info::ActiveModel {
         id: Set(1),
@@ -224,9 +222,6 @@ async fn update_chain_info(db: &DatabaseConnection, block_number: i64) -> anyhow
 
 /// Delete chain_info record to simulate indexer not started
 async fn delete_chain_info(db: &DatabaseConnection) -> anyhow::Result<()> {
-    use blokli_db_entity::codegen::chain_info;
-    use sea_orm::EntityTrait;
-
     chain_info::Entity::delete_many().exec(db).await?;
     Ok(())
 }

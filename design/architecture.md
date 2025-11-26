@@ -43,10 +43,13 @@ The architecture follows an event-driven model with clear separation between dat
 
 **Responsibilities**:
 
-- Configuration management with TOML-based file loading and validation
+- Configuration management with TOML-based file loading, environment variable overrides, and validation
 - Signal handling for graceful shutdown and config reload
 - Orchestration of BlokliChain and API server components
 - Process lifecycle management
+
+**Configuration Layer**:
+The configuration layer aggregates settings from multiple sources (Env > File > Defaults). It supports canonical environment variables (e.g. `DATABASE_URL`, `PGHOST`) alongside application-specific variables (`BLOKLI_HOST`, `BLOKLI_INDEXER_FAST_SYNC`) for flexible deployment in containerized environments.
 
 **Key Features**:
 

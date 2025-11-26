@@ -6,9 +6,10 @@ fn default_host() -> std::net::SocketAddr {
 }
 
 fn default_database() -> DatabaseConfig {
-    DatabaseConfig::PostgreSql(PostgreSqlConfig::Url {
+    DatabaseConfig::PostgreSql(PostgreSqlConfig::Url(PostgreSqlUrlConfig {
         url: "postgresql://bloklid:password@localhost:5432/bloklid".to_string(),
-    })
+        max_connections: default_max_connections(),
+    }))
 }
 
 fn default_rpc_url() -> String {
@@ -32,17 +33,29 @@ fn default_network() -> String {
 #[serde(untagged)]
 pub enum PostgreSqlConfig {
     /// Simple connection URL format
-    Url { url: String },
+    Url(PostgreSqlUrlConfig),
     /// Detailed connection parameters
-    Detailed {
-        host: String,
-        port: u16,
-        username: String,
-        password: String,
-        database: String,
-        #[serde(default = "default_max_connections")]
-        max_connections: u32,
-    },
+    Detailed(PostgreSqlDetailedConfig),
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PostgreSqlUrlConfig {
+    pub url: String,
+    #[serde(default = "default_max_connections")]
+    pub max_connections: u32,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PostgreSqlDetailedConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub database: String,
+    #[serde(default = "default_max_connections")]
+    pub max_connections: u32,
 }
 
 /// SQLite database configuration
@@ -51,6 +64,7 @@ pub enum PostgreSqlConfig {
 /// - Index database: Contains accounts, channels, announcements, node_info, chain_info
 /// - Logs database: Contains log, log_status, log_topic_info tables
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct SqliteConfig {
     /// Path to the index SQLite database file (accounts, channels, etc.)
     /// Use ":memory:" for in-memory database
@@ -95,16 +109,12 @@ impl DatabaseConfig {
     pub fn to_url(&self) -> String {
         match self {
             DatabaseConfig::PostgreSql(pg_config) => match pg_config {
-                PostgreSqlConfig::Url { url } => url.clone(),
-                PostgreSqlConfig::Detailed {
-                    host,
-                    port,
-                    username,
-                    password,
-                    database,
-                    ..
-                } => {
-                    format!("postgresql://{}:{}@{}:{}/{}", username, password, host, port, database)
+                PostgreSqlConfig::Url(config) => config.url.clone(),
+                PostgreSqlConfig::Detailed(config) => {
+                    format!(
+                        "postgresql://{}:{}@{}:{}/{}",
+                        config.username, config.password, config.host, config.port, config.database
+                    )
                 }
             },
             DatabaseConfig::Sqlite(sqlite_config) => {
@@ -127,8 +137,8 @@ impl DatabaseConfig {
     pub fn max_connections(&self) -> u32 {
         match self {
             DatabaseConfig::PostgreSql(pg_config) => match pg_config {
-                PostgreSqlConfig::Url { .. } => default_max_connections(),
-                PostgreSqlConfig::Detailed { max_connections, .. } => *max_connections,
+                PostgreSqlConfig::Url(config) => config.max_connections,
+                PostgreSqlConfig::Detailed(config) => config.max_connections,
             },
             DatabaseConfig::Sqlite(sqlite_config) => sqlite_config.max_connections,
         }
@@ -137,6 +147,7 @@ impl DatabaseConfig {
 
 #[serde_with::serde_as]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault, validator::Validate)]
+#[serde(deny_unknown_fields)]
 pub struct Config {
     #[serde_as(as = "serde_with::DisplayFromStr")]
     #[default(_code = "default_host()")]
@@ -181,6 +192,7 @@ pub struct Config {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
+#[serde(deny_unknown_fields)]
 pub struct IndexerConfig {
     #[default(true)]
     pub fast_sync: bool,
@@ -197,6 +209,7 @@ pub struct IndexerConfig {
 
 /// Configuration for GraphQL subscription behavior
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
+#[serde(deny_unknown_fields)]
 pub struct SubscriptionConfig {
     /// Capacity of the event bus buffer for channel events
     /// Higher values prevent overflow but use more memory
@@ -216,6 +229,7 @@ pub struct SubscriptionConfig {
 
 #[serde_with::serde_as]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
+#[serde(deny_unknown_fields)]
 pub struct ApiConfig {
     #[default(true)]
     pub enabled: bool,
@@ -233,6 +247,7 @@ pub struct ApiConfig {
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
+#[serde(deny_unknown_fields)]
 pub struct HealthConfig {
     /// Maximum allowed indexer lag (in blocks) before readiness check fails
     #[default(10)]
@@ -245,4 +260,172 @@ pub struct HealthConfig {
 
 fn default_api_bind_address() -> std::net::SocketAddr {
     "0.0.0.0:8080".parse().unwrap()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, path::PathBuf};
+
+    use super::*;
+
+    #[test]
+    fn test_strict_parsing() {
+        // Test unknown top-level field
+        let config = r#"
+        host = "0.0.0.0:3064"
+        unknown_field = "bad"
+        [database]
+        type = "sqlite"
+        index_path = ":memory:"
+        logs_path = ":memory:"
+    "#;
+        let res: Result<Config, _> = toml::from_str(config);
+        assert!(res.is_err(), "Should fail on unknown field");
+
+        // Test unknown nested field
+        let config = r#"
+        host = "0.0.0.0:3064"
+        [indexer]
+        fast_sync = true
+        unknown_indexer_field = "bad"
+        [database]
+        type = "sqlite"
+        index_path = ":memory:"
+        logs_path = ":memory:"
+    "#;
+        let res: Result<Config, _> = toml::from_str(config);
+        assert!(res.is_err(), "Should fail on unknown nested field");
+
+        // Test invalid type
+        let config = r#"
+        host = "0.0.0.0:3064"
+        max_rpc_requests_per_sec = "not_a_number"
+        [database]
+        type = "sqlite"
+        index_path = ":memory:"
+        logs_path = ":memory:"
+    "#;
+        let res: Result<Config, _> = toml::from_str(config);
+        assert!(res.is_err(), "Should fail on invalid type");
+    }
+
+    #[test]
+    fn test_sqlite_strict() {
+        let config = r#"
+        host = "0.0.0.0:3064"
+        [database]
+        type = "sqlite"
+        index_path = ":memory:"
+        logs_path = ":memory:"
+        unknown = "bad"
+    "#;
+        let res: Result<Config, _> = toml::from_str(config);
+        assert!(res.is_err(), "Should fail on unknown sqlite field");
+    }
+
+    #[test]
+    fn test_postgres_detailed_strict() {
+        let config = r#"
+        host = "0.0.0.0:3064"
+        [database]
+        type = "postgresql"
+        host = "localhost"
+        port = 5432
+        username = "u"
+        password = "p"
+        database = "d"
+        unknown = "bad"
+    "#;
+        let res: Result<Config, _> = toml::from_str(config);
+        assert!(res.is_err(), "Should fail on unknown postgres detailed field");
+    }
+
+    #[test]
+    fn test_postgres_url_strict() {
+        let config = r#"
+        host = "0.0.0.0:3064"
+        [database]
+        type = "postgresql"
+        url = "postgresql://..."
+        unknown = "bad"
+    "#;
+        let res: Result<Config, _> = toml::from_str(config);
+        assert!(res.is_err(), "Should fail on unknown postgres url field");
+    }
+
+    #[test]
+    fn test_api_strict() {
+        let config = r#"
+        host = "0.0.0.0:3064"
+        [api]
+        enabled = true
+        unknown_api_field = "bad"
+        [database]
+        type = "sqlite"
+        index_path = ":memory:"
+        logs_path = ":memory:"
+    "#;
+        let res: Result<Config, _> = toml::from_str(config);
+        assert!(res.is_err(), "Should fail on unknown api field");
+    }
+
+    #[test]
+    fn test_valid_postgres_config() {
+        let config = r#"
+        host = "0.0.0.0:3064"
+        [database]
+        type = "postgresql"
+        url = "postgres://..."
+    "#;
+        let res: Result<Config, _> = toml::from_str(config);
+        assert!(res.is_ok(), "Should pass on valid postgres config: {:?}", res.err());
+    }
+
+    #[test]
+    fn test_valid_config() {
+        let config = r#"
+        host = "0.0.0.0:3064"
+        [database]
+        type = "sqlite"
+        index_path = ":memory:"
+        logs_path = ":memory:"
+    "#;
+        let res: Result<Config, _> = toml::from_str(config);
+        assert!(res.is_ok(), "Should pass on valid config: {:?}", res.err());
+    }
+
+    #[test]
+    fn test_load_example_config() {
+        let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let config_path = project_root.join("example-config.toml");
+
+        println!("Loading config from: {:?}", config_path);
+
+        let config_content = fs::read_to_string(&config_path).expect("Failed to read example-config.toml");
+
+        let config: Config = toml::from_str(&config_content).expect("Failed to parse example-config.toml");
+
+        // Basic verification that values are loaded correctly
+        assert_eq!(config.host.to_string(), "0.0.0.0:3064");
+        assert_eq!(config.network, "dufour");
+
+        // Check database config
+        match config.database {
+            DatabaseConfig::PostgreSql(pg) => {
+                match pg {
+                    PostgreSqlConfig::Url(_) => {} // OK
+                    _ => panic!("Example config should use URL format by default"),
+                }
+            }
+            _ => panic!("Example config should default to PostgreSQL"),
+        }
+
+        // Check indexer config
+        assert!(config.indexer.fast_sync);
+        assert_eq!(config.indexer.subscription.event_bus_capacity, 1000);
+
+        // Check API config
+        assert!(config.api.enabled);
+        assert_eq!(config.api.bind_address.to_string(), "0.0.0.0:8080");
+    }
 }

@@ -4,7 +4,8 @@ mod subscriptions;
 mod testing;
 mod transactions;
 
-use cynic::GraphQlResponse;
+use cynic::{GraphQlResponse, http::ReqwestExt};
+use eventsource_client::Client;
 use futures::{StreamExt, TryFutureExt, TryStreamExt};
 #[cfg(feature = "testing")]
 pub use testing::{
@@ -73,7 +74,6 @@ impl BlokliClient {
         Q: cynic::QueryFragment + cynic::serde::de::DeserializeOwned + 'static,
         V: cynic::QueryVariables + cynic::serde::Serialize,
     {
-        use eventsource_client::Client;
         let client = eventsource_client::ClientBuilder::for_url(self.graphql_url()?.as_str())
             .map_err(ErrorKind::from)?
             .connect_timeout(self.cfg.timeout)
@@ -116,8 +116,6 @@ impl BlokliClient {
         Q: cynic::QueryFragment + cynic::serde::de::DeserializeOwned + 'static,
         V: cynic::QueryVariables + cynic::serde::Serialize,
     {
-        use cynic::http::ReqwestExt;
-
         let client = self.build_reqwest_client()?;
 
         Ok(client
