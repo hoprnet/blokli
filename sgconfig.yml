@@ -1,0 +1,12 @@
+# ast-grep configuration for Blokli project
+ruleDirs:
+  - .ast-grep/rules
+
+# Test configuration (optional)
+# testConfigs:
+#   - testDir: rule-test
+
+# Custom languages (if needed in future)
+# customLanguages:
+#   my-lang:
+#     libraryPath: path/to/language.so

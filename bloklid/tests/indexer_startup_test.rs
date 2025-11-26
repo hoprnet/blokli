@@ -5,7 +5,7 @@ use blokli_chain_indexer::{IndexerConfig, block::Indexer, handlers::ContractEven
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{api::logs::BlokliDbLogOperations, db::BlokliDb};
-use futures::stream;
+use futures::stream::{self, StreamExt};
 use hopr_crypto_types::types::Hash;
 use hopr_primitive_types::prelude::*;
 use tempfile::TempDir;
@@ -61,8 +61,6 @@ impl HoprIndexerRpcOperations for MockRpcOperations {
         _is_synced: bool,
     ) -> blokli_chain_rpc::errors::Result<std::pin::Pin<Box<dyn futures::Stream<Item = BlockWithLogs> + Send + 'a>>>
     {
-        use futures::stream::StreamExt;
-
         // Create a stream that emits a few blocks and then waits indefinitely
         // This prevents the stream from terminating immediately
         let blocks = vec![
@@ -279,8 +277,6 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
             _is_synced: bool,
         ) -> blokli_chain_rpc::errors::Result<std::pin::Pin<Box<dyn futures::Stream<Item = BlockWithLogs> + Send + 'a>>>
         {
-            use futures::stream::StreamExt;
-
             // Record the requested start block
             let requested_start = self.requested_start_block.clone();
             tokio::spawn(async move {

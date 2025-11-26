@@ -15,6 +15,10 @@ pub mod topics {
         },
         hopr_node_safe_registry_events::HoprNodeSafeRegistryEvents::{DeregisteredNodeSafe, RegisteredNodeSafe},
         hopr_ticket_price_oracle_events::HoprTicketPriceOracleEvents::TicketPriceUpdated,
+        hopr_token::HoprToken::{
+            Approval, AuthorizedOperator, Burned, Minted, RevokedOperator, RoleAdminChanged, RoleGranted, RoleRevoked,
+            Sent, Transfer,
+        },
         hopr_winning_probability_oracle_events::HoprWinningProbabilityOracleEvents::WinProbUpdated,
     };
 
@@ -56,10 +60,6 @@ pub mod topics {
     }
 
     pub fn token() -> Vec<B256> {
-        use hopr_bindings::hopr_token::HoprToken::{
-            Approval, AuthorizedOperator, Burned, Minted, RevokedOperator, RoleAdminChanged, RoleGranted, RoleRevoked,
-            Sent, Transfer,
-        };
         vec![
             Transfer::SIGNATURE_HASH,
             Approval::SIGNATURE_HASH,

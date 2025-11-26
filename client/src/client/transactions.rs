@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use cynic::MutationBuilder;
+use cynic::{MutationBuilder, SubscriptionBuilder};
 use futures::TryStreamExt;
 use futures_time::future::FutureExt;
 use hex::ToHex;
@@ -58,7 +58,6 @@ impl BlokliTransactionClient for BlokliClient {
     }
 
     async fn track_transaction(&self, tx_id: TxId, client_timeout: Duration) -> Result<Transaction> {
-        use cynic::SubscriptionBuilder;
         self.build_subscription_stream(SubscribeTransaction::build(TransactionsVariables { id: tx_id.into() }))?
             .try_filter_map(|item| {
                 futures::future::ready(match &item.transaction_updated.status {

@@ -21,7 +21,7 @@ use std::path::PathBuf;
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
-use sea_orm::TransactionTrait;
+use sea_orm::{ConnectionTrait, TransactionTrait};
 pub use sea_orm::{DatabaseConnection, DatabaseTransaction};
 
 use crate::{
@@ -219,8 +219,6 @@ impl BlokliDbGeneralModelOperations for BlokliDb {
     }
 
     async fn import_logs_db(self, src_dir: PathBuf) -> Result<()> {
-        use sea_orm::ConnectionTrait;
-
         let sql_path = src_dir.join("hopr_logs.sql");
 
         if !sql_path.exists() {

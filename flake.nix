@@ -335,6 +335,7 @@
             treefmtPrograms = pkgs.lib.attrValues config.treefmt.build.programs;
             shellHook = packages.pre-commit-check.shellHook;
             extraPackages = [
+              pkgs.ast-grep
               pkgs.foundry-bin
               pkgs.solc
               pkgs.kubernetes-helm
@@ -454,6 +455,20 @@
                   '';
                 };
                 includes = [ ".github/workflows/*.yaml" ];
+              };
+              # Rust code linter using AST-based pattern matching
+              settings.formatter.ast-grep = {
+                command = pkgs.writeShellApplication {
+                  name = "ast-grep-check";
+                  runtimeInputs = [ pkgs.ast-grep ];
+                  text = ''
+                    ast-grep scan "$@"
+                  '';
+                };
+                includes = [ "**/*.rs" ];
+                excludes = [
+                  "db/entity/src/codegen/*.rs"
+                ];
               };
             };
           };

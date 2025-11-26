@@ -76,6 +76,10 @@ clippy-all:
 clippy-fix:
     cargo clippy --workspace --fix --allow-dirty --allow-staged
 
+# Run ast-grep to check import organization and code style rules
+lint-imports:
+    ast-grep scan
+
 # ============================================================================
 # Run Commands - bloklid daemon
 # ============================================================================

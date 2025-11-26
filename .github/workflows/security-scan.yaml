@@ -47,7 +47,6 @@ jobs:
         with:
           sarif_file: trivy-results-${{ inputs.architecture }}.sarif
           category: trivy-${{ inputs.architecture }}
-
   smoke-test:
     name: Smoke Test (${{ inputs.architecture }})
     runs-on: self-hosted-hoprnet-bigger
@@ -99,7 +98,6 @@ jobs:
           fi
 
           echo "✓ Smoke test passed - container started successfully"
-
   generate-sbom:
     name: Generate SBOM (${{ inputs.architecture }})
     runs-on: self-hosted-hoprnet-bigger
