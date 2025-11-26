@@ -18,18 +18,12 @@ on:
         type: string
 jobs:
   security-scan:
-    name: Security Scan (${{ inputs.architecture }})
+    name: Trivy Vulnerability Scan (${{ inputs.architecture }})
     runs-on: self-hosted-hoprnet-bigger
     steps:
-      - name: Harden Runner
-        uses: step-security/harden-runner@95d9a5deda9de15063e7595e9719c11c38c90ae2 # v2.13.2
-        with:
-          disable-sudo: true
-          egress-policy: audit
       - name: Checkout repository
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
       - name: Setup GCP
-        id: gcp
         uses: hoprnet/hopr-workflows/actions/setup-gcp@12c56020e16036982e6cc529848edeedfc705865 # master
         with:
           google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
@@ -53,7 +47,20 @@ jobs:
         with:
           sarif_file: trivy-results-${{ inputs.architecture }}.sarif
           category: trivy-${{ inputs.architecture }}
-      - name: Smoke test - Verify container starts
+
+  smoke-test:
+    name: Smoke Test (${{ inputs.architecture }})
+    runs-on: self-hosted-hoprnet-bigger
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+      - name: Setup GCP
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@12c56020e16036982e6cc529848edeedfc705865 # master
+        with:
+          google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
+          login-artifact-registry: 'true'
+          install-sdk: 'false'
+      - name: Verify container starts
         run: |
           # Pull the image for smoke testing
           docker pull "${{ inputs.image_url }}"
@@ -92,8 +99,20 @@ jobs:
           fi
 
           echo "✓ Smoke test passed - container started successfully"
+
+  generate-sbom:
+    name: Generate SBOM (${{ inputs.architecture }})
+    runs-on: self-hosted-hoprnet-bigger
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+      - name: Setup GCP
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@12c56020e16036982e6cc529848edeedfc705865 # master
+        with:
+          google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
+          login-artifact-registry: 'true'
+          install-sdk: 'false'
       - name: Generate SBOM
-        if: always()
         run: |
           # Generate SBOM using Trivy via Docker
           docker run --rm \
@@ -104,7 +123,6 @@ jobs:
             --output "/output/sbom-${{ inputs.architecture }}.json" \
             "${{ inputs.image_url }}"
       - name: Upload SBOM artifacts
-        if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
           name: sbom-${{ inputs.architecture }}
