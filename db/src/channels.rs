@@ -785,6 +785,8 @@ impl BlokliDbChannelOperations for BlokliDb {
 
 #[cfg(test)]
 mod tests {
+    use std::time::SystemTime;
+
     use anyhow::Context;
     use hopr_crypto_random::random_bytes;
     use hopr_crypto_types::{
@@ -1425,7 +1427,7 @@ mod tests {
         let mut handles = vec![];
         for i in 0..10 {
             let db_clone = db.clone();
-            let channel_id = ce_initial.get_id();
+            let _channel_id = ce_initial.get_id();
             let handle = tokio::spawn(async move {
                 let balance = HoprBalance::from((i + 2) * 1000);
                 let ce = ChannelEntry::new(
