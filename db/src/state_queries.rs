@@ -980,7 +980,7 @@ mod tests {
         let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
 
         // Insert normal state before reorg
-        let state_id_1 =
+        let _state_id_1 =
             insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
 
         // Insert states that will be "reverted" by reorg
