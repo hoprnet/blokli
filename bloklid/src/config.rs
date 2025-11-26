@@ -195,9 +195,11 @@ pub struct Config {
 #[serde(deny_unknown_fields)]
 pub struct IndexerConfig {
     #[default(true)]
+    #[serde(default = "default_true")]
     pub fast_sync: bool,
 
     #[default(false)]
+    #[serde(default = "default_false")]
     pub enable_logs_snapshot: bool,
 
     #[serde(default)]
@@ -214,16 +216,19 @@ pub struct SubscriptionConfig {
     /// Capacity of the event bus buffer for channel events
     /// Higher values prevent overflow but use more memory
     #[default(1000)]
+    #[serde(default = "default_event_bus_capacity")]
     pub event_bus_capacity: usize,
 
     /// Capacity of the shutdown signal buffer
     /// Typically a small value is sufficient
     #[default(10)]
+    #[serde(default = "default_shutdown_signal_capacity")]
     pub shutdown_signal_capacity: usize,
 
     /// Batch size for Phase 1 historical channel queries
     /// Higher values fetch more data per query but may increase latency
     #[default(100)]
+    #[serde(default = "default_batch_size")]
     pub batch_size: usize,
 }
 
@@ -232,6 +237,7 @@ pub struct SubscriptionConfig {
 #[serde(deny_unknown_fields)]
 pub struct ApiConfig {
     #[default(true)]
+    #[serde(default = "default_true")]
     pub enabled: bool,
 
     #[serde_as(as = "serde_with::DisplayFromStr")]
@@ -240,6 +246,7 @@ pub struct ApiConfig {
     pub bind_address: std::net::SocketAddr,
 
     #[default(true)]
+    #[serde(default = "default_true")]
     pub playground_enabled: bool,
 
     #[serde(default)]
@@ -251,15 +258,46 @@ pub struct ApiConfig {
 pub struct HealthConfig {
     /// Maximum allowed indexer lag (in blocks) before readiness check fails
     #[default(10)]
+    #[serde(default = "default_max_indexer_lag")]
     pub max_indexer_lag: u64,
 
     /// Timeout for health check queries (in milliseconds)
     #[default(5000)]
+    #[serde(default = "default_health_timeout_ms")]
     pub timeout_ms: u64,
 }
 
 fn default_api_bind_address() -> std::net::SocketAddr {
     "0.0.0.0:8080".parse().unwrap()
+}
+
+// Helper functions for serde defaults that respect SmartDefault values
+fn default_true() -> bool {
+    true
+}
+
+fn default_false() -> bool {
+    false
+}
+
+fn default_event_bus_capacity() -> usize {
+    1000
+}
+
+fn default_shutdown_signal_capacity() -> usize {
+    10
+}
+
+fn default_batch_size() -> usize {
+    100
+}
+
+fn default_max_indexer_lag() -> u64 {
+    10
+}
+
+fn default_health_timeout_ms() -> u64 {
+    5000
 }
 
 #[cfg(test)]
@@ -427,5 +465,70 @@ mod tests {
         // Check API config
         assert!(config.api.enabled);
         assert_eq!(config.api.bind_address.to_string(), "0.0.0.0:8080");
+    }
+
+    #[test]
+    fn test_partial_indexer_config() {
+        // Only set fast_sync, all other fields should use defaults
+        let config = r#"
+        host = "0.0.0.0:3064"
+        [indexer]
+        fast_sync = false
+        [database]
+        type = "sqlite"
+        index_path = ":memory:"
+        logs_path = ":memory:"
+    "#;
+        let res: Result<Config, _> = toml::from_str(config);
+        assert!(res.is_ok(), "Should allow partial indexer config: {:?}", res.err());
+
+        let cfg = res.unwrap();
+        assert!(!cfg.indexer.fast_sync);
+        assert!(!cfg.indexer.enable_logs_snapshot); // Default
+        assert_eq!(cfg.indexer.subscription.event_bus_capacity, 1000); // Default
+        assert_eq!(cfg.indexer.subscription.batch_size, 100); // Default
+    }
+
+    #[test]
+    fn test_partial_api_config() {
+        // Only set enabled, all other fields should use defaults
+        let config = r#"
+        host = "0.0.0.0:3064"
+        [api]
+        enabled = false
+        [database]
+        type = "sqlite"
+        index_path = ":memory:"
+        logs_path = ":memory:"
+    "#;
+        let res: Result<Config, _> = toml::from_str(config);
+        assert!(res.is_ok(), "Should allow partial api config: {:?}", res.err());
+
+        let cfg = res.unwrap();
+        assert!(!cfg.api.enabled);
+        assert!(cfg.api.playground_enabled); // Default
+        assert_eq!(cfg.api.bind_address.to_string(), "0.0.0.0:8080"); // Default
+        assert_eq!(cfg.api.health.max_indexer_lag, 10); // Default
+    }
+
+    #[test]
+    fn test_partial_subscription_config() {
+        // Only set event_bus_capacity, other fields should use defaults
+        let config = r#"
+        host = "0.0.0.0:3064"
+        [indexer.subscription]
+        event_bus_capacity = 500
+        [database]
+        type = "sqlite"
+        index_path = ":memory:"
+        logs_path = ":memory:"
+    "#;
+        let res: Result<Config, _> = toml::from_str(config);
+        assert!(res.is_ok(), "Should allow partial subscription config: {:?}", res.err());
+
+        let cfg = res.unwrap();
+        assert_eq!(cfg.indexer.subscription.event_bus_capacity, 500);
+        assert_eq!(cfg.indexer.subscription.shutdown_signal_capacity, 10); // Default
+        assert_eq!(cfg.indexer.subscription.batch_size, 100); // Default
     }
 }
