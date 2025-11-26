@@ -8,6 +8,7 @@ fn default_host() -> std::net::SocketAddr {
 fn default_database() -> DatabaseConfig {
     DatabaseConfig::PostgreSql(PostgreSqlConfig::Url(PostgreSqlUrlConfig {
         url: "postgresql://bloklid:password@localhost:5432/bloklid".to_string(),
+        max_connections: default_max_connections(),
     }))
 }
 
@@ -41,6 +42,8 @@ pub enum PostgreSqlConfig {
 #[serde(deny_unknown_fields)]
 pub struct PostgreSqlUrlConfig {
     pub url: String,
+    #[serde(default = "default_max_connections")]
+    pub max_connections: u32,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -134,7 +137,7 @@ impl DatabaseConfig {
     pub fn max_connections(&self) -> u32 {
         match self {
             DatabaseConfig::PostgreSql(pg_config) => match pg_config {
-                PostgreSqlConfig::Url(_) => default_max_connections(),
+                PostgreSqlConfig::Url(config) => config.max_connections,
                 PostgreSqlConfig::Detailed(config) => config.max_connections,
             },
             DatabaseConfig::Sqlite(sqlite_config) => sqlite_config.max_connections,

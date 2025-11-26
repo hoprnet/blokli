@@ -12,12 +12,6 @@ data:
     # Server configuration
     host = "0.0.0.0:{{ .Values.service.port }}"
 
-    # Database configuration
-    [database]
-    type = "postgresql"
-    url = "{{ include "blokli.databaseUrl" . }}"
-    max_connections = {{ .Values.database.maxConnections }}
-
     # Data storage
     data_directory = "{{ .Values.config.dataDirectory }}"
 
@@ -25,6 +19,12 @@ data:
     network = "{{ .Values.config.network }}"
     rpc_url = "{{ .Values.config.rpcUrl }}"
     max_rpc_requests_per_sec = {{ .Values.config.maxRpcRequestsPerSec }}
+
+    # Database configuration
+    [database]
+    type = "postgresql"
+    url = "{{ include "blokli.databaseUrl" . }}"
+    max_connections = {{ .Values.database.maxConnections }}
 
     # Indexer settings
     [indexer]
