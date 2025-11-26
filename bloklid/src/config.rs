@@ -264,6 +264,8 @@ fn default_api_bind_address() -> std::net::SocketAddr {
 
 #[cfg(test)]
 mod tests {
+    use std::{fs, path::PathBuf};
+
     use super::*;
 
     #[test]
@@ -394,8 +396,6 @@ mod tests {
 
     #[test]
     fn test_load_example_config() {
-        use std::{fs, path::PathBuf};
-
         let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let config_path = project_root.join("example-config.toml");
 
