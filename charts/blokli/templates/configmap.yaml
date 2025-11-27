@@ -14,7 +14,7 @@ data:
 
     # Database configuration
     [database]
-    type = "postgresql"
+    type = {{ required "You must set .Values.database.type " .Values.database.type | quote }}
     max_connections = {{ .Values.database.maxConnections }}
 
     # Data storage

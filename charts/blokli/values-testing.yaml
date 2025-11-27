@@ -18,6 +18,7 @@ persistence:
   size: 10Gi
 # Database configuration
 database:
+  type: "postgresql"
   host: postgres-18.postgres.svc
   database: bloklid
   username: bloklid

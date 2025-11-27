@@ -78,10 +78,28 @@ Return the database connection string
 */}}
 {{- define "blokli.databaseUrl" -}}
 {{- with .Values.database }}
+{{- if eq .type "postgresql" }}
+  {{- if not .host }}
+    {{- fail "You must set .Values.database.host (or use .existingSecret)." }}
+  {{- end }}
+  {{- if not .username }}
+    {{- fail "You must set .Values.database.username (or use .existingSecret)." }}
+  {{- end }}
   {{- if not .password }}
     {{- fail "You must set .Values.database.password (or use .existingSecret)." }}
   {{- end }}
+  {{- if not .database }}
+    {{- fail "You must set .Values.database.database (or use .existingSecret)." }}
+  {{- end }}
 {{- printf "postgresql://%s:%s@%s:%d/%s" .username .password .host (.port | int) .database }}
+{{- else if eq .type "sqlite" }}
+  {{- if not .path }}
+    {{- fail "You must set .Values.database.path for sqlite." }}
+  {{- end }}
+{{- printf "sqlite://%s" .path }}
+{{- else }}
+  {{- fail "Unsupported database type. Must be 'postgresql' or 'sqlite'." }}
+{{- end }}
 {{- end }}
 {{- end }}
 

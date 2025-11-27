@@ -43,8 +43,10 @@ spec:
         env:
         - name: RUST_LOG
           value: {{ .Values.config.logging.level | quote }}
-        {{- if .Values.database.existingSecret }}
         envFrom:
+        - secretRef:
+            name: {{ include "blokli.fullname" . }}
+        {{- if .Values.database.existingSecret }}
         - secretRef:
             name: {{ .Values.database.existingSecret }}
         {{- end }}

@@ -246,24 +246,32 @@ persistence:
   selector: {}
 # Database configuration
 database:
+  ## @param database.type Database type (e.g., postgresql, sqlite)
+  ##
+  type: ""
+
   ## @param database.host PostgreSQL host
   ##
-  host: "postgresql"
+  host: ""
   ## @param database.port PostgreSQL port
   ##
   port: 5432
   ## @param database.database PostgreSQL database name
   ##
-  database: "bloklid"
+  database: ""
   ## @param database.username PostgreSQL username
   ##
-  username: "bloklid"
+  username: ""
   ## @param database.password PostgreSQL password (ignored if existingSecret is set)
   ##
   password: ""
+  ## @param database.path Sqlite database file path (used only if database.type is "sqlite")
+  ##
+  path: ""
+
   ## @param database.existingSecret Name of existing secret containing database credentials
   ##
-  ## Secret should contain key DATABASE_URL with the full database URL in the format: postgresql://username:password@host:port/database
+  ## Secret should contain key BLOKLI_DATABASE_TYPE="postgresql", BLOKLI_DATABASE_URL with the full database URL in the format: postgresql://username:password@host:port/database
   existingSecret: ""
   ## @param database.maxConnections Maximum number of database connections
   ##
