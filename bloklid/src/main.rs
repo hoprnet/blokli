@@ -288,10 +288,13 @@ async fn run() -> errors::Result<()> {
                 .ok_or_else(|| BloklidError::NonSpecific("Chain network not configured".into()))?
                 .clone();
 
-            let database = cfg
-                .database
-                .as_ref()
-                .ok_or_else(|| BloklidError::NonSpecific("Database not configured".into()))?;
+            let database = cfg.database.as_ref().ok_or_else(|| {
+                BloklidError::DatabaseNotConfigured(
+                    "Database configuration is missing. Ensure either [database] section is present in config file or \
+                     BLOKLI_DATABASE_TYPE and BLOKLI_DATABASE_URL are set"
+                        .to_string(),
+                )
+            })?;
 
             let indexer_config = blokli_chain_indexer::IndexerConfig {
                 start_block_number: chain_network.channel_contract_deploy_block as u64,
@@ -330,7 +333,11 @@ async fn run() -> errors::Result<()> {
                     .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
                 cfg.database
                     .as_ref()
-                    .ok_or_else(|| BloklidError::NonSpecific("Database not configured".into()))?
+                    .ok_or_else(|| {
+                        BloklidError::DatabaseNotConfigured(
+                            "Failed to read database configuration during connection pool initialization".to_string(),
+                        )
+                    })?
                     .max_connections()
             },
             log_slow_queries: Duration::from_secs(1),
@@ -492,19 +499,28 @@ mod tests {
     static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
 
     /// Helper for environment variable tests
-    /// Sets variables for the test and cleans them up afterwards
+    /// Clears specified variables at construction and removes them on drop.
+    /// This ensures clean state before and after the test runs, preventing
+    /// interference from other tests or environment setup.
     struct EnvGuard {
         vars: Vec<&'static str>,
     }
 
     impl EnvGuard {
         fn new(vars: Vec<&'static str>) -> Self {
+            // Clear environment variables before test starts
+            for var in &vars {
+                unsafe {
+                    std::env::remove_var(var);
+                }
+            }
             Self { vars }
         }
     }
 
     impl Drop for EnvGuard {
         fn drop(&mut self) {
+            // Remove environment variables after test completes
             for var in &self.vars {
                 unsafe {
                     std::env::remove_var(var);

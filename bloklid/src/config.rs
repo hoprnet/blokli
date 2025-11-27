@@ -97,8 +97,24 @@ fn default_max_connections() -> u32 {
 
 impl DatabaseConfig {
     /// Convert database configuration to connection URL
-    /// For PostgreSQL, returns the single database URL
-    /// For SQLite, returns the index database URL
+    /// Constructs a database connection URL.
+    ///
+    /// For PostgreSQL:
+    /// - If `url` is provided in config, returns it directly
+    /// - Otherwise, constructs URL from individual fields with the following defaults:
+    ///   - `host`: "localhost" if not specified
+    ///   - `port`: 5432 if not specified
+    ///   - `username`: empty string if not specified
+    ///   - `password`: empty string if not specified
+    ///   - `database`: empty string if not specified
+    ///
+    /// For SQLite, returns the path with read-write mode enabled.
+    ///
+    /// # Warning
+    ///
+    /// When using detailed PostgreSQL configuration fields instead of a full URL,
+    /// ensure all required connection parameters are provided. Missing parameters
+    /// will use defaults which may result in connection failures.
     pub fn to_url(&self) -> String {
         match self {
             DatabaseConfig::PostgreSql(pg_config) => {
