@@ -129,19 +129,33 @@
             );
           };
 
+          # blokli-client crate information
+          blokliClientCrateInfoOriginal = craneLib.crateNameFromCargoToml {
+            cargoToml = ./client/Cargo.toml;
+          };
+          blokliClientCrateInfo = {
+            pname = "blokli-client";
+            # Normalize version to major.minor.patch for consistent caching
+            version = pkgs.lib.strings.concatStringsSep "." (
+              pkgs.lib.lists.take 3 (builtins.splitVersion blokliClientCrateInfoOriginal.version)
+            );
+          };
+
           # Create source trees for different build contexts using nix-lib
           sources = {
             main = nixLib.mkSrc {
-              root = ./.;
               inherit fs;
+              root = ./.;
+              extraExtensions = [ "graphql" ];
             };
             test = nixLib.mkTestSrc {
-              root = ./.;
               inherit fs;
+              root = ./.;
+              extraExtensions = [ "graphql" ];
             };
             deps = nixLib.mkDepsSrc {
-              root = ./.;
               inherit fs;
+              root = ./.;
             };
           };
 
@@ -163,22 +177,36 @@
               ;
           };
 
-          # Combine all packages
-          packages = bloklidPackages // {
-            # Additional standalone packages
-
-            # Pre-commit hooks check
-            pre-commit-check = pkgs.callPackage ./nix/packages/pre-commit-check.nix {
-              inherit pre-commit system config;
-            };
-
-            # Man pages
-            bloklid-man = nixLib.mkManPage {
-              pname = "bloklid";
-              binary = bloklidPackages.bloklid-dev;
-              description = "BLOKLID node executable";
-            };
+          blokliClientPackages = import ./nix/packages/blokli-client.nix {
+            inherit
+              lib
+              builders
+              sources
+              blokliClientCrateInfo
+              rev
+              nixLib
+              ;
           };
+
+          # Combine all packages
+          packages =
+            bloklidPackages
+            // blokliClientPackages
+            // {
+              # Additional standalone packages
+
+              # Pre-commit hooks check
+              pre-commit-check = pkgs.callPackage ./nix/packages/pre-commit-check.nix {
+                inherit pre-commit system config;
+              };
+
+              # Man pages
+              bloklid-man = nixLib.mkManPage {
+                pname = "bloklid";
+                binary = bloklidPackages.bloklid-dev;
+                description = "BLOKLID node executable";
+              };
+            };
 
           # Import Docker configurations
           # Docker images need Linux packages, even when building on macOS
@@ -226,83 +254,6 @@
               name = "bloklid-profile";
               Entrypoint = [ "${bloklidPackages.bloklid-aarch64-linux-profile}/bin/bloklid" ];
               pkgsLinux = pkgsLinuxAarch64;
-            };
-          };
-
-          # Docker security scanning using nix-lib
-          # Trivy vulnerability scans for each architecture
-          bloklidSecurity = {
-            # x86_64-linux security scans
-            bloklid-docker-amd64-scan = nixLib.mkTrivyScan {
-              image = bloklidDocker.bloklid-docker-amd64;
-              name = "bloklid-trivy-scan-amd64";
-              severity = "HIGH,CRITICAL";
-              format = "sarif";
-              exitCode = 1;
-            };
-
-            bloklid-dev-docker-amd64-scan = nixLib.mkTrivyScan {
-              image = bloklidDocker.bloklid-dev-docker-amd64;
-              name = "bloklid-dev-trivy-scan-amd64";
-              severity = "HIGH,CRITICAL";
-              format = "sarif";
-              exitCode = 0; # Don't fail dev builds on vulnerabilities
-            };
-
-            # aarch64-linux security scans
-            bloklid-docker-aarch64-scan = nixLib.mkTrivyScan {
-              image = bloklidDocker.bloklid-docker-aarch64;
-              name = "bloklid-trivy-scan-arm64";
-              severity = "HIGH,CRITICAL";
-              format = "sarif";
-              exitCode = 1;
-            };
-
-            bloklid-dev-docker-aarch64-scan = nixLib.mkTrivyScan {
-              image = bloklidDocker.bloklid-dev-docker-aarch64;
-              name = "bloklid-dev-trivy-scan-arm64";
-              severity = "HIGH,CRITICAL";
-              format = "sarif";
-              exitCode = 0; # Don't fail dev builds on vulnerabilities
-            };
-
-            # SBOM generation for each architecture
-            # x86_64-linux SBOMs
-            bloklid-docker-amd64-sbom = nixLib.mkSBOM {
-              image = bloklidDocker.bloklid-docker-amd64;
-              name = "bloklid-sbom-amd64";
-              formats = [
-                "spdx-json"
-                "cyclonedx-json"
-              ];
-            };
-
-            bloklid-dev-docker-amd64-sbom = nixLib.mkSBOM {
-              image = bloklidDocker.bloklid-dev-docker-amd64;
-              name = "bloklid-dev-sbom-amd64";
-              formats = [
-                "spdx-json"
-                "cyclonedx-json"
-              ];
-            };
-
-            # aarch64-linux SBOMs
-            bloklid-docker-aarch64-sbom = nixLib.mkSBOM {
-              image = bloklidDocker.bloklid-docker-aarch64;
-              name = "bloklid-sbom-arm64";
-              formats = [
-                "spdx-json"
-                "cyclonedx-json"
-              ];
-            };
-
-            bloklid-dev-docker-aarch64-sbom = nixLib.mkSBOM {
-              image = bloklidDocker.bloklid-dev-docker-aarch64;
-              name = "bloklid-dev-sbom-arm64";
-              formats = [
-                "spdx-json"
-                "cyclonedx-json"
-              ];
             };
           };
 
@@ -423,6 +374,7 @@
             '';
             extraPackages = [
               pkgs.nodejs
+              pkgs.ast-grep
               pkgs.foundry-bin
               pkgs.solc
               pkgs.kubernetes-helm
@@ -533,6 +485,31 @@
                   "*.md"
                 ];
               };
+              # GitHub Actions workflow linter
+              settings.formatter.actionlint = {
+                command = pkgs.writeShellApplication {
+                  name = "actionlint";
+                  runtimeInputs = [ pkgs.actionlint ];
+                  text = ''
+                    actionlint "$@"
+                  '';
+                };
+                includes = [ ".github/workflows/*.yaml" ];
+              };
+              # Rust code linter using AST-based pattern matching
+              settings.formatter.ast-grep = {
+                command = pkgs.writeShellApplication {
+                  name = "ast-grep-check";
+                  runtimeInputs = [ pkgs.ast-grep ];
+                  text = ''
+                    ast-grep scan "$@"
+                  '';
+                };
+                includes = [ "**/*.rs" ];
+                excludes = [
+                  "db/entity/src/codegen/*.rs"
+                ];
+              };
             };
           };
 
@@ -556,22 +533,6 @@
               bloklid-docker-aarch64
               bloklid-dev-docker-aarch64
               bloklid-profile-docker-aarch64
-              ;
-
-            # Security scans - Trivy vulnerability scanning
-            inherit (bloklidSecurity)
-              bloklid-docker-amd64-scan
-              bloklid-docker-aarch64-scan
-              bloklid-dev-docker-amd64-scan
-              bloklid-dev-docker-aarch64-scan
-              ;
-
-            # SBOMs - Software Bill of Materials
-            inherit (bloklidSecurity)
-              bloklid-docker-amd64-sbom
-              bloklid-docker-aarch64-sbom
-              bloklid-dev-docker-amd64-sbom
-              bloklid-dev-docker-aarch64-sbom
               ;
 
             # Multi-arch manifests

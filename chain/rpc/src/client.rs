@@ -27,16 +27,24 @@ use alloy::{
     network::{EthereumWallet, Network, TransactionBuilder},
     primitives::utils::parse_units,
     providers::{
-        Identity, Provider, RootProvider, SendableTx,
+        Identity, Provider, ProviderBuilder, RootProvider, SendableTx,
         fillers::{
             BlobGasFiller, ChainIdFiller, FillProvider, FillerControlFlow, GasFiller, JoinFill, NonceFiller, TxFiller,
             WalletFiller,
         },
     },
-    rpc::json_rpc::{ErrorPayload, RequestPacket, ResponsePacket, ResponsePayload},
-    transports::{HttpError, TransportError, TransportErrorKind, TransportFut, TransportResult, layers::RetryPolicy},
+    rpc::{
+        client::ClientBuilder,
+        json_rpc::{ErrorPayload, RequestPacket, ResponsePacket, ResponsePayload},
+    },
+    signers::local::PrivateKeySigner,
+    transports::{
+        HttpError, TransportError, TransportErrorKind, TransportFut, TransportResult, http::ReqwestTransport,
+        layers::RetryPolicy,
+    },
 };
 use futures::{FutureExt, StreamExt};
+use hopr_crypto_types::keypairs::Keypair;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use tower::{Layer, Service};
@@ -874,12 +882,6 @@ pub fn create_rpc_client_to_anvil(
     anvil: &alloy::node_bindings::AnvilInstance,
     signer: &hopr_crypto_types::keypairs::ChainKeypair,
 ) -> Arc<AnvilRpcClient> {
-    use alloy::{
-        providers::ProviderBuilder, rpc::client::ClientBuilder, signers::local::PrivateKeySigner,
-        transports::http::ReqwestTransport,
-    };
-    use hopr_crypto_types::keypairs::Keypair;
-
     let wallet = PrivateKeySigner::from_slice(signer.secret().as_ref()).expect("failed to construct wallet");
 
     let transport_client = ReqwestTransport::new(anvil.endpoint_url());

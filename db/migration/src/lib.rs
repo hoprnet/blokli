@@ -18,6 +18,8 @@ mod m014_add_announcement_position_index;
 mod m015_create_current_state_views;
 mod m016_add_channel_state_reorg_correction;
 mod m017_add_ticket_params_notify_trigger;
+mod m018_alter_log_topic_info_topic_binary;
+mod m019_alter_chain_node_info_id_bigint;
 
 #[derive(PartialEq)]
 pub enum BackendType {
@@ -50,6 +52,8 @@ impl MigratorTrait for Migrator {
             Box::new(m015_create_current_state_views::Migration),
             Box::new(m016_add_channel_state_reorg_correction::Migration),
             Box::new(m017_add_ticket_params_notify_trigger::Migration),
+            Box::new(m018_alter_log_topic_info_topic_binary::Migration),
+            Box::new(m019_alter_chain_node_info_id_bigint::Migration),
         ]
     }
 }
@@ -80,6 +84,7 @@ impl MigratorTrait for MigratorIndex {
             Box::new(m015_create_current_state_views::Migration),
             Box::new(m016_add_channel_state_reorg_correction::Migration),
             Box::new(m017_add_ticket_params_notify_trigger::Migration),
+            Box::new(m019_alter_chain_node_info_id_bigint::Migration),
         ]
     }
 }
@@ -95,6 +100,7 @@ impl MigratorTrait for MigratorChainLogs {
         vec![
             Box::new(m003_create_log_tables::Migration),
             Box::new(m004_create_log_indices::Migration),
+            Box::new(m018_alter_log_topic_info_topic_binary::Migration),
         ]
     }
 }

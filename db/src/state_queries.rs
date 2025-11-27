@@ -107,7 +107,11 @@
 //! - [`BlockPosition`](crate::events::BlockPosition) - Position tuple structure
 //! - [`handle_reorg`](crate::indexer::handle_reorg) - Reorg handling implementation
 
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
+use blokli_db_entity::{
+    account_state, channel_state,
+    prelude::{AccountState, ChannelState},
+};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, sea_query::Condition};
 
 use crate::{errors::Result, events::BlockPosition};
 
@@ -127,8 +131,6 @@ pub async fn get_current_channel_state(
     db: &DatabaseConnection,
     channel_id: i64,
 ) -> Result<Option<blokli_db_entity::channel_state::Model>> {
-    use blokli_db_entity::{channel_state, prelude::ChannelState};
-
     // TODO(Phase 2-3): Query from channel_current view instead of direct table query
     // For now, manually get the latest state
     let state = ChannelState::find()
@@ -160,9 +162,6 @@ pub async fn get_channel_state_at(
     channel_id: i64,
     position: BlockPosition,
 ) -> Result<Option<blokli_db_entity::channel_state::Model>> {
-    use blokli_db_entity::{channel_state, prelude::ChannelState};
-    use sea_orm::sea_query::Condition;
-
     // Query for state at or before the given position
     // Position comparison: (block < target_block) OR
     //                      (block = target_block AND tx_index < target_tx) OR
@@ -213,9 +212,6 @@ pub async fn get_channel_state_history(
     from: BlockPosition,
     to: BlockPosition,
 ) -> Result<Vec<blokli_db_entity::channel_state::Model>> {
-    use blokli_db_entity::{channel_state, prelude::ChannelState};
-    use sea_orm::sea_query::Condition;
-
     // Build condition for range: state >= from AND state <= to
     let from_condition = Condition::any()
         .add(channel_state::Column::PublishedBlock.gt(from.block))
@@ -274,8 +270,6 @@ pub async fn get_current_account_state(
     db: &DatabaseConnection,
     account_id: i64,
 ) -> Result<Option<blokli_db_entity::account_state::Model>> {
-    use blokli_db_entity::{account_state, prelude::AccountState};
-
     // TODO(Phase 2-3): Query from account_current view instead of direct table query
     // For now, manually get the latest state
     let state = AccountState::find()
@@ -307,9 +301,6 @@ pub async fn get_account_state_at(
     account_id: i64,
     position: BlockPosition,
 ) -> Result<Option<blokli_db_entity::account_state::Model>> {
-    use blokli_db_entity::{account_state, prelude::AccountState};
-    use sea_orm::sea_query::Condition;
-
     let condition = Condition::any()
         .add(account_state::Column::PublishedBlock.lt(position.block))
         .add(
@@ -356,9 +347,6 @@ pub async fn get_account_state_history(
     from: BlockPosition,
     to: BlockPosition,
 ) -> Result<Vec<blokli_db_entity::account_state::Model>> {
-    use blokli_db_entity::{account_state, prelude::AccountState};
-    use sea_orm::sea_query::Condition;
-
     let from_condition = Condition::any()
         .add(account_state::Column::PublishedBlock.gt(from.block))
         .add(
@@ -402,7 +390,7 @@ pub async fn get_account_state_history(
 
 #[cfg(test)]
 mod tests {
-    use blokli_db_entity::{account_state, channel_state};
+    use blokli_db_entity::{account, account_state, channel, channel_state};
     use sea_orm::{ActiveModelTrait, ActiveValue};
 
     use super::*;
@@ -410,8 +398,6 @@ mod tests {
 
     // Helper to create test channel in database
     async fn create_test_channel(db: &DatabaseConnection) -> anyhow::Result<i64> {
-        use blokli_db_entity::{account, channel};
-
         // First create source and destination accounts
         let source_account = account::ActiveModel {
             chain_key: ActiveValue::Set(vec![1; 20]),
@@ -447,8 +433,6 @@ mod tests {
 
     // Helper to create test account in database
     async fn create_test_account(db: &DatabaseConnection) -> anyhow::Result<i64> {
-        use blokli_db_entity::account;
-
         let account = account::ActiveModel {
             chain_key: ActiveValue::Set(vec![
                 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
@@ -996,7 +980,7 @@ mod tests {
         let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
 
         // Insert normal state before reorg
-        let state_id_1 =
+        let _state_id_1 =
             insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
 
         // Insert states that will be "reverted" by reorg

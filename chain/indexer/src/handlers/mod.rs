@@ -9,7 +9,7 @@ use blokli_chain_rpc::{HoprIndexerRpcOperations, Log};
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction};
 use hopr_bindings::{
-    hopr_channels::HoprChannels::HoprChannelsEvents,
+    hopr_announcements::HoprAnnouncements::HoprAnnouncementsEvents, hopr_channels::HoprChannels::HoprChannelsEvents,
     hopr_node_management_module::HoprNodeManagementModule::HoprNodeManagementModuleEvents,
     hopr_node_safe_registry::HoprNodeSafeRegistry::HoprNodeSafeRegistryEvents,
     hopr_ticket_price_oracle::HoprTicketPriceOracle::HoprTicketPriceOracleEvents,
@@ -127,8 +127,6 @@ where
         .ok_or_else(|| {
             CoreEthereumIndexerError::ProcessError(format!("failed to convert log to primitive log: {slog:?}"))
         })?;
-
-        use hopr_bindings::hopr_announcements::HoprAnnouncements::HoprAnnouncementsEvents;
 
         if log.address.eq(&self.addresses.announcements) {
             let bn = log.block_number as u32;

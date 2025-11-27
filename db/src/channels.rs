@@ -6,7 +6,10 @@
 use std::time::SystemTime;
 
 use async_trait::async_trait;
-use blokli_db_entity::channel;
+use blokli_db_entity::{
+    account, channel, channel_state,
+    prelude::{Account, Channel, ChannelState},
+};
 use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use hopr_crypto_types::types::Hash;
@@ -15,7 +18,7 @@ use hopr_primitive_types::{
     prelude::{Address, HoprBalance, U256},
     traits::{IntoEndian, ToHex},
 };
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 use tracing::instrument;
 
 use crate::{
@@ -36,8 +39,6 @@ use crate::{
 ///
 /// The account's database ID (primary key)
 async fn get_or_create_account_id(tx: &sea_orm::DatabaseTransaction, address: &Address) -> Result<i64> {
-    use blokli_db_entity::{account, prelude::Account};
-
     // Try to find existing account
     if let Some(existing) = Account::find()
         .filter(account::Column::ChainKey.eq(address.as_ref().to_vec()))
@@ -72,8 +73,6 @@ async fn lookup_account_addresses(
     source_id: i64,
     dest_id: i64,
 ) -> Result<(Address, Address)> {
-    use blokli_db_entity::prelude::Account;
-
     let source_account = Account::find_by_id(source_id)
         .one(tx)
         .await?
@@ -167,8 +166,6 @@ async fn insert_channel_state_and_emit(
     tx_index: i64,
     log_index: i64,
 ) -> Result<blokli_db_entity::channel_state::Model> {
-    use blokli_db_entity::channel_state;
-
     // Helper function to convert SystemTime to DateTime<Utc>
     fn system_time_to_datetime(time: &SystemTime) -> DateTime<Utc> {
         DateTime::from(*time)
@@ -343,12 +340,6 @@ impl BlokliDbChannelOperations for BlokliDb {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    use blokli_db_entity::{
-                        channel, channel_state,
-                        prelude::{Channel, ChannelState},
-                    };
-                    use sea_orm::QueryOrder;
-
                     // Step 1: Find channel by concrete_channel_id
                     let channel_model = match Channel::find()
                         .filter(channel::Column::ConcreteChannelId.eq(id_hex))
@@ -401,12 +392,6 @@ impl BlokliDbChannelOperations for BlokliDb {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    use blokli_db_entity::{
-                        account, channel, channel_state,
-                        prelude::{Account, Channel, ChannelState},
-                    };
-                    use sea_orm::QueryOrder;
-
                     // Step 1: Lookup account IDs for source and destination
                     let source_account = Account::find()
                         .filter(account::Column::ChainKey.eq(src_clone.as_ref().to_vec()))
@@ -471,12 +456,6 @@ impl BlokliDbChannelOperations for BlokliDb {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    use blokli_db_entity::{
-                        account, channel, channel_state,
-                        prelude::{Account, Channel, ChannelState},
-                    };
-                    use sea_orm::QueryOrder;
-
                     // Step 1: Lookup target account ID
                     let target_account = Account::find()
                         .filter(account::Column::ChainKey.eq(target_clone.as_ref().to_vec()))
@@ -669,12 +648,6 @@ impl BlokliDbChannelOperations for BlokliDb {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    use blokli_db_entity::{
-                        channel, channel_state,
-                        prelude::{Channel, ChannelState},
-                    };
-                    use sea_orm::QueryOrder;
-
                     // Step 1: Find channel by concrete_channel_id
                     let channel_model = match Channel::find()
                         .filter(channel::Column::ConcreteChannelId.eq(id_hex))
@@ -721,12 +694,6 @@ impl BlokliDbChannelOperations for BlokliDb {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    use blokli_db_entity::{
-                        channel, channel_state,
-                        prelude::{Channel, ChannelState},
-                    };
-                    use sea_orm::QueryOrder;
-
                     // Step 1: Find channel by concrete_channel_id
                     let channel_model = match Channel::find()
                         .filter(channel::Column::ConcreteChannelId.eq(id_hex))
@@ -782,12 +749,6 @@ impl BlokliDbChannelOperations for BlokliDb {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    use blokli_db_entity::{
-                        channel, channel_state,
-                        prelude::{Channel, ChannelState},
-                    };
-                    use sea_orm::ActiveModelTrait;
-
                     // Step 1: Find channel by concrete_channel_id
                     let channel_model = Channel::find()
                         .filter(channel::Column::ConcreteChannelId.eq(&id_hex))
@@ -824,6 +785,8 @@ impl BlokliDbChannelOperations for BlokliDb {
 
 #[cfg(test)]
 mod tests {
+    use std::time::SystemTime;
+
     use anyhow::Context;
     use hopr_crypto_random::random_bytes;
     use hopr_crypto_types::{
@@ -1143,8 +1106,7 @@ mod tests {
         db.upsert_channel(None, ce_open, 100, 0, 0).await?;
 
         // State 2: PendingToClose at block 200
-        use std::time::{Duration, SystemTime};
-        let closure_time = SystemTime::now() + Duration::from_secs(3600);
+        let closure_time = SystemTime::now() + std::time::Duration::from_secs(3600);
         let ce_pending = ChannelEntry::new(
             addr_1,
             addr_2,
@@ -1465,7 +1427,7 @@ mod tests {
         let mut handles = vec![];
         for i in 0..10 {
             let db_clone = db.clone();
-            let channel_id = ce_initial.get_id();
+            let _channel_id = ce_initial.get_id();
             let handle = tokio::spawn(async move {
                 let balance = HoprBalance::from((i + 2) * 1000);
                 let ce = ChannelEntry::new(

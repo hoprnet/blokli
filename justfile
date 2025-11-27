@@ -76,6 +76,10 @@ clippy-all:
 clippy-fix:
     cargo clippy --workspace --fix --allow-dirty --allow-staged
 
+# Run ast-grep to check import organization and code style rules
+lint-imports:
+    ast-grep scan
+
 # ============================================================================
 # Run Commands - bloklid daemon
 # ============================================================================
@@ -230,7 +234,6 @@ generate-target-db-schema-svg:
       -i target-db-schema.mmd -o target-db-schema.svg
     @echo "SVG stored at ./design/target-db-schema.svg"
 
-
 # ============================================================================
 # Helm Chart Commands
 # ============================================================================
@@ -260,3 +263,13 @@ helm-push:
   set -euo pipefail
   version=$(yq -r '.version' ./charts/blokli/Chart.yaml)
   helm push "blokli-${version}.tgz" oci://europe-west3-docker.pkg.dev/hoprassociation/helm-charts
+# ============================================================================
+# Smoke Tests
+# ============================================================================
+
+# Run smoke tests with Docker Compose (PostgreSQL + Anvil)
+smoke-test:
+    ./tests/smoke/run-smoke-test.sh
+
+# Build Docker image and run smoke tests
+smoke-test-full: docker-build smoke-test

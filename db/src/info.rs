@@ -146,11 +146,15 @@ impl BlokliDbInfoOperations for BlokliDb {
 
                     let mut initial_row = chain_info::ActiveModel::new();
                     initial_row.id = Set(1);
-                    ChainInfo::insert(initial_row).exec(tx.as_ref()).await?;
+                    ChainInfo::insert(initial_row)
+                        .exec_without_returning(tx.as_ref())
+                        .await?;
 
                     let mut initial_row = node_info::ActiveModel::new();
                     initial_row.id = Set(1);
-                    NodeInfo::insert(initial_row).exec(tx.as_ref()).await?;
+                    NodeInfo::insert(initial_row)
+                        .exec_without_returning(tx.as_ref())
+                        .await?;
 
                     Ok::<(), DbSqlError>(())
                 })

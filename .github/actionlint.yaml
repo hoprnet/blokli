@@ -1,0 +1,4 @@
+self-hosted-runner:
+  labels:
+    - self-hosted-hoprnet-bigger
+    - self-hosted-hoprnet-small

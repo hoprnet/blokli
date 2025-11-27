@@ -1,0 +1,45 @@
+name: Smoke Test
+on:
+  workflow_call:
+    inputs:
+      image:
+        description: 'Docker image to test'
+        required: true
+        type: string
+jobs:
+  smoke-test:
+    name: Run Smoke Tests
+    runs-on: self-hosted-hoprnet-bigger
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+      - name: Use Nix Cache
+        uses: cachix/cachix-action@0fc020193b5a1fa3ac4575aa3a7d3aa6a35435ad # v16
+        with:
+          name: blokli
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+        env:
+          USER: runner
+      - name: Setup GCP
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@12c56020e16036982e6cc529848edeedfc705865 # master
+        with:
+          google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
+          login-artifact-registry: 'true'
+          install-sdk: 'false'
+      - name: Run smoke tests
+        run: |
+          nix develop -c ./tests/smoke/run-smoke-test.sh 2>&1 | tee test.logs
+        env:
+          SOURCE_IMAGE: ${{ inputs.image }}
+      - name: Upload container logs on failure
+        if: failure()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: smoke-test-logs
+          path: test.logs
+          retention-days: 7
+      - name: Cleanup
+        if: always()
+        run: |
+          nix develop -c docker compose -f tests/smoke/docker-compose.yml down -v --remove-orphans || true

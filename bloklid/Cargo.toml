@@ -47,6 +47,7 @@ blokli-chain-types   = { workspace = true }
 blokli-db            = { workspace = true }
 
 # HOPR dependencies
+config               = { workspace = true }
 hopr-chain-config    = { workspace = true }
 hopr-crypto-types    = { workspace = true }
 hopr-internal-types  = { workspace = true }
