@@ -136,7 +136,7 @@ impl Args {
             ("BLOKLI_API_PLAYGROUND_ENABLED", "api.playground_enabled"),
             // API Health
             ("BLOKLI_API_HEALTH_MAX_INDEXER_LAG", "api.health.max_indexer_lag"),
-            ("BLOKLI_API_HEALTH_TIMEOUT_MS", "api.health.timeout_ms"),
+            ("BLOKLI_API_HEALTH_TIMEOUT", "api.health.timeout"),
         ];
 
         for (env_var, config_key) in env_mappings {
@@ -375,7 +375,7 @@ async fn run() -> errors::Result<()> {
                 contract_addresses: contracts,
                 health: blokli_api::config::HealthConfig {
                     max_indexer_lag: api_config.health.max_indexer_lag,
-                    timeout_ms: api_config.health.timeout_ms,
+                    timeout: api_config.health.timeout,
                 },
             };
 

@@ -1,9 +1,9 @@
 //! Configuration for the blokli API server
 
-use std::{net::SocketAddr, path::PathBuf};
+use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use blokli_chain_types::ContractAddresses;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 /// API server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -67,15 +67,23 @@ pub struct HealthConfig {
     pub max_indexer_lag: u64,
 
     /// Timeout for health check queries (in milliseconds)
-    #[serde(default = "default_health_timeout_ms")]
-    pub timeout_ms: u64,
+    #[serde(default = "default_health_timeout", deserialize_with = "deserialize_duration_ms")]
+    pub timeout: Duration,
+}
+
+fn deserialize_duration_ms<'de, D>(deserializer: D) -> Result<Duration, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let millis = u64::deserialize(deserializer)?;
+    Ok(Duration::from_millis(millis))
 }
 
 impl Default for HealthConfig {
     fn default() -> Self {
         Self {
             max_indexer_lag: default_max_indexer_lag(),
-            timeout_ms: default_health_timeout_ms(),
+            timeout: default_health_timeout(),
         }
     }
 }
@@ -84,8 +92,8 @@ fn default_max_indexer_lag() -> u64 {
     10
 }
 
-fn default_health_timeout_ms() -> u64 {
-    5000
+fn default_health_timeout() -> Duration {
+    Duration::from_millis(5000)
 }
 
 impl Default for ApiConfig {

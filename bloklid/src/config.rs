@@ -1,5 +1,8 @@
+use std::time::Duration;
+
 use blokli_chain_types::ContractAddresses;
 use hopr_chain_config::{ChainNetworkConfig, ProtocolsConfig};
+use serde::Deserialize;
 
 fn default_host() -> std::net::SocketAddr {
     "0.0.0.0:3064".parse().unwrap()
@@ -262,9 +265,17 @@ pub struct HealthConfig {
     pub max_indexer_lag: u64,
 
     /// Timeout for health check queries (in milliseconds)
-    #[default(5000)]
-    #[serde(default = "default_health_timeout_ms")]
-    pub timeout_ms: u64,
+    #[default(_code = "Duration::from_millis(5000)")]
+    #[serde(default = "default_health_timeout", deserialize_with = "deserialize_duration_ms")]
+    pub timeout: Duration,
+}
+
+fn deserialize_duration_ms<'de, D>(deserializer: D) -> Result<Duration, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let millis = u64::deserialize(deserializer)?;
+    Ok(Duration::from_millis(millis))
 }
 
 fn default_api_bind_address() -> std::net::SocketAddr {
@@ -296,8 +307,8 @@ fn default_max_indexer_lag() -> u64 {
     10
 }
 
-fn default_health_timeout_ms() -> u64 {
-    5000
+fn default_health_timeout() -> Duration {
+    Duration::from_millis(5000)
 }
 
 #[cfg(test)]
@@ -509,6 +520,7 @@ mod tests {
         assert!(cfg.api.playground_enabled); // Default
         assert_eq!(cfg.api.bind_address.to_string(), "0.0.0.0:8080"); // Default
         assert_eq!(cfg.api.health.max_indexer_lag, 10); // Default
+        assert_eq!(cfg.api.health.timeout, Duration::from_millis(5000)); // Default
     }
 
     #[test]
