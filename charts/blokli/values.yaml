@@ -290,7 +290,7 @@ config:
     ## @param config.indexer.enableLogsSnapshot Enable logs snapshot feature
     ##
     enableLogsSnapshot: false
-    ## @param config.indexer.logsSnapshotUrl URL for logs snapshot download (optional)
+    ## @param config.indexer.logsSnapshotUrl URL for logs snapshot download (required when enableLogsSnapshot is true)
     ##
     logsSnapshotUrl: ""
     # Subscription behavior configuration
