@@ -119,11 +119,14 @@ The command removes all the Kubernetes components associated with the chart and 
 | `persistence.size`                                   | Size of the PVC                                                                                               | `10Gi`              |
 | `persistence.annotations`                            | Annotations for the PVC                                                                                       | `{}`                |
 | `persistence.selector`                               | Selector for existing PV (optional)                                                                           | `{}`                |
-| `database.host`                                      | PostgreSQL host                                                                                               | `postgresql`        |
+| `database.type`                                      | Database type (e.g., postgresql, sqlite)                                                                      | `""`                |
+| `database.host`                                      | PostgreSQL host                                                                                               | `""`                |
 | `database.port`                                      | PostgreSQL port                                                                                               | `5432`              |
-| `database.database`                                  | PostgreSQL database name                                                                                      | `bloklid`           |
-| `database.username`                                  | PostgreSQL username                                                                                           | `bloklid`           |
+| `database.database`                                  | PostgreSQL database name                                                                                      | `""`                |
+| `database.username`                                  | PostgreSQL username                                                                                           | `""`                |
 | `database.password`                                  | PostgreSQL password (ignored if existingSecret is set)                                                        | `""`                |
+| `database.index_path`                                | Sqlite database file path (used only if database.type is "sqlite")                                            | `""`                |
+| `database.logs_path`                                 | Sqlite logs database file path (used only if database.type is "sqlite")                                       | `""`                |
 | `database.existingSecret`                            | Name of existing secret containing database credentials                                                       | `""`                |
 | `database.maxConnections`                            | Maximum number of database connections                                                                        | `10`                |
 | `config.network`                                     | HOPR network to index (e.g., dufour, rotsee)                                                                  | `dufour`            |
@@ -140,15 +143,15 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.api.bindAddress`                             | Address and port for the API server to bind to                                                                | `0.0.0.0:8080`      |
 | `config.api.playgroundEnabled`                       | Enable GraphQL Playground for development and testing. Recommended to set to false for production deployments | `false`             |
 | `config.api.health.maxIndexerLag`                    | Maximum indexer lag (blocks) before readiness fails                                                           | `10`                |
-| `config.api.health.timeoutMs`                        | Timeout for health check operations (ms)                                                                      | `5000`              |
+| `config.api.health.timeout`                          | Timeout for health check operations (ms)                                                                      | `5000`              |
 | `config.logging.level`                               | Rust log level configuration. Examples: "info", "debug", "info,blokli_chain_indexer=debug"                    | `info`              |
+| `config.logging.backtrace`                           | Rust backtrace configuration (e.g., "full", "short", "0")                                                     | `full`              |
 
 ## Configuration Examples
 
 ### Full example Configuration
 
 Please refer to the contents of the file [values-testing.yaml](./values-testing.yaml) for a full example configuration
-
 
 ### Configuration with Existing Secret
 

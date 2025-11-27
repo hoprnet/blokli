@@ -24,7 +24,6 @@ database:
   username: bloklid
   password: "SomePassword"
   maxConnections: 20
-
 config:
   network: "dufour"
   rpcUrl: "https://rpc.gnosischain.com"

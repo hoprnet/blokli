@@ -43,6 +43,8 @@ spec:
         env:
         - name: RUST_LOG
           value: {{ .Values.config.logging.level | quote }}
+        - name: RUST_BACKTRACE
+          value: {{ .Values.config.logging.backtrace | quote }}
         envFrom:
         - secretRef:
             name: {{ include "blokli.fullname" . }}

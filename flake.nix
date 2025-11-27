@@ -422,6 +422,7 @@
 
               # Helm templates (contain Go template syntax that yamlfmt can't parse)
               "charts/blokli/templates/*"
+              "charts/blokli/README.md"
 
               # Other specific files
               "bloklid/.dockerignore"

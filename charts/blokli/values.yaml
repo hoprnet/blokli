@@ -1,5 +1,4 @@
 # Default values for blokli
-
 ## @section Global Configuration ###
 image:
   ## @param image.registry Container image registry
@@ -37,9 +36,7 @@ serviceAccount:
   name: ""
 ## @param podAnnotations Annotations to add to the pod
 podAnnotations: {}
-
 podSecurityContext:
-
   ## @param podSecurityContext.runAsNonRoot Run container as non-root user
   ##
   runAsNonRoot: true
@@ -52,7 +49,6 @@ podSecurityContext:
   ## @param podSecurityContext.fsGroup File system group ID
   ##
   fsGroup: 65532
-
 securityContext:
   ## @param securityContext.allowPrivilegeEscalation Prevent privilege escalation
   ##
@@ -96,11 +92,9 @@ ingress:
   ## @param ingress.hostname Hostnames for the GraphQL API
   ##
   hostname: ""
-
   ## @param ingress.tls Enable TLS configuration for ingress. It will reference a secret named <hostname>-tls. Where hostname dots are replaced with dashes.
   ##
   tls: true
-
 ## @param resources Resource requests and limits
 ##
 # Sizing guidance:
@@ -108,7 +102,6 @@ ingress:
 #   Medium (production):  requests: 500m/1Gi,   limits: 2000m/4Gi
 #   Large (high traffic): requests: 1000m/2Gi,  limits: 4000m/8Gi
 resources: {}
-
 # Liveness probe configuration
 livenessProbe:
   ## @param livenessProbe.enabled Enable liveness probe
@@ -178,7 +171,6 @@ tolerations: []
 ## @param affinity Affinity rules for pod assignment
 ##
 affinity: {}
-
 # Monitoring configuration
 monitoring:
   serviceMonitor:
@@ -200,7 +192,6 @@ monitoring:
     ## @param monitoring.serviceMonitor.path Metrics path (update when metrics endpoint is implemented)
     ##
     path: /metrics
-
 ## @param extraEnv Additional environment variables
 ##
 extraEnv: []
@@ -249,7 +240,6 @@ database:
   ## @param database.type Database type (e.g., postgresql, sqlite)
   ##
   type: ""
-
   ## @param database.host PostgreSQL host
   ##
   host: ""
@@ -265,13 +255,15 @@ database:
   ## @param database.password PostgreSQL password (ignored if existingSecret is set)
   ##
   password: ""
-  ## @param database.path Sqlite database file path (used only if database.type is "sqlite")
+  ## @param database.index_path Sqlite database file path (used only if database.type is "sqlite")
   ##
-  path: ""
-
+  index_path: ""
+  ## @param database.logs_path Sqlite logs database file path (used only if database.type is "sqlite")
+  ##
+  logs_path: ""
   ## @param database.existingSecret Name of existing secret containing database credentials
   ##
-  ## Secret should contain key BLOKLI_DATABASE_TYPE="postgresql", BLOKLI_DATABASE_URL with the full database URL in the format: postgresql://username:password@host:port/database
+  ## Secret should contain key BLOKLI_DATABASE_URL with the full database URL in the format: postgresql://username:password@host:port/database
   existingSecret: ""
   ## @param database.maxConnections Maximum number of database connections
   ##
@@ -331,11 +323,14 @@ config:
       ## @param config.api.health.maxIndexerLag Maximum indexer lag (blocks) before readiness fails
       ##
       maxIndexerLag: 10
-      ## @param config.api.health.timeoutMs Timeout for health check operations (ms)
+      ## @param config.api.health.timeout Timeout for health check operations (ms)
       ##
-      timeoutMs: 5000
+      timeout: 5000
   # Logging configuration
   logging:
     ## @param config.logging.level Rust log level configuration. Examples: "info", "debug", "info,blokli_chain_indexer=debug"
     ##
     level: "info"
+    ## @param config.logging.backtrace Rust backtrace configuration (e.g., "full", "short", "0")
+    ##
+    backtrace: full

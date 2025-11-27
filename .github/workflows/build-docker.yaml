@@ -145,9 +145,9 @@ jobs:
         include:
           - image: ${{ needs.upload-manifest.outputs.image_url_amd64 }}
             architecture: amd64
-          # Re-enable when aarch64 runner is available
-          # - image: ${{ needs.upload-manifest.outputs.image_url_arm64 }}
-          #   architecture: arm64
+            # Re-enable when aarch64 runner is available
+            # - image: ${{ needs.upload-manifest.outputs.image_url_arm64 }}
+            #   architecture: arm64
     uses: ./.github/workflows/security-scan.yaml
     with:
       image_url: ${{ matrix.image }}
