@@ -361,12 +361,24 @@
           shellArgs = {
             treefmtWrapper = config.treefmt.build.wrapper;
             treefmtPrograms = pkgs.lib.attrValues config.treefmt.build.programs;
-            shellHook = packages.pre-commit-check.shellHook;
+            shellHook = ''
+              echo "Running pre-commit checks..."
+              ${packages.pre-commit-check.shellHook}
+
+              # Use a local npm global directory in your home
+              export NPM_CONFIG_PREFIX=$HOME/.npm-global
+              export PATH=$NPM_CONFIG_PREFIX/bin:$PATH
+
+              echo "Install helm-chart readme-generator"
+              npm install -g @bitnami/readme-generator-for-helm@2.7.2
+            '';
             extraPackages = [
+              pkgs.nodejs
               pkgs.ast-grep
               pkgs.foundry-bin
               pkgs.solc
               pkgs.kubernetes-helm
+              pkgs.yq
             ];
           };
           shells = {
@@ -410,6 +422,7 @@
 
               # Helm templates (contain Go template syntax that yamlfmt can't parse)
               "charts/blokli/templates/*"
+              "charts/blokli/README.md"
 
               # Other specific files
               "bloklid/.dockerignore"

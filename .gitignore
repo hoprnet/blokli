@@ -54,3 +54,4 @@ result
 !.beads/*.jsonl
 data
 api/tests/contracts/build
+*.tgz

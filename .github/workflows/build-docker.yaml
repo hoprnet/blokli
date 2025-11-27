@@ -137,20 +137,19 @@ jobs:
         env:
           GOOGLE_ACCESS_TOKEN: ${{ steps.gcp.outputs.access_token }}
           IMAGE_TARGET: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ needs.build-docker-images.outputs.docker_tag }}
-  security-scan-amd64:
-    name: Security Scan (amd64)
+  security-scan:
+    name: Security Scan (${{ matrix.architecture }})
     needs: upload-manifest
+    strategy:
+      matrix:
+        include:
+          - image: ${{ needs.upload-manifest.outputs.image_url_amd64 }}
+            architecture: amd64
+            # Re-enable when aarch64 runner is available
+            # - image: ${{ needs.upload-manifest.outputs.image_url_arm64 }}
+            #   architecture: arm64
     uses: ./.github/workflows/security-scan.yaml
     with:
-      image_url: ${{ needs.upload-manifest.outputs.image_url_amd64 }}
-      architecture: amd64
+      image_url: ${{ matrix.image }}
+      architecture: ${{ matrix.architecture }}
     secrets: inherit
-  # Re-enable when aarch64 runner is available
-  # security-scan-arm64:
-  #   name: Security Scan (arm64)
-  #   needs: upload-manifest
-  #   uses: ./.github/workflows/security-scan.yaml
-  #   with:
-  #     image_url: ${{ needs.upload-manifest.outputs.image_url_arm64 }}
-  #     architecture: arm64
-  #   secrets: inherit
