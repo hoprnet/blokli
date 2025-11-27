@@ -6,8 +6,6 @@
 
 ```bash
 helm install my-blokli ./charts/blokli \
-  --set image.repository=my-registry/bloklid \
-  --set image.tag=1.0.0 \
   --set database.host=postgresql.default.svc.cluster.local \
   --set database.password=secretpassword \
   --set config.network=dufour \
@@ -47,187 +45,113 @@ The command removes all the Kubernetes components associated with the chart and 
 
 ## Parameters
 
-### Global Parameters
+### Global Configuration ###
 
-| Name               | Description                                      | Value |
-| ------------------ | ------------------------------------------------ | ----- |
-| `replicaCount`     | Number of replicas (bloklid is singleton, use 1) | `1`   |
-| `nameOverride`     | Override the chart name                          | `""`  |
-| `fullnameOverride` | Override the full release name                   | `""`  |
+| Name                                       | Description                                                                                                                          | Value                                                       |
+| ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------ | ----------------------------------------------------------- |
+| `image.registry`                           | Container image registry                                                                                                             | `europe-west3-docker.pkg.dev/hoprassociation/docker-images` |
+| `image.repository`                         | Container image repository                                                                                                           | `bloklid`                                                   |
+| `image.pullPolicy`                         | Container image pull policy                                                                                                          | `Always`                                                    |
+| `image.tag`                                | Container image tag (defaults to chart appVersion if not specified)                                                                  | `""`                                                        |
+| `imagePullSecrets`                         | Image pull secrets for private registries                                                                                            | `[]`                                                        |
+| `nameOverride`                             | Override the chart name                                                                                                              | `""`                                                        |
+| `fullnameOverride`                         | Override the full release name                                                                                                       | `""`                                                        |
+| `serviceAccount.create`                    | Specifies whether a service account should be created                                                                                | `true`                                                      |
+| `serviceAccount.annotations`               | Annotations to add to the service account                                                                                            | `{}`                                                        |
+| `serviceAccount.name`                      | The name of the service account to use. If not set and create is true, a name is generated using the fullname template               | `""`                                                        |
+| `podAnnotations`                           | Annotations to add to the pod                                                                                                        | `{}`                                                        |
+| `podSecurityContext.runAsNonRoot`          | Run container as non-root user                                                                                                       | `true`                                                      |
+| `podSecurityContext.runAsUser`             | User ID to run the container                                                                                                         | `65532`                                                     |
+| `podSecurityContext.runAsGroup`            | Group ID to run the container                                                                                                        | `65532`                                                     |
+| `podSecurityContext.fsGroup`               | File system group ID                                                                                                                 | `65532`                                                     |
+| `securityContext.allowPrivilegeEscalation` | Prevent privilege escalation                                                                                                         | `false`                                                     |
+| `securityContext.capabilities.drop`        | Capabilities to drop                                                                                                                 | `["ALL"]`                                                   |
+| `securityContext.readOnlyRootFilesystem`   | Mount root filesystem as read-only                                                                                                   | `true`                                                      |
+| `securityContext.runAsNonRoot`             | Run container as non-root user                                                                                                       | `true`                                                      |
+| `securityContext.runAsUser`                | User ID to run the container                                                                                                         | `65532`                                                     |
+| `service.type`                             | Service type                                                                                                                         | `ClusterIP`                                                 |
+| `service.port`                             | Service port for GraphQL API                                                                                                         | `8080`                                                      |
+| `service.annotations`                      | Service annotations                                                                                                                  | `{}`                                                        |
+| `ingress.enabled`                          | Enable ingress for GraphQL API                                                                                                       | `false`                                                     |
+| `ingress.className`                        | Ingress class name                                                                                                                   | `""`                                                        |
+| `ingress.annotations`                      | Ingress annotations                                                                                                                  | `{}`                                                        |
+| `ingress.hostname`                         | Hostnames for the GraphQL API                                                                                                        | `""`                                                        |
+| `ingress.tls`                              | Enable TLS configuration for ingress. It will reference a secret named <hostname>-tls. Where hostname dots are replaced with dashes. | `true`                                                      |
+| `resources`                                | Resource requests and limits                                                                                                         | `{}`                                                        |
+| `livenessProbe.enabled`                    | Enable liveness probe                                                                                                                | `true`                                                      |
+| `livenessProbe.initialDelaySeconds`        | Initial delay before liveness probe starts                                                                                           | `30`                                                        |
+| `livenessProbe.periodSeconds`              | Period between liveness probe checks                                                                                                 | `10`                                                        |
+| `livenessProbe.timeoutSeconds`             | Timeout for liveness probe                                                                                                           | `5`                                                         |
+| `livenessProbe.successThreshold`           | Success threshold for liveness probe                                                                                                 | `1`                                                         |
+| `livenessProbe.failureThreshold`           | Failure threshold for liveness probe                                                                                                 | `3`                                                         |
+| `readinessProbe.enabled`                   | Enable readiness probe                                                                                                               | `true`                                                      |
+| `readinessProbe.initialDelaySeconds`       | Initial delay before readiness probe starts                                                                                          | `10`                                                        |
+| `readinessProbe.periodSeconds`             | Period between readiness probe checks                                                                                                | `5`                                                         |
+| `readinessProbe.timeoutSeconds`            | Timeout for readiness probe                                                                                                          | `3`                                                         |
+| `readinessProbe.successThreshold`          | Success threshold for readiness probe                                                                                                | `1`                                                         |
+| `readinessProbe.failureThreshold`          | Failure threshold for readiness probe                                                                                                | `3`                                                         |
+| `startupProbe.enabled`                     | Enable startup probe                                                                                                                 | `true`                                                      |
+| `startupProbe.initialDelaySeconds`         | Initial delay before startup probe starts                                                                                            | `0`                                                         |
+| `startupProbe.periodSeconds`               | Period between startup probe checks                                                                                                  | `10`                                                        |
+| `startupProbe.timeoutSeconds`              | Timeout for startup probe                                                                                                            | `3`                                                         |
+| `startupProbe.successThreshold`            | Success threshold for startup probe                                                                                                  | `1`                                                         |
+| `startupProbe.failureThreshold`            | Failure threshold for startup probe (allows up to 5 minutes for startup)                                                             | `30`                                                        |
+| `nodeSelector`                             | Node selector for pod assignment                                                                                                     | `{}`                                                        |
+| `tolerations`                              | Tolerations for pod assignment                                                                                                       | `[]`                                                        |
+| `affinity`                                 | Affinity rules for pod assignment                                                                                                    | `{}`                                                        |
+| `monitoring.serviceMonitor.enabled`        | Enable ServiceMonitor creation                                                                                                       | `false`                                                     |
+| `monitoring.serviceMonitor.namespace`      | ServiceMonitor namespace (defaults to release namespace)                                                                             | `""`                                                        |
+| `monitoring.serviceMonitor.labels`         | ServiceMonitor labels                                                                                                                | `{}`                                                        |
+| `monitoring.serviceMonitor.interval`       | Scrape interval                                                                                                                      | `30s`                                                       |
+| `monitoring.serviceMonitor.scrapeTimeout`  | Scrape timeout                                                                                                                       | `10s`                                                       |
+| `monitoring.serviceMonitor.path`           | Metrics path (update when metrics endpoint is implemented)                                                                           | `/metrics`                                                  |
+| `extraEnv`                                 | Additional environment variables                                                                                                     | `[]`                                                        |
+| `extraVolumes`                             | Additional volumes                                                                                                                   | `[]`                                                        |
+| `extraVolumeMounts`                        | Additional volume mounts                                                                                                             | `[]`                                                        |
 
-### Image Parameters
+### Blokli Application Configuration ###
 
-| Name               | Description                                        | Value          |
-| ------------------ | -------------------------------------------------- | -------------- |
-| `image.registry`   | Container image registry                           | `""`           |
-| `image.repository` | Container image repository                         | `""`           |
-| `image.tag`        | Container image tag (defaults to chart appVersion) | `""`           |
-| `image.pullPolicy` | Container image pull policy                        | `IfNotPresent` |
-| `imagePullSecrets` | Image pull secrets for private registries          | `[]`           |
-
-### Service Account Parameters
-
-| Name                         | Description                 | Value  |
-| ---------------------------- | --------------------------- | ------ |
-| `serviceAccount.create`      | Create service account      | `true` |
-| `serviceAccount.annotations` | Service account annotations | `{}`   |
-| `serviceAccount.name`        | Service account name        | `""`   |
-
-### Pod Parameters
-
-| Name                 | Description                | Value           |
-| -------------------- | -------------------------- | --------------- |
-| `podAnnotations`     | Pod annotations            | `{}`            |
-| `podSecurityContext` | Pod security context       | See values.yaml |
-| `securityContext`    | Container security context | See values.yaml |
-
-### Service Parameters
-
-| Name                  | Description         | Value       |
-| --------------------- | ------------------- | ----------- |
-| `service.type`        | Service type        | `ClusterIP` |
-| `service.port`        | Service port        | `3064`      |
-| `service.annotations` | Service annotations | `{}`        |
-
-### Ingress Parameters
-
-| Name                  | Description                 | Value           |
-| --------------------- | --------------------------- | --------------- |
-| `ingress.enabled`     | Enable ingress              | `false`         |
-| `ingress.className`   | Ingress class name          | `""`            |
-| `ingress.annotations` | Ingress annotations         | `{}`            |
-| `ingress.hosts`       | Ingress hosts configuration | See values.yaml |
-| `ingress.tls`         | Ingress TLS configuration   | `[]`            |
-
-### Database Parameters
-
-| Name                      | Description                              | Value          |
-| ------------------------- | ---------------------------------------- | -------------- |
-| `database.host`           | PostgreSQL host                          | `"postgresql"` |
-| `database.port`           | PostgreSQL port                          | `5432`         |
-| `database.database`       | PostgreSQL database name                 | `"bloklid"`    |
-| `database.username`       | PostgreSQL username                      | `"bloklid"`    |
-| `database.password`       | PostgreSQL password                      | `""`           |
-| `database.existingSecret` | Name of existing secret with credentials | `""`           |
-| `database.maxConnections` | Maximum database connections             | `10`           |
-
-### Blokli Configuration Parameters
-
-| Name                                | Description                               | Value                       |
-| ----------------------------------- | ----------------------------------------- | --------------------------- |
-| `config.network`                    | HOPR network (dufour, rotsee, etc.)       | `"dufour"`                  |
-| `config.rpcUrl`                     | Blockchain RPC URL                        | `"https://rpc.example.com"` |
-| `config.maxRpcRequestsPerSec`       | Max RPC requests per second (0=unlimited) | `0`                         |
-| `config.dataDirectory`              | Data directory path                       | `"/data"`                   |
-| `config.indexer.fastSync`           | Enable fast sync mode                     | `true`                      |
-| `config.indexer.enableLogsSnapshot` | Enable logs snapshot                      | `false`                     |
-| `config.indexer.logsSnapshotUrl`    | Logs snapshot URL                         | `""`                        |
-| `config.logging.level`              | Rust log level                            | `"info"`                    |
-| `config.api.enabled`                | Enable GraphQL API server                 | `true`                      |
-| `config.api.bindAddress`            | API server bind address                   | `"0.0.0.0:8080"`            |
-| `config.api.playgroundEnabled`      | Enable GraphQL Playground                 | `false`                     |
-| `config.api.health.maxIndexerLag`   | Max indexer lag before readiness fails    | `10`                        |
-| `config.api.health.timeoutMs`       | Health check timeout (ms)                 | `5000`                      |
-
-### Persistence Parameters
-
-| Name                       | Description        | Value               |
-| -------------------------- | ------------------ | ------------------- |
-| `persistence.enabled`      | Enable persistence | `true`              |
-| `persistence.storageClass` | Storage class      | `""`                |
-| `persistence.accessModes`  | Access modes       | `["ReadWriteOnce"]` |
-| `persistence.size`         | PVC size           | `10Gi`              |
-| `persistence.annotations`  | PVC annotations    | `{}`                |
-
-### Resource Parameters
-
-| Name                        | Description    | Value   |
-| --------------------------- | -------------- | ------- |
-| `resources.limits.cpu`      | CPU limit      | `2000m` |
-| `resources.limits.memory`   | Memory limit   | `4Gi`   |
-| `resources.requests.cpu`    | CPU request    | `500m`  |
-| `resources.requests.memory` | Memory request | `1Gi`   |
-
-### Probe Parameters
-
-| Name                     | Description            | Value  |
-| ------------------------ | ---------------------- | ------ |
-| `livenessProbe.enabled`  | Enable liveness probe  | `true` |
-| `readinessProbe.enabled` | Enable readiness probe | `true` |
-| `startupProbe.enabled`   | Enable startup probe   | `true` |
-
-### Monitoring Parameters
-
-| Name                                 | Description                      | Value      |
-| ------------------------------------ | -------------------------------- | ---------- |
-| `monitoring.serviceMonitor.enabled`  | Enable Prometheus ServiceMonitor | `false`    |
-| `monitoring.serviceMonitor.interval` | Scrape interval                  | `30s`      |
-| `monitoring.serviceMonitor.path`     | Metrics path                     | `/metrics` |
-
-### Pod Disruption Budget Parameters
-
-| Name                               | Description                | Value   |
-| ---------------------------------- | -------------------------- | ------- |
-| `podDisruptionBudget.enabled`      | Enable PodDisruptionBudget | `false` |
-| `podDisruptionBudget.minAvailable` | Minimum available pods     | `1`     |
+| Name                                                 | Description                                                                                                   | Value               |
+| ---------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- | ------------------- |
+| `persistence.enabled`                                | Enable persistence for data directory                                                                         | `true`              |
+| `persistence.storageClass`                           | Storage class for PVC                                                                                         | `""`                |
+| `persistence.accessModes`                            | Access mode for PVC                                                                                           | `["ReadWriteOnce"]` |
+| `persistence.size`                                   | Size of the PVC                                                                                               | `10Gi`              |
+| `persistence.annotations`                            | Annotations for the PVC                                                                                       | `{}`                |
+| `persistence.selector`                               | Selector for existing PV (optional)                                                                           | `{}`                |
+| `database.type`                                      | Database type (e.g., postgresql, sqlite)                                                                      | `""`                |
+| `database.host`                                      | PostgreSQL host                                                                                               | `""`                |
+| `database.port`                                      | PostgreSQL port                                                                                               | `5432`              |
+| `database.database`                                  | PostgreSQL database name                                                                                      | `""`                |
+| `database.username`                                  | PostgreSQL username                                                                                           | `""`                |
+| `database.password`                                  | PostgreSQL password (ignored if existingSecret is set)                                                        | `""`                |
+| `database.index_path`                                | Sqlite database file path (used only if database.type is "sqlite")                                            | `""`                |
+| `database.logs_path`                                 | Sqlite logs database file path (used only if database.type is "sqlite")                                       | `""`                |
+| `database.existingSecret`                            | Name of existing secret containing database credentials                                                       | `""`                |
+| `database.maxConnections`                            | Maximum number of database connections                                                                        | `10`                |
+| `config.network`                                     | HOPR network to index (e.g., dufour, rotsee)                                                                  | `dufour`            |
+| `config.rpcUrl`                                      | Blockchain RPC URL                                                                                            | `""`                |
+| `config.maxRpcRequestsPerSec`                        | Maximum RPC requests per second (0 = unlimited)                                                               | `0`                 |
+| `config.dataDirectory`                               | Data directory path (should match persistence mount path)                                                     | `/data`             |
+| `config.indexer.fastSync`                            | Enable fast sync mode                                                                                         | `true`              |
+| `config.indexer.enableLogsSnapshot`                  | Enable logs snapshot feature                                                                                  | `false`             |
+| `config.indexer.logsSnapshotUrl`                     | URL for logs snapshot download (required when enableLogsSnapshot is true)                                     | `""`                |
+| `config.indexer.subscription.eventBusCapacity`       | Capacity of the event bus buffer for channel events                                                           | `1000`              |
+| `config.indexer.subscription.shutdownSignalCapacity` | Capacity of the shutdown signal buffer                                                                        | `10`                |
+| `config.indexer.subscription.batchSize`              | Batch size for Phase 1 historical channel queries                                                             | `100`               |
+| `config.api.enabled`                                 | Enable or disable the GraphQL API server                                                                      | `true`              |
+| `config.api.bindAddress`                             | Address and port for the API server to bind to                                                                | `0.0.0.0:8080`      |
+| `config.api.playgroundEnabled`                       | Enable GraphQL Playground for development and testing. Recommended to set to false for production deployments | `false`             |
+| `config.api.health.maxIndexerLag`                    | Maximum indexer lag (blocks) before readiness fails                                                           | `10`                |
+| `config.api.health.timeout`                          | Timeout for health check operations (ms)                                                                      | `5000`              |
+| `config.logging.level`                               | Rust log level configuration. Examples: "info", "debug", "info,blokli_chain_indexer=debug"                    | `info`              |
+| `config.logging.backtrace`                           | Rust backtrace configuration (e.g., "full", "short", "0")                                                     | `full`              |
 
 ## Configuration Examples
 
-### Basic Configuration with External PostgreSQL
+### Full example Configuration
 
-```yaml
-# values-production.yaml
-image:
-  repository: us-docker.pkg.dev/my-project/blokli/bloklid
-  tag: "1.0.0"
-  pullPolicy: IfNotPresent
-
-database:
-  host: postgresql.database.svc.cluster.local
-  port: 5432
-  database: bloklid
-  username: bloklid
-  password: "my-secure-password"
-
-config:
-  network: dufour
-  rpcUrl: "https://rpc.gnosischain.com"
-  maxRpcRequestsPerSec: 100
-
-persistence:
-  enabled: true
-  storageClass: ssd
-  size: 50Gi
-
-resources:
-  limits:
-    cpu: 4000m
-    memory: 8Gi
-  requests:
-    cpu: 1000m
-    memory: 2Gi
-```
-
-### Configuration with Ingress and TLS
-
-```yaml
-# values-ingress.yaml
-ingress:
-  enabled: true
-  className: nginx
-  annotations:
-    cert-manager.io/cluster-issuer: letsencrypt-prod
-    nginx.ingress.kubernetes.io/ssl-redirect: "true"
-  hosts:
-    - host: blokli.example.com
-      paths:
-        - path: /
-          pathType: Prefix
-  tls:
-    - secretName: blokli-tls
-      hosts:
-        - blokli.example.com
-```
+Please refer to the contents of the file [values-testing.yaml](./values-testing.yaml) for a full example configuration
 
 ### Configuration with Existing Secret
 
@@ -245,27 +169,6 @@ Create the secret:
 kubectl create secret generic blokli-db-credentials \
   --from-literal=DB_USERNAME=bloklid \
   --from-literal=DB_PASSWORD=my-secure-password
-```
-
-### Configuration with Monitoring
-
-```yaml
-# values-monitoring.yaml
-monitoring:
-  serviceMonitor:
-    enabled: true
-    interval: 30s
-    labels:
-      prometheus: kube-prometheus
-```
-
-### Configuration with Pod Disruption Budget
-
-```yaml
-# values-pdb.yaml
-podDisruptionBudget:
-  enabled: true
-  minAvailable: 1
 ```
 
 ## Deployment Architectures
@@ -295,8 +198,8 @@ Blokli requires an external PostgreSQL database. You can use a managed service (
 Example using Bitnami PostgreSQL chart:
 
 ```bash
-helm repo add bitnami https://charts.bitnami.com/bitnami
-helm install postgresql bitnami/postgresql \
+helm repo add bitnamilelegacy https://raw.githubusercontent.com/bitnami/charts/archive-full-index/bitnami
+helm install postgresql bitnamilelegacy/postgresql \
   --set auth.username=bloklid \
   --set auth.password=secretpassword \
   --set auth.database=bloklid
@@ -329,14 +232,6 @@ curl https://blokli.example.com/graphql
 - **Health Check (readiness)**: `/readyz`
 - **GraphQL Playground**: `/graphql` (in browser)
 
-## Testing the Deployment
-
-Run Helm tests to verify the deployment:
-
-```bash
-helm test my-blokli
-```
-
 ## Upgrading
 
 To upgrade the chart:
@@ -365,7 +260,7 @@ kubectl exec -it <pod-name> -- sh
 ### Check Configuration
 
 ```bash
-kubectl get configmap <release-name>-blokli -o yaml
+kubectl get configmap my-blokli -o yaml
 ```
 
 ### Common Issues
@@ -377,7 +272,7 @@ kubectl get configmap <release-name>-blokli -o yaml
 
 ## License
 
-Copyright HOPR Association
+GPL-3.0-or-later
 
 ## Support
 

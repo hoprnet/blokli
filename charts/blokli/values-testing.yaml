@@ -1,0 +1,43 @@
+image:
+  tag: latest
+ingress:
+  enabled: true
+  className: nginx
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-issuer
+  hostname: blokli.example.com
+resources:
+  limits:
+    cpu: 2000m
+    memory: 4Gi
+  requests:
+    cpu: 500m
+    memory: 1Gi
+persistence:
+  storageClass: standard-rwo
+  size: 10Gi
+# Database configuration
+database:
+  type: "postgresql"
+  host: postgres-18.postgres.svc
+  database: bloklid
+  username: bloklid
+  password: "SomePassword"
+  maxConnections: 20
+config:
+  network: "dufour"
+  rpcUrl: "https://rpc.gnosischain.com"
+  maxRpcRequestsPerSec: 0
+  # Indexer settings
+  indexer:
+    fastSync: true
+    enableLogsSnapshot: true
+    logsSnapshotUrl: https://logs-snapshots.hoprnet.org/dufour-v3.0-latest.tar.xz
+    subscription:
+      eventBusCapacity: 1000
+      shutdownSignalCapacity: 10
+      batchSize: 100
+  api:
+    playgroundEnabled: true
+  logging:
+    level: "info"

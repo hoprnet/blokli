@@ -12,28 +12,28 @@ data:
     # Server configuration
     host = "0.0.0.0:{{ .Values.service.port }}"
 
+    {{- if eq .Values.database.type "sqlite" }}
+    # Database configuration
+    [database]
+    type = "sqlite"
+    index_path = "{{ required "config.database.index_path is required" .Values.database.index_path }}"
+    logs_path = "{{ required "config.database.logs_path is required" .Values.database.logs_path }}"
+    max_connections = {{ .Values.database.maxConnections }}
+    {{- end }}
+
     # Data storage
     data_directory = "{{ .Values.config.dataDirectory }}"
 
     # Network configuration
     network = "{{ .Values.config.network }}"
-    rpc_url = "{{ .Values.config.rpcUrl }}"
     max_rpc_requests_per_sec = {{ .Values.config.maxRpcRequestsPerSec }}
-
-    # Database configuration
-    [database]
-    type = "postgresql"
-    url = "{{ include "blokli.databaseUrl" . }}"
-    max_connections = {{ .Values.database.maxConnections }}
 
     # Indexer settings
     [indexer]
     fast_sync = {{ .Values.config.indexer.fastSync }}
-    {{- if .Values.config.indexer.enableLogsSnapshot }}
     enable_logs_snapshot = {{ .Values.config.indexer.enableLogsSnapshot }}
-    {{- if .Values.config.indexer.logsSnapshotUrl }}
-    logs_snapshot_url = "{{ .Values.config.indexer.logsSnapshotUrl }}"
-    {{- end }}
+    {{- if .Values.config.indexer.enableLogsSnapshot }}
+    logs_snapshot_url = "{{ required "config.indexer.logsSnapshotUrl is required" .Values.config.indexer.logsSnapshotUrl }}"
     {{- end }}
 
     # Indexer subscription configuration
@@ -51,4 +51,4 @@ data:
     # Health check configuration
     [api.health]
     max_indexer_lag = {{ .Values.config.api.health.maxIndexerLag }}
-    timeout_ms = {{ .Values.config.api.health.timeoutMs }}
+    timeout = {{ .Values.config.api.health.timeout }}
