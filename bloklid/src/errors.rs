@@ -32,6 +32,11 @@ pub enum ConfigError {
     Parse(String),
     #[error("failed to validate config: {0}")]
     Validation(ValidationErrors),
+    #[error(
+        "no database configuration provided. must provide either [database] section in config file or environment \
+         variables: BLOKLI_DATABASE_TYPE, BLOKLI_DATABASE_URL"
+    )]
+    NoDatabaseConfiguration,
 }
 
 pub type Result<T> = std::result::Result<T, BloklidError>;

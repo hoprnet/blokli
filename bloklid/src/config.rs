@@ -8,13 +8,6 @@ fn default_host() -> std::net::SocketAddr {
     "0.0.0.0:3064".parse().unwrap()
 }
 
-fn default_database() -> DatabaseConfig {
-    DatabaseConfig::PostgreSql(PostgreSqlConfig::Url(PostgreSqlUrlConfig {
-        url: "postgresql://bloklid:password@localhost:5432/bloklid".to_string(),
-        max_connections: default_max_connections(),
-    }))
-}
-
 fn default_rpc_url() -> String {
     "http://localhost:8545".to_string()
 }
@@ -31,32 +24,29 @@ fn default_network() -> String {
 ///
 /// Supports two formats:
 /// 1. Simple URL: `url = "postgresql://user:pass@host:port/database"`
-/// 2. Detailed components with individual fields
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(untagged)]
-pub enum PostgreSqlConfig {
-    /// Simple connection URL format
-    Url(PostgreSqlUrlConfig),
-    /// Detailed connection parameters
-    Detailed(PostgreSqlDetailedConfig),
-}
-
+/// 2. Detailed components with individual fields (host, port, username, password, database)
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct PostgreSqlUrlConfig {
-    pub url: String,
-    #[serde(default = "default_max_connections")]
-    pub max_connections: u32,
-}
-
-#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct PostgreSqlDetailedConfig {
-    pub host: String,
-    pub port: u16,
-    pub username: String,
-    pub password: String,
-    pub database: String,
+pub struct PostgreSqlConfig {
+    /// Connection URL (Option 1: simple URL format)
+    #[serde(default)]
+    pub url: Option<String>,
+    /// Host (Option 2: detailed configuration)
+    #[serde(default)]
+    pub host: Option<String>,
+    /// Port (Option 2: detailed configuration)
+    #[serde(default)]
+    pub port: Option<u16>,
+    /// Username (Option 2: detailed configuration)
+    #[serde(default)]
+    pub username: Option<String>,
+    /// Password (Option 2: detailed configuration)
+    #[serde(default)]
+    pub password: Option<String>,
+    /// Database (Option 2: detailed configuration)
+    #[serde(default)]
+    pub database: Option<String>,
+    /// Maximum number of connections
     #[serde(default = "default_max_connections")]
     pub max_connections: u32,
 }
@@ -111,15 +101,20 @@ impl DatabaseConfig {
     /// For SQLite, returns the index database URL
     pub fn to_url(&self) -> String {
         match self {
-            DatabaseConfig::PostgreSql(pg_config) => match pg_config {
-                PostgreSqlConfig::Url(config) => config.url.clone(),
-                PostgreSqlConfig::Detailed(config) => {
-                    format!(
-                        "postgresql://{}:{}@{}:{}/{}",
-                        config.username, config.password, config.host, config.port, config.database
-                    )
+            DatabaseConfig::PostgreSql(pg_config) => {
+                // If URL is provided, use it directly
+                if let Some(url) = &pg_config.url {
+                    return url.clone();
                 }
-            },
+
+                // Otherwise, construct from detailed fields
+                let username = pg_config.username.as_deref().unwrap_or("");
+                let password = pg_config.password.as_deref().unwrap_or("");
+                let host = pg_config.host.as_deref().unwrap_or("localhost");
+                let port = pg_config.port.unwrap_or(5432);
+                let database = pg_config.database.as_deref().unwrap_or("");
+                format!("postgresql://{}:{}@{}:{}/{}", username, password, host, port, database)
+            }
             DatabaseConfig::Sqlite(sqlite_config) => {
                 format!("sqlite://{}?mode=rwc", sqlite_config.index_path)
             }
@@ -139,10 +134,7 @@ impl DatabaseConfig {
     /// Get max_connections setting
     pub fn max_connections(&self) -> u32 {
         match self {
-            DatabaseConfig::PostgreSql(pg_config) => match pg_config {
-                PostgreSqlConfig::Url(config) => config.max_connections,
-                PostgreSqlConfig::Detailed(config) => config.max_connections,
-            },
+            DatabaseConfig::PostgreSql(pg_config) => pg_config.max_connections,
             DatabaseConfig::Sqlite(sqlite_config) => sqlite_config.max_connections,
         }
     }
@@ -157,9 +149,8 @@ pub struct Config {
     #[serde(default = "default_host")]
     pub host: std::net::SocketAddr,
 
-    #[default(_code = "default_database()")]
-    #[serde(default = "default_database")]
-    pub database: DatabaseConfig,
+    #[serde(default)]
+    pub database: Option<DatabaseConfig>,
 
     #[default(_code = "default_data_directory()")]
     #[serde(default = "default_data_directory")]
@@ -444,6 +435,24 @@ mod tests {
     }
 
     #[test]
+    fn test_config_without_database_section() {
+        let config = r#"
+        host = "0.0.0.0:3064"
+        network = "dufour"
+        rpc_url = "http://localhost:8545"
+    "#;
+        let res: Result<Config, _> = toml::from_str(config);
+        assert!(
+            res.is_ok(),
+            "Should allow config without database section: {:?}",
+            res.err()
+        );
+
+        let cfg = res.unwrap();
+        assert!(cfg.database.is_none(), "database should be None when not specified");
+    }
+
+    #[test]
     fn test_load_example_config() {
         let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let config_path = project_root.join("example-config.toml");
@@ -458,15 +467,13 @@ mod tests {
         assert_eq!(config.host.to_string(), "0.0.0.0:3064");
         assert_eq!(config.network, "dufour");
 
-        // Check database config
-        match config.database {
-            DatabaseConfig::PostgreSql(pg) => {
-                match pg {
-                    PostgreSqlConfig::Url(_) => {} // OK
-                    _ => panic!("Example config should use URL format by default"),
-                }
+        // Check database config (should be present in example-config.toml)
+        match &config.database {
+            Some(DatabaseConfig::PostgreSql(pg)) => {
+                // Should have a URL configured
+                assert!(pg.url.is_some(), "Example config should have URL configured");
             }
-            _ => panic!("Example config should default to PostgreSQL"),
+            _ => panic!("Example config should have PostgreSQL database section"),
         }
 
         // Check indexer config
@@ -521,6 +528,7 @@ mod tests {
         assert_eq!(cfg.api.bind_address.to_string(), "0.0.0.0:8080"); // Default
         assert_eq!(cfg.api.health.max_indexer_lag, 10); // Default
         assert_eq!(cfg.api.health.timeout, Duration::from_millis(5000)); // Default
+        assert!(cfg.database.is_some()); // Database was provided
     }
 
     #[test]
