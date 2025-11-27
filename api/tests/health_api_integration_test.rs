@@ -149,7 +149,7 @@ async fn setup_test_environment() -> anyhow::Result<TestContext> {
         contract_addresses: contract_addrs,
         health: HealthConfig {
             max_indexer_lag: 10,
-            timeout_ms: 5000,
+            timeout: std::time::Duration::from_millis(5000),
         },
         ..Default::default()
     };
