@@ -83,5 +83,5 @@ playground_enabled = true
 [api.health]
 # Maximum allowed indexer lag (in blocks) before readiness check fails (default: 10)
 max_indexer_lag = 10
-# Timeout for health check queries in milliseconds (default: 5000)
-timeout_ms = 5000
+# Timeout for health check queries (in milliseconds, default: 5000)
+timeout = 5000
