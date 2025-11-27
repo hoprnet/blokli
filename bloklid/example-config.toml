@@ -17,6 +17,12 @@ rpc_url = "http://localhost:8545"
 max_rpc_requests_per_sec = 0
 
 # Database configuration - supports PostgreSQL or SQLite
+# IMPORTANT: This section is OPTIONAL if using environment variables.
+# For environment-only configuration, comment out this entire [database] section and set:
+#   - BLOKLI_DATABASE_TYPE=postgresql
+#   - BLOKLI_DATABASE_URL=postgresql://user:password@host:port/database
+#   - BLOKLI_DATABASE_MAX_CONNECTIONS=10 (optional, defaults to 10)
+
 [database]
 # PostgreSQL configuration (recommended for production)
 type = "postgresql"

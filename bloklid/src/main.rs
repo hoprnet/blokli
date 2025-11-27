@@ -152,6 +152,11 @@ impl Args {
             .try_deserialize()
             .map_err(|e| ConfigError::Parse(e.to_string()))?;
 
+        // Validate that database configuration is provided either in config file or environment variables
+        if config.database.is_none() {
+            return Err(ConfigError::NoDatabaseConfiguration.into());
+        }
+
         config.validate().map_err(ConfigError::Validation)?;
 
         // coerce with protocol config
@@ -283,6 +288,14 @@ async fn run() -> errors::Result<()> {
                 .ok_or_else(|| BloklidError::NonSpecific("Chain network not configured".into()))?
                 .clone();
 
+            let database = cfg.database.as_ref().ok_or_else(|| {
+                BloklidError::DatabaseNotConfigured(
+                    "Database configuration is missing. Ensure either [database] section is present in config file or \
+                     BLOKLI_DATABASE_TYPE and BLOKLI_DATABASE_URL are set"
+                        .to_string(),
+                )
+            })?;
+
             let indexer_config = blokli_chain_indexer::IndexerConfig {
                 start_block_number: chain_network.channel_contract_deploy_block as u64,
                 fast_sync: cfg.indexer.fast_sync,
@@ -294,8 +307,8 @@ async fn run() -> errors::Result<()> {
             };
 
             (
-                cfg.database.to_url(),
-                cfg.database.to_logs_url(),
+                database.to_url(),
+                database.to_logs_url(),
                 chain_network,
                 cfg.contracts,
                 indexer_config,
@@ -318,7 +331,14 @@ async fn run() -> errors::Result<()> {
                 let cfg = config
                     .read()
                     .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
-                cfg.database.max_connections()
+                cfg.database
+                    .as_ref()
+                    .ok_or_else(|| {
+                        BloklidError::DatabaseNotConfigured(
+                            "Failed to read database configuration during connection pool initialization".to_string(),
+                        )
+                    })?
+                    .max_connections()
             },
             log_slow_queries: Duration::from_secs(1),
         };
@@ -470,117 +490,214 @@ async fn run() -> errors::Result<()> {
 }
 
 #[cfg(test)]
-mod env_tests {
-    use std::io::Write;
+mod tests {
+    use std::{io::Write, sync::Mutex};
 
     use super::*;
 
-    // Helper to safely run env var tests
-    fn run_env_test<F>(test: F)
-    where
-        F: FnOnce() + std::panic::UnwindSafe,
-    {
-        // We use a mutex to ensure env vars are not modified concurrently
-        // Note: This only protects against other tests using this helper
-        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        let _guard = ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    /// Lock to serialize environment variable tests to avoid interference
+    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-        let result = std::panic::catch_unwind(test);
+    /// Helper for environment variable tests
+    /// Clears specified variables at construction and removes them on drop.
+    /// This ensures clean state before and after the test runs, preventing
+    /// interference from other tests or environment setup.
+    struct EnvGuard {
+        vars: Vec<&'static str>,
+    }
 
-        // Clean up commonly used env vars
-        unsafe {
-            std::env::remove_var("BLOKLI_HOST");
-            std::env::remove_var("BLOKLI_DATABASE_URL");
-            std::env::remove_var("DATABASE_URL");
-            std::env::remove_var("BLOKLI_API_ENABLED");
+    impl EnvGuard {
+        fn new(vars: Vec<&'static str>) -> Self {
+            // Clear environment variables before test starts
+            for var in &vars {
+                unsafe {
+                    std::env::remove_var(var);
+                }
+            }
+            Self { vars }
         }
+    }
 
-        if let Err(err) = result {
-            std::panic::resume_unwind(err);
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // Remove environment variables after test completes
+            for var in &self.vars {
+                unsafe {
+                    std::env::remove_var(var);
+                }
+            }
         }
     }
 
     #[test]
     fn test_env_var_override() {
-        run_env_test(|| {
-            // Create a temp config file with .toml extension
-            let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-            writeln!(
-                file,
-                r#"
-                host = "127.0.0.1:3000"
-                network = "dufour"
-                rpc_url = "http://localhost:8545"
-                [database]
-                type = "postgresql"
-                url = "postgres://file:5432/db"
-            "#
-            )
-            .unwrap();
-            let path = file.path().to_path_buf();
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
 
-            // Set env vars
-            unsafe {
-                std::env::set_var("BLOKLI_HOST", "127.0.0.1:4000");
-                std::env::set_var("BLOKLI_DATABASE_URL", "postgres://env:5432/db");
+        // Create a temp config file
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            host = "127.0.0.1:3000"
+            network = "dufour"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        // Set env vars that should override config file
+        let _guard = EnvGuard::new(vec!["BLOKLI_HOST", "BLOKLI_DATABASE_URL"]);
+        unsafe {
+            std::env::set_var("BLOKLI_HOST", "127.0.0.1:4000");
+            std::env::set_var("BLOKLI_DATABASE_URL", "postgres://env:5432/db");
+        }
+
+        let args = Args {
+            verbose: 0,
+            config: Some(path),
+            command: None,
+        };
+
+        let config = args.load_config(false).expect("Failed to load config");
+
+        // Environment variables should override config file
+        assert_eq!(config.host.to_string(), "127.0.0.1:4000");
+        match config.database {
+            Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
+                assert_eq!(c.url.as_ref().map(|s| s.as_str()), Some("postgres://env:5432/db"));
             }
-
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            let config = args.load_config(false).expect("Failed to load config");
-
-            assert_eq!(config.host.to_string(), "127.0.0.1:4000"); // Env override
-            match config.database {
-                crate::config::DatabaseConfig::PostgreSql(crate::config::PostgreSqlConfig::Url(c)) => {
-                    assert_eq!(c.url, "postgres://env:5432/db");
-                }
-                _ => panic!("Wrong db type"),
-            }
-        });
+            _ => panic!("Expected PostgreSQL database config"),
+        }
     }
 
     #[test]
     fn test_canonical_env_var_override() {
-        run_env_test(|| {
-            // Create a temp config file with .toml extension
-            let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-            writeln!(
-                file,
-                r#"
-                host = "127.0.0.1:3000"
-                network = "dufour"
-                rpc_url = "http://localhost:8545"
-                [database]
-                type = "postgresql"
-                url = "postgres://file:5432/db"
-            "#
-            )
-            .unwrap();
-            let path = file.path().to_path_buf();
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
 
-            // Set canonical env var
-            unsafe {
-                std::env::set_var("DATABASE_URL", "postgres://canonical:5432/db");
+        // Create a temp config file
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            host = "127.0.0.1:3000"
+            network = "dufour"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        // Set canonical DATABASE_URL env var
+        let _guard = EnvGuard::new(vec!["DATABASE_URL"]);
+        unsafe {
+            std::env::set_var("DATABASE_URL", "postgres://canonical:5432/db");
+        }
+
+        let args = Args {
+            verbose: 0,
+            config: Some(path),
+            command: None,
+        };
+
+        let config = args.load_config(false).expect("Failed to load config");
+
+        // Canonical env var should override config file
+        match config.database {
+            Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
+                assert_eq!(c.url.as_ref().map(|s| s.as_str()), Some("postgres://canonical:5432/db"));
             }
+            _ => panic!("Expected PostgreSQL database config"),
+        }
+    }
 
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
+    #[test]
+    fn test_env_only_database_config() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
 
-            let config = args.load_config(false).expect("Failed to load config");
+        // Create config file without [database] section
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            host = "0.0.0.0:3064"
+            network = "dufour"
+            rpc_url = "http://localhost:8545"
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
 
-            match config.database {
-                crate::config::DatabaseConfig::PostgreSql(crate::config::PostgreSqlConfig::Url(c)) => {
-                    assert_eq!(c.url, "postgres://canonical:5432/db");
-                }
-                _ => panic!("Wrong db type"),
+        // Database config must come entirely from environment variables
+        let _guard = EnvGuard::new(vec!["BLOKLI_DATABASE_TYPE", "BLOKLI_DATABASE_URL"]);
+        unsafe {
+            std::env::set_var("BLOKLI_DATABASE_TYPE", "postgresql");
+            std::env::set_var("BLOKLI_DATABASE_URL", "postgresql://user:pass@localhost/db");
+        }
+
+        let args = Args {
+            verbose: 0,
+            config: Some(path),
+            command: None,
+        };
+
+        let config = args
+            .load_config(false)
+            .expect("Should load database config from environment");
+
+        // Should successfully load database config from environment variables
+        match config.database {
+            Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
+                assert_eq!(
+                    c.url.as_ref().map(|s| s.as_str()),
+                    Some("postgresql://user:pass@localhost/db")
+                );
+                assert_eq!(c.max_connections, 10); // Default value
             }
-        });
+            _ => panic!("Expected PostgreSQL database config"),
+        }
+    }
+
+    #[test]
+    fn test_missing_database_config_fails() {
+        let _lock = ENV_TEST_LOCK.lock().unwrap();
+
+        // Create config file without [database] section
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            host = "0.0.0.0:3064"
+            network = "dufour"
+            rpc_url = "http://localhost:8545"
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        // Don't set any database environment variables
+        let _guard = EnvGuard::new(vec![]);
+
+        let args = Args {
+            verbose: 0,
+            config: Some(path),
+            command: None,
+        };
+
+        // Should fail when database config is missing from both file and environment
+        let result = args.load_config(false);
+        assert!(result.is_err(), "Should fail when database config is missing");
+
+        let err_msg = result.unwrap_err().to_string();
+        assert!(
+            err_msg.contains("database configuration"),
+            "Error message should mention database configuration"
+        );
     }
 }
