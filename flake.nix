@@ -365,8 +365,8 @@
               echo "Running pre-commit checks..."
               ${packages.pre-commit-check.shellHook}
 
-              # Use a local npm global directory in your home
-              export NPM_CONFIG_PREFIX=$HOME/.npm-global
+              # Use a local npm directory
+              export NPM_CONFIG_PREFIX=.npm
               export PATH=$NPM_CONFIG_PREFIX/bin:$PATH
 
               echo "Install helm-chart readme-generator"
@@ -430,6 +430,9 @@
 
               # Generated GraphQL schema (formatted separately)
               "schema.graphql"
+
+              # locally installed npm packages
+              ".npm/"
             ];
             extraFormatters = {
               settings.formatter.shfmt.includes = [
