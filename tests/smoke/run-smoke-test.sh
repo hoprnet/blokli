@@ -30,7 +30,7 @@ LOCAL_IMAGE="${LOCAL_REGISTRY}/bloklid:smoke-test"
 
 # Bloklid API configuration
 BLOKLID_URL="http://localhost:3064"
-TIMEOUT_SECONDS=120
+TIMEOUT_SECONDS=30
 POLL_INTERVAL=5
 
 # Logging functions

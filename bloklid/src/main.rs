@@ -307,6 +307,14 @@ async fn run() -> errors::Result<()> {
     // Initial config load
     let config = Arc::new(RwLock::new(args.load_config(true)?));
 
+    // Log the final configuration with redacted secrets
+    {
+        let cfg = config
+            .read()
+            .map_err(|_| BloklidError::NonSpecific("failed to lock config for logging".into()))?;
+        info!("{}", cfg.display_redacted());
+    }
+
     // Initialize components
     let (process_handles, api_handle) = {
         let (database_path, logs_database_path, chain_network, contracts, indexer_config, rpc_url, api_config) = {
@@ -949,7 +957,10 @@ mod tests {
             };
 
             let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(config.indexer.fast_sync, true, "BLOKLI_INDEXER_FAST_SYNC should be parsed as bool");
+            assert_eq!(
+                config.indexer.fast_sync, true,
+                "BLOKLI_INDEXER_FAST_SYNC should be parsed as bool"
+            );
         });
     }
 
@@ -981,7 +992,10 @@ mod tests {
             };
 
             let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(config.indexer.fast_sync, true, "BLOKLI_INDEXER_FAST_SYNC='1' should be parsed as boolean true");
+            assert_eq!(
+                config.indexer.fast_sync, true,
+                "BLOKLI_INDEXER_FAST_SYNC='1' should be parsed as boolean true"
+            );
         });
     }
 
@@ -1013,7 +1027,10 @@ mod tests {
             };
 
             let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(config.indexer.fast_sync, false, "BLOKLI_INDEXER_FAST_SYNC='0' should be parsed as boolean false");
+            assert_eq!(
+                config.indexer.fast_sync, false,
+                "BLOKLI_INDEXER_FAST_SYNC='0' should be parsed as boolean false"
+            );
         });
     }
 
@@ -1044,7 +1061,10 @@ mod tests {
             };
 
             let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(config.indexer.fast_sync, false, "BLOKLI_INDEXER_FAST_SYNC should be parsed as bool");
+            assert_eq!(
+                config.indexer.fast_sync, false,
+                "BLOKLI_INDEXER_FAST_SYNC should be parsed as bool"
+            );
         });
     }
 
@@ -1076,7 +1096,10 @@ mod tests {
             };
 
             let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(config.api.health.max_indexer_lag, 20, "Non-boolean numeric config should parse as u64");
+            assert_eq!(
+                config.api.health.max_indexer_lag, 20,
+                "Non-boolean numeric config should parse as u64"
+            );
         });
     }
 }

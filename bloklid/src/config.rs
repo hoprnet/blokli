@@ -4,6 +4,15 @@ use blokli_chain_types::ContractAddresses;
 use hopr_chain_config::{ChainNetworkConfig, ProtocolsConfig};
 use serde::Deserialize;
 
+/// Redacts sensitive information from strings
+fn redact_sensitive(value: &str) -> String {
+    if value.len() <= 4 {
+        "***".to_string()
+    } else {
+        format!("{}...{}", &value[..2], &value[value.len() - 2..])
+    }
+}
+
 fn default_host() -> std::net::SocketAddr {
     "0.0.0.0:3064".parse().unwrap()
 }
@@ -154,6 +163,45 @@ impl DatabaseConfig {
             DatabaseConfig::Sqlite(sqlite_config) => sqlite_config.max_connections,
         }
     }
+
+    /// Display the database configuration with sensitive data redacted
+    pub fn display_redacted(&self) -> String {
+        match self {
+            DatabaseConfig::PostgreSql(pg_config) => {
+                let url_display = if let Some(url) = &pg_config.url {
+                    format!("url={}", redact_sensitive(url))
+                } else {
+                    let host = pg_config.host.as_deref().unwrap_or("localhost");
+                    let port = pg_config.port.unwrap_or(5432);
+                    let user = pg_config
+                        .username
+                        .as_ref()
+                        .map(|u| redact_sensitive(u))
+                        .unwrap_or("***".to_string());
+                    let pass = pg_config
+                        .password
+                        .as_ref()
+                        .map(|_| "***".to_string())
+                        .unwrap_or("(none)".to_string());
+                    let db = pg_config.database.as_deref().unwrap_or("bloklid");
+                    format!(
+                        "host={}, port={}, user={}, password={}, database={}",
+                        host, port, user, pass, db
+                    )
+                };
+                format!(
+                    "PostgreSQL: {}, max_connections={}",
+                    url_display, pg_config.max_connections
+                )
+            }
+            DatabaseConfig::Sqlite(sqlite_config) => {
+                format!(
+                    "SQLite: index_path={}, logs_path={}, max_connections={}",
+                    sqlite_config.index_path, sqlite_config.logs_path, sqlite_config.max_connections
+                )
+            }
+        }
+    }
 }
 
 #[serde_with::serde_as]
@@ -199,6 +247,52 @@ pub struct Config {
 
     #[serde(default)]
     pub protocols: ProtocolsConfig,
+}
+
+impl Config {
+    /// Display the configuration with sensitive data redacted
+    pub fn display_redacted(&self) -> String {
+        let mut output = String::new();
+        output.push_str("Configuration:\n");
+        output.push_str(&format!("  host: {}\n", self.host));
+        output.push_str(&format!("  network: {}\n", self.network));
+        output.push_str(&format!("  rpc_url: {}\n", redact_sensitive(&self.rpc_url)));
+        output.push_str(&format!("  data_directory: {}\n", self.data_directory));
+        output.push_str(&format!(
+            "  max_rpc_requests_per_sec: {}\n",
+            self.max_rpc_requests_per_sec
+        ));
+
+        if let Some(db_config) = &self.database {
+            output.push_str(&format!("  database: {}\n", db_config.display_redacted()));
+        } else {
+            output.push_str("  database: (not configured)\n");
+        }
+
+        output.push_str(&format!("  indexer.fast_sync: {}\n", self.indexer.fast_sync));
+        output.push_str(&format!(
+            "  indexer.enable_logs_snapshot: {}\n",
+            self.indexer.enable_logs_snapshot
+        ));
+
+        if let Some(snapshot_url) = &self.indexer.logs_snapshot_url {
+            output.push_str(&format!(
+                "  indexer.logs_snapshot_url: {}\n",
+                redact_sensitive(snapshot_url)
+            ));
+        }
+
+        output.push_str(&format!("  api.enabled: {}\n", self.api.enabled));
+        output.push_str(&format!("  api.bind_address: {}\n", self.api.bind_address));
+        output.push_str(&format!("  api.playground_enabled: {}\n", self.api.playground_enabled));
+        output.push_str(&format!(
+            "  api.health.max_indexer_lag: {}\n",
+            self.api.health.max_indexer_lag
+        ));
+        output.push_str(&format!("  api.health.timeout: {:?}\n", self.api.health.timeout));
+
+        output
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
