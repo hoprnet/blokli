@@ -97,8 +97,13 @@ pub async fn start_server(network: String, config: ApiConfig) -> ApiResult<()> {
 
     // Create RPC connection for balance queries
     info!("Connecting to RPC: {}", redact_url(&config.rpc_url));
-    let rpc_url = url::Url::parse(&config.rpc_url)
-        .map_err(|e| ApiError::ConfigError(format!("Failed to parse RPC URL '{}': {}", config.rpc_url, e)))?;
+    let rpc_url = url::Url::parse(&config.rpc_url).map_err(|e| {
+        ApiError::ConfigError(format!(
+            "Failed to parse RPC URL '{}': {}",
+            redact_url(&config.rpc_url),
+            e
+        ))
+    })?;
     let transport_client = alloy::transports::http::ReqwestTransport::new(rpc_url);
     let rpc_client = alloy::rpc::client::ClientBuilder::default()
         .layer(alloy::transports::layers::RetryBackoffLayer::new_with_policy(

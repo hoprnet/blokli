@@ -23,7 +23,7 @@ use tracing_subscriber::{EnvFilter, fmt};
 use validator::Validate;
 
 use crate::{
-    config::Config,
+    config::{Config, redact_database_url, redact_rpc_url},
     errors::{BloklidError, ConfigError},
 };
 
@@ -361,10 +361,10 @@ async fn run() -> errors::Result<()> {
 
         if let Some(logs_path) = &logs_database_path {
             info!("Initializing dual-database setup:");
-            info!("  Index database: {}", database_path);
-            info!("  Logs database: {}", logs_path);
+            info!("  Index database: {}", redact_database_url(&database_path));
+            info!("  Logs database: {}", redact_database_url(logs_path));
         } else {
-            info!("Initializing single database: {}", database_path);
+            info!("Initializing single database: {}", redact_database_url(&database_path));
         }
 
         // Initialize database
@@ -389,7 +389,7 @@ async fn run() -> errors::Result<()> {
         // Clone notification manager for API before db is moved to BlokliChain
         let sqlite_notification_manager = db.sqlite_notification_manager().cloned();
 
-        info!("Connecting to RPC endpoint: {}", rpc_url);
+        info!("Connecting to RPC endpoint: {}", redact_rpc_url(&rpc_url));
 
         // Extract chain_id and network before chain_network is moved
         let chain_id = chain_network.chain.chain_id as u64;
