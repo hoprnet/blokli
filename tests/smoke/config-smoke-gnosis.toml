@@ -3,9 +3,6 @@
 # It connects to PostgreSQL (local) and Gnosis Chain RPC (external)
 #
 
-# Host address and port for the daemon to listen on
-host = "0.0.0.0:3064"
-
 # Directory for storing data files
 data_directory = "/data"
 

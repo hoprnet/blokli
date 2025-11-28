@@ -84,8 +84,6 @@ impl Args {
         // Layer 2: Environment Variables (Manual Mapping)
         // We manually map env vars to config keys to ensure precedence and specific naming
         let env_mappings = [
-            // Root
-            ("BLOKLI_HOST", "host"),
             ("BLOKLI_DATA_DIRECTORY", "data_directory"),
             ("BLOKLI_NETWORK", "network"),
             ("BLOKLI_RPC_URL", "rpc_url"),
@@ -549,7 +547,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "127.0.0.1:3000"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -561,30 +558,23 @@ mod tests {
         let path = file.path().to_path_buf();
 
         // Set env vars that should override config file
-        temp_env::with_vars(
-            [
-                ("BLOKLI_HOST", Some("127.0.0.1:4000")),
-                ("BLOKLI_DATABASE_URL", Some("postgres://env:5432/db")),
-            ],
-            || {
-                let args = Args {
-                    verbose: 0,
-                    config: Some(path),
-                    command: None,
-                };
+        temp_env::with_vars([("BLOKLI_DATABASE_URL", Some("postgres://env:5432/db"))], || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
 
-                let config = args.load_config(false).expect("Failed to load config");
+            let config = args.load_config(false).expect("Failed to load config");
 
-                // Environment variables should override config file
-                assert_eq!(config.host.to_string(), "127.0.0.1:4000");
-                match config.database {
-                    Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
-                        assert_eq!(c.url.as_ref().map(|s| s.as_str()), Some("postgres://env:5432/db"));
-                    }
-                    _ => panic!("Expected PostgreSQL database config"),
+            // Environment variables should override config file
+            match config.database {
+                Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
+                    assert_eq!(c.url.as_ref().map(|s| s.as_str()), Some("postgres://env:5432/db"));
                 }
-            },
-        );
+                _ => panic!("Expected PostgreSQL database config"),
+            }
+        });
     }
 
     #[test]
@@ -594,7 +584,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "127.0.0.1:3000"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -632,7 +621,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
         "#
@@ -679,7 +667,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
         "#
@@ -713,7 +700,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -745,7 +731,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -782,7 +767,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -823,7 +807,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -861,7 +844,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -902,7 +884,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -943,7 +924,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -977,7 +957,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -1012,7 +991,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -1047,7 +1025,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -1081,7 +1058,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]

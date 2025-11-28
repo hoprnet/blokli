@@ -88,10 +88,6 @@ fn redact_rpc_url(url: &str) -> String {
     }
 }
 
-fn default_host() -> std::net::SocketAddr {
-    "0.0.0.0:3064".parse().unwrap()
-}
-
 fn default_rpc_url() -> String {
     "http://localhost:8545".to_string()
 }
@@ -283,11 +279,6 @@ impl DatabaseConfig {
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault, validator::Validate)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    #[serde_as(as = "serde_with::DisplayFromStr")]
-    #[default(_code = "default_host()")]
-    #[serde(default = "default_host")]
-    pub host: std::net::SocketAddr,
-
     #[serde(default)]
     pub database: Option<DatabaseConfig>,
 
@@ -329,7 +320,6 @@ impl Config {
     pub fn display_redacted(&self) -> String {
         let mut output = String::new();
         output.push_str("Configuration:\n");
-        output.push_str(&format!("  host: {}\n", self.host));
         output.push_str(&format!("  network: {}\n", self.network));
         output.push_str(&format!("  rpc_url: {}\n", redact_rpc_url(&self.rpc_url)));
         output.push_str(&format!("  data_directory: {}\n", self.data_directory));
@@ -509,39 +499,36 @@ mod tests {
     fn test_strict_parsing() {
         // Test unknown top-level field
         let config = r#"
-        host = "0.0.0.0:3064"
-        unknown_field = "bad"
-        [database]
-        type = "sqlite"
-        index_path = ":memory:"
-        logs_path = ":memory:"
-    "#;
+         unknown_field = "bad"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_err(), "Should fail on unknown field");
 
         // Test unknown nested field
         let config = r#"
-        host = "0.0.0.0:3064"
-        [indexer]
-        fast_sync = true
-        unknown_indexer_field = "bad"
-        [database]
-        type = "sqlite"
-        index_path = ":memory:"
-        logs_path = ":memory:"
-    "#;
+         [indexer]
+         fast_sync = true
+         unknown_indexer_field = "bad"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_err(), "Should fail on unknown nested field");
 
         // Test invalid type
         let config = r#"
-        host = "0.0.0.0:3064"
-        max_rpc_requests_per_sec = "not_a_number"
-        [database]
-        type = "sqlite"
-        index_path = ":memory:"
-        logs_path = ":memory:"
-    "#;
+         max_rpc_requests_per_sec = "not_a_number"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_err(), "Should fail on invalid type");
     }
@@ -549,13 +536,12 @@ mod tests {
     #[test]
     fn test_sqlite_strict() {
         let config = r#"
-        host = "0.0.0.0:3064"
-        [database]
-        type = "sqlite"
-        index_path = ":memory:"
-        logs_path = ":memory:"
-        unknown = "bad"
-    "#;
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+         unknown = "bad"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_err(), "Should fail on unknown sqlite field");
     }
@@ -563,16 +549,15 @@ mod tests {
     #[test]
     fn test_postgres_detailed_strict() {
         let config = r#"
-        host = "0.0.0.0:3064"
-        [database]
-        type = "postgresql"
-        host = "localhost"
-        port = 5432
-        username = "u"
-        password = "p"
-        database = "d"
-        unknown = "bad"
-    "#;
+         [database]
+         type = "postgresql"
+         host = "localhost"
+         port = 5432
+         username = "u"
+         password = "p"
+         database = "d"
+         unknown = "bad"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_err(), "Should fail on unknown postgres detailed field");
     }
@@ -580,12 +565,11 @@ mod tests {
     #[test]
     fn test_postgres_url_strict() {
         let config = r#"
-        host = "0.0.0.0:3064"
-        [database]
-        type = "postgresql"
-        url = "postgresql://..."
-        unknown = "bad"
-    "#;
+         [database]
+         type = "postgresql"
+         url = "postgresql://..."
+         unknown = "bad"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_err(), "Should fail on unknown postgres url field");
     }
@@ -593,15 +577,14 @@ mod tests {
     #[test]
     fn test_api_strict() {
         let config = r#"
-        host = "0.0.0.0:3064"
-        [api]
-        enabled = true
-        unknown_api_field = "bad"
-        [database]
-        type = "sqlite"
-        index_path = ":memory:"
-        logs_path = ":memory:"
-    "#;
+         [api]
+         enabled = true
+         unknown_api_field = "bad"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_err(), "Should fail on unknown api field");
     }
@@ -609,11 +592,10 @@ mod tests {
     #[test]
     fn test_valid_postgres_config() {
         let config = r#"
-        host = "0.0.0.0:3064"
-        [database]
-        type = "postgresql"
-        url = "postgres://..."
-    "#;
+         [database]
+         type = "postgresql"
+         url = "postgres://..."
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_ok(), "Should pass on valid postgres config: {:?}", res.err());
     }
@@ -621,12 +603,11 @@ mod tests {
     #[test]
     fn test_valid_config() {
         let config = r#"
-        host = "0.0.0.0:3064"
-        [database]
-        type = "sqlite"
-        index_path = ":memory:"
-        logs_path = ":memory:"
-    "#;
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_ok(), "Should pass on valid config: {:?}", res.err());
     }
@@ -634,10 +615,9 @@ mod tests {
     #[test]
     fn test_config_without_database_section() {
         let config = r#"
-        host = "0.0.0.0:3064"
-        network = "dufour"
-        rpc_url = "http://localhost:8545"
-    "#;
+         network = "dufour"
+         rpc_url = "http://localhost:8545"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(
             res.is_ok(),
@@ -661,7 +641,6 @@ mod tests {
         let config: Config = toml::from_str(&config_content).expect("Failed to parse example-config.toml");
 
         // Basic verification that values are loaded correctly
-        assert_eq!(config.host.to_string(), "0.0.0.0:3064");
         assert_eq!(config.network, "dufour");
 
         // Check database config (should be present in example-config.toml)
@@ -686,14 +665,13 @@ mod tests {
     fn test_partial_indexer_config() {
         // Only set fast_sync, all other fields should use defaults
         let config = r#"
-        host = "0.0.0.0:3064"
-        [indexer]
-        fast_sync = false
-        [database]
-        type = "sqlite"
-        index_path = ":memory:"
-        logs_path = ":memory:"
-    "#;
+         [indexer]
+         fast_sync = false
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_ok(), "Should allow partial indexer config: {:?}", res.err());
 
@@ -708,14 +686,13 @@ mod tests {
     fn test_partial_api_config() {
         // Only set enabled, all other fields should use defaults
         let config = r#"
-        host = "0.0.0.0:3064"
-        [api]
-        enabled = false
-        [database]
-        type = "sqlite"
-        index_path = ":memory:"
-        logs_path = ":memory:"
-    "#;
+         [api]
+         enabled = false
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_ok(), "Should allow partial api config: {:?}", res.err());
 
@@ -732,14 +709,13 @@ mod tests {
     fn test_partial_subscription_config() {
         // Only set event_bus_capacity, other fields should use defaults
         let config = r#"
-        host = "0.0.0.0:3064"
-        [indexer.subscription]
-        event_bus_capacity = 500
-        [database]
-        type = "sqlite"
-        index_path = ":memory:"
-        logs_path = ":memory:"
-    "#;
+         [indexer.subscription]
+         event_bus_capacity = 500
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_ok(), "Should allow partial subscription config: {:?}", res.err());
 
