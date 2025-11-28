@@ -140,7 +140,7 @@ fn default_cors_allowed_origins() -> Vec<String> {
 fn default_chain_id() -> u64 {
     std::env::var("CHAIN_ID")
         .ok()
-        .and_then(|s| s.parse().ok())
+        .and_then(|s| s.parse::<u64>().ok())
         .unwrap_or(100) // Default to Gnosis Chain (chain ID 100)
 }
 
@@ -150,4 +150,137 @@ fn default_rpc_url() -> String {
 
 fn default_contract_addresses() -> ContractAddresses {
     ContractAddresses::default()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_chain_id_from_valid_env_var() {
+        temp_env::with_var("CHAIN_ID", Some("137"), || {
+            assert_eq!(default_chain_id(), 137);
+        });
+    }
+
+    #[test]
+    fn test_chain_id_from_zero_env_var() {
+        temp_env::with_var("CHAIN_ID", Some("0"), || {
+            assert_eq!(default_chain_id(), 0);
+        });
+    }
+
+    #[test]
+    fn test_chain_id_from_large_env_var() {
+        temp_env::with_var("CHAIN_ID", Some("18446744073709551615"), || {
+            assert_eq!(default_chain_id(), 18446744073709551615);
+        });
+    }
+
+    #[test]
+    fn test_chain_id_defaults_when_env_missing() {
+        temp_env::with_var("CHAIN_ID", None::<&str>, || {
+            assert_eq!(default_chain_id(), 100);
+        });
+    }
+
+    #[test]
+    fn test_chain_id_defaults_when_env_invalid() {
+        // Invalid chain ID (not a number)
+        temp_env::with_var("CHAIN_ID", Some("invalid"), || {
+            assert_eq!(default_chain_id(), 100);
+        });
+
+        // Invalid chain ID (negative number)
+        temp_env::with_var("CHAIN_ID", Some("-1"), || {
+            assert_eq!(default_chain_id(), 100);
+        });
+
+        // Invalid chain ID (overflow)
+        temp_env::with_var("CHAIN_ID", Some("18446744073709551616"), || {
+            assert_eq!(default_chain_id(), 100);
+        });
+
+        // Invalid chain ID (float)
+        temp_env::with_var("CHAIN_ID", Some("137.5"), || {
+            assert_eq!(default_chain_id(), 100);
+        });
+    }
+
+    #[test]
+    fn test_database_url_from_env_var() {
+        temp_env::with_var("DATABASE_URL", Some("postgres://custom:pass@host/db"), || {
+            assert_eq!(default_database_url(), "postgres://custom:pass@host/db");
+        });
+    }
+
+    #[test]
+    fn test_database_url_defaults_when_env_missing() {
+        temp_env::with_var("DATABASE_URL", None::<&str>, || {
+            assert_eq!(default_database_url(), "postgres://user:pw@127.0.0.1/blokli");
+        });
+    }
+
+    #[test]
+    fn test_cors_allowed_origins_from_env_var() {
+        temp_env::with_var(
+            "CORS_ALLOWED_ORIGINS",
+            Some("https://example.com, https://api.example.com"),
+            || {
+                let origins = default_cors_allowed_origins();
+                assert_eq!(origins.len(), 2);
+                assert_eq!(origins[0], "https://example.com");
+                assert_eq!(origins[1], "https://api.example.com");
+            },
+        );
+    }
+
+    #[test]
+    fn test_cors_allowed_origins_single_entry() {
+        temp_env::with_var("CORS_ALLOWED_ORIGINS", Some("https://example.com"), || {
+            let origins = default_cors_allowed_origins();
+            assert_eq!(origins.len(), 1);
+            assert_eq!(origins[0], "https://example.com");
+        });
+    }
+
+    #[test]
+    fn test_cors_allowed_origins_with_whitespace_trimmed() {
+        temp_env::with_var(
+            "CORS_ALLOWED_ORIGINS",
+            Some("  https://example.com  ,  https://api.example.com  "),
+            || {
+                let origins = default_cors_allowed_origins();
+                assert_eq!(origins.len(), 2);
+                assert_eq!(origins[0], "https://example.com");
+                assert_eq!(origins[1], "https://api.example.com");
+            },
+        );
+    }
+
+    #[test]
+    fn test_cors_allowed_origins_defaults_when_env_missing() {
+        temp_env::with_var("CORS_ALLOWED_ORIGINS", None::<&str>, || {
+            let origins = default_cors_allowed_origins();
+            assert_eq!(origins.len(), 4);
+            assert!(origins.contains(&"http://localhost:8080".to_string()));
+            assert!(origins.contains(&"https://localhost:8080".to_string()));
+            assert!(origins.contains(&"http://127.0.0.1:8080".to_string()));
+            assert!(origins.contains(&"https://127.0.0.1:8080".to_string()));
+        });
+    }
+
+    #[test]
+    fn test_rpc_url_from_env_var() {
+        temp_env::with_var("RPC_URL", Some("https://rpc.example.com"), || {
+            assert_eq!(default_rpc_url(), "https://rpc.example.com");
+        });
+    }
+
+    #[test]
+    fn test_rpc_url_defaults_when_env_missing() {
+        temp_env::with_var("RPC_URL", None::<&str>, || {
+            assert_eq!(default_rpc_url(), "http://localhost:8545");
+        });
+    }
 }
