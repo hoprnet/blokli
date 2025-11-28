@@ -212,7 +212,7 @@ Initialize the database (bloklid runs migrations automatically on startup).
 ### Via Port Forwarding
 
 ```bash
-kubectl port-forward svc/my-blokli 8080:3064
+kubectl port-forward svc/my-blokli 8080:8080
 # Access at http://localhost:8080/graphql
 ```
 

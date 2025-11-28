@@ -33,7 +33,7 @@ LOCAL_REGISTRY="${REGISTRY_HOST}:${REGISTRY_PORT}"
 LOCAL_IMAGE="${LOCAL_REGISTRY}/bloklid:smoke-test"
 
 # Bloklid API configuration
-BLOKLID_URL="http://localhost:3064"
+BLOKLID_URL="http://localhost:8080"
 TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-30}"
 POLL_INTERVAL=5
 

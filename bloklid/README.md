@@ -27,7 +27,7 @@ bloklid -vv   # trace level
 
 See `example-config.toml` for a complete configuration example. Key settings include:
 
-- `host`: API server bind address (default: "0.0.0.0:3064")
+- `api.bind_address`: API server bind address (default: "0.0.0.0:8080")
 - `database_path`: Path to SQLite database file
 - `private_key`: Ethereum private key for chain operations
 - `rpc_url`: Ethereum JSON-RPC endpoint
