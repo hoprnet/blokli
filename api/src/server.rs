@@ -44,6 +44,7 @@ use crate::{
     errors::ApiResult,
     mutation::MutationRoot,
     query::QueryRoot,
+    readiness::{ReadinessChecker, ReadinessState},
     schema::build_schema,
     subscription::SubscriptionRoot,
 };
@@ -132,6 +133,7 @@ pub struct AppState {
     pub db: DatabaseConnection,
     pub rpc_operations: Arc<RpcOperations<ReqwestClient>>,
     pub health_config: HealthConfig,
+    pub readiness_checker: ReadinessChecker,
 }
 
 /// Build the Axum application router
@@ -158,12 +160,15 @@ pub async fn build_app(
         sqlite_notification_manager,
     );
 
+    let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), config.health.clone());
+
     let app_state = AppState {
         schema: Arc::new(schema),
         playground_enabled: config.playground_enabled,
         db,
         rpc_operations,
         health_config: config.health,
+        readiness_checker,
     };
 
     // Configure CORS based on allowed origins
@@ -214,6 +219,19 @@ pub async fn build_app(
 
 /// GraphQL query/mutation/subscription handler
 async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json(request): Json<Value>) -> Response {
+    // Check if server is ready before processing GraphQL requests
+    if state.readiness_checker.get().await == ReadinessState::NotReady {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "errors": [{
+                    "message": "GraphQL API is not ready yet. Indexer is still catching up. Please try again later."
+                }]
+            })),
+        )
+            .into_response();
+    }
+
     // Parse the GraphQL request
     let request = match serde_json::from_value::<async_graphql::Request>(request) {
         Ok(req) => req,
@@ -700,5 +718,12 @@ mod tests {
             predicate.should_compress(&response),
             "Missing Content-Type header should default to compress"
         );
+    }
+
+    #[test]
+    fn test_readiness_state_values() {
+        assert_eq!(ReadinessState::Ready, ReadinessState::Ready);
+        assert_eq!(ReadinessState::NotReady, ReadinessState::NotReady);
+        assert_ne!(ReadinessState::Ready, ReadinessState::NotReady);
     }
 }
