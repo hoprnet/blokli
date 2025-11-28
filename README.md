@@ -152,10 +152,11 @@ You can override any configuration setting using environment variables.
 
 #### API Configuration
 
-| Config Key                   | Environment Variable                |
-| :--------------------------- | :---------------------------------- |
-| `api.enabled`                | `BLOKLI_API_ENABLED`                |
-| `api.bind_address`           | `BLOKLI_API_BIND_ADDRESS`           |
-| `api.playground_enabled`     | `BLOKLI_API_PLAYGROUND_ENABLED`     |
-| `api.health.max_indexer_lag` | `BLOKLI_API_HEALTH_MAX_INDEXER_LAG` |
-| `api.health.timeout`         | `BLOKLI_API_HEALTH_TIMEOUT`         |
+| Config Key                            | Environment Variable                         |
+| ------------------------------------- | -------------------------------------------- |
+| `api.enabled`                         | `BLOKLI_API_ENABLED`                         |
+| `api.bind_address`                    | `BLOKLI_API_BIND_ADDRESS`                    |
+| `api.playground_enabled`              | `BLOKLI_API_PLAYGROUND_ENABLED`              |
+| `api.health.max_indexer_lag`          | `BLOKLI_API_HEALTH_MAX_INDEXER_LAG`          |
+| `api.health.timeout`                  | `BLOKLI_API_HEALTH_TIMEOUT`                  |
+| `api.health.readiness_check_interval` | `BLOKLI_API_HEALTH_READINESS_CHECK_INTERVAL` |

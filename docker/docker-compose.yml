@@ -30,7 +30,7 @@ services:
       - ./config-docker.toml:/config.toml:ro
       - bloklid_data:/data
     ports:
-      - "3064:3064"
+      - "8080:8080"
     command: ["-c", "/config.toml"]
     networks:
       - bloklid-network

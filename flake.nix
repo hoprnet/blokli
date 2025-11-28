@@ -227,16 +227,26 @@
               name = "bloklid";
               Entrypoint = [ "${bloklidPackages.bloklid-x86_64-linux}/bin/bloklid" ];
               pkgsLinux = pkgsLinux;
+              env = [
+                "SSL_CERT_FILE=${pkgsLinux.cacert}/etc/ssl/certs/ca-bundle.crt"
+              ];
             };
             bloklid-dev-docker-amd64 = nixLib.mkDockerImage {
               name = "bloklid-dev";
               Entrypoint = [ "${bloklidPackages.bloklid-x86_64-linux-dev}/bin/bloklid" ];
               pkgsLinux = pkgsLinux;
+              env = [
+                "SSL_CERT_FILE=${pkgsLinux.cacert}/etc/ssl/certs/ca-bundle.crt"
+
+              ];
             };
             bloklid-profile-docker-amd64 = nixLib.mkDockerImage {
               name = "bloklid-profile";
               Entrypoint = [ "${bloklidPackages.bloklid-x86_64-linux-profile}/bin/bloklid" ];
               pkgsLinux = pkgsLinux;
+              env = [
+                "SSL_CERT_FILE=${pkgsLinux.cacert}/etc/ssl/certs/ca-bundle.crt"
+              ];
             };
 
             # aarch64-linux Docker images
@@ -244,16 +254,25 @@
               name = "bloklid";
               Entrypoint = [ "${bloklidPackages.bloklid-aarch64-linux}/bin/bloklid" ];
               pkgsLinux = pkgsLinuxAarch64;
+              env = [
+                "SSL_CERT_FILE=${pkgsLinuxAarch64.cacert}/etc/ssl/certs/ca-bundle.crt"
+              ];
             };
             bloklid-dev-docker-aarch64 = nixLib.mkDockerImage {
               name = "bloklid-dev";
               Entrypoint = [ "${bloklidPackages.bloklid-aarch64-linux-dev}/bin/bloklid" ];
               pkgsLinux = pkgsLinuxAarch64;
+              env = [
+                "SSL_CERT_FILE=${pkgsLinuxAarch64.cacert}/etc/ssl/certs/ca-bundle.crt"
+              ];
             };
             bloklid-profile-docker-aarch64 = nixLib.mkDockerImage {
               name = "bloklid-profile";
               Entrypoint = [ "${bloklidPackages.bloklid-aarch64-linux-profile}/bin/bloklid" ];
               pkgsLinux = pkgsLinuxAarch64;
+              env = [
+                "SSL_CERT_FILE=${pkgsLinuxAarch64.cacert}/etc/ssl/certs/ca-bundle.crt"
+              ];
             };
           };
 

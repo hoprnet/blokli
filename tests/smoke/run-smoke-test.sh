@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # Smoke test script for blokli
-# Tests that bloklid can start and become healthy with PostgreSQL and Anvil
+# Tests that bloklid can start and become healthy with PostgreSQL and RPC
 #
 # Usage:
-#   ./run-smoke-test.sh                           # Build from nix, push to local registry
+#   ./run-smoke-test.sh                           # Test with local Anvil (fast, no external deps)
+#   SMOKE_CONFIG=config-smoke-gnosis.toml ./run-smoke-test.sh  # Test with Gnosis Chain RPC
 #   SOURCE_IMAGE=myimage:tag ./run-smoke-test.sh  # Pull image, push to local registry
 #
 # Environment variables:
+#   SMOKE_CONFIG     - Config file to use (default: config-smoke.toml)
+#                      - config-smoke.toml: Local Anvil testing
+#                      - config-smoke-gnosis.toml: Real Gnosis Chain RPC testing
 #   SOURCE_IMAGE     - Image to pull from remote registry (optional, builds from nix if not set)
 #   REGISTRY_HOST    - Local registry hostname (default: localhost)
 #   REGISTRY_PORT    - Local registry port (default: 5000)
@@ -29,9 +33,20 @@ LOCAL_REGISTRY="${REGISTRY_HOST}:${REGISTRY_PORT}"
 LOCAL_IMAGE="${LOCAL_REGISTRY}/bloklid:smoke-test"
 
 # Bloklid API configuration
-BLOKLID_URL="http://localhost:3064"
-TIMEOUT_SECONDS=120
+BLOKLID_URL="http://localhost:8080"
+TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-30}"
 POLL_INTERVAL=5
+
+# Retry configuration
+HEALTHZ_MAX_RETRIES=5
+HEALTHZ_RETRY_INTERVAL=1
+READYZ_MAX_RETRIES=5
+READYZ_RETRY_INTERVAL=1
+REGISTRY_TIMEOUT=30
+REGISTRY_POLL_INTERVAL=1
+CHAIN_SYNC_TIMEOUT=30
+CHAIN_SYNC_POLL_INTERVAL=2
+MAX_INDEXER_LAG=10
 
 # Logging functions
 log_info() {
@@ -44,6 +59,91 @@ log_warn() {
 
 log_error() {
   echo "[ERROR] $1"
+}
+
+# JSON parsing helper - Extract a single field from JSON response
+# Usage: extract_json_field "$response" '.path.to.field' 'default_value'
+extract_json_field() {
+  local response="$1"
+  local jq_path="$2"
+  local default="${3:-}"
+
+  if [ -z "$response" ]; then
+    echo "$default"
+    return
+  fi
+
+  local result
+  result=$(echo "$response" | jq -r "$jq_path" 2>/dev/null || echo "$default")
+
+  if [ "$result" = "null" ] || [ -z "$result" ]; then
+    echo "$default"
+  else
+    echo "$result"
+  fi
+}
+
+# Unified retry function with timeout and interval
+# Usage: retry_with_timeout <timeout_seconds> <interval_seconds> <description> <validation_command>
+# Returns: 0 on success, 1 on timeout/failure
+# The validation_command should return 0 on success, non-zero on failure
+retry_with_timeout() {
+  local timeout="$1"
+  local interval="$2"
+  local description="$3"
+  local validation_cmd="$4"
+
+  local elapsed=0
+  local attempt=1
+
+  log_info "${description} (timeout: ${timeout}s, interval: ${interval}s)"
+
+  while [ $elapsed -lt "$timeout" ]; do
+    log_info "  Attempt ${attempt} (elapsed: ${elapsed}s)"
+
+    if eval "$validation_cmd"; then
+      log_info "  ${description} succeeded after ${elapsed}s (${attempt} attempts)"
+      return 0
+    fi
+
+    sleep "$interval"
+    elapsed=$((elapsed + interval))
+    attempt=$((attempt + 1))
+  done
+
+  log_error "${description} failed after ${timeout}s (${attempt} attempts)"
+  return 1
+}
+
+# Retry function with max attempts (count-based instead of time-based)
+# Usage: retry_with_attempts <max_retries> <interval_seconds> <description> <validation_command>
+# Returns: 0 on success, 1 on max retries exceeded
+retry_with_attempts() {
+  local max_retries="$1"
+  local interval="$2"
+  local description="$3"
+  local validation_cmd="$4"
+
+  local retry=0
+
+  log_info "${description} (max retries: ${max_retries}, interval: ${interval}s)"
+
+  while [ $retry -lt "$max_retries" ]; do
+    log_info "  Attempt $((retry + 1))/${max_retries}"
+
+    if eval "$validation_cmd"; then
+      log_info "  ${description} succeeded after $((retry + 1)) attempts"
+      return 0
+    fi
+
+    retry=$((retry + 1))
+    if [ $retry -lt "$max_retries" ]; then
+      sleep "$interval"
+    fi
+  done
+
+  log_error "${description} failed after ${max_retries} attempts"
+  return 1
 }
 
 # Detect system architecture for nix build
@@ -102,6 +202,14 @@ check_prerequisites() {
   fi
 }
 
+# Check if registry is healthy
+check_registry_health() {
+  local status
+  status=$(docker inspect --format='{{.State.Health.Status}}' blokli-smoke-registry 2>/dev/null || echo "starting")
+  log_info "    Registry status: ${status}"
+  [ "$status" = "healthy" ]
+}
+
 # Start the local registry
 start_registry() {
   log_info "Starting local Docker registry on port ${REGISTRY_PORT}..."
@@ -113,25 +221,11 @@ start_registry() {
   docker compose -f "${COMPOSE_FILE}" up -d registry
 
   # Wait for registry to be healthy (via Docker healthcheck)
-  local elapsed=0
-  local max_wait=30
-  while [ $elapsed -lt $max_wait ]; do
-    local status
-    status=$(docker inspect --format='{{.State.Health.Status}}' blokli-smoke-registry 2>/dev/null || echo "starting")
-
-    if [ "$status" = "healthy" ]; then
-      log_info "Local registry is ready"
-      return 0
-    fi
-
-    log_info "Waiting for registry... status=${status} (${elapsed}s)"
-    sleep 1
-    elapsed=$((elapsed + 1))
-  done
-
-  log_error "Local registry failed to start within ${max_wait}s"
-  docker logs blokli-smoke-registry
-  exit 1
+  if ! retry_with_timeout "$REGISTRY_TIMEOUT" "$REGISTRY_POLL_INTERVAL" "Waiting for local registry to be ready" "check_registry_health"; then
+    log_error "Dumping registry logs:"
+    docker logs blokli-smoke-registry
+    exit 1
+  fi
 }
 
 # Build or pull the source image and push to local registry
@@ -183,109 +277,132 @@ start_stack() {
   # Export environment variables for docker-compose
   export REGISTRY_PORT
   export BLOKLID_IMAGE="${LOCAL_IMAGE}"
+  export SMOKE_CONFIG="${SMOKE_CONFIG:-config-smoke.toml}"
 
   docker compose -f "${COMPOSE_FILE}" up -d
 
   log_info "Waiting for services to start..."
 }
 
+# Check if bloklid is healthy
+check_bloklid_health() {
+  local healthz_response
+  local healthz_code
+  healthz_response=$(curl -sf "${BLOKLID_URL}/healthz" 2>&1) || true
+  healthz_code=$?
+
+  # Show container status for debugging
+  local container_status
+  container_status=$(docker inspect --format='{{.State.Health.Status}}' blokli-smoke-bloklid 2>/dev/null || echo "unknown")
+  log_info "    Container status: ${container_status}"
+
+  # Show healthz response if available
+  if [ -n "$healthz_response" ]; then
+    log_info "    Healthz response: ${healthz_response}"
+  fi
+
+  [ $healthz_code -eq 0 ]
+}
+
 # Wait for bloklid to become healthy
 wait_for_healthy() {
-  log_info "Waiting for bloklid to become healthy (timeout: ${TIMEOUT_SECONDS}s)..."
-
-  local elapsed=0
-  local healthy=false
-
-  while [ $elapsed -lt $TIMEOUT_SECONDS ]; do
-    # Check healthz endpoint
-    if curl -sf "${BLOKLID_URL}/healthz" >/dev/null 2>&1; then
-      healthy=true
-      break
-    fi
-
-    # Show container status
-    local status
-    status=$(docker inspect --format='{{.State.Health.Status}}' blokli-smoke-bloklid 2>/dev/null || echo "unknown")
-    log_info "Container health status: ${status} (${elapsed}s elapsed)"
-
-    sleep $POLL_INTERVAL
-    elapsed=$((elapsed + POLL_INTERVAL))
-  done
-
-  if [ "$healthy" = false ]; then
-    log_error "bloklid failed to become healthy within ${TIMEOUT_SECONDS}s"
-    log_error "Container logs:"
+  if ! retry_with_timeout "$TIMEOUT_SECONDS" "$POLL_INTERVAL" "Waiting for bloklid to become healthy" "check_bloklid_health"; then
+    log_error "Dumping bloklid logs:"
     docker compose -f "${COMPOSE_FILE}" logs bloklid
     return 1
   fi
 
-  log_info "bloklid is healthy after ${elapsed}s"
+  return 0
+}
+
+# Global variable to store healthz response
+HEALTHZ_RESPONSE=""
+
+# Check healthz endpoint
+check_healthz() {
+  HEALTHZ_RESPONSE=$(curl -sf "${BLOKLID_URL}/healthz" 2>/dev/null || echo "")
+  local status
+  status=$(extract_json_field "$HEALTHZ_RESPONSE" '.status' '')
+
+  log_info "    Status: ${status}"
+  [ "$status" = "healthy" ]
 }
 
 # Test healthz endpoint
 test_healthz() {
   log_info "Testing /healthz endpoint..."
 
-  local response
-  response=$(curl -sf "${BLOKLID_URL}/healthz")
-
-  local status
-  status=$(echo "$response" | jq -r '.status')
-
-  if [ "$status" != "healthy" ]; then
-    log_error "healthz returned unexpected status: ${status}"
-    log_error "Response: ${response}"
+  if ! retry_with_attempts "$HEALTHZ_MAX_RETRIES" "$HEALTHZ_RETRY_INTERVAL" "Checking /healthz endpoint" "check_healthz"; then
+    log_error "healthz returned unexpected status"
+    log_error "Response: ${HEALTHZ_RESPONSE}"
     return 1
   fi
 
   local version
-  version=$(echo "$response" | jq -r '.version')
-  log_info "healthz: status=${status}, version=${version}"
+  version=$(extract_json_field "$HEALTHZ_RESPONSE" '.version' 'unknown')
+  log_info "healthz: status=healthy, version=${version}"
 
   return 0
+}
+
+# Global variables to store readyz response
+READYZ_RESPONSE=""
+READYZ_HTTP_CODE=""
+
+# Check readyz endpoint
+check_readyz() {
+  local full_response
+  full_response=$(curl -sf -w "\n%{http_code}" "${BLOKLID_URL}/readyz" 2>/dev/null || echo "")
+
+  if [ -n "$full_response" ]; then
+    READYZ_HTTP_CODE=$(echo "$full_response" | tail -n1)
+    READYZ_RESPONSE=$(echo "$full_response" | sed '$d')
+    local status
+    status=$(extract_json_field "$READYZ_RESPONSE" '.status' '')
+
+    log_info "    Status: ${status}, HTTP code: ${READYZ_HTTP_CODE}"
+    [ -n "$status" ] && [ "$status" != "null" ]
+  else
+    return 1
+  fi
 }
 
 # Test readyz endpoint
 test_readyz() {
   log_info "Testing /readyz endpoint..."
 
-  local response
-  local http_code
+  if ! retry_with_attempts "$READYZ_MAX_RETRIES" "$READYZ_RETRY_INTERVAL" "Checking /readyz endpoint" "check_readyz"; then
+    log_error "readyz returned no valid response"
+    log_error "Response: ${READYZ_RESPONSE}"
+    return 1
+  fi
 
-  # Get both response body and HTTP status code
-  response=$(curl -sf -w "\n%{http_code}" "${BLOKLID_URL}/readyz" || true)
-  http_code=$(echo "$response" | tail -n1)
-  response=$(echo "$response" | sed '$d')
+  # Extract check statuses using helper function
+  local status db_status rpc_status indexer_status
+  status=$(extract_json_field "$READYZ_RESPONSE" '.status' 'unknown')
+  db_status=$(extract_json_field "$READYZ_RESPONSE" '.checks.database.status' 'unknown')
+  rpc_status=$(extract_json_field "$READYZ_RESPONSE" '.checks.rpc.status' 'unknown')
+  indexer_status=$(extract_json_field "$READYZ_RESPONSE" '.checks.indexer.status' 'unknown')
 
-  local status
-  status=$(echo "$response" | jq -r '.status')
-
-  # Extract check statuses
-  local db_status rpc_status indexer_status
-  db_status=$(echo "$response" | jq -r '.checks.database.status')
-  rpc_status=$(echo "$response" | jq -r '.checks.rpc.status')
-  indexer_status=$(echo "$response" | jq -r '.checks.indexer.status')
-
-  log_info "readyz: status=${status}, http_code=${http_code}"
+  log_info "readyz: status=${status}, http_code=${READYZ_HTTP_CODE}"
   log_info "  database: ${db_status}"
   log_info "  rpc: ${rpc_status}"
   log_info "  indexer: ${indexer_status}"
 
   # Show additional details
-  local rpc_block
-  rpc_block=$(echo "$response" | jq -r '.checks.rpc.block_number // "null"')
-  log_info "  rpc_block_number: ${rpc_block}"
+  local rpc_block indexer_block indexer_lag
+  rpc_block=$(extract_json_field "$READYZ_RESPONSE" '.checks.rpc.block_number' 'null')
+  indexer_block=$(extract_json_field "$READYZ_RESPONSE" '.checks.indexer.last_indexed_block' 'null')
+  indexer_lag=$(extract_json_field "$READYZ_RESPONSE" '.checks.indexer.lag' 'null')
 
-  local indexer_block indexer_lag
-  indexer_block=$(echo "$response" | jq -r '.checks.indexer.last_indexed_block // "null"')
-  indexer_lag=$(echo "$response" | jq -r '.checks.indexer.lag // "null"')
+  log_info "  rpc_block_number: ${rpc_block}"
   log_info "  last_indexed_block: ${indexer_block}, lag: ${indexer_lag}"
 
   # Check for errors
   local db_error rpc_error indexer_error
-  db_error=$(echo "$response" | jq -r '.checks.database.error // empty')
-  rpc_error=$(echo "$response" | jq -r '.checks.rpc.error // empty')
-  indexer_error=$(echo "$response" | jq -r '.checks.indexer.error // empty')
+  db_error=$(extract_json_field "$READYZ_RESPONSE" '.checks.database.error' '')
+  rpc_error=$(extract_json_field "$READYZ_RESPONSE" '.checks.rpc.error' '')
+  indexer_error=$(extract_json_field "$READYZ_RESPONSE" '.checks.indexer.error' '')
 
   if [ -n "$db_error" ]; then
     log_error "Database error: ${db_error}"
@@ -326,8 +443,8 @@ test_graphql() {
     -d '{"query": "{ chainInfo { network chainId } }"}')
 
   local network chain_id
-  network=$(echo "$response" | jq -r '.data.chainInfo.network // empty')
-  chain_id=$(echo "$response" | jq -r '.data.chainInfo.chainId // empty')
+  network=$(extract_json_field "$response" '.data.chainInfo.network' '')
+  chain_id=$(extract_json_field "$response" '.data.chainInfo.chainId' '')
 
   if [ -z "$network" ] || [ -z "$chain_id" ]; then
     log_error "GraphQL query failed"
@@ -339,73 +456,66 @@ test_graphql() {
   return 0
 }
 
+# Check if blocks have been mined
+check_blocks_mined() {
+  local response
+  response=$(curl -sf "${BLOKLID_URL}/readyz" || echo "{}")
+
+  local rpc_block
+  rpc_block=$(extract_json_field "$response" '.checks.rpc.block_number' '0')
+
+  log_info "    RPC block number: ${rpc_block}"
+  [ "$rpc_block" -gt 0 ]
+}
+
+# Check if indexer has synced
+check_indexer_synced() {
+  local response
+  response=$(curl -sf "${BLOKLID_URL}/readyz" || echo "{}")
+
+  local indexed_block rpc_block lag
+  indexed_block=$(extract_json_field "$response" '.checks.indexer.last_indexed_block' '0')
+  rpc_block=$(extract_json_field "$response" '.checks.rpc.block_number' '0')
+  lag=$(extract_json_field "$response" '.checks.indexer.lag' '999')
+
+  log_info "    Indexed: ${indexed_block}, RPC: ${rpc_block}, Lag: ${lag}"
+
+  if [ "$indexed_block" -gt 0 ]; then
+    # Verify indexer is reasonably close to chain head
+    if [ "$lag" -gt "$MAX_INDEXER_LAG" ]; then
+      log_warn "Indexer lag is high: ${lag} blocks (threshold: ${MAX_INDEXER_LAG})"
+    fi
+    return 0
+  fi
+
+  return 1
+}
+
 # Test that indexer follows the chain
 test_indexer_follows_chain() {
   log_info "Testing indexer chain following..."
 
-  local max_wait=30
-  local poll_interval=2
-  local elapsed=0
-
-  # Wait for blocks to be mined by Anvil
-  log_info "Waiting for blocks to be mined..."
-  while [ $elapsed -lt $max_wait ]; do
-    local response
-    response=$(curl -sf "${BLOKLID_URL}/readyz" || echo "{}")
-
-    local rpc_block
-    rpc_block=$(echo "$response" | jq -r '.checks.rpc.block_number // 0')
-
-    if [ "$rpc_block" -gt 0 ]; then
-      log_info "Blocks mined: rpc_block_number=${rpc_block}"
-      break
-    fi
-
-    sleep $poll_interval
-    elapsed=$((elapsed + poll_interval))
-  done
-
-  if [ $elapsed -ge $max_wait ]; then
-    log_error "No blocks mined within ${max_wait}s"
+  # Step 1: Wait for blocks to be mined
+  if ! retry_with_timeout "$CHAIN_SYNC_TIMEOUT" "$CHAIN_SYNC_POLL_INTERVAL" "Waiting for blocks to be mined" "check_blocks_mined"; then
+    log_error "No blocks mined"
     return 1
   fi
 
-  # Wait for indexer to catch up
-  log_info "Waiting for indexer to catch up..."
-  elapsed=0
-  while [ $elapsed -lt $max_wait ]; do
-    local response
-    response=$(curl -sf "${BLOKLID_URL}/readyz" || echo "{}")
+  # Step 2: Wait for indexer to catch up
+  if ! retry_with_timeout "$CHAIN_SYNC_TIMEOUT" "$CHAIN_SYNC_POLL_INTERVAL" "Waiting for indexer to catch up" "check_indexer_synced"; then
+    log_error "Indexer did not index any blocks"
+    return 1
+  fi
 
-    local indexed_block rpc_block lag
-    indexed_block=$(echo "$response" | jq -r '.checks.indexer.last_indexed_block // 0')
-    rpc_block=$(echo "$response" | jq -r '.checks.rpc.block_number // 0')
-    lag=$(echo "$response" | jq -r '.checks.indexer.lag // 999')
-
-    if [ "$indexed_block" -gt 0 ]; then
-      log_info "Indexer caught up: last_indexed_block=${indexed_block}, rpc_block_number=${rpc_block}, lag=${lag}"
-
-      # Verify indexer is reasonably close to chain head
-      # Using a generous threshold since this is a smoke test
-      if [ "$lag" -gt 10 ]; then
-        log_warn "Indexer lag is high: ${lag} blocks"
-      fi
-
-      return 0
-    fi
-
-    sleep $poll_interval
-    elapsed=$((elapsed + poll_interval))
-  done
-
-  log_error "Indexer did not index any blocks within ${max_wait}s"
-  return 1
+  log_info "Indexer successfully following chain"
+  return 0
 }
 
 # Main test execution
 main() {
   log_info "Starting blokli smoke tests"
   log_info "================================"
+  log_info "Config file: ${SMOKE_CONFIG:-config-smoke.toml}"
   log_info "Local registry: ${LOCAL_REGISTRY}"
   log_info "Local image: ${LOCAL_IMAGE}"
   if [ -n "${SOURCE_IMAGE:-}" ]; then

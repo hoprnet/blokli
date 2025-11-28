@@ -1,9 +1,6 @@
 # Example configuration for bloklid daemon
 # This serves as a complete working example showing all available options
 
-# Host address and port for the daemon to listen on
-host = "0.0.0.0:3064"
-
 # Directory for storing data files
 data_directory = "data"
 
@@ -91,3 +88,7 @@ playground_enabled = true
 max_indexer_lag = 10
 # Timeout for health check queries (in milliseconds, default: 5000)
 timeout = 5000
+# Interval for periodic readiness checks (in milliseconds, default: 60000)
+# This controls how often the cached readiness state is updated by a background task
+# Set lower for faster detection of readiness changes, higher to reduce I/O overhead
+readiness_check_interval = 60000

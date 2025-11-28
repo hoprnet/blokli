@@ -44,6 +44,7 @@ use crate::{
     errors::ApiResult,
     mutation::MutationRoot,
     query::QueryRoot,
+    readiness::{ReadinessChecker, ReadinessState},
     schema::build_schema,
     subscription::SubscriptionRoot,
 };
@@ -132,6 +133,7 @@ pub struct AppState {
     pub db: DatabaseConnection,
     pub rpc_operations: Arc<RpcOperations<ReqwestClient>>,
     pub health_config: HealthConfig,
+    pub readiness_checker: ReadinessChecker,
 }
 
 /// Build the Axum application router
@@ -158,12 +160,18 @@ pub async fn build_app(
         sqlite_notification_manager,
     );
 
+    let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), config.health.clone());
+
+    // Start periodic readiness updates in background
+    readiness_checker.clone().start_periodic_updates();
+
     let app_state = AppState {
         schema: Arc::new(schema),
         playground_enabled: config.playground_enabled,
         db,
         rpc_operations,
         health_config: config.health,
+        readiness_checker,
     };
 
     // Configure CORS based on allowed origins
@@ -214,6 +222,19 @@ pub async fn build_app(
 
 /// GraphQL query/mutation/subscription handler
 async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json(request): Json<Value>) -> Response {
+    // Check if server is ready before processing GraphQL requests
+    if state.readiness_checker.get().await == ReadinessState::NotReady {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "errors": [{
+                    "message": "GraphQL API is not ready yet. Indexer is still catching up. Please try again later."
+                }]
+            })),
+        )
+            .into_response();
+    }
+
     // Parse the GraphQL request
     let request = match serde_json::from_value::<async_graphql::Request>(request) {
         Ok(req) => req,
@@ -291,6 +312,9 @@ async fn healthz_handler() -> impl IntoResponse {
 
 /// Readiness probe endpoint - comprehensive check for service readiness
 async fn readyz_handler(State(state): State<AppState>) -> impl IntoResponse {
+    // Perform an immediate out-of-band readiness check and update the cached state
+    state.readiness_checker.check_and_update().await;
+
     let mut all_healthy = true;
     let mut checks = ReadinessChecks {
         database: CheckStatus {
