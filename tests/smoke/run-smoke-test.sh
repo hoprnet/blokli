@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # Smoke test script for blokli
-# Tests that bloklid can start and become healthy with PostgreSQL and Anvil
+# Tests that bloklid can start and become healthy with PostgreSQL and RPC
 #
 # Usage:
-#   ./run-smoke-test.sh                           # Build from nix, push to local registry
+#   ./run-smoke-test.sh                           # Test with local Anvil (fast, no external deps)
+#   SMOKE_CONFIG=config-smoke-gnosis.toml ./run-smoke-test.sh  # Test with Gnosis Chain RPC
 #   SOURCE_IMAGE=myimage:tag ./run-smoke-test.sh  # Pull image, push to local registry
 #
 # Environment variables:
+#   SMOKE_CONFIG     - Config file to use (default: config-smoke.toml)
+#                      - config-smoke.toml: Local Anvil testing
+#                      - config-smoke-gnosis.toml: Real Gnosis Chain RPC testing
 #   SOURCE_IMAGE     - Image to pull from remote registry (optional, builds from nix if not set)
 #   REGISTRY_HOST    - Local registry hostname (default: localhost)
 #   REGISTRY_PORT    - Local registry port (default: 5000)
@@ -30,7 +34,7 @@ LOCAL_IMAGE="${LOCAL_REGISTRY}/bloklid:smoke-test"
 
 # Bloklid API configuration
 BLOKLID_URL="http://localhost:3064"
-TIMEOUT_SECONDS=30
+TIMEOUT_SECONDS="${TIMEOUT_SECONDS:-30}"
 POLL_INTERVAL=5
 
 # Logging functions
@@ -183,6 +187,7 @@ start_stack() {
   # Export environment variables for docker-compose
   export REGISTRY_PORT
   export BLOKLID_IMAGE="${LOCAL_IMAGE}"
+  export SMOKE_CONFIG="${SMOKE_CONFIG:-config-smoke.toml}"
 
   docker compose -f "${COMPOSE_FILE}" up -d
 
@@ -197,16 +202,26 @@ wait_for_healthy() {
   local healthy=false
 
   while [ $elapsed -lt $TIMEOUT_SECONDS ]; do
-    # Check healthz endpoint
-    if curl -sf "${BLOKLID_URL}/healthz" >/dev/null 2>&1; then
+    # Check healthz endpoint and capture response
+    local healthz_response
+    local healthz_code
+    healthz_response=$(curl -sf "${BLOKLID_URL}/healthz" 2>&1) || true
+    healthz_code=$?
+
+    if [ $healthz_code -eq 0 ]; then
       healthy=true
       break
     fi
 
-    # Show container status
+    # Show container status and healthz response for debugging
     local status
     status=$(docker inspect --format='{{.State.Health.Status}}' blokli-smoke-bloklid 2>/dev/null || echo "unknown")
     log_info "Container health status: ${status} (${elapsed}s elapsed)"
+
+    # Show healthz response if it's not empty (helps debug why it's failing)
+    if [ -n "$healthz_response" ]; then
+      log_info "healthz response: ${healthz_response}"
+    fi
 
     sleep $POLL_INTERVAL
     elapsed=$((elapsed + POLL_INTERVAL))
@@ -226,11 +241,28 @@ wait_for_healthy() {
 test_healthz() {
   log_info "Testing /healthz endpoint..."
 
+  # Retry a few times to allow API server to fully start
+  local max_retries=5
+  local retry=0
   local response
-  response=$(curl -sf "${BLOKLID_URL}/healthz")
-
   local status
-  status=$(echo "$response" | jq -r '.status')
+
+  while [ $retry -lt $max_retries ]; do
+    response=$(curl -sf "${BLOKLID_URL}/healthz" 2>/dev/null || echo "")
+
+    if [ -n "$response" ]; then
+      status=$(echo "$response" | jq -r '.status' 2>/dev/null || echo "")
+
+      if [ "$status" = "healthy" ]; then
+        break
+      fi
+    fi
+
+    retry=$((retry + 1))
+    if [ $retry -lt $max_retries ]; then
+      sleep 1
+    fi
+  done
 
   if [ "$status" != "healthy" ]; then
     log_error "healthz returned unexpected status: ${status}"
@@ -249,16 +281,38 @@ test_healthz() {
 test_readyz() {
   log_info "Testing /readyz endpoint..."
 
+  # Retry a few times to allow API server to fully start
+  local max_retries=5
+  local retry=0
   local response
   local http_code
-
-  # Get both response body and HTTP status code
-  response=$(curl -sf -w "\n%{http_code}" "${BLOKLID_URL}/readyz" || true)
-  http_code=$(echo "$response" | tail -n1)
-  response=$(echo "$response" | sed '$d')
-
   local status
-  status=$(echo "$response" | jq -r '.status')
+
+  while [ $retry -lt $max_retries ]; do
+    # Get both response body and HTTP status code
+    response=$(curl -sf -w "\n%{http_code}" "${BLOKLID_URL}/readyz" 2>/dev/null || echo "")
+
+    if [ -n "$response" ]; then
+      http_code=$(echo "$response" | tail -n1)
+      response=$(echo "$response" | sed '$d')
+      status=$(echo "$response" | jq -r '.status' 2>/dev/null || echo "")
+
+      if [ -n "$status" ] && [ "$status" != "null" ]; then
+        break
+      fi
+    fi
+
+    retry=$((retry + 1))
+    if [ $retry -lt $max_retries ]; then
+      sleep 1
+    fi
+  done
+
+  if [ -z "$status" ] || [ "$status" = "null" ]; then
+    log_error "readyz returned no valid response after ${max_retries} retries"
+    log_error "Response: ${response}"
+    return 1
+  fi
 
   # Extract check statuses
   local db_status rpc_status indexer_status
@@ -406,6 +460,7 @@ test_indexer_follows_chain() {
 main() {
   log_info "Starting blokli smoke tests"
   log_info "================================"
+  log_info "Config file: ${SMOKE_CONFIG:-config-smoke.toml}"
   log_info "Local registry: ${LOCAL_REGISTRY}"
   log_info "Local image: ${LOCAL_IMAGE}"
   if [ -n "${SOURCE_IMAGE:-}" ]; then

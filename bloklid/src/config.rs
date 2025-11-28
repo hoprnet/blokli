@@ -52,10 +52,7 @@ fn redact_database_url(url: &str) -> String {
 ///     redact_rpc_url("https://api.infura.io/v3/key123"),
 ///     "https://api.infura.io/REDACTED"
 /// );
-/// assert_eq!(
-///     redact_rpc_url("http://localhost:8545"),
-///     "http://localhost:8545"
-/// );
+/// assert_eq!(redact_rpc_url("http://localhost:8545"), "http://localhost:8545");
 /// ```
 fn redact_rpc_url(url: &str) -> String {
     // Parse the URL to extract components

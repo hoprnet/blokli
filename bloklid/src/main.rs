@@ -399,14 +399,8 @@ async fn run() -> errors::Result<()> {
         // Get IndexerState for API subscriptions
         let indexer_state = blokli_chain.indexer_state();
 
-        info!("Starting BlokliChain processes");
-
-        // Start all chain processes
-        let process_handles = blokli_chain.start().await?;
-
-        info!("BlokliChain started successfully");
-
-        // Start API server if enabled
+        // Start API server if enabled (before starting indexer processes)
+        // This ensures the API is available immediately even if indexer initialization takes time
         let api_handle = if api_config.enabled {
             info!("Starting blokli-api server on {}", api_config.bind_address);
 
@@ -456,20 +450,21 @@ async fn run() -> errors::Result<()> {
             .await
             .map_err(|e| BloklidError::NonSpecific(format!("Failed to build API app: {}", e)))?;
 
+            // Bind the listener first to ensure the port is available before spawning the server
+            let listener = tokio::net::TcpListener::bind(api_config.bind_address)
+                .await
+                .map_err(|e| BloklidError::NonSpecific(format!("Failed to bind API server: {}", e)))?;
+
+            info!("API server listening on {}", api_config.bind_address);
+            if api_config.playground_enabled {
+                info!(
+                    "GraphQL Playground available at http://{}/graphql",
+                    api_config.bind_address
+                );
+            }
+
             // Spawn API server as a background task
             let handle = tokio::spawn(async move {
-                let listener = tokio::net::TcpListener::bind(api_config.bind_address)
-                    .await
-                    .expect("Failed to bind API server");
-
-                info!("API server listening on {}", api_config.bind_address);
-                if api_config.playground_enabled {
-                    info!(
-                        "GraphQL Playground available at http://{}/graphql",
-                        api_config.bind_address
-                    );
-                }
-
                 axum::serve(listener, api_app).await.expect("API server failed");
             });
 
@@ -479,6 +474,13 @@ async fn run() -> errors::Result<()> {
             info!("API server disabled in configuration");
             None
         };
+
+        info!("Starting BlokliChain processes");
+
+        // Start all chain processes
+        let process_handles = blokli_chain.start().await?;
+
+        info!("BlokliChain started successfully");
 
         (process_handles, api_handle)
     };

@@ -68,9 +68,9 @@ services:
       anvil:
         condition: service_healthy
     environment:
-      RUST_LOG: debug
+      RUST_LOG: trace
     volumes:
-      - ./config-smoke.toml:/config.toml:ro
+      - ./${SMOKE_CONFIG:-config-smoke.toml}:/config.toml:ro
     ports:
       - "3064:3064"
     command: ["-c", "/config.toml"]
