@@ -18,7 +18,7 @@ use serde::Deserialize;
 ///     "postgresql://localhost:5432/mydb"
 /// );
 /// ```
-fn redact_database_url(url: &str) -> String {
+pub fn redact_database_url(url: &str) -> String {
     // Parse the URL to extract components
     if let Some(scheme_end) = url.find("://") {
         let scheme = &url[..scheme_end + 3];
@@ -54,7 +54,7 @@ fn redact_database_url(url: &str) -> String {
 /// );
 /// assert_eq!(redact_rpc_url("http://localhost:8545"), "http://localhost:8545");
 /// ```
-fn redact_rpc_url(url: &str) -> String {
+pub fn redact_rpc_url(url: &str) -> String {
     // Parse the URL to extract components
     if let Some(scheme_end) = url.find("://") {
         let scheme = &url[..scheme_end + 3];
