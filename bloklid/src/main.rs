@@ -500,48 +500,12 @@ async fn run() -> errors::Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use std::{io::Write, sync::Mutex};
+    use std::io::Write;
 
     use super::*;
 
-    /// Lock to serialize environment variable tests to avoid interference
-    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-    /// Helper for environment variable tests
-    /// Clears specified variables at construction and removes them on drop.
-    /// This ensures clean state before and after the test runs, preventing
-    /// interference from other tests or environment setup.
-    struct EnvGuard {
-        vars: Vec<&'static str>,
-    }
-
-    impl EnvGuard {
-        fn new(vars: Vec<&'static str>) -> Self {
-            // Clear environment variables before test starts
-            for var in &vars {
-                unsafe {
-                    std::env::remove_var(var);
-                }
-            }
-            Self { vars }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            // Remove environment variables after test completes
-            for var in &self.vars {
-                unsafe {
-                    std::env::remove_var(var);
-                }
-            }
-        }
-    }
-
     #[test]
     fn test_env_var_override() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-
         // Create a temp config file
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
@@ -559,34 +523,34 @@ mod tests {
         let path = file.path().to_path_buf();
 
         // Set env vars that should override config file
-        let _guard = EnvGuard::new(vec!["BLOKLI_HOST", "BLOKLI_DATABASE_URL"]);
-        unsafe {
-            std::env::set_var("BLOKLI_HOST", "127.0.0.1:4000");
-            std::env::set_var("BLOKLI_DATABASE_URL", "postgres://env:5432/db");
-        }
+        temp_env::with_vars(
+            [
+                ("BLOKLI_HOST", Some("127.0.0.1:4000")),
+                ("BLOKLI_DATABASE_URL", Some("postgres://env:5432/db")),
+            ],
+            || {
+                let args = Args {
+                    verbose: 0,
+                    config: Some(path),
+                    command: None,
+                };
 
-        let args = Args {
-            verbose: 0,
-            config: Some(path),
-            command: None,
-        };
+                let config = args.load_config(false).expect("Failed to load config");
 
-        let config = args.load_config(false).expect("Failed to load config");
-
-        // Environment variables should override config file
-        assert_eq!(config.host.to_string(), "127.0.0.1:4000");
-        match config.database {
-            Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
-                assert_eq!(c.url.as_ref().map(|s| s.as_str()), Some("postgres://env:5432/db"));
-            }
-            _ => panic!("Expected PostgreSQL database config"),
-        }
+                // Environment variables should override config file
+                assert_eq!(config.host.to_string(), "127.0.0.1:4000");
+                match config.database {
+                    Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
+                        assert_eq!(c.url.as_ref().map(|s| s.as_str()), Some("postgres://env:5432/db"));
+                    }
+                    _ => panic!("Expected PostgreSQL database config"),
+                }
+            },
+        );
     }
 
     #[test]
     fn test_canonical_env_var_override() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-
         // Create a temp config file
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
@@ -604,32 +568,27 @@ mod tests {
         let path = file.path().to_path_buf();
 
         // Set canonical DATABASE_URL env var
-        let _guard = EnvGuard::new(vec!["DATABASE_URL"]);
-        unsafe {
-            std::env::set_var("DATABASE_URL", "postgres://canonical:5432/db");
-        }
+        temp_env::with_var("DATABASE_URL", Some("postgres://canonical:5432/db"), || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
 
-        let args = Args {
-            verbose: 0,
-            config: Some(path),
-            command: None,
-        };
+            let config = args.load_config(false).expect("Failed to load config");
 
-        let config = args.load_config(false).expect("Failed to load config");
-
-        // Canonical env var should override config file
-        match config.database {
-            Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
-                assert_eq!(c.url.as_ref().map(|s| s.as_str()), Some("postgres://canonical:5432/db"));
+            // Canonical env var should override config file
+            match config.database {
+                Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
+                    assert_eq!(c.url.as_ref().map(|s| s.as_str()), Some("postgres://canonical:5432/db"));
+                }
+                _ => panic!("Expected PostgreSQL database config"),
             }
-            _ => panic!("Expected PostgreSQL database config"),
-        }
+        });
     }
 
     #[test]
     fn test_env_only_database_config() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-
         // Create config file without [database] section
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
@@ -644,39 +603,39 @@ mod tests {
         let path = file.path().to_path_buf();
 
         // Database config must come entirely from environment variables
-        let _guard = EnvGuard::new(vec!["BLOKLI_DATABASE_TYPE", "BLOKLI_DATABASE_URL"]);
-        unsafe {
-            std::env::set_var("BLOKLI_DATABASE_TYPE", "postgresql");
-            std::env::set_var("BLOKLI_DATABASE_URL", "postgresql://user:pass@localhost/db");
-        }
+        temp_env::with_vars(
+            [
+                ("BLOKLI_DATABASE_TYPE", Some("postgresql")),
+                ("BLOKLI_DATABASE_URL", Some("postgresql://user:pass@localhost/db")),
+            ],
+            || {
+                let args = Args {
+                    verbose: 0,
+                    config: Some(path),
+                    command: None,
+                };
 
-        let args = Args {
-            verbose: 0,
-            config: Some(path),
-            command: None,
-        };
+                let config = args
+                    .load_config(false)
+                    .expect("Should load database config from environment");
 
-        let config = args
-            .load_config(false)
-            .expect("Should load database config from environment");
-
-        // Should successfully load database config from environment variables
-        match config.database {
-            Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
-                assert_eq!(
-                    c.url.as_ref().map(|s| s.as_str()),
-                    Some("postgresql://user:pass@localhost/db")
-                );
-                assert_eq!(c.max_connections, 10); // Default value
-            }
-            _ => panic!("Expected PostgreSQL database config"),
-        }
+                // Should successfully load database config from environment variables
+                match config.database {
+                    Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
+                        assert_eq!(
+                            c.url.as_ref().map(|s| s.as_str()),
+                            Some("postgresql://user:pass@localhost/db")
+                        );
+                        assert_eq!(c.max_connections, 10); // Default value
+                    }
+                    _ => panic!("Expected PostgreSQL database config"),
+                }
+            },
+        );
     }
 
     #[test]
     fn test_missing_database_config_fails() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-
         // Create config file without [database] section
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
@@ -691,29 +650,27 @@ mod tests {
         let path = file.path().to_path_buf();
 
         // Don't set any database environment variables
-        let _guard = EnvGuard::new(vec![]);
+        temp_env::with_var("BLOKLI_DATABASE_TYPE", None::<&str>, || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
 
-        let args = Args {
-            verbose: 0,
-            config: Some(path),
-            command: None,
-        };
+            // Should fail when database config is missing from both file and environment
+            let result = args.load_config(false);
+            assert!(result.is_err(), "Should fail when database config is missing");
 
-        // Should fail when database config is missing from both file and environment
-        let result = args.load_config(false);
-        assert!(result.is_err(), "Should fail when database config is missing");
-
-        let err_msg = result.unwrap_err().to_string();
-        assert!(
-            err_msg.contains("database configuration"),
-            "Error message should mention database configuration"
-        );
+            let err_msg = result.unwrap_err().to_string();
+            assert!(
+                err_msg.contains("database configuration"),
+                "Error message should mention database configuration"
+            );
+        });
     }
 
     #[test]
     fn test_env_var_string_values_are_parsed_by_config_rs() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             file,
@@ -729,27 +686,22 @@ mod tests {
         .unwrap();
         let path = file.path().to_path_buf();
 
-        let _guard = EnvGuard::new(vec!["BLOKLI_NETWORK"]);
-        unsafe {
-            std::env::set_var("BLOKLI_NETWORK", "rotsee");
-        }
+        temp_env::with_var("BLOKLI_NETWORK", Some("rotsee"), || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
 
-        let args = Args {
-            verbose: 0,
-            config: Some(path),
-            command: None,
-        };
+            let config = args.load_config(false).expect("Failed to load config");
 
-        let config = args.load_config(false).expect("Failed to load config");
-
-        // String environment variables should be properly parsed to their target types
-        assert_eq!(config.network, "rotsee", "String env var should override config");
+            // String environment variables should be properly parsed to their target types
+            assert_eq!(config.network, "rotsee", "String env var should override config");
+        });
     }
 
     #[test]
     fn test_database_config_defaults_max_connections_to_10() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-
         // Create a temp config file with PostgreSQL configuration
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
@@ -766,29 +718,27 @@ mod tests {
         .unwrap();
         let path = file.path().to_path_buf();
 
-        let _guard = EnvGuard::new(vec![]);
+        temp_env::with_var("BLOKLI_DATABASE_MAX_CONNECTIONS", None::<&str>, || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
 
-        let args = Args {
-            verbose: 0,
-            config: Some(path),
-            command: None,
-        };
+            let config = args.load_config(false).expect("Failed to load config");
 
-        let config = args.load_config(false).expect("Failed to load config");
-
-        // Verify max_connections defaults to 10 (u32) when not specified
-        match config.database {
-            Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
-                assert_eq!(c.max_connections, 10, "PostgreSQL max_connections should default to 10");
+            // Verify max_connections defaults to 10 (u32) when not specified
+            match config.database {
+                Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
+                    assert_eq!(c.max_connections, 10, "PostgreSQL max_connections should default to 10");
+                }
+                _ => panic!("Expected PostgreSQL database config"),
             }
-            _ => panic!("Expected PostgreSQL database config"),
-        }
+        });
     }
 
     #[test]
     fn test_database_config_max_connections_from_config_file() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-
         // Create a temp config file with explicit max_connections
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
@@ -806,32 +756,30 @@ mod tests {
         .unwrap();
         let path = file.path().to_path_buf();
 
-        let _guard = EnvGuard::new(vec![]);
+        temp_env::with_var("BLOKLI_DATABASE_MAX_CONNECTIONS", None::<&str>, || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
 
-        let args = Args {
-            verbose: 0,
-            config: Some(path),
-            command: None,
-        };
+            let config = args.load_config(false).expect("Failed to load config");
 
-        let config = args.load_config(false).expect("Failed to load config");
-
-        // Verify max_connections is correctly read as u32 from config file
-        match config.database {
-            Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
-                assert_eq!(
-                    c.max_connections, 50,
-                    "max_connections should be parsed as u32 from config file"
-                );
+            // Verify max_connections is correctly read as u32 from config file
+            match config.database {
+                Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
+                    assert_eq!(
+                        c.max_connections, 50,
+                        "max_connections should be parsed as u32 from config file"
+                    );
+                }
+                _ => panic!("Expected PostgreSQL database config"),
             }
-            _ => panic!("Expected PostgreSQL database config"),
-        }
+        });
     }
 
     #[test]
     fn test_sqlite_database_config_max_connections_defaults() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-
         // Create a temp config file with SQLite database configuration
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
@@ -849,29 +797,27 @@ mod tests {
         .unwrap();
         let path = file.path().to_path_buf();
 
-        let _guard = EnvGuard::new(vec![]);
+        temp_env::with_var("BLOKLI_DATABASE_MAX_CONNECTIONS", None::<&str>, || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
 
-        let args = Args {
-            verbose: 0,
-            config: Some(path),
-            command: None,
-        };
+            let config = args.load_config(false).expect("Failed to load config");
 
-        let config = args.load_config(false).expect("Failed to load config");
-
-        // Verify SQLite max_connections defaults to 10 (u32)
-        match config.database {
-            Some(crate::config::DatabaseConfig::Sqlite(c)) => {
-                assert_eq!(c.max_connections, 10, "SQLite max_connections should default to 10");
+            // Verify SQLite max_connections defaults to 10 (u32)
+            match config.database {
+                Some(crate::config::DatabaseConfig::Sqlite(c)) => {
+                    assert_eq!(c.max_connections, 10, "SQLite max_connections should default to 10");
+                }
+                _ => panic!("Expected SQLite database config"),
             }
-            _ => panic!("Expected SQLite database config"),
-        }
+        });
     }
 
     #[test]
     fn test_env_var_blokli_database_max_connections_integer_casting() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-
         // Create a temp config file with PostgreSQL configuration
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
@@ -889,35 +835,30 @@ mod tests {
         let path = file.path().to_path_buf();
 
         // Override max_connections with environment variable (string in env, should be parsed to u32)
-        let _guard = EnvGuard::new(vec!["BLOKLI_DATABASE_MAX_CONNECTIONS"]);
-        unsafe {
-            std::env::set_var("BLOKLI_DATABASE_MAX_CONNECTIONS", "75");
-        }
+        temp_env::with_var("BLOKLI_DATABASE_MAX_CONNECTIONS", Some("75"), || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
 
-        let args = Args {
-            verbose: 0,
-            config: Some(path),
-            command: None,
-        };
+            let config = args.load_config(false).expect("Failed to load config");
 
-        let config = args.load_config(false).expect("Failed to load config");
-
-        // Verify max_connections was correctly parsed from string to u64 then to u32
-        match config.database {
-            Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
-                assert_eq!(
-                    c.max_connections, 75,
-                    "BLOKLI_DATABASE_MAX_CONNECTIONS should be parsed as u32 from env var"
-                );
+            // Verify max_connections was correctly parsed from string to u64 then to u32
+            match config.database {
+                Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
+                    assert_eq!(
+                        c.max_connections, 75,
+                        "BLOKLI_DATABASE_MAX_CONNECTIONS should be parsed as u32 from env var"
+                    );
+                }
+                _ => panic!("Expected PostgreSQL database config"),
             }
-            _ => panic!("Expected PostgreSQL database config"),
-        }
+        });
     }
 
     #[test]
     fn test_env_var_blokli_database_max_connections_for_sqlite() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-
         // Create a temp config file with SQLite configuration
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
@@ -936,28 +877,25 @@ mod tests {
         let path = file.path().to_path_buf();
 
         // Override max_connections with environment variable for SQLite
-        let _guard = EnvGuard::new(vec!["BLOKLI_DATABASE_MAX_CONNECTIONS"]);
-        unsafe {
-            std::env::set_var("BLOKLI_DATABASE_MAX_CONNECTIONS", "40");
-        }
+        temp_env::with_var("BLOKLI_DATABASE_MAX_CONNECTIONS", Some("40"), || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
 
-        let args = Args {
-            verbose: 0,
-            config: Some(path),
-            command: None,
-        };
+            let config = args.load_config(false).expect("Failed to load config");
 
-        let config = args.load_config(false).expect("Failed to load config");
-
-        // Verify max_connections was correctly parsed from string to u64 then to u32 for SQLite
-        match config.database {
-            Some(crate::config::DatabaseConfig::Sqlite(c)) => {
-                assert_eq!(
-                    c.max_connections, 40,
-                    "BLOKLI_DATABASE_MAX_CONNECTIONS should be parsed as u32 from env var for SQLite"
-                );
+            // Verify max_connections was correctly parsed from string to u64 then to u32 for SQLite
+            match config.database {
+                Some(crate::config::DatabaseConfig::Sqlite(c)) => {
+                    assert_eq!(
+                        c.max_connections, 40,
+                        "BLOKLI_DATABASE_MAX_CONNECTIONS should be parsed as u32 from env var for SQLite"
+                    );
+                }
+                _ => panic!("Expected SQLite database config"),
             }
-            _ => panic!("Expected SQLite database config"),
-        }
+        });
     }
 }

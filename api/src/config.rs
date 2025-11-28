@@ -154,217 +154,133 @@ fn default_contract_addresses() -> ContractAddresses {
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Mutex;
-
     use super::*;
-
-    /// Lock to serialize environment variable tests to avoid interference
-    static ENV_TEST_LOCK: Mutex<()> = Mutex::new(());
-
-    /// Helper for environment variable tests
-    struct EnvGuard {
-        vars: Vec<&'static str>,
-    }
-
-    impl EnvGuard {
-        fn new(vars: Vec<&'static str>) -> Self {
-            // Clear environment variables before test starts
-            for var in &vars {
-                unsafe {
-                    std::env::remove_var(var);
-                }
-            }
-            Self { vars }
-        }
-    }
-
-    impl Drop for EnvGuard {
-        fn drop(&mut self) {
-            // Remove environment variables after test completes
-            for var in &self.vars {
-                unsafe {
-                    std::env::remove_var(var);
-                }
-            }
-        }
-    }
 
     #[test]
     fn test_chain_id_from_valid_env_var() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["CHAIN_ID"]);
-
-        unsafe {
-            std::env::set_var("CHAIN_ID", "137");
-        }
-
-        assert_eq!(default_chain_id(), 137);
+        temp_env::with_var("CHAIN_ID", Some("137"), || {
+            assert_eq!(default_chain_id(), 137);
+        });
     }
 
     #[test]
     fn test_chain_id_from_zero_env_var() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["CHAIN_ID"]);
-
-        unsafe {
-            std::env::set_var("CHAIN_ID", "0");
-        }
-
-        assert_eq!(default_chain_id(), 0);
+        temp_env::with_var("CHAIN_ID", Some("0"), || {
+            assert_eq!(default_chain_id(), 0);
+        });
     }
 
     #[test]
     fn test_chain_id_from_large_env_var() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["CHAIN_ID"]);
-
-        // Test with a large valid u64
-        unsafe {
-            std::env::set_var("CHAIN_ID", "18446744073709551615");
-        }
-
-        assert_eq!(default_chain_id(), 18446744073709551615);
+        temp_env::with_var("CHAIN_ID", Some("18446744073709551615"), || {
+            assert_eq!(default_chain_id(), 18446744073709551615);
+        });
     }
 
     #[test]
     fn test_chain_id_defaults_when_env_missing() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["CHAIN_ID"]);
-
-        // CHAIN_ID not set
-        assert_eq!(default_chain_id(), 100);
+        temp_env::with_var("CHAIN_ID", None::<&str>, || {
+            assert_eq!(default_chain_id(), 100);
+        });
     }
 
     #[test]
     fn test_chain_id_defaults_when_env_invalid() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["CHAIN_ID"]);
-
         // Invalid chain ID (not a number)
-        unsafe {
-            std::env::set_var("CHAIN_ID", "invalid");
-        }
-        assert_eq!(default_chain_id(), 100);
+        temp_env::with_var("CHAIN_ID", Some("invalid"), || {
+            assert_eq!(default_chain_id(), 100);
+        });
 
         // Invalid chain ID (negative number)
-        unsafe {
-            std::env::set_var("CHAIN_ID", "-1");
-        }
-        assert_eq!(default_chain_id(), 100);
+        temp_env::with_var("CHAIN_ID", Some("-1"), || {
+            assert_eq!(default_chain_id(), 100);
+        });
 
         // Invalid chain ID (overflow)
-        unsafe {
-            std::env::set_var("CHAIN_ID", "18446744073709551616");
-        }
-        assert_eq!(default_chain_id(), 100);
+        temp_env::with_var("CHAIN_ID", Some("18446744073709551616"), || {
+            assert_eq!(default_chain_id(), 100);
+        });
 
         // Invalid chain ID (float)
-        unsafe {
-            std::env::set_var("CHAIN_ID", "137.5");
-        }
-        assert_eq!(default_chain_id(), 100);
+        temp_env::with_var("CHAIN_ID", Some("137.5"), || {
+            assert_eq!(default_chain_id(), 100);
+        });
     }
 
     #[test]
     fn test_database_url_from_env_var() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["DATABASE_URL"]);
-
-        unsafe {
-            std::env::set_var("DATABASE_URL", "postgres://custom:pass@host/db");
-        }
-
-        assert_eq!(default_database_url(), "postgres://custom:pass@host/db");
+        temp_env::with_var("DATABASE_URL", Some("postgres://custom:pass@host/db"), || {
+            assert_eq!(default_database_url(), "postgres://custom:pass@host/db");
+        });
     }
 
     #[test]
     fn test_database_url_defaults_when_env_missing() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["DATABASE_URL"]);
-
-        // DATABASE_URL not set
-        assert_eq!(default_database_url(), "postgres://user:pw@127.0.0.1/blokli");
+        temp_env::with_var("DATABASE_URL", None::<&str>, || {
+            assert_eq!(default_database_url(), "postgres://user:pw@127.0.0.1/blokli");
+        });
     }
 
     #[test]
     fn test_cors_allowed_origins_from_env_var() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["CORS_ALLOWED_ORIGINS"]);
-
-        unsafe {
-            std::env::set_var("CORS_ALLOWED_ORIGINS", "https://example.com, https://api.example.com");
-        }
-
-        let origins = default_cors_allowed_origins();
-        assert_eq!(origins.len(), 2);
-        assert_eq!(origins[0], "https://example.com");
-        assert_eq!(origins[1], "https://api.example.com");
+        temp_env::with_var(
+            "CORS_ALLOWED_ORIGINS",
+            Some("https://example.com, https://api.example.com"),
+            || {
+                let origins = default_cors_allowed_origins();
+                assert_eq!(origins.len(), 2);
+                assert_eq!(origins[0], "https://example.com");
+                assert_eq!(origins[1], "https://api.example.com");
+            },
+        );
     }
 
     #[test]
     fn test_cors_allowed_origins_single_entry() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["CORS_ALLOWED_ORIGINS"]);
-
-        unsafe {
-            std::env::set_var("CORS_ALLOWED_ORIGINS", "https://example.com");
-        }
-
-        let origins = default_cors_allowed_origins();
-        assert_eq!(origins.len(), 1);
-        assert_eq!(origins[0], "https://example.com");
+        temp_env::with_var("CORS_ALLOWED_ORIGINS", Some("https://example.com"), || {
+            let origins = default_cors_allowed_origins();
+            assert_eq!(origins.len(), 1);
+            assert_eq!(origins[0], "https://example.com");
+        });
     }
 
     #[test]
     fn test_cors_allowed_origins_with_whitespace_trimmed() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["CORS_ALLOWED_ORIGINS"]);
-
-        unsafe {
-            std::env::set_var(
-                "CORS_ALLOWED_ORIGINS",
-                "  https://example.com  ,  https://api.example.com  ",
-            );
-        }
-
-        let origins = default_cors_allowed_origins();
-        assert_eq!(origins.len(), 2);
-        assert_eq!(origins[0], "https://example.com");
-        assert_eq!(origins[1], "https://api.example.com");
+        temp_env::with_var(
+            "CORS_ALLOWED_ORIGINS",
+            Some("  https://example.com  ,  https://api.example.com  "),
+            || {
+                let origins = default_cors_allowed_origins();
+                assert_eq!(origins.len(), 2);
+                assert_eq!(origins[0], "https://example.com");
+                assert_eq!(origins[1], "https://api.example.com");
+            },
+        );
     }
 
     #[test]
     fn test_cors_allowed_origins_defaults_when_env_missing() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["CORS_ALLOWED_ORIGINS"]);
-
-        // CORS_ALLOWED_ORIGINS not set
-        let origins = default_cors_allowed_origins();
-        assert_eq!(origins.len(), 4);
-        assert!(origins.contains(&"http://localhost:8080".to_string()));
-        assert!(origins.contains(&"https://localhost:8080".to_string()));
-        assert!(origins.contains(&"http://127.0.0.1:8080".to_string()));
-        assert!(origins.contains(&"https://127.0.0.1:8080".to_string()));
+        temp_env::with_var("CORS_ALLOWED_ORIGINS", None::<&str>, || {
+            let origins = default_cors_allowed_origins();
+            assert_eq!(origins.len(), 4);
+            assert!(origins.contains(&"http://localhost:8080".to_string()));
+            assert!(origins.contains(&"https://localhost:8080".to_string()));
+            assert!(origins.contains(&"http://127.0.0.1:8080".to_string()));
+            assert!(origins.contains(&"https://127.0.0.1:8080".to_string()));
+        });
     }
 
     #[test]
     fn test_rpc_url_from_env_var() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["RPC_URL"]);
-
-        unsafe {
-            std::env::set_var("RPC_URL", "https://rpc.example.com");
-        }
-
-        assert_eq!(default_rpc_url(), "https://rpc.example.com");
+        temp_env::with_var("RPC_URL", Some("https://rpc.example.com"), || {
+            assert_eq!(default_rpc_url(), "https://rpc.example.com");
+        });
     }
 
     #[test]
     fn test_rpc_url_defaults_when_env_missing() {
-        let _lock = ENV_TEST_LOCK.lock().unwrap();
-        let _guard = EnvGuard::new(vec!["RPC_URL"]);
-
-        // RPC_URL not set
-        assert_eq!(default_rpc_url(), "http://localhost:8545");
+        temp_env::with_var("RPC_URL", None::<&str>, || {
+            assert_eq!(default_rpc_url(), "http://localhost:8545");
+        });
     }
 }
