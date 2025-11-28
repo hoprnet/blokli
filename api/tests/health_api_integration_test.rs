@@ -150,6 +150,7 @@ async fn setup_test_environment() -> anyhow::Result<TestContext> {
         health: HealthConfig {
             max_indexer_lag: 10,
             timeout: std::time::Duration::from_millis(5000),
+            readiness_check_interval: std::time::Duration::from_millis(100), // Fast updates for tests
         },
         ..Default::default()
     };

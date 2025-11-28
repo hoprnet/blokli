@@ -162,6 +162,9 @@ pub async fn build_app(
 
     let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), config.health.clone());
 
+    // Start periodic readiness updates in background
+    readiness_checker.clone().start_periodic_updates();
+
     let app_state = AppState {
         schema: Arc::new(schema),
         playground_enabled: config.playground_enabled,
@@ -309,6 +312,9 @@ async fn healthz_handler() -> impl IntoResponse {
 
 /// Readiness probe endpoint - comprehensive check for service readiness
 async fn readyz_handler(State(state): State<AppState>) -> impl IntoResponse {
+    // Perform an immediate out-of-band readiness check and update the cached state
+    state.readiness_checker.check_and_update().await;
+
     let mut all_healthy = true;
     let mut checks = ReadinessChecks {
         database: CheckStatus {

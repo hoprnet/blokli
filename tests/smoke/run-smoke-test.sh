@@ -102,7 +102,7 @@ retry_with_timeout() {
     log_info "  Attempt ${attempt} (elapsed: ${elapsed}s)"
 
     if eval "$validation_cmd"; then
-      log_info "  ✓ ${description} succeeded after ${elapsed}s (${attempt} attempts)"
+      log_info "  ${description} succeeded after ${elapsed}s (${attempt} attempts)"
       return 0
     fi
 
@@ -132,7 +132,7 @@ retry_with_attempts() {
     log_info "  Attempt $((retry + 1))/${max_retries}"
 
     if eval "$validation_cmd"; then
-      log_info "  ✓ ${description} succeeded after $((retry + 1)) attempts"
+      log_info "  ${description} succeeded after $((retry + 1)) attempts"
       return 0
     fi
 
@@ -340,7 +340,7 @@ test_healthz() {
 
   local version
   version=$(extract_json_field "$HEALTHZ_RESPONSE" '.version' 'unknown')
-  log_info "✓ healthz: status=healthy, version=${version}"
+  log_info "healthz: status=healthy, version=${version}"
 
   return 0
 }
@@ -384,7 +384,7 @@ test_readyz() {
   rpc_status=$(extract_json_field "$READYZ_RESPONSE" '.checks.rpc.status' 'unknown')
   indexer_status=$(extract_json_field "$READYZ_RESPONSE" '.checks.indexer.status' 'unknown')
 
-  log_info "✓ readyz: status=${status}, http_code=${READYZ_HTTP_CODE}"
+  log_info "readyz: status=${status}, http_code=${READYZ_HTTP_CODE}"
   log_info "  database: ${db_status}"
   log_info "  rpc: ${rpc_status}"
   log_info "  indexer: ${indexer_status}"

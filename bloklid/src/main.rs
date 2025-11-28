@@ -137,6 +137,10 @@ impl Args {
             // API Health
             ("BLOKLI_API_HEALTH_MAX_INDEXER_LAG", "api.health.max_indexer_lag"),
             ("BLOKLI_API_HEALTH_TIMEOUT", "api.health.timeout"),
+            (
+                "BLOKLI_API_HEALTH_READINESS_CHECK_INTERVAL",
+                "api.health.readiness_check_interval",
+            ),
         ];
 
         // Keys that should be parsed as boolean values
@@ -430,6 +434,7 @@ async fn run() -> errors::Result<()> {
                 health: blokli_api::config::HealthConfig {
                     max_indexer_lag: api_config.health.max_indexer_lag,
                     timeout: api_config.health.timeout,
+                    readiness_check_interval: api_config.health.readiness_check_interval,
                 },
             };
 

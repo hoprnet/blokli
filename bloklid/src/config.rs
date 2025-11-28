@@ -444,6 +444,14 @@ pub struct HealthConfig {
     #[default(_code = "Duration::from_millis(5000)")]
     #[serde(default = "default_health_timeout", deserialize_with = "deserialize_duration_ms")]
     pub timeout: Duration,
+
+    /// Interval for periodic readiness checks (in milliseconds)
+    #[default(_code = "Duration::from_secs(60)")]
+    #[serde(
+        default = "default_readiness_check_interval",
+        deserialize_with = "deserialize_duration_ms"
+    )]
+    pub readiness_check_interval: Duration,
 }
 
 fn deserialize_duration_ms<'de, D>(deserializer: D) -> Result<Duration, D::Error>
@@ -485,6 +493,10 @@ fn default_max_indexer_lag() -> u64 {
 
 fn default_health_timeout() -> Duration {
     Duration::from_millis(5000)
+}
+
+fn default_readiness_check_interval() -> Duration {
+    Duration::from_secs(60)
 }
 
 #[cfg(test)]

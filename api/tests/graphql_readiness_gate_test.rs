@@ -149,6 +149,7 @@ async fn setup_test_environment() -> anyhow::Result<TestContext> {
         health: HealthConfig {
             max_indexer_lag: 10,
             timeout: std::time::Duration::from_millis(5000),
+            readiness_check_interval: std::time::Duration::from_millis(100), // Fast updates for tests
         },
         ..Default::default()
     };
@@ -269,6 +270,9 @@ async fn test_graphql_returns_200_when_ready() -> anyhow::Result<()> {
     // Set up chain_info to make server ready
     update_chain_info(&ctx.db, 0).await?;
 
+    // Wait for periodic check to update cached state (interval is 100ms in test config)
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
     // Try to make a simple GraphQL query
     let query = r#"query { __typename }"#;
     let (status, json) = make_graphql_request(ctx.app, query).await;
@@ -351,6 +355,8 @@ async fn test_graphql_readiness_transition() -> anyhow::Result<()> {
 
     // Second request: ready (after updating chain_info)
     update_chain_info(&ctx.db, 0).await?;
+    // Wait for periodic check to update cached state (interval is 100ms in test config)
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     let (status2, json2) = make_graphql_request(ctx.app, query).await;
     assert_ne!(status2, StatusCode::SERVICE_UNAVAILABLE);
 

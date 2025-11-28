@@ -69,6 +69,13 @@ pub struct HealthConfig {
     /// Timeout for health check queries (in milliseconds)
     #[serde(default = "default_health_timeout", deserialize_with = "deserialize_duration_ms")]
     pub timeout: Duration,
+
+    /// Interval for periodic readiness checks (in milliseconds)
+    #[serde(
+        default = "default_readiness_check_interval",
+        deserialize_with = "deserialize_duration_ms"
+    )]
+    pub readiness_check_interval: Duration,
 }
 
 fn deserialize_duration_ms<'de, D>(deserializer: D) -> Result<Duration, D::Error>
@@ -84,6 +91,7 @@ impl Default for HealthConfig {
         Self {
             max_indexer_lag: default_max_indexer_lag(),
             timeout: default_health_timeout(),
+            readiness_check_interval: default_readiness_check_interval(),
         }
     }
 }
@@ -94,6 +102,10 @@ fn default_max_indexer_lag() -> u64 {
 
 fn default_health_timeout() -> Duration {
     Duration::from_millis(5000)
+}
+
+fn default_readiness_check_interval() -> Duration {
+    Duration::from_secs(60)
 }
 
 impl Default for ApiConfig {
@@ -282,5 +294,10 @@ mod tests {
         temp_env::with_var("RPC_URL", None::<&str>, || {
             assert_eq!(default_rpc_url(), "http://localhost:8545");
         });
+    }
+
+    #[test]
+    fn test_readiness_check_interval_defaults() {
+        assert_eq!(default_readiness_check_interval(), Duration::from_secs(60));
     }
 }

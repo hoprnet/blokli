@@ -5,13 +5,20 @@
 //! 1. Database is connected and has chain info
 //! 2. RPC is reachable
 //! 3. Indexer lag is within acceptable limits
+//!
+//! The readiness state is cached and updated periodically via a background task.
+//! Out-of-band updates are triggered by:
+//! - /readyz endpoint calls (immediate check)
+//! - Indexer completion signals (immediate check)
+//! - Periodic background task (every `readiness_check_interval`)
 
 use std::sync::Arc;
 
 use blokli_chain_rpc::rpc::RpcOperations;
 use blokli_db_entity::codegen::prelude::ChainInfo;
 use sea_orm::{DatabaseConnection, EntityTrait};
-use tracing::error;
+use tokio::sync::RwLock;
+use tracing::{error, info};
 
 use crate::config::HealthConfig;
 
@@ -24,9 +31,10 @@ pub enum ReadinessState {
     NotReady,
 }
 
-/// Shared readiness state tracker
+/// Shared readiness state tracker with caching and periodic updates
 #[derive(Clone)]
 pub struct ReadinessChecker {
+    cached_state: Arc<RwLock<ReadinessState>>,
     db: DatabaseConnection,
     rpc_operations: Arc<RpcOperations<blokli_chain_rpc::transport::ReqwestClient>>,
     health_config: HealthConfig,
@@ -40,15 +48,55 @@ impl ReadinessChecker {
         health_config: HealthConfig,
     ) -> Self {
         Self {
+            cached_state: Arc::new(RwLock::new(ReadinessState::NotReady)),
             db,
             rpc_operations,
             health_config,
         }
     }
 
-    /// Get the current readiness state (checks current status)
+    /// Get the current cached readiness state (fast, non-blocking)
     pub async fn get(&self) -> ReadinessState {
-        self.check_readiness().await
+        *self.cached_state.read().await
+    }
+
+    /// Perform a full readiness check and update the cached state
+    /// This is used by /readyz endpoint and indexer completion signals
+    pub async fn check_and_update(&self) {
+        let new_state = self.check_readiness().await;
+        let mut cached = self.cached_state.write().await;
+        let old_state = *cached;
+        *cached = new_state;
+
+        // Log state transitions
+        if old_state != new_state {
+            match new_state {
+                ReadinessState::Ready => {
+                    info!("Readiness state transitioned to READY");
+                }
+                ReadinessState::NotReady => {
+                    info!("Readiness state transitioned to NOT_READY");
+                }
+            }
+        }
+    }
+
+    /// Trigger an out-of-band readiness check (used by indexer completion signal)
+    pub async fn trigger_update(&self) {
+        self.check_and_update().await;
+    }
+
+    /// Start a background task that periodically updates the readiness state
+    /// This ensures the cached state is refreshed even if /readyz is not called
+    pub fn start_periodic_updates(self) {
+        let interval = self.health_config.readiness_check_interval;
+        tokio::spawn(async move {
+            let mut ticker = tokio::time::interval(interval);
+            loop {
+                ticker.tick().await;
+                self.check_and_update().await;
+            }
+        });
     }
 
     /// Check if the server is ready
