@@ -4,12 +4,90 @@ use blokli_chain_types::ContractAddresses;
 use hopr_chain_config::{ChainNetworkConfig, ProtocolsConfig};
 use serde::Deserialize;
 
-/// Redacts sensitive information from strings
-fn redact_sensitive(value: &str) -> String {
-    if value.len() <= 4 {
-        "***".to_string()
+/// Redacts username and password from database URLs while keeping host, port, and database visible
+///
+/// # Examples
+/// ```
+/// # use bloklid::config::redact_database_url;
+/// assert_eq!(
+///     redact_database_url("postgres://user:pass@localhost:5432/mydb"),
+///     "postgres://REDACTED:REDACTED@localhost:5432/mydb"
+/// );
+/// assert_eq!(
+///     redact_database_url("postgresql://localhost:5432/mydb"),
+///     "postgresql://localhost:5432/mydb"
+/// );
+/// ```
+fn redact_database_url(url: &str) -> String {
+    // Parse the URL to extract components
+    if let Some(scheme_end) = url.find("://") {
+        let scheme = &url[..scheme_end + 3];
+        let rest = &url[scheme_end + 3..];
+
+        // Check if there's an @ sign indicating credentials
+        if let Some(at_pos) = rest.find('@') {
+            let after_at = &rest[at_pos..];
+            // Redact credentials but keep everything else
+            format!("{}REDACTED:REDACTED{}", scheme, after_at)
+        } else {
+            // No credentials, return as-is
+            url.to_string()
+        }
     } else {
-        format!("{}...{}", &value[..2], &value[value.len() - 2..])
+        // Not a URL format, return as-is
+        url.to_string()
+    }
+}
+
+/// Redacts username, password, and path/query from RPC URLs while keeping protocol, host, and port visible
+///
+/// # Examples
+/// ```
+/// # use bloklid::config::redact_rpc_url;
+/// assert_eq!(
+///     redact_rpc_url("https://user:pass@api.infura.io/v3/key123"),
+///     "https://api.infura.io/REDACTED"
+/// );
+/// assert_eq!(
+///     redact_rpc_url("https://api.infura.io/v3/key123"),
+///     "https://api.infura.io/REDACTED"
+/// );
+/// assert_eq!(
+///     redact_rpc_url("http://localhost:8545"),
+///     "http://localhost:8545"
+/// );
+/// ```
+fn redact_rpc_url(url: &str) -> String {
+    // Parse the URL to extract components
+    if let Some(scheme_end) = url.find("://") {
+        let scheme = &url[..scheme_end + 3];
+        let rest = &url[scheme_end + 3..];
+
+        // Check if there's an @ sign indicating credentials
+        let (host_part, has_credentials) = if let Some(at_pos) = rest.find('@') {
+            (&rest[at_pos + 1..], true)
+        } else {
+            (rest, false)
+        };
+
+        // Extract host and port (everything before the first / or ?)
+        let host_end = host_part
+            .find('/')
+            .or_else(|| host_part.find('?'))
+            .unwrap_or(host_part.len());
+        let host = &host_part[..host_end];
+        let has_path = host_end < host_part.len();
+
+        // Reconstruct URL
+        if has_credentials || has_path {
+            format!("{}{}/REDACTED", scheme, host)
+        } else {
+            // No credentials or path, return as-is
+            url.to_string()
+        }
+    } else {
+        // Not a URL format, return as-is
+        url.to_string()
     }
 }
 
@@ -169,19 +247,19 @@ impl DatabaseConfig {
         match self {
             DatabaseConfig::PostgreSql(pg_config) => {
                 let url_display = if let Some(url) = &pg_config.url {
-                    format!("url={}", redact_sensitive(url))
+                    format!("url={}", redact_database_url(url))
                 } else {
                     let host = pg_config.host.as_deref().unwrap_or("localhost");
                     let port = pg_config.port.unwrap_or(5432);
                     let user = pg_config
                         .username
                         .as_ref()
-                        .map(|u| redact_sensitive(u))
-                        .unwrap_or("***".to_string());
+                        .map(|_| "REDACTED".to_string())
+                        .unwrap_or("REDACTED".to_string());
                     let pass = pg_config
                         .password
                         .as_ref()
-                        .map(|_| "***".to_string())
+                        .map(|_| "REDACTED".to_string())
                         .unwrap_or("(none)".to_string());
                     let db = pg_config.database.as_deref().unwrap_or("bloklid");
                     format!(
@@ -256,7 +334,7 @@ impl Config {
         output.push_str("Configuration:\n");
         output.push_str(&format!("  host: {}\n", self.host));
         output.push_str(&format!("  network: {}\n", self.network));
-        output.push_str(&format!("  rpc_url: {}\n", redact_sensitive(&self.rpc_url)));
+        output.push_str(&format!("  rpc_url: {}\n", redact_rpc_url(&self.rpc_url)));
         output.push_str(&format!("  data_directory: {}\n", self.data_directory));
         output.push_str(&format!(
             "  max_rpc_requests_per_sec: {}\n",
@@ -278,7 +356,7 @@ impl Config {
         if let Some(snapshot_url) = &self.indexer.logs_snapshot_url {
             output.push_str(&format!(
                 "  indexer.logs_snapshot_url: {}\n",
-                redact_sensitive(snapshot_url)
+                redact_rpc_url(snapshot_url)
             ));
         }
 
@@ -660,5 +738,93 @@ mod tests {
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 500);
         assert_eq!(cfg.indexer.subscription.shutdown_signal_capacity, 10); // Default
         assert_eq!(cfg.indexer.subscription.batch_size, 100); // Default
+    }
+
+    #[test]
+    fn test_redact_database_url_with_credentials() {
+        // URL with username and password should redact only credentials
+        let url = "postgres://user:password@localhost:5432/mydb";
+        let redacted = redact_database_url(url);
+        assert_eq!(redacted, "postgres://REDACTED:REDACTED@localhost:5432/mydb");
+    }
+
+    #[test]
+    fn test_redact_database_url_without_credentials() {
+        // URL without credentials should remain unchanged
+        let url = "postgresql://localhost:5432/mydb";
+        let redacted = redact_database_url(url);
+        assert_eq!(redacted, "postgresql://localhost:5432/mydb");
+    }
+
+    #[test]
+    fn test_redact_database_url_with_port() {
+        // URL with custom port
+        let url = "postgres://admin:secret@db.example.com:9876/production";
+        let redacted = redact_database_url(url);
+        assert_eq!(redacted, "postgres://REDACTED:REDACTED@db.example.com:9876/production");
+    }
+
+    #[test]
+    fn test_redact_rpc_url_with_credentials_and_path() {
+        // URL with credentials and path should redact both
+        let url = "https://user:pass@api.infura.io/v3/secret-key-123";
+        let redacted = redact_rpc_url(url);
+        assert_eq!(redacted, "https://api.infura.io/REDACTED");
+    }
+
+    #[test]
+    fn test_redact_rpc_url_with_path_only() {
+        // URL with path but no credentials should hide path
+        let url = "https://api.infura.io/v3/secret-key-123";
+        let redacted = redact_rpc_url(url);
+        assert_eq!(redacted, "https://api.infura.io/REDACTED");
+    }
+
+    #[test]
+    fn test_redact_rpc_url_without_path_or_credentials() {
+        // URL with neither path nor credentials should remain unchanged
+        let url = "http://localhost:8545";
+        let redacted = redact_rpc_url(url);
+        assert_eq!(redacted, "http://localhost:8545");
+    }
+
+    #[test]
+    fn test_redact_rpc_url_with_credentials_no_path() {
+        // URL with credentials but no path
+        let url = "https://user:pass@api.example.com";
+        let redacted = redact_rpc_url(url);
+        assert_eq!(redacted, "https://api.example.com/REDACTED");
+    }
+
+    #[test]
+    fn test_redact_rpc_url_with_query_string() {
+        // URL with query string should hide it
+        let url = "https://api.example.com/endpoint?apiKey=secret123";
+        let redacted = redact_rpc_url(url);
+        assert_eq!(redacted, "https://api.example.com/REDACTED");
+    }
+
+    #[test]
+    fn test_redact_rpc_url_with_port() {
+        // URL with port but no path
+        let url = "http://localhost:3000";
+        let redacted = redact_rpc_url(url);
+        assert_eq!(redacted, "http://localhost:3000");
+    }
+
+    #[test]
+    fn test_redact_rpc_url_with_port_and_path() {
+        // URL with port and path
+        let url = "http://localhost:3000/api/v1";
+        let redacted = redact_rpc_url(url);
+        assert_eq!(redacted, "http://localhost:3000/REDACTED");
+    }
+
+    #[test]
+    fn test_redact_non_url_string() {
+        // Non-URL string should remain unchanged
+        let not_url = "just-a-string";
+        assert_eq!(redact_database_url(not_url), not_url);
+        assert_eq!(redact_rpc_url(not_url), not_url);
     }
 }
