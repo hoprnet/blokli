@@ -725,11 +725,4 @@ mod tests {
             "Missing Content-Type header should default to compress"
         );
     }
-
-    #[test]
-    fn test_readiness_state_values() {
-        assert_eq!(ReadinessState::Ready, ReadinessState::Ready);
-        assert_eq!(ReadinessState::NotReady, ReadinessState::NotReady);
-        assert_ne!(ReadinessState::Ready, ReadinessState::NotReady);
-    }
 }

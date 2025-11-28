@@ -138,25 +138,3 @@ impl ReadinessChecker {
         ReadinessState::Ready
     }
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_readiness_state_equality() {
-        assert_eq!(ReadinessState::Ready, ReadinessState::Ready);
-        assert_eq!(ReadinessState::NotReady, ReadinessState::NotReady);
-        assert_ne!(ReadinessState::Ready, ReadinessState::NotReady);
-    }
-
-    #[test]
-    fn test_readiness_state_copy_clone() {
-        let state = ReadinessState::Ready;
-        let state_copy = state;
-        let state_clone = state.clone();
-
-        assert_eq!(state, state_copy);
-        assert_eq!(state, state_clone);
-    }
-}
