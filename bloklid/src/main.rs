@@ -139,16 +139,39 @@ impl Args {
             ("BLOKLI_API_HEALTH_TIMEOUT", "api.health.timeout"),
         ];
 
+        // Keys that should be parsed as boolean values
+        let boolean_keys = [
+            "indexer.fast_sync",
+            "indexer.enable_logs_snapshot",
+            "api.enabled",
+            "api.playground_enabled",
+        ];
+
         for (env_var, config_key) in env_mappings {
             if let Ok(val) = std::env::var(env_var) {
                 // Try to parse the value as a more specific type if needed.
-                // This allows numeric environment variables to be properly converted.
-                let override_val: config_rs::Value = if let Ok(num) = val.parse::<u64>() {
-                    num.into()
-                } else if let Ok(flag) = val.parse::<bool>() {
-                    flag.into()
+                // For boolean config keys, attempt bool parsing first (before u64)
+                // so that "1"/"0" are interpreted as booleans, not integers.
+                // For other keys, try u64 first, then bool, then fall back to string.
+                let override_val: config_rs::Value = if boolean_keys.contains(&config_key) {
+                    // For boolean keys, prioritize bool parsing
+                    if let Ok(flag) = val.parse::<bool>() {
+                        flag.into()
+                    } else if let Ok(num) = val.parse::<u64>() {
+                        // Support "1"/"0" as booleans by converting to bool
+                        (num != 0).into()
+                    } else {
+                        val.into()
+                    }
                 } else {
-                    val.into()
+                    // For non-boolean keys, try numeric first, then bool, then string
+                    if let Ok(num) = val.parse::<u64>() {
+                        num.into()
+                    } else if let Ok(flag) = val.parse::<bool>() {
+                        flag.into()
+                    } else {
+                        val.into()
+                    }
                 };
                 builder = builder
                     .set_override(config_key, override_val)
@@ -896,6 +919,164 @@ mod tests {
                 }
                 _ => panic!("Expected SQLite database config"),
             }
+        });
+    }
+
+    #[test]
+    fn test_boolean_env_var_with_true_string() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            host = "0.0.0.0:3064"
+            network = "dufour"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [indexer]
+            fast_sync = false
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_var("BLOKLI_INDEXER_FAST_SYNC", Some("true"), || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
+
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(config.indexer.fast_sync, true, "BLOKLI_INDEXER_FAST_SYNC should be parsed as bool");
+        });
+    }
+
+    #[test]
+    fn test_boolean_env_var_with_digit_one() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            host = "0.0.0.0:3064"
+            network = "dufour"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [indexer]
+            fast_sync = false
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        // "1" should be parsed as boolean true, not integer 1
+        temp_env::with_var("BLOKLI_INDEXER_FAST_SYNC", Some("1"), || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
+
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(config.indexer.fast_sync, true, "BLOKLI_INDEXER_FAST_SYNC='1' should be parsed as boolean true");
+        });
+    }
+
+    #[test]
+    fn test_boolean_env_var_with_digit_zero() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            host = "0.0.0.0:3064"
+            network = "dufour"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [indexer]
+            fast_sync = true
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        // "0" should be parsed as boolean false, not integer 0
+        temp_env::with_var("BLOKLI_INDEXER_FAST_SYNC", Some("0"), || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
+
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(config.indexer.fast_sync, false, "BLOKLI_INDEXER_FAST_SYNC='0' should be parsed as boolean false");
+        });
+    }
+
+    #[test]
+    fn test_boolean_env_var_false_string() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            host = "0.0.0.0:3064"
+            network = "dufour"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [indexer]
+            fast_sync = true
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_var("BLOKLI_INDEXER_FAST_SYNC", Some("false"), || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
+
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(config.indexer.fast_sync, false, "BLOKLI_INDEXER_FAST_SYNC should be parsed as bool");
+        });
+    }
+
+    #[test]
+    fn test_numeric_env_var_still_parsed_as_integer() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            host = "0.0.0.0:3064"
+            network = "dufour"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [api.health]
+            max_indexer_lag = 5
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        // Non-boolean numeric config should still parse as u64
+        temp_env::with_var("BLOKLI_API_HEALTH_MAX_INDEXER_LAG", Some("20"), || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
+
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(config.api.health.max_indexer_lag, 20, "Non-boolean numeric config should parse as u64");
         });
     }
 }
