@@ -1,4 +1,5 @@
 use blokli_chain_rpc::HoprIndexerRpcOperations;
+use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator, errors::DbSqlError};
 use hopr_bindings::hopr_announcements::HoprAnnouncements::HoprAnnouncementsEvents;
 use hopr_crypto_types::prelude::OffchainSignature;
@@ -51,7 +52,7 @@ where
                     );
                     return Ok(());
                 }
-                let node_address: Address = Address::from(<[u8; 20]>::from(*address_announcement.node));
+                let node_address: Address = address_announcement.node.to_hopr_address();
 
                 self.db
                     .insert_announcement(
@@ -86,7 +87,7 @@ where
                     "on_announcement_event: KeyBinding",
                 );
                 match KeyBinding::from_parts(
-                    Address::from(<[u8; 20]>::from(*key_binding.chain_key)),
+                    key_binding.chain_key.to_hopr_address(),
                     key_binding.ed25519_pub_key.0.try_into()?,
                     OffchainSignature::try_from((key_binding.ed25519_sig_0.0, key_binding.ed25519_sig_1.0))?,
                 ) {
@@ -137,7 +138,7 @@ where
                 }
             }
             HoprAnnouncementsEvents::RevokeAnnouncement(revocation) => {
-                let node_address: Address = Address::from(<[u8; 20]>::from(*revocation.node));
+                let node_address: Address = revocation.node.to_hopr_address();
                 match self.db.delete_all_announcements(Some(tx), node_address).await {
                     Ok(_) => {
                         // Publish AccountUpdated event if synced

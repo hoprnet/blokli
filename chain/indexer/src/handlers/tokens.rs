@@ -1,4 +1,5 @@
 use blokli_chain_rpc::HoprIndexerRpcOperations;
+use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction};
 use hopr_bindings::hopr_token::HoprToken::HoprTokenEvents;
 use hopr_primitive_types::prelude::Address;
@@ -33,8 +34,8 @@ where
 
         match event {
             HoprTokenEvents::Transfer(transferred) => {
-                let from: Address = Address::from(<[u8; 20]>::from(*transferred.from));
-                let to: Address = Address::from(<[u8; 20]>::from(*transferred.to));
+                let from: Address = transferred.from.to_hopr_address();
+                let to: Address = transferred.to.to_hopr_address();
 
                 trace!(
                     %from, %to,
@@ -42,8 +43,8 @@ where
                 );
             }
             HoprTokenEvents::Approval(approved) => {
-                let owner: Address = Address::from(<[u8; 20]>::from(*approved.owner));
-                let spender: Address = Address::from(<[u8; 20]>::from(*approved.spender));
+                let owner: Address = approved.owner.to_hopr_address();
+                let spender: Address = approved.spender.to_hopr_address();
 
                 trace!(
                     %owner, %spender, allowance = %approved.value,

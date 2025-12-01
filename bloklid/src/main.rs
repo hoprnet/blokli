@@ -13,7 +13,7 @@ use std::{
 use ::config as config_rs;
 use async_signal::{Signal, Signals};
 use blokli_chain_api::BlokliChain;
-use blokli_chain_types::ChainConfig;
+use blokli_chain_types::{AlloyAddressExt, ChainConfig};
 use blokli_db::db::{BlokliDb, BlokliDbConfig};
 use clap::{Parser, Subcommand};
 use futures::TryStreamExt;
@@ -222,25 +222,13 @@ impl Args {
         // Store resolved config and contracts
         config.chain_network = Some(chain_config.clone());
         config.contracts = blokli_chain_types::ContractAddresses {
-            token: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(network_config.addresses.token)),
-            channels: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
-                network_config.addresses.channels,
-            )),
-            announcements: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
-                network_config.addresses.announcements,
-            )),
-            node_safe_registry: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
-                network_config.addresses.node_safe_registry,
-            )),
-            ticket_price_oracle: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
-                network_config.addresses.ticket_price_oracle,
-            )),
-            winning_probability_oracle: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
-                network_config.addresses.winning_probability_oracle,
-            )),
-            node_stake_v2_factory: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
-                network_config.addresses.node_stake_factory,
-            )),
+            token: network_config.addresses.token.to_hopr_address(),
+            channels: network_config.addresses.channels.to_hopr_address(),
+            announcements: network_config.addresses.announcements.to_hopr_address(),
+            node_safe_registry: network_config.addresses.node_safe_registry.to_hopr_address(),
+            ticket_price_oracle: network_config.addresses.ticket_price_oracle.to_hopr_address(),
+            winning_probability_oracle: network_config.addresses.winning_probability_oracle.to_hopr_address(),
+            node_stake_v2_factory: network_config.addresses.node_stake_factory.to_hopr_address(),
         };
 
         info!(

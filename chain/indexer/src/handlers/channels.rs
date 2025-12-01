@@ -1,4 +1,5 @@
 use blokli_chain_rpc::HoprIndexerRpcOperations;
+use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator};
 use hopr_bindings::hopr_channels::HoprChannels::HoprChannelsEvents;
 use hopr_internal_types::channels::{ChannelEntry, ChannelStatus, generate_channel_id};
@@ -242,8 +243,8 @@ where
                 Ok(())
             }
             HoprChannelsEvents::ChannelOpened(channel_opened) => {
-                let source: Address = Address::from(<[u8; 20]>::from(*channel_opened.source));
-                let destination: Address = Address::from(<[u8; 20]>::from(*channel_opened.destination));
+                let source: Address = channel_opened.source.to_hopr_address();
+                let destination: Address = channel_opened.destination.to_hopr_address();
                 let channel_id = generate_channel_id(&source, &destination);
 
                 // Decode the packed channel state from the event

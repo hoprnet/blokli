@@ -20,6 +20,7 @@ use std::{
 
 use alloy::{primitives::B256, providers::PendingTransaction, rpc::types::TransactionRequest};
 use async_trait::async_trait;
+use blokli_chain_types::AlloyAddressExt;
 use errors::LogConversionError;
 use futures::Stream;
 use hopr_crypto_types::types::Hash;
@@ -68,7 +69,7 @@ impl TryFrom<alloy::rpc::types::Log> for Log {
 
     fn try_from(value: alloy::rpc::types::Log) -> std::result::Result<Self, Self::Error> {
         Ok(Self {
-            address: Address::from(<[u8; 20]>::from(*value.address())),
+            address: value.address().to_hopr_address(),
             topics: value.topics().iter().map(|t| Hash::from(t.0)).collect(),
             data: Box::from(value.data().data.as_ref()),
             tx_index: value

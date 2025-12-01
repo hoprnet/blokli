@@ -16,7 +16,7 @@ use alloy::{
     sol,
 };
 use async_trait::async_trait;
-use blokli_chain_types::{ContractAddresses, ContractInstances};
+use blokli_chain_types::{AlloyAddressExt, ContractAddresses, ContractInstances};
 use hopr_crypto_types::prelude::Hash;
 use hopr_internal_types::prelude::{EncodedWinProb, WinningProbability};
 use hopr_primitive_types::prelude::*;
@@ -237,8 +237,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
     }
 
     pub(crate) async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64> {
-        let safe_address_alloy =
-            alloy::primitives::Address::from(<[u8; 20]>::try_from(safe_address.as_ref()).expect("Address is 20 bytes"));
+        let safe_address_alloy = alloy::primitives::Address::from_hopr_address(safe_address);
 
         // Get provider from any contract instance (they all share the same provider)
         let provider = self.contract_instances.token.provider();
@@ -311,7 +310,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
             .call()
             .await
         {
-            Ok(returned_result) => Ok(Address::from(<[u8; 20]>::from(*returned_result))),
+            Ok(returned_result) => Ok(returned_result.to_hopr_address()),
             Err(e) => Err(e.into()),
         }
     }
