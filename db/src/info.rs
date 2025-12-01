@@ -251,19 +251,22 @@ impl BlokliDbInfoOperations for BlokliDb {
                             .ok_or(MissingFixedTableEntry("chain_info".into()))?;
 
                         let ledger_dst = if let Some(b) = model.ledger_dst {
-                            Some(Hash::try_from(b.as_ref())?)
+                            let bytes: &[u8] = b.as_ref();
+                            Some(Hash::try_from(bytes)?)
                         } else {
                             None
                         };
 
                         let safe_registry_dst = if let Some(b) = model.safe_registry_dst {
-                            Some(Hash::try_from(b.as_ref())?)
+                            let bytes: &[u8] = b.as_ref();
+                            Some(Hash::try_from(bytes)?)
                         } else {
                             None
                         };
 
                         let channels_dst = if let Some(b) = model.channels_dst {
-                            Some(Hash::try_from(b.as_ref())?)
+                            let bytes: &[u8] = b.as_ref();
+                            Some(Hash::try_from(bytes)?)
                         } else {
                             None
                         };

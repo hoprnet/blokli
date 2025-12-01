@@ -4,13 +4,17 @@
 # Directory for storing data files
 data_directory = "data"
 
-# Network identifier
+# Network identifier - specifies which blockchain network to connect to
+# Supported networks: dufour (testnet), rotsee (mainnet), anvil-localhost (local development)
+# Network configuration is loaded from hopr-bindings NetworksWithContractAddresses
 network = "dufour"
 
 # RPC endpoint URL for connecting to the blockchain
+# This overrides the default RPC endpoint for the selected network
 rpc_url = "http://localhost:8545"
 
 # Maximum number of RPC requests per second (0 for unlimited)
+# This overrides the default rate limit for the selected network
 max_rpc_requests_per_sec = 0
 
 # Database configuration - supports PostgreSQL or SQLite

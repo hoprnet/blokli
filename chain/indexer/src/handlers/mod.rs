@@ -120,7 +120,7 @@ where
         let log = Log::from(slog.clone());
 
         let primitive_log = alloy::primitives::Log::new(
-            slog.address.into(),
+            alloy::primitives::Address::from(<[u8; 20]>::try_from(slog.address.as_ref()).expect("Address is 20 bytes")),
             slog.topics.iter().map(|h| B256::from_slice(h.as_ref())).collect(),
             slog.data.clone().into(),
         )

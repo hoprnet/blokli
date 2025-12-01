@@ -92,7 +92,11 @@ pub fn create_native_transfer<N>(to: Address, amount: U256) -> N::TransactionReq
 where
     N: alloy::providers::Network,
 {
-    N::TransactionRequest::default().with_to(to.into()).with_value(amount)
+    N::TransactionRequest::default()
+        .with_to(primitives::Address::from(
+            <[u8; 20]>::try_from(to.as_ref()).expect("Address is 20 bytes"),
+        ))
+        .with_value(amount)
 }
 
 /// Funds the given wallet address with specified amount of native tokens and HOPR tokens.
@@ -109,7 +113,9 @@ where
 {
     if native_token > 0 {
         let native_transfer_tx = N::TransactionRequest::default()
-            .with_to(node.into())
+            .with_to(primitives::Address::from(
+                <[u8; 20]>::try_from(node.as_ref()).expect("Address is 20 bytes"),
+            ))
             .with_value(native_token);
 
         // let native_transfer_tx = Eip1559TransactionRequest::new()
@@ -122,7 +128,10 @@ where
     }
     if hopr_token > 0 {
         hopr_token_contract
-            .transfer(node.into(), hopr_token)
+            .transfer(
+                primitives::Address::from(<[u8; 20]>::try_from(node.as_ref()).expect("Address is 20 bytes")),
+                hopr_token,
+            )
             .send()
             .await?
             .watch()
@@ -151,7 +160,10 @@ where
         .await?;
 
     hopr_channels
-        .fundChannel(counterparty.into(), aliases::U96::from(amount))
+        .fundChannel(
+            primitives::Address::from(<[u8; 20]>::try_from(counterparty.as_ref()).expect("Address is 20 bytes")),
+            aliases::U96::from(amount),
+        )
         .send()
         .await?
         .watch()
@@ -173,18 +185,31 @@ where
     P: alloy::contract::private::Provider<N> + Clone,
     N: alloy::providers::Network,
 {
-    let hopr_token_with_new_client: HoprTokenInstance<P, N> =
-        HoprTokenInstance::new(hopr_token_address.into(), new_client.clone());
-    let hopr_channels_with_new_client = HoprChannelsInstance::new(hopr_channels_address.into(), new_client.clone());
+    let hopr_token_with_new_client: HoprTokenInstance<P, N> = HoprTokenInstance::new(
+        primitives::Address::from(<[u8; 20]>::try_from(hopr_token_address.as_ref()).expect("Address is 20 bytes")),
+        new_client.clone(),
+    );
+    let hopr_channels_with_new_client = HoprChannelsInstance::new(
+        primitives::Address::from(<[u8; 20]>::try_from(hopr_channels_address.as_ref()).expect("Address is 20 bytes")),
+        new_client.clone(),
+    );
     hopr_token_with_new_client
-        .approve(hopr_channels_address.into(), amount)
+        .approve(
+            primitives::Address::from(
+                <[u8; 20]>::try_from(hopr_channels_address.as_ref()).expect("Address is 20 bytes"),
+            ),
+            amount,
+        )
         .send()
         .await?
         .watch()
         .await?;
 
     hopr_channels_with_new_client
-        .fundChannel(counterparty.into(), aliases::U96::from(amount))
+        .fundChannel(
+            primitives::Address::from(<[u8; 20]>::try_from(counterparty.as_ref()).expect("Address is 20 bytes")),
+            aliases::U96::from(amount),
+        )
         .send()
         .await?
         .watch()
@@ -208,7 +233,7 @@ where
 
     let data_hash = safe_contract
         .getTransactionHash(
-            target.into(),
+            primitives::Address::from(<[u8; 20]>::try_from(target.as_ref()).expect("Address is 20 bytes")),
             U256::ZERO,
             inner_tx_data.clone(),
             0,
@@ -225,7 +250,7 @@ where
     let signed_data_hash = wallet.sign_hash(&data_hash).await?;
 
     let safe_tx_data = SafeContract::execTransactionCall {
-        to: target.into(),
+        to: primitives::Address::from(<[u8; 20]>::try_from(target.as_ref()).expect("Address is 20 bytes")),
         value: U256::ZERO,
         data: inner_tx_data,
         operation: 0,
@@ -260,12 +285,17 @@ where
 {
     // Inner tx payload: include node to the module
     let inner_tx_data = HoprToken::approveCall {
-        spender: channel_address.into(),
+        spender: primitives::Address::from(
+            <[u8; 20]>::try_from(channel_address.as_ref()).expect("Address is 20 bytes"),
+        ),
         value: U256::MAX,
     }
     .abi_encode();
 
-    let safe_contract = SafeContract::new(safe_address.into(), provider.clone());
+    let safe_contract = SafeContract::new(
+        primitives::Address::from(<[u8; 20]>::try_from(safe_address.as_ref()).expect("Address is 20 bytes")),
+        provider.clone(),
+    );
     let wallet = PrivateKeySigner::from_slice(deployer.secret().as_ref()).expect("failed to construct wallet");
     let safe_tx = get_safe_tx(safe_contract, token_address, inner_tx_data.into(), wallet)
         .await

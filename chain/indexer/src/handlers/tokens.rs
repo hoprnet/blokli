@@ -33,8 +33,8 @@ where
 
         match event {
             HoprTokenEvents::Transfer(transferred) => {
-                let from: Address = transferred.from.into();
-                let to: Address = transferred.to.into();
+                let from: Address = Address::from(<[u8; 20]>::from(*transferred.from));
+                let to: Address = Address::from(<[u8; 20]>::from(*transferred.to));
 
                 trace!(
                     %from, %to,
@@ -42,8 +42,8 @@ where
                 );
             }
             HoprTokenEvents::Approval(approved) => {
-                let owner: Address = approved.owner.into();
-                let spender: Address = approved.spender.into();
+                let owner: Address = Address::from(<[u8; 20]>::from(*approved.owner));
+                let spender: Address = Address::from(<[u8; 20]>::from(*approved.spender));
 
                 trace!(
                     %owner, %spender, allowance = %approved.value,

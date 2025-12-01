@@ -1,6 +1,7 @@
 mod config;
 mod constants;
 mod errors;
+mod network;
 
 use std::{
     path::PathBuf,
@@ -12,11 +13,10 @@ use std::{
 use ::config as config_rs;
 use async_signal::{Signal, Signals};
 use blokli_chain_api::BlokliChain;
-use blokli_chain_types::ContractAddresses;
+use blokli_chain_types::ResolvedChainConfig;
 use blokli_db::db::{BlokliDb, BlokliDbConfig};
 use clap::{Parser, Subcommand};
 use futures::TryStreamExt;
-use hopr_chain_config::ChainNetworkConfig;
 use sea_orm::Database;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, fmt};
@@ -193,48 +193,62 @@ impl Args {
 
         config.validate().map_err(ConfigError::Validation)?;
 
-        // coerce with protocol config
-        let chain_network_config = ChainNetworkConfig::new_no_version_check(
-            &config.network,
-            Some(&config.rpc_url),
-            Some(config.max_rpc_requests_per_sec),
-            &mut config.protocols,
-        )
-        .map_err(|e| {
-            let available_networks: Vec<String> = config.protocols.networks.keys().cloned().collect();
-
-            if e.contains("Could not find network") {
-                BloklidError::NonSpecific(format!(
-                    "Failed to resolve blockchain environment: {e}\n\nSupported networks: {}",
-                    available_networks.join(", ")
-                ))
-            } else if e.contains("unsupported network error") {
-                BloklidError::NonSpecific(format!(
-                    "Failed to resolve blockchain environment: {e}\n\nThis network exists but is not compatible with \
-                     version {} of bloklid.\nSupported networks: {}",
-                    crate::constants::APP_VERSION_COERCED,
-                    available_networks.join(", ")
-                ))
-            } else {
-                BloklidError::NonSpecific(format!("Failed to resolve blockchain environment: {e}"))
-            }
+        // Resolve network configuration from hopr-bindings
+        let network_config = config.network.resolve().ok_or_else(|| {
+            use crate::network::Network;
+            BloklidError::NonSpecific(format!(
+                "Network '{}' is not defined in hopr-bindings.\n\nSupported networks: {}",
+                config.network,
+                Network::all_names().join(", ")
+            ))
         })?;
 
-        config.chain_network = Some(chain_network_config.clone());
-
-        let contract_addresses = ContractAddresses {
-            token: chain_network_config.token,
-            channels: chain_network_config.channels,
-            announcements: chain_network_config.announcements,
-            node_safe_registry: chain_network_config.node_safe_registry,
-            ticket_price_oracle: chain_network_config.ticket_price_oracle,
-            winning_probability_oracle: chain_network_config.winning_probability_oracle,
-            node_stake_v2_factory: chain_network_config.node_stake_v2_factory,
+        // Create resolved chain config with user overrides
+        let max_rpc_req = if config.max_rpc_requests_per_sec > 0 {
+            Some(config.max_rpc_requests_per_sec)
+        } else {
+            None
         };
-        config.contracts = contract_addresses;
+
+        let chain_config = ResolvedChainConfig {
+            chain_id: config.network.chain_id(),
+            block_time: config.network.block_time(),
+            tx_polling_interval: config.network.tx_polling_interval(),
+            confirmations: config.network.confirmations(),
+            max_block_range: config.network.max_block_range(),
+            channel_contract_deploy_block: network_config.indexer_start_block_number,
+            max_requests_per_sec: max_rpc_req,
+            contracts: blokli_chain_types::ContractAddresses {
+                token: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
+                    network_config.addresses.token,
+                )),
+                channels: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
+                    network_config.addresses.channels,
+                )),
+                announcements: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
+                    network_config.addresses.announcements,
+                )),
+                node_safe_registry: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
+                    network_config.addresses.node_safe_registry,
+                )),
+                ticket_price_oracle: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
+                    network_config.addresses.ticket_price_oracle,
+                )),
+                winning_probability_oracle: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
+                    network_config.addresses.winning_probability_oracle,
+                )),
+                node_stake_v2_factory: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
+                    network_config.addresses.node_stake_factory,
+                )),
+            },
+        };
+
+        // Store resolved config and contracts
+        config.chain_network = Some(chain_config.clone());
+        config.contracts = chain_config.contracts;
 
         info!(
-            contract_addresses = ?contract_addresses,
+            contract_addresses = ?config.contracts,
             "Resolved contract addresses",
         );
 
@@ -391,9 +405,14 @@ async fn run() -> errors::Result<()> {
 
         info!("Connecting to RPC endpoint: {}", redact_rpc_url(&rpc_url));
 
-        // Extract chain_id and network before chain_network is moved
-        let chain_id = chain_network.chain.chain_id as u64;
-        let network = chain_network.id.clone();
+        // Extract chain_id and network name for API configuration
+        let chain_id = chain_network.chain_id;
+        let network = {
+            let cfg = config
+                .read()
+                .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
+            cfg.network.to_string()
+        };
 
         // Create BlokliChain instance
         let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, rpc_url)?;
@@ -720,7 +739,8 @@ mod tests {
             let config = args.load_config(false).expect("Failed to load config");
 
             // String environment variables should be properly parsed to their target types
-            assert_eq!(config.network, "rotsee", "String env var should override config");
+            use crate::network::Network;
+            assert_eq!(config.network, Network::Rotsee, "String env var should override config");
         });
     }
 

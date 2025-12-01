@@ -215,14 +215,12 @@ pub(crate) fn model_to_account_entry(
     Ok(AccountEntry {
         public_key: OffchainPublicKey::from_hex(&account.packet_key)?,
         chain_addr,
-        published_at: account.published_block as u32,
         entry_type: match announcement {
             None => AccountType::NotAnnounced,
-            Some(a) => AccountType::Announced {
-                multiaddr: a.multiaddress.parse().map_err(|_| DbSqlError::DecodingError)?,
-                updated_block: a.published_block as u32,
-            },
+            Some(a) => AccountType::Announced(vec![a.multiaddress.parse().map_err(|_| DbSqlError::DecodingError)?]),
         },
+        safe_address: None,
+        key_id: 0.into(),
     })
 }
 
@@ -368,7 +366,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                     match account::Entity::insert(account::ActiveModel {
                         chain_key: Set(account.chain_addr.as_ref().to_vec()),
                         packet_key: Set(account.public_key.to_hex()),
-                        published_block: Set(account.published_at as i64),
+                        published_block: Set(0), // Default since AccountEntry no longer tracks this
                         ..Default::default()
                     })
                     .on_conflict(
@@ -388,14 +386,18 @@ impl BlokliDbAccountOperations for BlokliDb {
                                 // tracing::warn!(?account, %error, "keybinding not updated")
                             }
 
-                            if let AccountType::Announced {
-                                multiaddr,
-                                updated_block,
-                            } = account.entry_type
-                            {
-                                myself
-                                    .insert_announcement(Some(tx), account.chain_addr, multiaddr, updated_block)
-                                    .await?;
+                            if let AccountType::Announced(multiaddrs) = &account.entry_type {
+                                // Insert announcements for all multiaddrs
+                                for multiaddr in multiaddrs {
+                                    myself
+                                        .insert_announcement(
+                                            Some(tx),
+                                            account.chain_addr,
+                                            multiaddr.clone(),
+                                            0, // Default since AccountEntry no longer tracks block number
+                                        )
+                                        .await?;
+                                }
                             }
 
                             Ok::<(), DbSqlError>(())

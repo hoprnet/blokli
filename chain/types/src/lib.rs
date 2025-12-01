@@ -23,6 +23,30 @@ pub mod errors;
 // Various (mostly testing related) utility functions
 pub mod utils;
 
+/// Resolved chain configuration containing all blockchain-specific parameters.
+///
+/// This struct encapsulates all chain-level configuration needed by the indexer and RPC operations,
+/// resolved from network definitions with optional user overrides.
+#[derive(Clone, Debug)]
+pub struct ResolvedChainConfig {
+    /// Chain ID (e.g., 100 for Gnosis Chain)
+    pub chain_id: u64,
+    /// Expected block time in milliseconds
+    pub block_time: u64,
+    /// Transaction polling interval in milliseconds
+    pub tx_polling_interval: u64,
+    /// Number of confirmations required (finality)
+    pub confirmations: u16,
+    /// Maximum block range for RPC queries
+    pub max_block_range: u32,
+    /// Starting block number for channel contract (where indexing should begin)
+    pub channel_contract_deploy_block: u32,
+    /// Maximum RPC requests per second (None = unlimited)
+    pub max_requests_per_sec: Option<u32>,
+    /// Contract addresses for this network
+    pub contracts: ContractAddresses,
+}
+
 /// Holds addresses of all smart contracts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ContractAddresses {
@@ -60,23 +84,48 @@ where
 {
     pub fn new(contract_addresses: &ContractAddresses, provider: P, _use_dummy_nr: bool) -> Self {
         Self {
-            token: HoprTokenInstance::new(contract_addresses.token.into(), provider.clone()),
-            channels: HoprChannelsInstance::new(contract_addresses.channels.into(), provider.clone()),
-            announcements: HoprAnnouncementsInstance::new(contract_addresses.announcements.into(), provider.clone()),
+            token: HoprTokenInstance::new(
+                primitives::Address::from(
+                    <[u8; 20]>::try_from(contract_addresses.token.as_ref()).expect("Address is 20 bytes"),
+                ),
+                provider.clone(),
+            ),
+            channels: HoprChannelsInstance::new(
+                primitives::Address::from(
+                    <[u8; 20]>::try_from(contract_addresses.channels.as_ref()).expect("Address is 20 bytes"),
+                ),
+                provider.clone(),
+            ),
+            announcements: HoprAnnouncementsInstance::new(
+                primitives::Address::from(
+                    <[u8; 20]>::try_from(contract_addresses.announcements.as_ref()).expect("Address is 20 bytes"),
+                ),
+                provider.clone(),
+            ),
             safe_registry: HoprNodeSafeRegistryInstance::new(
-                contract_addresses.node_safe_registry.into(),
+                primitives::Address::from(
+                    <[u8; 20]>::try_from(contract_addresses.node_safe_registry.as_ref()).expect("Address is 20 bytes"),
+                ),
                 provider.clone(),
             ),
             price_oracle: HoprTicketPriceOracleInstance::new(
-                contract_addresses.ticket_price_oracle.into(),
+                primitives::Address::from(
+                    <[u8; 20]>::try_from(contract_addresses.ticket_price_oracle.as_ref()).expect("Address is 20 bytes"),
+                ),
                 provider.clone(),
             ),
             win_prob_oracle: HoprWinningProbabilityOracleInstance::new(
-                contract_addresses.winning_probability_oracle.into(),
+                primitives::Address::from(
+                    <[u8; 20]>::try_from(contract_addresses.winning_probability_oracle.as_ref())
+                        .expect("Address is 20 bytes"),
+                ),
                 provider.clone(),
             ),
             stake_factory: HoprNodeStakeFactoryInstance::new(
-                contract_addresses.node_stake_v2_factory.into(),
+                primitives::Address::from(
+                    <[u8; 20]>::try_from(contract_addresses.node_stake_v2_factory.as_ref())
+                        .expect("Address is 20 bytes"),
+                ),
                 provider.clone(),
             ),
         }
@@ -102,7 +151,10 @@ where
         }
 
         // Get deployer address
-        let self_address = deployer.public().to_address().into();
+        let deployer_hopr_address = deployer.public().to_address();
+        let self_address = primitives::Address::from(
+            <[u8; 20]>::try_from(deployer_hopr_address.as_ref()).expect("Address is 20 bytes"),
+        );
 
         let safe_registry = HoprNodeSafeRegistry::deploy(provider.clone()).await?;
         let announcements = HoprAnnouncements::deploy(provider.clone()).await?;
@@ -167,13 +219,13 @@ where
 {
     fn from(instances: &ContractInstances<P>) -> Self {
         Self {
-            token: Into::<Address>::into(*instances.token.address()),
-            channels: Into::<Address>::into(*instances.channels.address()),
-            announcements: Into::<Address>::into(*instances.announcements.address()),
-            node_safe_registry: Into::<Address>::into(*instances.safe_registry.address()),
-            ticket_price_oracle: Into::<Address>::into(*instances.price_oracle.address()),
-            winning_probability_oracle: Into::<Address>::into(*instances.win_prob_oracle.address()),
-            node_stake_v2_factory: Into::<Address>::into(*instances.stake_factory.address()),
+            token: Address::from(<[u8; 20]>::from(*instances.token.address())),
+            channels: Address::from(<[u8; 20]>::from(*instances.channels.address())),
+            announcements: Address::from(<[u8; 20]>::from(*instances.announcements.address())),
+            node_safe_registry: Address::from(<[u8; 20]>::from(*instances.safe_registry.address())),
+            ticket_price_oracle: Address::from(<[u8; 20]>::from(*instances.price_oracle.address())),
+            winning_probability_oracle: Address::from(<[u8; 20]>::from(*instances.win_prob_oracle.address())),
+            node_stake_v2_factory: Address::from(<[u8; 20]>::from(*instances.stake_factory.address())),
         }
     }
 }

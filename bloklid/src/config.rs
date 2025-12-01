@@ -1,7 +1,8 @@
 use std::time::Duration;
 
-use blokli_chain_types::ContractAddresses;
-use hopr_chain_config::{ChainNetworkConfig, ProtocolsConfig};
+use blokli_chain_types::{ContractAddresses, ResolvedChainConfig};
+
+use crate::network::Network;
 
 /// Redacts username and password from database URLs while keeping host, port, and database visible
 ///
@@ -95,8 +96,8 @@ fn default_data_directory() -> String {
     "data".to_string()
 }
 
-fn default_network() -> String {
-    "dufour".to_string()
+fn default_network() -> Network {
+    Network::default()
 }
 
 /// PostgreSQL database configuration
@@ -287,7 +288,7 @@ pub struct Config {
 
     #[default(_code = "default_network()")]
     #[serde(default = "default_network")]
-    pub network: String,
+    pub network: Network,
 
     #[default(_code = "default_rpc_url()")]
     #[serde(default = "default_rpc_url")]
@@ -304,14 +305,11 @@ pub struct Config {
 
     #[serde(skip)]
     #[default(None)]
-    pub chain_network: Option<ChainNetworkConfig>,
+    pub chain_network: Option<ResolvedChainConfig>,
 
     #[serde(skip)]
     #[default(_code = "ContractAddresses::default()")]
     pub contracts: ContractAddresses,
-
-    #[serde(default)]
-    pub protocols: ProtocolsConfig,
 }
 
 impl Config {
@@ -633,7 +631,7 @@ mod tests {
         let config: Config = toml::from_str(&config_content).expect("Failed to parse example-config.toml");
 
         // Basic verification that values are loaded correctly
-        assert_eq!(config.network, "dufour");
+        assert_eq!(config.network, Network::Dufour);
 
         // Check database config (should be present in example-config.toml)
         match &config.database {

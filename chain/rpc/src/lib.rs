@@ -68,7 +68,7 @@ impl TryFrom<alloy::rpc::types::Log> for Log {
 
     fn try_from(value: alloy::rpc::types::Log) -> std::result::Result<Self, Self::Error> {
         Ok(Self {
-            address: value.address().into(),
+            address: Address::from(<[u8; 20]>::from(*value.address())),
             topics: value.topics().iter().map(|t| Hash::from(t.0)).collect(),
             data: Box::from(value.data().data.as_ref()),
             tx_index: value
@@ -90,7 +90,9 @@ impl TryFrom<alloy::rpc::types::Log> for Log {
 impl From<Log> for alloy::rpc::types::RawLog {
     fn from(value: Log) -> Self {
         alloy::rpc::types::RawLog {
-            address: value.address.into(),
+            address: alloy::primitives::Address::from(
+                <[u8; 20]>::try_from(value.address.as_ref()).expect("Address is 20 bytes"),
+            ),
             topics: value.topics.into_iter().map(|h| B256::from_slice(h.as_ref())).collect(),
             data: value.data.into(),
         }

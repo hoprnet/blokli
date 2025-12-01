@@ -15,7 +15,7 @@ use futures::stream::BoxStream;
 use hopr_crypto_types::types::Hash;
 use hopr_internal_types::channels::{ChannelDirection, ChannelEntry, ChannelStatus};
 use hopr_primitive_types::{
-    prelude::{Address, HoprBalance, U256},
+    prelude::{Address, HoprBalance},
     traits::{IntoEndian, ToHex},
 };
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
@@ -134,9 +134,9 @@ fn reconstruct_channel_entry(
         source_addr,
         dest_addr,
         balance,
-        U256::from(state.ticket_index as u64),
+        u64::try_from(state.ticket_index).map_err(|_| DbSqlError::DecodingError)?,
         status,
-        U256::from(state.epoch as u64),
+        u32::try_from(state.epoch).map_err(|_| DbSqlError::DecodingError)?,
     ))
 }
 
@@ -183,8 +183,8 @@ async fn insert_channel_state_and_emit(
         channel_id: Set(channel_id),
         balance: Set(balance_bytes_12.to_vec()),
         status: Set(i8::from(channel_entry.status)),
-        epoch: Set(channel_entry.channel_epoch.as_u64() as i64),
-        ticket_index: Set(channel_entry.ticket_index.as_u64() as i64),
+        epoch: Set(channel_entry.channel_epoch as i64),
+        ticket_index: Set(channel_entry.ticket_index as i64),
         closure_time: Set(match &channel_entry.status {
             ChannelStatus::PendingToClose(time) => Some(system_time_to_datetime(time)),
             _ => None,

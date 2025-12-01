@@ -80,9 +80,9 @@ where
                     existing_channel.source,
                     existing_channel.destination,
                     new_balance,
-                    decoded.ticket_index.into(),
+                    decoded.ticket_index,
                     decoded.status,
-                    decoded.epoch.into(),
+                    decoded.epoch,
                 );
 
                 // Atomically upsert the new state
@@ -149,9 +149,9 @@ where
                     existing_channel.source,
                     existing_channel.destination,
                     new_balance,
-                    decoded.ticket_index.into(),
+                    decoded.ticket_index,
                     decoded.status,
-                    decoded.epoch.into(),
+                    decoded.epoch,
                 );
 
                 // Atomically upsert the new state
@@ -216,9 +216,9 @@ where
                     existing_channel.source,
                     existing_channel.destination,
                     decoded.balance,
-                    decoded.ticket_index.into(),
+                    decoded.ticket_index,
                     decoded.status,
-                    decoded.epoch.into(),
+                    decoded.epoch,
                 );
 
                 // Atomically upsert the new state
@@ -242,8 +242,8 @@ where
                 Ok(())
             }
             HoprChannelsEvents::ChannelOpened(channel_opened) => {
-                let source: Address = channel_opened.source.into();
-                let destination: Address = channel_opened.destination.into();
+                let source: Address = Address::from(<[u8; 20]>::from(*channel_opened.source));
+                let destination: Address = Address::from(<[u8; 20]>::from(*channel_opened.destination));
                 let channel_id = generate_channel_id(&source, &destination);
 
                 // Decode the packed channel state from the event
@@ -287,9 +287,9 @@ where
                         source,
                         destination,
                         decoded.balance,
-                        decoded.ticket_index.into(),
+                        decoded.ticket_index,
                         decoded.status,
-                        decoded.epoch.into(),
+                        decoded.epoch,
                     );
 
                     self.db
@@ -303,9 +303,9 @@ where
                         source,
                         destination,
                         decoded.balance,
-                        decoded.ticket_index.into(),
+                        decoded.ticket_index,
                         decoded.status,
-                        decoded.epoch.into(),
+                        decoded.epoch,
                     );
 
                     self.db
@@ -364,9 +364,9 @@ where
                     existing_channel.source,
                     existing_channel.destination,
                     decoded.balance,
-                    decoded.ticket_index.into(),
+                    decoded.ticket_index,
                     decoded.status,
-                    decoded.epoch.into(),
+                    decoded.epoch,
                 );
 
                 // Atomically upsert the new state
@@ -425,9 +425,9 @@ where
                     existing_channel.source,
                     existing_channel.destination,
                     decoded.balance,
-                    decoded.ticket_index.into(),
+                    decoded.ticket_index,
                     decoded.status, // Should be PendingToClose with proper timestamp
-                    decoded.epoch.into(),
+                    decoded.epoch,
                 );
 
                 // Atomically upsert the new state

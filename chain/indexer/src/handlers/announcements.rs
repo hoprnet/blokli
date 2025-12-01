@@ -51,7 +51,7 @@ where
                     );
                     return Ok(());
                 }
-                let node_address: Address = address_announcement.node.into();
+                let node_address: Address = Address::from(<[u8; 20]>::from(*address_announcement.node));
 
                 self.db
                     .insert_announcement(
@@ -86,7 +86,7 @@ where
                     "on_announcement_event: KeyBinding",
                 );
                 match KeyBinding::from_parts(
-                    key_binding.chain_key.into(),
+                    Address::from(<[u8; 20]>::from(*key_binding.chain_key)),
                     key_binding.ed25519_pub_key.0.try_into()?,
                     OffchainSignature::try_from((key_binding.ed25519_sig_0.0, key_binding.ed25519_sig_1.0))?,
                 ) {
@@ -137,7 +137,7 @@ where
                 }
             }
             HoprAnnouncementsEvents::RevokeAnnouncement(revocation) => {
-                let node_address: Address = revocation.node.into();
+                let node_address: Address = Address::from(<[u8; 20]>::from(*revocation.node));
                 match self.db.delete_all_announcements(Some(tx), node_address).await {
                     Ok(_) => {
                         // Publish AccountUpdated event if synced
