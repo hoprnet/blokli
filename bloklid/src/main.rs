@@ -23,7 +23,7 @@ use tracing_subscriber::{EnvFilter, fmt};
 use validator::Validate;
 
 use crate::{
-    config::Config,
+    config::{Config, redact_database_url, redact_rpc_url},
     errors::{BloklidError, ConfigError},
 };
 
@@ -84,8 +84,6 @@ impl Args {
         // Layer 2: Environment Variables (Manual Mapping)
         // We manually map env vars to config keys to ensure precedence and specific naming
         let env_mappings = [
-            // Root
-            ("BLOKLI_HOST", "host"),
             ("BLOKLI_DATA_DIRECTORY", "data_directory"),
             ("BLOKLI_NETWORK", "network"),
             ("BLOKLI_RPC_URL", "rpc_url"),
@@ -137,6 +135,10 @@ impl Args {
             // API Health
             ("BLOKLI_API_HEALTH_MAX_INDEXER_LAG", "api.health.max_indexer_lag"),
             ("BLOKLI_API_HEALTH_TIMEOUT", "api.health.timeout"),
+            (
+                "BLOKLI_API_HEALTH_READINESS_CHECK_INTERVAL",
+                "api.health.readiness_check_interval",
+            ),
         ];
 
         // Keys that should be parsed as boolean values
@@ -307,6 +309,14 @@ async fn run() -> errors::Result<()> {
     // Initial config load
     let config = Arc::new(RwLock::new(args.load_config(true)?));
 
+    // Log the final configuration with redacted secrets
+    {
+        let cfg = config
+            .read()
+            .map_err(|_| BloklidError::NonSpecific("failed to lock config for logging".into()))?;
+        info!("{}", cfg.display_redacted());
+    }
+
     // Initialize components
     let (process_handles, api_handle) = {
         let (database_path, logs_database_path, chain_network, contracts, indexer_config, rpc_url, api_config) = {
@@ -351,10 +361,10 @@ async fn run() -> errors::Result<()> {
 
         if let Some(logs_path) = &logs_database_path {
             info!("Initializing dual-database setup:");
-            info!("  Index database: {}", database_path);
-            info!("  Logs database: {}", logs_path);
+            info!("  Index database: {}", redact_database_url(&database_path));
+            info!("  Logs database: {}", redact_database_url(logs_path));
         } else {
-            info!("Initializing single database: {}", database_path);
+            info!("Initializing single database: {}", redact_database_url(&database_path));
         }
 
         // Initialize database
@@ -379,7 +389,7 @@ async fn run() -> errors::Result<()> {
         // Clone notification manager for API before db is moved to BlokliChain
         let sqlite_notification_manager = db.sqlite_notification_manager().cloned();
 
-        info!("Connecting to RPC endpoint: {}", rpc_url);
+        info!("Connecting to RPC endpoint: {}", redact_rpc_url(&rpc_url));
 
         // Extract chain_id and network before chain_network is moved
         let chain_id = chain_network.chain.chain_id as u64;
@@ -391,14 +401,8 @@ async fn run() -> errors::Result<()> {
         // Get IndexerState for API subscriptions
         let indexer_state = blokli_chain.indexer_state();
 
-        info!("Starting BlokliChain processes");
-
-        // Start all chain processes
-        let process_handles = blokli_chain.start().await?;
-
-        info!("BlokliChain started successfully");
-
-        // Start API server if enabled
+        // Start API server if enabled (before starting indexer processes)
+        // This ensures the API is available immediately even if indexer initialization takes time
         let api_handle = if api_config.enabled {
             info!("Starting blokli-api server on {}", api_config.bind_address);
 
@@ -428,6 +432,7 @@ async fn run() -> errors::Result<()> {
                 health: blokli_api::config::HealthConfig {
                     max_indexer_lag: api_config.health.max_indexer_lag,
                     timeout: api_config.health.timeout,
+                    readiness_check_interval: api_config.health.readiness_check_interval,
                 },
             };
 
@@ -448,20 +453,21 @@ async fn run() -> errors::Result<()> {
             .await
             .map_err(|e| BloklidError::NonSpecific(format!("Failed to build API app: {}", e)))?;
 
+            // Bind the listener first to ensure the port is available before spawning the server
+            let listener = tokio::net::TcpListener::bind(api_config.bind_address)
+                .await
+                .map_err(|e| BloklidError::NonSpecific(format!("Failed to bind API server: {}", e)))?;
+
+            info!("API server listening on {}", api_config.bind_address);
+            if api_config.playground_enabled {
+                info!(
+                    "GraphQL Playground available at http://{}/graphql",
+                    api_config.bind_address
+                );
+            }
+
             // Spawn API server as a background task
             let handle = tokio::spawn(async move {
-                let listener = tokio::net::TcpListener::bind(api_config.bind_address)
-                    .await
-                    .expect("Failed to bind API server");
-
-                info!("API server listening on {}", api_config.bind_address);
-                if api_config.playground_enabled {
-                    info!(
-                        "GraphQL Playground available at http://{}/graphql",
-                        api_config.bind_address
-                    );
-                }
-
                 axum::serve(listener, api_app).await.expect("API server failed");
             });
 
@@ -471,6 +477,13 @@ async fn run() -> errors::Result<()> {
             info!("API server disabled in configuration");
             None
         };
+
+        info!("Starting BlokliChain processes");
+
+        // Start all chain processes
+        let process_handles = blokli_chain.start().await?;
+
+        info!("BlokliChain started successfully");
 
         (process_handles, api_handle)
     };
@@ -534,7 +547,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "127.0.0.1:3000"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -546,30 +558,23 @@ mod tests {
         let path = file.path().to_path_buf();
 
         // Set env vars that should override config file
-        temp_env::with_vars(
-            [
-                ("BLOKLI_HOST", Some("127.0.0.1:4000")),
-                ("BLOKLI_DATABASE_URL", Some("postgres://env:5432/db")),
-            ],
-            || {
-                let args = Args {
-                    verbose: 0,
-                    config: Some(path),
-                    command: None,
-                };
+        temp_env::with_vars([("BLOKLI_DATABASE_URL", Some("postgres://env:5432/db"))], || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
 
-                let config = args.load_config(false).expect("Failed to load config");
+            let config = args.load_config(false).expect("Failed to load config");
 
-                // Environment variables should override config file
-                assert_eq!(config.host.to_string(), "127.0.0.1:4000");
-                match config.database {
-                    Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
-                        assert_eq!(c.url.as_ref().map(|s| s.as_str()), Some("postgres://env:5432/db"));
-                    }
-                    _ => panic!("Expected PostgreSQL database config"),
+            // Environment variables should override config file
+            match config.database {
+                Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
+                    assert_eq!(c.url.as_ref().map(|s| s.as_str()), Some("postgres://env:5432/db"));
                 }
-            },
-        );
+                _ => panic!("Expected PostgreSQL database config"),
+            }
+        });
     }
 
     #[test]
@@ -579,7 +584,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "127.0.0.1:3000"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -617,7 +621,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
         "#
@@ -664,7 +667,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
         "#
@@ -698,7 +700,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -730,7 +731,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -767,7 +767,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -808,7 +807,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -846,7 +844,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -887,7 +884,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -928,7 +924,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -949,7 +944,10 @@ mod tests {
             };
 
             let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(config.indexer.fast_sync, true, "BLOKLI_INDEXER_FAST_SYNC should be parsed as bool");
+            assert_eq!(
+                config.indexer.fast_sync, true,
+                "BLOKLI_INDEXER_FAST_SYNC should be parsed as bool"
+            );
         });
     }
 
@@ -959,7 +957,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -981,7 +978,10 @@ mod tests {
             };
 
             let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(config.indexer.fast_sync, true, "BLOKLI_INDEXER_FAST_SYNC='1' should be parsed as boolean true");
+            assert_eq!(
+                config.indexer.fast_sync, true,
+                "BLOKLI_INDEXER_FAST_SYNC='1' should be parsed as boolean true"
+            );
         });
     }
 
@@ -991,7 +991,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -1013,7 +1012,10 @@ mod tests {
             };
 
             let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(config.indexer.fast_sync, false, "BLOKLI_INDEXER_FAST_SYNC='0' should be parsed as boolean false");
+            assert_eq!(
+                config.indexer.fast_sync, false,
+                "BLOKLI_INDEXER_FAST_SYNC='0' should be parsed as boolean false"
+            );
         });
     }
 
@@ -1023,7 +1025,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -1044,7 +1045,10 @@ mod tests {
             };
 
             let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(config.indexer.fast_sync, false, "BLOKLI_INDEXER_FAST_SYNC should be parsed as bool");
+            assert_eq!(
+                config.indexer.fast_sync, false,
+                "BLOKLI_INDEXER_FAST_SYNC should be parsed as bool"
+            );
         });
     }
 
@@ -1054,7 +1058,6 @@ mod tests {
         writeln!(
             file,
             r#"
-            host = "0.0.0.0:3064"
             network = "dufour"
             rpc_url = "http://localhost:8545"
             [database]
@@ -1076,7 +1079,10 @@ mod tests {
             };
 
             let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(config.api.health.max_indexer_lag, 20, "Non-boolean numeric config should parse as u64");
+            assert_eq!(
+                config.api.health.max_indexer_lag, 20,
+                "Non-boolean numeric config should parse as u64"
+            );
         });
     }
 }

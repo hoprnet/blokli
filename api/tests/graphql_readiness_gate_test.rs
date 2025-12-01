@@ -1,10 +1,8 @@
-//! Integration tests for health API endpoints (/healthz and /readyz)
+//! Integration tests for GraphQL readiness gating
 //!
-//! These tests verify end-to-end functionality by:
-//! - Running a real Anvil instance with deployed HOPR contracts
-//! - Running database migrations to create required tables
-//! - Making HTTP requests to health endpoints
-//! - Verifying health check responses for various scenarios
+//! These tests verify that the GraphQL API is only usable when the server
+//! is ready (i.e., when /readyz returns 200 OK). The GraphQL endpoint should
+//! return 503 Service Unavailable while the indexer is catching up.
 
 use std::{sync::Arc, time::Duration};
 
@@ -39,13 +37,14 @@ use blokli_db_entity::codegen::chain_info;
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
 use migration::{Migrator, MigratorTrait};
 use sea_orm::{Database, DatabaseConnection, EntityTrait, Set, sea_query::OnConflict};
+use serde_json::json;
 use tower::ServiceExt;
 
-/// Test context containing all components needed for health API testing
+/// Test context containing all components needed for GraphQL readiness testing
 struct TestContext {
     /// Anvil instance (must be kept alive)
     _anvil: AnvilInstance,
-    /// Axum router with health endpoints
+    /// Axum router with GraphQL endpoint
     app: Router,
     /// Database connection for test data manipulation
     db: DatabaseConnection,
@@ -177,11 +176,19 @@ async fn setup_test_environment() -> anyhow::Result<TestContext> {
     })
 }
 
-/// Helper to make HTTP request and get response
-async fn make_request(app: Router, path: &str) -> (StatusCode, serde_json::Value) {
+/// Helper to make HTTP POST request to GraphQL endpoint
+async fn make_graphql_request(app: Router, query: &str) -> (StatusCode, serde_json::Value) {
+    let request_body = json!({
+        "query": query
+    });
+
     let request = Request::builder()
-        .uri(path)
-        .body(Body::empty())
+        .method("POST")
+        .uri("/graphql")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_string(&request_body).expect("Failed to serialize JSON"),
+        ))
         .expect("Failed to build request");
 
     let response = app.oneshot(request).await.expect("Failed to execute request");
@@ -197,9 +204,7 @@ async fn make_request(app: Router, path: &str) -> (StatusCode, serde_json::Value
 }
 
 /// Update chain_info record with specified block number
-/// The migration seeds initial data with id=1, so we update it
 async fn update_chain_info(db: &DatabaseConnection, block_number: i64) -> anyhow::Result<()> {
-    // Use upsert to handle both cases (existing or not)
     let chain_info = chain_info::ActiveModel {
         id: Set(1),
         last_indexed_block: Set(block_number),
@@ -228,194 +233,187 @@ async fn delete_chain_info(db: &DatabaseConnection) -> anyhow::Result<()> {
 }
 
 // ===========================================
-// Healthz Endpoint Tests
+// GraphQL Readiness Gate Tests
 // ===========================================
 
-/// Test that /healthz returns 200 OK with healthy status
+/// Test that GraphQL returns 503 when server is not ready (no chain_info)
 #[test_log::test(tokio::test)]
-async fn test_healthz_returns_ok() -> anyhow::Result<()> {
+async fn test_graphql_returns_503_when_not_ready() -> anyhow::Result<()> {
     let ctx = setup_test_environment().await?;
 
-    let (status, json) = make_request(ctx.app, "/healthz").await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(json["status"], "healthy");
-    assert!(json["version"].is_string(), "Version should be present");
-
-    Ok(())
-}
-
-/// Test that /healthz returns the correct version
-#[test_log::test(tokio::test)]
-async fn test_healthz_returns_version() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
-
-    let (status, json) = make_request(ctx.app, "/healthz").await;
-
-    assert_eq!(status, StatusCode::OK);
-    // Version should match the package version
-    assert_eq!(json["version"], env!("CARGO_PKG_VERSION"));
-
-    Ok(())
-}
-
-// ===========================================
-// Readyz Endpoint Tests - Success Scenarios
-// ===========================================
-
-/// Test that /readyz returns 200 OK when all checks pass
-#[test_log::test(tokio::test)]
-async fn test_readyz_all_healthy() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
-
-    // Get current block number from Anvil (usually starts at 0 or low number)
-    // We'll update chain_info with a recent block to ensure lag is within threshold
-
-    // Update chain_info with block 0 (Anvil starts near there)
-    update_chain_info(&ctx.db, 0).await?;
-
-    let (status, json) = make_request(ctx.app, "/readyz").await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(json["status"], "ready");
-    assert_eq!(json["checks"]["database"]["status"], "healthy");
-    assert_eq!(json["checks"]["rpc"]["status"], "healthy");
-    assert!(json["checks"]["rpc"]["block_number"].is_number());
-
-    Ok(())
-}
-
-/// Test that /readyz shows correct indexer lag calculation
-#[test_log::test(tokio::test)]
-async fn test_readyz_shows_indexer_lag() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
-
-    // Update chain_info with block 0
-    update_chain_info(&ctx.db, 0).await?;
-
-    let (status, json) = make_request(ctx.app, "/readyz").await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(json["checks"]["indexer"]["status"], "healthy");
-    assert!(json["checks"]["indexer"]["last_indexed_block"].is_number());
-    assert!(json["checks"]["indexer"]["lag"].is_number());
-
-    Ok(())
-}
-
-// ===========================================
-// Readyz Endpoint Tests - Failure Scenarios
-// ===========================================
-
-/// Test that /readyz returns 503 when no chain_info exists (indexer not started)
-#[test_log::test(tokio::test)]
-async fn test_readyz_no_chain_info() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
-
-    // Delete chain_info - simulates indexer not started
+    // Delete chain_info to simulate server not ready
     delete_chain_info(&ctx.db).await?;
 
-    let (status, json) = make_request(ctx.app, "/readyz").await;
+    // Try to make a simple GraphQL query
+    let query = r#"query { __typename }"#;
+    let (status, json) = make_graphql_request(ctx.app, query).await;
 
+    // Should return 503 Service Unavailable
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-    assert_eq!(json["status"], "not_ready");
-    assert_eq!(json["checks"]["database"]["status"], "unhealthy");
+
+    // Should have error message
+    assert!(json["errors"].is_array());
+    assert_eq!(json["errors"].as_array().unwrap().len(), 1);
     assert!(
-        json["checks"]["database"]["error"]
-            .as_str()
-            .unwrap()
-            .contains("No chain info found")
+        json["errors"][0]["message"].as_str().unwrap().contains("not ready yet"),
+        "Error message should mention server not being ready"
     );
 
     Ok(())
 }
 
-/// Test that /readyz returns 503 when indexer lag exceeds threshold
+/// Test that GraphQL returns 200 when server is ready
 #[test_log::test(tokio::test)]
-async fn test_readyz_indexer_lag_exceeded() -> anyhow::Result<()> {
+async fn test_graphql_returns_200_when_ready() -> anyhow::Result<()> {
     let ctx = setup_test_environment().await?;
 
-    // Update chain_info with block 0
+    // Set up chain_info to make server ready
     update_chain_info(&ctx.db, 0).await?;
 
-    let (status, json) = make_request(ctx.app, "/readyz").await;
+    // Wait for periodic check to update cached state (interval is 100ms in test config)
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
 
-    // The actual test depends on how many blocks Anvil has produced
-    // For a reliable test, we check that lag is calculated correctly
-    let lag = json["checks"]["indexer"]["lag"].as_u64();
+    // Try to make a simple GraphQL query
+    let query = r#"query { __typename }"#;
+    let (status, json) = make_graphql_request(ctx.app, query).await;
 
-    // If lag exceeds threshold, status should be not_ready
-    if lag.unwrap_or(0) > 10 {
-        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(json["status"], "not_ready");
-        assert_eq!(json["checks"]["indexer"]["status"], "unhealthy");
-    } else {
-        // If lag is within threshold, status should be ready
-        assert_eq!(status, StatusCode::OK);
-        assert_eq!(json["status"], "ready");
+    // Should return 200 OK (or at least not 503)
+    assert_ne!(status, StatusCode::SERVICE_UNAVAILABLE);
+    // Query should succeed (even if it returns empty data, there should be no "not ready" error)
+    if json["errors"].is_array() {
+        for error in json["errors"].as_array().unwrap() {
+            assert!(
+                !error["message"].as_str().unwrap_or("").contains("not ready yet"),
+                "Should not have 'not ready' error when server is ready"
+            );
+        }
     }
 
     Ok(())
 }
 
-/// Test that /readyz includes version in response
+/// Test that GraphQL error message is clear when indexer is catching up
 #[test_log::test(tokio::test)]
-async fn test_readyz_includes_version() -> anyhow::Result<()> {
+async fn test_graphql_error_message_mentions_indexer() -> anyhow::Result<()> {
     let ctx = setup_test_environment().await?;
 
-    update_chain_info(&ctx.db, 0).await?;
-
-    let (_, json) = make_request(ctx.app, "/readyz").await;
-
-    // Regardless of status, version should be present
-    assert!(json["version"].is_string());
-
-    Ok(())
-}
-
-// ===========================================
-// Error Response Structure Tests
-// ===========================================
-
-/// Test that error responses have proper structure
-#[test_log::test(tokio::test)]
-async fn test_readyz_error_response_structure() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
-
-    // Delete chain_info - will cause error
+    // Delete chain_info to simulate server not ready
     delete_chain_info(&ctx.db).await?;
 
-    let (_, json) = make_request(ctx.app, "/readyz").await;
+    let query = r#"query { __typename }"#;
+    let (status, json) = make_graphql_request(ctx.app, query).await;
 
-    // Verify response structure
-    assert!(json["status"].is_string());
-    assert!(json["version"].is_string());
-    assert!(json["checks"].is_object());
-    assert!(json["checks"]["database"].is_object());
-    assert!(json["checks"]["rpc"].is_object());
-    assert!(json["checks"]["indexer"].is_object());
-
-    // Database should have error details
-    assert!(json["checks"]["database"]["status"].is_string());
-    assert!(json["checks"]["database"]["error"].is_string());
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    let error_message = json["errors"][0]["message"].as_str().unwrap();
+    assert!(
+        error_message.contains("Indexer") || error_message.contains("indexer") || error_message.contains("catching up"),
+        "Error message should mention indexer or catching up"
+    );
 
     Ok(())
 }
 
-/// Test that successful responses omit error fields
+/// Test that different query types are all blocked when not ready
 #[test_log::test(tokio::test)]
-async fn test_readyz_success_omits_error_fields() -> anyhow::Result<()> {
+async fn test_graphql_all_request_types_blocked_when_not_ready() -> anyhow::Result<()> {
     let ctx = setup_test_environment().await?;
 
-    update_chain_info(&ctx.db, 0).await?;
+    // Delete chain_info to simulate server not ready
+    delete_chain_info(&ctx.db).await?;
 
-    let (status, json) = make_request(ctx.app, "/readyz").await;
+    // Test various query types
+    let queries = vec![
+        r#"query { __typename }"#,
+        r#"{ __typename }"#, // Shorthand query
+        r#"query TestQuery { __typename }"#,
+    ];
 
-    // If successful, error fields should be null (skipped in serialization)
-    if status == StatusCode::OK {
-        assert!(json["checks"]["database"]["error"].is_null());
-        assert!(json["checks"]["rpc"]["error"].is_null());
+    for query in queries {
+        let (status, _json) = make_graphql_request(ctx.app.clone(), query).await;
+        assert_eq!(
+            status,
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Query '{}' should be blocked when not ready",
+            query
+        );
     }
+
+    Ok(())
+}
+
+/// Test that readiness state transitions from not ready to ready
+#[test_log::test(tokio::test)]
+async fn test_graphql_readiness_transition() -> anyhow::Result<()> {
+    let ctx = setup_test_environment().await?;
+
+    let query = r#"query { __typename }"#;
+
+    // First request: not ready (no chain_info)
+    delete_chain_info(&ctx.db).await?;
+    let (status1, _) = make_graphql_request(ctx.app.clone(), query).await;
+    assert_eq!(status1, StatusCode::SERVICE_UNAVAILABLE);
+
+    // Second request: ready (after updating chain_info)
+    update_chain_info(&ctx.db, 0).await?;
+    // Wait for periodic check to update cached state (interval is 100ms in test config)
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    let (status2, json2) = make_graphql_request(ctx.app, query).await;
+    assert_ne!(status2, StatusCode::SERVICE_UNAVAILABLE);
+
+    // Verify no "not ready" error
+    if json2["errors"].is_array() {
+        for error in json2["errors"].as_array().unwrap() {
+            assert!(!error["message"].as_str().unwrap_or("").contains("not ready yet"));
+        }
+    }
+
+    Ok(())
+}
+
+/// Test that /readyz and GraphQL gating are in sync
+#[test_log::test(tokio::test)]
+async fn test_graphql_readiness_synced_with_readyz() -> anyhow::Result<()> {
+    let ctx = setup_test_environment().await?;
+
+    // Helper to check readyz status
+    let check_readyz = async |app: &Router| {
+        let request = Request::builder()
+            .uri("/readyz")
+            .body(Body::empty())
+            .expect("Failed to build request");
+
+        let response = app.clone().oneshot(request).await.expect("Failed to execute request");
+        response.status()
+    };
+
+    // Scenario 1: Both should be unavailable when not ready
+    delete_chain_info(&ctx.db).await?;
+    let readyz_status = check_readyz(&ctx.app).await;
+    let (graphql_status, _) = make_graphql_request(ctx.app.clone(), r#"query { __typename }"#).await;
+
+    // Both should indicate not ready (503 for readyz, 503 for GraphQL)
+    assert_eq!(
+        readyz_status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "/readyz should return 503 when not ready"
+    );
+    assert_eq!(
+        graphql_status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "GraphQL should return 503 when not ready"
+    );
+
+    // Scenario 2: Both should be available when ready
+    update_chain_info(&ctx.db, 0).await?;
+    let readyz_status = check_readyz(&ctx.app).await;
+    let (graphql_status, _) = make_graphql_request(ctx.app, r#"query { __typename }"#).await;
+
+    assert_eq!(readyz_status, StatusCode::OK, "/readyz should return 200 when ready");
+    assert_ne!(
+        graphql_status,
+        StatusCode::SERVICE_UNAVAILABLE,
+        "GraphQL should not return 503 when ready"
+    );
 
     Ok(())
 }

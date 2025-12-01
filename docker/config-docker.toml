@@ -1,9 +1,6 @@
 # Docker Compose configuration for bloklid
 # This configuration is used when running bloklid in Docker with PostgreSQL
 
-# Host address and port for the daemon to listen on
-host = "0.0.0.0:3064"
-
 # PostgreSQL database configuration
 [database]
 database        = "bloklid"

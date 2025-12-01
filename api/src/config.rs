@@ -3,7 +3,7 @@
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use blokli_chain_types::ContractAddresses;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 /// API server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,17 +66,13 @@ pub struct HealthConfig {
     #[serde(default = "default_max_indexer_lag")]
     pub max_indexer_lag: u64,
 
-    /// Timeout for health check queries (in milliseconds)
-    #[serde(default = "default_health_timeout", deserialize_with = "deserialize_duration_ms")]
+    /// Timeout for health check queries
+    #[serde(default = "default_health_timeout", with = "humantime_serde")]
     pub timeout: Duration,
-}
 
-fn deserialize_duration_ms<'de, D>(deserializer: D) -> Result<Duration, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let millis = u64::deserialize(deserializer)?;
-    Ok(Duration::from_millis(millis))
+    /// Interval for periodic readiness checks
+    #[serde(default = "default_readiness_check_interval", with = "humantime_serde")]
+    pub readiness_check_interval: Duration,
 }
 
 impl Default for HealthConfig {
@@ -84,6 +80,7 @@ impl Default for HealthConfig {
         Self {
             max_indexer_lag: default_max_indexer_lag(),
             timeout: default_health_timeout(),
+            readiness_check_interval: default_readiness_check_interval(),
         }
     }
 }
@@ -94,6 +91,10 @@ fn default_max_indexer_lag() -> u64 {
 
 fn default_health_timeout() -> Duration {
     Duration::from_millis(5000)
+}
+
+fn default_readiness_check_interval() -> Duration {
+    Duration::from_secs(60)
 }
 
 impl Default for ApiConfig {
@@ -282,5 +283,10 @@ mod tests {
         temp_env::with_var("RPC_URL", None::<&str>, || {
             assert_eq!(default_rpc_url(), "http://localhost:8545");
         });
+    }
+
+    #[test]
+    fn test_readiness_check_interval_defaults() {
+        assert_eq!(default_readiness_check_interval(), Duration::from_secs(60));
     }
 }

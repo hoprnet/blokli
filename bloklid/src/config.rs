@@ -2,10 +2,89 @@ use std::time::Duration;
 
 use blokli_chain_types::ContractAddresses;
 use hopr_chain_config::{ChainNetworkConfig, ProtocolsConfig};
-use serde::Deserialize;
 
-fn default_host() -> std::net::SocketAddr {
-    "0.0.0.0:3064".parse().unwrap()
+/// Redacts username and password from database URLs while keeping host, port, and database visible
+///
+/// # Examples
+/// ```
+/// # use bloklid::config::redact_database_url;
+/// assert_eq!(
+///     redact_database_url("postgres://user:pass@localhost:5432/mydb"),
+///     "postgres://REDACTED:REDACTED@localhost:5432/mydb"
+/// );
+/// assert_eq!(
+///     redact_database_url("postgresql://localhost:5432/mydb"),
+///     "postgresql://localhost:5432/mydb"
+/// );
+/// ```
+pub fn redact_database_url(url: &str) -> String {
+    // Parse the URL to extract components
+    if let Some(scheme_end) = url.find("://") {
+        let scheme = &url[..scheme_end + 3];
+        let rest = &url[scheme_end + 3..];
+
+        // Check if there's an @ sign indicating credentials
+        if let Some(at_pos) = rest.find('@') {
+            let after_at = &rest[at_pos..];
+            // Redact credentials but keep everything else
+            format!("{}REDACTED:REDACTED{}", scheme, after_at)
+        } else {
+            // No credentials, return as-is
+            url.to_string()
+        }
+    } else {
+        // Not a URL format, return as-is
+        url.to_string()
+    }
+}
+
+/// Redacts username, password, and path/query from RPC URLs while keeping protocol, host, and port visible
+///
+/// # Examples
+/// ```
+/// # use bloklid::config::redact_rpc_url;
+/// assert_eq!(
+///     redact_rpc_url("https://user:pass@api.infura.io/v3/key123"),
+///     "https://api.infura.io/REDACTED"
+/// );
+/// assert_eq!(
+///     redact_rpc_url("https://api.infura.io/v3/key123"),
+///     "https://api.infura.io/REDACTED"
+/// );
+/// assert_eq!(redact_rpc_url("http://localhost:8545"), "http://localhost:8545");
+/// ```
+pub fn redact_rpc_url(url: &str) -> String {
+    // Parse the URL to extract components
+    if let Some(scheme_end) = url.find("://") {
+        let scheme = &url[..scheme_end + 3];
+        let rest = &url[scheme_end + 3..];
+
+        // Check if there's an @ sign indicating credentials
+        let (host_part, has_credentials) = if let Some(at_pos) = rest.find('@') {
+            (&rest[at_pos + 1..], true)
+        } else {
+            (rest, false)
+        };
+
+        // Extract host and port (everything before the first / or ?)
+        let host_end = host_part
+            .find('/')
+            .or_else(|| host_part.find('?'))
+            .unwrap_or(host_part.len());
+        let host = &host_part[..host_end];
+        let has_path = host_end < host_part.len();
+
+        // Reconstruct URL
+        if has_credentials || has_path {
+            format!("{}{}/REDACTED", scheme, host)
+        } else {
+            // No credentials or path, return as-is
+            url.to_string()
+        }
+    } else {
+        // Not a URL format, return as-is
+        url.to_string()
+    }
 }
 
 fn default_rpc_url() -> String {
@@ -154,17 +233,51 @@ impl DatabaseConfig {
             DatabaseConfig::Sqlite(sqlite_config) => sqlite_config.max_connections,
         }
     }
+
+    /// Display the database configuration with sensitive data redacted
+    pub fn display_redacted(&self) -> String {
+        match self {
+            DatabaseConfig::PostgreSql(pg_config) => {
+                let url_display = if let Some(url) = &pg_config.url {
+                    format!("url={}", redact_database_url(url))
+                } else {
+                    let host = pg_config.host.as_deref().unwrap_or("localhost");
+                    let port = pg_config.port.unwrap_or(5432);
+                    let user = if pg_config.username.is_some() {
+                        "configured".to_string()
+                    } else {
+                        "REDACTED".to_string()
+                    };
+                    let pass = pg_config
+                        .password
+                        .as_ref()
+                        .map(|_| "REDACTED".to_string())
+                        .unwrap_or("(none)".to_string());
+                    let db = pg_config.database.as_deref().unwrap_or("bloklid");
+                    format!(
+                        "host={}, port={}, user={}, password={}, database={}",
+                        host, port, user, pass, db
+                    )
+                };
+                format!(
+                    "PostgreSQL: {}, max_connections={}",
+                    url_display, pg_config.max_connections
+                )
+            }
+            DatabaseConfig::Sqlite(sqlite_config) => {
+                format!(
+                    "SQLite: index_path={}, logs_path={}, max_connections={}",
+                    sqlite_config.index_path, sqlite_config.logs_path, sqlite_config.max_connections
+                )
+            }
+        }
+    }
 }
 
 #[serde_with::serde_as]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault, validator::Validate)]
 #[serde(deny_unknown_fields)]
 pub struct Config {
-    #[serde_as(as = "serde_with::DisplayFromStr")]
-    #[default(_code = "default_host()")]
-    #[serde(default = "default_host")]
-    pub host: std::net::SocketAddr,
-
     #[serde(default)]
     pub database: Option<DatabaseConfig>,
 
@@ -199,6 +312,55 @@ pub struct Config {
 
     #[serde(default)]
     pub protocols: ProtocolsConfig,
+}
+
+impl Config {
+    /// Display the configuration with sensitive data redacted
+    pub fn display_redacted(&self) -> String {
+        let mut output = String::new();
+        output.push_str("Configuration:\n");
+        output.push_str(&format!("  network: {}\n", self.network));
+        output.push_str(&format!("  rpc_url: {}\n", redact_rpc_url(&self.rpc_url)));
+        output.push_str(&format!("  data_directory: {}\n", self.data_directory));
+        output.push_str(&format!(
+            "  max_rpc_requests_per_sec: {}\n",
+            self.max_rpc_requests_per_sec
+        ));
+
+        if let Some(db_config) = &self.database {
+            output.push_str(&format!("  database: {}\n", db_config.display_redacted()));
+        } else {
+            output.push_str("  database: (not configured)\n");
+        }
+
+        output.push_str(&format!("  indexer.fast_sync: {}\n", self.indexer.fast_sync));
+        output.push_str(&format!(
+            "  indexer.enable_logs_snapshot: {}\n",
+            self.indexer.enable_logs_snapshot
+        ));
+
+        if let Some(snapshot_url) = &self.indexer.logs_snapshot_url {
+            output.push_str(&format!(
+                "  indexer.logs_snapshot_url: {}\n",
+                redact_rpc_url(snapshot_url)
+            ));
+        }
+
+        output.push_str(&format!("  api.enabled: {}\n", self.api.enabled));
+        output.push_str(&format!("  api.bind_address: {}\n", self.api.bind_address));
+        output.push_str(&format!("  api.playground_enabled: {}\n", self.api.playground_enabled));
+        output.push_str(&format!(
+            "  api.health.max_indexer_lag: {}\n",
+            self.api.health.max_indexer_lag
+        ));
+        output.push_str(&format!("  api.health.timeout: {:?}\n", self.api.health.timeout));
+        output.push_str(&format!(
+            "  api.health.readiness_check_interval: {:?}\n",
+            self.api.health.readiness_check_interval
+        ));
+
+        output
+    }
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
@@ -271,18 +433,15 @@ pub struct HealthConfig {
     #[serde(default = "default_max_indexer_lag")]
     pub max_indexer_lag: u64,
 
-    /// Timeout for health check queries (in milliseconds)
+    /// Timeout for health check queries
     #[default(_code = "Duration::from_millis(5000)")]
-    #[serde(default = "default_health_timeout", deserialize_with = "deserialize_duration_ms")]
+    #[serde(default = "default_health_timeout", with = "humantime_serde")]
     pub timeout: Duration,
-}
 
-fn deserialize_duration_ms<'de, D>(deserializer: D) -> Result<Duration, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let millis = u64::deserialize(deserializer)?;
-    Ok(Duration::from_millis(millis))
+    /// Interval for periodic readiness checks
+    #[default(_code = "Duration::from_secs(60)")]
+    #[serde(default = "default_readiness_check_interval", with = "humantime_serde")]
+    pub readiness_check_interval: Duration,
 }
 
 fn default_api_bind_address() -> std::net::SocketAddr {
@@ -318,6 +477,10 @@ fn default_health_timeout() -> Duration {
     Duration::from_millis(5000)
 }
 
+fn default_readiness_check_interval() -> Duration {
+    Duration::from_secs(60)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs, path::PathBuf};
@@ -328,39 +491,36 @@ mod tests {
     fn test_strict_parsing() {
         // Test unknown top-level field
         let config = r#"
-        host = "0.0.0.0:3064"
-        unknown_field = "bad"
-        [database]
-        type = "sqlite"
-        index_path = ":memory:"
-        logs_path = ":memory:"
-    "#;
+         unknown_field = "bad"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_err(), "Should fail on unknown field");
 
         // Test unknown nested field
         let config = r#"
-        host = "0.0.0.0:3064"
-        [indexer]
-        fast_sync = true
-        unknown_indexer_field = "bad"
-        [database]
-        type = "sqlite"
-        index_path = ":memory:"
-        logs_path = ":memory:"
-    "#;
+         [indexer]
+         fast_sync = true
+         unknown_indexer_field = "bad"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_err(), "Should fail on unknown nested field");
 
         // Test invalid type
         let config = r#"
-        host = "0.0.0.0:3064"
-        max_rpc_requests_per_sec = "not_a_number"
-        [database]
-        type = "sqlite"
-        index_path = ":memory:"
-        logs_path = ":memory:"
-    "#;
+         max_rpc_requests_per_sec = "not_a_number"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_err(), "Should fail on invalid type");
     }
@@ -368,13 +528,12 @@ mod tests {
     #[test]
     fn test_sqlite_strict() {
         let config = r#"
-        host = "0.0.0.0:3064"
-        [database]
-        type = "sqlite"
-        index_path = ":memory:"
-        logs_path = ":memory:"
-        unknown = "bad"
-    "#;
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+         unknown = "bad"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_err(), "Should fail on unknown sqlite field");
     }
@@ -382,16 +541,15 @@ mod tests {
     #[test]
     fn test_postgres_detailed_strict() {
         let config = r#"
-        host = "0.0.0.0:3064"
-        [database]
-        type = "postgresql"
-        host = "localhost"
-        port = 5432
-        username = "u"
-        password = "p"
-        database = "d"
-        unknown = "bad"
-    "#;
+         [database]
+         type = "postgresql"
+         host = "localhost"
+         port = 5432
+         username = "u"
+         password = "p"
+         database = "d"
+         unknown = "bad"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_err(), "Should fail on unknown postgres detailed field");
     }
@@ -399,12 +557,11 @@ mod tests {
     #[test]
     fn test_postgres_url_strict() {
         let config = r#"
-        host = "0.0.0.0:3064"
-        [database]
-        type = "postgresql"
-        url = "postgresql://..."
-        unknown = "bad"
-    "#;
+         [database]
+         type = "postgresql"
+         url = "postgresql://..."
+         unknown = "bad"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_err(), "Should fail on unknown postgres url field");
     }
@@ -412,15 +569,14 @@ mod tests {
     #[test]
     fn test_api_strict() {
         let config = r#"
-        host = "0.0.0.0:3064"
-        [api]
-        enabled = true
-        unknown_api_field = "bad"
-        [database]
-        type = "sqlite"
-        index_path = ":memory:"
-        logs_path = ":memory:"
-    "#;
+         [api]
+         enabled = true
+         unknown_api_field = "bad"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_err(), "Should fail on unknown api field");
     }
@@ -428,11 +584,10 @@ mod tests {
     #[test]
     fn test_valid_postgres_config() {
         let config = r#"
-        host = "0.0.0.0:3064"
-        [database]
-        type = "postgresql"
-        url = "postgres://..."
-    "#;
+         [database]
+         type = "postgresql"
+         url = "postgres://..."
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_ok(), "Should pass on valid postgres config: {:?}", res.err());
     }
@@ -440,12 +595,11 @@ mod tests {
     #[test]
     fn test_valid_config() {
         let config = r#"
-        host = "0.0.0.0:3064"
-        [database]
-        type = "sqlite"
-        index_path = ":memory:"
-        logs_path = ":memory:"
-    "#;
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_ok(), "Should pass on valid config: {:?}", res.err());
     }
@@ -453,10 +607,9 @@ mod tests {
     #[test]
     fn test_config_without_database_section() {
         let config = r#"
-        host = "0.0.0.0:3064"
-        network = "dufour"
-        rpc_url = "http://localhost:8545"
-    "#;
+         network = "dufour"
+         rpc_url = "http://localhost:8545"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(
             res.is_ok(),
@@ -480,7 +633,6 @@ mod tests {
         let config: Config = toml::from_str(&config_content).expect("Failed to parse example-config.toml");
 
         // Basic verification that values are loaded correctly
-        assert_eq!(config.host.to_string(), "0.0.0.0:3064");
         assert_eq!(config.network, "dufour");
 
         // Check database config (should be present in example-config.toml)
@@ -505,14 +657,13 @@ mod tests {
     fn test_partial_indexer_config() {
         // Only set fast_sync, all other fields should use defaults
         let config = r#"
-        host = "0.0.0.0:3064"
-        [indexer]
-        fast_sync = false
-        [database]
-        type = "sqlite"
-        index_path = ":memory:"
-        logs_path = ":memory:"
-    "#;
+         [indexer]
+         fast_sync = false
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_ok(), "Should allow partial indexer config: {:?}", res.err());
 
@@ -527,14 +678,13 @@ mod tests {
     fn test_partial_api_config() {
         // Only set enabled, all other fields should use defaults
         let config = r#"
-        host = "0.0.0.0:3064"
-        [api]
-        enabled = false
-        [database]
-        type = "sqlite"
-        index_path = ":memory:"
-        logs_path = ":memory:"
-    "#;
+         [api]
+         enabled = false
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_ok(), "Should allow partial api config: {:?}", res.err());
 
@@ -551,14 +701,13 @@ mod tests {
     fn test_partial_subscription_config() {
         // Only set event_bus_capacity, other fields should use defaults
         let config = r#"
-        host = "0.0.0.0:3064"
-        [indexer.subscription]
-        event_bus_capacity = 500
-        [database]
-        type = "sqlite"
-        index_path = ":memory:"
-        logs_path = ":memory:"
-    "#;
+         [indexer.subscription]
+         event_bus_capacity = 500
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_ok(), "Should allow partial subscription config: {:?}", res.err());
 
@@ -566,5 +715,93 @@ mod tests {
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 500);
         assert_eq!(cfg.indexer.subscription.shutdown_signal_capacity, 10); // Default
         assert_eq!(cfg.indexer.subscription.batch_size, 100); // Default
+    }
+
+    #[test]
+    fn test_redact_database_url_with_credentials() {
+        // URL with username and password should redact only credentials
+        let url = "postgres://user:password@localhost:5432/mydb";
+        let redacted = redact_database_url(url);
+        assert_eq!(redacted, "postgres://REDACTED:REDACTED@localhost:5432/mydb");
+    }
+
+    #[test]
+    fn test_redact_database_url_without_credentials() {
+        // URL without credentials should remain unchanged
+        let url = "postgresql://localhost:5432/mydb";
+        let redacted = redact_database_url(url);
+        assert_eq!(redacted, "postgresql://localhost:5432/mydb");
+    }
+
+    #[test]
+    fn test_redact_database_url_with_port() {
+        // URL with custom port
+        let url = "postgres://admin:secret@db.example.com:9876/production";
+        let redacted = redact_database_url(url);
+        assert_eq!(redacted, "postgres://REDACTED:REDACTED@db.example.com:9876/production");
+    }
+
+    #[test]
+    fn test_redact_rpc_url_with_credentials_and_path() {
+        // URL with credentials and path should redact both
+        let url = "https://user:pass@api.infura.io/v3/secret-key-123";
+        let redacted = redact_rpc_url(url);
+        assert_eq!(redacted, "https://api.infura.io/REDACTED");
+    }
+
+    #[test]
+    fn test_redact_rpc_url_with_path_only() {
+        // URL with path but no credentials should hide path
+        let url = "https://api.infura.io/v3/secret-key-123";
+        let redacted = redact_rpc_url(url);
+        assert_eq!(redacted, "https://api.infura.io/REDACTED");
+    }
+
+    #[test]
+    fn test_redact_rpc_url_without_path_or_credentials() {
+        // URL with neither path nor credentials should remain unchanged
+        let url = "http://localhost:8545";
+        let redacted = redact_rpc_url(url);
+        assert_eq!(redacted, "http://localhost:8545");
+    }
+
+    #[test]
+    fn test_redact_rpc_url_with_credentials_no_path() {
+        // URL with credentials but no path
+        let url = "https://user:pass@api.example.com";
+        let redacted = redact_rpc_url(url);
+        assert_eq!(redacted, "https://api.example.com/REDACTED");
+    }
+
+    #[test]
+    fn test_redact_rpc_url_with_query_string() {
+        // URL with query string should hide it
+        let url = "https://api.example.com/endpoint?apiKey=secret123";
+        let redacted = redact_rpc_url(url);
+        assert_eq!(redacted, "https://api.example.com/REDACTED");
+    }
+
+    #[test]
+    fn test_redact_rpc_url_with_port() {
+        // URL with port but no path
+        let url = "http://localhost:3000";
+        let redacted = redact_rpc_url(url);
+        assert_eq!(redacted, "http://localhost:3000");
+    }
+
+    #[test]
+    fn test_redact_rpc_url_with_port_and_path() {
+        // URL with port and path
+        let url = "http://localhost:3000/api/v1";
+        let redacted = redact_rpc_url(url);
+        assert_eq!(redacted, "http://localhost:3000/REDACTED");
+    }
+
+    #[test]
+    fn test_redact_non_url_string() {
+        // Non-URL string should remain unchanged
+        let not_url = "just-a-string";
+        assert_eq!(redact_database_url(not_url), not_url);
+        assert_eq!(redact_rpc_url(not_url), not_url);
     }
 }

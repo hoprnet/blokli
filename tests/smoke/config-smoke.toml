@@ -2,9 +2,6 @@
 # This configuration is used for smoke testing with Docker Compose
 # It connects to PostgreSQL and Anvil services in the same Docker network
 
-# Host address and port for the daemon to listen on
-host = "0.0.0.0:3064"
-
 # Directory for storing data files
 data_directory = "/data"
 
@@ -38,7 +35,7 @@ shutdown_signal_capacity = 10
 
 # API server configuration
 [api]
-bind_address       = "0.0.0.0:3064"
+bind_address       = "0.0.0.0:8080"
 enabled            = true
 playground_enabled = true
 

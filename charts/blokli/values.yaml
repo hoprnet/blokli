@@ -323,10 +323,13 @@ config:
       ## @param config.api.health.maxIndexerLag Maximum indexer lag (blocks) before readiness fails
       ##
       maxIndexerLag: 10
-      ## @param config.api.health.timeout Timeout for health check operations (ms)
+      ## @param config.api.health.timeout Timeout for health check operations
       ##
-      timeout: 5000
-  # Logging configuration
+      timeout: "5s"
+      ## @param config.api.health.readinessCheckInterval Interval for periodic readiness checks
+      ##
+      readinessCheckInterval: "60s"
+      # Logging configuration
   logging:
     ## @param config.logging.level Rust log level configuration. Examples: "info", "debug", "info,blokli_chain_indexer=debug"
     ##
