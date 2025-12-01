@@ -2,7 +2,6 @@ use std::time::Duration;
 
 use blokli_chain_types::ContractAddresses;
 use hopr_chain_config::{ChainNetworkConfig, ProtocolsConfig};
-use serde::Deserialize;
 
 /// Redacts username and password from database URLs while keeping host, port, and database visible
 ///
@@ -244,11 +243,11 @@ impl DatabaseConfig {
                 } else {
                     let host = pg_config.host.as_deref().unwrap_or("localhost");
                     let port = pg_config.port.unwrap_or(5432);
-                    let user = pg_config
-                        .username
-                        .as_ref()
-                        .map(|_| "REDACTED".to_string())
-                        .unwrap_or("REDACTED".to_string());
+                    let user = if pg_config.username.is_some() {
+                        "configured".to_string()
+                    } else {
+                        "REDACTED".to_string()
+                    };
                     let pass = pg_config
                         .password
                         .as_ref()
@@ -355,6 +354,10 @@ impl Config {
             self.api.health.max_indexer_lag
         ));
         output.push_str(&format!("  api.health.timeout: {:?}\n", self.api.health.timeout));
+        output.push_str(&format!(
+            "  api.health.readiness_check_interval: {:?}\n",
+            self.api.health.readiness_check_interval
+        ));
 
         output
     }
@@ -430,26 +433,15 @@ pub struct HealthConfig {
     #[serde(default = "default_max_indexer_lag")]
     pub max_indexer_lag: u64,
 
-    /// Timeout for health check queries (in milliseconds)
+    /// Timeout for health check queries
     #[default(_code = "Duration::from_millis(5000)")]
-    #[serde(default = "default_health_timeout", deserialize_with = "deserialize_duration_ms")]
+    #[serde(default = "default_health_timeout", with = "humantime_serde")]
     pub timeout: Duration,
 
-    /// Interval for periodic readiness checks (in milliseconds)
+    /// Interval for periodic readiness checks
     #[default(_code = "Duration::from_secs(60)")]
-    #[serde(
-        default = "default_readiness_check_interval",
-        deserialize_with = "deserialize_duration_ms"
-    )]
+    #[serde(default = "default_readiness_check_interval", with = "humantime_serde")]
     pub readiness_check_interval: Duration,
-}
-
-fn deserialize_duration_ms<'de, D>(deserializer: D) -> Result<Duration, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let millis = u64::deserialize(deserializer)?;
-    Ok(Duration::from_millis(millis))
 }
 
 fn default_api_bind_address() -> std::net::SocketAddr {

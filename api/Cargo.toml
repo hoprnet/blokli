@@ -53,9 +53,10 @@ sea-orm = { workspace = true }
 sqlx    = { workspace = true }
 
 # Encoding
-chrono = { workspace = true }
-hex    = { workspace = true }
-uuid   = { workspace = true }
+chrono          = { workspace = true }
+hex             = { workspace = true }
+humantime-serde = { workspace = true }
+uuid            = { workspace = true }
 
 # RPC and blockchain
 alloy = { workspace = true }

@@ -3,7 +3,7 @@
 use std::{net::SocketAddr, path::PathBuf, time::Duration};
 
 use blokli_chain_types::ContractAddresses;
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 /// API server configuration
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -66,24 +66,13 @@ pub struct HealthConfig {
     #[serde(default = "default_max_indexer_lag")]
     pub max_indexer_lag: u64,
 
-    /// Timeout for health check queries (in milliseconds)
-    #[serde(default = "default_health_timeout", deserialize_with = "deserialize_duration_ms")]
+    /// Timeout for health check queries
+    #[serde(default = "default_health_timeout", with = "humantime_serde")]
     pub timeout: Duration,
 
-    /// Interval for periodic readiness checks (in milliseconds)
-    #[serde(
-        default = "default_readiness_check_interval",
-        deserialize_with = "deserialize_duration_ms"
-    )]
+    /// Interval for periodic readiness checks
+    #[serde(default = "default_readiness_check_interval", with = "humantime_serde")]
     pub readiness_check_interval: Duration,
-}
-
-fn deserialize_duration_ms<'de, D>(deserializer: D) -> Result<Duration, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let millis = u64::deserialize(deserializer)?;
-    Ok(Duration::from_millis(millis))
 }
 
 impl Default for HealthConfig {

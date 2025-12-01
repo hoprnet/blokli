@@ -143,7 +143,8 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.api.bindAddress`                             | Address and port for the API server to bind to                                                                | `0.0.0.0:8080`      |
 | `config.api.playgroundEnabled`                       | Enable GraphQL Playground for development and testing. Recommended to set to false for production deployments | `false`             |
 | `config.api.health.maxIndexerLag`                    | Maximum indexer lag (blocks) before readiness fails                                                           | `10`                |
-| `config.api.health.timeout`                          | Timeout for health check operations (ms)                                                                      | `5000`              |
+| `config.api.health.timeout`                          | Timeout for health check operations (e.g., "5s", "10ms")                                                      | `5s`                |
+| `config.api.health.readinessCheckInterval`           | Interval for periodic readiness checks (e.g., "60s", "1m")                                                    | `60s`               |
 | `config.logging.level`                               | Rust log level configuration. Examples: "info", "debug", "info,blokli_chain_indexer=debug"                    | `info`              |
 | `config.logging.backtrace`                           | Rust backtrace configuration (e.g., "full", "short", "0")                                                     | `full`              |
 

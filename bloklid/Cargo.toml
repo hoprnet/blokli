@@ -25,6 +25,7 @@ axum               = { workspace = true }
 clap               = { workspace = true }
 futures            = { workspace = true }
 hex                = { workspace = true }
+humantime-serde    = { workspace = true }
 sea-orm            = { workspace = true }
 serde              = { workspace = true }
 serde_with         = { workspace = true }
