@@ -1191,13 +1191,13 @@ mod tests {
 
         assert_eq!(2, history.len(), "should have 2 state records");
         assert_eq!(
-            0u32,
-            history[0].ticket_index.as_u32(),
+            0u64,
+            history[0].ticket_index,
             "first state should have ticket_index 0"
         );
         assert_eq!(
-            5u32,
-            history[1].ticket_index.as_u32(),
+            5u64,
+            history[1].ticket_index,
             "second state should have ticket_index 5"
         );
 
@@ -1321,19 +1321,19 @@ mod tests {
             .await?;
 
         // Create 5 state changes across different blocks
-        let channel_id = ChannelEntry::new(
+        let base_channel = ChannelEntry::new(
             addr_1,
             addr_2,
             HoprBalance::from(1000u32),
-            0_u32.into(),
+            0u64,
             ChannelStatus::Open,
-            1_u32.into(),
-        )
-        .get_id();
+            1u32,
+        );
+        let channel_id = base_channel.get_id();
 
         for i in 0..5 {
             let balance = HoprBalance::from((i + 1) * 1000);
-            let ce = ChannelEntry::new(addr_1, addr_2, balance, i.into(), ChannelStatus::Open, 1_u32.into());
+            let ce = ChannelEntry::new(addr_1, addr_2, balance, i as u64, ChannelStatus::Open, 1u32);
             db.upsert_channel(None, ce, (i + 1) * 100, 0, 0).await?;
         }
 
@@ -1351,8 +1351,8 @@ mod tests {
                 i
             );
             assert_eq!(
-                i as u32,
-                state.ticket_index.as_u32(),
+                i as u64,
+                state.ticket_index,
                 "state {} should have correct ticket_index",
                 i
             );

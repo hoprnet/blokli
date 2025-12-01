@@ -526,9 +526,9 @@ mod tests {
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
             0.into(),
-            primitive_types::U256::zero(),
+            0u64,
             ChannelStatus::Open,
-            primitive_types::U256::one(),
+            0u32,
         );
 
         db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
@@ -536,9 +536,9 @@ mod tests {
         let solidity_balance: HoprBalance = primitive_types::U256::from((1u128 << 96) - 1).into();
         let channel_state = encode_channel_state(
             solidity_balance,
-            channel.ticket_index.as_u64(),
+            channel.ticket_index,
             0,
-            channel.channel_epoch.as_u32(),
+            channel.channel_epoch,
             channel.status,
         );
 
@@ -627,9 +627,9 @@ mod tests {
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
             HoprBalance::from(primitive_types::U256::from((1u128 << 96) - 1)),
-            primitive_types::U256::zero(),
+            0u64,
             ChannelStatus::Open,
-            primitive_types::U256::one(),
+            0u32,
         );
 
         db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
@@ -637,9 +637,9 @@ mod tests {
         let solidity_balance: HoprBalance = primitive_types::U256::from((1u128 << 96) - 2).into();
         let channel_state = encode_channel_state(
             solidity_balance,
-            channel.ticket_index.as_u64(),
+            channel.ticket_index,
             0,
-            channel.channel_epoch.as_u32(),
+            channel.channel_epoch,
             channel.status,
         );
 
@@ -686,9 +686,9 @@ mod tests {
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
             starting_balance,
-            primitive_types::U256::zero(),
+            0u64,
             ChannelStatus::Open,
-            primitive_types::U256::one(),
+            0u32,
         );
 
         db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
@@ -698,7 +698,7 @@ mod tests {
             HoprBalance::zero(),
             0,
             0,
-            channel.channel_epoch.as_u32(),
+            channel.channel_epoch,
             ChannelStatus::Closed,
         );
 
@@ -723,7 +723,7 @@ mod tests {
         // TODO: Add event verification - check published IndexerEvent instead of return value
 
         assert_eq!(closed_channel.status, ChannelStatus::Closed);
-        assert_eq!(closed_channel.ticket_index, 0u64.into());
+        assert_eq!(closed_channel.ticket_index, 0u64);
         // TODO: Re-enable once get_outgoing_ticket_index is implemented
         // assert_eq!(0, db.get_outgoing_ticket_index(closed_channel.get_id()).await?.load(Ordering::Relaxed));
 
@@ -765,9 +765,9 @@ mod tests {
             foreign_addr1,
             foreign_addr2,
             starting_balance,
-            primitive_types::U256::zero(),
+            0u64,
             ChannelStatus::Open,
-            primitive_types::U256::one(),
+            0u32,
         );
 
         db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
@@ -777,7 +777,7 @@ mod tests {
             HoprBalance::zero(),
             0,
             0,
-            channel.channel_epoch.as_u32(),
+            channel.channel_epoch,
             ChannelStatus::Closed,
         );
 
@@ -802,7 +802,7 @@ mod tests {
         // Foreign channels are kept in database with Closed status for historical data
         assert_eq!(closed_channel.status, ChannelStatus::Closed);
         assert_eq!(closed_channel.balance, HoprBalance::zero());
-        assert_eq!(closed_channel.ticket_index, 0u64.into());
+        assert_eq!(closed_channel.ticket_index, 0u64);
 
         // TODO: Add event verification - check published IndexerEvent instead of return value
 
@@ -850,8 +850,8 @@ mod tests {
         // TODO: Add event verification - check published IndexerEvent instead of return value
 
         assert_eq!(channel.status, ChannelStatus::Open);
-        assert_eq!(channel.channel_epoch, 1u64.into());
-        assert_eq!(channel.ticket_index, 0u64.into());
+        assert_eq!(channel.channel_epoch, 1u32);
+        assert_eq!(channel.ticket_index, 0u64);
         // TODO: Re-enable once get_outgoing_ticket_index is implemented
         // assert_eq!(0, db.get_outgoing_ticket_index(channel.get_id()).await?.load(Ordering::Relaxed));
         Ok(())
@@ -875,9 +875,9 @@ mod tests {
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
             HoprBalance::zero(),
-            primitive_types::U256::zero(),
+            0u64,
             ChannelStatus::Closed,
-            3.into(),
+            3u32,
         );
 
         db.upsert_channel(None, channel, 1, 0, 0).await?;
@@ -908,8 +908,8 @@ mod tests {
         // TODO: Add event verification - check published IndexerEvent instead of return value
 
         assert_eq!(channel.status, ChannelStatus::Open);
-        assert_eq!(channel.channel_epoch, 4u64.into());
-        assert_eq!(channel.ticket_index, 0u64.into());
+        assert_eq!(channel.channel_epoch, 4u32);
+        assert_eq!(channel.ticket_index, 0u64);
 
         // TODO: Re-enable once get_outgoing_ticket_index is implemented
         // assert_eq!(0, db.get_outgoing_ticket_index(channel.get_id()).await?.load(Ordering::Relaxed));
@@ -933,9 +933,9 @@ mod tests {
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
             0.into(),
-            primitive_types::U256::zero(),
+            0u64,
             ChannelStatus::Open,
-            3.into(),
+            3u32,
         );
 
         db.upsert_channel(None, channel, 1, 0, 0).await?;
@@ -1287,9 +1287,9 @@ mod tests {
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
             primitive_types::U256::from((1u128 << 96) - 1).into(),
-            primitive_types::U256::zero(),
+            0u64,
             ChannelStatus::Open,
-            primitive_types::U256::one(),
+            0u32,
         );
 
         let ticket_index = primitive_types::U256::from((1u128 << 48) - 2);
@@ -1302,7 +1302,7 @@ mod tests {
             channel.balance,
             next_ticket_index.as_u64(),
             0, // closure_time
-            channel.channel_epoch.as_u32(),
+            channel.channel_epoch,
             ChannelStatus::Open,
         );
 
@@ -1327,7 +1327,7 @@ mod tests {
         // TODO: Add event verification - check published IndexerEvent instead of return value
 
         assert_eq!(
-            channel.ticket_index, next_ticket_index,
+            channel.ticket_index, next_ticket_index.as_u64(),
             "channel entry must contain next ticket index"
         );
 
@@ -1362,9 +1362,9 @@ mod tests {
             *COUNTERPARTY_CHAIN_ADDRESS,
             *SELF_CHAIN_ADDRESS,
             primitive_types::U256::from((1u128 << 96) - 1).into(),
-            primitive_types::U256::zero(),
+            0u64,
             ChannelStatus::Open,
-            primitive_types::U256::one(),
+            0u32,
         );
 
         db.upsert_channel(None, channel, 1, 0, 0).await?;
@@ -1376,7 +1376,7 @@ mod tests {
             channel.balance,
             next_ticket_index.as_u64(),
             0, // closure_time
-            channel.channel_epoch.as_u32(),
+            channel.channel_epoch,
             ChannelStatus::Open,
         );
 
@@ -1401,14 +1401,14 @@ mod tests {
         // TODO: Add event verification - check published IndexerEvent instead of return value
 
         assert_eq!(
-            channel.ticket_index, next_ticket_index,
+            channel.ticket_index, next_ticket_index.as_u64(),
             "channel entry must contain next ticket index"
         );
         Ok(())
-    }
+        }
 
-    #[tokio::test]
-    async fn on_channel_ticket_redeemed_on_foreign_channel_should_pass() -> anyhow::Result<()> {
+        #[tokio::test]
+        async fn on_channel_ticket_redeemed_on_foreign_channel_should_pass() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
@@ -1435,9 +1435,9 @@ mod tests {
             foreign_addr1,
             foreign_addr2,
             primitive_types::U256::from((1u128 << 96) - 1).into(),
-            primitive_types::U256::zero(),
+            0u64,
             ChannelStatus::Open,
-            primitive_types::U256::one(),
+            0u32,
         );
 
         db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
@@ -1447,7 +1447,7 @@ mod tests {
             channel.balance,
             next_ticket_index.as_u64(),
             0,
-            channel.channel_epoch.as_u32(),
+            channel.channel_epoch,
             channel.status,
         );
 
@@ -1472,14 +1472,14 @@ mod tests {
         // TODO: Add event verification - check published IndexerEvent instead of return value
 
         assert_eq!(
-            channel.ticket_index, next_ticket_index,
+            channel.ticket_index, next_ticket_index.as_u64(),
             "channel entry must contain next ticket index"
         );
         Ok(())
-    }
+        }
 
-    #[tokio::test]
-    async fn on_channel_closure_initiated() -> anyhow::Result<()> {
+        #[tokio::test]
+        async fn on_channel_closure_initiated() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
@@ -1495,9 +1495,9 @@ mod tests {
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
             primitive_types::U256::from((1u128 << 96) - 1).into(),
-            primitive_types::U256::zero(),
+            0u64,
             ChannelStatus::Open,
-            primitive_types::U256::one(),
+            0u32,
         );
 
         db.upsert_channel(None, channel, 1, 0, 0).await?;
@@ -1510,7 +1510,7 @@ mod tests {
             channel.balance,
             0, // ticket_index
             closure_time_secs,
-            channel.channel_epoch.as_u32(),
+            channel.channel_epoch,
             ChannelStatus::PendingToClose(timestamp),
         );
 

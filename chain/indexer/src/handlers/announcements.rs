@@ -259,7 +259,8 @@ mod tests {
             public_key: *SELF_PRIV_KEY.public(),
             chain_addr: *SELF_CHAIN_ADDRESS,
             entry_type: AccountType::NotAnnounced,
-            published_at: 10, // Matches event_to_log default block number
+            safe_address: None,
+            key_id: 0.into(),
         };
 
         db.begin_transaction()
@@ -311,7 +312,8 @@ mod tests {
             public_key: *SELF_PRIV_KEY.public(),
             chain_addr: *SELF_CHAIN_ADDRESS,
             entry_type: AccountType::NotAnnounced,
-            published_at: 1,
+            safe_address: None,
+            key_id: 0.into(),
         };
 
         let test_multiaddr_empty: Multiaddr = "".parse()?;
@@ -375,11 +377,9 @@ mod tests {
         let announced_account_entry = AccountEntry {
             public_key: *SELF_PRIV_KEY.public(),
             chain_addr: *SELF_CHAIN_ADDRESS,
-            entry_type: AccountType::Announced {
-                multiaddr: test_multiaddr.clone(),
-                updated_block: 1,
-            },
-            published_at: 1,
+            entry_type: AccountType::Announced(vec![test_multiaddr.clone()]),
+            safe_address: None,
+            key_id: 0.into(),
         };
 
         let handlers_clone = handlers.clone();
@@ -450,11 +450,9 @@ mod tests {
         let announced_dns_account_entry = AccountEntry {
             public_key: *SELF_PRIV_KEY.public(),
             chain_addr: *SELF_CHAIN_ADDRESS,
-            entry_type: AccountType::Announced {
-                multiaddr: test_multiaddr_dns.clone(),
-                updated_block: 2,
-            },
-            published_at: 1,
+            entry_type: AccountType::Announced(vec![test_multiaddr_dns.clone()]),
+            safe_address: None,
+            key_id: 0.into(),
         };
 
         db.begin_transaction()
@@ -534,7 +532,8 @@ mod tests {
             public_key: *SELF_PRIV_KEY.public(),
             chain_addr: *SELF_CHAIN_ADDRESS,
             entry_type: AccountType::NotAnnounced,
-            published_at: 1,
+            safe_address: None,
+            key_id: 0.into(),
         };
 
         db.begin_transaction()

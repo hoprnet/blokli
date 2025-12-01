@@ -326,9 +326,11 @@ async fn test_allowance_api_integration() -> anyhow::Result<()> {
 
         // Approve the channels contract to spend tokens
         let approval_amount = U256::from(500) * U256::from(10).pow(U256::from(18));
+        use blokli_chain_types::AlloyAddressExt;
+        let channels_alloy_addr = alloy::primitives::Address::from_hopr_address(channels_addr);
         ctx.contract_instances
             .token
-            .approve(channels_addr.into(), approval_amount)
+            .approve(channels_alloy_addr, approval_amount)
             .send()
             .await
             .expect("Approval transaction should succeed")

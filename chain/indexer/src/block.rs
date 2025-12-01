@@ -1417,7 +1417,8 @@ mod tests {
                     public_key: *ALICE_OKP.public(),
                     chain_addr: *ALICE,
                     entry_type: AccountType::NotAnnounced,
-                    published_at: 1,
+                    safe_address: None,
+                    key_id: 0.into(),
                 },
             )
             .await?;
@@ -1427,7 +1428,8 @@ mod tests {
                     public_key: *BOB_OKP.public(),
                     chain_addr: *BOB,
                     entry_type: AccountType::NotAnnounced,
-                    published_at: 1,
+                    safe_address: None,
+                    key_id: 0.into(),
                 },
             )
             .await?;

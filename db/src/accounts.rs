@@ -699,8 +699,9 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_at: 1,
                 entry_type: AccountType::NotAnnounced,
+                safe_address: None,
+                key_id: 0.into(),
             },
         )
         .await?;
@@ -708,7 +709,6 @@ mod tests {
         let acc = db.get_account(None, chain_1).await?.expect("should contain account");
         assert_eq!(packet_1, acc.public_key, "pub keys must match");
         assert_eq!(AccountType::NotAnnounced, acc.entry_type.clone());
-        assert_eq!(1, acc.published_at);
 
         let maddr: Multiaddr = "/ip4/1.2.3.4/tcp/8000".parse()?;
         let block = 100;
@@ -716,16 +716,14 @@ mod tests {
         let db_acc = db.insert_announcement(None, chain_1, maddr.clone(), block).await?;
 
         let acc = db.get_account(None, chain_1).await?.context("should contain account")?;
-        assert_eq!(Some(maddr.clone()), acc.get_multiaddr(), "multiaddress must match");
-        assert_eq!(Some(block), acc.updated_at());
+        assert_eq!(Some(&maddr), acc.get_multiaddrs().first(), "multiaddress must match");
         assert_eq!(acc, db_acc);
 
         let block = 200;
         let db_acc = db.insert_announcement(None, chain_1, maddr.clone(), block).await?;
 
         let acc = db.get_account(None, chain_1).await?.expect("should contain account");
-        assert_eq!(Some(maddr), acc.get_multiaddr(), "multiaddress must match");
-        assert_eq!(Some(block), acc.updated_at());
+        assert_eq!(Some(&maddr), acc.get_multiaddrs().first(), "multiaddress must match");
         assert_eq!(acc, db_acc);
 
         let maddr: Multiaddr = "/dns4/useful.domain/tcp/56".parse()?;
@@ -733,8 +731,7 @@ mod tests {
         let db_acc = db.insert_announcement(None, chain_1, maddr.clone(), block).await?;
 
         let acc = db.get_account(None, chain_1).await?.expect("should contain account");
-        assert_eq!(Some(maddr), acc.get_multiaddr(), "multiaddress must match");
-        assert_eq!(Some(block), acc.updated_at());
+        assert_eq!(Some(&maddr), acc.get_multiaddrs().first(), "multiaddress must match");
         assert_eq!(acc, db_acc);
 
         Ok(())
@@ -752,8 +749,9 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_at: 1,
                 entry_type: AccountType::NotAnnounced,
+                safe_address: None,
+                key_id: 0.into(),
             },
         )
         .await?;
@@ -765,7 +763,7 @@ mod tests {
 
         assert_eq!(
             "/ip4/1.2.3.4/tcp/8000",
-            ae.get_multiaddr().expect("has multiaddress").to_string()
+            ae.get_multiaddrs().first().expect("has multiaddress").to_string()
         );
 
         db.insert_announcement(None, chain_1, "/ip4/1.2.3.4/tcp/8001".parse()?, 110)
@@ -775,7 +773,7 @@ mod tests {
 
         assert_eq!(
             "/ip4/1.2.3.4/tcp/8001",
-            ae.get_multiaddr().expect("has multiaddress").to_string()
+            ae.get_multiaddrs().first().expect("has multiaddress").to_string()
         );
 
         Ok(())
@@ -811,8 +809,9 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_at: 1,
                 entry_type: AccountType::NotAnnounced,
+                safe_address: None,
+                key_id: 0.into(),
             },
         )
         .await?;
@@ -825,8 +824,9 @@ mod tests {
             AccountEntry {
                 public_key: packet_2,
                 chain_addr: chain_2,
-                published_at: 2,
                 entry_type: AccountType::NotAnnounced,
+                safe_address: None,
+                key_id: 0.into(),
             },
         )
         .await?;
@@ -838,13 +838,11 @@ mod tests {
         let db_acc_2 = db.insert_announcement(None, chain_2, maddr.clone(), block).await?;
 
         let acc = db.get_account(None, chain_1).await?.expect("should contain account");
-        assert_eq!(Some(maddr.clone()), acc.get_multiaddr(), "multiaddress must match");
-        assert_eq!(Some(block), acc.updated_at());
+        assert_eq!(Some(&maddr), acc.get_multiaddrs().first(), "multiaddress must match");
         assert_eq!(acc, db_acc_1);
 
         let acc = db.get_account(None, chain_2).await?.expect("should contain account");
-        assert_eq!(Some(maddr.clone()), acc.get_multiaddr(), "multiaddress must match");
-        assert_eq!(Some(block), acc.updated_at());
+        assert_eq!(Some(&maddr), acc.get_multiaddrs().first(), "multiaddress must match");
         assert_eq!(acc, db_acc_2);
 
         Ok(())
@@ -861,11 +859,9 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_at: 1,
-                entry_type: AccountType::Announced {
-                    multiaddr: "/ip4/1.2.3.4/tcp/1234".parse()?,
-                    updated_block: 10,
-                },
+                entry_type: AccountType::Announced(vec!["/ip4/1.2.3.4/tcp/1234".parse()?]),
+                safe_address: None,
+                key_id: 0.into(),
             },
         )
         .await?;
@@ -906,8 +902,9 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_at: 1,
                 entry_type: AccountType::NotAnnounced,
+                safe_address: None,
+                key_id: 0.into(),
             },
         )
         .await?;
@@ -917,8 +914,9 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_at: 1,
                 entry_type: AccountType::NotAnnounced,
+                safe_address: None,
+                key_id: 0.into(),
             },
         )
         .await?;
@@ -935,11 +933,9 @@ mod tests {
         let mut entry = AccountEntry {
             public_key: packet_1,
             chain_addr: chain_1,
-            published_at: 1,
-            entry_type: AccountType::Announced {
-                multiaddr: "/ip4/1.2.3.4/tcp/1234".parse()?,
-                updated_block: 10,
-            },
+            entry_type: AccountType::Announced(vec!["/ip4/1.2.3.4/tcp/1234".parse()?]),
+            safe_address: None,
+            key_id: 0.into(),
         };
 
         db.insert_account(None, entry.clone()).await?;
@@ -991,8 +987,9 @@ mod tests {
                             AccountEntry {
                                 public_key: packet_1,
                                 chain_addr: chain_1,
-                                published_at: 1,
                                 entry_type: AccountType::NotAnnounced,
+                                safe_address: None,
+                                key_id: 0.into(),
                             },
                         )
                         .await?;
@@ -1002,8 +999,9 @@ mod tests {
                             AccountEntry {
                                 public_key: packet_2,
                                 chain_addr: chain_2,
-                                published_at: 2,
                                 entry_type: AccountType::NotAnnounced,
+                                safe_address: None,
+                                key_id: 0.into(),
                             },
                         )
                         .await?;
@@ -1050,7 +1048,8 @@ mod tests {
                                 public_key: *OffchainKeypair::random().public(),
                                 chain_addr: chain_1,
                                 entry_type: AccountType::NotAnnounced,
-                                published_at: 1,
+                                safe_address: None,
+                                key_id: 0.into(),
                             },
                         )
                         .await?;
@@ -1060,11 +1059,9 @@ mod tests {
                             AccountEntry {
                                 public_key: *OffchainKeypair::random().public(),
                                 chain_addr: chain_2,
-                                entry_type: AccountType::Announced {
-                                    multiaddr: "/ip4/10.10.10.10/tcp/1234".parse().map_err(|_| DecodingError)?,
-                                    updated_block: 10,
-                                },
-                                published_at: 2,
+                                entry_type: AccountType::Announced(vec!["/ip4/10.10.10.10/tcp/1234".parse().map_err(|_| DecodingError)?]),
+                                safe_address: None,
+                                key_id: 0.into(),
                             },
                         )
                         .await?;
@@ -1075,7 +1072,8 @@ mod tests {
                                 public_key: *OffchainKeypair::random().public(),
                                 chain_addr: chain_3,
                                 entry_type: AccountType::NotAnnounced,
-                                published_at: 3,
+                                safe_address: None,
+                                key_id: 0.into(),
                             },
                         )
                         .await?;
@@ -1126,11 +1124,11 @@ mod tests {
 
         assert_eq!(
             "/ip4/10.10.10.10/tcp/1234",
-            acc_1.get_multiaddr().expect("should have a multiaddress").to_string()
+            acc_1.get_multiaddrs().first().expect("should have a multiaddress").to_string()
         );
         assert_eq!(
             "/ip4/8.8.1.1/tcp/1234",
-            acc_2.get_multiaddr().expect("should have a multiaddress").to_string()
+            acc_2.get_multiaddrs().first().expect("should have a multiaddress").to_string()
         );
 
         Ok(())

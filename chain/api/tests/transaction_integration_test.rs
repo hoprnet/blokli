@@ -170,12 +170,13 @@ async fn create_eth_transfer_tx(
     value_wei: u128,
     nonce: u64,
 ) -> anyhow::Result<Vec<u8>> {
+    use blokli_chain_types::AlloyAddressExt;
     let tx = TxLegacy {
         chain_id: Some(ctx.anvil.chain_id()),
         nonce,
         gas_price: 1_000_000_000, // 1 gwei
         gas_limit: 21_000,
-        to: TxKind::Call(to.into()),
+        to: TxKind::Call(alloy::primitives::Address::from_hopr_address(to)),
         value: U256::from(value_wei),
         input: Default::default(),
     };
