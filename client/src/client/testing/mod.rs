@@ -251,6 +251,7 @@ pub struct BlokliTestClient<M> {
     accounts_channel: AccountEvents,
     channels_channel: GraphEvents,
     ticket_channel: TicketParamEvents,
+    tx_simulation_delay: Duration,
 }
 
 fn channel_matches(channel: &Channel, selector: &ChannelSelector) -> bool {
@@ -297,6 +298,7 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
             accounts_channel: (accounts_tx, accounts_rx.deactivate()),
             channels_channel: (channels_tx, channels_rx.deactivate()),
             ticket_channel: (tickets_tx, tickets_rx.deactivate()),
+            tx_simulation_delay: Duration::from_secs(1),
         }
     }
 
@@ -304,6 +306,15 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
     #[must_use]
     pub fn with_mutator(mut self, mutator: M) -> Self {
         self.mutator = mutator;
+        self
+    }
+
+    /// Sets the delay before a simulated transaction is confirmed.
+    ///
+    /// The default is 1 second.
+    #[must_use]
+    pub fn with_tx_simulation_delay(mut self, tx_simulation_delay: Duration) -> Self {
+        self.tx_simulation_delay = tx_simulation_delay;
         self
     }
 
@@ -746,7 +757,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
     }
 
     async fn submit_and_confirm_transaction(&self, signed_tx: &[u8], num_confirmations: usize) -> Result<TxReceipt> {
-        futures_time::task::sleep((Duration::from_millis(200) * num_confirmations as u32).into()).await;
+        futures_time::task::sleep((self.tx_simulation_delay * num_confirmations as u32).into()).await;
 
         let mut tx_receipt = [0u8; 32];
         rand::fill(&mut tx_receipt);
@@ -769,7 +780,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
     }
 
     async fn track_transaction(&self, tx_id: TxId, client_timeout: Duration) -> Result<Transaction> {
-        futures_time::task::sleep(client_timeout.div(10).into()).await;
+        futures_time::task::sleep(self.tx_simulation_delay.min(client_timeout.div(2)).into()).await;
         let tx = self
             .state
             .write()
