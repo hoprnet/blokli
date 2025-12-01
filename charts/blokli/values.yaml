@@ -329,7 +329,7 @@ config:
       ## @param config.api.health.readinessCheckInterval Interval for periodic readiness checks
       ##
       readinessCheckInterval: "60s"
-      # Logging configuration
+  # Logging configuration
   logging:
     ## @param config.logging.level Rust log level configuration. Examples: "info", "debug", "info,blokli_chain_indexer=debug"
     ##

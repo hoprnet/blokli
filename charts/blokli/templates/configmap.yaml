@@ -48,4 +48,5 @@ data:
     # Health check configuration
     [api.health]
     max_indexer_lag = {{ .Values.config.api.health.maxIndexerLag }}
-    timeout = {{ .Values.config.api.health.timeout }}
+    timeout = {{ .Values.config.api.health.timeout | quote }}
+    readiness_check_interval = {{ .Values.config.api.health.readinessCheckInterval | quote }}
