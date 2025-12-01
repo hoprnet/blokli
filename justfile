@@ -271,5 +271,9 @@ helm-push:
 smoke-test:
     ./tests/smoke/run-smoke-test.sh
 
-# Build Docker image and run smoke tests
-smoke-test-full: docker-build smoke-test
+# Run smoke tests against Gnosis Chain RPC
+smoke-test-gnosis:
+    SMOKE_CONFIG=config-smoke-gnosis.toml ./tests/smoke/run-smoke-test.sh
+
+# Build Docker image and run all smoke tests (Anvil + Gnosis Chain)
+smoke-test-full: docker-build smoke-test smoke-test-gnosis

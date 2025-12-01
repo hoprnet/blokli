@@ -68,14 +68,14 @@ services:
       anvil:
         condition: service_healthy
     environment:
-      RUST_LOG: debug
+      RUST_LOG: trace
     volumes:
-      - ./config-smoke.toml:/config.toml:ro
+      - ./${SMOKE_CONFIG:-config-smoke.toml}:/config.toml:ro
     ports:
-      - "3064:3064"
+      - "8080:8080"
     command: ["-c", "/config.toml"]
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:3064/healthz"]
+      test: ["CMD", "curl", "-sf", "http://localhost:8080/healthz"]
       interval: 5s
       timeout: 10s
       retries: 30
