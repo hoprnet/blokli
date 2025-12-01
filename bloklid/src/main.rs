@@ -13,7 +13,7 @@ use std::{
 use ::config as config_rs;
 use async_signal::{Signal, Signals};
 use blokli_chain_api::BlokliChain;
-use blokli_chain_types::ResolvedChainConfig;
+use blokli_chain_types::ChainConfig;
 use blokli_db::db::{BlokliDb, BlokliDbConfig};
 use clap::{Parser, Subcommand};
 use futures::TryStreamExt;
@@ -210,42 +210,38 @@ impl Args {
             None
         };
 
-        let chain_config = ResolvedChainConfig {
-            chain_id: config.network.chain_id(),
-            block_time: config.network.block_time(),
+        let chain_config = ChainConfig {
+            chain_id: network_config.chain_id,
             tx_polling_interval: config.network.tx_polling_interval(),
             confirmations: config.network.confirmations(),
             max_block_range: config.network.max_block_range(),
             channel_contract_deploy_block: network_config.indexer_start_block_number,
             max_requests_per_sec: max_rpc_req,
-            contracts: blokli_chain_types::ContractAddresses {
-                token: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
-                    network_config.addresses.token,
-                )),
-                channels: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
-                    network_config.addresses.channels,
-                )),
-                announcements: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
-                    network_config.addresses.announcements,
-                )),
-                node_safe_registry: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
-                    network_config.addresses.node_safe_registry,
-                )),
-                ticket_price_oracle: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
-                    network_config.addresses.ticket_price_oracle,
-                )),
-                winning_probability_oracle: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
-                    network_config.addresses.winning_probability_oracle,
-                )),
-                node_stake_v2_factory: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
-                    network_config.addresses.node_stake_factory,
-                )),
-            },
         };
 
         // Store resolved config and contracts
         config.chain_network = Some(chain_config.clone());
-        config.contracts = chain_config.contracts;
+        config.contracts = blokli_chain_types::ContractAddresses {
+            token: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(network_config.addresses.token)),
+            channels: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
+                network_config.addresses.channels,
+            )),
+            announcements: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
+                network_config.addresses.announcements,
+            )),
+            node_safe_registry: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
+                network_config.addresses.node_safe_registry,
+            )),
+            ticket_price_oracle: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
+                network_config.addresses.ticket_price_oracle,
+            )),
+            winning_probability_oracle: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
+                network_config.addresses.winning_probability_oracle,
+            )),
+            node_stake_v2_factory: hopr_primitive_types::primitives::Address::from(<[u8; 20]>::from(
+                network_config.addresses.node_stake_factory,
+            )),
+        };
 
         info!(
             contract_addresses = ?config.contracts,
@@ -405,7 +401,7 @@ async fn run() -> errors::Result<()> {
 
         info!("Connecting to RPC endpoint: {}", redact_rpc_url(&rpc_url));
 
-        // Extract chain_id and network name for API configuration
+        // Extract chain_id and network name for configuration
         let chain_id = chain_network.chain_id;
         let network = {
             let cfg = config

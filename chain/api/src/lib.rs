@@ -23,7 +23,7 @@ use blokli_chain_rpc::{
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
 };
-use blokli_chain_types::{ContractAddresses, ResolvedChainConfig};
+use blokli_chain_types::{ChainConfig, ContractAddresses};
 use blokli_db::BlokliDbAllOperations;
 use futures::future::AbortHandle;
 use hopr_async_runtime::spawn_as_abortable;
@@ -81,7 +81,7 @@ pub struct BlokliChain<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt
 impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static> BlokliChain<T> {
     pub fn new(
         db: T,
-        chain_config: ResolvedChainConfig,
+        chain_config: ChainConfig,
         contract_addresses: ContractAddresses,
         indexer_cfg: IndexerConfig,
         rpc_url: String,
@@ -100,7 +100,6 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         let rpc_cfg = RpcOperationsConfig {
             chain_id: chain_config.chain_id,
             contract_addrs: contract_addresses,
-            expected_block_time: Duration::from_millis(chain_config.block_time),
             tx_polling_interval: Duration::from_millis(chain_config.tx_polling_interval),
             finality: chain_config.confirmations as u32,
             max_block_range_fetch_size: chain_config.max_block_range as u64,

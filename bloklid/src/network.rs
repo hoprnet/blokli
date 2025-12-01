@@ -18,11 +18,11 @@ pub enum Network {
     /// Local Anvil development network
     #[serde(alias = "anvil_localhost", alias = "anvil-localhost", alias = "localhost")]
     AnvilLocalhost,
-    /// Dufour testnet
+    /// Dufour mainnet (production network)
     #[default]
     #[serde(alias = "dufour")]
     Dufour,
-    /// Rotsee mainnet
+    /// Rotsee testnet (development/testing network)
     #[serde(alias = "rotsee")]
     Rotsee,
 }
@@ -74,24 +74,6 @@ impl Network {
     pub fn resolve(&self) -> Option<SingleNetworkContractAddresses> {
         let networks = NetworksWithContractAddresses::default();
         networks.networks.get(self.as_str()).copied()
-    }
-
-    /// Returns the chain ID for this network.
-    pub fn chain_id(&self) -> u64 {
-        match self {
-            Network::AnvilLocalhost => 31337,
-            Network::Dufour => 100, // Gnosis Chain
-            Network::Rotsee => 100, // Gnosis Chain
-        }
-    }
-
-    /// Returns the expected block time in milliseconds.
-    pub fn block_time(&self) -> u64 {
-        match self {
-            Network::AnvilLocalhost => 1000, // 1 second
-            Network::Dufour => 5000,         // 5 seconds
-            Network::Rotsee => 5000,         // 5 seconds
-        }
     }
 
     /// Returns the transaction polling interval in milliseconds.

@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use blokli_chain_types::{ContractAddresses, ResolvedChainConfig};
+use blokli_chain_types::{ChainConfig, ContractAddresses};
 
 use crate::network::Network;
 
@@ -305,7 +305,7 @@ pub struct Config {
 
     #[serde(skip)]
     #[default(None)]
-    pub chain_network: Option<ResolvedChainConfig>,
+    pub chain_network: Option<ChainConfig>,
 
     #[serde(skip)]
     #[default(_code = "ContractAddresses::default()")]

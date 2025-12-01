@@ -23,16 +23,14 @@ pub mod errors;
 // Various (mostly testing related) utility functions
 pub mod utils;
 
-/// Resolved chain configuration containing all blockchain-specific parameters.
+/// Chain configuration containing blockchain-specific parameters.
 ///
-/// This struct encapsulates all chain-level configuration needed by the indexer and RPC operations,
-/// resolved from network definitions with optional user overrides.
+/// This struct encapsulates chain-level configuration needed by the indexer and RPC operations.
+/// Chain ID and contract addresses are resolved from hopr-bindings network definitions.
 #[derive(Clone, Debug)]
-pub struct ResolvedChainConfig {
-    /// Chain ID (e.g., 100 for Gnosis Chain)
+pub struct ChainConfig {
+    /// Chain ID (e.g., 100 for Gnosis Chain) - read from hopr-bindings
     pub chain_id: u64,
-    /// Expected block time in milliseconds
-    pub block_time: u64,
     /// Transaction polling interval in milliseconds
     pub tx_polling_interval: u64,
     /// Number of confirmations required (finality)
@@ -43,8 +41,6 @@ pub struct ResolvedChainConfig {
     pub channel_contract_deploy_block: u32,
     /// Maximum RPC requests per second (None = unlimited)
     pub max_requests_per_sec: Option<u32>,
-    /// Contract addresses for this network
-    pub contracts: ContractAddresses,
 }
 
 /// Holds addresses of all smart contracts.
