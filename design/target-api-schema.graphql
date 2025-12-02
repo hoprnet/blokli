@@ -537,7 +537,7 @@ type SubscriptionRoot {
   Subscribe to real-time updates of key binding fee
   
   Emits the current fee once on subscription, then streams updates whenever
-  the indexer processes a KeyBindingFeeUpdate event and is in synced mode.
+  the indexer processes a KeyBindingFeeUpdate event.
   """
   keyBindingFeeUpdated: TokenValueString!
   """

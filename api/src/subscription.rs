@@ -805,6 +805,16 @@ mod tests {
 
     use super::*;
 
+    // Dummy Query root
+    #[derive(Default)]
+    struct DummyQuery;
+    #[Object]
+    impl DummyQuery {
+        async fn dummy(&self) -> bool {
+            true
+        }
+    }
+
     // Helper: Create test channel in database
     async fn create_test_channel(
         db: &DatabaseConnection,
@@ -1418,11 +1428,8 @@ mod tests {
         let db = BlokliDb::new_in_memory().await.unwrap();
         let indexer_state = IndexerState::new(10, 100);
 
-        // Initialize chain_info with a key binding fee (12 bytes for realistic DB state)
-        // Value: 12345
-        let mut fee_bytes_12 = vec![0u8; 12];
-        fee_bytes_12[10] = 0x30; // 0x3039 = 12345
-        fee_bytes_12[11] = 0x39;
+        // Initialize chain_info with a keybinding fee
+        let starting_fee = 12345u16;
 
         chain_info::Entity::delete_many()
             .exec(db.conn(blokli_db::TargetDb::Index))
@@ -1435,7 +1442,7 @@ mod tests {
             last_indexed_tx_index: Set(0),
             last_indexed_log_index: Set(0),
             ticket_price: Set(None),
-            key_binding_fee: Set(Some(fee_bytes_12)),
+            key_binding_fee: Set(Some(starting_fee.to_be_bytes().into())),
             channels_dst: Set(None),
             ledger_dst: Set(None),
             safe_registry_dst: Set(None),
@@ -1443,16 +1450,6 @@ mod tests {
             channel_closure_grace_period: Set(None),
         };
         chain_info.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
-
-        // Dummy Query root
-        #[derive(Default)]
-        struct DummyQuery;
-        #[Object]
-        impl DummyQuery {
-            async fn dummy(&self) -> bool {
-                true
-            }
-        }
 
         // Setup schema
         let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
@@ -1469,11 +1466,11 @@ mod tests {
         let data = response.into_result().expect("Response should be ok").data;
         assert_eq!(
             data,
-            async_graphql::Value::from_json(serde_json::json!({ "keyBindingFeeUpdated": "12345" })).unwrap()
+            async_graphql::Value::from_json(serde_json::json!({ "keyBindingFeeUpdated": starting_fee.to_string() }))
+                .unwrap()
         );
 
         // 2. Publish update via event bus
-        // Value: 67890
         let new_fee = "67890".to_string();
         indexer_state.publish_event(IndexerEvent::KeyBindingFeeUpdated(TokenValueString(new_fee.clone())));
 
@@ -1482,7 +1479,7 @@ mod tests {
         let data = response.into_result().expect("Response should be ok").data;
         assert_eq!(
             data,
-            async_graphql::Value::from_json(serde_json::json!({ "keyBindingFeeUpdated": "67890" })).unwrap()
+            async_graphql::Value::from_json(serde_json::json!({ "keyBindingFeeUpdated": new_fee })).unwrap()
         );
     }
 }

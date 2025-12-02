@@ -585,13 +585,11 @@ mod tests {
         };
         let (handlers, _state, mut event_receiver) = init_handlers_with_events(clonable_rpc_operations, db.clone());
 
-        // Initial fee should be empty/none or default
-        // We don't have a direct get_key_binding_fee method exposed on db, but we can check via get_indexer_data
+        // Initial fee should be empty/none
         let data = db.get_indexer_data(None).await?;
         assert!(data.key_binding_fee.is_none());
 
         // Create KeyBindingFeeUpdate event
-        // newFee is uint256
         let new_fee_value: u128 = 123456;
 
         let event = KeyBindingFeeUpdateEvent {
