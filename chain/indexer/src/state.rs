@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use async_broadcast::{Receiver, Sender, broadcast};
-use blokli_api_types::{Account, ChannelUpdate};
+use blokli_api_types::{Account, ChannelUpdate, TokenValueString};
 use tokio::sync::RwLock;
 
 /// Event type for the subscription event bus
@@ -29,6 +29,9 @@ pub enum IndexerEvent {
     ///
     /// Contains complete channel data plus both participating accounts.
     ChannelUpdated(Box<ChannelUpdate>),
+
+    /// Key binding fee was updated
+    KeyBindingFeeUpdated(TokenValueString),
 }
 
 /// Shared state for coordinating indexer operations with subscriptions

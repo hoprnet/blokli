@@ -178,6 +178,9 @@ mod tests {
         let rotsee = Network::Rotsee.resolve();
         assert!(rotsee.is_some(), "Rotsee network should be defined in hopr-bindings");
         let anvil = Network::AnvilLocalhost.resolve();
-        assert!(anvil.is_some(), "AnvilLocalhost network should be defined in hopr-bindings");
+        assert!(
+            anvil.is_some(),
+            "AnvilLocalhost network should be defined in hopr-bindings"
+        );
     }
 }

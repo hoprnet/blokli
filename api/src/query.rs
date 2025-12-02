@@ -483,6 +483,13 @@ impl QueryRoot {
             .map(|bytes| TokenValueString(PrimitiveHoprBalance::from_be_bytes(bytes).amount().to_string()))
             .unwrap_or_else(|| TokenValueString(PrimitiveHoprBalance::zero().amount().to_string()));
 
+        // Convert key_binding_fee from binary to human-readable string
+        let key_binding_fee = chain_info
+            .key_binding_fee
+            .as_ref()
+            .map(|bytes| TokenValueString(PrimitiveHoprBalance::from_be_bytes(bytes).amount().to_string()))
+            .unwrap_or_else(|| TokenValueString(PrimitiveHoprBalance::zero().amount().to_string()));
+
         // Convert last_indexed_block from i64 to i32 with validation
         let block_number = i32::try_from(chain_info.last_indexed_block).map_err(|_| {
             async_graphql::Error::new(format!(
@@ -549,6 +556,7 @@ impl QueryRoot {
             chain_id: chain_id_i32,
             network: network.clone(),
             ticket_price,
+            key_binding_fee,
             min_ticket_winning_probability,
             channel_dst,
             contract_addresses: ContractAddressMap::from(contract_addresses),

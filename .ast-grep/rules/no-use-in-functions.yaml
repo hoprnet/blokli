@@ -13,7 +13,3 @@ rule:
   kind: use_declaration
   inside:
     kind: block
-    inside:
-      any:
-        - kind: function_item
-        - kind: impl_item

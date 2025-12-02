@@ -1,10 +1,14 @@
+use blokli_api_types::TokenValueString;
 use blokli_chain_rpc::HoprIndexerRpcOperations;
 use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator, errors::DbSqlError};
 use hopr_bindings::hopr_announcements::HoprAnnouncements::HoprAnnouncementsEvents;
 use hopr_crypto_types::prelude::OffchainSignature;
 use hopr_internal_types::announcement::KeyBinding;
-use hopr_primitive_types::prelude::Address;
+use hopr_primitive_types::{
+    prelude::{Address, HoprBalance},
+    traits::IntoEndian,
+};
 use tracing::{debug, error, warn};
 
 use super::{ContractEventHandlers, helpers::construct_account_update};
@@ -168,6 +172,19 @@ where
                     new_fee = %fee_update.newFee,
                     "on_announcement_event: KeyBindingFeeUpdate"
                 );
+
+                let fee = HoprBalance::from_be_bytes(fee_update.newFee.to_be_bytes::<32>());
+
+                self.db.update_key_binding_fee(Some(tx), fee).await?;
+
+                // Publish subscription event only when indexer is in synced mode
+                if is_synced {
+                    let fee_str = fee.amount().to_string();
+                    self.indexer_state
+                        .publish_event(crate::state::IndexerEvent::KeyBindingFeeUpdated(TokenValueString(
+                            fee_str,
+                        )));
+                }
             }
             HoprAnnouncementsEvents::LedgerDomainSeparatorUpdated(ledger_domain_separator) => {
                 self.db
@@ -212,14 +229,20 @@ mod tests {
         BlokliDbGeneralModelOperations,
         accounts::{BlokliDbAccountOperations, ChainOrPacketKey},
         db::BlokliDb,
+        info::BlokliDbInfoOperations,
     };
-    use hopr_bindings::hopr_announcements_events::HoprAnnouncementsEvents::KeyBinding as KeyBindingEvent;
+    use hopr_bindings::hopr_announcements_events::HoprAnnouncementsEvents::{
+        KeyBinding as KeyBindingEvent, KeyBindingFeeUpdate as KeyBindingFeeUpdateEvent,
+    };
     use hopr_crypto_types::keypairs::Keypair;
     use hopr_internal_types::{
         account::{AccountEntry, AccountType},
         announcement::KeyBinding,
     };
-    use hopr_primitive_types::prelude::SerializableLog;
+    use hopr_primitive_types::{
+        prelude::{SerializableLog, U256},
+        traits::IntoEndian,
+    };
     use multiaddr::Multiaddr;
 
     use super::*;
@@ -550,6 +573,55 @@ mod tests {
                 .context("a value should be present")?,
             account_entry
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_key_binding_fee_update() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let rpc_operations = MockIndexerRpcOperations::new();
+        let clonable_rpc_operations = ClonableMockOperations {
+            inner: Arc::new(rpc_operations),
+        };
+        let (handlers, _state, mut event_receiver) = init_handlers_with_events(clonable_rpc_operations, db.clone());
+
+        // Initial fee should be empty/none or default
+        // We don't have a direct get_key_binding_fee method exposed on db, but we can check via get_indexer_data
+        let data = db.get_indexer_data(None).await?;
+        assert!(data.key_binding_fee.is_none());
+
+        // Create KeyBindingFeeUpdate event
+        // newFee is uint256
+        let new_fee_value: u128 = 123456;
+
+        let event = KeyBindingFeeUpdateEvent {
+            newFee: alloy::primitives::U256::from(new_fee_value),
+            oldFee: alloy::primitives::U256::ZERO,
+        };
+
+        let log = event_to_log(event, handlers.addresses.announcements);
+
+        db.begin_transaction()
+            .await?
+            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, log, true).await }))
+            .await?;
+
+        // Verify KeyBindingFeeUpdated event was published
+        let event = try_recv_event(&mut event_receiver).expect("Expected KeyBindingFeeUpdated event to be published");
+        match event {
+            IndexerEvent::KeyBindingFeeUpdated(fee) => {
+                assert_eq!(fee.0, new_fee_value.to_string(), "Published fee should match");
+            }
+            _ => panic!("Expected KeyBindingFeeUpdated event, got {:?}", event),
+        }
+
+        // Verify DB was updated
+        let data = db.get_indexer_data(None).await?;
+        assert_eq!(
+            data.key_binding_fee.expect("Fee should be set").amount(),
+            U256::from(new_fee_value)
+        );
+
         Ok(())
     }
 }

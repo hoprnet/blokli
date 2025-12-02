@@ -487,6 +487,7 @@ mod tests {
         sol_types::{SolEvent, SolValue},
     };
     use anyhow::Context;
+    use blokli_chain_types::AlloyAddressExt;
     use blokli_db::{
         BlokliDbGeneralModelOperations, accounts::BlokliDbAccountOperations, api::info::DomainSeparator,
         channels::BlokliDbChannelOperations, db::BlokliDb, info::BlokliDbInfoOperations,

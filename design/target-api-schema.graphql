@@ -45,6 +45,8 @@ type ChainInfo {
   channelDst: String
   "Map of contract identifiers to their deployed addresses"
   contractAddresses: ContractAddressMap!
+  "Current key binding fee"
+  keyBindingFee: TokenValueString!
   "Ledger smart contract domain separator (hex string)"
   ledgerDst: String
   "Current minimum ticket winning probability (decimal value between 0.0 and 1.0)"
@@ -531,6 +533,13 @@ type SubscriptionRoot {
     "Filter by channel status"
     status: ChannelStatus
   ): Channel!
+  """
+  Subscribe to real-time updates of key binding fee
+  
+  Emits the current fee once on subscription, then streams updates whenever
+  the indexer processes a KeyBindingFeeUpdate event and is in synced mode.
+  """
+  keyBindingFeeUpdated: TokenValueString!
   """
   Subscribe to the opened payment channels graph with real-time updates
   

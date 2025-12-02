@@ -96,6 +96,10 @@ pub trait BlokliDbInfoOperations {
     /// To retrieve the stored ticket price, use [`BlokliDbInfoOperations::get_indexer_data`],
     async fn update_ticket_price<'a>(&'a self, tx: OptTx<'a>, price: HoprBalance) -> Result<()>;
 
+    /// Updates the key binding fee.
+    /// To retrieve the stored key binding fee, use [`BlokliDbInfoOperations::get_indexer_data`],
+    async fn update_key_binding_fee<'a>(&'a self, tx: OptTx<'a>, fee: HoprBalance) -> Result<()>;
+
     /// Sets the channel closure grace period in seconds.
     /// To retrieve the stored grace period, use [`BlokliDbInfoOperations::get_indexer_data`],
     async fn set_channel_closure_grace_period<'a>(&'a self, tx: OptTx<'a>, period_seconds: u64) -> Result<()>;
@@ -276,6 +280,7 @@ impl BlokliDbInfoOperations for BlokliDb {
                             safe_registry_dst,
                             channels_dst,
                             ticket_price: model.ticket_price.map(HoprBalance::from_be_bytes),
+                            key_binding_fee: model.key_binding_fee.map(HoprBalance::from_be_bytes),
                             minimum_incoming_ticket_winning_prob: (model.min_incoming_ticket_win_prob as f64)
                                 .try_into()?,
                             channel_closure_grace_period: model
@@ -354,6 +359,27 @@ impl BlokliDbInfoOperations for BlokliDb {
                     chain_info::ActiveModel {
                         id: Set(SINGULAR_TABLE_FIXED_ID),
                         ticket_price: Set(Some(price.to_be_bytes().into())),
+                        ..Default::default()
+                    }
+                    .update(tx.as_ref())
+                    .await?;
+
+                    Ok::<(), DbSqlError>(())
+                })
+            })
+            .await?;
+
+        Ok(())
+    }
+
+    async fn update_key_binding_fee<'a>(&'a self, tx: OptTx<'a>, fee: HoprBalance) -> Result<()> {
+        self.nest_transaction(tx)
+            .await?
+            .perform(|tx| {
+                Box::pin(async move {
+                    chain_info::ActiveModel {
+                        id: Set(SINGULAR_TABLE_FIXED_ID),
+                        key_binding_fee: Set(Some(fee.to_be_bytes().into())),
                         ..Default::default()
                     }
                     .update(tx.as_ref())
