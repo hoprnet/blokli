@@ -236,7 +236,7 @@ impl BlokliDb {
             .all(&db)
             .await?
             .into_iter()
-            .try_for_each(|(a, b)| match model_to_account_entry(a, b) {
+            .try_for_each(|(a, b)| match model_to_account_entry(a, None, b) {
                 Ok(_account) => {
                     // FIXME: update key id mapper
                     Ok::<(), DbSqlError>(())
