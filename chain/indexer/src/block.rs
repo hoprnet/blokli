@@ -7,8 +7,9 @@ use std::{
     },
 };
 
-use alloy::sol_types::SolEvent;
+use alloy::{primitives::Address as AlloyAddress, sol_types::SolEvent};
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
+use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{
     BlokliDbGeneralModelOperations, TargetDb, api::logs::BlokliDbLogOperations, info::BlokliDbInfoOperations,
 };
@@ -439,9 +440,7 @@ where
         addresses_no_token.iter().for_each(|address| {
             let topics = logs_handler.contract_address_topics(*address);
             if !topics.is_empty() {
-                filter_base_addresses.push(alloy::primitives::Address::from(
-                    <[u8; 20]>::try_from(address.as_ref()).expect("Address is 20 bytes"),
-                ));
+                filter_base_addresses.push(AlloyAddress::from_hopr_address(*address));
                 filter_base_topics.extend(topics.clone());
                 for topic in topics.iter() {
                     address_topics.push((*address, Hash::from(topic.0)))
@@ -452,8 +451,8 @@ where
         let filter_base = alloy::rpc::types::Filter::new()
             .address(filter_base_addresses)
             .event_signature(filter_base_topics);
-        let filter_token = alloy::rpc::types::Filter::new().address(alloy::primitives::Address::from(
-            <[u8; 20]>::try_from(logs_handler.contract_addresses_map().token.as_ref()).expect("Address is 20 bytes"),
+        let filter_token = alloy::rpc::types::Filter::new().address(AlloyAddress::from_hopr_address(
+            logs_handler.contract_addresses_map().token,
         ));
 
         let filter_token_transfer = filter_token.clone().event_signature(Transfer::SIGNATURE_HASH);
@@ -1119,7 +1118,7 @@ mod tests {
                 block_hash: block_hash.into(),
                 topics: vec![hopr_bindings::hopr_announcements_events::HoprAnnouncementsEvents::AddressAnnouncement::SIGNATURE_HASH.into()],
                 data: DynSolValue::Tuple(vec![
-                    DynSolValue::Address(AlloyAddress::from_slice(address.as_ref())),
+                    DynSolValue::Address(AlloyAddress::from_hopr_address(address)),
                     DynSolValue::String(test_multiaddr.to_string()),
                 ])
                 .abi_encode(),

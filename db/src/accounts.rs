@@ -1059,7 +1059,9 @@ mod tests {
                             AccountEntry {
                                 public_key: *OffchainKeypair::random().public(),
                                 chain_addr: chain_2,
-                                entry_type: AccountType::Announced(vec!["/ip4/10.10.10.10/tcp/1234".parse().map_err(|_| DecodingError)?]),
+                                entry_type: AccountType::Announced(vec![
+                                    "/ip4/10.10.10.10/tcp/1234".parse().map_err(|_| DecodingError)?,
+                                ]),
                                 safe_address: None,
                                 key_id: 0.into(),
                             },
@@ -1124,11 +1126,19 @@ mod tests {
 
         assert_eq!(
             "/ip4/10.10.10.10/tcp/1234",
-            acc_1.get_multiaddrs().first().expect("should have a multiaddress").to_string()
+            acc_1
+                .get_multiaddrs()
+                .first()
+                .expect("should have a multiaddress")
+                .to_string()
         );
         assert_eq!(
             "/ip4/8.8.1.1/tcp/1234",
-            acc_2.get_multiaddrs().first().expect("should have a multiaddress").to_string()
+            acc_2
+                .get_multiaddrs()
+                .first()
+                .expect("should have a multiaddress")
+                .to_string()
         );
 
         Ok(())

@@ -247,7 +247,7 @@ mod tests {
         // Create KeyBinding event using bindings
         let event = KeyBindingEvent {
             key_id: alloy::primitives::U256::ZERO,
-            chain_key: AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref()),
+            chain_key: AlloyAddress::from_hopr_address(*SELF_CHAIN_ADDRESS),
             ed25519_pub_key: FixedBytes::<32>::from_slice(packet_key_bytes),
             ed25519_sig_0: FixedBytes::<32>::from_slice(&sig_bytes[..32]),
             ed25519_sig_1: FixedBytes::<32>::from_slice(&sig_bytes[32..64]),
@@ -319,7 +319,7 @@ mod tests {
         let test_multiaddr_empty: Multiaddr = "".parse()?;
 
         let address_announcement_empty_log_encoded_data = DynSolValue::Tuple(vec![
-            DynSolValue::Address(AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref())),
+            DynSolValue::Address(AlloyAddress::from_hopr_address(*SELF_CHAIN_ADDRESS)),
             DynSolValue::String(test_multiaddr_empty.to_string()),
         ])
         .abi_encode();
@@ -358,7 +358,7 @@ mod tests {
         let test_multiaddr: Multiaddr = "/ip4/1.2.3.4/tcp/56".parse()?;
 
         let address_announcement_log_encoded_data = DynSolValue::Tuple(vec![
-            DynSolValue::Address(AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref())),
+            DynSolValue::Address(AlloyAddress::from_hopr_address(*SELF_CHAIN_ADDRESS)),
             DynSolValue::String(test_multiaddr.to_string()),
         ])
         .abi_encode();
@@ -431,7 +431,7 @@ mod tests {
         let test_multiaddr_dns: Multiaddr = "/dns4/useful.domain/tcp/56".parse()?;
 
         let address_announcement_dns_log_encoded_data = DynSolValue::Tuple(vec![
-            DynSolValue::Address(AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref())),
+            DynSolValue::Address(AlloyAddress::from_hopr_address(*SELF_CHAIN_ADDRESS)),
             DynSolValue::String(test_multiaddr_dns.to_string()),
         ])
         .abi_encode();
@@ -516,7 +516,7 @@ mod tests {
         db.insert_announcement(None, *SELF_CHAIN_ADDRESS, test_multiaddr, 0)
             .await?;
 
-        let encoded_data = (AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref()),).abi_encode();
+        let encoded_data = (AlloyAddress::from_hopr_address(*SELF_CHAIN_ADDRESS),).abi_encode();
 
         let revoke_announcement_log = SerializableLog {
             address: handlers.addresses.announcements,

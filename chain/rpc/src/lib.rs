@@ -18,7 +18,11 @@ use std::{
     time::Duration,
 };
 
-use alloy::{primitives::B256, providers::PendingTransaction, rpc::types::TransactionRequest};
+use alloy::{
+    primitives::{Address as AlloyAddress, B256},
+    providers::PendingTransaction,
+    rpc::types::TransactionRequest,
+};
 use async_trait::async_trait;
 use blokli_chain_types::AlloyAddressExt;
 use errors::LogConversionError;
@@ -91,9 +95,7 @@ impl TryFrom<alloy::rpc::types::Log> for Log {
 impl From<Log> for alloy::rpc::types::RawLog {
     fn from(value: Log) -> Self {
         alloy::rpc::types::RawLog {
-            address: alloy::primitives::Address::from(
-                <[u8; 20]>::try_from(value.address.as_ref()).expect("Address is 20 bytes"),
-            ),
+            address: AlloyAddress::from_hopr_address(value.address),
             topics: value.topics.into_iter().map(|h| B256::from_slice(h.as_ref())).collect(),
             data: value.data.into(),
         }
@@ -439,7 +441,7 @@ mod tests {
     fn test_log_conversion_from_alloy_success() {
         let alloy_log = alloy::rpc::types::Log {
             inner: alloy::primitives::Log {
-                address: alloy::primitives::Address::ZERO,
+                address: AlloyAddress::ZERO,
                 data: alloy::primitives::LogData::new_unchecked(
                     vec![alloy::primitives::B256::ZERO],
                     vec![1, 2, 3].into(),
@@ -468,7 +470,7 @@ mod tests {
     fn test_log_conversion_missing_block_number_fails() {
         let alloy_log = alloy::rpc::types::Log {
             inner: alloy::primitives::Log {
-                address: alloy::primitives::Address::ZERO,
+                address: AlloyAddress::ZERO,
                 data: alloy::primitives::LogData::new_unchecked(
                     vec![alloy::primitives::B256::ZERO],
                     vec![1, 2, 3].into(),
@@ -495,7 +497,7 @@ mod tests {
     fn test_log_conversion_missing_tx_index_fails() {
         let alloy_log = alloy::rpc::types::Log {
             inner: alloy::primitives::Log {
-                address: alloy::primitives::Address::ZERO,
+                address: AlloyAddress::ZERO,
                 data: alloy::primitives::LogData::new_unchecked(
                     vec![alloy::primitives::B256::ZERO],
                     vec![1, 2, 3].into(),
@@ -522,7 +524,7 @@ mod tests {
     fn test_log_conversion_missing_log_index_fails() {
         let alloy_log = alloy::rpc::types::Log {
             inner: alloy::primitives::Log {
-                address: alloy::primitives::Address::ZERO,
+                address: AlloyAddress::ZERO,
                 data: alloy::primitives::LogData::new_unchecked(
                     vec![alloy::primitives::B256::ZERO],
                     vec![1, 2, 3].into(),

@@ -9,7 +9,7 @@ use std::{str::FromStr, sync::Arc, time::Duration};
 
 use alloy::{
     node_bindings::AnvilInstance,
-    primitives::U256,
+    primitives::{Address as AlloyAddress, U256},
     rpc::client::ClientBuilder,
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
@@ -27,7 +27,7 @@ use blokli_chain_rpc::{
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
 };
-use blokli_chain_types::{ContractAddresses, ContractInstances, utils::create_anvil};
+use blokli_chain_types::{AlloyAddressExt, ContractAddresses, ContractInstances, utils::create_anvil};
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
 use hopr_primitive_types::{prelude::HoprBalance, traits::ToHex};
 use sea_orm::{Database, DatabaseConnection};
@@ -326,8 +326,7 @@ async fn test_allowance_api_integration() -> anyhow::Result<()> {
 
         // Approve the channels contract to spend tokens
         let approval_amount = U256::from(500) * U256::from(10).pow(U256::from(18));
-        use blokli_chain_types::AlloyAddressExt;
-        let channels_alloy_addr = alloy::primitives::Address::from_hopr_address(channels_addr);
+        let channels_alloy_addr = AlloyAddress::from_hopr_address(channels_addr);
         ctx.contract_instances
             .token
             .approve(channels_alloy_addr, approval_amount)

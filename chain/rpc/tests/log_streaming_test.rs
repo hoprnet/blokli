@@ -8,7 +8,7 @@ mod common;
 use std::time::Duration;
 
 use alloy::{
-    primitives::U256,
+    primitives::{Address as AlloyAddress, U256},
     rpc::{client::ClientBuilder, types::Filter},
     sol_types::SolEvent,
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
@@ -51,16 +51,16 @@ async fn test_try_stream_logs_should_contain_all_logs_when_opening_channel() -> 
     let contract_addrs = ContractAddresses::from(&contract_instances);
 
     let filter_token_approval = Filter::new()
-        .address(alloy::primitives::Address::from_hopr_address(contract_addrs.token))
+        .address(AlloyAddress::from_hopr_address(contract_addrs.token))
         .event_signature(Approval::SIGNATURE_HASH);
     let filter_token_transfer = Filter::new()
-        .address(alloy::primitives::Address::from_hopr_address(contract_addrs.token))
+        .address(AlloyAddress::from_hopr_address(contract_addrs.token))
         .event_signature(Transfer::SIGNATURE_HASH);
     let filter_channels_opened = Filter::new()
-        .address(alloy::primitives::Address::from_hopr_address(contract_addrs.channels))
+        .address(AlloyAddress::from_hopr_address(contract_addrs.channels))
         .event_signature(ChannelOpened::SIGNATURE_HASH);
     let filter_channels_balance_increased = Filter::new()
-        .address(alloy::primitives::Address::from_hopr_address(contract_addrs.channels))
+        .address(AlloyAddress::from_hopr_address(contract_addrs.channels))
         .event_signature(ChannelBalanceIncreased::SIGNATURE_HASH);
 
     let log_filter = FilterSet {
@@ -212,10 +212,10 @@ async fn test_try_stream_logs_should_contain_only_channel_logs_when_filtered_on_
     let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
 
     let filter_channels_opened = Filter::new()
-        .address(alloy::primitives::Address::from_hopr_address(contract_addrs.channels))
+        .address(AlloyAddress::from_hopr_address(contract_addrs.channels))
         .event_signature(ChannelOpened::SIGNATURE_HASH);
     let filter_channels_balance_increased = Filter::new()
-        .address(alloy::primitives::Address::from_hopr_address(contract_addrs.channels))
+        .address(AlloyAddress::from_hopr_address(contract_addrs.channels))
         .event_signature(ChannelBalanceIncreased::SIGNATURE_HASH);
 
     let log_filter = FilterSet {

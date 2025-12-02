@@ -1,6 +1,9 @@
 //! This crate contains various on-chain related modules and types.
 use alloy::{
-    contract::Result as ContractResult, network::TransactionBuilder, primitives, rpc::types::TransactionRequest,
+    contract::Result as ContractResult,
+    network::TransactionBuilder,
+    primitives::{self, Address as AlloyAddress},
+    rpc::types::TransactionRequest,
 };
 use constants::{ERC_1820_DEPLOYER, ERC_1820_REGISTRY_DEPLOY_CODE, ETH_VALUE_FOR_ERC1820_DEPLOYER};
 use hopr_bindings::{
@@ -49,13 +52,13 @@ pub trait AlloyAddressExt {
     fn from_hopr_address(addr: Address) -> Self;
 }
 
-impl AlloyAddressExt for primitives::Address {
+impl AlloyAddressExt for AlloyAddress {
     fn to_hopr_address(self) -> Address {
         Address::from(<[u8; 20]>::from(self))
     }
 
     fn from_hopr_address(addr: Address) -> Self {
-        primitives::Address::from(<[u8; 20]>::try_from(addr.as_ref()).expect("Address is 20 bytes"))
+        AlloyAddress::from(<[u8; 20]>::try_from(addr.as_ref()).expect("Address is 20 bytes"))
     }
 }
 
@@ -117,31 +120,31 @@ where
     pub fn new(contract_addresses: &ContractAddresses, provider: P, _use_dummy_nr: bool) -> Self {
         Self {
             token: HoprTokenInstance::new(
-                primitives::Address::from_hopr_address(contract_addresses.token),
+                AlloyAddress::from_hopr_address(contract_addresses.token),
                 provider.clone(),
             ),
             channels: HoprChannelsInstance::new(
-                primitives::Address::from_hopr_address(contract_addresses.channels),
+                AlloyAddress::from_hopr_address(contract_addresses.channels),
                 provider.clone(),
             ),
             announcements: HoprAnnouncementsInstance::new(
-                primitives::Address::from_hopr_address(contract_addresses.announcements),
+                AlloyAddress::from_hopr_address(contract_addresses.announcements),
                 provider.clone(),
             ),
             safe_registry: HoprNodeSafeRegistryInstance::new(
-                primitives::Address::from_hopr_address(contract_addresses.node_safe_registry),
+                AlloyAddress::from_hopr_address(contract_addresses.node_safe_registry),
                 provider.clone(),
             ),
             price_oracle: HoprTicketPriceOracleInstance::new(
-                primitives::Address::from_hopr_address(contract_addresses.ticket_price_oracle),
+                AlloyAddress::from_hopr_address(contract_addresses.ticket_price_oracle),
                 provider.clone(),
             ),
             win_prob_oracle: HoprWinningProbabilityOracleInstance::new(
-                primitives::Address::from_hopr_address(contract_addresses.winning_probability_oracle),
+                AlloyAddress::from_hopr_address(contract_addresses.winning_probability_oracle),
                 provider.clone(),
             ),
             stake_factory: HoprNodeStakeFactoryInstance::new(
-                primitives::Address::from_hopr_address(contract_addresses.node_stake_v2_factory),
+                AlloyAddress::from_hopr_address(contract_addresses.node_stake_v2_factory),
                 provider.clone(),
             ),
         }
@@ -168,14 +171,14 @@ where
 
         // Get deployer address
         let deployer_hopr_address = deployer.public().to_address();
-        let self_address = primitives::Address::from_hopr_address(deployer_hopr_address);
+        let self_address = AlloyAddress::from_hopr_address(deployer_hopr_address);
 
         let safe_registry = HoprNodeSafeRegistry::deploy(provider.clone()).await?;
         let announcements = HoprAnnouncements::deploy(provider.clone()).await?;
         let stake_factory = HoprNodeStakeFactory::deploy(
             provider.clone(),
-            primitives::Address::ZERO, // _moduleSingletonAddress - use zero for testing
-            primitives::Address::from(announcements.address().as_ref()),
+            AlloyAddress::ZERO, // _moduleSingletonAddress - use zero for testing
+            AlloyAddress::from(announcements.address().as_ref()),
             self_address,
         )
         .await?;
@@ -195,9 +198,9 @@ where
         let token = HoprToken::deploy(provider.clone()).await?;
         let channels = HoprChannels::deploy(
             provider.clone(),
-            primitives::Address::from(token.address().as_ref()),
+            AlloyAddress::from(token.address().as_ref()),
             1_u32,
-            primitives::Address::from(safe_registry.address().as_ref()),
+            AlloyAddress::from(safe_registry.address().as_ref()),
         )
         .await?;
 

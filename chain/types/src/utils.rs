@@ -8,7 +8,7 @@ use SafeContract::SafeContractInstance;
 use alloy::{
     contract::Result as ContractResult,
     network::{ReceiptResponse, TransactionBuilder},
-    primitives::{self, Bytes, U256, aliases, keccak256},
+    primitives::{self, Address as AlloyAddress, Bytes, U256, aliases, keccak256},
     signers::{Signer, local::PrivateKeySigner},
     sol,
     sol_types::SolCall,
@@ -93,9 +93,7 @@ where
     N: alloy::providers::Network,
 {
     N::TransactionRequest::default()
-        .with_to(primitives::Address::from(
-            <[u8; 20]>::try_from(to.as_ref()).expect("Address is 20 bytes"),
-        ))
+        .with_to(AlloyAddress::from_hopr_address(to))
         .with_value(amount)
 }
 
@@ -113,9 +111,7 @@ where
 {
     if native_token > 0 {
         let native_transfer_tx = N::TransactionRequest::default()
-            .with_to(primitives::Address::from(
-                <[u8; 20]>::try_from(node.as_ref()).expect("Address is 20 bytes"),
-            ))
+            .with_to(AlloyAddress::from_hopr_address(node))
             .with_value(native_token);
 
         // let native_transfer_tx = Eip1559TransactionRequest::new()
@@ -128,7 +124,7 @@ where
     }
     if hopr_token > 0 {
         hopr_token_contract
-            .transfer(primitives::Address::from_hopr_address(node), hopr_token)
+            .transfer(AlloyAddress::from_hopr_address(node), hopr_token)
             .send()
             .await?
             .watch()
@@ -158,7 +154,7 @@ where
 
     hopr_channels
         .fundChannel(
-            primitives::Address::from_hopr_address(counterparty),
+            AlloyAddress::from_hopr_address(counterparty),
             aliases::U96::from(amount),
         )
         .send()
@@ -182,21 +178,14 @@ where
     P: alloy::contract::private::Provider<N> + Clone,
     N: alloy::providers::Network,
 {
-    let hopr_token_with_new_client: HoprTokenInstance<P, N> = HoprTokenInstance::new(
-        primitives::Address::from_hopr_address(hopr_token_address),
-        new_client.clone(),
-    );
+    let hopr_token_with_new_client: HoprTokenInstance<P, N> =
+        HoprTokenInstance::new(AlloyAddress::from_hopr_address(hopr_token_address), new_client.clone());
     let hopr_channels_with_new_client = HoprChannelsInstance::new(
-        primitives::Address::from_hopr_address(hopr_channels_address),
+        AlloyAddress::from_hopr_address(hopr_channels_address),
         new_client.clone(),
     );
     hopr_token_with_new_client
-        .approve(
-            primitives::Address::from(
-                <[u8; 20]>::try_from(hopr_channels_address.as_ref()).expect("Address is 20 bytes"),
-            ),
-            amount,
-        )
+        .approve(AlloyAddress::from_hopr_address(hopr_channels_address), amount)
         .send()
         .await?
         .watch()
@@ -204,7 +193,7 @@ where
 
     hopr_channels_with_new_client
         .fundChannel(
-            primitives::Address::from_hopr_address(counterparty),
+            AlloyAddress::from_hopr_address(counterparty),
             aliases::U96::from(amount),
         )
         .send()
@@ -230,14 +219,14 @@ where
 
     let data_hash = safe_contract
         .getTransactionHash(
-            primitives::Address::from_hopr_address(target),
+            AlloyAddress::from_hopr_address(target),
             U256::ZERO,
             inner_tx_data.clone(),
             0,
             U256::ZERO,
             U256::ZERO,
             U256::ZERO,
-            primitives::Address::default(),
+            AlloyAddress::default(),
             wallet.address(),
             nonce,
         )
@@ -247,14 +236,14 @@ where
     let signed_data_hash = wallet.sign_hash(&data_hash).await?;
 
     let safe_tx_data = SafeContract::execTransactionCall {
-        to: primitives::Address::from_hopr_address(target),
+        to: AlloyAddress::from_hopr_address(target),
         value: U256::ZERO,
         data: inner_tx_data,
         operation: 0,
         safeTxGas: U256::ZERO,
         baseGas: U256::ZERO,
         gasPrice: U256::ZERO,
-        gasToken: primitives::Address::default(),
+        gasToken: AlloyAddress::default(),
         refundReceiver: wallet.address(),
         signatures: Bytes::from(signed_data_hash.as_bytes()),
     }
@@ -282,14 +271,12 @@ where
 {
     // Inner tx payload: include node to the module
     let inner_tx_data = HoprToken::approveCall {
-        spender: primitives::Address::from(
-            <[u8; 20]>::try_from(channel_address.as_ref()).expect("Address is 20 bytes"),
-        ),
+        spender: AlloyAddress::from_hopr_address(channel_address),
         value: U256::MAX,
     }
     .abi_encode();
 
-    let safe_contract = SafeContract::new(primitives::Address::from_hopr_address(safe_address), provider.clone());
+    let safe_contract = SafeContract::new(AlloyAddress::from_hopr_address(safe_address), provider.clone());
     let wallet = PrivateKeySigner::from_slice(deployer.secret().as_ref()).expect("failed to construct wallet");
     let safe_tx = get_safe_tx(safe_contract, token_address, inner_tx_data.into(), wallet)
         .await

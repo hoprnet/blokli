@@ -5,6 +5,7 @@
 use std::{sync::Arc, time::Duration};
 
 use alloy::{
+    primitives::Address as AlloyAddress,
     providers::{
         Identity, PendingTransaction, Provider, ProviderBuilder, RootProvider,
         fillers::{BlobGasFiller, CachedNonceManager, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
@@ -197,9 +198,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
     pub(crate) async fn get_xdai_balance(&self, address: Address) -> Result<XDaiBalance> {
         Ok(XDaiBalance::from_be_bytes(
             self.provider
-                .get_balance(alloy::primitives::Address::from(
-                    <[u8; 20]>::try_from(address.as_ref()).expect("Address is 20 bytes"),
-                ))
+                .get_balance(AlloyAddress::from_hopr_address(address))
                 .await?
                 .to_be_bytes::<32>(),
         ))
@@ -209,9 +208,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         Ok(HoprBalance::from_be_bytes(
             self.contract_instances
                 .token
-                .balanceOf(alloy::primitives::Address::from(
-                    <[u8; 20]>::try_from(address.as_ref()).expect("Address is 20 bytes"),
-                ))
+                .balanceOf(AlloyAddress::from_hopr_address(address))
                 .call()
                 .await?
                 .to_be_bytes::<32>(),
@@ -223,12 +220,8 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
             self.contract_instances
                 .token
                 .allowance(
-                    alloy::primitives::Address::from(
-                        <[u8; 20]>::try_from(owner.as_ref()).expect("Address is 20 bytes"),
-                    ),
-                    alloy::primitives::Address::from(
-                        <[u8; 20]>::try_from(spender.as_ref()).expect("Address is 20 bytes"),
-                    ),
+                    AlloyAddress::from_hopr_address(owner),
+                    AlloyAddress::from_hopr_address(spender),
                 )
                 .call()
                 .await?
@@ -237,7 +230,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
     }
 
     pub(crate) async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64> {
-        let safe_address_alloy = alloy::primitives::Address::from_hopr_address(safe_address);
+        let safe_address_alloy = AlloyAddress::from_hopr_address(safe_address);
 
         // Get provider from any contract instance (they all share the same provider)
         let provider = self.contract_instances.token.provider();
@@ -304,9 +297,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
         match self
             .contract_instances
             .safe_registry
-            .nodeToSafe(alloy::primitives::Address::from(
-                <[u8; 20]>::try_from(node_address.as_ref()).expect("Address is 20 bytes"),
-            ))
+            .nodeToSafe(AlloyAddress::from_hopr_address(node_address))
             .call()
             .await
         {

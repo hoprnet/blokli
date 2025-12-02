@@ -1190,16 +1190,8 @@ mod tests {
         let history = db.get_channel_history(None, &ce_initial.get_id()).await?;
 
         assert_eq!(2, history.len(), "should have 2 state records");
-        assert_eq!(
-            0u64,
-            history[0].ticket_index,
-            "first state should have ticket_index 0"
-        );
-        assert_eq!(
-            5u64,
-            history[1].ticket_index,
-            "second state should have ticket_index 5"
-        );
+        assert_eq!(0u64, history[0].ticket_index, "first state should have ticket_index 0");
+        assert_eq!(5u64, history[1].ticket_index, "second state should have ticket_index 5");
 
         Ok(())
     }
@@ -1351,8 +1343,7 @@ mod tests {
                 i
             );
             assert_eq!(
-                i as u64,
-                state.ticket_index,
+                i as u64, state.ticket_index,
                 "state {} should have correct ticket_index",
                 i
             );

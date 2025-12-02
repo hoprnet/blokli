@@ -694,13 +694,8 @@ mod tests {
         db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
 
         // When channel is closed, balance is 0, ticket_index is reset to 0, and status is Closed
-        let channel_state = encode_channel_state(
-            HoprBalance::zero(),
-            0,
-            0,
-            channel.channel_epoch,
-            ChannelStatus::Closed,
-        );
+        let channel_state =
+            encode_channel_state(HoprBalance::zero(), 0, 0, channel.channel_epoch, ChannelStatus::Closed);
 
         // Create ChannelClosed event using bindings
         let event = ChannelClosed {
@@ -773,13 +768,8 @@ mod tests {
         db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
 
         // When channel is closed, balance is 0, ticket_index is reset to 0, and status is Closed
-        let channel_state = encode_channel_state(
-            HoprBalance::zero(),
-            0,
-            0,
-            channel.channel_epoch,
-            ChannelStatus::Closed,
-        );
+        let channel_state =
+            encode_channel_state(HoprBalance::zero(), 0, 0, channel.channel_epoch, ChannelStatus::Closed);
 
         // Create ChannelClosed event using bindings
         let event = ChannelClosed {
@@ -830,8 +820,8 @@ mod tests {
         // Create ChannelOpened event using bindings
         let event = ChannelOpened {
             channelId: FixedBytes::from_slice(channel_id.as_ref()),
-            source: AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref()),
-            destination: AlloyAddress::from_slice(COUNTERPARTY_CHAIN_ADDRESS.as_ref()),
+            source: AlloyAddress::from_hopr_address(*SELF_CHAIN_ADDRESS),
+            destination: AlloyAddress::from_hopr_address(*COUNTERPARTY_CHAIN_ADDRESS),
             channel: channel_state,
         };
 
@@ -888,8 +878,8 @@ mod tests {
         // Create ChannelOpened event using bindings (reopening is a ChannelOpened event)
         let event = ChannelOpened {
             channelId: FixedBytes::from_slice(channel_id.as_ref()),
-            source: AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref()),
-            destination: AlloyAddress::from_slice(COUNTERPARTY_CHAIN_ADDRESS.as_ref()),
+            source: AlloyAddress::from_hopr_address(*SELF_CHAIN_ADDRESS),
+            destination: AlloyAddress::from_hopr_address(*COUNTERPARTY_CHAIN_ADDRESS),
             channel: channel_state,
         };
 
@@ -946,8 +936,8 @@ mod tests {
         // Create ChannelOpened event using bindings
         let event = ChannelOpened {
             channelId: FixedBytes::from_slice(channel_id.as_ref()),
-            source: AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref()),
-            destination: AlloyAddress::from_slice(COUNTERPARTY_CHAIN_ADDRESS.as_ref()),
+            source: AlloyAddress::from_hopr_address(*SELF_CHAIN_ADDRESS),
+            destination: AlloyAddress::from_hopr_address(*COUNTERPARTY_CHAIN_ADDRESS),
             channel: channel_state,
         };
 
@@ -1327,7 +1317,8 @@ mod tests {
         // TODO: Add event verification - check published IndexerEvent instead of return value
 
         assert_eq!(
-            channel.ticket_index, next_ticket_index.as_u64(),
+            channel.ticket_index,
+            next_ticket_index.as_u64(),
             "channel entry must contain next ticket index"
         );
 
@@ -1401,14 +1392,15 @@ mod tests {
         // TODO: Add event verification - check published IndexerEvent instead of return value
 
         assert_eq!(
-            channel.ticket_index, next_ticket_index.as_u64(),
+            channel.ticket_index,
+            next_ticket_index.as_u64(),
             "channel entry must contain next ticket index"
         );
         Ok(())
-        }
+    }
 
-        #[tokio::test]
-        async fn on_channel_ticket_redeemed_on_foreign_channel_should_pass() -> anyhow::Result<()> {
+    #[tokio::test]
+    async fn on_channel_ticket_redeemed_on_foreign_channel_should_pass() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
@@ -1472,14 +1464,15 @@ mod tests {
         // TODO: Add event verification - check published IndexerEvent instead of return value
 
         assert_eq!(
-            channel.ticket_index, next_ticket_index.as_u64(),
+            channel.ticket_index,
+            next_ticket_index.as_u64(),
             "channel entry must contain next ticket index"
         );
         Ok(())
-        }
+    }
 
-        #[tokio::test]
-        async fn on_channel_closure_initiated() -> anyhow::Result<()> {
+    #[tokio::test]
+    async fn on_channel_closure_initiated() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         // ==> set mock expectations here
