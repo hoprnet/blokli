@@ -4,10 +4,9 @@
 # Directory for storing data files
 data_directory = "data"
 
-# Network identifier - specifies which blockchain network to connect to
-# Supported networks: dufour (mainnet), rotsee (testnet), anvil-localhost (local development)
-# Network configuration is loaded from hopr-bindings NetworksWithContractAddresses
-network = "dufour"
+# Network identifier - specifies which HOPR network to connect to
+# Supported networks: rotsee (testnet), anvil-localhost (local development)
+network = "rotsee"
 
 # RPC endpoint URL for connecting to the blockchain
 # This overrides the default RPC endpoint for the selected network

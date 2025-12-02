@@ -18,11 +18,8 @@ pub enum Network {
     /// Local Anvil development network
     #[serde(alias = "anvil_localhost", alias = "anvil-localhost", alias = "localhost")]
     AnvilLocalhost,
-    /// Dufour mainnet (production network)
-    #[default]
-    #[serde(alias = "dufour")]
-    Dufour,
     /// Rotsee testnet (development/testing network)
+    #[default]
     #[serde(alias = "rotsee")]
     Rotsee,
 }
@@ -33,7 +30,7 @@ impl Network {
     /// This is useful for generating error messages that show users
     /// what networks are supported.
     pub fn all() -> Vec<Network> {
-        vec![Network::AnvilLocalhost, Network::Dufour, Network::Rotsee]
+        vec![Network::AnvilLocalhost, Network::Rotsee]
     }
 
     /// Returns all available network names as strings.
@@ -50,7 +47,6 @@ impl Network {
     pub fn as_str(&self) -> &'static str {
         match self {
             Network::AnvilLocalhost => "anvil-localhost",
-            Network::Dufour => "dufour",
             Network::Rotsee => "rotsee",
         }
     }
@@ -66,7 +62,7 @@ impl Network {
     /// ```rust,ignore
     /// use bloklid::network::Network;
     ///
-    /// let network = Network::Dufour;
+    /// let network = Network::Rotsee;
     /// if let Some(config) = network.resolve() {
     ///     println!("Start block: {}", config.indexer_start_block_number);
     /// }
@@ -80,7 +76,6 @@ impl Network {
     pub fn tx_polling_interval(&self) -> u64 {
         match self {
             Network::AnvilLocalhost => 100,
-            Network::Dufour => 1000,
             Network::Rotsee => 1000,
         }
     }
@@ -89,7 +84,6 @@ impl Network {
     pub fn confirmations(&self) -> u16 {
         match self {
             Network::AnvilLocalhost => 1,
-            Network::Dufour => 5,
             Network::Rotsee => 12,
         }
     }
@@ -98,7 +92,6 @@ impl Network {
     pub fn max_block_range(&self) -> u32 {
         match self {
             Network::AnvilLocalhost => 10000,
-            Network::Dufour => 1000,
             Network::Rotsee => 1000,
         }
     }
@@ -116,7 +109,6 @@ impl FromStr for Network {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_lowercase().as_str() {
             "anvil-localhost" | "anvil_localhost" | "localhost" => Ok(Network::AnvilLocalhost),
-            "dufour" => Ok(Network::Dufour),
             "rotsee" => Ok(Network::Rotsee),
             _ => Err(NetworkParseError::UnknownNetwork {
                 name: s.to_string(),
@@ -145,9 +137,8 @@ mod tests {
 
     #[test]
     fn test_network_from_str() {
-        assert_eq!("dufour".parse::<Network>().unwrap(), Network::Dufour);
-        assert_eq!("DUFOUR".parse::<Network>().unwrap(), Network::Dufour);
         assert_eq!("rotsee".parse::<Network>().unwrap(), Network::Rotsee);
+        assert_eq!("ROTSEE".parse::<Network>().unwrap(), Network::Rotsee);
         assert_eq!("anvil-localhost".parse::<Network>().unwrap(), Network::AnvilLocalhost);
         assert_eq!("localhost".parse::<Network>().unwrap(), Network::AnvilLocalhost);
     }
@@ -158,12 +149,11 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err();
         assert!(err.to_string().contains("invalid-network"));
-        assert!(err.to_string().contains("dufour"));
+        assert!(err.to_string().contains("rotsee"));
     }
 
     #[test]
     fn test_network_display() {
-        assert_eq!(Network::Dufour.to_string(), "dufour");
         assert_eq!(Network::Rotsee.to_string(), "rotsee");
         assert_eq!(Network::AnvilLocalhost.to_string(), "anvil-localhost");
     }
@@ -171,22 +161,23 @@ mod tests {
     #[test]
     fn test_network_all() {
         let networks = Network::all();
-        assert_eq!(networks.len(), 3);
+        assert_eq!(networks.len(), 2);
         assert!(networks.contains(&Network::AnvilLocalhost));
-        assert!(networks.contains(&Network::Dufour));
         assert!(networks.contains(&Network::Rotsee));
     }
 
     #[test]
     fn test_network_default() {
-        assert_eq!(Network::default(), Network::Dufour);
+        assert_eq!(Network::default(), Network::Rotsee);
     }
 
     #[test]
     fn test_network_resolve() {
         // Test that networks can be resolved
         // Note: This test depends on hopr-bindings having these networks defined
-        let dufour = Network::Dufour.resolve();
-        assert!(dufour.is_some(), "Dufour network should be defined in hopr-bindings");
+        let rotsee = Network::Rotsee.resolve();
+        assert!(rotsee.is_some(), "Rotsee network should be defined in hopr-bindings");
+        let anvil = Network::AnvilLocalhost.resolve();
+        assert!(anvil.is_some(), "AnvilLocalhost network should be defined in hopr-bindings");
     }
 }

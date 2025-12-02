@@ -550,7 +550,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "dufour"
+            network = "rotsee"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -587,7 +587,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "dufour"
+            network = "rotsee"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -624,7 +624,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "dufour"
+            network = "rotsee"
             rpc_url = "http://localhost:8545"
         "#
         )
@@ -670,7 +670,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "dufour"
+            network = "rotsee"
             rpc_url = "http://localhost:8545"
         "#
         )
@@ -703,7 +703,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "dufour"
+            network = "rotsee"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -735,7 +735,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "dufour"
+            network = "rotsee"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -771,7 +771,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "dufour"
+            network = "rotsee"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -811,7 +811,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "dufour"
+            network = "rotsee"
             rpc_url = "http://localhost:8545"
             [database]
             type = "sqlite"
@@ -848,7 +848,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "dufour"
+            network = "rotsee"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -888,7 +888,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "dufour"
+            network = "rotsee"
             rpc_url = "http://localhost:8545"
             [database]
             type = "sqlite"
@@ -928,7 +928,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "dufour"
+            network = "rotsee"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -961,7 +961,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "dufour"
+            network = "rotsee"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -995,7 +995,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "dufour"
+            network = "rotsee"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -1029,7 +1029,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "dufour"
+            network = "rotsee"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
@@ -1062,7 +1062,7 @@ mod tests {
         writeln!(
             file,
             r#"
-            network = "dufour"
+            network = "rotsee"
             rpc_url = "http://localhost:8545"
             [database]
             type = "postgresql"
