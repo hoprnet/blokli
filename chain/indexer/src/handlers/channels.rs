@@ -750,9 +750,9 @@ mod tests {
         ))
         .expect("valid keypair");
 
-        db.upsert_account(None, foreign_addr1, *foreign_key1.public(), None, 1, 0, 0)
+        db.upsert_account(None, 1, foreign_addr1, *foreign_key1.public(), None, 1, 0, 0)
             .await?;
-        db.upsert_account(None, foreign_addr2, *foreign_key2.public(), None, 1, 0, 1)
+        db.upsert_account(None, 2, foreign_addr2, *foreign_key2.public(), None, 1, 0, 1)
             .await?;
 
         let starting_balance = HoprBalance::from(primitive_types::U256::from((1u128 << 96) - 1));
@@ -1419,9 +1419,9 @@ mod tests {
         let foreign_key2 =
             OffchainKeypair::from_secret(&hopr_crypto_random::random_bytes::<32>()).expect("valid keypair");
 
-        db.upsert_account(None, foreign_addr1, *foreign_key1.public(), None, 1, 0, 0)
+        db.upsert_account(None, 1, foreign_addr1, *foreign_key1.public(), None, 1, 0, 0)
             .await?;
-        db.upsert_account(None, foreign_addr2, *foreign_key2.public(), None, 1, 0, 1)
+        db.upsert_account(None, 2, foreign_addr2, *foreign_key2.public(), None, 1, 0, 1)
             .await?;
 
         let channel = ChannelEntry::new(

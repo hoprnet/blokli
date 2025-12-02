@@ -520,12 +520,6 @@ impl BlokliDbChannelOperations for BlokliDb {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    use blokli_db_entity::{
-                        channel_state,
-                        prelude::{Channel, ChannelState},
-                    };
-                    use sea_orm::QueryOrder;
-
                     // Step 1: Get all channels
                     let channels = Channel::find().all(tx.as_ref()).await?;
 
@@ -811,7 +805,7 @@ mod tests {
         // Create accounts first (required before channels can be created)
         let addr = Address::default();
         let packet_key = *OffchainKeypair::random().public();
-        db.upsert_account(None, addr, packet_key, None, 1, 0, 0).await?;
+        db.upsert_account(None, 1, addr, packet_key, None, 1, 0, 0).await?;
 
         let ce = ChannelEntry::new(addr, addr, 0.into(), 0_u32.into(), ChannelStatus::Open, 0_u32.into());
 
@@ -837,8 +831,8 @@ mod tests {
         // Create accounts first (required before channels can be created)
         let packet_key_a = *OffchainKeypair::random().public();
         let packet_key_b = *OffchainKeypair::random().public();
-        db.upsert_account(None, a, packet_key_a, None, 1, 0, 0).await?;
-        db.upsert_account(None, b, packet_key_b, None, 2, 0, 0).await?;
+        db.upsert_account(None, 1, a, packet_key_a, None, 1, 0, 0).await?;
+        db.upsert_account(None, 2, b, packet_key_b, None, 2, 0, 0).await?;
 
         let ce = ChannelEntry::new(a, b, 0.into(), 0_u32.into(), ChannelStatus::Open, 0_u32.into());
 
@@ -878,6 +872,7 @@ mod tests {
         let packet_key_expected_destination = *OffchainKeypair::random().public();
         db.upsert_account(
             None,
+            1,
             expected_destination,
             packet_key_expected_destination,
             None,
@@ -918,10 +913,10 @@ mod tests {
 
         // Create accounts first (required before channels can be created)
         let packet_key_addr_1 = *OffchainKeypair::random().public();
-        db.upsert_account(None, addr_1, packet_key_addr_1, None, 1, 0, 0)
+        db.upsert_account(None, 1, addr_1, packet_key_addr_1, None, 1, 0, 0)
             .await?;
         let packet_key_addr_2 = *OffchainKeypair::random().public();
-        db.upsert_account(None, addr_2, packet_key_addr_2, None, 2, 0, 0)
+        db.upsert_account(None, 2, addr_2, packet_key_addr_2, None, 2, 0, 0)
             .await?;
 
         let ce_1 = ChannelEntry::new(
@@ -981,10 +976,10 @@ mod tests {
 
         // Create accounts first
         let packet_key_addr_1 = *OffchainKeypair::random().public();
-        db.upsert_account(None, addr_1, packet_key_addr_1, None, 1, 0, 0)
+        db.upsert_account(None, 1, addr_1, packet_key_addr_1, None, 1, 0, 0)
             .await?;
         let packet_key_addr_2 = *OffchainKeypair::random().public();
-        db.upsert_account(None, addr_2, packet_key_addr_2, None, 1, 0, 0)
+        db.upsert_account(None, 2, addr_2, packet_key_addr_2, None, 1, 0, 0)
             .await?;
 
         // Create channel with initial state at block 100
@@ -1020,10 +1015,10 @@ mod tests {
 
         // Create accounts first
         let packet_key_addr_1 = *OffchainKeypair::random().public();
-        db.upsert_account(None, addr_1, packet_key_addr_1, None, 1, 0, 0)
+        db.upsert_account(None, 1, addr_1, packet_key_addr_1, None, 1, 0, 0)
             .await?;
         let packet_key_addr_2 = *OffchainKeypair::random().public();
-        db.upsert_account(None, addr_2, packet_key_addr_2, None, 1, 0, 0)
+        db.upsert_account(None, 2, addr_2, packet_key_addr_2, None, 1, 0, 0)
             .await?;
 
         // Create channel with initial state at block 100
@@ -1093,10 +1088,10 @@ mod tests {
 
         // Create accounts first
         let packet_key_addr_1 = *OffchainKeypair::random().public();
-        db.upsert_account(None, addr_1, packet_key_addr_1, None, 1, 0, 0)
+        db.upsert_account(None, 1, addr_1, packet_key_addr_1, None, 1, 0, 0)
             .await?;
         let packet_key_addr_2 = *OffchainKeypair::random().public();
-        db.upsert_account(None, addr_2, packet_key_addr_2, None, 1, 0, 0)
+        db.upsert_account(None, 2, addr_2, packet_key_addr_2, None, 1, 0, 0)
             .await?;
 
         let balance = HoprBalance::from(1000u32);
@@ -1170,10 +1165,10 @@ mod tests {
 
         // Create accounts first
         let packet_key_addr_1 = *OffchainKeypair::random().public();
-        db.upsert_account(None, addr_1, packet_key_addr_1, None, 1, 0, 0)
+        db.upsert_account(None, 1, addr_1, packet_key_addr_1, None, 1, 0, 0)
             .await?;
         let packet_key_addr_2 = *OffchainKeypair::random().public();
-        db.upsert_account(None, addr_2, packet_key_addr_2, None, 1, 0, 0)
+        db.upsert_account(None, 2, addr_2, packet_key_addr_2, None, 1, 0, 0)
             .await?;
 
         let balance = HoprBalance::from(1000u32);
@@ -1205,10 +1200,10 @@ mod tests {
 
         // Create accounts first
         let packet_key_addr_1 = *OffchainKeypair::random().public();
-        db.upsert_account(None, addr_1, packet_key_addr_1, None, 1, 0, 0)
+        db.upsert_account(None, 1, addr_1, packet_key_addr_1, None, 1, 0, 0)
             .await?;
         let packet_key_addr_2 = *OffchainKeypair::random().public();
-        db.upsert_account(None, addr_2, packet_key_addr_2, None, 1, 0, 0)
+        db.upsert_account(None, 2, addr_2, packet_key_addr_2, None, 1, 0, 0)
             .await?;
 
         // Create multiple states at different blocks
@@ -1306,10 +1301,10 @@ mod tests {
 
         // Create accounts first
         let packet_key_addr_1 = *OffchainKeypair::random().public();
-        db.upsert_account(None, addr_1, packet_key_addr_1, None, 1, 0, 0)
+        db.upsert_account(None, 1, addr_1, packet_key_addr_1, None, 1, 0, 0)
             .await?;
         let packet_key_addr_2 = *OffchainKeypair::random().public();
-        db.upsert_account(None, addr_2, packet_key_addr_2, None, 1, 0, 0)
+        db.upsert_account(None, 2, addr_2, packet_key_addr_2, None, 1, 0, 0)
             .await?;
 
         // Create 5 state changes across different blocks
@@ -1361,10 +1356,10 @@ mod tests {
 
         // Create accounts first
         let packet_key_addr_1 = *OffchainKeypair::random().public();
-        db.upsert_account(None, addr_1, packet_key_addr_1, None, 1, 0, 0)
+        db.upsert_account(None, 1, addr_1, packet_key_addr_1, None, 1, 0, 0)
             .await?;
         let packet_key_addr_2 = *OffchainKeypair::random().public();
-        db.upsert_account(None, addr_2, packet_key_addr_2, None, 1, 0, 0)
+        db.upsert_account(None, 2, addr_2, packet_key_addr_2, None, 1, 0, 0)
             .await?;
 
         // Create channel with state at block 100
@@ -1397,10 +1392,10 @@ mod tests {
 
         // Create accounts first
         let packet_key_addr_1 = *OffchainKeypair::random().public();
-        db.upsert_account(None, addr_1, packet_key_addr_1, None, 1, 0, 0)
+        db.upsert_account(None, 1, addr_1, packet_key_addr_1, None, 1, 0, 0)
             .await?;
         let packet_key_addr_2 = *OffchainKeypair::random().public();
-        db.upsert_account(None, addr_2, packet_key_addr_2, None, 1, 0, 0)
+        db.upsert_account(None, 2, addr_2, packet_key_addr_2, None, 1, 0, 0)
             .await?;
 
         // Create initial channel

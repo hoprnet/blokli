@@ -109,6 +109,7 @@ pub trait BlokliDbAccountOperations {
     async fn upsert_account<'a>(
         &'a self,
         tx: OptTx<'a>,
+        key_id: u32,
         chain_key: Address,
         packet_key: OffchainPublicKey,
         safe_address: Option<Address>,
@@ -240,6 +241,7 @@ impl BlokliDbAccountOperations for BlokliDb {
     async fn upsert_account<'a>(
         &'a self,
         tx: OptTx<'a>,
+        key_id: u32,
         chain_key: Address,
         packet_key: OffchainPublicKey,
         safe_address: Option<Address>,
@@ -267,12 +269,12 @@ impl BlokliDbAccountOperations for BlokliDb {
                     } else {
                         // Account doesn't exist - create identity + initial state
                         let account_model = account::ActiveModel {
+                            id: Set(key_id as i64),
                             chain_key: Set(chain_key.as_ref().to_vec()),
                             packet_key: Set(packet_key.to_hex()),
                             published_block: Set(block_i64),
                             published_tx_index: Set(tx_index_i64),
                             published_log_index: Set(log_index_i64),
-                            ..Default::default()
                         };
                         let inserted = account_model.insert(tx.as_ref()).await?;
                         inserted.id
@@ -1189,7 +1191,7 @@ mod tests {
         let safe_addr = Address::from(hopr_crypto_random::random_bytes());
 
         // Create account with upsert at block 100
-        db.upsert_account(None, chain_key, packet_key, Some(safe_addr), 100, 0, 0)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr), 100, 0, 0)
             .await?;
 
         // Verify account can be retrieved with latest state
@@ -1211,11 +1213,11 @@ mod tests {
         let safe_addr_2 = Address::from(hopr_crypto_random::random_bytes());
 
         // Create account with initial state at block 100
-        db.upsert_account(None, chain_key, packet_key, Some(safe_addr_1), 100, 0, 0)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr_1), 100, 0, 0)
             .await?;
 
         // Update account with new safe address at block 200
-        db.upsert_account(None, chain_key, packet_key, Some(safe_addr_2), 200, 0, 0)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr_2), 200, 0, 0)
             .await?;
 
         // Verify latest state has new safe address
@@ -1245,16 +1247,17 @@ mod tests {
         let packet_key = *OffchainKeypair::random().public();
 
         // State 1: No safe address at block 100
-        db.upsert_account(None, chain_key, packet_key, None, 100, 0, 0).await?;
+        db.upsert_account(None, 1, chain_key, packet_key, None, 100, 0, 0)
+            .await?;
 
         // State 2: Add safe address at block 200
         let safe_addr = Address::from(hopr_crypto_random::random_bytes());
-        db.upsert_account(None, chain_key, packet_key, Some(safe_addr), 200, 0, 0)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr), 200, 0, 0)
             .await?;
 
         // State 3: Change safe address at block 300
         let safe_addr_2 = Address::from(hopr_crypto_random::random_bytes());
-        db.upsert_account(None, chain_key, packet_key, Some(safe_addr_2), 300, 0, 0)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr_2), 300, 0, 0)
             .await?;
 
         // Verify full history has all 3 states
@@ -1272,14 +1275,15 @@ mod tests {
         let packet_key = *OffchainKeypair::random().public();
 
         // Create multiple states at different blocks
-        db.upsert_account(None, chain_key, packet_key, None, 100, 0, 0).await?;
+        db.upsert_account(None, 1, chain_key, packet_key, None, 100, 0, 0)
+            .await?;
 
         let safe_addr_1 = Address::from(hopr_crypto_random::random_bytes());
-        db.upsert_account(None, chain_key, packet_key, Some(safe_addr_1), 200, 0, 0)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr_1), 200, 0, 0)
             .await?;
 
         let safe_addr_2 = Address::from(hopr_crypto_random::random_bytes());
-        db.upsert_account(None, chain_key, packet_key, Some(safe_addr_2), 300, 0, 0)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr_2), 300, 0, 0)
             .await?;
 
         // Query state at various blocks
@@ -1321,7 +1325,7 @@ mod tests {
             } else {
                 None
             };
-            db.upsert_account(None, chain_key, packet_key, safe_addr, (i + 1) * 100, 0, 0)
+            db.upsert_account(None, 1, chain_key, packet_key, safe_addr, (i + 1) * 100, 0, 0)
                 .await?;
         }
 
@@ -1347,10 +1351,12 @@ mod tests {
         let packet_key = *OffchainKeypair::random().public();
 
         // Create multiple states
-        db.upsert_account(None, chain_key, packet_key, None, 100, 0, 0).await?;
-        db.upsert_account(None, chain_key, packet_key, None, 200, 0, 0).await?;
+        db.upsert_account(None, 1, chain_key, packet_key, None, 100, 0, 0)
+            .await?;
+        db.upsert_account(None, 1, chain_key, packet_key, None, 200, 0, 0)
+            .await?;
         let latest_safe = Address::from(hopr_crypto_random::random_bytes());
-        db.upsert_account(None, chain_key, packet_key, Some(latest_safe), 300, 0, 0)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(latest_safe), 300, 0, 0)
             .await?;
 
         // get_account should return the latest state
@@ -1369,7 +1375,8 @@ mod tests {
         let packet_key = *OffchainKeypair::random().public();
 
         // Create account with upsert
-        db.upsert_account(None, chain_key, packet_key, None, 100, 0, 0).await?;
+        db.upsert_account(None, 1, chain_key, packet_key, None, 100, 0, 0)
+            .await?;
 
         // Verify translate_key works in both directions
         let translated_packet: OffchainPublicKey = db
@@ -1397,7 +1404,8 @@ mod tests {
         let packet_key = *OffchainKeypair::random().public();
 
         // Create initial account
-        db.upsert_account(None, chain_key, packet_key, None, 100, 0, 0).await?;
+        db.upsert_account(None, 1, chain_key, packet_key, None, 100, 0, 0)
+            .await?;
 
         // Spawn multiple concurrent updates
         let mut handles = vec![];
@@ -1410,7 +1418,7 @@ mod tests {
                     None
                 };
                 db_clone
-                    .upsert_account(None, chain_key, packet_key, safe, 200 + i, 0, 0)
+                    .upsert_account(None, 1, chain_key, packet_key, safe, 200 + i, 0, 0)
                     .await
             });
             handles.push(handle);
@@ -1444,10 +1452,10 @@ mod tests {
         let packet_2 = *OffchainKeypair::random().public();
 
         // Create two accounts with interleaved positions
-        db.upsert_account(None, chain_1, packet_1, None, 100, 5, 2).await?;
-        db.upsert_account(None, chain_2, packet_2, None, 100, 7, 0).await?;
-        db.upsert_account(None, chain_1, packet_1, None, 101, 3, 1).await?;
-        db.upsert_account(None, chain_2, packet_2, None, 101, 4, 2).await?;
+        db.upsert_account(None, 1, chain_1, packet_1, None, 100, 5, 2).await?;
+        db.upsert_account(None, 2, chain_2, packet_2, None, 100, 7, 0).await?;
+        db.upsert_account(None, 1, chain_1, packet_1, None, 101, 3, 1).await?;
+        db.upsert_account(None, 2, chain_2, packet_2, None, 101, 4, 2).await?;
 
         // Query account 1 history - should not include account 2's states
         let history_1 = db.get_account_history(None, chain_1).await?;
@@ -1478,7 +1486,7 @@ mod tests {
         let safe_addr_2 = Address::from(hopr_crypto_random::random_bytes());
 
         // State 1: Create account with first safe address at block 100
-        db.upsert_account(None, chain_key, packet_key, Some(safe_addr_1), 100, 0, 0)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr_1), 100, 0, 0)
             .await?;
 
         // Verify safe_address is correctly retrieved
@@ -1488,10 +1496,10 @@ mod tests {
             account.safe_address,
             "safe_address should match first state"
         );
-        assert_ne!(account.key_id, 1.into(), "key_id should be non-zero");
+        assert_ne!(account.key_id, 0.into(), "key_id should be non-zero");
 
         // State 2: Update account with new safe address at block 200
-        db.upsert_account(None, chain_key, packet_key, Some(safe_addr_2), 200, 0, 0)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr_2), 200, 0, 0)
             .await?;
 
         // Verify latest state has updated safe_address
@@ -1542,7 +1550,7 @@ mod tests {
         // State 3: Create account without safe address
         let chain_key_no_safe = ChainKeypair::random().public().to_address();
         let packet_key_no_safe = *OffchainKeypair::random().public();
-        db.upsert_account(None, chain_key_no_safe, packet_key_no_safe, None, 100, 0, 0)
+        db.upsert_account(None, 2, chain_key_no_safe, packet_key_no_safe, None, 100, 0, 0)
             .await?;
 
         let no_safe = db
@@ -1552,7 +1560,7 @@ mod tests {
         assert_eq!(None, no_safe.safe_address, "safe_address should be None when not set");
         assert_ne!(
             no_safe.key_id,
-            1.into(),
+            0.into(),
             "key_id should still be set even without safe_address"
         );
 

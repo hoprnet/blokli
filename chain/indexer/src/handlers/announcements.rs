@@ -97,10 +97,15 @@ where
                 ) {
                     Ok(binding) => {
                         let chain_key = binding.chain_key;
+                        // key_id is a U256, but we only support u32 for now as it maps to the account ID
+                        // This should be safe as long as we don't have more than 2^32 accounts
+                        let key_id: u32 = key_binding.key_id.try_into().unwrap_or_default();
+
                         match self
                             .db
                             .upsert_account(
                                 Some(tx),
+                                key_id,
                                 chain_key,
                                 binding.packet_key,
                                 None, // safe_address is None for key bindings
@@ -322,6 +327,7 @@ mod tests {
         // Create account using upsert_account
         db.upsert_account(
             None,
+            1,
             *SELF_CHAIN_ADDRESS,
             *SELF_PRIV_KEY.public(),
             None, // no safe_address
@@ -336,7 +342,7 @@ mod tests {
             chain_addr: *SELF_CHAIN_ADDRESS,
             entry_type: AccountType::NotAnnounced,
             safe_address: None,
-            key_id: 0.into(),
+            key_id: 1.into(),
         };
 
         let test_multiaddr_empty: Multiaddr = "".parse()?;
@@ -402,7 +408,7 @@ mod tests {
             chain_addr: *SELF_CHAIN_ADDRESS,
             entry_type: AccountType::Announced(vec![test_multiaddr.clone()]),
             safe_address: None,
-            key_id: 0.into(),
+            key_id: 1.into(),
         };
 
         let handlers_clone = handlers.clone();
@@ -475,7 +481,7 @@ mod tests {
             chain_addr: *SELF_CHAIN_ADDRESS,
             entry_type: AccountType::Announced(vec![test_multiaddr_dns.clone()]),
             safe_address: None,
-            key_id: 0.into(),
+            key_id: 1.into(),
         };
 
         db.begin_transaction()
@@ -526,6 +532,7 @@ mod tests {
         // Create account using upsert_account
         db.upsert_account(
             None,
+            1,
             *SELF_CHAIN_ADDRESS,
             *SELF_PRIV_KEY.public(),
             None, // no safe_address
@@ -556,7 +563,7 @@ mod tests {
             chain_addr: *SELF_CHAIN_ADDRESS,
             entry_type: AccountType::NotAnnounced,
             safe_address: None,
-            key_id: 0.into(),
+            key_id: 1.into(),
         };
 
         db.begin_transaction()
