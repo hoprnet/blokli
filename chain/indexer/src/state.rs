@@ -15,7 +15,7 @@ use tokio::sync::RwLock;
 
 /// Event type for the subscription event bus
 ///
-/// Represents changes to accounts and channels that should be broadcast to subscribers.
+/// Represents changes to accounts, channels, and protocol parameters that should be broadcast to subscribers.
 /// Events contain complete GraphQL data to avoid additional database queries per subscriber
 /// and to ensure temporal consistency.
 #[derive(Clone, Debug)]

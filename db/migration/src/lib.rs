@@ -21,6 +21,8 @@ mod m017_add_ticket_params_notify_trigger;
 mod m018_alter_log_topic_info_topic_binary;
 mod m019_alter_chain_node_info_id_bigint;
 mod m020_add_key_binding_fee_to_chain_info;
+mod m021_clear_index_data;
+mod m022_clear_log_data;
 
 #[derive(PartialEq)]
 pub enum BackendType {
@@ -56,6 +58,8 @@ impl MigratorTrait for Migrator {
             Box::new(m018_alter_log_topic_info_topic_binary::Migration),
             Box::new(m019_alter_chain_node_info_id_bigint::Migration),
             Box::new(m020_add_key_binding_fee_to_chain_info::Migration),
+            Box::new(m021_clear_index_data::Migration),
+            Box::new(m022_clear_log_data::Migration),
         ]
     }
 }
@@ -88,6 +92,7 @@ impl MigratorTrait for MigratorIndex {
             Box::new(m017_add_ticket_params_notify_trigger::Migration),
             Box::new(m019_alter_chain_node_info_id_bigint::Migration),
             Box::new(m020_add_key_binding_fee_to_chain_info::Migration),
+            Box::new(m021_clear_index_data::Migration),
         ]
     }
 }
@@ -104,6 +109,7 @@ impl MigratorTrait for MigratorChainLogs {
             Box::new(m003_create_log_tables::Migration),
             Box::new(m004_create_log_indices::Migration),
             Box::new(m018_alter_log_topic_info_topic_binary::Migration),
+            Box::new(m022_clear_log_data::Migration),
         ]
     }
 }

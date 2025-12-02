@@ -573,6 +573,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_update_key_binding_fee() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let data = db.get_indexer_data(None).await?;
+        assert_eq!(data.key_binding_fee, None);
+
+        let fee = HoprBalance::from(50);
+        db.update_key_binding_fee(None, fee).await?;
+
+        let data = db.get_indexer_data(None).await?;
+        assert_eq!(data.key_binding_fee, Some(fee));
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_clear_index_db_multiple_times() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
 
