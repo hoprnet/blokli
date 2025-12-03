@@ -203,8 +203,8 @@ async fn update_chain_info(db: &DatabaseConnection, block_number: i64) -> anyhow
     let chain_info = chain_info::ActiveModel {
         id: Set(1),
         last_indexed_block: Set(block_number),
-        last_indexed_tx_index: Set(0),
-        last_indexed_log_index: Set(0),
+        last_indexed_tx_index: Set(Some(0)),
+        last_indexed_log_index: Set(Some(0)),
         min_incoming_ticket_win_prob: Set(0.0),
         ..Default::default()
     };

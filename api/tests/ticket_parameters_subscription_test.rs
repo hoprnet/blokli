@@ -46,8 +46,8 @@ async fn init_chain_info_with_params(
         ledger_dst: Set(None),
         safe_registry_dst: Set(None),
         channel_closure_grace_period: Set(None),
-        last_indexed_tx_index: Set(0),
-        last_indexed_log_index: Set(0),
+        last_indexed_tx_index: Set(Some(0)),
+        last_indexed_log_index: Set(Some(0)),
     };
     chain_info.insert(db).await?;
     Ok(())
@@ -173,8 +173,8 @@ async fn test_ticket_parameters_subscription_handles_missing_ticket_price() {
         ledger_dst: Set(None),
         safe_registry_dst: Set(None),
         channel_closure_grace_period: Set(None),
-        last_indexed_tx_index: Set(0),
-        last_indexed_log_index: Set(0),
+        last_indexed_tx_index: Set(Some(0)),
+        last_indexed_log_index: Set(Some(0)),
     };
     chain_info.insert(db.conn(TargetDb::Index)).await.unwrap();
 
