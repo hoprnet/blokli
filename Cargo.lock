@@ -1911,7 +1911,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1987,7 +1987,7 @@ dependencies = [
 
 [[package]]
 name = "bloklid"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "alloy",
  "anyhow",
