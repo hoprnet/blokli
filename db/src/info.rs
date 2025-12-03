@@ -152,17 +152,13 @@ impl BlokliDbInfoOperations for BlokliDb {
                         id: Set(SINGULAR_TABLE_FIXED_ID),
                         ..Default::default()
                     };
-                    ChainInfo::insert(initial_row)
-                        .exec_without_returning(tx.as_ref())
-                        .await?;
+                    initial_row.insert(tx.as_ref()).await?;
 
                     let initial_row = node_info::ActiveModel {
                         id: Set(SINGULAR_TABLE_FIXED_ID),
                         ..Default::default()
                     };
-                    NodeInfo::insert(initial_row)
-                        .exec_without_returning(tx.as_ref())
-                        .await?;
+                    initial_row.insert(tx.as_ref()).await?;
 
                     Ok::<(), DbSqlError>(())
                 })

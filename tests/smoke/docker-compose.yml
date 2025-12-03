@@ -75,7 +75,7 @@ services:
       - "8080:8080"
     command: ["-c", "/config.toml"]
     healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:8080/healthz"]
+      test: ["CMD", "sh", "-c", "curl -sf http://localhost:8080/healthz && curl -sf http://localhost:8080/readyz | grep -q '\"status\":\"ready\"'"]
       interval: 5s
       timeout: 10s
       retries: 30

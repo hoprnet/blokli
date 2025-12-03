@@ -284,24 +284,22 @@ start_stack() {
   log_info "Waiting for services to start..."
 }
 
-# Check if bloklid is healthy
+# Check if bloklid is ready (not just alive)
 check_bloklid_health() {
-  local healthz_response
-  local healthz_code
-  healthz_response=$(curl -sf "${BLOKLID_URL}/healthz" 2>&1) || true
-  healthz_code=$?
+  local readyz_response
+  readyz_response=$(curl -sf "${BLOKLID_URL}/readyz" 2>&1) || return 1
 
   # Show container status for debugging
   local container_status
   container_status=$(docker inspect --format='{{.State.Health.Status}}' blokli-smoke-bloklid 2>/dev/null || echo "unknown")
   log_info "    Container status: ${container_status}"
 
-  # Show healthz response if available
-  if [ -n "$healthz_response" ]; then
-    log_info "    Healthz response: ${healthz_response}"
-  fi
+  # Extract and validate status from readyz response
+  local status
+  status=$(extract_json_field "$readyz_response" '.status' '')
+  log_info "    Readiness status: ${status}"
 
-  [ $healthz_code -eq 0 ]
+  [ "$status" = "ready" ]
 }
 
 # Wait for bloklid to become healthy

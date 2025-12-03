@@ -115,27 +115,9 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Seed initial ChainInfo entry with default values
-        manager
-            .exec_stmt(
-                Query::insert()
-                    .into_table(ChainInfo::Table)
-                    .columns([ChainInfo::Id])
-                    .values_panic([1.into()])
-                    .to_owned(),
-            )
-            .await?;
-
-        // Seed initial NodeInfo entry with default values
-        manager
-            .exec_stmt(
-                Query::insert()
-                    .into_table(NodeInfo::Table)
-                    .columns([NodeInfo::Id])
-                    .values_panic([1.into()])
-                    .to_owned(),
-            )
-            .await
+        // Note: ChainInfo and NodeInfo seeding moved to application startup
+        // See bloklid/src/main.rs for initialization logic
+        Ok(())
     }
 
     async fn down(&self, _manager: &SchemaManager) -> Result<(), DbErr> {
