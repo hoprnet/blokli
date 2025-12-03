@@ -38,11 +38,9 @@ services:
     networks:
       - bloklid-network
     restart: unless-stopped
-
 volumes:
   postgres_data:
   bloklid_data:
-  
 networks:
   bloklid-network:
     driver: bridge

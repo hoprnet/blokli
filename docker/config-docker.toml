@@ -2,35 +2,35 @@
 # This configuration is used when running bloklid in Docker with PostgreSQL
 
 # Network identifier (change this based on your target network)
-network                  = "rotsee"
+network = "rotsee"
 
 # Maximum number of RPC requests per second (0 for unlimited)
 max_rpc_requests_per_sec = 0
 
 # Directory for storing data files
-data_directory           = "/data"
+data_directory = "/data"
 
 # RPC endpoint URL for connecting to the blockchain
 # Update this to point to your actual RPC endpoint
-rpc_url                  = "https://gnosis-chain-two.rpc.rank1.co"
+rpc_url = "https://gnosis-chain-two.rpc.rank1.co"
 
 
 # PostgreSQL database configuration
 [database]
+max_connections = 10
 type            = "postgresql"
 # inline full configuration can be used instead of the 5 following parameters with the format:
 # url = "postgresql://username:password@host:port/database"
-database        = "bloklid"
-host            = "postgres"
-password        = "bloklid_dev_password"
-port            = 5432
-username        = "bloklid"
-max_connections = 10
+database = "bloklid"
+host     = "postgres"
+password = "bloklid_dev_password"
+port     = 5432
+username = "bloklid"
 
 # Indexer configuration
 [indexer]
 # Enable fast sync mode for initial synchronization
-fast_sync            = true
+fast_sync = true
 
 # Enable downloading logs snapshot for faster initial sync
 enable_logs_snapshot = false
