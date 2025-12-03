@@ -25,6 +25,7 @@ use validator::Validate;
 use crate::{
     config::{Config, redact_database_url, redact_rpc_url},
     errors::{BloklidError, ConfigError},
+    network::Network,
 };
 
 /// Bloklid: Daemon for indexing HOPR on-chain events and executing HOPR-related on-chain transactions
@@ -195,7 +196,6 @@ impl Args {
 
         // Resolve network configuration from hopr-bindings
         let network_config = config.network.resolve().ok_or_else(|| {
-            use crate::network::Network;
             BloklidError::NonSpecific(format!(
                 "Network '{}' is not defined in hopr-bindings.\n\nSupported networks: {}",
                 config.network,
@@ -723,7 +723,6 @@ mod tests {
             let config = args.load_config(false).expect("Failed to load config");
 
             // String environment variables should be properly parsed to their target types
-            use crate::network::Network;
             assert_eq!(config.network, Network::Rotsee, "String env var should override config");
         });
     }
