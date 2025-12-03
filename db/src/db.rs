@@ -277,7 +277,12 @@ impl BlokliDb {
         // Each call to :memory: creates a separate private database
         let index_url = "sqlite::memory:";
         let logs_url = "sqlite::memory:";
-        Self::new(index_url, Some(logs_url), Default::default()).await
+        let db = Self::new(index_url, Some(logs_url), Default::default()).await?;
+
+        // Initialize singleton entries for tests
+        db.ensure_singletons().await?;
+
+        Ok(db)
     }
 
     /// Get the appropriate database connection for log-related operations.
