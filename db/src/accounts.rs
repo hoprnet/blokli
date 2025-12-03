@@ -3,8 +3,8 @@
 
 use async_trait::async_trait;
 use blokli_db_entity::{
-    account, announcement,
-    prelude::{Account, Announcement},
+    account, account_state, announcement,
+    prelude::{Account, AccountState, Announcement},
 };
 use futures::TryFutureExt;
 use hopr_crypto_types::prelude::OffchainPublicKey;
@@ -109,6 +109,7 @@ pub trait BlokliDbAccountOperations {
     async fn upsert_account<'a>(
         &'a self,
         tx: OptTx<'a>,
+        key_id: u32,
         chain_key: Address,
         packet_key: OffchainPublicKey,
         safe_address: Option<Address>,
@@ -204,6 +205,7 @@ pub trait BlokliDbAccountOperations {
 // NOTE: this function currently assumes `announcements` are sorted from latest to earliest
 pub(crate) fn model_to_account_entry(
     account: account::Model,
+    account_state: Option<blokli_db_entity::account_state::Model>,
     announcements: Vec<announcement::Model>,
 ) -> Result<AccountEntry> {
     // Currently, we always take only the most recent announcement
@@ -212,17 +214,25 @@ pub(crate) fn model_to_account_entry(
     // Convert Vec<u8> (20 bytes) to Address
     let chain_addr = Address::try_from(account.chain_key.as_slice())?;
 
+    // Extract safe_address from account_state if present
+    let safe_address = account_state.and_then(|state| {
+        state
+            .safe_address
+            .map(|addr_bytes| Address::try_from(addr_bytes.as_slice()))
+            .transpose()
+            .ok()
+            .flatten()
+    });
+
     Ok(AccountEntry {
         public_key: OffchainPublicKey::from_hex(&account.packet_key)?,
         chain_addr,
-        published_at: account.published_block as u32,
         entry_type: match announcement {
             None => AccountType::NotAnnounced,
-            Some(a) => AccountType::Announced {
-                multiaddr: a.multiaddress.parse().map_err(|_| DbSqlError::DecodingError)?,
-                updated_block: a.published_block as u32,
-            },
+            Some(a) => AccountType::Announced(vec![a.multiaddress.parse().map_err(|_| DbSqlError::DecodingError)?]),
         },
+        safe_address,
+        key_id: (account.id as u32).into(),
     })
 }
 
@@ -231,6 +241,7 @@ impl BlokliDbAccountOperations for BlokliDb {
     async fn upsert_account<'a>(
         &'a self,
         tx: OptTx<'a>,
+        key_id: u32,
         chain_key: Address,
         packet_key: OffchainPublicKey,
         safe_address: Option<Address>,
@@ -247,8 +258,6 @@ impl BlokliDbAccountOperations for BlokliDb {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    use blokli_db_entity::{account_state, prelude::AccountState};
-
                     // Step 1: Insert or find account identity record
                     let account_id = if let Some(existing_account) = account::Entity::find()
                         .filter(account::Column::ChainKey.eq(chain_key.as_ref().to_vec()))
@@ -260,12 +269,12 @@ impl BlokliDbAccountOperations for BlokliDb {
                     } else {
                         // Account doesn't exist - create identity + initial state
                         let account_model = account::ActiveModel {
+                            id: Set(key_id as i64),
                             chain_key: Set(chain_key.as_ref().to_vec()),
                             packet_key: Set(packet_key.to_hex()),
                             published_block: Set(block_i64),
                             published_tx_index: Set(tx_index_i64),
                             published_log_index: Set(log_index_i64),
-                            ..Default::default()
                         };
                         let inserted = account_model.insert(tx.as_ref()).await?;
                         inserted.id
@@ -302,8 +311,6 @@ impl BlokliDbAccountOperations for BlokliDb {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    use blokli_db_entity::{account_state, prelude::AccountState};
-
                     // Step 1: Find account by key
                     let account_model = match Account::find().filter(cpk).one(tx.as_ref()).await? {
                         Some(a) => a,
@@ -311,16 +318,13 @@ impl BlokliDbAccountOperations for BlokliDb {
                     };
 
                     // Step 2: Get the most recent account_state (latest by block, tx_index, log_index)
-                    let _state_model = AccountState::find()
+                    let state_model = AccountState::find()
                         .filter(account_state::Column::AccountId.eq(account_model.id))
                         .order_by_desc(account_state::Column::PublishedBlock)
                         .order_by_desc(account_state::Column::PublishedTxIndex)
                         .order_by_desc(account_state::Column::PublishedLogIndex)
                         .one(tx.as_ref())
                         .await?;
-
-                    // Note: Currently AccountEntry doesn't store safe_address, so we don't use state_model yet
-                    // In the future, when AccountEntry includes safe_address, we'll use it from state_model
 
                     // Step 3: Get announcements for account entry
                     let announcements = Announcement::find()
@@ -330,7 +334,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                         .await?;
 
                     // Step 4: Convert to AccountEntry
-                    Ok::<_, DbSqlError>(Some(model_to_account_entry(account_model, announcements)?))
+                    Ok::<_, DbSqlError>(Some(model_to_account_entry(account_model, state_model, announcements)?))
                 })
             })
             .await
@@ -341,7 +345,7 @@ impl BlokliDbAccountOperations for BlokliDb {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    Account::find()
+                    let accounts = Account::find()
                         .find_with_related(Announcement)
                         .filter(if public_only {
                             announcement::Column::Multiaddress.ne("")
@@ -350,10 +354,22 @@ impl BlokliDbAccountOperations for BlokliDb {
                         })
                         .order_by_desc(announcement::Column::PublishedBlock)
                         .all(tx.as_ref())
-                        .await?
-                        .into_iter()
-                        .map(|(a, b)| model_to_account_entry(a, b))
-                        .collect()
+                        .await?;
+
+                    let mut entries = Vec::new();
+                    for (account_model, announcements) in accounts {
+                        // Get the most recent account_state for each account
+                        let state_model = AccountState::find()
+                            .filter(account_state::Column::AccountId.eq(account_model.id))
+                            .order_by_desc(account_state::Column::PublishedBlock)
+                            .order_by_desc(account_state::Column::PublishedTxIndex)
+                            .order_by_desc(account_state::Column::PublishedLogIndex)
+                            .one(tx.as_ref())
+                            .await?;
+
+                        entries.push(model_to_account_entry(account_model, state_model, announcements)?);
+                    }
+                    Ok::<_, DbSqlError>(entries)
                 })
             })
             .await
@@ -368,7 +384,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                     match account::Entity::insert(account::ActiveModel {
                         chain_key: Set(account.chain_addr.as_ref().to_vec()),
                         packet_key: Set(account.public_key.to_hex()),
-                        published_block: Set(account.published_at as i64),
+                        published_block: Set(0), // Default since AccountEntry no longer tracks this
                         ..Default::default()
                     })
                     .on_conflict(
@@ -388,14 +404,18 @@ impl BlokliDbAccountOperations for BlokliDb {
                                 // tracing::warn!(?account, %error, "keybinding not updated")
                             }
 
-                            if let AccountType::Announced {
-                                multiaddr,
-                                updated_block,
-                            } = account.entry_type
-                            {
-                                myself
-                                    .insert_announcement(Some(tx), account.chain_addr, multiaddr, updated_block)
-                                    .await?;
+                            if let AccountType::Announced(multiaddrs) = &account.entry_type {
+                                // Insert announcements for all multiaddrs
+                                for multiaddr in multiaddrs {
+                                    myself
+                                        .insert_announcement(
+                                            Some(tx),
+                                            account.chain_addr,
+                                            multiaddr.clone(),
+                                            0, // Default since AccountEntry no longer tracks block number
+                                        )
+                                        .await?;
+                                }
                             }
 
                             Ok::<(), DbSqlError>(())
@@ -456,7 +476,16 @@ impl BlokliDbAccountOperations for BlokliDb {
                         existing_announcements.insert(0, new_announcement);
                     }
 
-                    model_to_account_entry(existing_account, existing_announcements)
+                    // Get the most recent account_state for the account
+                    let state_model = AccountState::find()
+                        .filter(account_state::Column::AccountId.eq(existing_account.id))
+                        .order_by_desc(account_state::Column::PublishedBlock)
+                        .order_by_desc(account_state::Column::PublishedTxIndex)
+                        .order_by_desc(account_state::Column::PublishedLogIndex)
+                        .one(tx.as_ref())
+                        .await?;
+
+                    model_to_account_entry(existing_account, state_model, existing_announcements)
                 })
             })
             .await
@@ -511,7 +540,7 @@ impl BlokliDbAccountOperations for BlokliDb {
             .perform(|tx| {
                 Box::pin(async move {
                     if let Some(entry) = account::Entity::find().filter(cpk).one(tx.as_ref()).await? {
-                        let _account_entry = model_to_account_entry(entry.clone(), vec![])?;
+                        let _account_entry = model_to_account_entry(entry.clone(), None, vec![])?;
                         entry.delete(tx.as_ref()).await?;
 
                         Ok::<_, DbSqlError>(())
@@ -585,8 +614,6 @@ impl BlokliDbAccountOperations for BlokliDb {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    use blokli_db_entity::{account_state, prelude::AccountState};
-
                     // Step 1: Find account by key
                     let account_model = match Account::find().filter(cpk).one(tx.as_ref()).await? {
                         Some(a) => a,
@@ -616,7 +643,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                         .await?;
 
                     // Step 4: Convert to AccountEntry
-                    Ok::<_, DbSqlError>(Some(model_to_account_entry(account_model, announcements)?))
+                    Ok::<_, DbSqlError>(Some(model_to_account_entry(account_model, state_model, announcements)?))
                 })
             })
             .await
@@ -633,8 +660,6 @@ impl BlokliDbAccountOperations for BlokliDb {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    use blokli_db_entity::{account_state, prelude::AccountState};
-
                     // Step 1: Find account by key
                     let account_model = match Account::find().filter(cpk).one(tx.as_ref()).await? {
                         Some(a) => a,
@@ -661,8 +686,9 @@ impl BlokliDbAccountOperations for BlokliDb {
                     // Note: We use the same announcements for all states
                     // In a temporal design, we'd want to filter announcements by state's block
                     let mut history = Vec::new();
-                    for _ in &state_models {
-                        let entry = model_to_account_entry(account_model.clone(), announcements.clone())?;
+                    for state_model in state_models {
+                        let entry =
+                            model_to_account_entry(account_model.clone(), Some(state_model), announcements.clone())?;
                         history.push(entry);
                     }
 
@@ -677,7 +703,7 @@ impl BlokliDbAccountOperations for BlokliDb {
 mod tests {
     use anyhow::Context;
     use hopr_crypto_types::prelude::{ChainKeypair, Keypair, OffchainKeypair};
-    use hopr_internal_types::prelude::AccountType::NotAnnounced;
+    use hopr_internal_types::prelude::AccountType;
 
     use super::*;
     use crate::{
@@ -697,8 +723,9 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_at: 1,
                 entry_type: AccountType::NotAnnounced,
+                safe_address: None,
+                key_id: 0.into(),
             },
         )
         .await?;
@@ -706,7 +733,6 @@ mod tests {
         let acc = db.get_account(None, chain_1).await?.expect("should contain account");
         assert_eq!(packet_1, acc.public_key, "pub keys must match");
         assert_eq!(AccountType::NotAnnounced, acc.entry_type.clone());
-        assert_eq!(1, acc.published_at);
 
         let maddr: Multiaddr = "/ip4/1.2.3.4/tcp/8000".parse()?;
         let block = 100;
@@ -714,16 +740,14 @@ mod tests {
         let db_acc = db.insert_announcement(None, chain_1, maddr.clone(), block).await?;
 
         let acc = db.get_account(None, chain_1).await?.context("should contain account")?;
-        assert_eq!(Some(maddr.clone()), acc.get_multiaddr(), "multiaddress must match");
-        assert_eq!(Some(block), acc.updated_at());
+        assert_eq!(Some(&maddr), acc.get_multiaddrs().first(), "multiaddress must match");
         assert_eq!(acc, db_acc);
 
         let block = 200;
         let db_acc = db.insert_announcement(None, chain_1, maddr.clone(), block).await?;
 
         let acc = db.get_account(None, chain_1).await?.expect("should contain account");
-        assert_eq!(Some(maddr), acc.get_multiaddr(), "multiaddress must match");
-        assert_eq!(Some(block), acc.updated_at());
+        assert_eq!(Some(&maddr), acc.get_multiaddrs().first(), "multiaddress must match");
         assert_eq!(acc, db_acc);
 
         let maddr: Multiaddr = "/dns4/useful.domain/tcp/56".parse()?;
@@ -731,8 +755,7 @@ mod tests {
         let db_acc = db.insert_announcement(None, chain_1, maddr.clone(), block).await?;
 
         let acc = db.get_account(None, chain_1).await?.expect("should contain account");
-        assert_eq!(Some(maddr), acc.get_multiaddr(), "multiaddress must match");
-        assert_eq!(Some(block), acc.updated_at());
+        assert_eq!(Some(&maddr), acc.get_multiaddrs().first(), "multiaddress must match");
         assert_eq!(acc, db_acc);
 
         Ok(())
@@ -750,8 +773,9 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_at: 1,
                 entry_type: AccountType::NotAnnounced,
+                safe_address: None,
+                key_id: 0.into(),
             },
         )
         .await?;
@@ -763,7 +787,7 @@ mod tests {
 
         assert_eq!(
             "/ip4/1.2.3.4/tcp/8000",
-            ae.get_multiaddr().expect("has multiaddress").to_string()
+            ae.get_multiaddrs().first().expect("has multiaddress").to_string()
         );
 
         db.insert_announcement(None, chain_1, "/ip4/1.2.3.4/tcp/8001".parse()?, 110)
@@ -773,7 +797,7 @@ mod tests {
 
         assert_eq!(
             "/ip4/1.2.3.4/tcp/8001",
-            ae.get_multiaddr().expect("has multiaddress").to_string()
+            ae.get_multiaddrs().first().expect("has multiaddress").to_string()
         );
 
         Ok(())
@@ -809,8 +833,9 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_at: 1,
                 entry_type: AccountType::NotAnnounced,
+                safe_address: None,
+                key_id: 0.into(),
             },
         )
         .await?;
@@ -823,8 +848,9 @@ mod tests {
             AccountEntry {
                 public_key: packet_2,
                 chain_addr: chain_2,
-                published_at: 2,
                 entry_type: AccountType::NotAnnounced,
+                safe_address: None,
+                key_id: 0.into(),
             },
         )
         .await?;
@@ -836,13 +862,11 @@ mod tests {
         let db_acc_2 = db.insert_announcement(None, chain_2, maddr.clone(), block).await?;
 
         let acc = db.get_account(None, chain_1).await?.expect("should contain account");
-        assert_eq!(Some(maddr.clone()), acc.get_multiaddr(), "multiaddress must match");
-        assert_eq!(Some(block), acc.updated_at());
+        assert_eq!(Some(&maddr), acc.get_multiaddrs().first(), "multiaddress must match");
         assert_eq!(acc, db_acc_1);
 
         let acc = db.get_account(None, chain_2).await?.expect("should contain account");
-        assert_eq!(Some(maddr.clone()), acc.get_multiaddr(), "multiaddress must match");
-        assert_eq!(Some(block), acc.updated_at());
+        assert_eq!(Some(&maddr), acc.get_multiaddrs().first(), "multiaddress must match");
         assert_eq!(acc, db_acc_2);
 
         Ok(())
@@ -859,11 +883,9 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_at: 1,
-                entry_type: AccountType::Announced {
-                    multiaddr: "/ip4/1.2.3.4/tcp/1234".parse()?,
-                    updated_block: 10,
-                },
+                entry_type: AccountType::Announced(vec!["/ip4/1.2.3.4/tcp/1234".parse()?]),
+                safe_address: None,
+                key_id: 0.into(),
             },
         )
         .await?;
@@ -904,8 +926,9 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_at: 1,
                 entry_type: AccountType::NotAnnounced,
+                safe_address: None,
+                key_id: 1.into(),
             },
         )
         .await?;
@@ -915,8 +938,9 @@ mod tests {
             AccountEntry {
                 public_key: packet_1,
                 chain_addr: chain_1,
-                published_at: 1,
                 entry_type: AccountType::NotAnnounced,
+                safe_address: None,
+                key_id: 2.into(),
             },
         )
         .await?;
@@ -930,25 +954,33 @@ mod tests {
 
         let packet_1 = *OffchainKeypair::random().public();
         let chain_1 = ChainKeypair::random().public().to_address();
-        let mut entry = AccountEntry {
+        let entry = AccountEntry {
             public_key: packet_1,
             chain_addr: chain_1,
-            published_at: 1,
-            entry_type: AccountType::Announced {
-                multiaddr: "/ip4/1.2.3.4/tcp/1234".parse()?,
-                updated_block: 10,
-            },
+            entry_type: AccountType::Announced(vec!["/ip4/1.2.3.4/tcp/1234".parse()?]),
+            safe_address: None,
+            key_id: 1.into(),
         };
 
         db.insert_account(None, entry.clone()).await?;
 
-        assert_eq!(Some(entry.clone()), db.get_account(None, chain_1).await?);
-
+        // Get the actual account with the correct key_id
+        let entry_with_key_id = db.get_account(None, chain_1).await?.expect("account should exist");
+        assert_eq!(packet_1, entry_with_key_id.public_key);
+        assert_eq!(chain_1, entry_with_key_id.chain_addr);
+        assert_eq!(
+            AccountType::Announced(vec!["/ip4/1.2.3.4/tcp/1234".parse()?]),
+            entry_with_key_id.entry_type
+        );
+        assert_eq!(entry_with_key_id.key_id, entry.key_id);
         db.delete_all_announcements(None, chain_1).await?;
 
-        entry.entry_type = NotAnnounced;
-
-        assert_eq!(Some(entry), db.get_account(None, chain_1).await?);
+        // After deleting announcements, the entry should still have the same key_id but NotAnnounced type
+        let entry_after_delete = db.get_account(None, chain_1).await?.expect("account should exist");
+        assert_eq!(packet_1, entry_after_delete.public_key);
+        assert_eq!(chain_1, entry_after_delete.chain_addr);
+        assert_eq!(AccountType::NotAnnounced, entry_after_delete.entry_type);
+        assert_eq!(entry_with_key_id.key_id, entry_after_delete.key_id);
 
         Ok(())
     }
@@ -989,8 +1021,9 @@ mod tests {
                             AccountEntry {
                                 public_key: packet_1,
                                 chain_addr: chain_1,
-                                published_at: 1,
                                 entry_type: AccountType::NotAnnounced,
+                                safe_address: None,
+                                key_id: 2.into(),
                             },
                         )
                         .await?;
@@ -1000,8 +1033,9 @@ mod tests {
                             AccountEntry {
                                 public_key: packet_2,
                                 chain_addr: chain_2,
-                                published_at: 2,
                                 entry_type: AccountType::NotAnnounced,
+                                safe_address: None,
+                                key_id: 3.into(),
                             },
                         )
                         .await?;
@@ -1048,7 +1082,8 @@ mod tests {
                                 public_key: *OffchainKeypair::random().public(),
                                 chain_addr: chain_1,
                                 entry_type: AccountType::NotAnnounced,
-                                published_at: 1,
+                                safe_address: None,
+                                key_id: 2.into(),
                             },
                         )
                         .await?;
@@ -1058,11 +1093,11 @@ mod tests {
                             AccountEntry {
                                 public_key: *OffchainKeypair::random().public(),
                                 chain_addr: chain_2,
-                                entry_type: AccountType::Announced {
-                                    multiaddr: "/ip4/10.10.10.10/tcp/1234".parse().map_err(|_| DecodingError)?,
-                                    updated_block: 10,
-                                },
-                                published_at: 2,
+                                entry_type: AccountType::Announced(vec![
+                                    "/ip4/10.10.10.10/tcp/1234".parse().map_err(|_| DecodingError)?,
+                                ]),
+                                safe_address: None,
+                                key_id: 3.into(),
                             },
                         )
                         .await?;
@@ -1073,7 +1108,8 @@ mod tests {
                                 public_key: *OffchainKeypair::random().public(),
                                 chain_addr: chain_3,
                                 entry_type: AccountType::NotAnnounced,
-                                published_at: 3,
+                                safe_address: None,
+                                key_id: 4.into(),
                             },
                         )
                         .await?;
@@ -1124,11 +1160,19 @@ mod tests {
 
         assert_eq!(
             "/ip4/10.10.10.10/tcp/1234",
-            acc_1.get_multiaddr().expect("should have a multiaddress").to_string()
+            acc_1
+                .get_multiaddrs()
+                .first()
+                .expect("should have a multiaddress")
+                .to_string()
         );
         assert_eq!(
             "/ip4/8.8.1.1/tcp/1234",
-            acc_2.get_multiaddr().expect("should have a multiaddress").to_string()
+            acc_2
+                .get_multiaddrs()
+                .first()
+                .expect("should have a multiaddress")
+                .to_string()
         );
 
         Ok(())
@@ -1147,7 +1191,7 @@ mod tests {
         let safe_addr = Address::from(hopr_crypto_random::random_bytes());
 
         // Create account with upsert at block 100
-        db.upsert_account(None, chain_key, packet_key, Some(safe_addr), 100, 0, 0)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr), 100, 0, 0)
             .await?;
 
         // Verify account can be retrieved with latest state
@@ -1169,11 +1213,11 @@ mod tests {
         let safe_addr_2 = Address::from(hopr_crypto_random::random_bytes());
 
         // Create account with initial state at block 100
-        db.upsert_account(None, chain_key, packet_key, Some(safe_addr_1), 100, 0, 0)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr_1), 100, 0, 0)
             .await?;
 
         // Update account with new safe address at block 200
-        db.upsert_account(None, chain_key, packet_key, Some(safe_addr_2), 200, 0, 0)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr_2), 200, 0, 0)
             .await?;
 
         // Verify latest state has new safe address
@@ -1203,16 +1247,17 @@ mod tests {
         let packet_key = *OffchainKeypair::random().public();
 
         // State 1: No safe address at block 100
-        db.upsert_account(None, chain_key, packet_key, None, 100, 0, 0).await?;
+        db.upsert_account(None, 1, chain_key, packet_key, None, 100, 0, 0)
+            .await?;
 
         // State 2: Add safe address at block 200
         let safe_addr = Address::from(hopr_crypto_random::random_bytes());
-        db.upsert_account(None, chain_key, packet_key, Some(safe_addr), 200, 0, 0)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr), 200, 0, 0)
             .await?;
 
         // State 3: Change safe address at block 300
         let safe_addr_2 = Address::from(hopr_crypto_random::random_bytes());
-        db.upsert_account(None, chain_key, packet_key, Some(safe_addr_2), 300, 0, 0)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr_2), 300, 0, 0)
             .await?;
 
         // Verify full history has all 3 states
@@ -1230,14 +1275,15 @@ mod tests {
         let packet_key = *OffchainKeypair::random().public();
 
         // Create multiple states at different blocks
-        db.upsert_account(None, chain_key, packet_key, None, 100, 0, 0).await?;
+        db.upsert_account(None, 1, chain_key, packet_key, None, 100, 0, 0)
+            .await?;
 
         let safe_addr_1 = Address::from(hopr_crypto_random::random_bytes());
-        db.upsert_account(None, chain_key, packet_key, Some(safe_addr_1), 200, 0, 0)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr_1), 200, 0, 0)
             .await?;
 
         let safe_addr_2 = Address::from(hopr_crypto_random::random_bytes());
-        db.upsert_account(None, chain_key, packet_key, Some(safe_addr_2), 300, 0, 0)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr_2), 300, 0, 0)
             .await?;
 
         // Query state at various blocks
@@ -1279,7 +1325,7 @@ mod tests {
             } else {
                 None
             };
-            db.upsert_account(None, chain_key, packet_key, safe_addr, (i + 1) * 100, 0, 0)
+            db.upsert_account(None, 1, chain_key, packet_key, safe_addr, (i + 1) * 100, 0, 0)
                 .await?;
         }
 
@@ -1305,10 +1351,12 @@ mod tests {
         let packet_key = *OffchainKeypair::random().public();
 
         // Create multiple states
-        db.upsert_account(None, chain_key, packet_key, None, 100, 0, 0).await?;
-        db.upsert_account(None, chain_key, packet_key, None, 200, 0, 0).await?;
+        db.upsert_account(None, 1, chain_key, packet_key, None, 100, 0, 0)
+            .await?;
+        db.upsert_account(None, 1, chain_key, packet_key, None, 200, 0, 0)
+            .await?;
         let latest_safe = Address::from(hopr_crypto_random::random_bytes());
-        db.upsert_account(None, chain_key, packet_key, Some(latest_safe), 300, 0, 0)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(latest_safe), 300, 0, 0)
             .await?;
 
         // get_account should return the latest state
@@ -1327,7 +1375,8 @@ mod tests {
         let packet_key = *OffchainKeypair::random().public();
 
         // Create account with upsert
-        db.upsert_account(None, chain_key, packet_key, None, 100, 0, 0).await?;
+        db.upsert_account(None, 1, chain_key, packet_key, None, 100, 0, 0)
+            .await?;
 
         // Verify translate_key works in both directions
         let translated_packet: OffchainPublicKey = db
@@ -1355,7 +1404,8 @@ mod tests {
         let packet_key = *OffchainKeypair::random().public();
 
         // Create initial account
-        db.upsert_account(None, chain_key, packet_key, None, 100, 0, 0).await?;
+        db.upsert_account(None, 1, chain_key, packet_key, None, 100, 0, 0)
+            .await?;
 
         // Spawn multiple concurrent updates
         let mut handles = vec![];
@@ -1368,7 +1418,7 @@ mod tests {
                     None
                 };
                 db_clone
-                    .upsert_account(None, chain_key, packet_key, safe, 200 + i, 0, 0)
+                    .upsert_account(None, 1, chain_key, packet_key, safe, 200 + i, 0, 0)
                     .await
             });
             handles.push(handle);
@@ -1402,10 +1452,10 @@ mod tests {
         let packet_2 = *OffchainKeypair::random().public();
 
         // Create two accounts with interleaved positions
-        db.upsert_account(None, chain_1, packet_1, None, 100, 5, 2).await?;
-        db.upsert_account(None, chain_2, packet_2, None, 100, 7, 0).await?;
-        db.upsert_account(None, chain_1, packet_1, None, 101, 3, 1).await?;
-        db.upsert_account(None, chain_2, packet_2, None, 101, 4, 2).await?;
+        db.upsert_account(None, 1, chain_1, packet_1, None, 100, 5, 2).await?;
+        db.upsert_account(None, 2, chain_2, packet_2, None, 100, 7, 0).await?;
+        db.upsert_account(None, 1, chain_1, packet_1, None, 101, 3, 1).await?;
+        db.upsert_account(None, 2, chain_2, packet_2, None, 101, 4, 2).await?;
 
         // Query account 1 history - should not include account 2's states
         let history_1 = db.get_account_history(None, chain_1).await?;
@@ -1421,6 +1471,97 @@ mod tests {
         assert!(
             history_2.iter().all(|s| s.chain_addr == chain_2),
             "all states should belong to account 2"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_safe_address_and_key_id_retrieval() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let chain_key = ChainKeypair::random().public().to_address();
+        let packet_key = *OffchainKeypair::random().public();
+        let safe_addr_1 = Address::from(hopr_crypto_random::random_bytes());
+        let safe_addr_2 = Address::from(hopr_crypto_random::random_bytes());
+
+        // State 1: Create account with first safe address at block 100
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr_1), 100, 0, 0)
+            .await?;
+
+        // Verify safe_address is correctly retrieved
+        let account = db.get_account(None, chain_key).await?.expect("account should exist");
+        assert_eq!(
+            Some(safe_addr_1),
+            account.safe_address,
+            "safe_address should match first state"
+        );
+        assert_ne!(account.key_id, 0.into(), "key_id should be non-zero");
+
+        // State 2: Update account with new safe address at block 200
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr_2), 200, 0, 0)
+            .await?;
+
+        // Verify latest state has updated safe_address
+        let updated = db.get_account(None, chain_key).await?.expect("account should exist");
+        assert_eq!(
+            Some(safe_addr_2),
+            updated.safe_address,
+            "safe_address should match latest state"
+        );
+        assert_eq!(
+            account.key_id, updated.key_id,
+            "key_id should remain constant across state updates"
+        );
+
+        // Verify historical state at block 100 still has first safe address
+        let historical = db
+            .get_account_state_at_block(None, chain_key, 150)
+            .await?
+            .expect("historical state should exist");
+        assert_eq!(
+            Some(safe_addr_1),
+            historical.safe_address,
+            "historical safe_address should match block 100 state"
+        );
+        assert_eq!(
+            account.key_id, historical.key_id,
+            "key_id should be consistent in historical state"
+        );
+
+        // Verify account history contains different safe addresses
+        let history = db.get_account_history(None, chain_key).await?;
+        assert_eq!(2, history.len(), "should have 2 state records");
+        assert_eq!(
+            Some(safe_addr_1),
+            history[0].safe_address,
+            "first historical state should have first safe address"
+        );
+        assert_eq!(
+            Some(safe_addr_2),
+            history[1].safe_address,
+            "second historical state should have second safe address"
+        );
+        assert!(
+            history.iter().all(|s| s.key_id == account.key_id),
+            "all states should have consistent key_id"
+        );
+
+        // State 3: Create account without safe address
+        let chain_key_no_safe = ChainKeypair::random().public().to_address();
+        let packet_key_no_safe = *OffchainKeypair::random().public();
+        db.upsert_account(None, 2, chain_key_no_safe, packet_key_no_safe, None, 100, 0, 0)
+            .await?;
+
+        let no_safe = db
+            .get_account(None, chain_key_no_safe)
+            .await?
+            .expect("account should exist");
+        assert_eq!(None, no_safe.safe_address, "safe_address should be None when not set");
+        assert_ne!(
+            no_safe.key_id,
+            0.into(),
+            "key_id should still be set even without safe_address"
         );
 
         Ok(())

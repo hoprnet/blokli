@@ -79,7 +79,7 @@ mod integration_tests {
     use blokli_chain_indexer::handlers::ContractEventHandlers;
     use blokli_chain_rpc::HoprIndexerRpcOperations;
     use blokli_chain_types::{
-        ContractAddresses,
+        AlloyAddressExt, ContractAddresses,
         chain_events::{ChainEventType, SignificantChainEvent},
     };
     use blokli_db::{
@@ -244,7 +244,7 @@ mod integration_tests {
                 data: DynSolValue::Tuple(vec![
                     DynSolValue::Bytes(keybinding.signature.as_ref().to_vec()),
                     DynSolValue::Bytes(keybinding.packet_key.as_ref().to_vec()),
-                    DynSolValue::FixedBytes(AlloyAddress::from_slice(chain_addr.as_ref()).into_word(), 32),
+                    DynSolValue::FixedBytes(AlloyAddress::from_hopr_address(chain_addr).into_word(), 32),
                 ])
                 .abi_encode_packed(),
                 ..self.base_log()
@@ -260,7 +260,7 @@ mod integration_tests {
             let multiaddr_parsed: Multiaddr = multiaddr.parse()?;
 
             let data = DynSolValue::Tuple(vec![
-                DynSolValue::Address(AlloyAddress::from_slice(account.as_ref())),
+                DynSolValue::Address(AlloyAddress::from_hopr_address(account)),
                 DynSolValue::String(multiaddr_parsed.to_string()),
             ])
             .abi_encode_params();
@@ -275,7 +275,7 @@ mod integration_tests {
 
         /// Create a RevokeAnnouncement event log
         fn create_revoke_announcement_log(&self, account: Address) -> SerializableLog {
-            let data = DynSolValue::Tuple(vec![DynSolValue::Address(AlloyAddress::from_slice(account.as_ref()))])
+            let data = DynSolValue::Tuple(vec![DynSolValue::Address(AlloyAddress::from_hopr_address(account))])
                 .abi_encode_params();
 
             SerializableLog {
@@ -350,8 +350,8 @@ mod integration_tests {
             let channel_state = self.encode_channel_state(HoprBalance::zero(), 0, 0, 0, ChannelStatus::Open);
 
             let data = DynSolValue::Tuple(vec![
-                DynSolValue::Address(AlloyAddress::from_slice(source.as_ref())),
-                DynSolValue::Address(AlloyAddress::from_slice(destination.as_ref())),
+                DynSolValue::Address(AlloyAddress::from_hopr_address(source)),
+                DynSolValue::Address(AlloyAddress::from_hopr_address(destination)),
                 DynSolValue::FixedBytes(channel_state.into(), 32),
             ])
             .abi_encode_params();

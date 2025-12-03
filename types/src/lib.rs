@@ -202,6 +202,9 @@ pub struct ChainInfo {
     /// Current HOPR token price
     #[graphql(name = "ticketPrice")]
     pub ticket_price: TokenValueString,
+    /// Current key binding fee
+    #[graphql(name = "keyBindingFee")]
+    pub key_binding_fee: TokenValueString,
     /// Current minimum ticket winning probability (decimal value between 0.0 and 1.0)
     #[graphql(name = "minTicketWinningProbability")]
     pub min_ticket_winning_probability: f64,

@@ -436,6 +436,10 @@ impl SubscriptionRoot {
                                 // Account updates don't affect this subscription
                                 // Just continue to next event
                             }
+                            Ok(IndexerEvent::KeyBindingFeeUpdated(_)) => {
+                                // Key binding fee updates don't affect this subscription
+                                // Just continue to next event
+                            }
                             Err(async_broadcast::RecvError::Closed) => {
                                 tracing::info!("Event bus closed, ending subscription");
                                 return;
@@ -532,6 +536,89 @@ impl SubscriptionRoot {
                     Ok(_) => {}
                     Err(e) => {
                         tracing::error!("Failed to fetch ticket parameters: {:?}", e);
+                    }
+                }
+            }
+        })
+    }
+
+    /// Subscribe to real-time updates of the key binding fee
+    ///
+    /// Emits the current fee once on subscription, then streams updates whenever
+    /// the indexer processes a `KeyBindingFeeUpdate` event and is in synced mode.
+    #[graphql(name = "keyBindingFeeUpdated")]
+    async fn key_binding_fee_updated(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = TokenValueString>> {
+        let db = ctx.data::<DatabaseConnection>()?.clone();
+        let indexer_state = ctx
+            .data::<IndexerState>()
+            .map_err(|_| async_graphql::Error::new("IndexerState not available in context"))?
+            .clone();
+
+        Ok(stream! {
+            // Create subscription channels early to avoid missing events between initial fetch and loop
+            let mut event_receiver = indexer_state.subscribe_to_events();
+            let mut shutdown_receiver = indexer_state.subscribe_to_shutdown();
+
+            // Track last value to avoid duplicate emissions
+            let mut last_fee: Option<TokenValueString> = None;
+
+            // Emit current value from DB (if available)
+            match chain_info::Entity::find().one(&db).await {
+                Ok(Some(info)) => {
+                    if let Some(bytes) = info.key_binding_fee.as_ref() {
+                        let fee_str = PrimitiveHoprBalance::from_be_bytes(bytes).amount().to_string();
+                        let current = TokenValueString(fee_str);
+                        last_fee = Some(current.clone());
+                        yield current;
+                    }
+                }
+                Ok(None) => {
+                    tracing::warn!("chain_info not initialized when subscribing to keyBindingFeeUpdated");
+                }
+                Err(e) => {
+                    tracing::error!("Failed to fetch chain_info for keyBindingFeeUpdated: {:?}", e);
+                }
+            }
+
+            loop {
+                tokio::select! {
+                    shutdown_result = shutdown_receiver.recv() => {
+                        match shutdown_result {
+                            Ok(_) => {
+                                tracing::info!("keyBindingFeeUpdated subscription shutting down due to reorg");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                tracing::warn!("Shutdown channel closed for keyBindingFeeUpdated");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                tracing::warn!("Shutdown signal overflowed ({}), continuing", n);
+                            }
+                        }
+                    }
+                    event_result = event_receiver.recv() => {
+                        match event_result {
+                            Ok(IndexerEvent::KeyBindingFeeUpdated(fee)) => {
+                                if last_fee.as_ref() != Some(&fee) {
+                                    last_fee = Some(fee.clone());
+                                    yield fee;
+                                }
+                            }
+                            Ok(IndexerEvent::AccountUpdated(_)) => {
+                                // Irrelevant for this subscription
+                            }
+                            Ok(IndexerEvent::ChannelUpdated(_)) => {
+                                // Irrelevant for this subscription
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                tracing::info!("Event bus closed, ending keyBindingFeeUpdated subscription");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                tracing::warn!("Event bus overflowed ({}); keyBindingFeeUpdated may miss events", n);
+                            }
+                        }
                     }
                 }
             }
@@ -710,11 +797,23 @@ impl SubscriptionRoot {
 
 #[cfg(test)]
 mod tests {
+    use async_graphql::{EmptyMutation, Object, Schema};
     use blokli_chain_indexer::state::IndexerEvent;
     use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb};
+    use futures::StreamExt;
     use sea_orm::{ActiveModelTrait, Set};
 
     use super::*;
+
+    // Dummy Query root
+    #[derive(Default)]
+    struct DummyQuery;
+    #[Object]
+    impl DummyQuery {
+        async fn dummy(&self) -> bool {
+            true
+        }
+    }
 
     // Helper: Create test channel in database
     async fn create_test_channel(
@@ -789,6 +888,7 @@ mod tests {
             last_indexed_tx_index: Set(tx_index),
             last_indexed_log_index: Set(log_index),
             ticket_price: Set(None),
+            key_binding_fee: Set(None),
             channels_dst: Set(None),
             ledger_dst: Set(None),
             safe_registry_dst: Set(None),
@@ -1321,5 +1421,65 @@ mod tests {
 
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("temporarily unavailable"));
+    }
+
+    #[tokio::test]
+    async fn test_key_binding_fee_updated_subscription() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let indexer_state = IndexerState::new(10, 100);
+
+        // Initialize chain_info with a keybinding fee
+        let starting_fee = 12345u16;
+
+        chain_info::Entity::delete_many()
+            .exec(db.conn(blokli_db::TargetDb::Index))
+            .await
+            .unwrap();
+
+        let chain_info = chain_info::ActiveModel {
+            id: Set(1),
+            last_indexed_block: Set(100),
+            last_indexed_tx_index: Set(0),
+            last_indexed_log_index: Set(0),
+            ticket_price: Set(None),
+            key_binding_fee: Set(Some(starting_fee.to_be_bytes().into())),
+            channels_dst: Set(None),
+            ledger_dst: Set(None),
+            safe_registry_dst: Set(None),
+            min_incoming_ticket_win_prob: Set(0.0),
+            channel_closure_grace_period: Set(None),
+        };
+        chain_info.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
+
+        // Setup schema
+        let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
+            .data(db.conn(blokli_db::TargetDb::Index).clone())
+            .data(indexer_state.clone())
+            .finish();
+
+        let query = "subscription { keyBindingFeeUpdated }";
+        let stream = schema.execute_stream(query);
+        let mut stream = stream.boxed();
+
+        // 1. Expect initial value
+        let response = stream.next().await.expect("Stream should return initial value");
+        let data = response.into_result().expect("Response should be ok").data;
+        assert_eq!(
+            data,
+            async_graphql::Value::from_json(serde_json::json!({ "keyBindingFeeUpdated": starting_fee.to_string() }))
+                .unwrap()
+        );
+
+        // 2. Publish update via event bus
+        let new_fee = "67890".to_string();
+        indexer_state.publish_event(IndexerEvent::KeyBindingFeeUpdated(TokenValueString(new_fee.clone())));
+
+        // 3. Expect update
+        let response = stream.next().await.expect("Stream should return update");
+        let data = response.into_result().expect("Response should be ok").data;
+        assert_eq!(
+            data,
+            async_graphql::Value::from_json(serde_json::json!({ "keyBindingFeeUpdated": new_fee })).unwrap()
+        );
     }
 }

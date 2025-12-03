@@ -1,9 +1,14 @@
+use blokli_api_types::TokenValueString;
 use blokli_chain_rpc::HoprIndexerRpcOperations;
+use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator, errors::DbSqlError};
 use hopr_bindings::hopr_announcements::HoprAnnouncements::HoprAnnouncementsEvents;
 use hopr_crypto_types::prelude::OffchainSignature;
 use hopr_internal_types::announcement::KeyBinding;
-use hopr_primitive_types::prelude::Address;
+use hopr_primitive_types::{
+    prelude::{Address, HoprBalance},
+    traits::IntoEndian,
+};
 use tracing::{debug, error, warn};
 
 use super::{ContractEventHandlers, helpers::construct_account_update};
@@ -51,7 +56,7 @@ where
                     );
                     return Ok(());
                 }
-                let node_address: Address = address_announcement.node.into();
+                let node_address: Address = address_announcement.node.to_hopr_address();
 
                 self.db
                     .insert_announcement(
@@ -86,16 +91,21 @@ where
                     "on_announcement_event: KeyBinding",
                 );
                 match KeyBinding::from_parts(
-                    key_binding.chain_key.into(),
+                    key_binding.chain_key.to_hopr_address(),
                     key_binding.ed25519_pub_key.0.try_into()?,
                     OffchainSignature::try_from((key_binding.ed25519_sig_0.0, key_binding.ed25519_sig_1.0))?,
                 ) {
                     Ok(binding) => {
                         let chain_key = binding.chain_key;
+                        // key_id is a U256, but we only support u32 for now as it maps to the account ID
+                        // This should be safe as long as we don't have more than 2^32 accounts
+                        let key_id: u32 = key_binding.key_id.try_into().unwrap_or_default();
+
                         match self
                             .db
                             .upsert_account(
                                 Some(tx),
+                                key_id,
                                 chain_key,
                                 binding.packet_key,
                                 None, // safe_address is None for key bindings
@@ -137,7 +147,7 @@ where
                 }
             }
             HoprAnnouncementsEvents::RevokeAnnouncement(revocation) => {
-                let node_address: Address = revocation.node.into();
+                let node_address: Address = revocation.node.to_hopr_address();
                 match self.db.delete_all_announcements(Some(tx), node_address).await {
                     Ok(_) => {
                         // Publish AccountUpdated event if synced
@@ -167,6 +177,19 @@ where
                     new_fee = %fee_update.newFee,
                     "on_announcement_event: KeyBindingFeeUpdate"
                 );
+
+                let fee = HoprBalance::from_be_bytes(fee_update.newFee.to_be_bytes::<32>());
+
+                self.db.update_key_binding_fee(Some(tx), fee).await?;
+
+                // Publish subscription event only when indexer is in synced mode
+                if is_synced {
+                    let fee_str = fee.amount().to_string();
+                    self.indexer_state
+                        .publish_event(crate::state::IndexerEvent::KeyBindingFeeUpdated(TokenValueString(
+                            fee_str,
+                        )));
+                }
             }
             HoprAnnouncementsEvents::LedgerDomainSeparatorUpdated(ledger_domain_separator) => {
                 self.db
@@ -211,14 +234,20 @@ mod tests {
         BlokliDbGeneralModelOperations,
         accounts::{BlokliDbAccountOperations, ChainOrPacketKey},
         db::BlokliDb,
+        info::BlokliDbInfoOperations,
     };
-    use hopr_bindings::hopr_announcements_events::HoprAnnouncementsEvents::KeyBinding as KeyBindingEvent;
+    use hopr_bindings::hopr_announcements_events::HoprAnnouncementsEvents::{
+        KeyBinding as KeyBindingEvent, KeyBindingFeeUpdate as KeyBindingFeeUpdateEvent,
+    };
     use hopr_crypto_types::keypairs::Keypair;
     use hopr_internal_types::{
         account::{AccountEntry, AccountType},
         announcement::KeyBinding,
     };
-    use hopr_primitive_types::prelude::SerializableLog;
+    use hopr_primitive_types::{
+        prelude::{SerializableLog, U256},
+        traits::IntoEndian,
+    };
     use multiaddr::Multiaddr;
 
     use super::*;
@@ -246,7 +275,7 @@ mod tests {
         // Create KeyBinding event using bindings
         let event = KeyBindingEvent {
             key_id: alloy::primitives::U256::ZERO,
-            chain_key: AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref()),
+            chain_key: AlloyAddress::from_hopr_address(*SELF_CHAIN_ADDRESS),
             ed25519_pub_key: FixedBytes::<32>::from_slice(packet_key_bytes),
             ed25519_sig_0: FixedBytes::<32>::from_slice(&sig_bytes[..32]),
             ed25519_sig_1: FixedBytes::<32>::from_slice(&sig_bytes[32..64]),
@@ -258,7 +287,8 @@ mod tests {
             public_key: *SELF_PRIV_KEY.public(),
             chain_addr: *SELF_CHAIN_ADDRESS,
             entry_type: AccountType::NotAnnounced,
-            published_at: 10, // Matches event_to_log default block number
+            safe_address: None,
+            key_id: 0.into(),
         };
 
         db.begin_transaction()
@@ -297,6 +327,7 @@ mod tests {
         // Create account using upsert_account
         db.upsert_account(
             None,
+            1,
             *SELF_CHAIN_ADDRESS,
             *SELF_PRIV_KEY.public(),
             None, // no safe_address
@@ -310,13 +341,14 @@ mod tests {
             public_key: *SELF_PRIV_KEY.public(),
             chain_addr: *SELF_CHAIN_ADDRESS,
             entry_type: AccountType::NotAnnounced,
-            published_at: 1,
+            safe_address: None,
+            key_id: 1.into(),
         };
 
         let test_multiaddr_empty: Multiaddr = "".parse()?;
 
         let address_announcement_empty_log_encoded_data = DynSolValue::Tuple(vec![
-            DynSolValue::Address(AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref())),
+            DynSolValue::Address(AlloyAddress::from_hopr_address(*SELF_CHAIN_ADDRESS)),
             DynSolValue::String(test_multiaddr_empty.to_string()),
         ])
         .abi_encode();
@@ -355,7 +387,7 @@ mod tests {
         let test_multiaddr: Multiaddr = "/ip4/1.2.3.4/tcp/56".parse()?;
 
         let address_announcement_log_encoded_data = DynSolValue::Tuple(vec![
-            DynSolValue::Address(AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref())),
+            DynSolValue::Address(AlloyAddress::from_hopr_address(*SELF_CHAIN_ADDRESS)),
             DynSolValue::String(test_multiaddr.to_string()),
         ])
         .abi_encode();
@@ -374,11 +406,9 @@ mod tests {
         let announced_account_entry = AccountEntry {
             public_key: *SELF_PRIV_KEY.public(),
             chain_addr: *SELF_CHAIN_ADDRESS,
-            entry_type: AccountType::Announced {
-                multiaddr: test_multiaddr.clone(),
-                updated_block: 1,
-            },
-            published_at: 1,
+            entry_type: AccountType::Announced(vec![test_multiaddr.clone()]),
+            safe_address: None,
+            key_id: 1.into(),
         };
 
         let handlers_clone = handlers.clone();
@@ -430,7 +460,7 @@ mod tests {
         let test_multiaddr_dns: Multiaddr = "/dns4/useful.domain/tcp/56".parse()?;
 
         let address_announcement_dns_log_encoded_data = DynSolValue::Tuple(vec![
-            DynSolValue::Address(AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref())),
+            DynSolValue::Address(AlloyAddress::from_hopr_address(*SELF_CHAIN_ADDRESS)),
             DynSolValue::String(test_multiaddr_dns.to_string()),
         ])
         .abi_encode();
@@ -449,11 +479,9 @@ mod tests {
         let announced_dns_account_entry = AccountEntry {
             public_key: *SELF_PRIV_KEY.public(),
             chain_addr: *SELF_CHAIN_ADDRESS,
-            entry_type: AccountType::Announced {
-                multiaddr: test_multiaddr_dns.clone(),
-                updated_block: 2,
-            },
-            published_at: 1,
+            entry_type: AccountType::Announced(vec![test_multiaddr_dns.clone()]),
+            safe_address: None,
+            key_id: 1.into(),
         };
 
         db.begin_transaction()
@@ -504,6 +532,7 @@ mod tests {
         // Create account using upsert_account
         db.upsert_account(
             None,
+            1,
             *SELF_CHAIN_ADDRESS,
             *SELF_PRIV_KEY.public(),
             None, // no safe_address
@@ -517,7 +546,7 @@ mod tests {
         db.insert_announcement(None, *SELF_CHAIN_ADDRESS, test_multiaddr, 0)
             .await?;
 
-        let encoded_data = (AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref()),).abi_encode();
+        let encoded_data = (AlloyAddress::from_hopr_address(*SELF_CHAIN_ADDRESS),).abi_encode();
 
         let revoke_announcement_log = SerializableLog {
             address: handlers.addresses.announcements,
@@ -533,7 +562,8 @@ mod tests {
             public_key: *SELF_PRIV_KEY.public(),
             chain_addr: *SELF_CHAIN_ADDRESS,
             entry_type: AccountType::NotAnnounced,
-            published_at: 1,
+            safe_address: None,
+            key_id: 1.into(),
         };
 
         db.begin_transaction()
@@ -550,6 +580,53 @@ mod tests {
                 .context("a value should be present")?,
             account_entry
         );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_key_binding_fee_update() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let rpc_operations = MockIndexerRpcOperations::new();
+        let clonable_rpc_operations = ClonableMockOperations {
+            inner: Arc::new(rpc_operations),
+        };
+        let (handlers, _state, mut event_receiver) = init_handlers_with_events(clonable_rpc_operations, db.clone());
+
+        // Initial fee should be empty/none
+        let data = db.get_indexer_data(None).await?;
+        assert!(data.key_binding_fee.is_none());
+
+        // Create KeyBindingFeeUpdate event
+        let new_fee_value: u128 = 123456;
+
+        let event = KeyBindingFeeUpdateEvent {
+            newFee: alloy::primitives::U256::from(new_fee_value),
+            oldFee: alloy::primitives::U256::ZERO,
+        };
+
+        let log = event_to_log(event, handlers.addresses.announcements);
+
+        db.begin_transaction()
+            .await?
+            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, log, true).await }))
+            .await?;
+
+        // Verify KeyBindingFeeUpdated event was published
+        let event = try_recv_event(&mut event_receiver).expect("Expected KeyBindingFeeUpdated event to be published");
+        match event {
+            IndexerEvent::KeyBindingFeeUpdated(fee) => {
+                assert_eq!(fee.0, new_fee_value.to_string(), "Published fee should match");
+            }
+            _ => panic!("Expected KeyBindingFeeUpdated event, got {:?}", event),
+        }
+
+        // Verify DB was updated
+        let data = db.get_indexer_data(None).await?;
+        assert_eq!(
+            data.key_binding_fee.expect("Fee should be set").amount(),
+            U256::from(new_fee_value)
+        );
+
         Ok(())
     }
 }

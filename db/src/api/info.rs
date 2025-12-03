@@ -14,6 +14,8 @@ pub struct IndexerData {
     pub channels_dst: Option<Hash>,
     /// Current ticket price
     pub ticket_price: Option<HoprBalance>,
+    /// Current key binding fee
+    pub key_binding_fee: Option<HoprBalance>,
     /// Minimum winning probability
     pub minimum_incoming_ticket_winning_prob: WinningProbability,
     /// Channel closure grace period in seconds
