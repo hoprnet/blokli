@@ -452,6 +452,9 @@
 
               # locally installed npm packages
               ".npm/"
+
+              # ignore any beads files
+              ".beads/"
             ];
             extraFormatters = {
               settings.formatter.shfmt.includes = [
