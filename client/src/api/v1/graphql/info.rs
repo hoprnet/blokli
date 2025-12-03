@@ -15,6 +15,7 @@ pub struct ChainInfo {
     pub chain_id: i32,
     pub ledger_dst: Option<String>,
     pub min_ticket_winning_probability: f64,
+    pub key_binding_fee: TokenValueString,
     pub safe_registry_dst: Option<String>,
     pub ticket_price: TokenValueString,
     pub network: String,
