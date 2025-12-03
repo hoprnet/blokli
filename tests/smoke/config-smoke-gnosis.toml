@@ -47,4 +47,4 @@ playground_enabled = true
 # The indexer will be millions of blocks behind during the short test duration
 # This test only verifies HTTPS connectivity and service startup, not full sync
 max_indexer_lag = 100000000
-timeout         = 10000
+timeout         = "10s"

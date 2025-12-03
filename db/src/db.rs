@@ -1,14 +1,14 @@
 use std::time::Duration;
 
-use blokli_db_entity::prelude::{Account, Announcement};
+use blokli_db_entity::codegen::{chain_info, node_info, prelude::*};
 use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait};
-use sea_orm::{ConnectOptions, Database, EntityTrait, SqlxSqliteConnector};
+use sea_orm::{ConnectOptions, Database, EntityTrait, Set, SqlxSqliteConnector, sea_query::OnConflict};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tracing::log::LevelFilter;
 use validator::Validate;
 
 use crate::{
-    BlokliDbAllOperations,
+    BlokliDbAllOperations, BlokliDbGeneralModelOperations, SINGULAR_TABLE_FIXED_ID,
     accounts::model_to_account_entry,
     errors::{DbSqlError, Result},
     events::EventBus,
@@ -277,7 +277,12 @@ impl BlokliDb {
         // Each call to :memory: creates a separate private database
         let index_url = "sqlite::memory:";
         let logs_url = "sqlite::memory:";
-        Self::new(index_url, Some(logs_url), Default::default()).await
+        let db = Self::new(index_url, Some(logs_url), Default::default()).await?;
+
+        // Initialize singleton entries for tests
+        db.ensure_singletons().await?;
+
+        Ok(db)
     }
 
     /// Get the appropriate database connection for log-related operations.
@@ -286,6 +291,49 @@ impl BlokliDb {
     /// For PostgreSQL or single-database mode, returns the primary database connection.
     pub(crate) fn logs_db(&self) -> &sea_orm::DatabaseConnection {
         self.logs_db.as_ref().unwrap_or(&self.db)
+    }
+
+    /// Initialize ChainInfo and NodeInfo singleton entries if they don't exist.
+    ///
+    /// This ensures the required singleton rows exist in chain_info and node_info tables.
+    /// These rows are created during startup after migrations complete.
+    ///
+    /// This operation is atomic - both singletons are created in a single transaction or neither is.
+    ///
+    /// # Errors
+    ///
+    /// Returns `DbSqlError` if database operations fail.
+    pub async fn ensure_singletons(&self) -> Result<()> {
+        self.nest_transaction(None)
+            .await?
+            .perform(|tx| {
+                Box::pin(async move {
+                    // Insert ChainInfo singleton with ON CONFLICT DO NOTHING for idempotency
+                    let chain_info_model = chain_info::ActiveModel {
+                        id: Set(SINGULAR_TABLE_FIXED_ID),
+                        ..Default::default()
+                    };
+                    ChainInfo::insert(chain_info_model)
+                        .on_conflict(OnConflict::column(chain_info::Column::Id).do_nothing().to_owned())
+                        .exec(tx.as_ref())
+                        .await?;
+
+                    // Insert NodeInfo singleton with ON CONFLICT DO NOTHING for idempotency
+                    let node_info_model = node_info::ActiveModel {
+                        id: Set(SINGULAR_TABLE_FIXED_ID),
+                        ..Default::default()
+                    };
+                    NodeInfo::insert(node_info_model)
+                        .on_conflict(OnConflict::column(node_info::Column::Id).do_nothing().to_owned())
+                        .exec(tx.as_ref())
+                        .await?;
+
+                    Ok::<(), DbSqlError>(())
+                })
+            })
+            .await?;
+
+        Ok(())
     }
 
     /// Get a reference to the event bus for subscribing to state changes.

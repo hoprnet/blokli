@@ -384,6 +384,11 @@ async fn run() -> errors::Result<()> {
         };
         let db = BlokliDb::new(&database_path, logs_database_path.as_deref(), db_config).await?;
 
+        // Initialize singleton entries for chain_info and node_info
+        db.ensure_singletons()
+            .await
+            .map_err(|e| BloklidError::NonSpecific(format!("Failed to initialize database singletons: {e}")))?;
+
         // Clone notification manager for API before db is moved to BlokliChain
         let sqlite_notification_manager = db.sqlite_notification_manager().cloned();
 
