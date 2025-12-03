@@ -2,13 +2,13 @@ use std::time::Duration;
 
 use blokli_db_entity::codegen::{chain_info, node_info, prelude::*};
 use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait};
-use sea_orm::{ActiveModelTrait, ConnectOptions, Database, EntityTrait, Set, SqlxSqliteConnector};
+use sea_orm::{ConnectOptions, Database, EntityTrait, Set, SqlxSqliteConnector, sea_query::OnConflict};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tracing::log::LevelFilter;
 use validator::Validate;
 
 use crate::{
-    BlokliDbAllOperations,
+    BlokliDbAllOperations, BlokliDbGeneralModelOperations, SINGULAR_TABLE_FIXED_ID,
     accounts::model_to_account_entry,
     errors::{DbSqlError, Result},
     events::EventBus,
@@ -290,36 +290,43 @@ impl BlokliDb {
 
     /// Initialize ChainInfo and NodeInfo singleton entries if they don't exist.
     ///
-    /// This ensures the required singleton rows exist in chain_info and node_info tables
-    /// with id=1. These rows are created during startup after migrations complete.
+    /// This ensures the required singleton rows exist in chain_info and node_info tables.
+    /// These rows are created during startup after migrations complete.
     ///
-    /// This is idempotent - it will only insert if the rows don't already exist.
+    /// This operation is atomic - both singletons are created in a single transaction or neither is.
     ///
     /// # Errors
     ///
     /// Returns `DbSqlError` if database operations fail.
     pub async fn ensure_singletons(&self) -> Result<()> {
-        // Ensure ChainInfo singleton exists
-        let chain_info_exists = ChainInfo::find_by_id(1).one(&self.db).await?.is_some();
+        self.nest_transaction(None)
+            .await?
+            .perform(|tx| {
+                Box::pin(async move {
+                    // Insert ChainInfo singleton with ON CONFLICT DO NOTHING for idempotency
+                    let chain_info_model = chain_info::ActiveModel {
+                        id: Set(SINGULAR_TABLE_FIXED_ID),
+                        ..Default::default()
+                    };
+                    ChainInfo::insert(chain_info_model)
+                        .on_conflict(OnConflict::column(chain_info::Column::Id).do_nothing().to_owned())
+                        .exec(tx.as_ref())
+                        .await?;
 
-        if !chain_info_exists {
-            let chain_info_model = chain_info::ActiveModel {
-                id: Set(1),
-                ..Default::default()
-            };
-            chain_info_model.insert(&self.db).await?;
-        }
+                    // Insert NodeInfo singleton with ON CONFLICT DO NOTHING for idempotency
+                    let node_info_model = node_info::ActiveModel {
+                        id: Set(SINGULAR_TABLE_FIXED_ID),
+                        ..Default::default()
+                    };
+                    NodeInfo::insert(node_info_model)
+                        .on_conflict(OnConflict::column(node_info::Column::Id).do_nothing().to_owned())
+                        .exec(tx.as_ref())
+                        .await?;
 
-        // Ensure NodeInfo singleton exists
-        let node_info_exists = NodeInfo::find_by_id(1).one(&self.db).await?.is_some();
-
-        if !node_info_exists {
-            let node_info_model = node_info::ActiveModel {
-                id: Set(1),
-                ..Default::default()
-            };
-            node_info_model.insert(&self.db).await?;
-        }
+                    Ok::<(), DbSqlError>(())
+                })
+            })
+            .await?;
 
         Ok(())
     }
