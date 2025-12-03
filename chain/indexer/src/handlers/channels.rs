@@ -1,4 +1,5 @@
 use blokli_chain_rpc::HoprIndexerRpcOperations;
+use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator};
 use hopr_bindings::hopr_channels::HoprChannels::HoprChannelsEvents;
 use hopr_internal_types::channels::{ChannelEntry, ChannelStatus, generate_channel_id};
@@ -80,9 +81,9 @@ where
                     existing_channel.source,
                     existing_channel.destination,
                     new_balance,
-                    decoded.ticket_index.into(),
+                    decoded.ticket_index,
                     decoded.status,
-                    decoded.epoch.into(),
+                    decoded.epoch,
                 );
 
                 // Atomically upsert the new state
@@ -149,9 +150,9 @@ where
                     existing_channel.source,
                     existing_channel.destination,
                     new_balance,
-                    decoded.ticket_index.into(),
+                    decoded.ticket_index,
                     decoded.status,
-                    decoded.epoch.into(),
+                    decoded.epoch,
                 );
 
                 // Atomically upsert the new state
@@ -216,9 +217,9 @@ where
                     existing_channel.source,
                     existing_channel.destination,
                     decoded.balance,
-                    decoded.ticket_index.into(),
+                    decoded.ticket_index,
                     decoded.status,
-                    decoded.epoch.into(),
+                    decoded.epoch,
                 );
 
                 // Atomically upsert the new state
@@ -242,8 +243,8 @@ where
                 Ok(())
             }
             HoprChannelsEvents::ChannelOpened(channel_opened) => {
-                let source: Address = channel_opened.source.into();
-                let destination: Address = channel_opened.destination.into();
+                let source: Address = channel_opened.source.to_hopr_address();
+                let destination: Address = channel_opened.destination.to_hopr_address();
                 let channel_id = generate_channel_id(&source, &destination);
 
                 // Decode the packed channel state from the event
@@ -287,9 +288,9 @@ where
                         source,
                         destination,
                         decoded.balance,
-                        decoded.ticket_index.into(),
+                        decoded.ticket_index,
                         decoded.status,
-                        decoded.epoch.into(),
+                        decoded.epoch,
                     );
 
                     self.db
@@ -303,9 +304,9 @@ where
                         source,
                         destination,
                         decoded.balance,
-                        decoded.ticket_index.into(),
+                        decoded.ticket_index,
                         decoded.status,
-                        decoded.epoch.into(),
+                        decoded.epoch,
                     );
 
                     self.db
@@ -364,9 +365,9 @@ where
                     existing_channel.source,
                     existing_channel.destination,
                     decoded.balance,
-                    decoded.ticket_index.into(),
+                    decoded.ticket_index,
                     decoded.status,
-                    decoded.epoch.into(),
+                    decoded.epoch,
                 );
 
                 // Atomically upsert the new state
@@ -425,9 +426,9 @@ where
                     existing_channel.source,
                     existing_channel.destination,
                     decoded.balance,
-                    decoded.ticket_index.into(),
+                    decoded.ticket_index,
                     decoded.status, // Should be PendingToClose with proper timestamp
-                    decoded.epoch.into(),
+                    decoded.epoch,
                 );
 
                 // Atomically upsert the new state
@@ -486,6 +487,7 @@ mod tests {
         sol_types::{SolEvent, SolValue},
     };
     use anyhow::Context;
+    use blokli_chain_types::AlloyAddressExt;
     use blokli_db::{
         BlokliDbGeneralModelOperations, accounts::BlokliDbAccountOperations, api::info::DomainSeparator,
         channels::BlokliDbChannelOperations, db::BlokliDb, info::BlokliDbInfoOperations,
@@ -525,9 +527,9 @@ mod tests {
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
             0.into(),
-            primitive_types::U256::zero(),
+            0u64,
             ChannelStatus::Open,
-            primitive_types::U256::one(),
+            0u32,
         );
 
         db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
@@ -535,9 +537,9 @@ mod tests {
         let solidity_balance: HoprBalance = primitive_types::U256::from((1u128 << 96) - 1).into();
         let channel_state = encode_channel_state(
             solidity_balance,
-            channel.ticket_index.as_u64(),
+            channel.ticket_index,
             0,
-            channel.channel_epoch.as_u32(),
+            channel.channel_epoch,
             channel.status,
         );
 
@@ -626,9 +628,9 @@ mod tests {
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
             HoprBalance::from(primitive_types::U256::from((1u128 << 96) - 1)),
-            primitive_types::U256::zero(),
+            0u64,
             ChannelStatus::Open,
-            primitive_types::U256::one(),
+            0u32,
         );
 
         db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
@@ -636,9 +638,9 @@ mod tests {
         let solidity_balance: HoprBalance = primitive_types::U256::from((1u128 << 96) - 2).into();
         let channel_state = encode_channel_state(
             solidity_balance,
-            channel.ticket_index.as_u64(),
+            channel.ticket_index,
             0,
-            channel.channel_epoch.as_u32(),
+            channel.channel_epoch,
             channel.status,
         );
 
@@ -685,21 +687,16 @@ mod tests {
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
             starting_balance,
-            primitive_types::U256::zero(),
+            0u64,
             ChannelStatus::Open,
-            primitive_types::U256::one(),
+            0u32,
         );
 
         db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
 
         // When channel is closed, balance is 0, ticket_index is reset to 0, and status is Closed
-        let channel_state = encode_channel_state(
-            HoprBalance::zero(),
-            0,
-            0,
-            channel.channel_epoch.as_u32(),
-            ChannelStatus::Closed,
-        );
+        let channel_state =
+            encode_channel_state(HoprBalance::zero(), 0, 0, channel.channel_epoch, ChannelStatus::Closed);
 
         // Create ChannelClosed event using bindings
         let event = ChannelClosed {
@@ -722,7 +719,7 @@ mod tests {
         // TODO: Add event verification - check published IndexerEvent instead of return value
 
         assert_eq!(closed_channel.status, ChannelStatus::Closed);
-        assert_eq!(closed_channel.ticket_index, 0u64.into());
+        assert_eq!(closed_channel.ticket_index, 0u64);
         // TODO: Re-enable once get_outgoing_ticket_index is implemented
         // assert_eq!(0, db.get_outgoing_ticket_index(closed_channel.get_id()).await?.load(Ordering::Relaxed));
 
@@ -753,9 +750,9 @@ mod tests {
         ))
         .expect("valid keypair");
 
-        db.upsert_account(None, foreign_addr1, *foreign_key1.public(), None, 1, 0, 0)
+        db.upsert_account(None, 1, foreign_addr1, *foreign_key1.public(), None, 1, 0, 0)
             .await?;
-        db.upsert_account(None, foreign_addr2, *foreign_key2.public(), None, 1, 0, 1)
+        db.upsert_account(None, 2, foreign_addr2, *foreign_key2.public(), None, 1, 0, 1)
             .await?;
 
         let starting_balance = HoprBalance::from(primitive_types::U256::from((1u128 << 96) - 1));
@@ -764,21 +761,16 @@ mod tests {
             foreign_addr1,
             foreign_addr2,
             starting_balance,
-            primitive_types::U256::zero(),
+            0u64,
             ChannelStatus::Open,
-            primitive_types::U256::one(),
+            0u32,
         );
 
         db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
 
         // When channel is closed, balance is 0, ticket_index is reset to 0, and status is Closed
-        let channel_state = encode_channel_state(
-            HoprBalance::zero(),
-            0,
-            0,
-            channel.channel_epoch.as_u32(),
-            ChannelStatus::Closed,
-        );
+        let channel_state =
+            encode_channel_state(HoprBalance::zero(), 0, 0, channel.channel_epoch, ChannelStatus::Closed);
 
         // Create ChannelClosed event using bindings
         let event = ChannelClosed {
@@ -801,7 +793,7 @@ mod tests {
         // Foreign channels are kept in database with Closed status for historical data
         assert_eq!(closed_channel.status, ChannelStatus::Closed);
         assert_eq!(closed_channel.balance, HoprBalance::zero());
-        assert_eq!(closed_channel.ticket_index, 0u64.into());
+        assert_eq!(closed_channel.ticket_index, 0u64);
 
         // TODO: Add event verification - check published IndexerEvent instead of return value
 
@@ -829,8 +821,8 @@ mod tests {
         // Create ChannelOpened event using bindings
         let event = ChannelOpened {
             channelId: FixedBytes::from_slice(channel_id.as_ref()),
-            source: AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref()),
-            destination: AlloyAddress::from_slice(COUNTERPARTY_CHAIN_ADDRESS.as_ref()),
+            source: AlloyAddress::from_hopr_address(*SELF_CHAIN_ADDRESS),
+            destination: AlloyAddress::from_hopr_address(*COUNTERPARTY_CHAIN_ADDRESS),
             channel: channel_state,
         };
 
@@ -849,8 +841,8 @@ mod tests {
         // TODO: Add event verification - check published IndexerEvent instead of return value
 
         assert_eq!(channel.status, ChannelStatus::Open);
-        assert_eq!(channel.channel_epoch, 1u64.into());
-        assert_eq!(channel.ticket_index, 0u64.into());
+        assert_eq!(channel.channel_epoch, 1u32);
+        assert_eq!(channel.ticket_index, 0u64);
         // TODO: Re-enable once get_outgoing_ticket_index is implemented
         // assert_eq!(0, db.get_outgoing_ticket_index(channel.get_id()).await?.load(Ordering::Relaxed));
         Ok(())
@@ -874,9 +866,9 @@ mod tests {
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
             HoprBalance::zero(),
-            primitive_types::U256::zero(),
+            0u64,
             ChannelStatus::Closed,
-            3.into(),
+            3u32,
         );
 
         db.upsert_channel(None, channel, 1, 0, 0).await?;
@@ -887,8 +879,8 @@ mod tests {
         // Create ChannelOpened event using bindings (reopening is a ChannelOpened event)
         let event = ChannelOpened {
             channelId: FixedBytes::from_slice(channel_id.as_ref()),
-            source: AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref()),
-            destination: AlloyAddress::from_slice(COUNTERPARTY_CHAIN_ADDRESS.as_ref()),
+            source: AlloyAddress::from_hopr_address(*SELF_CHAIN_ADDRESS),
+            destination: AlloyAddress::from_hopr_address(*COUNTERPARTY_CHAIN_ADDRESS),
             channel: channel_state,
         };
 
@@ -907,8 +899,8 @@ mod tests {
         // TODO: Add event verification - check published IndexerEvent instead of return value
 
         assert_eq!(channel.status, ChannelStatus::Open);
-        assert_eq!(channel.channel_epoch, 4u64.into());
-        assert_eq!(channel.ticket_index, 0u64.into());
+        assert_eq!(channel.channel_epoch, 4u32);
+        assert_eq!(channel.ticket_index, 0u64);
 
         // TODO: Re-enable once get_outgoing_ticket_index is implemented
         // assert_eq!(0, db.get_outgoing_ticket_index(channel.get_id()).await?.load(Ordering::Relaxed));
@@ -932,9 +924,9 @@ mod tests {
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
             0.into(),
-            primitive_types::U256::zero(),
+            0u64,
             ChannelStatus::Open,
-            3.into(),
+            3u32,
         );
 
         db.upsert_channel(None, channel, 1, 0, 0).await?;
@@ -945,8 +937,8 @@ mod tests {
         // Create ChannelOpened event using bindings
         let event = ChannelOpened {
             channelId: FixedBytes::from_slice(channel_id.as_ref()),
-            source: AlloyAddress::from_slice(SELF_CHAIN_ADDRESS.as_ref()),
-            destination: AlloyAddress::from_slice(COUNTERPARTY_CHAIN_ADDRESS.as_ref()),
+            source: AlloyAddress::from_hopr_address(*SELF_CHAIN_ADDRESS),
+            destination: AlloyAddress::from_hopr_address(*COUNTERPARTY_CHAIN_ADDRESS),
             channel: channel_state,
         };
 
@@ -1286,9 +1278,9 @@ mod tests {
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
             primitive_types::U256::from((1u128 << 96) - 1).into(),
-            primitive_types::U256::zero(),
+            0u64,
             ChannelStatus::Open,
-            primitive_types::U256::one(),
+            0u32,
         );
 
         let ticket_index = primitive_types::U256::from((1u128 << 48) - 2);
@@ -1301,7 +1293,7 @@ mod tests {
             channel.balance,
             next_ticket_index.as_u64(),
             0, // closure_time
-            channel.channel_epoch.as_u32(),
+            channel.channel_epoch,
             ChannelStatus::Open,
         );
 
@@ -1326,7 +1318,8 @@ mod tests {
         // TODO: Add event verification - check published IndexerEvent instead of return value
 
         assert_eq!(
-            channel.ticket_index, next_ticket_index,
+            channel.ticket_index,
+            next_ticket_index.as_u64(),
             "channel entry must contain next ticket index"
         );
 
@@ -1361,9 +1354,9 @@ mod tests {
             *COUNTERPARTY_CHAIN_ADDRESS,
             *SELF_CHAIN_ADDRESS,
             primitive_types::U256::from((1u128 << 96) - 1).into(),
-            primitive_types::U256::zero(),
+            0u64,
             ChannelStatus::Open,
-            primitive_types::U256::one(),
+            0u32,
         );
 
         db.upsert_channel(None, channel, 1, 0, 0).await?;
@@ -1375,7 +1368,7 @@ mod tests {
             channel.balance,
             next_ticket_index.as_u64(),
             0, // closure_time
-            channel.channel_epoch.as_u32(),
+            channel.channel_epoch,
             ChannelStatus::Open,
         );
 
@@ -1400,7 +1393,8 @@ mod tests {
         // TODO: Add event verification - check published IndexerEvent instead of return value
 
         assert_eq!(
-            channel.ticket_index, next_ticket_index,
+            channel.ticket_index,
+            next_ticket_index.as_u64(),
             "channel entry must contain next ticket index"
         );
         Ok(())
@@ -1425,18 +1419,18 @@ mod tests {
         let foreign_key2 =
             OffchainKeypair::from_secret(&hopr_crypto_random::random_bytes::<32>()).expect("valid keypair");
 
-        db.upsert_account(None, foreign_addr1, *foreign_key1.public(), None, 1, 0, 0)
+        db.upsert_account(None, 1, foreign_addr1, *foreign_key1.public(), None, 1, 0, 0)
             .await?;
-        db.upsert_account(None, foreign_addr2, *foreign_key2.public(), None, 1, 0, 1)
+        db.upsert_account(None, 2, foreign_addr2, *foreign_key2.public(), None, 1, 0, 1)
             .await?;
 
         let channel = ChannelEntry::new(
             foreign_addr1,
             foreign_addr2,
             primitive_types::U256::from((1u128 << 96) - 1).into(),
-            primitive_types::U256::zero(),
+            0u64,
             ChannelStatus::Open,
-            primitive_types::U256::one(),
+            0u32,
         );
 
         db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
@@ -1446,7 +1440,7 @@ mod tests {
             channel.balance,
             next_ticket_index.as_u64(),
             0,
-            channel.channel_epoch.as_u32(),
+            channel.channel_epoch,
             channel.status,
         );
 
@@ -1471,7 +1465,8 @@ mod tests {
         // TODO: Add event verification - check published IndexerEvent instead of return value
 
         assert_eq!(
-            channel.ticket_index, next_ticket_index,
+            channel.ticket_index,
+            next_ticket_index.as_u64(),
             "channel entry must contain next ticket index"
         );
         Ok(())
@@ -1494,9 +1489,9 @@ mod tests {
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
             primitive_types::U256::from((1u128 << 96) - 1).into(),
-            primitive_types::U256::zero(),
+            0u64,
             ChannelStatus::Open,
-            primitive_types::U256::one(),
+            0u32,
         );
 
         db.upsert_channel(None, channel, 1, 0, 0).await?;
@@ -1509,7 +1504,7 @@ mod tests {
             channel.balance,
             0, // ticket_index
             closure_time_secs,
-            channel.channel_epoch.as_u32(),
+            channel.channel_epoch,
             ChannelStatus::PendingToClose(timestamp),
         );
 

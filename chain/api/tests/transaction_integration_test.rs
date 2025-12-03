@@ -9,7 +9,7 @@ use alloy::{
     consensus::{SignableTransaction, TxLegacy},
     eips::eip2718::Encodable2718,
     node_bindings::AnvilInstance,
-    primitives::{TxKind, U256},
+    primitives::{Address as AlloyAddress, TxKind, U256},
     signers::{Signer, local::PrivateKeySigner},
 };
 use blokli_chain_api::{
@@ -25,7 +25,7 @@ use blokli_chain_rpc::{
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
 };
-use blokli_chain_types::{ContractAddresses, utils::create_anvil};
+use blokli_chain_types::{AlloyAddressExt, ContractAddresses, utils::create_anvil};
 use hopr_crypto_types::{
     keypairs::{ChainKeypair, Keypair},
     types::Hash,
@@ -175,7 +175,7 @@ async fn create_eth_transfer_tx(
         nonce,
         gas_price: 1_000_000_000, // 1 gwei
         gas_limit: 21_000,
-        to: TxKind::Call(to.into()),
+        to: TxKind::Call(AlloyAddress::from_hopr_address(to)),
         value: U256::from(value_wei),
         input: Default::default(),
     };

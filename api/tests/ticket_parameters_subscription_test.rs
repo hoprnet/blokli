@@ -40,6 +40,7 @@ async fn init_chain_info_with_params(
         id: Set(1),
         last_indexed_block: Set(block),
         ticket_price: Set(Some(ticket_price_bytes)),
+        key_binding_fee: Set(None),
         min_incoming_ticket_win_prob: Set(min_win_prob),
         channels_dst: Set(None),
         ledger_dst: Set(None),
@@ -166,6 +167,7 @@ async fn test_ticket_parameters_subscription_handles_missing_ticket_price() {
         id: Set(1),
         last_indexed_block: Set(100),
         ticket_price: Set(None), // Missing ticket price
+        key_binding_fee: Set(None),
         min_incoming_ticket_win_prob: Set(0.5),
         channels_dst: Set(None),
         ledger_dst: Set(None),

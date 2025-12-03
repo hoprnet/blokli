@@ -3,10 +3,13 @@ use std::{
     sync::Arc,
 };
 
-use alloy::{primitives::B256, sol_types::SolEventInterface};
+use alloy::{
+    primitives::{Address as AlloyAddress, B256},
+    sol_types::SolEventInterface,
+};
 use async_trait::async_trait;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, Log};
-use blokli_chain_types::ContractAddresses;
+use blokli_chain_types::{AlloyAddressExt, ContractAddresses};
 use blokli_db::{BlokliDbAllOperations, OpenTransaction};
 use hopr_bindings::{
     hopr_announcements::HoprAnnouncements::HoprAnnouncementsEvents, hopr_channels::HoprChannels::HoprChannelsEvents,
@@ -120,7 +123,7 @@ where
         let log = Log::from(slog.clone());
 
         let primitive_log = alloy::primitives::Log::new(
-            slog.address.into(),
+            AlloyAddress::from_hopr_address(slog.address),
             slog.topics.iter().map(|h| B256::from_slice(h.as_ref())).collect(),
             slog.data.clone().into(),
         )

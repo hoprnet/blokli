@@ -63,22 +63,26 @@ futures-timer = "3.0.3"
 futures-util = "0.3.31"
 hex = "0.4.3"
 hex-literal = "1.0.0"
-hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet", branch = "tb/202511-fix-call-selector" }
+hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
 hopr-bindings = { git = "https://github.com/hoprnet/contracts", branch = "main" }
-hopr-chain-config = { git = "https://github.com/hoprnet/hoprnet", branch = "tb/202511-fix-call-selector" }
-hopr-crypto-packet = { git = "https://github.com/hoprnet/hoprnet", branch = "tb/202511-fix-call-selector" }
-hopr-crypto-random = { git = "https://github.com/hoprnet/hoprnet", branch = "tb/202511-fix-call-selector" }
-hopr-crypto-types = { git = "https://github.com/hoprnet/hoprnet", branch = "tb/202511-fix-call-selector" }
-hopr-internal-types = { git = "https://github.com/hoprnet/hoprnet", branch = "tb/202511-fix-call-selector" }
-hopr-metrics = { git = "https://github.com/hoprnet/hoprnet", branch = "tb/202511-fix-call-selector" }
-hopr-network-types = { git = "https://github.com/hoprnet/hoprnet", branch = "tb/202511-fix-call-selector" }
-hopr-parallelize = { git = "https://github.com/hoprnet/hoprnet", branch = "tb/202511-fix-call-selector" }
-hopr-path = { git = "https://github.com/hoprnet/hoprnet", branch = "tb/202511-fix-call-selector" }
-hopr-platform = { git = "https://github.com/hoprnet/hoprnet", branch = "tb/202511-fix-call-selector" }
-hopr-primitive-types = { git = "https://github.com/hoprnet/hoprnet", branch = "tb/202511-fix-call-selector" }
+hopr-crypto-packet = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-crypto-random = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-crypto-types = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-internal-types = { git = "https://github.com/hoprnet/hoprnet", branch = "master", features = [
+  "serde",
+] }
+hopr-metrics = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-network-types = { git = "https://github.com/hoprnet/hoprnet", branch = "master", features = [
+  "serde",
+] }
+hopr-parallelize = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-platform = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-primitive-types = { git = "https://github.com/hoprnet/hoprnet", branch = "master", features = [
+  "serde",
+] }
 http = "1.3.1"
 humantime-serde = "1.1"
-indexmap = "2.12.0"
+indexmap = "2.12.1"
 insta = "1.43.2"
 lazy_static = "1.5.0"
 libp2p-identity = { version = "0.2.12", features = [

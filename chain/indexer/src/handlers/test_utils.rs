@@ -195,10 +195,11 @@ pub(super) mod test_helpers {
 
     /// Helper function to create test accounts for channel operations
     pub async fn create_test_accounts(db: &BlokliDb) -> anyhow::Result<()> {
-        db.upsert_account(None, *SELF_CHAIN_ADDRESS, *SELF_PRIV_KEY.public(), None, 1, 0, 0)
+        db.upsert_account(None, 1, *SELF_CHAIN_ADDRESS, *SELF_PRIV_KEY.public(), None, 1, 0, 0)
             .await?;
         db.upsert_account(
             None,
+            2,
             *COUNTERPARTY_CHAIN_ADDRESS,
             *COUNTERPARTY_PRIV_KEY.public(),
             None,
