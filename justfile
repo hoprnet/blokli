@@ -280,4 +280,4 @@ smoke-test-gnosis-full-sync:
     SMOKE_CONFIG=config-smoke-gnosis-full-sync.toml ./tests/smoke/run-smoke-test.sh
 
 # Build Docker image and run all smoke tests (Anvil + Gnosis Chain connectivity + Gnosis Chain full sync)
-smoke-test-full: docker-build smoke-test smoke-test-gnosis smoke-test-gnosis-full-sync
+smoke-test-full: smoke-test smoke-test-gnosis smoke-test-gnosis-full-sync

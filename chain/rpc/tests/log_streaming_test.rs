@@ -15,7 +15,7 @@ use alloy::{
 };
 use anyhow::Context;
 use blokli_chain_rpc::{
-    BlockWithLogs, FilterSet, HoprIndexerRpcOperations,
+    FilterSet, HoprIndexerRpcOperations,
     client::create_rpc_client_to_anvil,
     errors::RpcError,
     rpc::{RpcOperations, RpcOperationsConfig},

@@ -482,8 +482,7 @@ mod tests {
     use std::{sync::Arc, time::SystemTime};
 
     use alloy::{
-        dyn_abi::DynSolValue,
-        primitives::{Address as AlloyAddress, FixedBytes, U256},
+        primitives::{Address as AlloyAddress, FixedBytes},
         sol_types::{SolEvent, SolValue},
     };
     use anyhow::Context;

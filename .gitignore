@@ -58,4 +58,4 @@ api/tests/contracts/build
 
 /.npm/
 
-/*.log
+*.log

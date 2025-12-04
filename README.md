@@ -64,7 +64,7 @@ just smoke-test
 # Test with Gnosis Chain RPC (allows high lag, 30s timeout)
 just smoke-test-gnosis
 
-# Test with Gnosis Chain RPC (requires full sync within 10 blocks, 120s timeout)
+# Test with Gnosis Chain RPC (requires full sync within 10 blocks, 600s timeout)
 just smoke-test-gnosis-full-sync
 
 # Run all smoke tests (builds Docker image first)
@@ -80,7 +80,7 @@ cd tests/smoke && ./run-smoke-test.sh
 # Test with Gnosis Chain RPC (allows high lag, 30s timeout)
 SMOKE_CONFIG=config-smoke-gnosis.toml ./run-smoke-test.sh
 
-# Test with Gnosis Chain RPC (requires full sync within 10 blocks, 120s timeout)
+# Test with Gnosis Chain RPC (requires full sync within 10 blocks, 600s timeout)
 SMOKE_CONFIG=config-smoke-gnosis-full-sync.toml ./run-smoke-test.sh
 ```
 

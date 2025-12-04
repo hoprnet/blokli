@@ -112,6 +112,3 @@ pub fn create_test_rpc_operations<R: HttpRequestor + 'static + Clone>(
 
     Ok(RpcOperations::new(rpc_client, requestor, cfg, None)?)
 }
-
-/// Re-export create_rpc_client_to_anvil for tests that need wallet-enabled clients
-pub use blokli_chain_rpc::client::create_rpc_client_to_anvil;

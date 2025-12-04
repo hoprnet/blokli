@@ -12,7 +12,7 @@
 #   SMOKE_CONFIG     - Config file to use (default: config-smoke.toml)
 #                      - config-smoke.toml: Local Anvil testing (fast, 30s timeout)
 #                      - config-smoke-gnosis.toml: Real Gnosis Chain RPC testing (allows high lag, 30s timeout)
-#                      - config-smoke-gnosis-full-sync.toml: Real Gnosis Chain RPC testing (requires full sync within 10 blocks, 120s timeout)
+#                      - config-smoke-gnosis-full-sync.toml: Real Gnosis Chain RPC testing (requires full sync within 10 blocks, 600s timeout)
 #   SOURCE_IMAGE     - Image to pull from remote registry (optional, builds from nix if not set)
 #   REGISTRY_HOST    - Local registry hostname (default: localhost)
 #   REGISTRY_PORT    - Local registry port (default: 5000)
@@ -181,7 +181,7 @@ collect_blokli_logs() {
   config_name=$(basename "${SMOKE_CONFIG:-config-smoke.toml}" .toml)
   local timestamp
   timestamp=$(date +%Y%m%d_%H%M%S)
-  local log_file="blokli-smoke-${config_name}-${timestamp}.log"
+  local log_file="${SCRIPT_DIR}/blokli-smoke-${config_name}-${timestamp}.log"
 
   # Collect logs from the blokli container
   if docker logs blokli-smoke-bloklid >"${log_file}" 2>&1; then

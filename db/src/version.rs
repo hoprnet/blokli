@@ -250,6 +250,9 @@ mod tests {
         let was_reset = check_and_reset_if_needed(db.conn(crate::TargetDb::Index), None).await?;
         assert!(was_reset, "Data should have been reset");
 
+        // Recreate singletons after reset (matches production flow)
+        db.ensure_singletons().await?;
+
         // Verify version was updated
         let version_after = get_stored_version(db.conn(crate::TargetDb::Index)).await?;
         assert_eq!(version_after, CURRENT_SCHEMA_VERSION);
@@ -387,6 +390,9 @@ mod tests {
         let was_reset =
             check_and_reset_if_needed(db.conn(crate::TargetDb::Index), Some(db.conn(crate::TargetDb::Logs))).await?;
         assert!(was_reset, "Data should have been reset");
+
+        // Recreate singletons after reset (matches production flow)
+        db.ensure_singletons().await?;
 
         // Verify index data was cleared
         let chain_info_after = ChainInfo::find_by_id(1)

@@ -133,7 +133,6 @@ mod tests {
     use hopr_primitive_types::prelude::{Address, HoprBalance, SerializableLog};
     use primitive_types::H256;
 
-    use super::*;
     use crate::handlers::test_utils::test_helpers::*;
 
     #[test_log::test(tokio::test)]
