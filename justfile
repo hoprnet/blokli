@@ -271,9 +271,13 @@ helm-push:
 smoke-test:
     ./tests/smoke/run-smoke-test.sh
 
-# Run smoke tests against Gnosis Chain RPC
+# Run smoke tests against Gnosis Chain RPC (allows high lag)
 smoke-test-gnosis:
     SMOKE_CONFIG=config-smoke-gnosis.toml ./tests/smoke/run-smoke-test.sh
 
-# Build Docker image and run all smoke tests (Anvil + Gnosis Chain)
-smoke-test-full: docker-build smoke-test smoke-test-gnosis
+# Run smoke tests against Gnosis Chain RPC with full sync (requires indexer to catch up within 10 blocks)
+smoke-test-gnosis-full-sync:
+    SMOKE_CONFIG=config-smoke-gnosis-full-sync.toml ./tests/smoke/run-smoke-test.sh
+
+# Build Docker image and run all smoke tests (Anvil + Gnosis Chain connectivity + Gnosis Chain full sync)
+smoke-test-full: docker-build smoke-test smoke-test-gnosis smoke-test-gnosis-full-sync

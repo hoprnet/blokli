@@ -1,0 +1,49 @@
+# Smoke test configuration for bloklid - Gnosis Chain full sync variant
+# This configuration tests against the real Gnosis Chain RPC with a 10-block lag limit
+# It connects to PostgreSQL (local) and Gnosis Chain RPC (external)
+# The test ensures the indexer fully catches up to within 10 blocks of the chain head
+
+# Directory for storing data files
+data_directory = "/data"
+
+# Network identifier - using production Gnosis network
+network = "rotsee"
+
+# RPC endpoint URL - connects to real Gnosis Chain
+rpc_url = "https://rpc.gnosischain.com"
+
+# Rate limit RPC requests to avoid overwhelming public endpoint
+max_rpc_requests_per_sec = 10
+
+# PostgreSQL database configuration
+[database]
+type = "postgresql"
+url  = "postgresql://bloklid:bloklid_smoke_test@postgres:5432/bloklid"
+
+# Indexer configuration
+[indexer]
+# Enable fast sync for production network testing
+# We don't want to index from genesis on the real network
+fast_sync = true
+
+# Disable logs snapshot for smoke tests
+enable_logs_snapshot = false
+
+# GraphQL subscription configuration
+[indexer.subscription]
+batch_size               = 50
+event_bus_capacity       = 100
+shutdown_signal_capacity = 10
+
+# API server configuration
+[api]
+bind_address       = "0.0.0.0:8080"
+enabled            = true
+playground_enabled = true
+
+# Health check configuration
+[api.health]
+# Require indexer to be within 10 blocks of chain head
+# This ensures the indexer has fully caught up for the smoke test duration
+max_indexer_lag = 10
+timeout         = "10s"

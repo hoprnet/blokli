@@ -4,13 +4,15 @@
 #
 # Usage:
 #   ./run-smoke-test.sh                           # Test with local Anvil (fast, no external deps)
-#   SMOKE_CONFIG=config-smoke-gnosis.toml ./run-smoke-test.sh  # Test with Gnosis Chain RPC
+#   SMOKE_CONFIG=config-smoke-gnosis.toml ./run-smoke-test.sh  # Test with Gnosis Chain RPC (allows high lag)
+#   SMOKE_CONFIG=config-smoke-gnosis-full-sync.toml ./run-smoke-test.sh  # Test with Gnosis Chain RPC (requires full sync within 10 blocks)
 #   SOURCE_IMAGE=myimage:tag ./run-smoke-test.sh  # Pull image, push to local registry
 #
 # Environment variables:
 #   SMOKE_CONFIG     - Config file to use (default: config-smoke.toml)
-#                      - config-smoke.toml: Local Anvil testing
-#                      - config-smoke-gnosis.toml: Real Gnosis Chain RPC testing
+#                      - config-smoke.toml: Local Anvil testing (fast, 30s timeout)
+#                      - config-smoke-gnosis.toml: Real Gnosis Chain RPC testing (allows high lag, 30s timeout)
+#                      - config-smoke-gnosis-full-sync.toml: Real Gnosis Chain RPC testing (requires full sync within 10 blocks, 120s timeout)
 #   SOURCE_IMAGE     - Image to pull from remote registry (optional, builds from nix if not set)
 #   REGISTRY_HOST    - Local registry hostname (default: localhost)
 #   REGISTRY_PORT    - Local registry port (default: 5000)
@@ -44,8 +46,8 @@ READYZ_MAX_RETRIES=5
 READYZ_RETRY_INTERVAL=1
 REGISTRY_TIMEOUT=30
 REGISTRY_POLL_INTERVAL=1
-CHAIN_SYNC_TIMEOUT=30
-CHAIN_SYNC_POLL_INTERVAL=2
+CHAIN_SYNC_TIMEOUT=30  # Default timeout, overridden for full sync test
+CHAIN_SYNC_POLL_INTERVAL=2  # Default poll interval, overridden for full sync test
 MAX_INDEXER_LAG=10
 
 # Logging functions
@@ -173,10 +175,31 @@ detect_arch() {
   esac
 }
 
+# Collect blokli container logs for inspection
+collect_blokli_logs() {
+  local config_name
+  config_name=$(basename "${SMOKE_CONFIG:-config-smoke.toml}" .toml)
+  local timestamp
+  timestamp=$(date +%Y%m%d_%H%M%S)
+  local log_file="blokli-smoke-${config_name}-${timestamp}.log"
+
+  log_info "Collecting blokli container logs..."
+
+  # Collect logs from the blokli container
+  if docker logs blokli-smoke-bloklid > "${log_file}" 2>&1; then
+    log_info "Blokli logs saved to: ${log_file}"
+  else
+    log_warn "Failed to collect blokli logs"
+  fi
+}
+
 # Cleanup function
 cleanup() {
-  log_info "Cleaning up Docker Compose stack..."
-  docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans 2>/dev/null || true
+  # Collect logs before stopping containers
+  collect_blokli_logs
+
+log_info "Cleaning up Docker Compose stack..."
+docker compose -f "${COMPOSE_FILE}" down -v --remove-orphans 2>/dev/null || true
 }
 
 # Register cleanup on exit
@@ -304,7 +327,7 @@ check_bloklid_health() {
 
 # Wait for bloklid to become healthy
 wait_for_healthy() {
-  if ! retry_with_timeout "$TIMEOUT_SECONDS" "$POLL_INTERVAL" "Waiting for bloklid to become healthy" "check_bloklid_health"; then
+  if ! retry_with_timeout "$CHAIN_SYNC_TIMEOUT" "$CHAIN_SYNC_POLL_INTERVAL" "Waiting for bloklid to become healthy" "check_bloklid_health"; then
     log_error "Dumping bloklid logs:"
     docker compose -f "${COMPOSE_FILE}" logs bloklid
     return 1
@@ -423,8 +446,12 @@ test_readyz() {
     return 1
   fi
 
-  # Indexer might not be fully synced yet, just warn
-  if [ "$indexer_status" != "healthy" ]; then
+  # For Gnosis full sync test, indexer must be healthy (within 10 blocks)
+  # For other tests, indexer might not be fully synced yet
+  if [[ "$SMOKE_CONFIG" == *"gnosis-full-sync"* ]] && [ "$indexer_status" != "healthy" ]; then
+    log_error "Indexer check failed for Gnosis full sync test - must be within 10 blocks of chain head"
+    return 1
+  elif [ "$indexer_status" != "healthy" ]; then
     log_warn "Indexer is not fully healthy (this may be expected for fresh start)"
   fi
 
@@ -511,9 +538,29 @@ test_indexer_follows_chain() {
 
 # Main test execution
 main() {
+  local config_desc
+  case "${SMOKE_CONFIG:-config-smoke.toml}" in
+    "config-smoke.toml")
+      config_desc="Local Anvil testnet (fast, no external dependencies)"
+      ;;
+    "config-smoke-gnosis.toml")
+      config_desc="Gnosis Chain RPC (allows high lag for connectivity testing)"
+      ;;
+    "config-smoke-gnosis-full-sync.toml")
+      config_desc="Gnosis Chain RPC (requires full sync within 10 blocks)"
+      # Use longer timeouts for full sync test
+      CHAIN_SYNC_TIMEOUT=600 # 10min
+      CHAIN_SYNC_POLL_INTERVAL=5
+      ;;
+       *)
+      config_desc="Custom config: ${SMOKE_CONFIG}"
+      ;;
+      esac
+
   log_info "Starting blokli smoke tests"
   log_info "================================"
   log_info "Config file: ${SMOKE_CONFIG:-config-smoke.toml}"
+  log_info "Test type: ${config_desc}"
   log_info "Local registry: ${LOCAL_REGISTRY}"
   log_info "Local image: ${LOCAL_IMAGE}"
   if [ -n "${SOURCE_IMAGE:-}" ]; then

@@ -53,6 +53,39 @@ just test-debug
 just test-indexer
 ```
 
+### Smoke Tests
+
+Smoke tests verify that `bloklid` can start and connect to external dependencies. Logs are automatically saved to local files for inspection after each test run.
+
+```bash
+# Test with local Anvil (fast, 30s timeout, no external deps)
+just smoke-test
+
+# Test with Gnosis Chain RPC (allows high lag, 30s timeout)
+just smoke-test-gnosis
+
+# Test with Gnosis Chain RPC (requires full sync within 10 blocks, 120s timeout)
+just smoke-test-gnosis-full-sync
+
+# Run all smoke tests (builds Docker image first)
+just smoke-test-full
+```
+
+You can also run them manually:
+
+```bash
+# Test with local Anvil (fast, 30s timeout, no external deps)
+cd tests/smoke && ./run-smoke-test.sh
+
+# Test with Gnosis Chain RPC (allows high lag, 30s timeout)
+SMOKE_CONFIG=config-smoke-gnosis.toml ./run-smoke-test.sh
+
+# Test with Gnosis Chain RPC (requires full sync within 10 blocks, 120s timeout)
+SMOKE_CONFIG=config-smoke-gnosis-full-sync.toml ./run-smoke-test.sh
+```
+
+**Log Files**: After each test run, logs are saved as `blokli-smoke-{config}-{timestamp}.log` in the `tests/smoke/` directory for debugging failed tests.
+
 ### Testing Guide
 
 See **[TESTING.md](TESTING.md)** for the complete testing guide.
