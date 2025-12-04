@@ -57,3 +57,5 @@ api/tests/contracts/build
 *.tgz
 
 /.npm/
+
+/*.log

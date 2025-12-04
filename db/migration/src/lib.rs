@@ -24,6 +24,7 @@ mod m020_add_key_binding_fee_to_chain_info;
 mod m021_clear_index_data;
 mod m022_clear_log_data;
 mod m023_alter_log_tables_id_bigint;
+mod m024_alter_index_tables_id_bigint;
 
 #[derive(PartialEq)]
 pub enum BackendType {
@@ -61,6 +62,8 @@ impl MigratorTrait for Migrator {
             Box::new(m020_add_key_binding_fee_to_chain_info::Migration),
             Box::new(m021_clear_index_data::Migration),
             Box::new(m022_clear_log_data::Migration),
+            Box::new(m023_alter_log_tables_id_bigint::Migration),
+            Box::new(m024_alter_index_tables_id_bigint::Migration),
         ]
     }
 }
@@ -94,6 +97,7 @@ impl MigratorTrait for MigratorIndex {
             Box::new(m019_alter_chain_node_info_id_bigint::Migration),
             Box::new(m020_add_key_binding_fee_to_chain_info::Migration),
             Box::new(m021_clear_index_data::Migration),
+            Box::new(m024_alter_index_tables_id_bigint::Migration),
         ]
     }
 }
