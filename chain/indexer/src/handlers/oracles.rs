@@ -117,7 +117,6 @@ mod tests {
     use hopr_internal_types::tickets::WinningProbability;
     use hopr_primitive_types::prelude::SerializableLog;
 
-    use super::*;
     use crate::handlers::test_utils::test_helpers::*;
 
     #[tokio::test]

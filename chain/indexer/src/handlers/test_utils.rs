@@ -3,7 +3,6 @@ pub(super) mod test_helpers {
     use std::sync::Arc;
 
     use alloy::{primitives::B256, sol_types::private::IntoLogData};
-    use async_trait::async_trait;
     use blokli_chain_rpc::HoprIndexerRpcOperations;
     use blokli_chain_types::ContractAddresses;
     use blokli_db::{BlokliDbAllOperations, accounts::BlokliDbAccountOperations, db::BlokliDb};

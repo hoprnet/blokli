@@ -244,10 +244,7 @@ mod tests {
         account::{AccountEntry, AccountType},
         announcement::KeyBinding,
     };
-    use hopr_primitive_types::{
-        prelude::{SerializableLog, U256},
-        traits::IntoEndian,
-    };
+    use hopr_primitive_types::prelude::{SerializableLog, U256};
     use multiaddr::Multiaddr;
 
     use super::*;

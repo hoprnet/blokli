@@ -230,6 +230,12 @@ impl BlokliDb {
                 .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
         }
 
+        // Check schema version and clear data if needed
+        let data_was_reset = crate::version::check_and_reset_if_needed(&db, logs_db.as_ref()).await?;
+        if data_was_reset {
+            tracing::warn!("Database data was reset due to schema version change");
+        }
+
         // Initialize KeyId mapping for accounts
         Account::find()
             .find_with_related(Announcement)
