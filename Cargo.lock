@@ -1911,7 +1911,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1948,6 +1948,7 @@ dependencies = [
  "smart-default",
  "sqlx",
  "strum 0.27.2",
+ "tempfile",
  "thiserror 2.0.17",
  "tokio",
  "tracing",
@@ -1976,7 +1977,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db-migration"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "hopr-internal-types",
  "hopr-primitive-types",

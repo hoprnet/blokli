@@ -5,7 +5,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-db"
 repository  = "https://github.com/hoprnet/blokli"
-version     = "0.2.1"
+version     = "0.3.0"
 
 [lints]
 workspace = true
@@ -69,6 +69,7 @@ hex-literal = { workspace = true }
 lazy_static = { workspace = true }
 rand        = { workspace = true }
 sea-orm     = { workspace = true }
+tempfile    = { workspace = true }
 tokio       = { workspace = true }
 
 hopr-async-runtime = { workspace = true, features = ["runtime-tokio"] }
