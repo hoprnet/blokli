@@ -1,4 +1,5 @@
-use sea_orm::{ConnectionTrait, DatabaseConnection, Statement};
+use blokli_db_entity::codegen::prelude::*;
+use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, Statement};
 use tracing::{info, warn};
 
 use crate::errors::{DbSqlError, Result};
@@ -142,24 +143,24 @@ async fn clear_index_data(db: &DatabaseConnection) -> Result<()> {
     // Children first, then parents
 
     // Channel-related tables
-    db.execute_unprepared("DELETE FROM channel_state").await?;
-    db.execute_unprepared("DELETE FROM channel").await?;
+    ChannelState::delete_many().exec(db).await?;
+    Channel::delete_many().exec(db).await?;
 
     // Account-related tables
-    db.execute_unprepared("DELETE FROM account_state").await?;
-    db.execute_unprepared("DELETE FROM announcement").await?;
-    db.execute_unprepared("DELETE FROM account").await?;
+    AccountState::delete_many().exec(db).await?;
+    Announcement::delete_many().exec(db).await?;
+    Account::delete_many().exec(db).await?;
 
     // Balance tables
-    db.execute_unprepared("DELETE FROM hopr_balance").await?;
-    db.execute_unprepared("DELETE FROM native_balance").await?;
+    HoprBalance::delete_many().exec(db).await?;
+    NativeBalance::delete_many().exec(db).await?;
 
     // Safe contract table
-    db.execute_unprepared("DELETE FROM hopr_safe_contract").await?;
+    HoprSafeContract::delete_many().exec(db).await?;
 
     // Info tables
-    db.execute_unprepared("DELETE FROM chain_info").await?;
-    db.execute_unprepared("DELETE FROM node_info").await?;
+    ChainInfo::delete_many().exec(db).await?;
+    NodeInfo::delete_many().exec(db).await?;
 
     Ok(())
 }
@@ -173,13 +174,13 @@ async fn clear_logs_data(db: &DatabaseConnection) -> Result<()> {
     // Delete in order to respect foreign key constraints
 
     // Log topics (child)
-    db.execute_unprepared("DELETE FROM log_topic_info").await?;
+    LogTopicInfo::delete_many().exec(db).await?;
 
     // Log status (child)
-    db.execute_unprepared("DELETE FROM log_status").await?;
+    LogStatus::delete_many().exec(db).await?;
 
     // Logs (parent)
-    db.execute_unprepared("DELETE FROM log").await?;
+    Log::delete_many().exec(db).await?;
 
     Ok(())
 }
