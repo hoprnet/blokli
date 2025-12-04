@@ -82,6 +82,7 @@ impl Default for BlokliTestState {
                 chain_id: 100,
                 ledger_dst: Some("0000000000000000000000000000000000000000000000000000000000000000".into()),
                 min_ticket_winning_probability: 1.0,
+                key_binding_fee: TokenValueString("0.01 wxHOPR".into()),
                 safe_registry_dst: Some("0000000000000000000000000000000000000000000000000000000000000000".into()),
                 ticket_price: TokenValueString("1 wxHOPR".into()),
                 network: "rotsee".into(),
