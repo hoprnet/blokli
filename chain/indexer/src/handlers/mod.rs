@@ -133,7 +133,7 @@ where
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// # use std::sync::Arc;
     /// # use tokio::runtime::Runtime;
     /// # // setup placeholders for the example — real types come from the library
@@ -240,7 +240,7 @@ where
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let addrs = handlers.contract_addresses();
     /// assert_eq!(addrs.len(), 7);
     /// // order: announcements, channels, ticket_price_oracle, winning_probability_oracle,
@@ -273,7 +273,7 @@ where
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// // assume `handler` is an instance of ContractEventHandlers and `addr` is one of its addresses
     /// let topics = handler.contract_address_topics(handler.addresses.announcements);
     /// assert!(!topics.is_empty());

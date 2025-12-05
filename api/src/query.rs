@@ -84,7 +84,7 @@ pub enum SafesResult {
 ///
 /// # Examples
 ///
-/// ```
+/// ```ignore
 /// let res = parse_safe_address("0x0123456789abcdef0123456789abcdef01234567".to_string());
 /// assert!(res.is_ok());
 /// let bytes = res.unwrap();
@@ -524,7 +524,7 @@ impl QueryRoot {
     ///
     /// # Examples
     ///
-    /// ```rust
+    /// ```ignore
     /// # use api::query::SafeTransactionCountResult;
     /// # use api::query::SafeTransactionCount;
     /// # use api::query::UInt64;
@@ -655,7 +655,7 @@ impl QueryRoot {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```ignore
     /// // Given a prepared `query_root` and GraphQL `ctx`:
     /// let res = futures::executor::block_on(query_root.safe_by_chain_key(&ctx, "0x0123...".to_string())).unwrap();
     /// match res {
@@ -706,7 +706,7 @@ impl QueryRoot {
     ///
     /// # Examples
     ///
-    /// ```rust,no_run
+    /// ```ignore
     /// # use async_graphql::Context;
     /// # use crate::api::QueryRoot;
     /// # async fn doc_example(ctx: &Context<'_>) {

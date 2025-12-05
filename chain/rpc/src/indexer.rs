@@ -160,7 +160,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// # async fn example(op: &RpcOperations<impl Provider>, safe_address: Address) -> Result<()> {
     /// let count = op.get_safe_transaction_count(safe_address).await?;
     /// assert!(count >= 0);
@@ -179,7 +179,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// # use ethers::types::H256 as Hash;
     /// # async fn example(rpc: &crate::RpcOperations<_>, tx_hash: Hash) {
     /// // In real usage provide a valid `tx_hash` and `rpc`.

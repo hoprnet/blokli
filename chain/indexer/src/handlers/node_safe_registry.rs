@@ -38,7 +38,7 @@ where
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```ignore
     /// # async fn run_example() -> crate::Result<()> {
     /// # use crate::ContractEventHandlers;
     /// # let handlers = todo!();

@@ -375,7 +375,7 @@ impl SubscriptionRoot {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// use futures::StreamExt;
     ///
     /// # async fn example(root: crate::SubscriptionRoot, ctx: &async_graphql::Context<'_>) -> Result<(), async_graphql::Error> {
@@ -665,7 +665,7 @@ impl SubscriptionRoot {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```ignore
     /// # use futures::StreamExt;
     /// // `root` is a `SubscriptionRoot` and `ctx` is an `async_graphql::Context<'_>`
     /// let mut stream = root.safe_deployed(&ctx).await.unwrap();

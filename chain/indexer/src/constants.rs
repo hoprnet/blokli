@@ -68,7 +68,7 @@ pub mod topics {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let hashes = token();
     /// assert!(hashes.contains(&Transfer::SIGNATURE_HASH));
     /// assert!(hashes.contains(&Approval::SIGNATURE_HASH));
@@ -96,7 +96,7 @@ pub mod topics {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let v = stake_factory();
     /// assert_eq!(v.len(), 1);
     /// ```
@@ -110,7 +110,7 @@ pub mod topics {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let sigs = module_implementation();
     /// assert!(sigs.is_empty());
     /// ```

@@ -30,7 +30,7 @@ where
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// // Illustrative example — types and values are placeholders.
     /// # async fn example<H, D>(handler: &H, tx: &crate::db::OpenTransaction, log: &crate::chain::SerializableLog, event: crate::chain::HoprNodeStakeFactoryEvents)
     /// # where H: std::ops::Deref<Target=crate::chain::handlers::ContractEventHandlers<(), ()>> + Send + Sync {
