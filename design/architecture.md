@@ -162,6 +162,7 @@ RPC Endpoint
 - **HoprChannels**: Payment channel lifecycle events (open, fund, close)
 - **HoprToken**: wxHOPR token transfers and approvals for balance tracking
 - **HoprNodeSafeRegistry**: Safe contract address registration linking accounts to multisig wallets
+- **HoprNodeStakeFactory**: Safe contract deployment events with module and owner tracking
 - **HoprTicketPriceOracle**: Network-wide ticket price updates
 - **HoprWinningProbabilityOracle**: Network-wide winning probability updates
 
@@ -178,6 +179,7 @@ The database implements an event sourcing pattern with temporal versioning:
 - **announcement**: Multiaddress announcements with position tracking
 - **channel**: Immutable payment channel identities linking source/destination accounts
 - **channel_state**: Version history of channel states (balance, status, epoch) with position tracking
+- **hopr_safe_contract**: Safe contract deployments with module addresses and owner chain keys
 - **hopr_balance**: Current wxHOPR token balances indexed by address
 - **native_balance**: Current native token balances indexed by address
 - **chain_info**: Singleton table tracking indexer metadata (watermark, network parameters)
@@ -255,6 +257,7 @@ The schema is organized into three root types following GraphQL best practices:
 
 - Account queries with required filtering to prevent excessive data exposure
 - Channel queries with identity-based filters
+- Safe contract queries by address or chain key (owner)
 - Balance queries by address (works for any Ethereum address)
 - Chain information and network parameters
 - Transaction status queries by UUID
@@ -271,6 +274,7 @@ Three transaction submission modes with different guarantees:
 
 - Account updates: Real-time changes to account balances and Safe linking
 - Channel updates: Real-time changes to payment channel states
+- Safe deployments: Real-time notifications when new Safe contracts are deployed
 - Network topology: Opened channel graph updates for routing decisions
 - Transaction updates: Status changes for submitted transactions
 
@@ -296,8 +300,11 @@ Applies Zstandard compression selectively:
 
 **Key Traits**:
 
-- **HoprIndexerRpcOperations**: Indexer-specific operations including log streaming, block fetching with configurable ranges, and filter management
+- **HoprIndexerRpcOperations**: Indexer-specific operations including log streaming, block fetching with configurable ranges, filter management, and transaction sender retrieval for chain key extraction
 - **HoprRpcOperations**: General HOPR contract operations including balance queries, allowance checks, and network parameter reads
+
+**Transaction Sender Retrieval**:
+The `get_transaction_sender()` operation retrieves the sender address (chain key) from a transaction hash. This is used during Safe deployment tracking to identify the owner's chain key. The operation is cryptographically secure because transaction signatures are verified by Ethereum consensus—only successfully mined transactions can be queried, and the sender address is recovered from the transaction's ECDSA signature by the blockchain itself.
 
 **Configuration Parameters**:
 The RPC layer is configured with network-specific parameters including chain ID, contract addresses, expected block time for polling intervals, transaction polling configuration, finality depth, and maximum block range for batch fetching.
@@ -367,7 +374,7 @@ When a GraphQL subscription starts, it acquires read lock. While holding lock, i
 **Guarantee**: No events can be missed between reading the watermark and subscribing to the event bus, ensuring complete event delivery to all subscriptions.
 
 **Event Types**:
-The event bus carries three event types: AccountUpdated (with account keyid), ChannelUpdated (with channel id), and BalanceUpdated (with address bytes). Subscribers filter events based on their query parameters.
+The event bus carries four event types: AccountUpdated (with account keyid), ChannelUpdated (with channel id), BalanceUpdated (with address bytes), and SafeDeployed (with Safe contract address). Subscribers filter events based on their query parameters.
 
 ## User Flows
 
@@ -566,7 +573,7 @@ Blockchain RPC
 │ - Broadcast events   │  Publishes to all active subscriptions
 └──────────────────────┘
       │
-      │ IndexerEvent (AccountUpdated, ChannelUpdated, BalanceUpdated)
+      │ IndexerEvent (AccountUpdated, ChannelUpdated, BalanceUpdated, SafeDeployed)
       │
       ▼
 ┌──────────────────────┐
@@ -663,6 +670,51 @@ Subscribed Clients
 2. **Allowlist Check**: Only permits transactions to whitelisted HOPR contracts
 3. **Selector Validation**: Only permits calls to approved function selectors
 4. **Rate Limiting**: Prevents flooding RPC endpoint or blockchain network
+
+### Safe Contract Deployment Tracking
+
+This flow demonstrates how Safe contract deployments are indexed with module and owner information:
+
+```
+Blockchain emits NewHoprNodeStakeModuleForSafe event
+    ↓
+Indexer receives log from RPC provider
+    ↓
+StakeFactory handler processes event:
+    - Extracts Safe address from event
+    - Extracts module address from event
+    - Calls get_transaction_sender(tx_hash) via RPC
+    ↓
+RPC provider returns transaction sender (chain_key/owner)
+    - Sender extracted from tx.inner.signer()
+    - Cryptographically verified by Ethereum consensus
+    ↓
+Database operations:
+    - Check if Safe already exists (idempotency)
+    - Insert into hopr_safe_contract table:
+        * Safe address
+        * Module address
+        * Chain key (owner)
+        * Event position (block, tx_index, log_index)
+    ↓
+Publish SafeDeployed event to IndexerState event bus
+    ↓
+GraphQL safeDeployed subscription receives event:
+    - Queries database for full Safe details
+    - Streams to subscribed clients via SSE
+```
+
+**Query Access Patterns**:
+
+Clients can query Safe contracts through three methods:
+
+1. **By Safe Address**: `safe(address: "0x...")` - Direct lookup by Safe contract address
+2. **By Chain Key**: `safeByChainKey(chainKey: "0x...")` - Find Safe by owner's address
+3. **List All**: `safes()` - Retrieve all indexed Safe contracts
+
+**Idempotency Guarantee**:
+
+The unique constraint on `(deployed_block, deployed_tx_index, deployed_log_index)` ensures that processing the same event multiple times (due to retries or reorgs) will not create duplicate Safe entries.
 
 ### Database Change Notifications
 

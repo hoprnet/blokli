@@ -361,11 +361,4 @@ mod tests {
 
         Ok(())
     }
-
-    #[tokio::test]
-    async fn test_get_transaction_sender_mock() {
-        // This test verifies the signature of the get_transaction_sender method
-        // The actual implementation relies on RPC provider which is mocked in other tests
-        // This is just a placeholder if we want to unit test specific logic later
-    }
 }
