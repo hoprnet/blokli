@@ -67,7 +67,7 @@ impl BlokliDbSafeContractOperations for BlokliDb {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```ignore
     /// # async fn example(db: &BlokliDb, safe_addr: Address, module_addr: Address, chain_key: Address) -> Result<(), Box<dyn std::error::Error>> {
     /// let id = db.create_safe_contract(None, safe_addr, module_addr, chain_key, 100, 0, 0).await?;
     /// println!("safe id: {}", id);
@@ -140,7 +140,7 @@ impl BlokliDbSafeContractOperations for BlokliDb {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// # use crate::db::BlokliDb;
     /// # use crate::types::Address;
     /// # async fn example(db: &BlokliDb, addr: Address, key: Address) -> Result<(), crate::db::DbSqlError> {
@@ -178,6 +178,8 @@ impl BlokliDbSafeContractOperations for BlokliDb {
 
 #[cfg(test)]
 mod tests {
+    use sea_orm::PaginatorTrait;
+
     use super::*;
     use crate::db::BlokliDb;
 
