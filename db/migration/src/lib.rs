@@ -40,6 +40,21 @@ pub struct Migrator;
 /// a non-SQLite database (such as Postgres).
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator {
+    /// Returns the ordered set of migrations that comprise the full database migrator.
+    ///
+    /// This returns the complete sequence of migration instances in the order they should be applied.
+    ///
+    /// # Returns
+    ///
+    /// A `Vec<Box<dyn MigrationTrait>>` containing each migration boxed as a `MigrationTrait` object, ordered from earliest to latest.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let migrations = Migrator::migrations();
+    /// // full migrator should contain multiple migrations (at least 1)
+    /// assert!(!migrations.is_empty());
+    /// ```
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         vec![
             Box::new(m001_create_index_tables::Migration),
@@ -81,6 +96,15 @@ pub struct MigratorIndex;
 
 #[async_trait::async_trait]
 impl MigratorTrait for MigratorIndex {
+    /// List of migrations to apply for the index-only migrator, in execution order.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let list = migrations();
+    /// assert!(!list.is_empty());
+    /// // each element is a boxed `MigrationTrait` implementation
+    /// ```
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         vec![
             Box::new(m001_create_index_tables::Migration),

@@ -23,6 +23,29 @@ where
     T: HoprIndexerRpcOperations + Clone + Send + 'static,
     Db: BlokliDbAllOperations + Clone,
 {
+    /// Handle `HoprNodeSafeRegistryEvents` by verifying or updating safe registry state in the database.
+    ///
+    /// Processes three event variants:
+    /// - `RegisteredNodeSafe`: verifies the safe exists and its stored chain key matches the event's node address; logs the verification outcome.
+    /// - `DeregisteredNodeSafe`: records the deregistration via logging.
+    /// - `DomainSeparatorUpdated`: updates the SafeRegistry domain separator in the database.
+    ///
+    /// # Returns
+    ///
+    /// `Result<()>` indicating success, or an error if a database operation (such as updating the domain separator) fails.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn run_example() -> crate::Result<()> {
+    /// # use crate::ContractEventHandlers;
+    /// # let handlers = todo!();
+    /// # let tx = todo!();
+    /// # let event = todo!();
+    /// handlers.on_node_safe_registry_event(&tx, event, true).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub(super) async fn on_node_safe_registry_event(
         &self,
         tx: &OpenTransaction,

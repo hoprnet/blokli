@@ -5,6 +5,38 @@ pub struct Migration;
 
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
+    /// Applies the migration that replaces the existing `hopr_safe_contract` table with a new schema.
+    ///
+    /// The migration drops any existing `hopr_safe_contract` table, creates a new table that includes
+    /// `module_address` and `chain_key` columns, and adds indices for `chain_key`, `address`, and a
+    /// unique composite index on `(deployed_block, deployed_tx_index, deployed_log_index)` to enforce
+    /// event idempotency.
+    ///
+    /// # Parameters
+    ///
+    /// - `manager`: schema manager used to execute the migration operations.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` on success, `Err(DbErr)` if any schema operation fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use sea_orm_migration::prelude::*;
+    /// # use sea_query::SchemaManager;
+    /// # use sea_orm::DbErr;
+    /// # struct Migration;
+    /// # impl Migration {
+    /// #     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> { Ok(()) }
+    /// # }
+    /// # async fn run_example() -> Result<(), DbErr> {
+    /// let manager: SchemaManager = /* obtain SchemaManager from migration context */ unimplemented!();
+    /// let migration = Migration;
+    /// migration.up(&manager).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         // Drop existing table to enforce new schema with module_address and chain_key columns.
         // NOTE: This migration requires full re-indexing of Safe deployment events from the blockchain.
@@ -92,6 +124,30 @@ impl MigrationTrait for Migration {
         Ok(())
     }
 
+    /// Reverts the migration by replacing the updated `HoprSafeContract` table with its previous schema.
+    ///
+    /// This drops the table created by the migration and recreates the old `HoprSafeContract` table
+    /// without `ModuleAddress` and `ChainKey`, restoring columns: `Id`, `Address`, `DeployedBlock`,
+    /// `DeployedTxIndex`, and `DeployedLogIndex`.
+    ///
+    /// # Parameters
+    ///
+    /// - `manager`: Schema manager used to execute the drop and create table operations.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` on success, `DbErr` on failure.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use sea_orm_migration::prelude::*;
+    /// # async fn example(manager: &SchemaManager) -> Result<(), DbErr> {
+    /// let migration = Migration;
+    /// migration.down(manager).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         // Drop the new table
         manager

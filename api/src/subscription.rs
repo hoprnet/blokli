@@ -366,14 +366,28 @@ impl SubscriptionRoot {
         })
     }
 
-    /// Subscribe to a stream of opened payment channels with complete account information.
+    /// Streams opened payment channels with complete account information.
     ///
-    /// This subscription implements a 2-phase streaming model:
-    /// - Phase 1: Streams all open channels at subscription time (historical snapshot)
-    /// - Phase 2: Streams real-time updates from the event bus
+    /// Provides a two-phase stream: Phase 1 emits a historical snapshot of all channels
+    /// that were open at subscription time; Phase 2 emits real-time channel updates
+    /// from the indexer's event bus. The stream yields `ChannelUpdate` items and
+    /// terminates on shutdown, event-bus closure, or on a fatal query error.
     ///
-    /// Each update includes the channel along with complete source and destination account details.
-    /// This ensures no race conditions, duplicates, or data loss during the transition between phases.
+    /// # Examples
+    ///
+    /// ```
+    /// use futures::StreamExt;
+    ///
+    /// # async fn example(root: crate::SubscriptionRoot, ctx: &async_graphql::Context<'_>) -> Result<(), async_graphql::Error> {
+    /// let mut stream = root.opened_channels_graph_stream(ctx).await?;
+    /// // read one update (historical or real-time)
+    /// if let Some(update) = stream.next().await {
+    ///     // handle `ChannelUpdate`
+    ///     let _ = update;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     #[graphql(name = "openedChannelsGraphStream")]
     async fn opened_channels_graph_stream(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = ChannelUpdate>> {
         // Get dependencies from context
@@ -545,10 +559,24 @@ impl SubscriptionRoot {
         })
     }
 
-    /// Subscribe to real-time updates of the key binding fee
+    /// Streams updates to the key binding fee.
     ///
-    /// Emits the current fee once on subscription, then streams updates whenever
-    /// the indexer processes a `KeyBindingFeeUpdate` event and is in synced mode.
+    /// Emits the current fee once when the subscription starts, then emits new fee
+    /// values whenever a `KeyBindingFeeUpdated` event is processed while the indexer
+    /// is synced. Consecutive duplicate fee values are suppressed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use futures::StreamExt;
+    ///
+    /// // In an async context with a GraphQL `Context` available:
+    /// // let stream = root.key_binding_fee_updated(&ctx).await.unwrap();
+    /// // let mut stream = Box::pin(stream);
+    /// // if let Some(fee) = stream.next().await {
+    /// //     println!("current fee: {}", fee.0);
+    /// // }
+    /// ```
     #[graphql(name = "keyBindingFeeUpdated")]
     async fn key_binding_fee_updated(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = TokenValueString>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
@@ -631,9 +659,20 @@ impl SubscriptionRoot {
         })
     }
 
-    /// Subscribe to newly deployed safes
+    /// Streams newly deployed safes as `Safe` objects.
     ///
-    /// Emits Safe deployment events in real-time as they are indexed.
+    /// The stream yields a `Safe` for each `SafeDeployed` event observed by the indexer.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # use futures::StreamExt;
+    /// // `root` is a `SubscriptionRoot` and `ctx` is an `async_graphql::Context<'_>`
+    /// let mut stream = root.safe_deployed(&ctx).await.unwrap();
+    /// while let Some(safe) = stream.next().await {
+    ///     println!("{}", safe.address);
+    /// }
+    /// ```
     #[graphql(name = "safeDeployed")]
     async fn safe_deployed(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = Safe>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();

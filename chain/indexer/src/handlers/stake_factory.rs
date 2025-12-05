@@ -14,7 +14,29 @@ where
     T: HoprIndexerRpcOperations + Clone + Send + 'static,
     Db: BlokliDbAllOperations + Clone,
 {
-    #[allow(clippy::too_many_arguments)]
+    /// Handle a HoprNodeStakeFactory event that deploys a new safe-module pair and record the safe in the database.
+    ///
+    /// When the event is `NewHoprNodeStakeModuleForSafe`, this creates a safe contract entry using the deployed
+    /// safe and module addresses, resolves the transaction sender (chain key) via RPC, stores the entry in the DB,
+    /// and—if `is_synced` is true—emits a `SafeDeployed` indexer event.
+    ///
+    /// # Parameters
+    ///
+    /// - `is_synced`: if `true`, publish a `SafeDeployed` event after creating the DB entry.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` on success; `Err` if resolving the transaction sender via RPC or creating the DB entry fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // Illustrative example — types and values are placeholders.
+    /// # async fn example<H, D>(handler: &H, tx: &crate::db::OpenTransaction, log: &crate::chain::SerializableLog, event: crate::chain::HoprNodeStakeFactoryEvents)
+    /// # where H: std::ops::Deref<Target=crate::chain::handlers::ContractEventHandlers<(), ()>> + Send + Sync {
+    /// handler.on_stake_factory_event(tx, log, event, true, 123, 0, 0).await.unwrap();
+    /// # }
+    /// ```
     pub(super) async fn on_stake_factory_event(
         &self,
         tx: &OpenTransaction,
@@ -103,10 +125,25 @@ mod tests {
         traits::ChainLogHandler,
     };
 
+    /// Generates a cryptographically random Hopr `Address`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let _addr = random_address();
+    /// ```
     fn random_address() -> Address {
         Address::from(hopr_crypto_random::random_bytes())
     }
 
+    /// Generates a cryptographically secure random `Hash`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let h: Hash = random_hash();
+    /// let _ = h;
+    /// ```
     fn random_hash() -> Hash {
         Hash::from(hopr_crypto_random::random_bytes())
     }
@@ -167,6 +204,15 @@ mod tests {
         Ok(())
     }
 
+    /// Verifies that processing a NewHoprNodeStakeModuleForSafe event fails when the RPC `get_transaction_sender` returns an error.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // Arrange: mock RPC to return an error, initialize handlers, and prepare a NewHoprNodeStakeModuleForSafe log.
+    /// // Act: call `collect_log_event` with the prepared log.
+    /// // Assert: the result is an error.
+    /// ```
     #[tokio::test]
     async fn test_on_stake_factory_event_rpc_failure() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;

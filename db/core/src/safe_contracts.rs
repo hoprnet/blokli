@@ -54,6 +54,22 @@ pub trait BlokliDbSafeContractOperations: BlokliDbGeneralModelOperations {
 
 #[async_trait]
 impl BlokliDbSafeContractOperations for BlokliDb {
+    /// Creates a safe contract record for a deployment, inserting a new row or returning an existing one when the deployment indices match.
+    ///
+    /// If a record with the same deployment (deployed block, transaction index, and log index) already exists, the existing record's id is returned and no new row is inserted. The operation uses the provided optional transaction; a nested transaction will be created and committed on success when needed.
+    ///
+    /// # Returns
+    ///
+    /// The database id of the existing or newly inserted safe contract.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// # async fn example(db: &BlokliDb, safe_addr: Address, module_addr: Address, chain_key: Address) -> Result<(), Box<dyn std::error::Error>> {
+    /// let id = db.create_safe_contract(None, safe_addr, module_addr, chain_key, 100, 0, 0).await?;
+    /// println!("safe id: {}", id);
+    /// # Ok(()) }
+    /// ```
     #[allow(clippy::too_many_arguments)]
     #[allow(clippy::cast_possible_wrap)]
     async fn create_safe_contract<'a>(
@@ -112,6 +128,22 @@ impl BlokliDbSafeContractOperations for BlokliDb {
         Ok(safe.id)
     }
 
+    /// Checks that a safe contract exists at `safe_address` and that its stored chain key equals `expected_chain_key`.
+    ///
+    /// # Returns
+    ///
+    /// `true` if the safe exists and the stored chain key equals `expected_chain_key`, `false` if the safe exists but the chain key differs. Returns `DbSqlError::EntityNotFound` if no safe contract is found.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use crate::db::BlokliDb;
+    /// # use crate::types::Address;
+    /// # async fn example(db: &BlokliDb, addr: Address, key: Address) -> Result<(), crate::db::DbSqlError> {
+    /// let matches = db.verify_safe_contract(None, addr, key).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     async fn verify_safe_contract<'a>(
         &'a self,
         tx: OptTx<'a>,
@@ -146,6 +178,13 @@ mod tests {
     use crate::db::BlokliDb;
 
     // Helper to generate random address
+    /// Generates a new random `Address` from cryptographically secure random bytes.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let _addr: Address = random_address();
+    /// ```
     fn random_address() -> Address {
         Address::from(hopr_crypto_random::random_bytes())
     }
