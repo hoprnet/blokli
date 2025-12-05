@@ -689,9 +689,7 @@ impl SubscriptionRoot {
             loop {
                 tokio::select! {
                     shutdown_result = shutdown_receiver.recv() => {
-                        if shutdown_result.is_err() {
-                            return;
-                        }
+                        // Shutdown signal received or channel closed
                         return;
                     }
                     event_result = event_receiver.recv() => {
