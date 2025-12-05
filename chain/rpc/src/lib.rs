@@ -382,6 +382,33 @@ pub trait HoprIndexerRpcOperations {
     /// * `Err(RpcError)` - If the call fails or address is not a Safe contract
     async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64>;
 
+    /// Get transaction sender (from address) by transaction hash
+    ///
+    /// Used to determine the chain_key when processing
+    /// NewHoprNodeStakeModuleForSafe events, where the transaction
+    /// sender is the account owner.
+    ///
+    /// Retrieves the sender address (chain key) of a transaction from the blockchain.
+    ///
+    /// # Security Model
+    ///
+    /// This method trusts the RPC provider's response because the transaction sender
+    /// is cryptographically secured by Ethereum consensus:
+    /// - Transaction signatures are verified by all Ethereum nodes
+    /// - Only successfully mined transactions can be queried
+    /// - The sender address is recovered from the transaction's ECDSA signature
+    /// - The RPC provider is trusted infrastructure (same trust model as block data)
+    ///
+    /// Therefore, the sender address returned by this method is as secure as any
+    /// other blockchain data retrieved from the RPC provider.
+    ///
+    /// # Arguments
+    /// * `tx_hash` - Transaction hash from log
+    ///
+    /// # Returns
+    /// Address of transaction sender (from field)
+    async fn get_transaction_sender(&self, tx_hash: Hash) -> Result<Address>;
+
     /// Streams blockchain logs using selective filtering based on synchronization state.
     ///
     /// This method intelligently selects which log filters to use based on whether

@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
-use async_graphql::{Context, Object, Result, Union};
+use async_graphql::{Context, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
     Account, ChainInfo, Channel, ContractAddressMap, Hex32, HoprBalance, InvalidAddressError,
-    InvalidTransactionIdError, NativeBalance, QueryFailedError, SafeHoprAllowance, SafeTransactionCount,
+    InvalidTransactionIdError, NativeBalance, QueryFailedError, Safe, SafeHoprAllowance, SafeTransactionCount,
     TokenValueString, Transaction, UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
@@ -53,6 +53,96 @@ pub enum SafeTransactionCountResult {
     TransactionCount(SafeTransactionCount),
     InvalidAddress(InvalidAddressError),
     QueryFailed(QueryFailedError),
+}
+
+/// Result type for single safe queries
+#[derive(Union)]
+pub enum SafeResult {
+    Safe(Safe),
+    InvalidAddress(InvalidAddressError),
+    QueryFailed(QueryFailedError),
+}
+
+/// Success response for safes list query
+#[derive(SimpleObject)]
+pub struct SafesList {
+    /// List of safes
+    pub safes: Vec<Safe>,
+}
+
+/// Result type for safes list query
+#[derive(Union)]
+pub enum SafesResult {
+    Safes(SafesList),
+    QueryFailed(QueryFailedError),
+}
+
+/// Validate an Ethereum hex address and return its 20-byte binary form.
+///
+/// Parses and validates `address` (expected as a hex string, e.g. starting with `0x`); on success returns the address
+/// bytes suitable for database queries, otherwise returns `SafeResult::InvalidAddress` describing the validation error.
+///
+/// # Examples
+///
+/// ```ignore
+/// let res = parse_safe_address("0x0123456789abcdef0123456789abcdef01234567".to_string());
+/// assert!(res.is_ok());
+/// let bytes = res.unwrap();
+/// assert_eq!(bytes.len(), 20);
+/// ```
+fn parse_safe_address(address: String) -> std::result::Result<Vec<u8>, SafeResult> {
+    // Validate address format
+    if let Err(e) = validate_eth_address(&address) {
+        return Err(SafeResult::InvalidAddress(InvalidAddressError {
+            code: "INVALID_ADDRESS".to_string(),
+            message: e.message,
+            address,
+        }));
+    }
+
+    // Convert hex string to Address and then to binary
+    Address::from_hex(&address)
+        .map(|addr| addr.as_ref().to_vec())
+        .map_err(|e| {
+            SafeResult::InvalidAddress(InvalidAddressError {
+                code: "INVALID_ADDRESS".to_string(),
+                message: format!("Invalid address: {}", e),
+                address,
+            })
+        })
+}
+
+/// Helper function to convert database Safe model to GraphQL Safe type
+///
+/// Validates that all address fields in the database are exactly 20 bytes.
+/// Returns an error message if any address field has an invalid length.
+fn safe_from_db_model(safe: blokli_db_entity::hopr_safe_contract::Model) -> std::result::Result<Safe, String> {
+    let address = Address::try_from(&safe.address[..]).map_err(|_| {
+        format!(
+            "Invalid address length in database: expected 20 bytes, got {}",
+            safe.address.len()
+        )
+    })?;
+
+    let module_address = Address::try_from(&safe.module_address[..]).map_err(|_| {
+        format!(
+            "Invalid module address length in database: expected 20 bytes, got {}",
+            safe.module_address.len()
+        )
+    })?;
+
+    let chain_key = Address::try_from(&safe.chain_key[..]).map_err(|_| {
+        format!(
+            "Invalid chain key length in database: expected 20 bytes, got {}",
+            safe.chain_key.len()
+        )
+    })?;
+
+    Ok(Safe {
+        address: address.to_hex(),
+        module_address: module_address.to_hex(),
+        chain_key: chain_key.to_hex(),
+    })
 }
 
 /// Root query type providing read-only access to indexed blockchain data
@@ -419,15 +509,40 @@ impl QueryRoot {
         }
     }
 
-    /// Retrieve Safe contract transaction count
+    /// Fetches the current transaction count (nonce) for a Safe contract address from the blockchain.
     ///
-    /// Returns the current nonce/transaction count for a HOPR Safe contract directly
-    /// from the blockchain. The transaction count increments with each transaction
-    /// executed by the Safe.
+    /// The `address` must be a hexadecimal Ethereum address. The resolver validates the address format,
+    /// queries the blockchain RPC for the Safe's transaction count, and returns a `SafeTransactionCountResult`
+    /// that indicates success, an invalid address error, or a query failure.
     ///
-    /// This query makes a direct RPC call to the blockchain to get the current nonce.
-    /// No database storage is used - the count is fetched directly from the chain.
-    #[graphql(name = "safeTransactionCount")]
+    /// # Returns
+    ///
+    /// - `SafeTransactionCountResult::TransactionCount` containing the queried `address` and the `count` on success.
+    /// - `SafeTransactionCountResult::InvalidAddress` if the provided address is not a valid hexadecimal Ethereum
+    ///   address.
+    /// - `SafeTransactionCountResult::QueryFailed` if the RPC call fails.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use api::query::SafeTransactionCountResult;
+    /// # use api::query::SafeTransactionCount;
+    /// # use api::query::UInt64;
+    /// // Suppose `res` is the value returned by `safe_transaction_count`.
+    /// let res: SafeTransactionCountResult = SafeTransactionCountResult::TransactionCount(SafeTransactionCount {
+    ///     address: "0x0000000000000000000000000000000000000000".to_string(),
+    ///     count: UInt64(42),
+    /// });
+    ///
+    /// match res {
+    ///     SafeTransactionCountResult::TransactionCount(tc) => {
+    ///         assert_eq!(tc.count.0, 42);
+    ///         assert_eq!(tc.address, "0x0000000000000000000000000000000000000000");
+    ///     }
+    ///     SafeTransactionCountResult::InvalidAddress(err) => panic!("invalid address: {}", err.message),
+    ///     SafeTransactionCountResult::QueryFailed(err) => panic!("query failed: {}", err.message),
+    /// }
+    /// ```
     async fn safe_transaction_count(
         &self,
         ctx: &Context<'_>,
@@ -462,8 +577,193 @@ impl QueryRoot {
         }
     }
 
-    /// Retrieve chain information
-    #[graphql(name = "chainInfo")]
+    /// Fetches a Safe by its contract address.
+    ///
+    /// Validates the provided hexadecimal address, queries the database for a matching safe contract,
+    /// and returns a GraphQL-safe result wrapper indicating success, validation failure, or query failure.
+    /// The function returns `None` when no safe with the given address exists.
+    ///
+    /// # Returns
+    ///
+    /// - `Some(SafeResult::Safe)` with the found safe on success.
+    /// - `Some(SafeResult::InvalidAddress)` when the address format is invalid.
+    /// - `Some(SafeResult::QueryFailed)` when the database query fails.
+    /// - `None` when no safe is found for the given address.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // Example usage (executed in an async context with a prepared `ctx`):
+    /// // let res = query_root.safe(&ctx, "0x0123...abcd".to_string()).await?;
+    /// // match res {
+    /// //     Some(SafeResult::Safe(s)) => println!("Found safe: {}", s.address),
+    /// //     Some(SafeResult::InvalidAddress(err)) => eprintln!("Invalid address: {}", err.message),
+    /// //     Some(SafeResult::QueryFailed(err)) => eprintln!("Query failed: {}", err.message),
+    /// //     None => println!("Safe not found"),
+    /// // }
+    /// ```
+    async fn safe(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Safe contract address to query (hexadecimal format)")] address: String,
+    ) -> Result<Option<SafeResult>> {
+        let safe_address = match parse_safe_address(address) {
+            Ok(addr) => addr,
+            Err(error_result) => return Ok(Some(error_result)),
+        };
+
+        let db = ctx.data::<DatabaseConnection>()?;
+
+        match blokli_db_entity::hopr_safe_contract::Entity::find()
+            .filter(blokli_db_entity::hopr_safe_contract::Column::Address.eq(safe_address))
+            .one(db)
+            .await
+        {
+            Ok(Some(safe)) => match safe_from_db_model(safe) {
+                Ok(safe_data) => Ok(Some(SafeResult::Safe(safe_data))),
+                Err(e) => Ok(Some(SafeResult::QueryFailed(QueryFailedError {
+                    code: "INVALID_DB_DATA".to_string(),
+                    message: format!("Database contains malformed data: {}", e),
+                }))),
+            },
+            Ok(None) => Ok(None),
+            Err(e) => Ok(Some(SafeResult::QueryFailed(QueryFailedError {
+                code: "QUERY_FAILED".to_string(),
+                message: format!("Database query failed: {}", e),
+            }))),
+        }
+    }
+
+    /// Finds a Safe by its chain key (owner address) given as a hexadecimal string.
+    ///
+    /// The function validates the provided `chain_key` as an Ethereum-style hex address and returns one of the GraphQL
+    /// union variants describing the outcome:
+    /// - `Some(SafeResult::Safe(...))` when a matching safe is found,
+    /// - `None` when no safe exists for the given chain key,
+    /// - `Some(SafeResult::InvalidAddress(...))` when the `chain_key` is not a valid hex address,
+    /// - `Some(SafeResult::QueryFailed(...))` when the database query fails.
+    ///
+    /// # Parameters
+    ///
+    /// - `chain_key`: Chain key to query (hexadecimal format).
+    ///
+    /// # Returns
+    ///
+    /// `Some(SafeResult::Safe)` with the found `Safe` if a record exists; `None` if no record exists;
+    /// `Some(SafeResult::InvalidAddress)` if the chain key format is invalid; `Some(SafeResult::QueryFailed)` if the
+    /// database query fails.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // Given a prepared `query_root` and GraphQL `ctx`:
+    /// let res = futures::executor::block_on(query_root.safe_by_chain_key(&ctx, "0x0123...".to_string())).unwrap();
+    /// match res {
+    ///     Some(SafeResult::Safe(s)) => println!("Found safe: {}", s.address),
+    ///     Some(SafeResult::InvalidAddress(_)) => println!("Invalid chain key"),
+    ///     Some(SafeResult::QueryFailed(_)) => println!("Query failed"),
+    ///     None => println!("No safe for that chain key"),
+    /// }
+    /// ```
+    #[graphql(name = "safeByChainKey")]
+    async fn safe_by_chain_key(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Chain key to query (hexadecimal format)")] chain_key: String,
+    ) -> Result<Option<SafeResult>> {
+        let chain_key_address = match parse_safe_address(chain_key) {
+            Ok(addr) => addr,
+            Err(error_result) => return Ok(Some(error_result)),
+        };
+
+        let db = ctx.data::<DatabaseConnection>()?;
+
+        match blokli_db_entity::hopr_safe_contract::Entity::find()
+            .filter(blokli_db_entity::hopr_safe_contract::Column::ChainKey.eq(chain_key_address))
+            .one(db)
+            .await
+        {
+            Ok(Some(safe)) => match safe_from_db_model(safe) {
+                Ok(safe_data) => Ok(Some(SafeResult::Safe(safe_data))),
+                Err(e) => Ok(Some(SafeResult::QueryFailed(QueryFailedError {
+                    code: "INVALID_DB_DATA".to_string(),
+                    message: format!("Database contains malformed data: {}", e),
+                }))),
+            },
+            Ok(None) => Ok(None),
+            Err(e) => Ok(Some(SafeResult::QueryFailed(QueryFailedError {
+                code: "QUERY_FAILED".to_string(),
+                message: format!("Database query failed: {}", e),
+            }))),
+        }
+    }
+
+    /// Fetches all indexed Safe contracts.
+    ///
+    /// On success returns `SafesResult::Safes` containing a `SafesList` with each safe's
+    /// `address`, `module_address`, and `chain_key` encoded as hex strings. If the database
+    /// query fails, returns `SafesResult::QueryFailed` with code `"QUERY_FAILED"` and a message.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use async_graphql::Context;
+    /// # use crate::api::QueryRoot;
+    /// # async fn doc_example(ctx: &Context<'_>) {
+    /// let query = QueryRoot;
+    /// let res = query.safes(ctx).await.unwrap();
+    /// match res {
+    ///     crate::api::SafesResult::Safes(list) => {
+    ///         for safe in list.safes {
+    ///             println!("safe: {}", safe.address);
+    ///         }
+    ///     }
+    ///     crate::api::SafesResult::QueryFailed(err) => {
+    ///         eprintln!("query failed: {}", err.message);
+    ///     }
+    /// }
+    /// # }
+    /// ```
+    async fn safes(&self, ctx: &Context<'_>) -> Result<SafesResult> {
+        let db = ctx.data::<DatabaseConnection>()?;
+
+        match blokli_db_entity::hopr_safe_contract::Entity::find().all(db).await {
+            Ok(safes) => {
+                let safe_results: std::result::Result<Vec<Safe>, String> =
+                    safes.into_iter().map(safe_from_db_model).collect();
+
+                match safe_results {
+                    Ok(safe_list) => Ok(SafesResult::Safes(SafesList { safes: safe_list })),
+                    Err(e) => Ok(SafesResult::QueryFailed(QueryFailedError {
+                        code: "INVALID_DB_DATA".to_string(),
+                        message: format!("Database contains malformed data: {}", e),
+                    })),
+                }
+            }
+            Err(e) => Ok(SafesResult::QueryFailed(QueryFailedError {
+                code: "QUERY_FAILED".to_string(),
+                message: format!("Database query failed: {}", e),
+            })),
+        }
+    }
+
+    /// Returns the current chain configuration and runtime state exposed by the API.
+    ///
+    /// The returned `ChainInfo` contains the last indexed block number, the configured chain ID
+    /// and network name, human-readable token values for ticket price and key binding fee,
+    /// minimum incoming ticket winning probability, optional 32-byte domain separator hashes
+    /// for channels/ledger/safe registry as `Hex32`, a map of contract addresses, and an optional
+    /// channel closure grace period in seconds.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # async fn doc_example() {
+    /// // Query the GraphQL API for chain information
+    /// let resp = /* execute GraphQL query `{ chainInfo { blockNumber chainId network } }` */ unimplemented!();
+    /// // Inspect returned `ChainInfo` in the GraphQL response
+    /// # }
+    /// ```
     async fn chain_info(&self, ctx: &Context<'_>) -> Result<ChainInfo> {
         let db = ctx.data::<DatabaseConnection>()?;
         let chain_id = ctx.data::<u64>()?;

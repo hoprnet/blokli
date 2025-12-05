@@ -9,7 +9,7 @@ use async_broadcast::Receiver;
 use async_graphql::{Context, Result, Subscription};
 use async_stream::stream;
 use blokli_api_types::{
-    Account, Channel, ChannelUpdate, HoprBalance, NativeBalance, OpenedChannelsGraph, TicketParameters,
+    Account, Channel, ChannelUpdate, HoprBalance, NativeBalance, OpenedChannelsGraph, Safe, TicketParameters,
     TokenValueString, UInt64,
 };
 use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
@@ -366,14 +366,28 @@ impl SubscriptionRoot {
         })
     }
 
-    /// Subscribe to a stream of opened payment channels with complete account information.
+    /// Streams opened payment channels with complete account information.
     ///
-    /// This subscription implements a 2-phase streaming model:
-    /// - Phase 1: Streams all open channels at subscription time (historical snapshot)
-    /// - Phase 2: Streams real-time updates from the event bus
+    /// Provides a two-phase stream: Phase 1 emits a historical snapshot of all channels
+    /// that were open at subscription time; Phase 2 emits real-time channel updates
+    /// from the indexer's event bus. The stream yields `ChannelUpdate` items and
+    /// terminates on shutdown, event-bus closure, or on a fatal query error.
     ///
-    /// Each update includes the channel along with complete source and destination account details.
-    /// This ensures no race conditions, duplicates, or data loss during the transition between phases.
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use futures::StreamExt;
+    ///
+    /// # async fn example(root: crate::SubscriptionRoot, ctx: &async_graphql::Context<'_>) -> Result<(), async_graphql::Error> {
+    /// let mut stream = root.opened_channels_graph_stream(ctx).await?;
+    /// // read one update (historical or real-time)
+    /// if let Some(update) = stream.next().await {
+    ///     // handle `ChannelUpdate`
+    ///     let _ = update;
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     #[graphql(name = "openedChannelsGraphStream")]
     async fn opened_channels_graph_stream(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = ChannelUpdate>> {
         // Get dependencies from context
@@ -439,6 +453,9 @@ impl SubscriptionRoot {
                             Ok(IndexerEvent::KeyBindingFeeUpdated(_)) => {
                                 // Key binding fee updates don't affect this subscription
                                 // Just continue to next event
+                            }
+                            Ok(IndexerEvent::SafeDeployed(_)) => {
+                                // Safe deployment doesn't affect this subscription
                             }
                             Err(async_broadcast::RecvError::Closed) => {
                                 tracing::info!("Event bus closed, ending subscription");
@@ -542,10 +559,24 @@ impl SubscriptionRoot {
         })
     }
 
-    /// Subscribe to real-time updates of the key binding fee
+    /// Streams updates to the key binding fee.
     ///
-    /// Emits the current fee once on subscription, then streams updates whenever
-    /// the indexer processes a `KeyBindingFeeUpdate` event and is in synced mode.
+    /// Emits the current fee once when the subscription starts, then emits new fee
+    /// values whenever a `KeyBindingFeeUpdated` event is processed while the indexer
+    /// is synced. Consecutive duplicate fee values are suppressed.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use futures::StreamExt;
+    ///
+    /// // In an async context with a GraphQL `Context` available:
+    /// // let stream = root.key_binding_fee_updated(&ctx).await.unwrap();
+    /// // let mut stream = Box::pin(stream);
+    /// // if let Some(fee) = stream.next().await {
+    /// //     println!("current fee: {}", fee.0);
+    /// // }
+    /// ```
     #[graphql(name = "keyBindingFeeUpdated")]
     async fn key_binding_fee_updated(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = TokenValueString>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
@@ -611,12 +642,100 @@ impl SubscriptionRoot {
                             Ok(IndexerEvent::ChannelUpdated(_)) => {
                                 // Irrelevant for this subscription
                             }
+                            Ok(IndexerEvent::SafeDeployed(_)) => {
+                                // Irrelevant for this subscription
+                            }
                             Err(async_broadcast::RecvError::Closed) => {
                                 tracing::info!("Event bus closed, ending keyBindingFeeUpdated subscription");
                                 return;
                             }
                             Err(async_broadcast::RecvError::Overflowed(n)) => {
                                 tracing::warn!("Event bus overflowed ({}); keyBindingFeeUpdated may miss events", n);
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    /// Streams newly deployed safes as `Safe` objects.
+    ///
+    /// The stream yields a `Safe` for each `SafeDeployed` event observed by the indexer.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use futures::StreamExt;
+    /// // `root` is a `SubscriptionRoot` and `ctx` is an `async_graphql::Context<'_>`
+    /// let mut stream = root.safe_deployed(&ctx).await.unwrap();
+    /// while let Some(safe) = stream.next().await {
+    ///     println!("{}", safe.address);
+    /// }
+    /// ```
+    #[graphql(name = "safeDeployed")]
+    async fn safe_deployed(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = Safe>> {
+        let db = ctx.data::<DatabaseConnection>()?.clone();
+        let indexer_state = ctx
+            .data::<IndexerState>()
+            .map_err(|_| async_graphql::Error::new("IndexerState not available in context"))?
+            .clone();
+
+        // Capture watermark and subscribe to event bus (synchronized)
+        let (_watermark, mut event_receiver, mut shutdown_receiver) =
+            capture_watermark_synchronized(&indexer_state, &db).await?;
+
+        Ok(stream! {
+            loop {
+                tokio::select! {
+                    shutdown_result = shutdown_receiver.recv() => {
+                        match shutdown_result {
+                            Ok(_) => {
+                                tracing::info!("Subscription shutting down due to reorg");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                tracing::warn!("Shutdown channel closed");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                tracing::warn!("Shutdown signal overflowed, missed {} signals", n);
+                                // Continue - overflow on shutdown signal is not critical
+                            }
+                        }
+                    }
+                    event_result = event_receiver.recv() => {
+                        match event_result {
+                            Ok(IndexerEvent::SafeDeployed(safe_addr)) => {
+                                let safe_addr_bytes = safe_addr.as_ref().to_vec();
+                                match blokli_db_entity::hopr_safe_contract::Entity::find()
+                                    .filter(blokli_db_entity::hopr_safe_contract::Column::Address.eq(safe_addr_bytes))
+                                    .one(&db)
+                                    .await
+                                {
+                                    Ok(Some(safe)) => {
+                                        yield Safe {
+                                            address: Address::new(&safe.address).to_hex(),
+                                            module_address: Address::new(&safe.module_address).to_hex(),
+                                            chain_key: Address::new(&safe.chain_key).to_hex(),
+                                        };
+                                    }
+                                    Ok(None) => {
+                                        tracing::error!("Safe deployed event received but safe not found in DB: {}", safe_addr);
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to query safe for deployed event: {}", e);
+                                    }
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(async_broadcast::RecvError::Closed) => {
+                                tracing::info!("Event bus closed, ending subscription");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                tracing::warn!("Event bus overflowed, missed {} events - consider increasing buffer", n);
+                                // Continue but log warning - client may need to reconnect
                             }
                         }
                     }
@@ -1481,5 +1600,269 @@ mod tests {
             data,
             async_graphql::Value::from_json(serde_json::json!({ "keyBindingFeeUpdated": new_fee })).unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn test_safe_deployed_subscription_yields_on_event() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let indexer_state = IndexerState::new(10, 100);
+
+        // Initialize chain_info
+        init_chain_info(db.conn(blokli_db::TargetDb::Index), 100, 0, 0)
+            .await
+            .unwrap();
+
+        // Create a test safe in the database
+        let safe_address = vec![1; 20];
+        let module_address = vec![2; 20];
+        let chain_key = vec![3; 20];
+
+        let safe = blokli_db_entity::hopr_safe_contract::ActiveModel {
+            id: Default::default(),
+            address: Set(safe_address.clone()),
+            module_address: Set(module_address.clone()),
+            chain_key: Set(chain_key.clone()),
+            deployed_block: Set(100),
+            deployed_tx_index: Set(0),
+            deployed_log_index: Set(0),
+        };
+        safe.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
+
+        // Setup schema
+        let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
+            .data(db.conn(blokli_db::TargetDb::Index).clone())
+            .data(indexer_state.clone())
+            .finish();
+
+        let query = "subscription { safeDeployed { address moduleAddress chainKey } }";
+        let stream = schema.execute_stream(query);
+        let mut stream = stream.boxed();
+
+        // Spawn task to publish event after a brief delay, allowing subscription to start listening
+        let indexer_state_clone = indexer_state.clone();
+        let safe_addr_copy = safe_address.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let safe_addr = Address::new(&safe_addr_copy);
+            indexer_state_clone.publish_event(IndexerEvent::SafeDeployed(safe_addr));
+        });
+
+        // Expect safe object in stream with timeout
+        let response = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout waiting for safe deployed event")
+            .expect("Stream should return safe deployed");
+        let data = response.into_result().expect("Response should be ok").data;
+
+        let expected_address = Address::new(&safe_address).to_hex();
+        let expected_module = Address::new(&module_address).to_hex();
+        let expected_chain_key = Address::new(&chain_key).to_hex();
+
+        assert_eq!(
+            data,
+            async_graphql::Value::from_json(serde_json::json!({
+                "safeDeployed": {
+                    "address": expected_address,
+                    "moduleAddress": expected_module,
+                    "chainKey": expected_chain_key,
+                }
+            }))
+            .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_safe_deployed_subscription_initial_behavior_no_events() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let indexer_state = IndexerState::new(10, 100);
+
+        // Initialize chain_info
+        init_chain_info(db.conn(blokli_db::TargetDb::Index), 100, 0, 0)
+            .await
+            .unwrap();
+
+        // Setup schema
+        let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
+            .data(db.conn(blokli_db::TargetDb::Index).clone())
+            .data(indexer_state.clone())
+            .finish();
+
+        let query = "subscription { safeDeployed { address } }";
+        let stream = schema.execute_stream(query);
+        let mut stream = stream.boxed();
+
+        // No events emitted, stream should not yield until event occurs
+        // Use timeout to ensure stream doesn't immediately produce items
+        let timeout_result = tokio::time::timeout(Duration::from_millis(100), stream.next()).await;
+
+        // Should timeout waiting for event, confirming stream is waiting
+        assert!(
+            timeout_result.is_err(),
+            "Stream should not yield items before SafeDeployed events"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_safe_deployed_subscription_safe_not_found() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let indexer_state = IndexerState::new(10, 100);
+
+        // Initialize chain_info
+        init_chain_info(db.conn(blokli_db::TargetDb::Index), 100, 0, 0)
+            .await
+            .unwrap();
+
+        // Setup schema
+        let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
+            .data(db.conn(blokli_db::TargetDb::Index).clone())
+            .data(indexer_state.clone())
+            .finish();
+
+        let query = "subscription { safeDeployed { address } }";
+        let stream = schema.execute_stream(query);
+        let mut stream = stream.boxed();
+
+        // Emit SafeDeployed event for address that is NOT in the database
+        let non_existent_address = Address::new(&vec![99; 20]);
+        indexer_state.publish_event(IndexerEvent::SafeDeployed(non_existent_address));
+
+        // Stream should not yield an item (safe not found logged, stream continues)
+        let timeout_result = tokio::time::timeout(Duration::from_millis(200), stream.next()).await;
+
+        // Should timeout because no item is yielded for missing safe
+        // (error is logged, stream continues waiting for next event)
+        assert!(
+            timeout_result.is_err(),
+            "Stream should not yield when safe is not in database"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_safe_deployed_subscription_multiple_events() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let indexer_state = IndexerState::new(10, 100);
+
+        // Initialize chain_info
+        init_chain_info(db.conn(blokli_db::TargetDb::Index), 100, 0, 0)
+            .await
+            .unwrap();
+
+        // Create two test safes in the database
+        let safe_address_1 = vec![1; 20];
+        let module_address_1 = vec![2; 20];
+        let chain_key_1 = vec![3; 20];
+
+        let safe1 = blokli_db_entity::hopr_safe_contract::ActiveModel {
+            id: Default::default(),
+            address: Set(safe_address_1.clone()),
+            module_address: Set(module_address_1.clone()),
+            chain_key: Set(chain_key_1.clone()),
+            deployed_block: Set(100),
+            deployed_tx_index: Set(0),
+            deployed_log_index: Set(0),
+        };
+        safe1.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
+
+        let safe_address_2 = vec![4; 20];
+        let module_address_2 = vec![5; 20];
+        let chain_key_2 = vec![6; 20];
+
+        let safe2 = blokli_db_entity::hopr_safe_contract::ActiveModel {
+            id: Default::default(),
+            address: Set(safe_address_2.clone()),
+            module_address: Set(module_address_2.clone()),
+            chain_key: Set(chain_key_2.clone()),
+            deployed_block: Set(101),
+            deployed_tx_index: Set(0),
+            deployed_log_index: Set(0),
+        };
+        safe2.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
+
+        // Setup schema
+        let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
+            .data(db.conn(blokli_db::TargetDb::Index).clone())
+            .data(indexer_state.clone())
+            .finish();
+
+        let query = "subscription { safeDeployed { address } }";
+        let stream = schema.execute_stream(query);
+        let mut stream = stream.boxed();
+
+        // Spawn task to emit events after a brief delay
+        let indexer_state_clone = indexer_state.clone();
+        let safe_addr_1_copy = safe_address_1.clone();
+        let safe_addr_2_copy = safe_address_2.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let safe_addr_1 = Address::new(&safe_addr_1_copy);
+            indexer_state_clone.publish_event(IndexerEvent::SafeDeployed(safe_addr_1));
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            let safe_addr_2 = Address::new(&safe_addr_2_copy);
+            indexer_state_clone.publish_event(IndexerEvent::SafeDeployed(safe_addr_2));
+        });
+
+        // Expect first safe
+        let response = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout waiting for first safe")
+            .expect("Stream should return first safe");
+        let data = response.into_result().expect("Response should be ok").data;
+        let expected_address_1 = Address::new(&safe_address_1).to_hex();
+        assert_eq!(
+            data,
+            async_graphql::Value::from_json(serde_json::json!({
+                "safeDeployed": { "address": expected_address_1 }
+            }))
+            .unwrap()
+        );
+
+        // Expect second safe
+        let response = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout waiting for second safe")
+            .expect("Stream should return second safe");
+        let data = response.into_result().expect("Response should be ok").data;
+        let expected_address_2 = Address::new(&safe_address_2).to_hex();
+        assert_eq!(
+            data,
+            async_graphql::Value::from_json(serde_json::json!({
+                "safeDeployed": { "address": expected_address_2 }
+            }))
+            .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_safe_deployed_subscription_ignores_other_events() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let indexer_state = IndexerState::new(10, 100);
+
+        // Initialize chain_info
+        init_chain_info(db.conn(blokli_db::TargetDb::Index), 100, 0, 0)
+            .await
+            .unwrap();
+
+        // Setup schema
+        let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
+            .data(db.conn(blokli_db::TargetDb::Index).clone())
+            .data(indexer_state.clone())
+            .finish();
+
+        let query = "subscription { safeDeployed { address } }";
+        let stream = schema.execute_stream(query);
+        let mut stream = stream.boxed();
+
+        // Spawn task to emit non-SafeDeployed events after a brief delay
+        let indexer_state_clone = indexer_state.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            indexer_state_clone.publish_event(IndexerEvent::KeyBindingFeeUpdated(TokenValueString("999".to_string())));
+        });
+
+        // Stream should not yield an item for non-SafeDeployed events
+        let timeout_result = tokio::time::timeout(Duration::from_millis(500), stream.next()).await;
+
+        // Should timeout because non-SafeDeployed events are ignored
+        assert!(timeout_result.is_err(), "Stream should ignore non-SafeDeployed events");
     }
 }

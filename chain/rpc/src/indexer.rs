@@ -9,10 +9,12 @@
 //! For details on the Indexer see the `chain-indexer` crate.
 use std::pin::Pin;
 
-use alloy::{providers::Provider, rpc::types::Filter};
+use alloy::{primitives::B256, providers::Provider, rpc::types::Filter};
 use async_stream::stream;
 use async_trait::async_trait;
+use blokli_chain_types::AlloyAddressExt;
 use futures::{Stream, StreamExt, stream::BoxStream};
+use hopr_crypto_types::types::Hash;
 #[cfg(all(feature = "prometheus", not(test)))]
 use hopr_metrics::SimpleGauge;
 use hopr_primitive_types::prelude::*;
@@ -152,10 +154,72 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
         self.get_hopr_balance(address).await
     }
 
+    /// Fetches the current transaction count for the Safe at the given address.
+    ///
+    /// Returns the Safe's transaction count as a `u64`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # async fn example(op: &RpcOperations<impl Provider>, safe_address: Address) -> Result<()> {
+    /// let count = op.get_safe_transaction_count(safe_address).await?;
+    /// assert!(count >= 0);
+    /// # Ok(())
+    /// # }
+    /// ```
     async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64> {
         self.get_safe_transaction_count(safe_address).await
     }
 
+    /// Retrieves the sender (signer) address for a given transaction hash.
+    ///
+    /// # Returns
+    ///
+    /// The transaction sender's Hopr `Address`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use ethers::types::H256 as Hash;
+    /// # async fn example(rpc: &crate::RpcOperations<_>, tx_hash: Hash) {
+    /// // In real usage provide a valid `tx_hash` and `rpc`.
+    /// // let sender = rpc.get_transaction_sender(tx_hash).await.unwrap();
+    /// // assert!(/* sender is a valid Address */);
+    /// # }
+    /// ```
+    async fn get_transaction_sender(&self, tx_hash: Hash) -> Result<Address> {
+        let tx = self
+            .provider
+            .get_transaction_by_hash(B256::from_slice(tx_hash.as_ref()))
+            .await?
+            .ok_or_else(|| RpcError::TransactionNotFound(tx_hash))?;
+
+        Ok(tx.inner.signer().to_hopr_address())
+    }
+
+    /// Produces an incremental stream of completed block log batches starting from a given block.
+    ///
+    /// The returned stream yields `BlockWithLogs` items in ascending block order as blocks are
+    /// finalized and processed. It advances from `start_block_number`, repeatedly querying the
+    /// chain head and fetching logs for the inclusive range `[from, latest_block]`, yielding one
+    /// completed `BlockWithLogs` per block. The behavior adapts when the indexer is not yet
+    /// synced (token-related filters are omitted) and performs retries on transient RPC errors
+    /// until a configurable failure threshold is reached.
+    ///
+    /// # Errors
+    ///
+    /// Returns `FilterIsEmpty` if `filters.all` is empty.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // Example usage (pseudo-code):
+    /// // let stream = rpc_ops.try_stream_logs(100, my_filters, /* is_synced = */ true).unwrap();
+    /// // futures::pin_mut!(stream);
+    /// // while let Some(block_with_logs) = stream.next().await {
+    /// //     process(block_with_logs);
+    /// // }
+    /// ```
     fn try_stream_logs<'a>(
         &'a self,
         start_block_number: u64,

@@ -35,6 +35,9 @@ pub enum RpcError {
     #[error("transaction with hash {0} failed on-chain")]
     TransactionFailed(Hash),
 
+    #[error("transaction with hash {0} not found")]
+    TransactionNotFound(Hash),
+
     #[error("filter does not contain any criteria")]
     FilterIsEmpty,
 

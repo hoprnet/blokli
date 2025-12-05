@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use async_broadcast::{Receiver, Sender, broadcast};
 use blokli_api_types::{Account, ChannelUpdate, TokenValueString};
+use hopr_primitive_types::prelude::Address;
 use tokio::sync::RwLock;
 
 /// Event type for the subscription event bus
@@ -32,6 +33,9 @@ pub enum IndexerEvent {
 
     /// Key binding fee was updated
     KeyBindingFeeUpdated(TokenValueString),
+
+    /// A new safe was deployed
+    SafeDeployed(Address),
 }
 
 /// Shared state for coordinating indexer operations with subscriptions

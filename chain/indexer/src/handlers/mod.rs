@@ -15,6 +15,7 @@ use hopr_bindings::{
     hopr_announcements::HoprAnnouncements::HoprAnnouncementsEvents, hopr_channels::HoprChannels::HoprChannelsEvents,
     hopr_node_management_module::HoprNodeManagementModule::HoprNodeManagementModuleEvents,
     hopr_node_safe_registry::HoprNodeSafeRegistry::HoprNodeSafeRegistryEvents,
+    hopr_node_stake_factory::HoprNodeStakeFactory::HoprNodeStakeFactoryEvents,
     hopr_ticket_price_oracle::HoprTicketPriceOracle::HoprTicketPriceOracleEvents,
     hopr_token::HoprToken::HoprTokenEvents,
     hopr_winning_probability_oracle::HoprWinningProbabilityOracle::HoprWinningProbabilityOracleEvents,
@@ -34,6 +35,7 @@ mod channels;
 mod helpers;
 mod node_safe_registry;
 mod oracles;
+mod stake_factory;
 #[cfg(test)]
 mod test_utils;
 mod tokens;
@@ -116,6 +118,37 @@ where
         Ok(())
     }
 
+    /// Dispatches a single on-chain log to the appropriate contract event handler after decoding it.
+    ///
+    /// Decodes the provided `SerializableLog` into a primitive log, matches its contract address against
+    /// known contract addresses, and forwards the decoded event to the corresponding `on_*_event` handler.
+    /// Returns an error if decoding fails or if the log's contract address is not recognized. Channel
+    /// events that map to `ChannelDoesNotExist` are treated as non-fatal and ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CoreEthereumIndexerError::ProcessError` if the log cannot be converted to a primitive log,
+    /// `CoreEthereumIndexerError::UnknownContract` if the log's address is not one of the known contracts,
+    /// or other `CoreEthereumIndexerError` variants produced by the specific handler invoked.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use std::sync::Arc;
+    /// # use tokio::runtime::Runtime;
+    /// # // setup placeholders for the example — real types come from the library
+    /// # let rt = Runtime::new().unwrap();
+    /// # rt.block_on(async {
+    /// #     // `handler` is an instance of ContractEventHandlers configured with addresses and db.
+    /// #     // `tx` is an open database transaction handle and `slog` is a SerializableLog.
+    /// #     let handler = /* ContractEventHandlers::new(...) */ unimplemented!();
+    /// #     let tx = /* OpenTransaction */ unimplemented!();
+    /// #     let slog = /* SerializableLog */ unimplemented!();
+    /// let is_synced = true;
+    /// // Awaiting the processing result; errors propagate as `CoreEthereumIndexerError`.
+    /// let _ = handler.process_log_event(&tx, slog, is_synced).await;
+    /// # });
+    /// ```
     #[tracing::instrument(level = "debug", skip(self, slog), fields(log=%slog))]
     async fn process_log_event(&self, tx: &OpenTransaction, slog: SerializableLog, is_synced: bool) -> Result<()> {
         trace!(log = %slog, "log content");
@@ -137,6 +170,13 @@ where
             let log_idx = log.log_index.as_u32();
             let event = HoprAnnouncementsEvents::decode_log(&primitive_log)?;
             self.on_announcement_event(tx, event.data, bn, tx_idx, log_idx, is_synced)
+                .await
+        } else if log.address.eq(&self.addresses.node_stake_v2_factory) {
+            let event = HoprNodeStakeFactoryEvents::decode_log(&primitive_log)?;
+            let block = log.block_number;
+            let tx_idx = log.tx_index;
+            let log_idx = log.log_index.as_u64();
+            self.on_stake_factory_event(tx, &slog, event.data, is_synced, block, tx_idx, log_idx)
                 .await
         } else if log.address.eq(&self.addresses.channels) {
             let event = HoprChannelsEvents::decode_log(&primitive_log)?;
@@ -190,6 +230,22 @@ where
     T: HoprIndexerRpcOperations + Clone + Send + Sync + 'static,
     Db: BlokliDbAllOperations + Clone + Debug + Send + Sync + 'static,
 {
+    /// The contract addresses whose on-chain logs this handler processes.
+    ///
+    /// # Returns
+    ///
+    /// `Vec<Address>` containing the monitored contract addresses in the following order:
+    /// announcements, channels, ticket_price_oracle, winning_probability_oracle,
+    /// node_safe_registry, node_stake_v2_factory, token.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// let addrs = handlers.contract_addresses();
+    /// assert_eq!(addrs.len(), 7);
+    /// // order: announcements, channels, ticket_price_oracle, winning_probability_oracle,
+    /// // node_safe_registry, node_stake_v2_factory, token
+    /// ```
     fn contract_addresses(&self) -> Vec<Address> {
         vec![
             self.addresses.announcements,
@@ -197,6 +253,7 @@ where
             self.addresses.ticket_price_oracle,
             self.addresses.winning_probability_oracle,
             self.addresses.node_safe_registry,
+            self.addresses.node_stake_v2_factory,
             self.addresses.token,
         ]
     }
@@ -205,6 +262,22 @@ where
         self.addresses.clone()
     }
 
+    /// Map a contract address to its associated event topics.
+    ///
+    /// Given a contract address managed by this handler, returns the list of event topic hashes
+    /// (`Vec<B256>`) that should be used to filter logs for that contract.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `contract` is not one of the supported contract addresses held in `self.addresses`.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// // assume `handler` is an instance of ContractEventHandlers and `addr` is one of its addresses
+    /// let topics = handler.contract_address_topics(handler.addresses.announcements);
+    /// assert!(!topics.is_empty());
+    /// ```
     fn contract_address_topics(&self, contract: Address) -> Vec<B256> {
         if contract.eq(&self.addresses.announcements) {
             crate::constants::topics::announcement()
@@ -216,6 +289,8 @@ where
             crate::constants::topics::winning_prob_oracle()
         } else if contract.eq(&self.addresses.node_safe_registry) {
             crate::constants::topics::node_safe_registry()
+        } else if contract.eq(&self.addresses.node_stake_v2_factory) {
+            crate::constants::topics::stake_factory()
         } else if contract.eq(&self.addresses.token) {
             crate::constants::topics::token()
         } else {

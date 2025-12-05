@@ -31,7 +31,7 @@
   inputs = {
     # Core Nix ecosystem dependencies
     flake-parts.url = "github:hercules-ci/flake-parts";
-    nixpkgs.url = "github:NixOS/nixpkgs/release-25.05";
+    nixpkgs.url = "github:NixOS/nixpkgs/release-25.11";
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # HOPR Nix Library (provides flake-utils and reusable build functions)
@@ -393,6 +393,7 @@
             '';
             extraPackages = [
               pkgs.nodejs
+              pkgs.actionlint
               pkgs.ast-grep
               pkgs.foundry-bin
               pkgs.solc
@@ -475,7 +476,7 @@
                     pkgs.nodePackages.npm
                   ];
                   text = ''
-                    npx --yes format-graphql --write=true "$@"
+                    npx --yes format-graphql --sort-fields false --write=true "$@"
                   '';
                 };
                 includes = [ "design/*.graphql" ];

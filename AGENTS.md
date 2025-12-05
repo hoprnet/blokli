@@ -422,24 +422,20 @@ The project maintains two key configuration files:
 **When modifying configuration code (`bloklid/src/config.rs`)**, you MUST update the example configuration file:
 
 1. **Adding New Configuration Options**:
-
    - Add the new option to `bloklid/example-config.toml` with appropriate comments
    - Include the default value from the code (check the `#[default(...)]` attribute)
    - Document what the option does and when to use it
    - If it's a complex option, provide usage examples in comments
 
 2. **Removing Configuration Options**:
-
    - Remove the option from `bloklid/example-config.toml`
    - Ensure any related documentation comments are also removed
 
 3. **Changing Default Values**:
-
    - Update the default value in `bloklid/example-config.toml`
    - Update any comments that reference the default value
 
 4. **Adding New Configuration Sections**:
-
    - Add the entire section to `bloklid/example-config.toml`
    - Include all fields in the section with their defaults
    - Add a descriptive header comment explaining the section's purpose
@@ -500,7 +496,6 @@ Before committing configuration changes, verify:
 1. **Read the Architecture Document**: Before making significant changes to the system, read `design/architecture.md` to understand how components interact and the design principles behind the current architecture.
 
 2. **Update Architecture Documentation**: When making changes that affect the architecture, update `design/architecture.md` to reflect the new design. This includes:
-
    - Adding new components or services
    - Changing component interactions or data flows
    - Modifying database schema or queries patterns
@@ -519,13 +514,11 @@ Before committing configuration changes, verify:
 ### Workspace Structure
 
 - `bloklid` - Daemon for indexing HOPR on-chain events
-
   - Signal handling for config reload (SIGHUP) and shutdown (SIGINT/SIGTERM)
   - Configuration via TOML files
   - Uses tokio async runtime
 
 - `blokli-api` - GraphQL API server
-
   - Built with Axum and async-graphql
   - HTTP/2 support
   - TLS 1.3 support (when configured)
@@ -767,7 +760,6 @@ trivy image --format cyclonedx --output sbom.json <image-name>:<tag>
 Automated security scanning in CI using `aquasecurity/trivy-action`:
 
 - **Trivy Vulnerability Scanner**
-
   - Uses official Trivy GitHub Action
   - Scans for HIGH and CRITICAL severity vulnerabilities
   - Uploads results to GitHub Security tab (SARIF format)
@@ -775,7 +767,6 @@ Automated security scanning in CI using `aquasecurity/trivy-action`:
   - Automatic vulnerability database updates
 
 - **Smoke Tests**
-
   - Verifies container starts successfully
   - Tests entrypoint functionality with `--help` flag
   - Ensures binary is functional inside container

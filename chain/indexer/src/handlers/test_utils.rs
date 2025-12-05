@@ -51,6 +51,8 @@ pub(super) mod test_helpers {
 
         async fn get_safe_transaction_count(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<u64>;
 
+        async fn get_transaction_sender(&self, tx_hash: hopr_crypto_types::types::Hash) -> blokli_chain_rpc::errors::Result<Address>;
+
         fn try_stream_logs<'a>(
             &'a self,
             start_block_number: u64,
@@ -87,10 +89,83 @@ pub(super) mod test_helpers {
             self.inner.get_hopr_balance(address).await
         }
 
+        /// Retrieves the number of transactions associated with a Gnosis Safe address.
+        ///
+        /// # Parameters
+        ///
+        /// - `safe_address`: The safe (contract) address whose transaction count will be queried.
+        ///
+        /// # Returns
+        ///
+        /// `u64` representing the number of transactions recorded for the specified safe address.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// # use hopr_crypto_types::types::Address;
+        /// # async fn example<R: crate::HoprIndexerRpcOperations>(rpc: &R, addr: Address) -> anyhow::Result<()> {
+        /// let count = rpc.get_safe_transaction_count(addr).await?;
+        /// println!("safe tx count = {}", count);
+        /// # Ok(())
+        /// # }
+        /// ```
         async fn get_safe_transaction_count(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<u64> {
             self.inner.get_safe_transaction_count(safe_address).await
         }
 
+        /// Fetches the sender address for a given transaction hash.
+        ///
+        /// # Parameters
+        ///
+        /// - `tx_hash`: Transaction hash to look up.
+        ///
+        /// # Returns
+        ///
+        /// The sender `Address` corresponding to the provided transaction hash.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// # async fn example<O: std::ops::Deref<Target = impl std::future::Future<Output = ()>>>() {}
+        /// // Assume `ops` implements `HoprIndexerRpcOperations`.
+        /// // let addr = ops.get_transaction_sender(tx_hash).await.unwrap();
+        /// ```
+        async fn get_transaction_sender(
+            &self,
+            tx_hash: hopr_crypto_types::types::Hash,
+        ) -> blokli_chain_rpc::errors::Result<Address> {
+            self.inner.get_transaction_sender(tx_hash).await
+        }
+
+        /// Creates a stream of `BlockWithLogs` items starting from `start_block_number` that match `filters`.
+        ///
+        /// `is_synced` controls whether the RPC call should assume the node is synced when retrieving logs.
+        ///
+        /// # Parameters
+        ///
+        /// * `start_block_number` — block number to start streaming from (inclusive).
+        /// * `filters` — filter set used to select logs to include in the stream.
+        /// * `is_synced` — when `true`, treat the RPC node as synced for log retrieval semantics.
+        ///
+        /// # Returns
+        ///
+        /// `Ok` with a pinned, boxed stream that yields `BlockWithLogs` items; `Err` on RPC errors.
+        ///
+        /// # Examples
+        ///
+        /// ```
+        /// # use futures::executor::block_on;
+        /// # use futures::stream::StreamExt;
+        /// # async fn run_example(rpc: &impl HoprIndexerRpcOperations) {
+        /// let start = 10u64;
+        /// let filters = blokli_chain_rpc::FilterSet::default();
+        /// let mut stream = rpc.try_stream_logs(start, filters, true).unwrap();
+        /// // consume one block (if available)
+        /// if let Some(block) = stream.next().await {
+        ///     println!("got block with number: {}", block.block_number);
+        /// }
+        /// # }
+        /// ```
         fn try_stream_logs<'a>(
             &'a self,
             start_block_number: u64,
