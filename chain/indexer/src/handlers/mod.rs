@@ -144,9 +144,9 @@ where
     /// #     let handler = /* ContractEventHandlers::new(...) */ unimplemented!();
     /// #     let tx = /* OpenTransaction */ unimplemented!();
     /// #     let slog = /* SerializableLog */ unimplemented!();
-    ///     let is_synced = true;
-    ///     // Awaiting the processing result; errors propagate as `CoreEthereumIndexerError`.
-    ///     let _ = handler.process_log_event(&tx, slog, is_synced).await;
+    /// let is_synced = true;
+    /// // Awaiting the processing result; errors propagate as `CoreEthereumIndexerError`.
+    /// let _ = handler.process_log_event(&tx, slog, is_synced).await;
     /// # });
     /// ```
     #[tracing::instrument(level = "debug", skip(self, slog), fields(log=%slog))]

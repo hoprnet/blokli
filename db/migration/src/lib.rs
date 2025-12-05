@@ -46,7 +46,8 @@ impl MigratorTrait for Migrator {
     ///
     /// # Returns
     ///
-    /// A `Vec<Box<dyn MigrationTrait>>` containing each migration boxed as a `MigrationTrait` object, ordered from earliest to latest.
+    /// A `Vec<Box<dyn MigrationTrait>>` containing each migration boxed as a `MigrationTrait` object, ordered from
+    /// earliest to latest.
     ///
     /// # Examples
     ///

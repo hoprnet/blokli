@@ -79,7 +79,8 @@ pub enum SafesResult {
 
 /// Validate an Ethereum hex address and return its 20-byte binary form.
 ///
-/// Parses and validates `address` (expected as a hex string, e.g. starting with `0x`); on success returns the address bytes suitable for database queries, otherwise returns `SafeResult::InvalidAddress` describing the validation error.
+/// Parses and validates `address` (expected as a hex string, e.g. starting with `0x`); on success returns the address
+/// bytes suitable for database queries, otherwise returns `SafeResult::InvalidAddress` describing the validation error.
 ///
 /// # Examples
 ///
@@ -517,7 +518,8 @@ impl QueryRoot {
     /// # Returns
     ///
     /// - `SafeTransactionCountResult::TransactionCount` containing the queried `address` and the `count` on success.
-    /// - `SafeTransactionCountResult::InvalidAddress` if the provided address is not a valid hexadecimal Ethereum address.
+    /// - `SafeTransactionCountResult::InvalidAddress` if the provided address is not a valid hexadecimal Ethereum
+    ///   address.
     /// - `SafeTransactionCountResult::QueryFailed` if the RPC call fails.
     ///
     /// # Examples
@@ -634,7 +636,8 @@ impl QueryRoot {
 
     /// Finds a Safe by its chain key (owner address) given as a hexadecimal string.
     ///
-    /// The function validates the provided `chain_key` as an Ethereum-style hex address and returns one of the GraphQL union variants describing the outcome:
+    /// The function validates the provided `chain_key` as an Ethereum-style hex address and returns one of the GraphQL
+    /// union variants describing the outcome:
     /// - `Some(SafeResult::Safe(...))` when a matching safe is found,
     /// - `None` when no safe exists for the given chain key,
     /// - `Some(SafeResult::InvalidAddress(...))` when the `chain_key` is not a valid hex address,
@@ -646,7 +649,9 @@ impl QueryRoot {
     ///
     /// # Returns
     ///
-    /// `Some(SafeResult::Safe)` with the found `Safe` if a record exists; `None` if no record exists; `Some(SafeResult::InvalidAddress)` if the chain key format is invalid; `Some(SafeResult::QueryFailed)` if the database query fails.
+    /// `Some(SafeResult::Safe)` with the found `Safe` if a record exists; `None` if no record exists;
+    /// `Some(SafeResult::InvalidAddress)` if the chain key format is invalid; `Some(SafeResult::QueryFailed)` if the
+    /// database query fails.
     ///
     /// # Examples
     ///

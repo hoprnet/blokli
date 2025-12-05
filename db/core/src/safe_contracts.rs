@@ -54,9 +54,12 @@ pub trait BlokliDbSafeContractOperations: BlokliDbGeneralModelOperations {
 
 #[async_trait]
 impl BlokliDbSafeContractOperations for BlokliDb {
-    /// Creates a safe contract record for a deployment, inserting a new row or returning an existing one when the deployment indices match.
+    /// Creates a safe contract record for a deployment, inserting a new row or returning an existing one when the
+    /// deployment indices match.
     ///
-    /// If a record with the same deployment (deployed block, transaction index, and log index) already exists, the existing record's id is returned and no new row is inserted. The operation uses the provided optional transaction; a nested transaction will be created and committed on success when needed.
+    /// If a record with the same deployment (deployed block, transaction index, and log index) already exists, the
+    /// existing record's id is returned and no new row is inserted. The operation uses the provided optional
+    /// transaction; a nested transaction will be created and committed on success when needed.
     ///
     /// # Returns
     ///
@@ -132,7 +135,8 @@ impl BlokliDbSafeContractOperations for BlokliDb {
     ///
     /// # Returns
     ///
-    /// `true` if the safe exists and the stored chain key equals `expected_chain_key`, `false` if the safe exists but the chain key differs. Returns `DbSqlError::EntityNotFound` if no safe contract is found.
+    /// `true` if the safe exists and the stored chain key equals `expected_chain_key`, `false` if the safe exists but
+    /// the chain key differs. Returns `DbSqlError::EntityNotFound` if no safe contract is found.
     ///
     /// # Examples
     ///

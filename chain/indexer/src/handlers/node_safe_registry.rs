@@ -26,13 +26,15 @@ where
     /// Handle `HoprNodeSafeRegistryEvents` by verifying or updating safe registry state in the database.
     ///
     /// Processes three event variants:
-    /// - `RegisteredNodeSafe`: verifies the safe exists and its stored chain key matches the event's node address; logs the verification outcome.
+    /// - `RegisteredNodeSafe`: verifies the safe exists and its stored chain key matches the event's node address; logs
+    ///   the verification outcome.
     /// - `DeregisteredNodeSafe`: records the deregistration via logging.
     /// - `DomainSeparatorUpdated`: updates the SafeRegistry domain separator in the database.
     ///
     /// # Returns
     ///
-    /// `Result<()>` indicating success, or an error if a database operation (such as updating the domain separator) fails.
+    /// `Result<()>` indicating success, or an error if a database operation (such as updating the domain separator)
+    /// fails.
     ///
     /// # Examples
     ///

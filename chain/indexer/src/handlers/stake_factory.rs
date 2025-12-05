@@ -37,6 +37,7 @@ where
     /// handler.on_stake_factory_event(tx, log, event, true, 123, 0, 0).await.unwrap();
     /// # }
     /// ```
+    #[allow(clippy::too_many_arguments)]
     pub(super) async fn on_stake_factory_event(
         &self,
         tx: &OpenTransaction,
@@ -204,7 +205,8 @@ mod tests {
         Ok(())
     }
 
-    /// Verifies that processing a NewHoprNodeStakeModuleForSafe event fails when the RPC `get_transaction_sender` returns an error.
+    /// Verifies that processing a NewHoprNodeStakeModuleForSafe event fails when the RPC `get_transaction_sender`
+    /// returns an error.
     ///
     /// # Examples
     ///
