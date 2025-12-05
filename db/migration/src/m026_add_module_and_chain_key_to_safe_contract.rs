@@ -6,40 +6,50 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Add new columns - Split for SQLite compatibility
+        // Drop existing table (if it exists) - re-sync will recreate it empty with new schema
         manager
-            .alter_table(
-                Table::alter()
+            .drop_table(Table::drop().table(HoprSafeContract::Table).if_exists().to_owned())
+            .await?;
+
+        // Create HoprSafeContract table with new schema
+        manager
+            .create_table(
+                Table::create()
                     .table(HoprSafeContract::Table)
-                    .add_column(
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(HoprSafeContract::Id)
+                            .big_integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(HoprSafeContract::Address)
+                            .binary_len(20)
+                            .not_null()
+                            .unique_key(),
+                    )
+                    .col(
                         ColumnDef::new(HoprSafeContract::ModuleAddress)
                             .binary_len(20)
-                            .not_null()
-                            .default(vec![0u8; 20]), // Add default to handle existing rows
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(HoprSafeContract::ChainKey).binary_len(20).not_null())
+                    .col(ColumnDef::new(HoprSafeContract::DeployedBlock).big_integer().not_null())
+                    .col(
+                        ColumnDef::new(HoprSafeContract::DeployedTxIndex)
+                            .big_integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(HoprSafeContract::DeployedLogIndex)
+                            .big_integer()
+                            .not_null(),
                     )
                     .to_owned(),
             )
             .await?;
-
-        manager
-            .alter_table(
-                Table::alter()
-                    .table(HoprSafeContract::Table)
-                    .add_column(
-                        ColumnDef::new(HoprSafeContract::ChainKey)
-                            .binary_len(20)
-                            .not_null()
-                            .default(vec![0u8; 20]), // Add default to handle existing rows
-                    )
-                    .to_owned(),
-            )
-            .await?;
-
-        // We can remove the defaults now that columns are added
-        // But SeaORM doesn't easily support dropping defaults in the same statement or easily cross-db.
-        // Since this is an append-only table for us mostly, and existing data might be empty or we accept default 0s
-        // for old entries (which likely don't exist or are few). The design implies we start using this new
-        // structure.
 
         // Add indices for lookups
         manager
@@ -52,9 +62,6 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Address already has a unique constraint, but an explicit index might be desired for performance if the unique
-        // constraint implementation doesn't provide optimal lookup or if we want a non-unique index name (though it is
-        // unique). However, if we create a standard index on a unique column it works.
         manager
             .create_index(
                 Index::create()
@@ -65,7 +72,7 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Add idempotency constraint on event provenance
+        // Add idempotency constraint on event info
         manager
             .create_index(
                 Index::create()
@@ -83,41 +90,41 @@ impl MigrationTrait for Migration {
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Drop indices
+        // Drop the new table
         manager
-            .drop_index(
-                Index::drop()
-                    .name("idx_hopr_safe_contract_event")
-                    .table(HoprSafeContract::Table)
-                    .to_owned(),
-            )
+            .drop_table(Table::drop().table(HoprSafeContract::Table).to_owned())
             .await?;
 
+        // Recreate the old table (without new columns)
         manager
-            .drop_index(
-                Index::drop()
-                    .name("idx_hopr_safe_contract_address")
+            .create_table(
+                Table::create()
                     .table(HoprSafeContract::Table)
-                    .to_owned(),
-            )
-            .await?;
-
-        manager
-            .drop_index(
-                Index::drop()
-                    .name("idx_hopr_safe_contract_chain_key")
-                    .table(HoprSafeContract::Table)
-                    .to_owned(),
-            )
-            .await?;
-
-        // Drop columns
-        manager
-            .alter_table(
-                Table::alter()
-                    .table(HoprSafeContract::Table)
-                    .drop_column(HoprSafeContract::ChainKey)
-                    .drop_column(HoprSafeContract::ModuleAddress)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(HoprSafeContract::Id)
+                            .big_integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(HoprSafeContract::Address)
+                            .binary_len(20)
+                            .not_null()
+                            .unique_key(),
+                    )
+                    .col(ColumnDef::new(HoprSafeContract::DeployedBlock).big_integer().not_null())
+                    .col(
+                        ColumnDef::new(HoprSafeContract::DeployedTxIndex)
+                            .big_integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(HoprSafeContract::DeployedLogIndex)
+                            .big_integer()
+                            .not_null(),
+                    )
                     .to_owned(),
             )
             .await?;
@@ -129,6 +136,7 @@ impl MigrationTrait for Migration {
 #[derive(DeriveIden)]
 enum HoprSafeContract {
     Table,
+    Id,
     Address,
     ModuleAddress,
     ChainKey,

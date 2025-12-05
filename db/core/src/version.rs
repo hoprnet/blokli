@@ -10,7 +10,8 @@ use crate::errors::{DbSqlError, Result};
 /// Version history:
 /// - 1: Initial schema with INTEGER id columns
 /// - 2: Changed to BIGINT id columns (m023, m024)
-pub const CURRENT_SCHEMA_VERSION: i64 = 2;
+/// - 3: Added module_address and chain_key to hopr_safe_contract (m026)
+pub const CURRENT_SCHEMA_VERSION: i64 = 3;
 
 /// The singleton ID used for the schema_version table
 const SCHEMA_VERSION_TABLE_ID: i64 = 1;
