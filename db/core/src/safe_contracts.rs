@@ -2,6 +2,7 @@ use async_trait::async_trait;
 use blokli_db_entity::{codegen::prelude::*, hopr_safe_contract};
 use hopr_primitive_types::prelude::*;
 use sea_orm::*;
+use sea_query::OnConflict;
 
 use crate::{BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result};
 
@@ -18,7 +19,7 @@ pub trait BlokliDbSafeContractOperations: BlokliDbGeneralModelOperations {
     /// * `log_index` - Log index
     ///
     /// # Idempotency
-    /// Uses check-then-insert logic with unique constraint on (deployed_block, deployed_tx_index, deployed_log_index)
+    /// Uses ON CONFLICT DO NOTHING with unique constraint on (deployed_block, deployed_tx_index, deployed_log_index)
     #[allow(clippy::too_many_arguments)]
     async fn create_safe_contract<'a>(
         &'a self,
@@ -77,27 +78,38 @@ impl BlokliDbSafeContractOperations for BlokliDb {
             ..Default::default()
         };
 
-        // Check existence for idempotency
+        // Insert with ON CONFLICT DO NOTHING for idempotency
         // The unique constraint is on (deployed_block, deployed_tx_index, deployed_log_index).
-        let existing = HoprSafeContract::find()
+        // We ignore the result because ON CONFLICT DO NOTHING may not insert anything.
+        let _ = HoprSafeContract::insert(safe_model)
+            .on_conflict(
+                OnConflict::columns([
+                    hopr_safe_contract::Column::DeployedBlock,
+                    hopr_safe_contract::Column::DeployedTxIndex,
+                    hopr_safe_contract::Column::DeployedLogIndex,
+                ])
+                .do_nothing()
+                .to_owned(),
+            )
+            .exec(tx.as_ref())
+            .await;
+
+        // Retrieve the ID (whether newly inserted or existing)
+        let safe = HoprSafeContract::find()
             .filter(hopr_safe_contract::Column::DeployedBlock.eq(block as i64))
             .filter(hopr_safe_contract::Column::DeployedTxIndex.eq(tx_index as i64))
             .filter(hopr_safe_contract::Column::DeployedLogIndex.eq(log_index as i64))
             .one(tx.as_ref())
-            .await?;
-
-        if let Some(existing) = existing {
-            tx.commit().await?;
-            return Ok(existing.id);
-        }
-
-        let res = HoprSafeContract::insert(safe_model)
-            .exec(tx.as_ref())
-            .await
-            .map_err(DbSqlError::from)?;
+            .await?
+            .ok_or_else(|| {
+                DbSqlError::EntityNotFound(format!(
+                    "Safe contract not found after insert at block {} tx {} log {}",
+                    block, tx_index, log_index
+                ))
+            })?;
 
         tx.commit().await?;
-        Ok(res.last_insert_id)
+        Ok(safe.id)
     }
 
     async fn verify_safe_contract<'a>(
@@ -130,9 +142,6 @@ impl BlokliDbSafeContractOperations for BlokliDb {
 
 #[cfg(test)]
 mod tests {
-    use hopr_crypto_types::prelude::ChainKeypair;
-    use sea_orm::IntoActiveModel;
-
     use super::*;
     use crate::db::BlokliDb;
 

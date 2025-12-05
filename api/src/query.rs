@@ -103,6 +103,39 @@ fn parse_safe_address(address: String) -> std::result::Result<Vec<u8>, SafeResul
         })
 }
 
+/// Helper function to convert database Safe model to GraphQL Safe type
+///
+/// Validates that all address fields in the database are exactly 20 bytes.
+/// Returns an error message if any address field has an invalid length.
+fn safe_from_db_model(safe: blokli_db_entity::hopr_safe_contract::Model) -> std::result::Result<Safe, String> {
+    let address = Address::try_from(&safe.address[..]).map_err(|_| {
+        format!(
+            "Invalid address length in database: expected 20 bytes, got {}",
+            safe.address.len()
+        )
+    })?;
+
+    let module_address = Address::try_from(&safe.module_address[..]).map_err(|_| {
+        format!(
+            "Invalid module address length in database: expected 20 bytes, got {}",
+            safe.module_address.len()
+        )
+    })?;
+
+    let chain_key = Address::try_from(&safe.chain_key[..]).map_err(|_| {
+        format!(
+            "Invalid chain key length in database: expected 20 bytes, got {}",
+            safe.chain_key.len()
+        )
+    })?;
+
+    Ok(Safe {
+        address: address.to_hex(),
+        module_address: module_address.to_hex(),
+        chain_key: chain_key.to_hex(),
+    })
+}
+
 /// Root query type providing read-only access to indexed blockchain data
 pub struct QueryRoot;
 
@@ -538,11 +571,13 @@ impl QueryRoot {
             .one(db)
             .await
         {
-            Ok(Some(safe)) => Ok(Some(SafeResult::Safe(Safe {
-                address: Address::new(&safe.address).to_hex(),
-                module_address: Address::new(&safe.module_address).to_hex(),
-                chain_key: Address::new(&safe.chain_key).to_hex(),
-            }))),
+            Ok(Some(safe)) => match safe_from_db_model(safe) {
+                Ok(safe_data) => Ok(Some(SafeResult::Safe(safe_data))),
+                Err(e) => Ok(Some(SafeResult::QueryFailed(QueryFailedError {
+                    code: "INVALID_DB_DATA".to_string(),
+                    message: format!("Database contains malformed data: {}", e),
+                }))),
+            },
             Ok(None) => Ok(None),
             Err(e) => Ok(Some(SafeResult::QueryFailed(QueryFailedError {
                 code: "QUERY_FAILED".to_string(),
@@ -574,11 +609,13 @@ impl QueryRoot {
             .one(db)
             .await
         {
-            Ok(Some(safe)) => Ok(Some(SafeResult::Safe(Safe {
-                address: Address::new(&safe.address).to_hex(),
-                module_address: Address::new(&safe.module_address).to_hex(),
-                chain_key: Address::new(&safe.chain_key).to_hex(),
-            }))),
+            Ok(Some(safe)) => match safe_from_db_model(safe) {
+                Ok(safe_data) => Ok(Some(SafeResult::Safe(safe_data))),
+                Err(e) => Ok(Some(SafeResult::QueryFailed(QueryFailedError {
+                    code: "INVALID_DB_DATA".to_string(),
+                    message: format!("Database contains malformed data: {}", e),
+                }))),
+            },
             Ok(None) => Ok(None),
             Err(e) => Ok(Some(SafeResult::QueryFailed(QueryFailedError {
                 code: "QUERY_FAILED".to_string(),
@@ -596,15 +633,16 @@ impl QueryRoot {
 
         match blokli_db_entity::hopr_safe_contract::Entity::find().all(db).await {
             Ok(safes) => {
-                let safe_list = safes
-                    .into_iter()
-                    .map(|safe| Safe {
-                        address: Address::new(&safe.address).to_hex(),
-                        module_address: Address::new(&safe.module_address).to_hex(),
-                        chain_key: Address::new(&safe.chain_key).to_hex(),
-                    })
-                    .collect();
-                Ok(SafesResult::Safes(SafesList { safes: safe_list }))
+                let safe_results: std::result::Result<Vec<Safe>, String> =
+                    safes.into_iter().map(safe_from_db_model).collect();
+
+                match safe_results {
+                    Ok(safe_list) => Ok(SafesResult::Safes(SafesList { safes: safe_list })),
+                    Err(e) => Ok(SafesResult::QueryFailed(QueryFailedError {
+                        code: "INVALID_DB_DATA".to_string(),
+                        message: format!("Database contains malformed data: {}", e),
+                    })),
+                }
             }
             Err(e) => Ok(SafesResult::QueryFailed(QueryFailedError {
                 code: "QUERY_FAILED".to_string(),
