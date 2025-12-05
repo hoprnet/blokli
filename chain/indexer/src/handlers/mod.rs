@@ -118,6 +118,37 @@ where
         Ok(())
     }
 
+    /// Dispatches a single on-chain log to the appropriate contract event handler after decoding it.
+    ///
+    /// Decodes the provided `SerializableLog` into a primitive log, matches its contract address against
+    /// known contract addresses, and forwards the decoded event to the corresponding `on_*_event` handler.
+    /// Returns an error if decoding fails or if the log's contract address is not recognized. Channel
+    /// events that map to `ChannelDoesNotExist` are treated as non-fatal and ignored.
+    ///
+    /// # Errors
+    ///
+    /// Returns `CoreEthereumIndexerError::ProcessError` if the log cannot be converted to a primitive log,
+    /// `CoreEthereumIndexerError::UnknownContract` if the log's address is not one of the known contracts,
+    /// or other `CoreEthereumIndexerError` variants produced by the specific handler invoked.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use std::sync::Arc;
+    /// # use tokio::runtime::Runtime;
+    /// # // setup placeholders for the example — real types come from the library
+    /// # let rt = Runtime::new().unwrap();
+    /// # rt.block_on(async {
+    /// #     // `handler` is an instance of ContractEventHandlers configured with addresses and db.
+    /// #     // `tx` is an open database transaction handle and `slog` is a SerializableLog.
+    /// #     let handler = /* ContractEventHandlers::new(...) */ unimplemented!();
+    /// #     let tx = /* OpenTransaction */ unimplemented!();
+    /// #     let slog = /* SerializableLog */ unimplemented!();
+    /// let is_synced = true;
+    /// // Awaiting the processing result; errors propagate as `CoreEthereumIndexerError`.
+    /// let _ = handler.process_log_event(&tx, slog, is_synced).await;
+    /// # });
+    /// ```
     #[tracing::instrument(level = "debug", skip(self, slog), fields(log=%slog))]
     async fn process_log_event(&self, tx: &OpenTransaction, slog: SerializableLog, is_synced: bool) -> Result<()> {
         trace!(log = %slog, "log content");
@@ -199,6 +230,22 @@ where
     T: HoprIndexerRpcOperations + Clone + Send + Sync + 'static,
     Db: BlokliDbAllOperations + Clone + Debug + Send + Sync + 'static,
 {
+    /// The contract addresses whose on-chain logs this handler processes.
+    ///
+    /// # Returns
+    ///
+    /// `Vec<Address>` containing the monitored contract addresses in the following order:
+    /// announcements, channels, ticket_price_oracle, winning_probability_oracle,
+    /// node_safe_registry, node_stake_v2_factory, token.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let addrs = handlers.contract_addresses();
+    /// assert_eq!(addrs.len(), 7);
+    /// // order: announcements, channels, ticket_price_oracle, winning_probability_oracle,
+    /// // node_safe_registry, node_stake_v2_factory, token
+    /// ```
     fn contract_addresses(&self) -> Vec<Address> {
         vec![
             self.addresses.announcements,
@@ -215,6 +262,22 @@ where
         self.addresses.clone()
     }
 
+    /// Map a contract address to its associated event topics.
+    ///
+    /// Given a contract address managed by this handler, returns the list of event topic hashes
+    /// (`Vec<B256>`) that should be used to filter logs for that contract.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `contract` is not one of the supported contract addresses held in `self.addresses`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // assume `handler` is an instance of ContractEventHandlers and `addr` is one of its addresses
+    /// let topics = handler.contract_address_topics(handler.addresses.announcements);
+    /// assert!(!topics.is_empty());
+    /// ```
     fn contract_address_topics(&self, contract: Address) -> Vec<B256> {
         if contract.eq(&self.addresses.announcements) {
             crate::constants::topics::announcement()
