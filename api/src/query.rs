@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use async_graphql::{Context, Object, Result, SimpleObject, Union}; // Add SimpleObject
+use async_graphql::{Context, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
     Account, ChainInfo, Channel, ContractAddressMap, Hex32, HoprBalance, InvalidAddressError,
     InvalidTransactionIdError, NativeBalance, QueryFailedError, Safe, SafeHoprAllowance, SafeTransactionCount,
@@ -245,13 +245,11 @@ impl QueryRoot {
         // Require at least one identity filter to prevent excessive data retrieval
         // Note: status alone is not sufficient as it could still return thousands of channels
         if source_key_id.is_none() && destination_key_id.is_none() && concrete_channel_id.is_none() {
-            return Err(
-                async_graphql::Error::new(
-                    "At least one identity filter is required (sourceKeyId, destinationKeyId, or concreteChannelId). \
+            return Err(async_graphql::Error::new(
+                "At least one identity filter is required (sourceKeyId, destinationKeyId, or concreteChannelId). \
                      \n                 The status filter can be used in combination but not alone. \n                 \
                      Example: channels(sourceKeyId: 1) or channels(sourceKeyId: 1, status: OPEN)",
-                ),
-            );
+            ));
         }
 
         let db = ctx.data::<DatabaseConnection>()?;
@@ -502,7 +500,7 @@ impl QueryRoot {
             })));
         }
 
-        let safe_address_bytes = match Address::from_hex(&address) {
+        let safe_address = match Address::from_hex(&address) {
             Ok(addr) => addr.as_ref().to_vec(),
             Err(e) => {
                 return Ok(Some(SafeResult::InvalidAddress(InvalidAddressError {
@@ -516,7 +514,7 @@ impl QueryRoot {
         let db = ctx.data::<DatabaseConnection>()?;
 
         match blokli_db_entity::hopr_safe_contract::Entity::find()
-            .filter(blokli_db_entity::hopr_safe_contract::Column::Address.eq(safe_address_bytes))
+            .filter(blokli_db_entity::hopr_safe_contract::Column::Address.eq(safe_address))
             .one(db)
             .await
         {
@@ -552,7 +550,7 @@ impl QueryRoot {
             })));
         }
 
-        let chain_key_bytes = match Address::from_hex(&chain_key) {
+        let chain_key_address = match Address::from_hex(&chain_key) {
             Ok(addr) => addr.as_ref().to_vec(),
             Err(e) => {
                 return Ok(Some(SafeResult::InvalidAddress(InvalidAddressError {
@@ -566,7 +564,7 @@ impl QueryRoot {
         let db = ctx.data::<DatabaseConnection>()?;
 
         match blokli_db_entity::hopr_safe_contract::Entity::find()
-            .filter(blokli_db_entity::hopr_safe_contract::Column::ChainKey.eq(chain_key_bytes))
+            .filter(blokli_db_entity::hopr_safe_contract::Column::ChainKey.eq(chain_key_address))
             .one(db)
             .await
         {

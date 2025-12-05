@@ -14,7 +14,7 @@ use async_stream::stream;
 use async_trait::async_trait;
 use blokli_chain_types::AlloyAddressExt;
 use futures::{Stream, StreamExt, stream::BoxStream};
-use hopr_crypto_types::types::Hash; // Import Hash
+use hopr_crypto_types::types::Hash;
 #[cfg(all(feature = "prometheus", not(test)))]
 use hopr_metrics::SimpleGauge;
 use hopr_primitive_types::prelude::*;

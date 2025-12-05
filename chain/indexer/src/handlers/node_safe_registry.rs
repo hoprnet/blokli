@@ -1,8 +1,8 @@
 use blokli_chain_rpc::HoprIndexerRpcOperations;
-use blokli_chain_types::AlloyAddressExt; // Add this
+use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator};
 use hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::HoprNodeSafeRegistryEvents;
-use hopr_primitive_types::prelude::ToHex; // Fix this
+use hopr_primitive_types::prelude::ToHex;
 use tracing::{debug, error, info};
 
 use super::ContractEventHandlers;
@@ -43,10 +43,10 @@ where
                     "Verifying RegisteredNodeSafe event"
                 );
 
-                // VERIFICATION ONLY - Check safe exists and chain_key matches
+                // Check safe exists and chain_key matches
                 match self.db.verify_safe_contract(Some(tx), safe_addr, node_addr).await {
                     Ok(true) => {
-                        // Safe exists and chain_key matches - all good
+                        // Safe exists and chain_key matches
                         debug!(
                             node_address = %node_addr.to_hex(),
                             safe_address = %safe_addr.to_hex(),
@@ -54,11 +54,11 @@ where
                         );
                     }
                     Ok(false) => {
-                        // Safe exists but chain_key MISMATCH
+                        // Safe exists but chain_key mismatch
                         error!(
                             node_address = %node_addr.to_hex(),
                             safe_address = %safe_addr.to_hex(),
-                            "RegisteredNodeSafe chain_key MISMATCH! \
+                            "RegisteredNodeSafe chain_key mismatch. \
                              Event nodeAddress does not match database chain_key. \
                              This indicates a protocol violation or data inconsistency."
                         );
