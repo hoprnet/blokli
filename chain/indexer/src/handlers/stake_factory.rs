@@ -73,3 +73,129 @@ where
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use alloy::{
+        primitives::{B256, Address as AlloyAddress},
+        sol_types::{SolEvent, SolValue},
+    };
+    use blokli_chain_types::AlloyAddressExt;
+    use blokli_chain_rpc::HoprIndexerRpcOperations;
+    use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations};
+    use hopr_bindings::hopr_node_stake_factory::HoprNodeStakeFactory;
+    use hopr_crypto_types::types::Hash;
+    use hopr_primitive_types::prelude::{Address, SerializableLog};
+    use hopr_primitive_types::traits::IntoEndian;
+    use mockall::predicate::*;
+    use sea_orm::EntityTrait;
+
+    use crate::{
+        handlers::test_utils::test_helpers::*,
+        state::{IndexerEvent, IndexerState},
+        traits::ChainLogHandler,
+    };
+
+    fn random_address() -> Address {
+        Address::from(hopr_crypto_random::random_bytes())
+    }
+
+    fn random_hash() -> Hash {
+        Hash::from(hopr_crypto_random::random_bytes())
+    }
+
+    #[tokio::test]
+    async fn test_on_stake_factory_event_creates_safe() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let mut rpc_operations = MockIndexerRpcOperations::new();
+
+        // Mock get_transaction_sender
+        let tx_hash = random_hash();
+        let sender = random_address();
+        rpc_operations
+            .expect_get_transaction_sender()
+            .with(eq(tx_hash))
+            .returning(move |_| Ok(sender));
+
+        let clonable_rpc_operations = ClonableMockOperations {
+            inner: Arc::new(rpc_operations),
+        };
+
+        let (handlers, _indexer_state, mut event_rx) = init_handlers_with_events(clonable_rpc_operations, db.clone());
+
+        // Create event
+        let safe_address = random_address();
+        let module_address = random_address();
+        let event = HoprNodeStakeFactory::NewHoprNodeStakeModuleForSafe {
+            safe: AlloyAddress::from_hopr_address(safe_address),
+            module: AlloyAddress::from_hopr_address(module_address),
+        };
+
+        let encoded_data = event.encode_log_data();
+        let log = SerializableLog {
+            address: handlers.addresses.node_stake_v2_factory,
+            topics: encoded_data.topics().iter().map(|t| t.0).collect(),
+            data: encoded_data.data.to_vec(),
+            tx_hash: tx_hash.into(),
+            block_number: 100,
+            tx_index: 1,
+            log_index: 2,
+            ..test_log()
+        };
+
+        // Process event
+        handlers.collect_log_event(log, true).await?;
+
+        // Verify safe created in DB
+        let safe = db.verify_safe_contract(None, safe_address, sender).await?;
+        assert!(safe, "Safe should be created and verified");
+
+        // Verify event published
+        let event = try_recv_event(&mut event_rx).expect("Should receive event");
+        match event {
+            IndexerEvent::SafeDeployed(addr) => assert_eq!(addr, safe_address),
+            _ => panic!("Unexpected event type"),
+        }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_on_stake_factory_event_rpc_failure() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let mut rpc_operations = MockIndexerRpcOperations::new();
+
+        // Mock get_transaction_sender failure
+        rpc_operations
+            .expect_get_transaction_sender()
+            .returning(|_| Err(blokli_chain_rpc::errors::RpcError::Other("RPC failed".into())));
+
+        let clonable_rpc_operations = ClonableMockOperations {
+            inner: Arc::new(rpc_operations),
+        };
+
+        let handlers = init_handlers(clonable_rpc_operations, db.clone());
+
+        // Create event
+        let event = HoprNodeStakeFactory::NewHoprNodeStakeModuleForSafe {
+            safe: AlloyAddress::from_hopr_address(random_address()),
+            module: AlloyAddress::from_hopr_address(random_address()),
+        };
+
+        let encoded_data = event.encode_log_data();
+        let log = SerializableLog {
+            address: handlers.addresses.node_stake_v2_factory,
+            topics: encoded_data.topics().iter().map(|t| t.0).collect(),
+            data: encoded_data.data.to_vec(),
+            ..test_log()
+        };
+
+        // Process event - should fail
+        let result = handlers.collect_log_event(log, true).await;
+        assert!(result.is_err());
+
+        Ok(())
+    }
+}

@@ -245,11 +245,13 @@ impl QueryRoot {
         // Require at least one identity filter to prevent excessive data retrieval
         // Note: status alone is not sufficient as it could still return thousands of channels
         if source_key_id.is_none() && destination_key_id.is_none() && concrete_channel_id.is_none() {
-            return Err(async_graphql::Error::new(
-                "At least one identity filter is required (sourceKeyId, destinationKeyId, or concreteChannelId). \
+            return Err(
+                async_graphql::Error::new(
+                    "At least one identity filter is required (sourceKeyId, destinationKeyId, or concreteChannelId). \
                      \n                 The status filter can be used in combination but not alone. \n                 \
                      Example: channels(sourceKeyId: 1) or channels(sourceKeyId: 1, status: OPEN)",
-            ));
+                ),
+            );
         }
 
         let db = ctx.data::<DatabaseConnection>()?;

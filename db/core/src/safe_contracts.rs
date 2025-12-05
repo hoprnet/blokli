@@ -87,6 +87,7 @@ impl BlokliDbSafeContractOperations for BlokliDb {
             .await?;
 
         if let Some(existing) = existing {
+            tx.commit().await?;
             return Ok(existing.id);
         }
 
@@ -95,6 +96,7 @@ impl BlokliDbSafeContractOperations for BlokliDb {
             .await
             .map_err(DbSqlError::from)?;
 
+        tx.commit().await?;
         Ok(res.last_insert_id)
     }
 
@@ -123,5 +125,102 @@ impl BlokliDbSafeContractOperations for BlokliDb {
                 safe_address
             ))),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hopr_crypto_types::prelude::ChainKeypair;
+    use sea_orm::IntoActiveModel;
+
+    use super::*;
+    use crate::db::BlokliDb;
+
+    // Helper to generate random address
+    fn random_address() -> Address {
+        Address::from(hopr_crypto_random::random_bytes())
+    }
+
+    #[tokio::test]
+    async fn test_create_safe_contract() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let safe_address = random_address();
+        let module_address = random_address();
+        let chain_key = random_address();
+
+        // Create safe contract
+        let id = db
+            .create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+            .await?;
+
+        // Verify it was created
+        let safe = HoprSafeContract::find_by_id(id)
+            .one(db.conn(crate::TargetDb::Index))
+            .await?
+            .expect("safe should exist");
+
+        assert_eq!(safe.address, safe_address.as_ref().to_vec());
+        assert_eq!(safe.module_address, module_address.as_ref().to_vec());
+        assert_eq!(safe.chain_key, chain_key.as_ref().to_vec());
+        assert_eq!(safe.deployed_block, 100);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_create_safe_contract_idempotency() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let safe_address = random_address();
+        let module_address = random_address();
+        let chain_key = random_address();
+
+        // Create safe contract
+        let id1 = db
+            .create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+            .await?;
+
+        // Try to create same safe contract (same block/tx/log)
+        let id2 = db
+            .create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+            .await?;
+
+        // Should return same ID
+        assert_eq!(id1, id2);
+
+        // Verify only one record exists
+        let count = HoprSafeContract::find().count(db.conn(crate::TargetDb::Index)).await?;
+        assert_eq!(count, 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_verify_safe_contract() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let safe_address = random_address();
+        let module_address = random_address();
+        let chain_key = random_address();
+        let other_chain_key = random_address();
+
+        // Case 1: Safe doesn't exist
+        let result = db.verify_safe_contract(None, safe_address, chain_key).await;
+        assert!(matches!(result, Err(DbSqlError::EntityNotFound(_))));
+
+        // Create safe contract
+        db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+            .await?;
+
+        // Case 2: Safe exists and chain_key matches
+        let result = db.verify_safe_contract(None, safe_address, chain_key).await?;
+        assert!(result);
+
+        // Case 3: Safe exists but chain_key mismatch
+        let result = db.verify_safe_contract(None, safe_address, other_chain_key).await?;
+        assert!(!result);
+
+        Ok(())
     }
 }

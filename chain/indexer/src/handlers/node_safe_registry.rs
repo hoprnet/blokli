@@ -104,18 +104,32 @@ mod tests {
     use hopr_primitive_types::prelude::SerializableLog;
     use primitive_types::H256;
 
-    use crate::handlers::test_utils::test_helpers::*;
+    use crate::handlers::{
+        node_safe_registry::tests::SAFE_INSTANCE_ADDR, test_utils::test_helpers::*,
+    };
+    use blokli_db::safe_contracts::BlokliDbSafeContractOperations;
+    use hopr_primitive_types::prelude::Address;
 
     #[tokio::test]
-    async fn test_on_node_safe_registry_registered() -> anyhow::Result<()> {
+    async fn test_on_node_safe_registry_registered_verification_success() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let rpc_operations = MockIndexerRpcOperations::new();
-        // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
-            //
             inner: Arc::new(rpc_operations),
         };
         let handlers = init_handlers(clonable_rpc_operations, db.clone());
+
+        let safe_address = handlers.addresses.node_safe_registry; // Using registry addr as safe for test convenience
+        let node_address = *SELF_CHAIN_ADDRESS; // Using self address as node
+
+        // Pre-create the safe in DB to simulate NewHoprNodeStakeModuleForSafe happened before
+        db.create_safe_contract(
+            None,
+            safe_address,
+            Address::from(hopr_crypto_random::random_bytes()),
+            node_address,
+            10, 0, 0
+        ).await?;
 
         let encoded_data = ().abi_encode();
 
@@ -123,9 +137,8 @@ mod tests {
             address: handlers.addresses.node_safe_registry,
             topics: vec![
                 hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::RegisteredNodeSafe::SIGNATURE_HASH.into(),
-                // RegisteredNodeSafeFilter::signature().into(),
-                H256::from_slice(&SAFE_INSTANCE_ADDR.to_bytes32()).into(),
-                H256::from_slice(&SELF_CHAIN_ADDRESS.to_bytes32()).into(),
+                H256::from_slice(&safe_address.to_bytes32()).into(),
+                H256::from_slice(&node_address.to_bytes32()).into(),
             ],
             data: encoded_data,
             ..test_log()
@@ -136,9 +149,86 @@ mod tests {
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, safe_registered_log, true).await }))
             .await?;
 
-        // TODO: Add event verification - check published IndexerEvent instead of return value
+        Ok(())
+    }
 
-        // Nothing to check in the DB here, since we do not track this
+    #[tokio::test]
+    async fn test_on_node_safe_registry_registered_verification_failure_mismatch() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let rpc_operations = MockIndexerRpcOperations::new();
+        let clonable_rpc_operations = ClonableMockOperations {
+            inner: Arc::new(rpc_operations),
+        };
+        let handlers = init_handlers(clonable_rpc_operations, db.clone());
+
+        let safe_address = handlers.addresses.node_safe_registry;
+        let node_address = *SELF_CHAIN_ADDRESS;
+        let other_address = Address::from(hopr_crypto_random::random_bytes());
+
+        // Create safe contract
+        db.create_safe_contract(
+            None,
+            safe_address,
+            Address::from(hopr_crypto_random::random_bytes()),
+            other_address, // Mismatch
+            10, 0, 0
+        ).await?;
+
+        let encoded_data = ().abi_encode();
+
+        let safe_registered_log = SerializableLog {
+            address: handlers.addresses.node_safe_registry,
+            topics: vec![
+                hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::RegisteredNodeSafe::SIGNATURE_HASH.into(),
+                H256::from_slice(&safe_address.to_bytes32()).into(),
+                H256::from_slice(&node_address.to_bytes32()).into(),
+            ],
+            data: encoded_data,
+            ..test_log()
+        };
+
+        // Should succeed processing but log error (verification fail)
+        db.begin_transaction()
+            .await?
+            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, safe_registered_log, true).await }))
+            .await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_on_node_safe_registry_registered_verification_failure_missing() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let rpc_operations = MockIndexerRpcOperations::new();
+        let clonable_rpc_operations = ClonableMockOperations {
+            inner: Arc::new(rpc_operations),
+        };
+        let handlers = init_handlers(clonable_rpc_operations, db.clone());
+
+        let safe_address = handlers.addresses.node_safe_registry;
+        let node_address = *SELF_CHAIN_ADDRESS;
+
+        // Don't create safe in DB
+
+        let encoded_data = ().abi_encode();
+
+        let safe_registered_log = SerializableLog {
+            address: handlers.addresses.node_safe_registry,
+            topics: vec![
+                hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::RegisteredNodeSafe::SIGNATURE_HASH.into(),
+                H256::from_slice(&safe_address.to_bytes32()).into(),
+                H256::from_slice(&node_address.to_bytes32()).into(),
+            ],
+            data: encoded_data,
+            ..test_log()
+        };
+
+        // Should succeed processing but log error
+        db.begin_transaction()
+            .await?
+            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, safe_registered_log, true).await }))
+            .await?;
+
         Ok(())
     }
 
