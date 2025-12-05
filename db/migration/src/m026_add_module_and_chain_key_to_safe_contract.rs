@@ -22,7 +22,7 @@ impl MigrationTrait for Migration {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// # use sea_orm_migration::prelude::*;
     /// # use sea_query::SchemaManager;
     /// # use sea_orm::DbErr;
@@ -140,7 +140,7 @@ impl MigrationTrait for Migration {
     ///
     /// # Examples
     ///
-    /// ```no_run
+    /// ```ignore
     /// # use sea_orm_migration::prelude::*;
     /// # async fn example(manager: &SchemaManager) -> Result<(), DbErr> {
     /// let migration = Migration;

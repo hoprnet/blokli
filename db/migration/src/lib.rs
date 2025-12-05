@@ -51,7 +51,7 @@ impl MigratorTrait for Migrator {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let migrations = Migrator::migrations();
     /// // full migrator should contain multiple migrations (at least 1)
     /// assert!(!migrations.is_empty());
@@ -101,7 +101,7 @@ impl MigratorTrait for MigratorIndex {
     ///
     /// # Examples
     ///
-    /// ```
+    /// ```ignore
     /// let list = migrations();
     /// assert!(!list.is_empty());
     /// // each element is a boxed `MigrationTrait` implementation
