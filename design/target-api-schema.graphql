@@ -421,6 +421,35 @@ type QueryRoot {
     address: String!
   ): SafeHoprAllowanceResult!
   """
+  Retrieve safe by contract address
+
+  Returns Error with code INVALID_ADDRESS if address format is invalid.
+  Returns Error with code QUERY_FAILED if query fails.
+  Returns None if safe is not found.
+  """
+  safe(
+    "Safe contract address to query (hexadecimal format)"
+    address: String!
+  ): SafeResult
+  """
+  Retrieve safe by chain key (owner address)
+
+  Returns Error with code INVALID_ADDRESS if address format is invalid.
+  Returns Error with code QUERY_FAILED if query fails.
+  Returns None if safe is not found.
+  """
+  safeByChainKey(
+    "Chain key to query (hexadecimal format)"
+    chainKey: String!
+  ): SafeResult
+  """
+  Retrieve all safes
+
+  Returns all safe contracts indexed by the system.
+  Returns Error with code QUERY_FAILED if query fails.
+  """
+  safes: SafesResult!
+  """
   Retrieve Safe contract transaction count
   
   This query returns the current nonce/transaction count for a HOPR Safe contract
@@ -462,6 +491,16 @@ type RpcError {
   message: String!
 }
 
+"""HOPR Safe contract deployment information"""
+type Safe {
+  "Safe contract address (hexadecimal format)"
+  address: String!
+  "Chain key (owner address, hexadecimal format)"
+  chainKey: String!
+  "HOPR Node Management Module address (hexadecimal format)"
+  moduleAddress: String!
+}
+
 """Safe HOPR token allowance information for a specific Safe address"""
 type SafeHoprAllowance {
   "Safe contract address"
@@ -472,6 +511,18 @@ type SafeHoprAllowance {
 
 """Result type for Safe HOPR allowance queries"""
 union SafeHoprAllowanceResult = SafeHoprAllowance | InvalidAddressError | QueryFailedError
+
+"""Result type for single safe queries"""
+union SafeResult = Safe | InvalidAddressError | QueryFailedError
+
+"""Success response for safes list query"""
+type SafesList {
+  "List of safes"
+  safes: [Safe!]!
+}
+
+"""Result type for safes list query"""
+union SafesResult = SafesList | QueryFailedError
 
 """Safe contract transaction count information"""
 type SafeTransactionCount {
@@ -570,8 +621,14 @@ type SubscriptionRoot {
   """
   openedChannelGraphUpdated: OpenedChannelsGraphEntry!
   """
+  Subscribe to newly deployed safes
+
+  Emits Safe deployment events in real-time as they are indexed.
+  """
+  safeDeployed: Safe!
+  """
   Subscribe to real-time updates of ticket price and winning probability
-  
+
   Provides updates whenever there is a change in the ticket price or minimum
   winning probability on-chain. These values are essential for ticket validation
   and payment channel operation.

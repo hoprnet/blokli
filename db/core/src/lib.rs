@@ -15,6 +15,7 @@ pub mod events;
 pub mod info;
 pub mod logs;
 pub mod notifications;
+pub mod safe_contracts;
 pub mod state_queries;
 pub mod version;
 
@@ -33,6 +34,7 @@ use crate::{
     db::BlokliDb,
     errors::{DbSqlError, Result},
     info::BlokliDbInfoOperations,
+    safe_contracts::BlokliDbSafeContractOperations,
 };
 
 /// Primary key used in tables that contain only a single row.
@@ -270,6 +272,7 @@ pub trait BlokliDbAllOperations:
     // + BlokliDbCorruptedChannelOperations
     + BlokliDbInfoOperations
     + BlokliDbLogOperations
+    + BlokliDbSafeContractOperations
 {
 }
 
@@ -285,6 +288,7 @@ pub mod prelude {
         errors::*,
         events::*,
         info::*,
+        safe_contracts::*,
         state_queries::*,
     };
 }

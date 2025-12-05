@@ -2,10 +2,10 @@
 
 use std::sync::Arc;
 
-use async_graphql::{Context, Object, Result, Union};
+use async_graphql::{Context, Object, Result, SimpleObject, Union}; // Add SimpleObject
 use blokli_api_types::{
     Account, ChainInfo, Channel, ContractAddressMap, Hex32, HoprBalance, InvalidAddressError,
-    InvalidTransactionIdError, NativeBalance, QueryFailedError, SafeHoprAllowance, SafeTransactionCount,
+    InvalidTransactionIdError, NativeBalance, QueryFailedError, Safe, SafeHoprAllowance, SafeTransactionCount,
     TokenValueString, Transaction, UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
@@ -52,6 +52,28 @@ pub enum SafeHoprAllowanceResult {
 pub enum SafeTransactionCountResult {
     TransactionCount(SafeTransactionCount),
     InvalidAddress(InvalidAddressError),
+    QueryFailed(QueryFailedError),
+}
+
+/// Result type for single safe queries
+#[derive(Union)]
+pub enum SafeResult {
+    Safe(Safe),
+    InvalidAddress(InvalidAddressError),
+    QueryFailed(QueryFailedError),
+}
+
+/// Success response for safes list query
+#[derive(SimpleObject)]
+pub struct SafesList {
+    /// List of safes
+    pub safes: Vec<Safe>,
+}
+
+/// Result type for safes list query
+#[derive(Union)]
+pub enum SafesResult {
+    Safes(SafesList),
     QueryFailed(QueryFailedError),
 }
 
@@ -458,6 +480,131 @@ impl QueryRoot {
             Err(e) => Ok(SafeTransactionCountResult::QueryFailed(QueryFailedError {
                 code: "QUERY_FAILED".to_string(),
                 message: format!("Failed to query Safe transaction count from RPC: {}", e),
+            })),
+        }
+    }
+
+    /// Retrieve safe by contract address
+    ///
+    /// Returns Error with code INVALID_ADDRESS if address format is invalid.
+    /// Returns Error with code QUERY_FAILED if query fails.
+    /// Returns None if safe is not found.
+    async fn safe(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Safe contract address to query (hexadecimal format)")] address: String,
+    ) -> Result<Option<SafeResult>> {
+        if let Err(e) = validate_eth_address(&address) {
+            return Ok(Some(SafeResult::InvalidAddress(InvalidAddressError {
+                code: "INVALID_ADDRESS".to_string(),
+                message: e.message,
+                address,
+            })));
+        }
+
+        let safe_address_bytes = match Address::from_hex(&address) {
+            Ok(addr) => addr.as_ref().to_vec(),
+            Err(e) => {
+                return Ok(Some(SafeResult::InvalidAddress(InvalidAddressError {
+                    code: "INVALID_ADDRESS".to_string(),
+                    message: format!("Invalid address: {}", e),
+                    address,
+                })));
+            }
+        };
+
+        let db = ctx.data::<DatabaseConnection>()?;
+
+        match blokli_db_entity::hopr_safe_contract::Entity::find()
+            .filter(blokli_db_entity::hopr_safe_contract::Column::Address.eq(safe_address_bytes))
+            .one(db)
+            .await
+        {
+            Ok(Some(safe)) => Ok(Some(SafeResult::Safe(Safe {
+                address: Address::new(&safe.address).to_hex(),
+                module_address: Address::new(&safe.module_address).to_hex(),
+                chain_key: Address::new(&safe.chain_key).to_hex(),
+            }))),
+            Ok(None) => Ok(None),
+            Err(e) => Ok(Some(SafeResult::QueryFailed(QueryFailedError {
+                code: "QUERY_FAILED".to_string(),
+                message: format!("Database query failed: {}", e),
+            }))),
+        }
+    }
+
+    /// Retrieve safe by chain key (owner address)
+    ///
+    /// Returns Error with code INVALID_ADDRESS if address format is invalid.
+    /// Returns Error with code QUERY_FAILED if query fails.
+    /// Returns None if safe is not found.
+    #[graphql(name = "safeByChainKey")]
+    async fn safe_by_chain_key(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Chain key to query (hexadecimal format)")] chain_key: String,
+    ) -> Result<Option<SafeResult>> {
+        if let Err(e) = validate_eth_address(&chain_key) {
+            return Ok(Some(SafeResult::InvalidAddress(InvalidAddressError {
+                code: "INVALID_ADDRESS".to_string(),
+                message: e.message,
+                address: chain_key,
+            })));
+        }
+
+        let chain_key_bytes = match Address::from_hex(&chain_key) {
+            Ok(addr) => addr.as_ref().to_vec(),
+            Err(e) => {
+                return Ok(Some(SafeResult::InvalidAddress(InvalidAddressError {
+                    code: "INVALID_ADDRESS".to_string(),
+                    message: format!("Invalid address: {}", e),
+                    address: chain_key,
+                })));
+            }
+        };
+
+        let db = ctx.data::<DatabaseConnection>()?;
+
+        match blokli_db_entity::hopr_safe_contract::Entity::find()
+            .filter(blokli_db_entity::hopr_safe_contract::Column::ChainKey.eq(chain_key_bytes))
+            .one(db)
+            .await
+        {
+            Ok(Some(safe)) => Ok(Some(SafeResult::Safe(Safe {
+                address: Address::new(&safe.address).to_hex(),
+                module_address: Address::new(&safe.module_address).to_hex(),
+                chain_key: Address::new(&safe.chain_key).to_hex(),
+            }))),
+            Ok(None) => Ok(None),
+            Err(e) => Ok(Some(SafeResult::QueryFailed(QueryFailedError {
+                code: "QUERY_FAILED".to_string(),
+                message: format!("Database query failed: {}", e),
+            }))),
+        }
+    }
+
+    /// Retrieve all safes
+    ///
+    /// Returns all safe contracts indexed by the system.
+    /// Returns Error with code QUERY_FAILED if query fails.
+    async fn safes(&self, ctx: &Context<'_>) -> Result<SafesResult> {
+        let db = ctx.data::<DatabaseConnection>()?;
+
+        match blokli_db_entity::hopr_safe_contract::Entity::find().all(db).await {
+            Ok(safes) => {
+                let safe_list = safes
+                    .into_iter()
+                    .map(|safe| Safe {
+                        address: Address::new(&safe.address).to_hex(),
+                        module_address: Address::new(&safe.module_address).to_hex(),
+                        chain_key: Address::new(&safe.chain_key).to_hex(),
+                    })
+                    .collect();
+                Ok(SafesResult::Safes(SafesList { safes: safe_list }))
+            }
+            Err(e) => Ok(SafesResult::QueryFailed(QueryFailedError {
+                code: "QUERY_FAILED".to_string(),
+                message: format!("Database query failed: {}", e),
             })),
         }
     }

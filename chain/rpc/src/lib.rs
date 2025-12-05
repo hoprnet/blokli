@@ -382,6 +382,19 @@ pub trait HoprIndexerRpcOperations {
     /// * `Err(RpcError)` - If the call fails or address is not a Safe contract
     async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64>;
 
+    /// Get transaction sender (from address) by transaction hash
+    ///
+    /// Used to determine the chain_key when processing
+    /// NewHoprNodeStakeModuleForSafe events, where the transaction
+    /// sender is the account owner.
+    ///
+    /// # Arguments
+    /// * `tx_hash` - Transaction hash from log
+    ///
+    /// # Returns
+    /// Address of transaction sender (from field)
+    async fn get_transaction_sender(&self, tx_hash: Hash) -> Result<Address>;
+
     /// Streams blockchain logs using selective filtering based on synchronization state.
     ///
     /// This method intelligently selects which log filters to use based on whether

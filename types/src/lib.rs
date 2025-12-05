@@ -484,6 +484,19 @@ pub struct SafeTransactionCount {
     pub count: UInt64,
 }
 
+/// HOPR Safe contract deployment information
+#[derive(SimpleObject, Clone, Debug)]
+pub struct Safe {
+    /// Safe contract address (hexadecimal format)
+    pub address: String,
+    /// HOPR Node Management Module address (hexadecimal format)
+    #[graphql(name = "moduleAddress")]
+    pub module_address: String,
+    /// Chain key (owner address, hexadecimal format)
+    #[graphql(name = "chainKey")]
+    pub chain_key: String,
+}
+
 /// Ticket price and winning probability parameters
 #[derive(SimpleObject, Clone, Debug, PartialEq)]
 pub struct TicketParameters {

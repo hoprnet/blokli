@@ -9,10 +9,12 @@
 //! For details on the Indexer see the `chain-indexer` crate.
 use std::pin::Pin;
 
-use alloy::{providers::Provider, rpc::types::Filter};
+use alloy::{primitives::B256, providers::Provider, rpc::types::Filter};
 use async_stream::stream;
 use async_trait::async_trait;
+use blokli_chain_types::AlloyAddressExt;
 use futures::{Stream, StreamExt, stream::BoxStream};
+use hopr_crypto_types::types::Hash; // Import Hash
 #[cfg(all(feature = "prometheus", not(test)))]
 use hopr_metrics::SimpleGauge;
 use hopr_primitive_types::prelude::*;
@@ -154,6 +156,16 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
 
     async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64> {
         self.get_safe_transaction_count(safe_address).await
+    }
+
+    async fn get_transaction_sender(&self, tx_hash: Hash) -> Result<Address> {
+        let tx = self
+            .provider
+            .get_transaction_by_hash(B256::from_slice(tx_hash.as_ref()))
+            .await?
+            .ok_or_else(|| RpcError::TransactionNotFound(tx_hash))?;
+
+        Ok(tx.inner.signer().to_hopr_address())
     }
 
     fn try_stream_logs<'a>(

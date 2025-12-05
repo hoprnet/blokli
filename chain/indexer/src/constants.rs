@@ -14,6 +14,7 @@ pub mod topics {
             OutgoingChannelClosureInitiated, TicketRedeemed,
         },
         hopr_node_safe_registry_events::HoprNodeSafeRegistryEvents::{DeregisteredNodeSafe, RegisteredNodeSafe},
+        hopr_node_stake_factory_events::HoprNodeStakeFactoryEvents::NewHoprNodeStakeModuleForSafe,
         hopr_ticket_price_oracle_events::HoprTicketPriceOracleEvents::TicketPriceUpdated,
         hopr_token::HoprToken::{
             Approval, AuthorizedOperator, Burned, Minted, RevokedOperator, RoleAdminChanged, RoleGranted, RoleRevoked,
@@ -72,6 +73,10 @@ pub mod topics {
             RoleRevoked::SIGNATURE_HASH,
             Sent::SIGNATURE_HASH,
         ]
+    }
+
+    pub fn stake_factory() -> Vec<B256> {
+        vec![NewHoprNodeStakeModuleForSafe::SIGNATURE_HASH]
     }
 
     pub fn module_implementation() -> Vec<B256> {

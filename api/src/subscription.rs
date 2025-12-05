@@ -9,7 +9,7 @@ use async_broadcast::Receiver;
 use async_graphql::{Context, Result, Subscription};
 use async_stream::stream;
 use blokli_api_types::{
-    Account, Channel, ChannelUpdate, HoprBalance, NativeBalance, OpenedChannelsGraph, TicketParameters,
+    Account, Channel, ChannelUpdate, HoprBalance, NativeBalance, OpenedChannelsGraph, Safe, TicketParameters,
     TokenValueString, UInt64,
 };
 use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
@@ -440,6 +440,9 @@ impl SubscriptionRoot {
                                 // Key binding fee updates don't affect this subscription
                                 // Just continue to next event
                             }
+                            Ok(IndexerEvent::SafeDeployed(_)) => {
+                                // Safe deployment doesn't affect this subscription
+                            }
                             Err(async_broadcast::RecvError::Closed) => {
                                 tracing::info!("Event bus closed, ending subscription");
                                 return;
@@ -611,6 +614,9 @@ impl SubscriptionRoot {
                             Ok(IndexerEvent::ChannelUpdated(_)) => {
                                 // Irrelevant for this subscription
                             }
+                            Ok(IndexerEvent::SafeDeployed(_)) => {
+                                // Irrelevant for this subscription
+                            }
                             Err(async_broadcast::RecvError::Closed) => {
                                 tracing::info!("Event bus closed, ending keyBindingFeeUpdated subscription");
                                 return;
@@ -618,6 +624,63 @@ impl SubscriptionRoot {
                             Err(async_broadcast::RecvError::Overflowed(n)) => {
                                 tracing::warn!("Event bus overflowed ({}); keyBindingFeeUpdated may miss events", n);
                             }
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    /// Subscribe to newly deployed safes
+    ///
+    /// Emits Safe deployment events in real-time as they are indexed.
+    #[graphql(name = "safeDeployed")]
+    async fn safe_deployed(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = Safe>> {
+        let db = ctx.data::<DatabaseConnection>()?.clone();
+        let indexer_state = ctx
+            .data::<IndexerState>()
+            .map_err(|_| async_graphql::Error::new("IndexerState not available in context"))?
+            .clone();
+
+        // Capture watermark and subscribe to event bus (synchronized)
+        let (_watermark, mut event_receiver, mut shutdown_receiver) =
+            capture_watermark_synchronized(&indexer_state, &db).await?;
+
+        Ok(stream! {
+            loop {
+                tokio::select! {
+                    shutdown_result = shutdown_receiver.recv() => {
+                        if shutdown_result.is_err() {
+                            return;
+                        }
+                        return;
+                    }
+                    event_result = event_receiver.recv() => {
+                        match event_result {
+                            Ok(IndexerEvent::SafeDeployed(safe_addr)) => {
+                                let safe_addr_bytes = safe_addr.as_ref().to_vec();
+                                match blokli_db_entity::hopr_safe_contract::Entity::find()
+                                    .filter(blokli_db_entity::hopr_safe_contract::Column::Address.eq(safe_addr_bytes))
+                                    .one(&db)
+                                    .await
+                                {
+                                    Ok(Some(safe)) => {
+                                        yield Safe {
+                                            address: Address::new(&safe.address).to_hex(),
+                                            module_address: Address::new(&safe.module_address).to_hex(),
+                                            chain_key: Address::new(&safe.chain_key).to_hex(),
+                                        };
+                                    }
+                                    Ok(None) => {
+                                        tracing::error!("Safe deployed event received but safe not found in DB: {}", safe_addr);
+                                    }
+                                    Err(e) => {
+                                        tracing::error!("Failed to query safe for deployed event: {}", e);
+                                    }
+                                }
+                            }
+                            Ok(_) => {}
+                            Err(_) => return,
                         }
                     }
                 }

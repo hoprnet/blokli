@@ -51,6 +51,8 @@ pub(super) mod test_helpers {
 
         async fn get_safe_transaction_count(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<u64>;
 
+        async fn get_transaction_sender(&self, tx_hash: hopr_crypto_types::types::Hash) -> blokli_chain_rpc::errors::Result<Address>;
+
         fn try_stream_logs<'a>(
             &'a self,
             start_block_number: u64,
@@ -89,6 +91,13 @@ pub(super) mod test_helpers {
 
         async fn get_safe_transaction_count(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<u64> {
             self.inner.get_safe_transaction_count(safe_address).await
+        }
+
+        async fn get_transaction_sender(
+            &self,
+            tx_hash: hopr_crypto_types::types::Hash,
+        ) -> blokli_chain_rpc::errors::Result<Address> {
+            self.inner.get_transaction_sender(tx_hash).await
         }
 
         fn try_stream_logs<'a>(

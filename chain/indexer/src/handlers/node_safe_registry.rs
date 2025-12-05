@@ -1,7 +1,9 @@
 use blokli_chain_rpc::HoprIndexerRpcOperations;
+use blokli_chain_types::AlloyAddressExt; // Add this
 use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator};
 use hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::HoprNodeSafeRegistryEvents;
-use tracing::info;
+use hopr_primitive_types::prelude::ToHex; // Fix this
+use tracing::{debug, error, info};
 
 use super::ContractEventHandlers;
 use crate::errors::Result;
@@ -32,7 +34,48 @@ where
 
         match event {
             HoprNodeSafeRegistryEvents::RegisteredNodeSafe(registered) => {
-                info!(node_address = %registered.nodeAddress, safe_address = %registered.safeAddress, "Node safe registered", );
+                let safe_addr = registered.safeAddress.to_hopr_address();
+                let node_addr = registered.nodeAddress.to_hopr_address();
+
+                info!(
+                    node_address = %node_addr.to_hex(),
+                    safe_address = %safe_addr.to_hex(),
+                    "Verifying RegisteredNodeSafe event"
+                );
+
+                // VERIFICATION ONLY - Check safe exists and chain_key matches
+                match self.db.verify_safe_contract(Some(tx), safe_addr, node_addr).await {
+                    Ok(true) => {
+                        // Safe exists and chain_key matches - all good
+                        debug!(
+                            node_address = %node_addr.to_hex(),
+                            safe_address = %safe_addr.to_hex(),
+                            "RegisteredNodeSafe verified successfully"
+                        );
+                    }
+                    Ok(false) => {
+                        // Safe exists but chain_key MISMATCH
+                        error!(
+                            node_address = %node_addr.to_hex(),
+                            safe_address = %safe_addr.to_hex(),
+                            "RegisteredNodeSafe chain_key MISMATCH! \
+                             Event nodeAddress does not match database chain_key. \
+                             This indicates a protocol violation or data inconsistency."
+                        );
+                    }
+                    Err(e) => {
+                        // Safe doesn't exist or query failed
+                        error!(
+                            node_address = %node_addr.to_hex(),
+                            safe_address = %safe_addr.to_hex(),
+                            error = %e,
+                            "RegisteredNodeSafe verification failed. \
+                             Safe may not exist in database. \
+                             Expected NewHoprNodeStakeModuleForSafe to create safe first. \
+                             This indicates events are out of order."
+                        );
+                    }
+                }
             }
             HoprNodeSafeRegistryEvents::DeregisteredNodeSafe(deregistered) => {
                 info!(node_address = %deregistered.nodeAddress, safe_address = %deregistered.safeAddress, "Node safe deregistered", );

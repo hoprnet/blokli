@@ -54,6 +54,10 @@ impl HoprIndexerRpcOperations for MockRpcOperations {
         Ok(0)
     }
 
+    async fn get_transaction_sender(&self, _tx_hash: Hash) -> blokli_chain_rpc::errors::Result<Address> {
+        Ok(Address::from([0u8; 20]))
+    }
+
     fn try_stream_logs<'a>(
         &'a self,
         start_block_number: u64,
@@ -268,6 +272,10 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
 
         async fn get_safe_transaction_count(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<u64> {
             self.inner.get_safe_transaction_count(safe_address).await
+        }
+
+        async fn get_transaction_sender(&self, tx_hash: Hash) -> blokli_chain_rpc::errors::Result<Address> {
+            self.inner.get_transaction_sender(tx_hash).await
         }
 
         fn try_stream_logs<'a>(

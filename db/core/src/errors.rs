@@ -8,6 +8,9 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum DbSqlError {
+    #[error("entity not found: {0}")]
+    EntityNotFound(String),
+
     #[error("failed to construct the database: {0}")]
     Construction(String),
 
