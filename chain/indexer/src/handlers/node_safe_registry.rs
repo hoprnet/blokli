@@ -100,15 +100,11 @@ mod tests {
     use std::sync::Arc;
 
     use alloy::sol_types::{SolEvent, SolValue};
-    use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb};
-    use hopr_primitive_types::prelude::SerializableLog;
+    use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations};
+    use hopr_primitive_types::prelude::{Address, SerializableLog};
     use primitive_types::H256;
 
-    use crate::handlers::{
-        node_safe_registry::tests::SAFE_INSTANCE_ADDR, test_utils::test_helpers::*,
-    };
-    use blokli_db::safe_contracts::BlokliDbSafeContractOperations;
-    use hopr_primitive_types::prelude::Address;
+    use crate::handlers::{node_safe_registry::tests::SAFE_INSTANCE_ADDR, test_utils::test_helpers::*};
 
     #[tokio::test]
     async fn test_on_node_safe_registry_registered_verification_success() -> anyhow::Result<()> {
@@ -128,8 +124,11 @@ mod tests {
             safe_address,
             Address::from(hopr_crypto_random::random_bytes()),
             node_address,
-            10, 0, 0
-        ).await?;
+            10,
+            0,
+            0,
+        )
+        .await?;
 
         let encoded_data = ().abi_encode();
 
@@ -171,8 +170,11 @@ mod tests {
             safe_address,
             Address::from(hopr_crypto_random::random_bytes()),
             other_address, // Mismatch
-            10, 0, 0
-        ).await?;
+            10,
+            0,
+            0,
+        )
+        .await?;
 
         let encoded_data = ().abi_encode();
 

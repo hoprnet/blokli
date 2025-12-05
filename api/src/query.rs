@@ -77,6 +77,32 @@ pub enum SafesResult {
     QueryFailed(QueryFailedError),
 }
 
+/// Helper function to parse and validate an Ethereum address for Safe queries
+///
+/// Validates address format and converts it to binary representation for database queries.
+/// Returns SafeResult::InvalidAddress on any validation or parsing errors.
+fn parse_safe_address(address: String) -> std::result::Result<Vec<u8>, SafeResult> {
+    // Validate address format
+    if let Err(e) = validate_eth_address(&address) {
+        return Err(SafeResult::InvalidAddress(InvalidAddressError {
+            code: "INVALID_ADDRESS".to_string(),
+            message: e.message,
+            address,
+        }));
+    }
+
+    // Convert hex string to Address and then to binary
+    Address::from_hex(&address)
+        .map(|addr| addr.as_ref().to_vec())
+        .map_err(|e| {
+            SafeResult::InvalidAddress(InvalidAddressError {
+                code: "INVALID_ADDRESS".to_string(),
+                message: format!("Invalid address: {}", e),
+                address,
+            })
+        })
+}
+
 /// Root query type providing read-only access to indexed blockchain data
 pub struct QueryRoot;
 
@@ -489,28 +515,20 @@ impl QueryRoot {
     /// Returns Error with code INVALID_ADDRESS if address format is invalid.
     /// Returns Error with code QUERY_FAILED if query fails.
     /// Returns None if safe is not found.
+    ///
+    /// Note: Returns Option<SafeResult> to distinguish between:
+    /// - None: Safe not found (GraphQL null)
+    /// - Some(SafeResult::QueryFailed): Query error
+    /// - Some(SafeResult::InvalidAddress): Validation error
+    /// - Some(SafeResult::Safe): Success
     async fn safe(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Safe contract address to query (hexadecimal format)")] address: String,
     ) -> Result<Option<SafeResult>> {
-        if let Err(e) = validate_eth_address(&address) {
-            return Ok(Some(SafeResult::InvalidAddress(InvalidAddressError {
-                code: "INVALID_ADDRESS".to_string(),
-                message: e.message,
-                address,
-            })));
-        }
-
-        let safe_address = match Address::from_hex(&address) {
-            Ok(addr) => addr.as_ref().to_vec(),
-            Err(e) => {
-                return Ok(Some(SafeResult::InvalidAddress(InvalidAddressError {
-                    code: "INVALID_ADDRESS".to_string(),
-                    message: format!("Invalid address: {}", e),
-                    address,
-                })));
-            }
+        let safe_address = match parse_safe_address(address) {
+            Ok(addr) => addr,
+            Err(error_result) => return Ok(Some(error_result)),
         };
 
         let db = ctx.data::<DatabaseConnection>()?;
@@ -544,23 +562,9 @@ impl QueryRoot {
         ctx: &Context<'_>,
         #[graphql(desc = "Chain key to query (hexadecimal format)")] chain_key: String,
     ) -> Result<Option<SafeResult>> {
-        if let Err(e) = validate_eth_address(&chain_key) {
-            return Ok(Some(SafeResult::InvalidAddress(InvalidAddressError {
-                code: "INVALID_ADDRESS".to_string(),
-                message: e.message,
-                address: chain_key,
-            })));
-        }
-
-        let chain_key_address = match Address::from_hex(&chain_key) {
-            Ok(addr) => addr.as_ref().to_vec(),
-            Err(e) => {
-                return Ok(Some(SafeResult::InvalidAddress(InvalidAddressError {
-                    code: "INVALID_ADDRESS".to_string(),
-                    message: format!("Invalid address: {}", e),
-                    address: chain_key,
-                })));
-            }
+        let chain_key_address = match parse_safe_address(chain_key) {
+            Ok(addr) => addr,
+            Err(error_result) => return Ok(Some(error_result)),
         };
 
         let db = ctx.data::<DatabaseConnection>()?;

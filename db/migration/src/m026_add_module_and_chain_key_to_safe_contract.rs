@@ -6,7 +6,10 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Drop existing table (if it exists) - re-sync will recreate it empty with new schema
+        // Drop existing table to enforce new schema with module_address and chain_key columns.
+        // NOTE: This migration requires full re-indexing of Safe deployment events from the blockchain.
+        // This is acceptable because Safe deployments are infrequent (once per HOPR node) and re-indexing
+        // is fast. The StakeFactory.NewHoprNodeStakeModuleForSafe events will repopulate this table.
         manager
             .drop_table(Table::drop().table(HoprSafeContract::Table).if_exists().to_owned())
             .await?;

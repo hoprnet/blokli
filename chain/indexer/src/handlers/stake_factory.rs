@@ -79,18 +79,23 @@ mod tests {
     use std::sync::Arc;
 
     use alloy::{
-        primitives::{B256, Address as AlloyAddress},
+        primitives::{Address as AlloyAddress, B256},
         sol_types::{SolEvent, SolValue},
     };
-    use blokli_chain_types::AlloyAddressExt;
     use blokli_chain_rpc::HoprIndexerRpcOperations;
-    use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations};
+    use blokli_chain_types::AlloyAddressExt;
+    use blokli_db::{
+        BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations,
+    };
+    use blokli_db_entity::codegen::{hopr_safe_contract, prelude::*};
     use hopr_bindings::hopr_node_stake_factory::HoprNodeStakeFactory;
     use hopr_crypto_types::types::Hash;
-    use hopr_primitive_types::prelude::{Address, SerializableLog};
-    use hopr_primitive_types::traits::IntoEndian;
+    use hopr_primitive_types::{
+        prelude::{Address, SerializableLog},
+        traits::IntoEndian,
+    };
     use mockall::predicate::*;
-    use sea_orm::EntityTrait;
+    use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
     use crate::{
         handlers::test_utils::test_helpers::*,
@@ -195,6 +200,84 @@ mod tests {
         // Process event - should fail
         let result = handlers.collect_log_event(log, true).await;
         assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_on_stake_factory_event_idempotency() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let mut rpc_operations = MockIndexerRpcOperations::new();
+
+        // Mock get_transaction_sender
+        let tx_hash = random_hash();
+        let sender = random_address();
+        rpc_operations
+            .expect_get_transaction_sender()
+            .with(eq(tx_hash))
+            .times(2) // Called twice for duplicate event processing
+            .returning(move |_| Ok(sender));
+
+        let clonable_rpc_operations = ClonableMockOperations {
+            inner: Arc::new(rpc_operations),
+        };
+
+        let (handlers, _indexer_state, mut event_rx) = init_handlers_with_events(clonable_rpc_operations, db.clone());
+
+        // Create event
+        let safe_address = random_address();
+        let module_address = random_address();
+        let event = HoprNodeStakeFactory::NewHoprNodeStakeModuleForSafe {
+            safe: AlloyAddress::from_hopr_address(safe_address),
+            module: AlloyAddress::from_hopr_address(module_address),
+        };
+
+        let encoded_data = event.encode_log_data();
+        let log = SerializableLog {
+            address: handlers.addresses.node_stake_v2_factory,
+            topics: encoded_data.topics().iter().map(|t| t.0).collect(),
+            data: encoded_data.data.to_vec(),
+            tx_hash: tx_hash.into(),
+            block_number: 100,
+            tx_index: 1,
+            log_index: 2,
+            ..test_log()
+        };
+
+        // Process event first time
+        handlers.collect_log_event(log.clone(), true).await?;
+
+        // Verify safe created in DB
+        let safe_exists = db.verify_safe_contract(None, safe_address, sender).await?;
+        assert!(safe_exists, "Safe should be created after first processing");
+
+        // Verify event published
+        let first_event = try_recv_event(&mut event_rx).expect("Should receive first event");
+        match first_event {
+            IndexerEvent::SafeDeployed(addr) => assert_eq!(addr, safe_address),
+            _ => panic!("Unexpected event type"),
+        }
+
+        // Process the exact same event again (idempotency test)
+        handlers.collect_log_event(log, true).await?;
+
+        // Verify still only one safe entry (check via verification)
+        let still_exists = db.verify_safe_contract(None, safe_address, sender).await?;
+        assert!(still_exists, "Safe should still exist and verify correctly");
+
+        // Verify second event published
+        let second_event = try_recv_event(&mut event_rx).expect("Should receive second event");
+        match second_event {
+            IndexerEvent::SafeDeployed(addr) => assert_eq!(addr, safe_address),
+            _ => panic!("Unexpected event type"),
+        }
+
+        // Verify no duplicate DB entries by querying the raw table
+        let safe_count = HoprSafeContract::find()
+            .filter(hopr_safe_contract::Column::Address.eq(safe_address.as_ref()))
+            .count(db.conn(TargetDb::Index))
+            .await?;
+        assert_eq!(safe_count, 1, "Should only have one safe entry in database");
 
         Ok(())
     }
