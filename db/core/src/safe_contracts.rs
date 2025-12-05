@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use blokli_db_entity::{codegen::prelude::*, hopr_safe_contract};
 use hopr_primitive_types::prelude::*;
-use sea_orm::*;
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set};
 use sea_query::OnConflict;
 
 use crate::{BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result};
