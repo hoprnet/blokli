@@ -155,7 +155,7 @@ impl BlokliTestState {
         self.safe_allowances.get(account.safe_address.as_ref()?)
     }
 
-    /// Convenience method to return a mutable  reference to Safe allowance corresponding to the given [`ChainAddress`]
+    /// Convenience method to return a mutable reference to Safe allowance corresponding to the given [`ChainAddress`]
     /// of the [`Account`].
     pub fn get_account_safe_allowance_mut(&mut self, chain_key: &ChainAddress) -> Option<&mut SafeHoprAllowance> {
         let account = self.get_account(chain_key).and_then(|a| a.safe_address.clone())?;
