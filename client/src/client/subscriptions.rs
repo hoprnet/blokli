@@ -6,9 +6,9 @@ use crate::api::{
     AccountSelector, BlokliSubscriptionClient, ChannelSelector, Result,
     internal::{
         AccountVariables, ChannelsVariables, SubscribeAccounts, SubscribeChannels, SubscribeGraph,
-        SubscribeTicketParams,
+        SubscribeSafeDeployment, SubscribeTicketParams,
     },
-    types::{Account, Channel, OpenedChannelsGraphEntry, TicketParameters},
+    types::{Account, Channel, OpenedChannelsGraphEntry, Safe, TicketParameters},
 };
 
 impl BlokliSubscriptionClient for BlokliClient {
@@ -44,5 +44,12 @@ impl BlokliSubscriptionClient for BlokliClient {
         Ok(self
             .build_subscription_stream(SubscribeTicketParams::build(()))?
             .try_filter_map(|item| futures::future::ok(Some(item.ticket_parameters_updated))))
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    fn subscribe_safe_deployments(&self) -> Result<impl Stream<Item = Result<Safe>> + Send> {
+        Ok(self
+            .build_subscription_stream(SubscribeSafeDeployment::build(()))?
+            .try_filter_map(|item| futures::future::ok(Some(item.safe_deployed))))
     }
 }

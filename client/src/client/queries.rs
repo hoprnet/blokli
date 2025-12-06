@@ -3,7 +3,7 @@ use hex::ToHex;
 
 use super::{BlokliClient, response_to_data};
 use crate::{
-    api::{internal::*, types::*, *},
+    api::{internal::*, types::*, v1::SafeSelector, *},
     errors::{BlokliClientError, ErrorKind},
 };
 
@@ -69,6 +69,36 @@ impl BlokliQueryClient for BlokliClient {
             .await?;
 
         response_to_data(resp)?.safe_hopr_allowance.into()
+    }
+
+    #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
+    async fn query_safe(&self, selector: SafeSelector) -> Result<Option<Safe>> {
+        match selector {
+            SafeSelector::SafeAddress(safe_addr) => {
+                let res = self
+                    .build_query(QuerySafeByAddress::build(SafeVariables {
+                        address: safe_addr.encode_hex(),
+                    }))?
+                    .await?;
+
+                match response_to_data(res)?.safe {
+                    Some(result) => result.into(),
+                    None => Ok(None),
+                }
+            }
+            SafeSelector::ChainKey(chain_addr) => {
+                let res = self
+                    .build_query(QuerySafeByChainKey::build(SafeVariables {
+                        address: chain_addr.encode_hex(),
+                    }))?
+                    .await?;
+
+                match response_to_data(res)?.safe_by_chain_key {
+                    Some(result) => result.into(),
+                    None => Ok(None),
+                }
+            }
+        }
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]

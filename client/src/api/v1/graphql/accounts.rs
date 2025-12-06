@@ -74,6 +74,40 @@ pub struct Account {
     pub safe_address: Option<String>,
 }
 
+#[derive(cynic::QueryVariables, Debug)]
+pub struct SafeVariables {
+    pub address: String,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct Safe {
+    pub __typename: String,
+    pub address: String,
+    pub chain_key: String,
+    pub module_address: String,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "QueryRoot", variables = "SafeVariables")]
+pub struct QuerySafeByChainKey {
+    #[arguments(chainKey: $address)]
+    pub safe_by_chain_key: Option<SafeResult>,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "QueryRoot", variables = "SafeVariables")]
+pub struct QuerySafeByAddress {
+    #[arguments(address: $address)]
+    pub safe: Option<SafeResult>,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "SubscriptionRoot")]
+pub struct SubscribeSafeDeployment {
+    pub safe_deployed: Safe,
+}
+
 #[derive(cynic::InlineFragments, Debug)]
 pub enum AccountsResult {
     AccountsList(AccountsList),
@@ -90,6 +124,26 @@ impl From<AccountsResult> for Result<Vec<Account>, BlokliClientError> {
             AccountsResult::MissingFilterError(e) => Err(e.into()),
             AccountsResult::QueryFailedError(e) => Err(e.into()),
             AccountsResult::Unknown => Err(ErrorKind::NoData.into()),
+        }
+    }
+}
+
+#[derive(cynic::InlineFragments, Debug)]
+pub enum SafeResult {
+    Safe(Safe),
+    InvalidAddressError(InvalidAddressError),
+    QueryFailedError(QueryFailedError),
+    #[cynic(fallback)]
+    Unknown,
+}
+
+impl From<SafeResult> for Result<Option<Safe>, BlokliClientError> {
+    fn from(value: SafeResult) -> Self {
+        match value {
+            SafeResult::Safe(safe) => Ok(Some(safe)),
+            SafeResult::InvalidAddressError(e) => Err(e.into()),
+            SafeResult::QueryFailedError(e) => Err(e.into()),
+            SafeResult::Unknown => Err(ErrorKind::NoData.into()),
         }
     }
 }

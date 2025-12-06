@@ -5,7 +5,7 @@ use futures::{Stream, StreamExt};
 use indexmap::IndexMap;
 
 use crate::{
-    api::{types::*, *},
+    api::{types::*, v1::SafeSelector, *},
     errors::{BlokliClientError, ErrorKind, TrackingErrorKind},
 };
 
@@ -23,14 +23,14 @@ where
 pub struct BlokliTestState {
     /// Contains KeyID -> Account
     pub accounts: IndexMap<u32, Account>,
-    /// Contains ChainAddress -> SafeAddress that are not paired with any account yet.
-    pub unpaired_safes: IndexMap<String, String>,
     /// Contains native balances for addresses.
     pub native_balances: IndexMap<String, NativeBalance>,
     /// Contains token balances for addresses.
     pub token_balances: IndexMap<String, HoprBalance>,
     /// Contains safe allowances for addresses.
     pub safe_allowances: IndexMap<String, SafeHoprAllowance>,
+    /// Contains deployed Safes for addresses.
+    pub deployed_safes: IndexMap<String, Safe>,
     /// Contains transaction counts for addresses.
     pub tx_counts: IndexMap<String, u64>,
     /// Contains ChannelId -> Channel.
@@ -53,7 +53,7 @@ impl PartialEq for BlokliTestState {
     fn eq(&self, other: &Self) -> bool {
         // Skip active_txs because they are non-deterministic.
         self.accounts == other.accounts
-            && self.unpaired_safes == other.unpaired_safes
+            && self.deployed_safes == other.deployed_safes
             && self.native_balances == other.native_balances
             && self.token_balances == other.token_balances
             && self.safe_allowances == other.safe_allowances
@@ -69,10 +69,10 @@ impl Default for BlokliTestState {
     fn default() -> Self {
         Self {
             accounts: Default::default(),
-            unpaired_safes: Default::default(),
             native_balances: Default::default(),
             token_balances: Default::default(),
             safe_allowances: Default::default(),
+            deployed_safes: Default::default(),
             tx_counts: Default::default(),
             channels: Default::default(),
             chain_info: ChainInfo {
@@ -201,6 +201,8 @@ type TicketParamEvents = (
     async_broadcast::InactiveReceiver<TicketParameters>,
 );
 
+type SafeDeployEvents = (async_broadcast::Sender<Safe>, async_broadcast::InactiveReceiver<Safe>);
+
 /// Represents a snapshot of the [`BlokliTestState`] inside a [`BlokliTestClient`].
 #[derive(Clone)]
 pub struct BlokliTestStateSnapshot {
@@ -252,6 +254,7 @@ pub struct BlokliTestClient<M> {
     accounts_channel: AccountEvents,
     channels_channel: GraphEvents,
     ticket_channel: TicketParamEvents,
+    safe_deployed_channel: SafeDeployEvents,
     tx_simulation_delay: Duration,
 }
 
@@ -293,12 +296,17 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
         tickets_tx.set_await_active(false);
         tickets_tx.set_overflow(false);
 
+        let (mut safes_tx, safes_rx) = async_broadcast::broadcast(1024);
+        safes_tx.set_await_active(false);
+        safes_tx.set_overflow(false);
+
         Self {
             state: Arc::new(parking_lot::RwLock::new(initial_state)),
             mutator,
             accounts_channel: (accounts_tx, accounts_rx.deactivate()),
             channels_channel: (channels_tx, channels_rx.deactivate()),
             ticket_channel: (tickets_tx, tickets_rx.deactivate()),
+            safe_deployed_channel: (safes_tx, safes_rx.deactivate()),
             tx_simulation_delay: Duration::from_secs(1),
         }
     }
@@ -444,6 +452,18 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
             .ok_or_else(|| ErrorKind::NoData.into())
     }
 
+    async fn query_safe(&self, selector: SafeSelector) -> Result<Option<Safe>> {
+        let state = self.state.read();
+        match selector {
+            SafeSelector::SafeAddress(addr) => Ok(state.deployed_safes.get(&hex::encode(addr)).cloned()),
+            SafeSelector::ChainKey(chain_key) => Ok(state
+                .deployed_safes
+                .values()
+                .find(|s| s.chain_key == hex::encode(chain_key))
+                .cloned()),
+        }
+    }
+
     async fn count_channels(&self, selector: Option<ChannelSelector>) -> Result<u32> {
         Ok(match selector {
             None => self.state.read().channels.len() as u32,
@@ -578,6 +598,13 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliSubscriptionClient for Blokl
         .chain(self.ticket_channel.1.activate_cloned())
         .map(Ok))
     }
+
+    fn subscribe_safe_deployments(&self) -> Result<impl Stream<Item = Result<Safe>> + Send> {
+        let safes = self.state.read().deployed_safes.clone();
+        Ok(futures::stream::iter(safes.into_values())
+            .chain(self.safe_deployed_channel.1.activate_cloned())
+            .map(Ok))
+    }
 }
 
 fn simulate_tx_execution(
@@ -587,6 +614,7 @@ fn simulate_tx_execution(
     accounts_channel: &async_broadcast::Sender<Account>,
     channels_channel: &async_broadcast::Sender<(Account, Channel, Account)>,
     ticket_channel: &async_broadcast::Sender<TicketParameters>,
+    safe_deployed_channel: &async_broadcast::Sender<Safe>,
 ) -> Result<()> {
     let old_state = state.clone();
     if let Err(error) = mutator.update_state(signed_tx, state) {
@@ -693,6 +721,28 @@ fn simulate_tx_execution(
         }
     }
 
+    // Compare safes and broadcast changes
+    state
+        .deployed_safes
+        .iter()
+        .filter(|&(new_id, new_safe)| {
+            old_state
+                .deployed_safes
+                .get(new_id)
+                .is_none_or(|old_safe| old_safe != new_safe)
+        })
+        .for_each(
+            |(_, changed_safe)| match safe_deployed_channel.try_broadcast(changed_safe.clone()) {
+                Err(TrySendError::Full(_)) => {
+                    tracing::error!("failed to broadcast safe change - channel is full");
+                }
+                Err(TrySendError::Closed(_)) => {
+                    tracing::error!("failed to broadcast safe change - channel is closed");
+                }
+                _ => {}
+            },
+        );
+
     Ok(())
 }
 
@@ -710,6 +760,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
             &self.accounts_channel.0,
             &self.channels_channel.0,
             &self.ticket_channel.0,
+            &self.safe_deployed_channel.0,
         ) {
             tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction, state reverted");
         } else {
@@ -732,6 +783,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
             &self.accounts_channel.0,
             &self.channels_channel.0,
             &self.ticket_channel.0,
+            &self.safe_deployed_channel.0,
         )
         .map(|_| {
             tracing::debug!("transaction execution succeeded");
@@ -771,6 +823,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
             &self.accounts_channel.0,
             &self.channels_channel.0,
             &self.ticket_channel.0,
+            &self.safe_deployed_channel.0,
         )
         .inspect_err(|error| {
             tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction, state reverted");
