@@ -2,7 +2,7 @@ mod graphql;
 pub mod types {
     pub use super::graphql::{
         ChannelStatus, DateTime, Hex32, TokenValueString, Uint64,
-        accounts::Account,
+        accounts::{Account, Safe},
         balances::{HoprBalance, NativeBalance, SafeHoprAllowance},
         channels::Channel,
         graph::OpenedChannelsGraphEntry,
@@ -14,7 +14,8 @@ pub mod types {
 pub(crate) mod internal {
     pub use super::graphql::{
         accounts::{
-            AccountVariables, QueryAccountCount, QueryAccounts, QueryTxCount, SubscribeAccounts, TxCountVariables,
+            AccountVariables, QueryAccountCount, QueryAccounts, QuerySafeByAddress, QuerySafeByChainKey, QueryTxCount,
+            SafeVariables, SubscribeAccounts, SubscribeSafeDeployment, TxCountVariables,
         },
         balances::{BalanceVariables, QueryHoprBalance, QueryNativeBalance, QuerySafeAllowance},
         channels::{ChannelsVariables, QueryChannelCount, QueryChannels, SubscribeChannels},
@@ -67,6 +68,15 @@ pub enum ChannelFilter {
     SourceAndDestinationKeyIds(KeyId, KeyId),
 }
 
+/// Allows querying existing [`Safes`](types::Safe) by their address or chain key.
+#[derive(Debug, Clone)]
+pub enum SafeSelector {
+    /// Select a safe by its address.
+    SafeAddress(ChainAddress),
+    /// Select a safe by its owning chain key.
+    ChainKey(ChainAddress),
+}
+
 pub(crate) type Result<T> = std::result::Result<T, crate::errors::BlokliClientError>;
 
 /// Trait defining restricted queries to Blokli API.
@@ -84,6 +94,8 @@ pub trait BlokliQueryClient {
     async fn query_transaction_count(&self, address: &ChainAddress) -> Result<u64>;
     /// Queries the safe allowance of the given account.
     async fn query_safe_allowance(&self, address: &ChainAddress) -> Result<types::SafeHoprAllowance>;
+    /// Queries the deployed Safe by the given [`selector`](SafeSelector).
+    async fn query_safe(&self, selector: SafeSelector) -> Result<Option<types::Safe>>;
     /// Counts the number of channels optionally matching the given [`selector`](ChannelSelector).
     async fn count_channels(&self, selector: Option<ChannelSelector>) -> Result<u32>;
     /// Queries the channels matching the given [`selector`](ChannelSelector).
@@ -117,9 +129,10 @@ pub trait BlokliSubscriptionClient {
     ) -> Result<impl futures::Stream<Item = Result<types::Account>> + Send>;
     /// Subscribes to updates of the entire channel graph.
     fn subscribe_graph(&self) -> Result<impl futures::Stream<Item = Result<types::OpenedChannelsGraphEntry>> + Send>;
-
     /// Subscribes to updates of the ticket parameters.
     fn subscribe_ticket_params(&self) -> Result<impl futures::Stream<Item = Result<types::TicketParameters>> + Send>;
+    /// Subscribes to on-chain Safe deployments.
+    fn subscribe_safe_deployments(&self) -> Result<impl futures::Stream<Item = Result<types::Safe>> + Send>;
 }
 
 /// Trait defining Blokli API for signed transaction submission to the chain.
