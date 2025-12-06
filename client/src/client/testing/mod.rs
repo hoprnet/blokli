@@ -161,6 +161,20 @@ impl BlokliTestState {
         let account = self.get_account(chain_key).and_then(|a| a.safe_address.clone())?;
         self.safe_allowances.get_mut(&account)
     }
+
+    /// Convenience method to return a reference to an [`Safe`] with the given owner's [`ChainAddress`].
+    pub fn get_safe_by_owner(&self, owner: &ChainAddress) -> Option<&Safe> {
+        self.deployed_safes
+            .values()
+            .find(|safe| safe.chain_key == hex::encode(owner))
+    }
+
+    /// Convenience method to return a mutable reference to an [`Safe`] with the given owner's [`ChainAddress`].
+    pub fn get_safe_by_owner_mut(&mut self, owner: &ChainAddress) -> Option<&mut Safe> {
+        self.deployed_safes
+            .values_mut()
+            .find(|safe| safe.chain_key == hex::encode(owner))
+    }
 }
 
 /// Mutator for the [`BlokliTestState`] based on signed transactions.
