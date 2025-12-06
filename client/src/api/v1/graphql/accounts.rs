@@ -82,7 +82,6 @@ pub struct SafeVariables {
 #[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Safe {
-    pub __typename: String,
     pub address: String,
     pub chain_key: String,
     pub module_address: String,
