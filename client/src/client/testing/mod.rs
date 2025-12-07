@@ -5,7 +5,7 @@ use futures::{Stream, StreamExt};
 use indexmap::IndexMap;
 
 use crate::{
-    api::{types::*, *},
+    api::{types::*, v1::SafeSelector, *},
     errors::{BlokliClientError, ErrorKind, TrackingErrorKind},
 };
 
