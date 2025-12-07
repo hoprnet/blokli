@@ -3,7 +3,7 @@ use hex::ToHex;
 
 use super::{BlokliClient, response_to_data};
 use crate::{
-    api::{internal::*, types::*, v1::SafeSelector, *},
+    api::{internal::*, types::*, *},
     errors::{BlokliClientError, ErrorKind},
 };
 
