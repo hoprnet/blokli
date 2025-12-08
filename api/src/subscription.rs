@@ -9,7 +9,7 @@ use async_broadcast::Receiver;
 use async_graphql::{Context, Result, Subscription};
 use async_stream::stream;
 use blokli_api_types::{
-    Account, Channel, ChannelUpdate, HoprBalance, NativeBalance, OpenedChannelsGraph, Safe, TicketParameters,
+    Account, Channel, ChannelUpdate, HoprBalance, NativeBalance, OpenedChannelsGraphEntry, Safe, TicketParameters,
     TokenValueString, UInt64,
 };
 use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
@@ -344,12 +344,37 @@ impl SubscriptionRoot {
         })
     }
 
-    /// Subscribe to a full stream of existing channels and channel updates.
+    /// Subscribe to the opened payment channels graph with real-time updates
     ///
-    /// Provides channel information on all open channels along with the accounts that participate in those channels.
-    /// This provides a complete view of the active payment channel network.
+    /// **Streaming Behavior:**
+    /// - Emits one OpenedChannelsGraphEntry per open channel
+    /// - Each entry contains a single channel with its source and destination accounts
+    /// - On subscription start, emits all existing open channels as separate entries
+    /// - Subsequently, emits updates when any channel changes
+    ///
+    /// **Building the Graph:**
+    /// Clients receive entries incrementally (one per channel) and should accumulate
+    /// them to build the complete network topology. The full graph is the union of all entries.
+    ///
+    /// **Update Triggers:**
+    /// An entry is re-emitted for a channel when:
+    /// - The channel's status changes (e.g., OPEN → PENDINGTOCLOSE)
+    /// - The channel's balance changes
+    /// - The channel closes (no longer emitted)
+    /// - A new channel opens (new entry emitted)
+    ///
+    /// **Example:**
+    /// If the network has three open channels: channelA (A→B), channelB (B→A), channelC (A→C),
+    /// the subscription emits three separate OpenedChannelsGraphEntry objects, each containing
+    /// one channel with its source and destination accounts.
+    ///
+    /// **Note:** This is a directed graph. Bidirectional communication requires
+    /// channels in both directions, each emitted as a separate entry.
     #[graphql(name = "openedChannelGraphUpdated")]
-    async fn opened_channel_graph_updated(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = OpenedChannelsGraph>> {
+    async fn opened_channel_graph_updated(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<impl Stream<Item = OpenedChannelsGraphEntry>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
 
         Ok(stream! {
@@ -358,9 +383,11 @@ impl SubscriptionRoot {
                 // For now, poll the database periodically
                 sleep(Duration::from_secs(1)).await;
 
-                // Query the opened channels graph
-                if let Ok(graph) = Self::fetch_opened_channels_graph(&db).await {
-                    yield graph;
+                // Query the opened channels graph and emit each entry
+                if let Ok(entries) = Self::fetch_opened_channels_graph_entries(&db).await {
+                    for entry in entries {
+                        yield entry;
+                    }
                 }
             }
         })
@@ -870,33 +897,11 @@ impl SubscriptionRoot {
         Ok(result)
     }
 
-    async fn fetch_opened_channels_graph(db: &DatabaseConnection) -> Result<OpenedChannelsGraph, sea_orm::DbErr> {
+    async fn fetch_opened_channels_graph_entries(
+        db: &DatabaseConnection,
+    ) -> Result<Vec<OpenedChannelsGraphEntry>, sea_orm::DbErr> {
         // 1. Fetch all OPEN channels (status = 1) using channel aggregation
         let aggregated_channels = fetch_channels_with_state(db, None, None, None, Some(1)).await?;
-
-        // Convert to GraphQL Channel type
-        let channels: Vec<Channel> = aggregated_channels
-            .iter()
-            .map(|agg| -> Result<Channel, sea_orm::DbErr> {
-                Ok(Channel {
-                    concrete_channel_id: agg.concrete_channel_id.clone(),
-                    source: agg.source,
-                    destination: agg.destination,
-                    balance: TokenValueString(agg.balance.clone()),
-                    status: agg.status.into(),
-                    epoch: i32::try_from(agg.epoch).map_err(|e| {
-                        sea_orm::DbErr::Custom(format!("Channel epoch {} out of range for i32: {}", agg.epoch, e))
-                    })?,
-                    ticket_index: UInt64(u64::try_from(agg.ticket_index).map_err(|e| {
-                        sea_orm::DbErr::Custom(format!(
-                            "Channel ticket_index {} is negative or out of range: {}",
-                            agg.ticket_index, e
-                        ))
-                    })?),
-                    closure_time: agg.closure_time,
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
 
         // 2. Collect unique keyids from source and destination
         let mut keyids = HashSet::new();
@@ -909,19 +914,52 @@ impl SubscriptionRoot {
         let keyid_vec: Vec<i64> = keyids.into_iter().collect();
         let aggregated_accounts = fetch_accounts_by_keyids(db, keyid_vec).await?;
 
-        // Convert to GraphQL Account type
-        let accounts = aggregated_accounts
+        // Create a lookup map for accounts by keyid
+        let account_map: HashMap<i64, Account> = aggregated_accounts
             .into_iter()
-            .map(|agg| Account {
-                keyid: agg.keyid,
-                chain_key: agg.chain_key,
-                packet_key: agg.packet_key,
-                safe_address: agg.safe_address,
-                multi_addresses: agg.multi_addresses,
+            .map(|agg| {
+                (
+                    agg.keyid,
+                    Account {
+                        keyid: agg.keyid,
+                        chain_key: agg.chain_key,
+                        packet_key: agg.packet_key,
+                        safe_address: agg.safe_address,
+                        multi_addresses: agg.multi_addresses,
+                    },
+                )
             })
             .collect();
 
-        Ok(OpenedChannelsGraph { channels, accounts })
+        // 4. Create entries by combining each channel with its source and destination accounts
+        let entries: Vec<OpenedChannelsGraphEntry> = aggregated_channels
+            .iter()
+            .filter_map(|agg| {
+                // Get source and destination accounts from the map
+                let source = account_map.get(&agg.source)?;
+                let destination = account_map.get(&agg.destination)?;
+
+                // Create the channel
+                let channel = Channel {
+                    concrete_channel_id: agg.concrete_channel_id.clone(),
+                    source: agg.source,
+                    destination: agg.destination,
+                    balance: TokenValueString(agg.balance.clone()),
+                    status: agg.status.into(),
+                    epoch: i32::try_from(agg.epoch).ok()?,
+                    ticket_index: UInt64(u64::try_from(agg.ticket_index).ok()?),
+                    closure_time: agg.closure_time,
+                };
+
+                Some(OpenedChannelsGraphEntry {
+                    channel,
+                    source: source.clone(),
+                    destination: destination.clone(),
+                })
+            })
+            .collect();
+
+        Ok(entries)
     }
 }
 

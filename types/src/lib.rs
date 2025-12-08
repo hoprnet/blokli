@@ -360,13 +360,29 @@ pub struct ChannelUpdate {
     pub destination: Account,
 }
 
-/// Graph of opened payment channels with associated accounts
+/// A single edge in the opened payment channels graph
+///
+/// Represents one channel with its associated source and destination accounts.
+/// This is a directed edge: source → destination. If channels exist in both
+/// directions (A→B and B→A), these are emitted as separate entries.
+///
+/// **Structure:**
+/// - Each entry contains exactly one channel with its source and destination accounts
+/// - If multiple channels exist between the same account pair, each is emitted as a separate entry
+/// - The channel is always open (closed channels are not included)
+///
+/// **Usage in subscriptions:**
+/// The `openedChannelGraphUpdated` subscription streams these entries one at a time.
+/// Clients must accumulate entries to build the complete channel graph.
+/// An entry is emitted whenever that specific channel is updated.
 #[derive(SimpleObject, Clone, Debug)]
-pub struct OpenedChannelsGraph {
-    /// List of all open payment channels
-    pub channels: Vec<Channel>,
-    /// List of accounts referenced by the open channels (source and destination nodes)
-    pub accounts: Vec<Account>,
+pub struct OpenedChannelsGraphEntry {
+    /// The open payment channel from source to destination
+    pub channel: Channel,
+    /// Source account (sender end of the directed edge)
+    pub source: Account,
+    /// Destination account (recipient end of the directed edge)
+    pub destination: Account,
 }
 
 /// HOPR token balance information for a specific address

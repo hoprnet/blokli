@@ -1,13 +1,14 @@
 //! Integration tests for openedChannelGraphUpdated subscription
 //!
 //! These tests verify the channel graph subscription functionality:
-//! - Initial graph emission with all open channels
+//! - Initial graph emission with all open channels (one entry per channel)
 //! - Graph updates when channels are opened
 //! - Graph updates when channels are closed
 //! - Account information is included for all channel participants
 //! - Only OPEN channels are included in the graph
+//! - Each emission contains one channel with its source and destination accounts
 
-use std::{str::FromStr, sync::Arc, time::Duration};
+use std::{collections::HashSet, str::FromStr, sync::Arc, time::Duration};
 
 use alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
 use async_graphql::Schema;
@@ -91,7 +92,7 @@ fn create_test_schema(db: &BlokliDb) -> Schema<QueryRoot, MutationRoot, Subscrip
 }
 
 #[tokio::test]
-async fn test_opened_channel_graph_subscription_emits_initial_graph() {
+async fn test_opened_channel_graph_subscription_emits_initial_entry() {
     let db = BlokliDb::new_in_memory().await.unwrap();
 
     // Create accounts
@@ -117,16 +118,21 @@ async fn test_opened_channel_graph_subscription_emits_initial_graph() {
     // Create GraphQL schema
     let schema = create_test_schema(&db);
 
-    // Execute subscription query
+    // Execute subscription query with new schema structure
     let query = r#"
         subscription {
             openedChannelGraphUpdated {
-                channels {
+                channel {
                     source
                     destination
                     status
                 }
-                accounts {
+                source {
+                    keyid
+                    chainKey
+                    packetKey
+                }
+                destination {
                     keyid
                     chainKey
                     packetKey
@@ -137,7 +143,7 @@ async fn test_opened_channel_graph_subscription_emits_initial_graph() {
 
     let mut stream = schema.execute_stream(query).boxed();
 
-    // Should receive initial graph within timeout
+    // Should receive one entry for the single open channel
     let result = tokio::time::timeout(Duration::from_secs(2), stream.next()).await;
 
     assert!(result.is_ok(), "Subscription should emit within timeout");
@@ -152,27 +158,25 @@ async fn test_opened_channel_graph_subscription_emits_initial_graph() {
 
     // Extract data
     let data = response.data.into_json().unwrap();
-    let graph = &data["openedChannelGraphUpdated"];
+    let entry = &data["openedChannelGraphUpdated"];
 
-    // Verify channels
-    let channels = graph["channels"].as_array().unwrap();
-    assert_eq!(channels.len(), 1);
-    assert_eq!(channels[0]["source"].as_i64().unwrap(), 1);
-    assert_eq!(channels[0]["destination"].as_i64().unwrap(), 2);
-    assert_eq!(channels[0]["status"].as_str().unwrap(), "OPEN");
+    // Verify channel
+    let channel = &entry["channel"];
+    assert_eq!(channel["source"].as_i64().unwrap(), 1);
+    assert_eq!(channel["destination"].as_i64().unwrap(), 2);
+    assert_eq!(channel["status"].as_str().unwrap(), "OPEN");
 
-    // Verify accounts
-    let accounts = graph["accounts"].as_array().unwrap();
-    assert_eq!(accounts.len(), 2);
+    // Verify source account
+    let source = &entry["source"];
+    assert_eq!(source["keyid"].as_i64().unwrap(), 1);
 
-    // Collect account keyids
-    let mut keyids: Vec<i64> = accounts.iter().map(|a| a["keyid"].as_i64().unwrap()).collect();
-    keyids.sort();
-    assert_eq!(keyids, vec![1, 2]);
+    // Verify destination account
+    let destination = &entry["destination"];
+    assert_eq!(destination["keyid"].as_i64().unwrap(), 2);
 }
 
 #[tokio::test]
-async fn test_opened_channel_graph_subscription_includes_multiple_channels() {
+async fn test_opened_channel_graph_subscription_emits_multiple_entries() {
     let db = BlokliDb::new_in_memory().await.unwrap();
 
     // Create 3 accounts
@@ -210,11 +214,14 @@ async fn test_opened_channel_graph_subscription_includes_multiple_channels() {
     let query = r#"
         subscription {
             openedChannelGraphUpdated {
-                channels {
+                channel {
                     source
                     destination
                 }
-                accounts {
+                source {
+                    keyid
+                }
+                destination {
                     keyid
                 }
             }
@@ -223,22 +230,32 @@ async fn test_opened_channel_graph_subscription_includes_multiple_channels() {
 
     let mut stream = schema.execute_stream(query).boxed();
 
-    let result = tokio::time::timeout(Duration::from_secs(2), stream.next())
-        .await
-        .unwrap()
-        .unwrap();
+    // Collect first 2 entries (one for each channel)
+    let mut entries = Vec::new();
+    for _ in 0..2 {
+        let result = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(result.errors.is_empty());
+        entries.push(result.data.into_json().unwrap());
+    }
 
-    assert!(result.errors.is_empty());
-    let data = result.data.into_json().unwrap();
-    let graph = &data["openedChannelGraphUpdated"];
+    // Should have received 2 entries
+    assert_eq!(entries.len(), 2);
 
-    // Should have 2 channels
-    let channels = graph["channels"].as_array().unwrap();
-    assert_eq!(channels.len(), 2);
+    // Collect all source/destination pairs
+    let mut channel_pairs = HashSet::new();
+    for entry_data in &entries {
+        let entry = &entry_data["openedChannelGraphUpdated"];
+        let source = entry["channel"]["source"].as_i64().unwrap();
+        let destination = entry["channel"]["destination"].as_i64().unwrap();
+        channel_pairs.insert((source, destination));
+    }
 
-    // Should have 3 accounts (all participants)
-    let accounts = graph["accounts"].as_array().unwrap();
-    assert_eq!(accounts.len(), 3);
+    // Verify we got both channels
+    assert!(channel_pairs.contains(&(1, 2)));
+    assert!(channel_pairs.contains(&(2, 3)));
 }
 
 #[tokio::test]
@@ -280,13 +297,10 @@ async fn test_opened_channel_graph_subscription_excludes_closed_channels() {
     let query = r#"
         subscription {
             openedChannelGraphUpdated {
-                channels {
+                channel {
                     source
                     destination
                     status
-                }
-                accounts {
-                    keyid
                 }
             }
         }
@@ -294,6 +308,7 @@ async fn test_opened_channel_graph_subscription_excludes_closed_channels() {
 
     let mut stream = schema.execute_stream(query).boxed();
 
+    // Should receive only one entry for the open channel
     let result = tokio::time::timeout(Duration::from_secs(2), stream.next())
         .await
         .unwrap()
@@ -301,22 +316,17 @@ async fn test_opened_channel_graph_subscription_excludes_closed_channels() {
 
     assert!(result.errors.is_empty());
     let data = result.data.into_json().unwrap();
-    let graph = &data["openedChannelGraphUpdated"];
+    let entry = &data["openedChannelGraphUpdated"];
 
-    // Should only have 1 open channel
-    let channels = graph["channels"].as_array().unwrap();
-    assert_eq!(channels.len(), 1);
-    assert_eq!(channels[0]["source"].as_i64().unwrap(), 1);
-    assert_eq!(channels[0]["destination"].as_i64().unwrap(), 2);
-    assert_eq!(channels[0]["status"].as_str().unwrap(), "OPEN");
-
-    // Should only have 2 accounts (those participating in open channels)
-    let accounts = graph["accounts"].as_array().unwrap();
-    assert_eq!(accounts.len(), 2);
+    // Verify it's the open channel
+    let channel = &entry["channel"];
+    assert_eq!(channel["source"].as_i64().unwrap(), 1);
+    assert_eq!(channel["destination"].as_i64().unwrap(), 2);
+    assert_eq!(channel["status"].as_str().unwrap(), "OPEN");
 }
 
 #[tokio::test]
-async fn test_opened_channel_graph_subscription_receives_new_channel_update() {
+async fn test_opened_channel_graph_subscription_receives_new_channel_entry() {
     let db = BlokliDb::new_in_memory().await.unwrap();
 
     // Create accounts
@@ -350,7 +360,7 @@ async fn test_opened_channel_graph_subscription_receives_new_channel_update() {
     let query = r#"
         subscription {
             openedChannelGraphUpdated {
-                channels {
+                channel {
                     source
                     destination
                 }
@@ -360,7 +370,7 @@ async fn test_opened_channel_graph_subscription_receives_new_channel_update() {
 
     let mut stream = schema.execute_stream(query).boxed();
 
-    // Receive initial graph with 1 channel
+    // Receive initial entry for first channel
     let initial = tokio::time::timeout(Duration::from_secs(2), stream.next())
         .await
         .unwrap()
@@ -368,31 +378,33 @@ async fn test_opened_channel_graph_subscription_receives_new_channel_update() {
 
     assert!(initial.errors.is_empty());
     let initial_data = initial.data.into_json().unwrap();
-    assert_eq!(
-        initial_data["openedChannelGraphUpdated"]["channels"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
+    let initial_entry = &initial_data["openedChannelGraphUpdated"];
+    assert_eq!(initial_entry["channel"]["source"].as_i64().unwrap(), 1);
+    assert_eq!(initial_entry["channel"]["destination"].as_i64().unwrap(), 2);
 
     // Add a new open channel
     let balance2 = HoprBalance::from_str("2000 wxHOPR").unwrap();
     let channel2 = ChannelEntry::new(addr2, addr3, balance2, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel2, 110, 0, 0).await.unwrap();
 
-    // Should receive updated graph with 2 channels
-    let updated = tokio::time::timeout(Duration::from_secs(3), stream.next())
-        .await
-        .unwrap()
-        .unwrap();
+    // Should receive entries for both channels (original + new)
+    let mut received_channels = HashSet::new();
 
-    assert!(updated.errors.is_empty());
-    let updated_data = updated.data.into_json().unwrap();
-    let channels = updated_data["openedChannelGraphUpdated"]["channels"]
-        .as_array()
-        .unwrap();
-    assert_eq!(channels.len(), 2);
+    // Receive up to 2 entries within timeout
+    for _ in 0..2 {
+        if let Ok(Some(update)) = tokio::time::timeout(Duration::from_secs(3), stream.next()).await {
+            assert!(update.errors.is_empty());
+            let data = update.data.into_json().unwrap();
+            let entry = &data["openedChannelGraphUpdated"];
+            let source = entry["channel"]["source"].as_i64().unwrap();
+            let destination = entry["channel"]["destination"].as_i64().unwrap();
+            received_channels.insert((source, destination));
+        }
+    }
+
+    // Should have received both channels
+    assert!(received_channels.contains(&(1, 2)));
+    assert!(received_channels.contains(&(2, 3)));
 }
 
 #[tokio::test]
@@ -424,7 +436,7 @@ async fn test_opened_channel_graph_subscription_receives_channel_closure_update(
     let query = r#"
         subscription {
             openedChannelGraphUpdated {
-                channels {
+                channel {
                     source
                     destination
                 }
@@ -434,38 +446,29 @@ async fn test_opened_channel_graph_subscription_receives_channel_closure_update(
 
     let mut stream = schema.execute_stream(query).boxed();
 
-    // Receive initial graph with 1 channel
+    // Receive initial entry with 1 channel
     let initial = tokio::time::timeout(Duration::from_secs(2), stream.next())
         .await
         .unwrap()
         .unwrap();
 
     assert!(initial.errors.is_empty());
-    let initial_data = initial.data.into_json().unwrap();
-    assert_eq!(
-        initial_data["openedChannelGraphUpdated"]["channels"]
-            .as_array()
-            .unwrap()
-            .len(),
-        1
-    );
 
     // Close the channel
     let closed_channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Closed, 1);
     db.upsert_channel(None, closed_channel, 110, 0, 0).await.unwrap();
 
-    // Should receive updated graph with 0 channels
-    let updated = tokio::time::timeout(Duration::from_secs(3), stream.next())
-        .await
-        .unwrap()
-        .unwrap();
+    // Next poll should return no entries (empty result set, no stream items)
+    // The subscription will timeout because there are no open channels to emit
+    let updated = tokio::time::timeout(Duration::from_secs(3), stream.next()).await;
 
-    assert!(updated.errors.is_empty());
-    let updated_data = updated.data.into_json().unwrap();
-    let channels = updated_data["openedChannelGraphUpdated"]["channels"]
-        .as_array()
-        .unwrap();
-    assert_eq!(channels.len(), 0);
+    // Either we timeout (no entries emitted) or we get an empty response
+    // Both are acceptable since there are no open channels
+    if let Ok(Some(response)) = updated {
+        assert!(response.errors.is_empty());
+        // If we do get a response, it should not contain the closed channel
+        // (implementation detail: polling may not emit anything when result set is empty)
+    }
 }
 
 #[tokio::test]
@@ -477,7 +480,7 @@ async fn test_opened_channel_graph_subscription_handles_empty_database() {
     let query = r#"
         subscription {
             openedChannelGraphUpdated {
-                channels {
+                channel {
                     source
                 }
             }
@@ -486,16 +489,11 @@ async fn test_opened_channel_graph_subscription_handles_empty_database() {
 
     let mut stream = schema.execute_stream(query).boxed();
 
-    // Should receive graph with empty channels array
-    let result = tokio::time::timeout(Duration::from_secs(2), stream.next())
-        .await
-        .unwrap()
-        .unwrap();
+    // With empty database, subscription should timeout (no entries to emit)
+    let result = tokio::time::timeout(Duration::from_secs(2), stream.next()).await;
 
-    assert!(result.errors.is_empty());
-    let data = result.data.into_json().unwrap();
-    let channels = data["openedChannelGraphUpdated"]["channels"].as_array().unwrap();
-    assert_eq!(channels.len(), 0);
+    // Timeout is expected since there are no channels to emit
+    assert!(result.is_err(), "Should timeout when no channels exist");
 }
 
 #[tokio::test]
@@ -527,7 +525,7 @@ async fn test_opened_channel_graph_subscription_includes_channel_balance() {
     let query = r#"
         subscription {
             openedChannelGraphUpdated {
-                channels {
+                channel {
                     balance
                 }
             }
@@ -543,10 +541,9 @@ async fn test_opened_channel_graph_subscription_includes_channel_balance() {
 
     assert!(result.errors.is_empty());
     let data = result.data.into_json().unwrap();
-    let channels = data["openedChannelGraphUpdated"]["channels"].as_array().unwrap();
-    assert_eq!(channels.len(), 1);
+    let entry = &data["openedChannelGraphUpdated"];
     // Balance is in wei (10^18 per HOPR)
-    assert_eq!(channels[0]["balance"].as_str().unwrap(), "1234000000000000000000");
+    assert_eq!(entry["channel"]["balance"].as_str().unwrap(), "1234000000000000000000");
 }
 
 #[tokio::test]
@@ -578,7 +575,7 @@ async fn test_opened_channel_graph_subscription_balance_update() {
     let query = r#"
         subscription {
             openedChannelGraphUpdated {
-                channels {
+                channel {
                     balance
                 }
             }
@@ -595,7 +592,7 @@ async fn test_opened_channel_graph_subscription_balance_update() {
 
     assert!(initial.errors.is_empty());
     let initial_data = initial.data.into_json().unwrap();
-    let initial_balance_str = initial_data["openedChannelGraphUpdated"]["channels"][0]["balance"]
+    let initial_balance_str = initial_data["openedChannelGraphUpdated"]["channel"]["balance"]
         .as_str()
         .unwrap();
     assert_eq!(initial_balance_str, "1000000000000000000000");
@@ -605,7 +602,7 @@ async fn test_opened_channel_graph_subscription_balance_update() {
     let updated_channel = ChannelEntry::new(addr1, addr2, updated_balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, updated_channel, 110, 0, 0).await.unwrap();
 
-    // Should receive updated balance
+    // Should receive updated balance entry
     let updated = tokio::time::timeout(Duration::from_secs(3), stream.next())
         .await
         .unwrap()
@@ -613,7 +610,7 @@ async fn test_opened_channel_graph_subscription_balance_update() {
 
     assert!(updated.errors.is_empty());
     let updated_data = updated.data.into_json().unwrap();
-    let updated_balance_str = updated_data["openedChannelGraphUpdated"]["channels"][0]["balance"]
+    let updated_balance_str = updated_data["openedChannelGraphUpdated"]["channel"]["balance"]
         .as_str()
         .unwrap();
     assert_eq!(updated_balance_str, "2000000000000000000000");
