@@ -328,6 +328,24 @@ pub enum ChannelsResult {
     QueryFailed(QueryFailedError),
 }
 
+/// Count value for count queries
+#[derive(SimpleObject, Clone, Debug)]
+pub struct Count {
+    /// Count value
+    pub count: i32,
+}
+
+/// Result type for count queries
+#[derive(Union, Clone, Debug)]
+pub enum CountResult {
+    /// Successful count
+    Count(Count),
+    /// Missing required filter parameter
+    MissingFilter(MissingFilterError),
+    /// Query failed
+    QueryFailed(QueryFailedError),
+}
+
 /// Channel update event for subscriptions
 ///
 /// Contains complete channel information along with source and destination account details.

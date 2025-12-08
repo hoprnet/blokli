@@ -59,6 +59,32 @@ fn extract_accounts_from_result(data: &serde_json::Value) -> anyhow::Result<Vec<
     }
 }
 
+/// Helper to extract count from union result
+fn extract_count_from_result(data: &serde_json::Value, query_name: &str) -> anyhow::Result<i64> {
+    match data[query_name]["__typename"].as_str() {
+        Some("Count") => {
+            let count = data[query_name]["count"]
+                .as_i64()
+                .ok_or_else(|| anyhow::anyhow!("Expected count value"))?;
+            Ok(count)
+        }
+        Some("MissingFilterError") => {
+            anyhow::bail!(
+                "MissingFilterError: {}",
+                data[query_name]["message"].as_str().unwrap_or("unknown")
+            )
+        }
+        Some("QueryFailedError") => {
+            anyhow::bail!(
+                "QueryFailedError: {}",
+                data[query_name]["message"].as_str().unwrap_or("unknown")
+            )
+        }
+        Some(other) => anyhow::bail!("Unexpected typename: {}", other),
+        None => anyhow::bail!("Missing __typename in response"),
+    }
+}
+
 #[tokio::test]
 async fn test_accounts_query_with_filters() -> anyhow::Result<()> {
     let db = BlokliDb::new_in_memory().await?;
@@ -459,15 +485,29 @@ async fn test_account_count_no_filters() -> anyhow::Result<()> {
     // Test: Count all accounts without filters
     let query = r#"
         query {
-            accountCount
+            accountCount {
+                __typename
+                ... on Count {
+                    count
+                }
+                ... on MissingFilterError {
+                    code
+                    message
+                }
+                ... on QueryFailedError {
+                    code
+                    message
+                }
+            }
         }
     "#;
 
     let response = execute_graphql_query(&schema, query).await;
-    assert!(response.errors.is_empty());
+    assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
 
     let data = response.data.into_json()?;
-    assert_eq!(data["accountCount"], 3);
+    let count = extract_count_from_result(&data, "accountCount")?;
+    assert_eq!(count, 3);
 
     Ok(())
 }
@@ -507,15 +547,29 @@ async fn test_account_count_with_filters() -> anyhow::Result<()> {
     {
         let query = r#"
             query {
-                accountCount(keyid: 1)
+                accountCount(keyid: 1) {
+                    __typename
+                    ... on Count {
+                        count
+                    }
+                    ... on MissingFilterError {
+                        code
+                        message
+                    }
+                    ... on QueryFailedError {
+                        code
+                        message
+                    }
+                }
             }
         "#;
 
         let response = execute_graphql_query(&schema, query).await;
-        assert!(response.errors.is_empty());
+        assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
 
         let data = response.data.into_json()?;
-        assert_eq!(data["accountCount"], 1);
+        let count = extract_count_from_result(&data, "accountCount")?;
+        assert_eq!(count, 1);
     }
 
     // Test 2: Count by packetKey
@@ -523,17 +577,31 @@ async fn test_account_count_with_filters() -> anyhow::Result<()> {
         let query = format!(
             r#"
             query {{
-                accountCount(packetKey: "{}")
+                accountCount(packetKey: "{}") {{
+                    __typename
+                    ... on Count {{
+                        count
+                    }}
+                    ... on MissingFilterError {{
+                        code
+                        message
+                    }}
+                    ... on QueryFailedError {{
+                        code
+                        message
+                    }}
+                }}
             }}
         "#,
             packet_key2.to_hex()
         );
 
         let response = execute_graphql_query(&schema, &query).await;
-        assert!(response.errors.is_empty());
+        assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
 
         let data = response.data.into_json()?;
-        assert_eq!(data["accountCount"], 1);
+        let count = extract_count_from_result(&data, "accountCount")?;
+        assert_eq!(count, 1);
     }
 
     // Test 3: Count by chainKey
@@ -541,17 +609,31 @@ async fn test_account_count_with_filters() -> anyhow::Result<()> {
         let query = format!(
             r#"
             query {{
-                accountCount(chainKey: "{}")
+                accountCount(chainKey: "{}") {{
+                    __typename
+                    ... on Count {{
+                        count
+                    }}
+                    ... on MissingFilterError {{
+                        code
+                        message
+                    }}
+                    ... on QueryFailedError {{
+                        code
+                        message
+                    }}
+                }}
             }}
         "#,
             chain_key1.to_hex()
         );
 
         let response = execute_graphql_query(&schema, &query).await;
-        assert!(response.errors.is_empty());
+        assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
 
         let data = response.data.into_json()?;
-        assert_eq!(data["accountCount"], 1);
+        let count = extract_count_from_result(&data, "accountCount")?;
+        assert_eq!(count, 1);
     }
 
     Ok(())
@@ -575,14 +657,33 @@ async fn test_account_count_invalid_chain_key() -> anyhow::Result<()> {
     // Test: Count with invalid chain key
     let query = r#"
         query {
-            accountCount(chainKey: "0xinvalid")
+            accountCount(chainKey: "0xinvalid") {
+                __typename
+                ... on Count {
+                    count
+                }
+                ... on MissingFilterError {
+                    code
+                    message
+                }
+                ... on QueryFailedError {
+                    code
+                    message
+                }
+            }
         }
     "#;
 
     let response = execute_graphql_query(&schema, query).await;
-    assert!(!response.errors.is_empty(), "Should have errors for invalid address");
+    assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
+
+    let data = response.data.into_json()?;
+
+    // Should return QueryFailedError variant
+    assert_eq!(data["accountCount"]["__typename"], "QueryFailedError");
+    assert_eq!(data["accountCount"]["code"], "INVALID_ADDRESS");
     assert!(
-        response.errors[0].message.contains("Invalid"),
+        data["accountCount"]["message"].as_str().unwrap().contains("Invalid"),
         "Error message should mention invalid address"
     );
 
@@ -607,15 +708,29 @@ async fn test_account_count_nonexistent_account() -> anyhow::Result<()> {
     // Test: Count for non-existent keyid
     let query = r#"
         query {
-            accountCount(keyid: 999)
+            accountCount(keyid: 999) {
+                __typename
+                ... on Count {
+                    count
+                }
+                ... on MissingFilterError {
+                    code
+                    message
+                }
+                ... on QueryFailedError {
+                    code
+                    message
+                }
+            }
         }
     "#;
 
     let response = execute_graphql_query(&schema, query).await;
-    assert!(response.errors.is_empty());
+    assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
 
     let data = response.data.into_json()?;
-    assert_eq!(data["accountCount"], 0);
+    let count = extract_count_from_result(&data, "accountCount")?;
+    assert_eq!(count, 0);
 
     Ok(())
 }
