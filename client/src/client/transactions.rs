@@ -28,7 +28,7 @@ impl GraphQlQueries {
         })
     }
 
-    /// `TrackTransaction` GraphQL subscription.
+    /// `TrackTransaction` GraphQL mutation.
     pub fn mutate_submit_and_track_transaction(
         signed_tx: &[u8],
     ) -> cynic::Operation<MutateTrackTransaction, SendTransactionVariables> {
