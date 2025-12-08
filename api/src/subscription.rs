@@ -804,35 +804,46 @@ impl SubscriptionRoot {
         concrete_channel_id: Option<String>,
         status: Option<blokli_api_types::ChannelStatus>,
     ) -> Result<Vec<Channel>, sea_orm::DbErr> {
-        // Build query with filters
-        let mut query = blokli_db_entity::channel::Entity::find();
+        // Convert i32 keyids to i64 for channel aggregation function
+        let source_i64 = source_key_id.map(|k| k as i64);
+        let dest_i64 = destination_key_id.map(|k| k as i64);
 
-        if let Some(src_keyid) = source_key_id {
-            query = query.filter(blokli_db_entity::channel::Column::Source.eq(src_keyid));
-        }
+        // Convert GraphQL ChannelStatus to internal status code (i8)
+        let status_code = status.map(|s| match s {
+            blokli_api_types::ChannelStatus::Open => 1i8,
+            blokli_api_types::ChannelStatus::PendingToClose => 0i8,
+            blokli_api_types::ChannelStatus::Closed => 2i8,
+        });
 
-        if let Some(dst_keyid) = destination_key_id {
-            query = query.filter(blokli_db_entity::channel::Column::Destination.eq(dst_keyid));
-        }
+        // Use optimized channel aggregation function
+        let aggregated_channels =
+            fetch_channels_with_state(db, source_i64, dest_i64, concrete_channel_id, status_code).await?;
 
-        if let Some(channel_id) = concrete_channel_id {
-            query = query.filter(blokli_db_entity::channel::Column::ConcreteChannelId.eq(channel_id));
-        }
+        // Convert to GraphQL Channel type
+        let channels: Vec<Channel> = aggregated_channels
+            .iter()
+            .map(|agg| -> Result<Channel, sea_orm::DbErr> {
+                Ok(Channel {
+                    concrete_channel_id: agg.concrete_channel_id.clone(),
+                    source: agg.source,
+                    destination: agg.destination,
+                    balance: TokenValueString(agg.balance.clone()),
+                    status: agg.status.into(),
+                    epoch: i32::try_from(agg.epoch).map_err(|e| {
+                        sea_orm::DbErr::Custom(format!("Channel epoch {} out of range for i32: {}", agg.epoch, e))
+                    })?,
+                    ticket_index: UInt64(u64::try_from(agg.ticket_index).map_err(|e| {
+                        sea_orm::DbErr::Custom(format!(
+                            "Channel ticket_index {} is negative or out of range: {}",
+                            agg.ticket_index, e
+                        ))
+                    })?),
+                    closure_time: agg.closure_time,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
-        // TODO(Phase 2-3): Status filtering requires querying channel_state table
-        if let Some(_status_filter) = status {
-            return Err(sea_orm::DbErr::Custom(
-                "Channel status filtering temporarily unavailable during schema migration".to_string(),
-            ));
-        }
-
-        let _channels = query.all(db).await?;
-
-        // TODO(Phase 2-3): Use proper channel query functions from blokli_db::channels
-        // that join with channel_state table to get complete channel data
-        Err(sea_orm::DbErr::Custom(
-            "Channel subscription temporarily unavailable during schema migration".to_string(),
-        ))
+        Ok(channels)
     }
 
     async fn fetch_filtered_accounts(
@@ -1522,24 +1533,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.len(), 3);
-    }
-
-    #[tokio::test]
-    async fn test_fetch_filtered_channels_returns_error_for_status_filter() {
-        let db = BlokliDb::new_in_memory().await.unwrap();
-
-        // Status filtering is not yet implemented
-        let result = SubscriptionRoot::fetch_filtered_channels(
-            db.conn(blokli_db::TargetDb::Index),
-            None,
-            None,
-            None,
-            Some(blokli_api_types::ChannelStatus::Open),
-        )
-        .await;
-
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("temporarily unavailable"));
     }
 
     #[tokio::test]
