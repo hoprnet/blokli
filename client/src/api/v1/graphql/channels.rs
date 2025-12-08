@@ -37,7 +37,10 @@ impl From<ChannelSelector> for ChannelsVariables {
                 status: value.status,
                 ..Default::default()
             },
-            None => Default::default(),
+            None => ChannelsVariables {
+                status: value.status,
+                ..Default::default()
+            },
         }
     }
 }
