@@ -19,10 +19,11 @@ use blokli_db::{
     BlokliDbGeneralModelOperations, TargetDb, accounts::BlokliDbAccountOperations, channels::BlokliDbChannelOperations,
     db::BlokliDb,
 };
+use blokli_db_entity::chain_info;
 use hopr_crypto_types::prelude::{ChainKeypair, Keypair, OffchainKeypair};
 use hopr_internal_types::channels::{ChannelEntry, ChannelStatus};
 use hopr_primitive_types::prelude::HoprBalance;
-use sea_orm::{ActiveModelTrait, EntityTrait, Set};
+use sea_orm::{ActiveModelTrait, EntityTrait, ModelTrait, Set};
 
 /// Helper to extract channels from union result
 fn extract_channels_from_result(data: &serde_json::Value) -> Result<Vec<serde_json::Value>> {
@@ -605,6 +606,7 @@ async fn test_chain_info_query() -> Result<()> {
                     ledgerDst
                     safeRegistryDst
                     channelClosureGracePeriod
+                    contractAddresses
                 }
                 ... on QueryFailedError {
                     code
@@ -620,14 +622,211 @@ async fn test_chain_info_query() -> Result<()> {
     let data = response.data.into_json()?;
     let chain_info = extract_chain_info_from_result(&data)?;
 
+    // Verify scalar fields
     assert_eq!(chain_info["blockNumber"], 1000);
     assert_eq!(chain_info["chainId"], 100);
     assert_eq!(chain_info["network"], "anvil-localhost");
     assert_eq!(chain_info["minTicketWinningProbability"], 0.5);
     assert_eq!(chain_info["channelClosureGracePeriod"], 300);
+
+    // Verify token values (0 balance represented as "0")
+    assert_eq!(chain_info["ticketPrice"].as_str().unwrap(), "0");
+    assert_eq!(chain_info["keyBindingFee"].as_str().unwrap(), "0");
+
+    // Verify domain separators are non-null hex strings
     assert!(!chain_info["channelDst"].is_null());
     assert!(!chain_info["ledgerDst"].is_null());
     assert!(!chain_info["safeRegistryDst"].is_null());
+
+    // Verify domain separator format (should be 66 hex characters with 0x prefix)
+    let channel_dst = chain_info["channelDst"].as_str().unwrap();
+    let ledger_dst = chain_info["ledgerDst"].as_str().unwrap();
+    let safe_registry_dst = chain_info["safeRegistryDst"].as_str().unwrap();
+    assert_eq!(channel_dst.len(), 66, "channelDst should be 66 chars (0x + 64 hex)");
+    assert_eq!(ledger_dst.len(), 66, "ledgerDst should be 66 chars (0x + 64 hex)");
+    assert_eq!(
+        safe_registry_dst.len(),
+        66,
+        "safeRegistryDst should be 66 chars (0x + 64 hex)"
+    );
+
+    // Verify all hex strings have 0x prefix and contain only valid hex characters
+    assert!(channel_dst.starts_with("0x"));
+    assert!(ledger_dst.starts_with("0x"));
+    assert!(safe_registry_dst.starts_with("0x"));
+    assert!(channel_dst[2..].chars().all(|c| c.is_ascii_hexdigit()));
+    assert!(ledger_dst[2..].chars().all(|c| c.is_ascii_hexdigit()));
+    assert!(safe_registry_dst[2..].chars().all(|c| c.is_ascii_hexdigit()));
+
+    // Verify contractAddresses contains all required keys
+    let contract_addresses = chain_info["contractAddresses"].as_object().unwrap();
+    let expected_keys = vec![
+        "token",
+        "channels",
+        "announcements",
+        "safe_registry",
+        "price_oracle",
+        "win_prob_oracle",
+        "stake_factory",
+    ];
+
+    for key in expected_keys {
+        assert!(
+            contract_addresses.contains_key(key),
+            "contractAddresses missing key: {}",
+            key
+        );
+        // Verify each address is a non-empty string
+        assert!(
+            !contract_addresses[key].as_str().unwrap().is_empty(),
+            "contractAddresses[{}] should not be empty",
+            key
+        );
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_chain_info_query_missing_data_returns_error() -> Result<()> {
+    // Create empty database without setting up chain_info
+    let db = BlokliDb::new_in_memory().await?;
+
+    // Delete the default chain_info row that BlokliDb::new_in_memory() creates
+    let chain_info_row = chain_info::Entity::find_by_id(1)
+        .one(db.conn(TargetDb::Index))
+        .await?
+        .expect("Default chain_info row should exist");
+    chain_info_row.delete(db.conn(TargetDb::Index)).await?;
+
+    let schema = async_graphql::Schema::build(
+        QueryRoot,
+        async_graphql::EmptyMutation,
+        async_graphql::EmptySubscription,
+    )
+    .data(db.conn(TargetDb::Index).clone())
+    .data(ContractAddresses::default())
+    .data(100u64)
+    .data("anvil-localhost".to_string())
+    .finish();
+
+    let query = r#"
+        query {
+            chainInfo {
+                __typename
+                ... on ChainInfo {
+                    blockNumber
+                    chainId
+                }
+                ... on QueryFailedError {
+                    code
+                    message
+                }
+            }
+        }
+    "#;
+
+    let response = execute_graphql_query(&schema, query).await;
+    assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
+
+    let data = response.data.into_json()?;
+
+    // Verify we got QueryFailedError
+    assert_eq!(data["chainInfo"]["__typename"], "QueryFailedError");
+    assert_eq!(data["chainInfo"]["code"], "NOT_FOUND");
+
+    let error_message = data["chainInfo"]["message"].as_str().unwrap();
+    assert!(
+        error_message.to_lowercase().contains("chain info"),
+        "Error message should mention chain info: {}",
+        error_message
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_chain_info_query_with_null_optional_fields() -> Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+
+    // Update chain_info with all optional fields set to NULL
+    let chain_info = blokli_db_entity::chain_info::ActiveModel {
+        id: Set(1),
+        last_indexed_block: Set(500),
+        last_indexed_tx_index: Set(Some(0)),
+        last_indexed_log_index: Set(Some(0)),
+        ticket_price: Set(None),                    // NULL
+        key_binding_fee: Set(None),                 // NULL
+        min_incoming_ticket_win_prob: Set(0.0_f32), // Zero value
+        channels_dst: Set(None),                    // NULL
+        ledger_dst: Set(None),                      // NULL
+        safe_registry_dst: Set(None),               // NULL
+        channel_closure_grace_period: Set(None),    // NULL
+    };
+    chain_info.update(db.conn(TargetDb::Index)).await?;
+
+    let schema = async_graphql::Schema::build(
+        QueryRoot,
+        async_graphql::EmptyMutation,
+        async_graphql::EmptySubscription,
+    )
+    .data(db.conn(TargetDb::Index).clone())
+    .data(ContractAddresses::default())
+    .data(200u64)
+    .data("test-network".to_string())
+    .finish();
+
+    let query = r#"
+        query {
+            chainInfo {
+                __typename
+                ... on ChainInfo {
+                    blockNumber
+                    chainId
+                    network
+                    ticketPrice
+                    keyBindingFee
+                    minTicketWinningProbability
+                    channelDst
+                    ledgerDst
+                    safeRegistryDst
+                    channelClosureGracePeriod
+                }
+                ... on QueryFailedError {
+                    code
+                    message
+                }
+            }
+        }
+    "#;
+
+    let response = execute_graphql_query(&schema, query).await;
+    assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
+
+    let data = response.data.into_json()?;
+    let chain_info = extract_chain_info_from_result(&data)?;
+
+    // Verify required fields are present
+    assert_eq!(chain_info["blockNumber"], 500);
+    assert_eq!(chain_info["chainId"], 200);
+    assert_eq!(chain_info["network"], "test-network");
+    assert_eq!(chain_info["minTicketWinningProbability"], 0.0);
+
+    // Verify optional token values default to "0" when not set (not null)
+    assert_eq!(chain_info["ticketPrice"].as_str().unwrap(), "0");
+    assert_eq!(chain_info["keyBindingFee"].as_str().unwrap(), "0");
+
+    // Verify optional domain separators are null when not set
+    assert!(chain_info["channelDst"].is_null(), "channelDst should be null");
+    assert!(chain_info["ledgerDst"].is_null(), "ledgerDst should be null");
+    assert!(
+        chain_info["safeRegistryDst"].is_null(),
+        "safeRegistryDst should be null"
+    );
+    assert!(
+        chain_info["channelClosureGracePeriod"].is_null(),
+        "channelClosureGracePeriod should be null"
+    );
 
     Ok(())
 }
