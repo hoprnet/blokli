@@ -9,6 +9,7 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use futures::{StreamExt, TryFutureExt, pin_mut};
 use hopr_primitive_types::prelude::Address;
 use queries::QueryTarget;
+use tracing_subscriber::{EnvFilter, fmt};
 
 use crate::subscriptions::{ChannelAllowedStates, SubscriptionTarget};
 
@@ -134,8 +135,13 @@ impl TryFrom<AccountArgs> for AccountSelector {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    let cli = Cli::try_parse()?;
+    fmt()
+        .with_env_filter(EnvFilter::from_default_env())
+        .with_level(true)
+        .compact()
+        .init();
 
+    let cli = Cli::try_parse()?;
     let blokli_client = BlokliClient::new(cli.url, BlokliClientConfig::default());
 
     match cli.command {

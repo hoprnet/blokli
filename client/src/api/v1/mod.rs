@@ -1,3 +1,5 @@
+use std::fmt::Formatter;
+
 mod graphql;
 pub mod types {
     pub use super::graphql::{
@@ -36,7 +38,7 @@ pub type KeyId = u32;
 pub type TxId = String;
 
 /// Allows selecting [`Accounts`](types::Account) by their key id, address or packet key.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum AccountSelector {
     /// Select an account by its key id.
     KeyId(KeyId),
@@ -44,6 +46,16 @@ pub enum AccountSelector {
     Address(ChainAddress),
     /// Select an account by its packet key.
     PacketKey(PacketKey),
+}
+
+impl std::fmt::Debug for AccountSelector {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::KeyId(key_id) => write!(f, "KeyId({})", key_id),
+            Self::Address(address) => write!(f, "Address({})", hex::encode(address)),
+            Self::PacketKey(packet_key) => write!(f, "PacketKey({})", hex::encode(packet_key)),
+        }
+    }
 }
 
 /// Allows selecting [`Channels`](types::Channel) based on a [`ChannelFilter`] and optionally a [`ChannelStatus`].
@@ -56,7 +68,7 @@ pub struct ChannelSelector {
 }
 
 /// Allows filtering [`Channels`](types::Channel) by their channel id, source and/or destination key id.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum ChannelFilter {
     /// Select a channel by its channel id.
     ChannelId(ChannelId),
@@ -68,13 +80,37 @@ pub enum ChannelFilter {
     SourceAndDestinationKeyIds(KeyId, KeyId),
 }
 
+impl std::fmt::Debug for ChannelFilter {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ChannelId(channel_id) => write!(f, "ChannelId({})", hex::encode(channel_id)),
+            Self::DestinationKeyId(key_id) => write!(f, "DestinationKeyId({})", key_id),
+            Self::SourceKeyId(key_id) => write!(f, "SourceKeyId({})", key_id),
+            Self::SourceAndDestinationKeyIds(source_key_id, destination_key_id) => write!(
+                f,
+                "SourceAndDestinationKeyIds({}, {})",
+                source_key_id, destination_key_id
+            ),
+        }
+    }
+}
+
 /// Allows querying existing [`Safes`](types::Safe) by their address or chain key.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum SafeSelector {
     /// Select a safe by its address.
     SafeAddress(ChainAddress),
     /// Select a safe by its owning chain key.
     ChainKey(ChainAddress),
+}
+
+impl std::fmt::Debug for SafeSelector {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SafeAddress(address) => write!(f, "SafeAddress({})", hex::encode(address)),
+            Self::ChainKey(address) => write!(f, "ChainKey({})", hex::encode(address)),
+        }
+    }
 }
 
 pub(crate) type Result<T> = std::result::Result<T, crate::errors::BlokliClientError>;

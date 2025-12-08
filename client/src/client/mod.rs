@@ -4,9 +4,10 @@ mod subscriptions;
 mod testing;
 mod transactions;
 
-use cynic::{GraphQlResponse, http::ReqwestExt};
+use cynic::GraphQlResponse;
 use eventsource_client::Client;
 use futures::{StreamExt, TryFutureExt, TryStreamExt};
+use std::fmt::Debug;
 #[cfg(feature = "testing")]
 pub use testing::{
     BlokliTestClient, BlokliTestState, BlokliTestStateMutator, BlokliTestStateSnapshot, NopStateMutator,
@@ -113,15 +114,20 @@ impl BlokliClient {
         op: cynic::Operation<Q, V>,
     ) -> Result<impl Future<Output = Result<GraphQlResponse<Q>, BlokliClientError>>, BlokliClientError>
     where
-        Q: cynic::QueryFragment + cynic::serde::de::DeserializeOwned + 'static,
+        Q: cynic::QueryFragment + cynic::serde::de::DeserializeOwned + Debug + 'static,
         V: cynic::QueryVariables + cynic::serde::Serialize,
     {
         let client = self.build_reqwest_client()?;
 
+        tracing::debug!(query = ?serde_json::to_string(&op), "sending Blokli query");
+
         Ok(client
             .post(self.graphql_url()?)
-            .run_graphql(op)
-            .into_future()
+            .header("Accept", "application/json")
+            .json(&op)
+            .send()
+            .and_then(|resp| resp.json::<GraphQlResponse<Q>>())
+            .inspect_ok(|resp| tracing::debug!(?resp, "received Blokli response"))
             .map_err(|e| ErrorKind::from(e).into()))
     }
 }
@@ -135,7 +141,26 @@ pub(crate) fn response_to_data<Q>(response: GraphQlResponse<Q>) -> crate::api::R
         }
         (None, Some(errors)) => {
             if !errors.is_empty() {
-                Err(ErrorKind::GraphQLError(errors.first().cloned().unwrap()).into())
+                Err(ErrorKind::GraphQLError(
+                    errors
+                        .into_iter()
+                        .reduce(|mut acc, next_err| {
+                            acc.message +=
+                                &format!("{}{}", if acc.message.is_empty() { "" } else { ", " }, next_err.message,);
+
+                            if let Some(next_locs) = next_err.locations {
+                                acc.locations.get_or_insert(Vec::new()).extend(next_locs);
+                            }
+
+                            if let Some(next_paths) = next_err.path {
+                                acc.path.get_or_insert(Vec::new()).extend(next_paths);
+                            }
+
+                            acc
+                        })
+                        .unwrap(),
+                )
+                .into())
             } else {
                 Err(ErrorKind::NoData.into())
             }

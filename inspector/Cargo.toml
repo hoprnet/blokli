@@ -18,7 +18,8 @@ hopr-primitive-types = { workspace = true }
 serde                = { workspace = true }
 serde_json           = { workspace = true }
 serde_yaml           = { workspace = true }
-tokio                = { workspace = true, features = ["signal"] }
+tokio                = { workspace = true, features = ["signal", "tracing"] }
+tracing-subscriber   = { workspace = true }
 url                  = { workspace = true }
 
 [lints]
