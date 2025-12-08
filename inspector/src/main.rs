@@ -35,10 +35,10 @@ enum Formats {
 }
 
 impl Formats {
-    pub fn serialize<T: serde::Serialize>(&self, value: T) -> String {
+    pub fn serialize<T: serde::Serialize>(&self, value: T) -> anyhow::Result<String> {
         match self {
-            Formats::Json => serde_json::to_string_pretty(&value).unwrap(),
-            Formats::Yaml => serde_yaml::to_string(&value).unwrap(),
+            Formats::Json => Ok(serde_json::to_string_pretty(&value)?),
+            Formats::Yaml => Ok(serde_yaml::to_string(&value)?),
         }
     }
 }
@@ -73,7 +73,7 @@ pub(crate) struct ChannelArgs {
     channel_id: Option<String>,
 }
 
-impl TryFrom<ChannelArgs> for blokli_client::api::ChannelSelector {
+impl TryFrom<ChannelArgs> for ChannelSelector {
     type Error = anyhow::Error;
 
     fn try_from(value: ChannelArgs) -> Result<Self, Self::Error> {
@@ -95,7 +95,7 @@ impl TryFrom<ChannelArgs> for blokli_client::api::ChannelSelector {
                 ),
                 _ => {
                     return Err(anyhow::anyhow!(
-                        "At least one of --with-src-key-id or --with-dst-key-id must be specified, or a --channel-id \
+                        "At least one of --src-key-id or --dst-key-id must be specified, or a --channel-id \
                          given."
                     ));
                 }
@@ -119,7 +119,7 @@ pub(crate) struct AccountArgs {
     key_id: Option<u32>,
 }
 
-impl TryFrom<AccountArgs> for blokli_client::api::AccountSelector {
+impl TryFrom<AccountArgs> for AccountSelector {
     type Error = anyhow::Error;
 
     fn try_from(value: AccountArgs) -> Result<Self, Self::Error> {

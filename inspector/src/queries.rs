@@ -8,7 +8,7 @@ use hopr_primitive_types::prelude::Address;
 use crate::{AccountArgs, ChannelArgs, Formats};
 
 #[derive(Subcommand, Debug)]
-pub enum QueryTarget {
+pub(crate) enum QueryTarget {
     /// Gets current Blokli version.
     Version,
     /// Gets the health status of Blokli.
@@ -41,8 +41,8 @@ pub enum QueryTarget {
 }
 
 impl QueryTarget {
-    pub async fn execute(self, client: &BlokliClient, format: Formats) -> anyhow::Result<String> {
-        Ok(match self {
+    pub(crate) async fn execute(self, client: &BlokliClient, format: Formats) -> anyhow::Result<String> {
+        match self {
             QueryTarget::Version => format.serialize(client.query_version().await?),
             QueryTarget::Health => format.serialize(client.query_health().await?),
             QueryTarget::NativeBalance { address } => {
@@ -63,6 +63,6 @@ impl QueryTarget {
             ),
             QueryTarget::Account(sel) => format.serialize(client.query_accounts(sel.try_into()?).await?),
             QueryTarget::Channel(sel) => format.serialize(client.query_channels(sel.try_into()?).await?),
-        })
+        }
     }
 }

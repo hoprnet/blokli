@@ -1,11 +1,11 @@
 use blokli_client::{BlokliClient, api::BlokliSubscriptionClient};
 use clap::{Subcommand, ValueEnum};
-use futures::StreamExt;
+use futures::{StreamExt, TryStreamExt};
 
 use crate::{AccountArgs, ChannelArgs, Formats};
 
 #[derive(Debug, Copy, Clone, ValueEnum)]
-pub enum ChannelAllowedStates {
+pub(crate) enum ChannelAllowedStates {
     /// Opened channels.
     Open,
     /// Pending to close channels.
@@ -15,7 +15,7 @@ pub enum ChannelAllowedStates {
 }
 
 #[derive(Subcommand, Debug)]
-pub enum SubscriptionTarget {
+pub(crate) enum SubscriptionTarget {
     /// Subscribe to Safe deployments.
     SafeDeployments,
     /// Subscribe to the graph updates.
@@ -29,7 +29,7 @@ pub enum SubscriptionTarget {
 }
 
 impl SubscriptionTarget {
-    pub fn execute(
+    pub(crate) fn execute(
         self,
         client: &BlokliClient,
         format: Formats,
@@ -37,24 +37,59 @@ impl SubscriptionTarget {
         match self {
             SubscriptionTarget::SafeDeployments => Ok(client
                 .subscribe_safe_deployments()?
-                .filter_map(move |f| futures::future::ready(f.ok().map(|v| format.serialize(v))))
+                .map_err(anyhow::Error::from)
+                .filter_map(move |f| {
+                    futures::future::ready(
+                        f.and_then(|v| format.serialize(v))
+                            .inspect_err(|e| eprintln!("failed to decode safe deployment event: {e}"))
+                            .ok(),
+                    )
+                })
                 .boxed()),
             SubscriptionTarget::Graph => Ok(client
                 .subscribe_graph()?
-                .filter_map(move |f| futures::future::ready(f.ok().map(|v| format.serialize(v))))
+                .map_err(anyhow::Error::from)
+                .filter_map(move |f| {
+                    futures::future::ready(
+                        f.and_then(|v| format.serialize(v))
+                            .inspect_err(|e| eprintln!("failed to decode graph event: {e}"))
+                            .ok(),
+                    )
+                })
                 .boxed()),
             SubscriptionTarget::TicketParams => Ok(client
                 .subscribe_ticket_params()?
-                .filter_map(move |f| futures::future::ready(f.ok().map(|v| format.serialize(v))))
+                .map_err(anyhow::Error::from)
+                .filter_map(move |f| {
+                    futures::future::ready(
+                        f.and_then(|v| format.serialize(v))
+                            .inspect_err(|e| eprintln!("failed to decode ticket params event: {e}"))
+                            .ok(),
+                    )
+                })
                 .boxed()),
 
             SubscriptionTarget::Accounts(sel) => Ok(client
                 .subscribe_accounts(Some(sel.try_into()?))?
-                .filter_map(move |f| futures::future::ready(f.ok().map(|v| format.serialize(v))))
+                .map_err(anyhow::Error::from)
+                .filter_map(move |f| {
+                    futures::future::ready(
+                        f.and_then(|v| format.serialize(v))
+                            .inspect_err(|e| eprintln!("failed to decode account event: {e}"))
+                            .ok(),
+                    )
+                })
                 .boxed()),
             SubscriptionTarget::Channels(sel) => Ok(client
                 .subscribe_channels(Some(sel.try_into()?))?
-                .filter_map(move |f| futures::future::ready(f.ok().map(|v| format.serialize(v))))
+                .map_err(anyhow::Error::from)
+                .filter_map(move |f| {
+                    futures::future::ready(
+                        f.and_then(|v| format.serialize(v))
+                            .inspect_err(|e| eprintln!("failed to decode channel event: {e}"))
+                            .ok(),
+                    )
+                })
                 .boxed()),
         }
     }
