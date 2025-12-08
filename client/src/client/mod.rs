@@ -139,32 +139,24 @@ pub(crate) fn response_to_data<Q>(response: GraphQlResponse<Q>) -> crate::api::R
             tracing::error!(?errors, "operation succeeded but errors were encountered");
             Ok(data)
         }
-        (None, Some(errors)) => {
-            if !errors.is_empty() {
-                Err(ErrorKind::GraphQLError(
-                    errors
-                        .into_iter()
-                        .reduce(|mut acc, next_err| {
-                            acc.message +=
-                                &format!("{}{}", if acc.message.is_empty() { "" } else { ", " }, next_err.message,);
+        (None, Some(errors)) => Err(errors
+            .into_iter()
+            .reduce(|mut acc, next_err| {
+                acc.message += &format!("{}{}", if acc.message.is_empty() { "" } else { ", " }, next_err.message,);
 
-                            if let Some(next_locs) = next_err.locations {
-                                acc.locations.get_or_insert(Vec::new()).extend(next_locs);
-                            }
+                if let Some(next_locs) = next_err.locations {
+                    acc.locations.get_or_insert_default().extend(next_locs);
+                }
 
-                            if let Some(next_paths) = next_err.path {
-                                acc.path.get_or_insert(Vec::new()).extend(next_paths);
-                            }
+                if let Some(next_paths) = next_err.path {
+                    acc.path.get_or_insert_default().extend(next_paths);
+                }
 
-                            acc
-                        })
-                        .unwrap(),
-                )
-                .into())
-            } else {
-                Err(ErrorKind::NoData.into())
-            }
-        }
+                acc
+            })
+            .map(ErrorKind::GraphQLError)
+            .unwrap_or(ErrorKind::NoData)
+            .into()),
         (None, None) => Err(ErrorKind::NoData.into()),
     }
 }
