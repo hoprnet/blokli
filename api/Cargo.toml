@@ -81,11 +81,13 @@ tracing-subscriber = { workspace = true }
 clap = { workspace = true }
 
 [dev-dependencies]
-blokli-db-migration = { path = "../db/migration" }
-env_logger          = { workspace = true }
-mockall             = { workspace = true }
-rand                = { workspace = true }
-temp-env            = { workspace = true }
-test-log            = { workspace = true }
-tokio-test          = { workspace = true }
-tower               = { workspace = true, features = ["util"] }
+blokli-db-migration  = { path = "../db/migration" }
+env_logger           = { workspace = true }
+hopr-internal-types  = { workspace = true }
+mockall              = { workspace = true }
+multiaddr            = { workspace = true }
+rand                 = { workspace = true }
+temp-env             = { workspace = true }
+test-log             = { workspace = true }
+tokio-test           = { workspace = true }
+tower                = { workspace = true, features = ["util"] }

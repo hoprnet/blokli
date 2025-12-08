@@ -4,9 +4,10 @@ use std::sync::Arc;
 
 use async_graphql::{Context, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
-    Account, ChainInfo, Channel, ContractAddressMap, Hex32, HoprBalance, InvalidAddressError,
-    InvalidTransactionIdError, NativeBalance, QueryFailedError, Safe, SafeHoprAllowance, SafeTransactionCount,
-    TokenValueString, Transaction, UInt64,
+    Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelsList, ChannelsResult,
+    ContractAddressMap, Hex32, HoprBalance, InvalidAddressError, InvalidTransactionIdError, MissingFilterError,
+    NativeBalance, QueryFailedError, Safe, SafeHoprAllowance, SafeTransactionCount, TokenValueString, Transaction,
+    UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
@@ -153,7 +154,7 @@ impl QueryRoot {
     /// Retrieve accounts from the database with required filtering
     ///
     /// At least one filter parameter must be provided (keyid, packet_key, or chain_key).
-    /// Returns an error if no identity filters are specified to prevent excessive data retrieval.
+    /// Returns a union type indicating success or specific error conditions.
     /// Filters can be combined to narrow results.
     async fn accounts(
         &self,
@@ -161,28 +162,50 @@ impl QueryRoot {
         #[graphql(desc = "Filter by account keyid")] keyid: Option<i64>,
         #[graphql(desc = "Filter by packet key (peer ID format)")] packet_key: Option<String>,
         #[graphql(desc = "Filter by chain key (hexadecimal format)")] chain_key: Option<String>,
-    ) -> Result<Vec<Account>> {
+    ) -> AccountsResult {
         // Require at least one identity filter to prevent excessive data retrieval
-        // Note: status alone is not sufficient as it could still return thousands of channels
         if keyid.is_none() && packet_key.is_none() && chain_key.is_none() {
-            return Err(async_graphql::Error::new(
-                "At least one filter parameter is required (keyid, packetKey, or chainKey). Example: accounts(keyid: \
-                 1) or accounts(chainKey: \"0x1234...\")",
-            ));
+            return AccountsResult::MissingFilter(MissingFilterError {
+                code: "MISSING_FILTER".to_string(),
+                message: "At least one filter parameter is required (keyid, packetKey, or chainKey). Example: \
+                          accounts(keyid: 1) or accounts(chainKey: \"0x1234...\")"
+                    .to_string(),
+            });
         }
 
         // Validate chain_key before DB access
-        if let Some(ref ck) = chain_key {
-            validate_eth_address(ck)?;
+        if let Some(ref ck) = chain_key
+            && let Err(e) = validate_eth_address(ck)
+        {
+            return AccountsResult::QueryFailed(QueryFailedError {
+                code: "INVALID_ADDRESS".to_string(),
+                message: e.message,
+            });
         }
 
-        let db = ctx.data::<DatabaseConnection>()?;
+        let db = match ctx.data::<DatabaseConnection>() {
+            Ok(db) => db,
+            Err(e) => {
+                return AccountsResult::QueryFailed(QueryFailedError {
+                    code: "CONTEXT_ERROR".to_string(),
+                    message: format!("Failed to get database connection: {:?}", e),
+                });
+            }
+        };
 
         // Fetch accounts with optional filters using optimized batch loading (4 queries)
-        let aggregated_accounts = fetch_accounts_with_filters(db, keyid, packet_key, chain_key).await?;
+        let aggregated_accounts = match fetch_accounts_with_filters(db, keyid, packet_key, chain_key).await {
+            Ok(accounts) => accounts,
+            Err(e) => {
+                return AccountsResult::QueryFailed(QueryFailedError {
+                    code: "QUERY_FAILED".to_string(),
+                    message: format!("Failed to fetch accounts: {}", e),
+                });
+            }
+        };
 
         // Convert to GraphQL Account type
-        let result = aggregated_accounts
+        let accounts = aggregated_accounts
             .into_iter()
             .map(|agg| Account {
                 keyid: agg.keyid,
@@ -193,7 +216,7 @@ impl QueryRoot {
             })
             .collect();
 
-        Ok(result)
+        AccountsResult::Accounts(AccountsList { accounts })
     }
 
     /// Count accounts matching optional filters
@@ -298,7 +321,7 @@ impl QueryRoot {
     ///
     /// At least one identity-based filter must be provided (source_key_id, destination_key_id,
     /// or concrete_channel_id). The status filter is optional and can be combined with others.
-    /// Returns an error if no identity filters are specified to prevent excessive data retrieval.
+    /// Returns a union type indicating success or specific error conditions.
     /// Filters can be combined to narrow results.
     async fn channels(
         &self,
@@ -309,20 +332,28 @@ impl QueryRoot {
         #[graphql(desc = "Filter by channel status (optional, combine with identity filters)")] status: Option<
             blokli_api_types::ChannelStatus,
         >,
-    ) -> Result<Vec<Channel>> {
+    ) -> ChannelsResult {
         // Require at least one identity filter to prevent excessive data retrieval
         // Note: status alone is not sufficient as it could still return thousands of channels
         if source_key_id.is_none() && destination_key_id.is_none() && concrete_channel_id.is_none() {
-            return Err(
-                async_graphql::Error::new(
-                    "At least one identity filter is required (sourceKeyId, destinationKeyId, or concreteChannelId). \
-                     \n                 The status filter can be used in combination but not alone. \n                 \
-                     Example: channels(sourceKeyId: 1) or channels(sourceKeyId: 1, status: OPEN)",
-                ),
-            );
+            return ChannelsResult::MissingFilter(MissingFilterError {
+                code: "MISSING_FILTER".to_string(),
+                message: "At least one identity filter is required (sourceKeyId, destinationKeyId, or \
+                          concreteChannelId). The status filter can be used in combination but not alone. Example: \
+                          channels(sourceKeyId: 1) or channels(sourceKeyId: 1, status: OPEN)"
+                    .to_string(),
+            });
         }
 
-        let db = ctx.data::<DatabaseConnection>()?;
+        let db = match ctx.data::<DatabaseConnection>() {
+            Ok(db) => db,
+            Err(e) => {
+                return ChannelsResult::QueryFailed(QueryFailedError {
+                    code: "CONTEXT_ERROR".to_string(),
+                    message: format!("Failed to get database connection: {:?}", e),
+                });
+            }
+        };
 
         // Convert GraphQL ChannelStatus to database i8 representation if status filter is provided
         let status_i8 = status.map(|s| match s {
@@ -332,44 +363,58 @@ impl QueryRoot {
         });
 
         // Fetch channels with state using optimized batch loading (2 queries total)
-        let aggregated_channels =
-            fetch_channels_with_state(db, source_key_id, destination_key_id, concrete_channel_id, status_i8).await?;
+        let aggregated_channels = match fetch_channels_with_state(
+            db,
+            source_key_id,
+            destination_key_id,
+            concrete_channel_id,
+            status_i8,
+        )
+        .await
+        {
+            Ok(channels) => channels,
+            Err(e) => {
+                return ChannelsResult::QueryFailed(QueryFailedError {
+                    code: "QUERY_FAILED".to_string(),
+                    message: format!("Failed to fetch channels: {}", e),
+                });
+            }
+        };
 
         // Convert to GraphQL Channel type
-        let result = aggregated_channels
+        let channels: Vec<Channel> = aggregated_channels
             .into_iter()
-            .map(|agg| -> Result<Channel> {
+            .filter_map(|agg| {
                 // Convert status from i8 to ChannelStatus enum
                 let status = match agg.status {
                     0 => blokli_api_types::ChannelStatus::Closed,
                     1 => blokli_api_types::ChannelStatus::Open,
                     2 => blokli_api_types::ChannelStatus::PendingToClose,
-                    unknown => {
-                        return Err(async_graphql::Error::new(format!(
-                            "Invalid channel status value {} in database for channel {}",
-                            unknown, agg.concrete_channel_id
-                        )));
+                    _ => {
+                        // Skip invalid status values
+                        return None;
                     }
                 };
 
                 // Convert epoch from i64 to i32 with validation
-                // Epoch should fit in u24, so i32 should always be safe, but propagate overflow errors
-                let epoch = i32::try_from(agg.epoch).map_err(|e| {
-                    async_graphql::Error::new(format!(
-                        "Channel epoch {} out of range for channel {}: {}",
-                        agg.epoch, agg.concrete_channel_id, e
-                    ))
-                })?;
+                let epoch = match i32::try_from(agg.epoch) {
+                    Ok(e) => e,
+                    Err(_) => {
+                        // Skip channels with out-of-range epochs
+                        return None;
+                    }
+                };
 
                 // Convert ticket_index from i64 to u64 (should always be non-negative)
-                let ticket_index = blokli_api_types::UInt64(u64::try_from(agg.ticket_index).map_err(|e| {
-                    async_graphql::Error::new(format!(
-                        "Channel ticket_index {} is negative for channel {}: {}",
-                        agg.ticket_index, agg.concrete_channel_id, e
-                    ))
-                })?);
+                let ticket_index = match u64::try_from(agg.ticket_index) {
+                    Ok(ti) => blokli_api_types::UInt64(ti),
+                    Err(_) => {
+                        // Skip channels with negative ticket indices
+                        return None;
+                    }
+                };
 
-                Ok(Channel {
+                Some(Channel {
                     concrete_channel_id: agg.concrete_channel_id,
                     source: agg.source,
                     destination: agg.destination,
@@ -380,9 +425,9 @@ impl QueryRoot {
                     closure_time: agg.closure_time,
                 })
             })
-            .collect::<Result<Vec<_>>>()?;
+            .collect();
 
-        Ok(result)
+        ChannelsResult::Channels(ChannelsList { channels })
     }
 
     /// Retrieve HOPR token balance for a specific address
@@ -764,17 +809,60 @@ impl QueryRoot {
     /// // Inspect returned `ChainInfo` in the GraphQL response
     /// # }
     /// ```
-    async fn chain_info(&self, ctx: &Context<'_>) -> Result<ChainInfo> {
-        let db = ctx.data::<DatabaseConnection>()?;
-        let chain_id = ctx.data::<u64>()?;
-        let network = ctx.data::<String>()?;
-        let contract_addresses = ctx.data::<ContractAddresses>()?;
+    async fn chain_info(&self, ctx: &Context<'_>) -> ChainInfoResult {
+        let db = match ctx.data::<DatabaseConnection>() {
+            Ok(db) => db,
+            Err(e) => {
+                return ChainInfoResult::QueryFailed(QueryFailedError {
+                    code: "CONTEXT_ERROR".to_string(),
+                    message: format!("Failed to get database connection: {:?}", e),
+                });
+            }
+        };
+        let chain_id = match ctx.data::<u64>() {
+            Ok(id) => id,
+            Err(e) => {
+                return ChainInfoResult::QueryFailed(QueryFailedError {
+                    code: "CONTEXT_ERROR".to_string(),
+                    message: format!("Failed to get chain ID: {:?}", e),
+                });
+            }
+        };
+        let network = match ctx.data::<String>() {
+            Ok(net) => net,
+            Err(e) => {
+                return ChainInfoResult::QueryFailed(QueryFailedError {
+                    code: "CONTEXT_ERROR".to_string(),
+                    message: format!("Failed to get network name: {:?}", e),
+                });
+            }
+        };
+        let contract_addresses = match ctx.data::<ContractAddresses>() {
+            Ok(addrs) => addrs,
+            Err(e) => {
+                return ChainInfoResult::QueryFailed(QueryFailedError {
+                    code: "CONTEXT_ERROR".to_string(),
+                    message: format!("Failed to get contract addresses: {:?}", e),
+                });
+            }
+        };
 
         // Fetch chain_info from database (assuming single row with id=1)
-        let chain_info = blokli_db_entity::chain_info::Entity::find_by_id(1)
-            .one(db)
-            .await?
-            .ok_or_else(|| async_graphql::Error::new("Chain info not found"))?;
+        let chain_info = match blokli_db_entity::chain_info::Entity::find_by_id(1).one(db).await {
+            Ok(Some(info)) => info,
+            Ok(None) => {
+                return ChainInfoResult::QueryFailed(QueryFailedError {
+                    code: "NOT_FOUND".to_string(),
+                    message: "Chain info not found in database".to_string(),
+                });
+            }
+            Err(e) => {
+                return ChainInfoResult::QueryFailed(QueryFailedError {
+                    code: "QUERY_FAILED".to_string(),
+                    message: format!("Failed to fetch chain info: {}", e),
+                });
+            }
+        };
 
         // Convert ticket_price from 12-byte binary to human-readable string
         let ticket_price = chain_info
@@ -791,67 +879,93 @@ impl QueryRoot {
             .unwrap_or_else(|| TokenValueString(PrimitiveHoprBalance::zero().amount().to_string()));
 
         // Convert last_indexed_block from i64 to i32 with validation
-        let block_number = i32::try_from(chain_info.last_indexed_block).map_err(|_| {
-            async_graphql::Error::new(format!(
-                "block number {} exceeds i32::MAX",
-                chain_info.last_indexed_block
-            ))
-        })?;
+        let block_number = match i32::try_from(chain_info.last_indexed_block) {
+            Ok(bn) => bn,
+            Err(_) => {
+                return ChainInfoResult::QueryFailed(QueryFailedError {
+                    code: "CONVERSION_ERROR".to_string(),
+                    message: format!("block number {} exceeds i32::MAX", chain_info.last_indexed_block),
+                });
+            }
+        };
 
         // Convert chain_id from u64 to i32 with validation
-        let chain_id_i32 = i32::try_from(*chain_id)
-            .map_err(|_| async_graphql::Error::new(format!("chain ID {} exceeds i32::MAX", chain_id)))?;
+        let chain_id_i32 = match i32::try_from(*chain_id) {
+            Ok(id) => id,
+            Err(_) => {
+                return ChainInfoResult::QueryFailed(QueryFailedError {
+                    code: "CONVERSION_ERROR".to_string(),
+                    message: format!("chain ID {} exceeds i32::MAX", chain_id),
+                });
+            }
+        };
 
         // f32 -> f64 is widening, always safe
         #[allow(clippy::cast_lossless)]
         let min_ticket_winning_probability = chain_info.min_incoming_ticket_win_prob as f64;
 
         // Convert domain separators from binary to hex strings
-        let channel_dst = chain_info
-            .channels_dst
-            .as_ref()
-            .map(|b| -> Result<Hex32> {
-                let bytes: &[u8; 32] = b.as_slice().try_into().map_err(|_| {
-                    async_graphql::Error::new(format!("channels_dst must be 32 bytes, got {} bytes", b.len()))
-                })?;
-                Ok(Hex32::from(bytes))
-            })
-            .transpose()?;
-        let ledger_dst = chain_info
-            .ledger_dst
-            .as_ref()
-            .map(|b| -> Result<Hex32> {
-                let bytes: &[u8; 32] = b.as_slice().try_into().map_err(|_| {
-                    async_graphql::Error::new(format!("ledger_dst must be 32 bytes, got {} bytes", b.len()))
-                })?;
-                Ok(Hex32::from(bytes))
-            })
-            .transpose()?;
-        let safe_registry_dst = chain_info
-            .safe_registry_dst
-            .as_ref()
-            .map(|b| -> Result<Hex32> {
-                let bytes: &[u8; 32] = b.as_slice().try_into().map_err(|_| {
-                    async_graphql::Error::new(format!("safe_registry_dst must be 32 bytes, got {} bytes", b.len()))
-                })?;
-                Ok(Hex32::from(bytes))
-            })
-            .transpose()?;
+        let channel_dst = match chain_info.channels_dst.as_ref() {
+            Some(b) => {
+                let bytes: &[u8; 32] = match b.as_slice().try_into() {
+                    Ok(bytes) => bytes,
+                    Err(_) => {
+                        return ChainInfoResult::QueryFailed(QueryFailedError {
+                            code: "CONVERSION_ERROR".to_string(),
+                            message: format!("channels_dst must be 32 bytes, got {} bytes", b.len()),
+                        });
+                    }
+                };
+                Some(Hex32::from(bytes))
+            }
+            None => None,
+        };
+        let ledger_dst = match chain_info.ledger_dst.as_ref() {
+            Some(b) => {
+                let bytes: &[u8; 32] = match b.as_slice().try_into() {
+                    Ok(bytes) => bytes,
+                    Err(_) => {
+                        return ChainInfoResult::QueryFailed(QueryFailedError {
+                            code: "CONVERSION_ERROR".to_string(),
+                            message: format!("ledger_dst must be 32 bytes, got {} bytes", b.len()),
+                        });
+                    }
+                };
+                Some(Hex32::from(bytes))
+            }
+            None => None,
+        };
+        let safe_registry_dst = match chain_info.safe_registry_dst.as_ref() {
+            Some(b) => {
+                let bytes: &[u8; 32] = match b.as_slice().try_into() {
+                    Ok(bytes) => bytes,
+                    Err(_) => {
+                        return ChainInfoResult::QueryFailed(QueryFailedError {
+                            code: "CONVERSION_ERROR".to_string(),
+                            message: format!("safe_registry_dst must be 32 bytes, got {} bytes", b.len()),
+                        });
+                    }
+                };
+                Some(Hex32::from(bytes))
+            }
+            None => None,
+        };
 
         // Convert channel closure grace period from i64 to u64 with validation
-        let channel_closure_grace_period = chain_info
-            .channel_closure_grace_period
-            .map(|period| {
-                u64::try_from(period).map_err(|_| {
-                    async_graphql::Error::new(format!(
-                        "channel_closure_grace_period must be non-negative, got {}",
-                        period
-                    ))
-                })
-            })
-            .transpose()?;
+        let channel_closure_grace_period = match chain_info.channel_closure_grace_period {
+            Some(period) => match u64::try_from(period) {
+                Ok(p) => Some(p),
+                Err(_) => {
+                    return ChainInfoResult::QueryFailed(QueryFailedError {
+                        code: "CONVERSION_ERROR".to_string(),
+                        message: format!("channel_closure_grace_period must be non-negative, got {}", period),
+                    });
+                }
+            },
+            None => None,
+        };
 
-        Ok(ChainInfo {
+        ChainInfoResult::ChainInfo(ChainInfo {
             block_number,
             chain_id: chain_id_i32,
             network: network.clone(),

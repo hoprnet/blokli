@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use async_graphql::{Enum, InputObject, InputValueError, NewType, Scalar, ScalarType, SimpleObject, Value};
+use async_graphql::{Enum, InputObject, InputValueError, NewType, Scalar, ScalarType, SimpleObject, Union, Value};
 use hopr_crypto_types::types::Hash;
 use hopr_primitive_types::prelude::ToHex;
 
@@ -225,6 +225,15 @@ pub struct ChainInfo {
     pub channel_closure_grace_period: Option<u64>,
 }
 
+/// Result type for chain info queries
+#[derive(Union, Clone, Debug)]
+pub enum ChainInfoResult {
+    /// Successful chain info
+    ChainInfo(ChainInfo),
+    /// Query failed
+    QueryFailed(QueryFailedError),
+}
+
 /// Account information
 ///
 /// The Account type contains identity information for HOPR nodes including keys,
@@ -246,6 +255,24 @@ pub struct Account {
     /// List of multiaddresses associated with the packet key
     #[graphql(name = "multiAddresses")]
     pub multi_addresses: Vec<String>,
+}
+
+/// Success response for accounts list query
+#[derive(SimpleObject, Clone, Debug)]
+pub struct AccountsList {
+    /// List of accounts
+    pub accounts: Vec<Account>,
+}
+
+/// Result type for accounts list query
+#[derive(Union, Clone, Debug)]
+pub enum AccountsResult {
+    /// Successful accounts list
+    Accounts(AccountsList),
+    /// Missing required filter parameter
+    MissingFilter(MissingFilterError),
+    /// Query failed
+    QueryFailed(QueryFailedError),
 }
 
 /// Network announcement with multiaddress information
@@ -281,6 +308,24 @@ pub struct Channel {
     /// Timestamp when the channel closure was initiated (null if no closure initiated)
     #[graphql(name = "closureTime")]
     pub closure_time: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Success response for channels list query
+#[derive(SimpleObject, Clone, Debug)]
+pub struct ChannelsList {
+    /// List of channels
+    pub channels: Vec<Channel>,
+}
+
+/// Result type for channels list query
+#[derive(Union, Clone, Debug)]
+pub enum ChannelsResult {
+    /// Successful channels list
+    Channels(ChannelsList),
+    /// Missing required filter parameter
+    MissingFilter(MissingFilterError),
+    /// Query failed
+    QueryFailed(QueryFailedError),
 }
 
 /// Channel update event for subscriptions
@@ -460,6 +505,15 @@ pub struct InvalidAddressError {
 /// Database or internal query error
 #[derive(SimpleObject, Clone, Debug)]
 pub struct QueryFailedError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+}
+
+/// Missing required filter parameter error
+#[derive(SimpleObject, Clone, Debug)]
+pub struct MissingFilterError {
     /// Error code
     pub code: String,
     /// Human-readable error message

@@ -56,6 +56,14 @@ test-package package:
 test-debug:
     cargo test --workspace -- --test-threads=1 --nocapture
 
+# Run all tests in workspace using nextest
+nextest:
+    cargo nextest run
+
+# Run tests for a specific package using nextest
+nextest-package package:
+    cargo nextest run -p {{ package }}
+
 # ============================================================================
 # Code Quality
 # ============================================================================
