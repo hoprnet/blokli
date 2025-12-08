@@ -15,8 +15,12 @@ pub mod internal {
     pub use super::api::internal::*;
 }
 
-#[cfg(feature = "testing")]
+#[doc(hidden)]
 pub mod exports {
-    pub use cynic::{Operation, StreamingOperation};
-    pub use indexmap::{IndexMap, map::Entry};
+    pub use url::Url;
+    #[cfg(feature = "testing")]
+    pub use {
+        cynic::{Operation, StreamingOperation},
+        indexmap::{IndexMap, map::Entry},
+    };
 }

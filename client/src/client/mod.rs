@@ -7,13 +7,12 @@ mod transactions;
 use std::fmt::Debug;
 
 use cynic::GraphQlResponse;
-use eventsource_client::Client;
+use eventsource_client::{Client, ReconnectOptionsBuilder};
 use futures::{StreamExt, TryFutureExt, TryStreamExt};
 #[cfg(feature = "testing")]
 pub use testing::{
     BlokliTestClient, BlokliTestState, BlokliTestStateMutator, BlokliTestStateSnapshot, NopStateMutator,
 };
-use url::Url;
 
 use crate::{
     api::VERSION,
@@ -26,6 +25,9 @@ pub struct BlokliClientConfig {
     /// General timeout for all requests.
     #[default(std::time::Duration::from_secs(10))]
     pub timeout: std::time::Duration,
+    /// Reconnection timeout for SSE streams.
+    #[default(std::time::Duration::from_secs(30))]
+    pub stream_reconnect_timeout: std::time::Duration,
 }
 
 /// Client implementation of the Blokli API.
@@ -36,7 +38,7 @@ pub struct BlokliClientConfig {
 /// - [`BlokliTransactionClient`](api::BlokliTransactionClient)
 #[derive(Clone, Debug)]
 pub struct BlokliClient {
-    base_url: Url,
+    base_url: url::Url,
     cfg: BlokliClientConfig,
 }
 
@@ -46,11 +48,11 @@ const REDIRECT_LIMIT: usize = 3;
 pub struct GraphQlQueries;
 
 impl BlokliClient {
-    pub fn new(base_url: Url, cfg: BlokliClientConfig) -> Self {
+    pub fn new(base_url: url::Url, cfg: BlokliClientConfig) -> Self {
         Self { base_url, cfg }
     }
 
-    fn graphql_url(&self) -> Result<Url, BlokliClientError> {
+    fn graphql_url(&self) -> Result<url::Url, BlokliClientError> {
         let mut base = self.base_url.clone();
         if !base.path().ends_with('/') {
             base.set_path(&format!("{}/", base.path()));
@@ -79,6 +81,9 @@ impl BlokliClient {
         Q: cynic::QueryFragment + cynic::serde::de::DeserializeOwned + 'static,
         V: cynic::QueryVariables + cynic::serde::Serialize,
     {
+        let query = serde_json::to_string(&op).map_err(ErrorKind::from)?;
+        tracing::debug!(query, "sending SSE query");
+
         let client = eventsource_client::ClientBuilder::for_url(self.graphql_url()?.as_str())
             .map_err(ErrorKind::from)?
             .connect_timeout(self.cfg.timeout)
@@ -86,31 +91,43 @@ impl BlokliClient {
             .map_err(ErrorKind::from)?
             .header("Content-Type", "application/json")
             .map_err(ErrorKind::from)?
-            .method("GET".into())
-            .body(serde_json::to_string(&op).map_err(ErrorKind::from)?)
+            .method("POST".into())
+            .body(query)
             .redirect_limit(REDIRECT_LIMIT as u32)
+            .reconnect(
+                ReconnectOptionsBuilder::new(true)
+                    .retry_initial(false)
+                    .delay(std::time::Duration::from_secs(2))
+                    .backoff_factor(2)
+                    .delay_max(self.cfg.stream_reconnect_timeout)
+                    .build(),
+            )
             .build();
 
         Ok(client
             .stream()
             .fuse()
-            .map_err(ErrorKind::from)
+            .inspect(|res| tracing::debug!(?res, "SSE response"))
+            .map_err(|e| BlokliClientError::from(ErrorKind::from(e)))
             .try_filter_map(move |item| {
                 futures::future::ready(match item {
-                    eventsource_client::SSE::Event(event) => serde_json::from_str::<Q>(&event.data)
-                        .map(|f| Some(f))
-                        .map_err(ErrorKind::from),
+                    eventsource_client::SSE::Event(event) => {
+                        tracing::debug!(?event, "SSE event");
+                        serde_json::from_str::<GraphQlResponse<Q>>(&event.data)
+                            .map_err(|e| BlokliClientError::from(ErrorKind::from(e)))
+                            .and_then(response_to_data)
+                            .map(Some)
+                    }
                     eventsource_client::SSE::Comment(comment) => {
                         tracing::debug!(comment, "SSE comment");
-                        Ok(None)
+                        Ok::<_, BlokliClientError>(None)
                     }
                     eventsource_client::SSE::Connected(details) => {
                         tracing::debug!(?details, "SSE connection details");
-                        Ok(None)
+                        Ok::<_, BlokliClientError>(None)
                     }
                 })
-            })
-            .map_err(BlokliClientError::from))
+            }))
     }
 
     fn build_query<Q, V>(
@@ -122,7 +139,6 @@ impl BlokliClient {
         V: cynic::QueryVariables + cynic::serde::Serialize,
     {
         let client = self.build_reqwest_client()?;
-
         tracing::debug!(query = ?serde_json::to_string(&op), "sending Blokli query");
 
         Ok(client

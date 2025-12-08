@@ -174,8 +174,11 @@ impl BlokliQueryClient for BlokliClient {
 
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
     async fn query_channels(&self, selector: ChannelSelector) -> Result<Vec<Channel>> {
-        let resp = self.build_query(GraphQlQueries::query_channels(selector))?.await?;
+        if selector.filter.is_none() {
+            return Err(ErrorKind::InvalidInput("filter must be specified on channel query").into());
+        }
 
+        let resp = self.build_query(GraphQlQueries::query_channels(selector))?.await?;
         response_to_data(resp)?.channels.into()
     }
 

@@ -16,24 +16,28 @@ pub struct ChannelsVariables {
 impl From<ChannelSelector> for ChannelsVariables {
     fn from(value: ChannelSelector) -> Self {
         match value.filter {
-            ChannelFilter::ChannelId(id) => ChannelsVariables {
+            Some(ChannelFilter::ChannelId(id)) => ChannelsVariables {
                 concrete_channel_id: Some(id.encode_hex()),
                 status: value.status,
                 ..Default::default()
             },
-            ChannelFilter::DestinationKeyId(dst) => ChannelsVariables {
+            Some(ChannelFilter::DestinationKeyId(dst)) => ChannelsVariables {
                 destination_key_id: Some(dst as i32),
                 status: value.status,
                 ..Default::default()
             },
-            ChannelFilter::SourceKeyId(src) => ChannelsVariables {
+            Some(ChannelFilter::SourceKeyId(src)) => ChannelsVariables {
                 source_key_id: Some(src as i32),
                 status: value.status,
                 ..Default::default()
             },
-            ChannelFilter::SourceAndDestinationKeyIds(src, dst) => ChannelsVariables {
+            Some(ChannelFilter::SourceAndDestinationKeyIds(src, dst)) => ChannelsVariables {
                 destination_key_id: Some(dst as i32),
                 source_key_id: Some(src as i32),
+                status: value.status,
+                ..Default::default()
+            },
+            None => ChannelsVariables {
                 status: value.status,
                 ..Default::default()
             },
