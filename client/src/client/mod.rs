@@ -4,10 +4,11 @@ mod subscriptions;
 mod testing;
 mod transactions;
 
+use std::fmt::Debug;
+
 use cynic::GraphQlResponse;
 use eventsource_client::Client;
 use futures::{StreamExt, TryFutureExt, TryStreamExt};
-use std::fmt::Debug;
 #[cfg(feature = "testing")]
 pub use testing::{
     BlokliTestClient, BlokliTestState, BlokliTestStateMutator, BlokliTestStateSnapshot, NopStateMutator,
@@ -40,6 +41,9 @@ pub struct BlokliClient {
 }
 
 const REDIRECT_LIMIT: usize = 3;
+
+/// Contains all GraphQL queries used by the Blokli client.
+pub struct GraphQlQueries;
 
 impl BlokliClient {
     pub fn new(base_url: Url, cfg: BlokliClientConfig) -> Self {

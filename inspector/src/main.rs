@@ -19,7 +19,7 @@ struct Cli {
     /// URL of Blokli instance connect to.
     #[arg(short, long, value_parser = clap::value_parser!(url::Url))]
     url: url::Url,
-
+    /// Output format.
     #[arg(short, long, value_enum, default_value = "json")]
     format: Formats,
 
@@ -96,8 +96,7 @@ impl TryFrom<ChannelArgs> for ChannelSelector {
                 ),
                 _ => {
                     return Err(anyhow::anyhow!(
-                        "At least one of --src-key-id or --dst-key-id must be specified, or a --channel-id \
-                         given."
+                        "At least one of --src-key-id or --dst-key-id must be specified, or a --channel-id given."
                     ));
                 }
             },
