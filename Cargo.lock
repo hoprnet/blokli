@@ -1882,7 +1882,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-client"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1984,6 +1984,24 @@ dependencies = [
  "sea-orm",
  "sea-orm-migration",
  "tokio",
+]
+
+[[package]]
+name = "blokli-inspector"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blokli-client",
+ "clap",
+ "futures",
+ "hex",
+ "hopr-primitive-types",
+ "serde",
+ "serde_json",
+ "serde_yaml",
+ "tokio",
+ "tracing-subscriber",
+ "url",
 ]
 
 [[package]]

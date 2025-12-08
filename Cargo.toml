@@ -13,6 +13,7 @@ members = [
   "db/core",
   "db/entity",
   "db/migration",
+  "inspector",
   "types",
 ]
 
@@ -46,6 +47,7 @@ blokli-chain-api = { path = "chain/api" }
 blokli-chain-indexer = { path = "chain/indexer" }
 blokli-chain-rpc = { path = "chain/rpc" }
 blokli-chain-types = { path = "chain/types" }
+blokli-client = { path = "client" }
 blokli-db = { path = "db/core" }
 blokli-db-entity = { path = "db/entity" }
 blokli-db-migration = { path = "db/migration" }

@@ -1,0 +1,26 @@
+[package]
+description = "A tool allowing to inspect running Blokli instances using their GraphQL API"
+edition     = "2024"
+homepage    = "https://hoprnet.org/"
+license     = "GPL-3.0-only"
+name        = "blokli-inspector"
+repository  = "https://github.com/hoprnet/blokli"
+version     = "0.1.0"
+
+
+[dependencies]
+anyhow               = { workspace = true }
+blokli-client        = { workspace = true, features = ["serde"] }
+clap                 = { workspace = true }
+futures              = { workspace = true }
+hex                  = { workspace = true }
+hopr-primitive-types = { workspace = true }
+serde                = { workspace = true }
+serde_json           = { workspace = true }
+serde_yaml           = { workspace = true }
+tokio                = { workspace = true, features = ["signal", "tracing"] }
+tracing-subscriber   = { workspace = true }
+url                  = { workspace = true }
+
+[lints]
+workspace = true
