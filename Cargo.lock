@@ -1994,10 +1994,13 @@ dependencies = [
  "blokli-client",
  "clap",
  "futures",
+ "hex",
+ "hopr-primitive-types",
  "serde",
  "serde_json",
  "serde_yaml",
  "tokio",
+ "url",
 ]
 
 [[package]]

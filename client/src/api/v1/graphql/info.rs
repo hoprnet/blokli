@@ -50,6 +50,7 @@ pub struct SubscribeTicketParams {
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct TicketParameters {
     pub min_ticket_winning_probability: f64,
     pub ticket_price: TokenValueString,
