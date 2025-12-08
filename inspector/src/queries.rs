@@ -15,12 +15,12 @@ pub(crate) enum QueryTarget {
     Health,
     /// Gets the native balance of an address.
     NativeBalance {
-        #[arg(short, long, value_parser = clap::value_parser!(Address))]
+        #[arg(value_parser = clap::value_parser!(Address))]
         address: Address,
     },
     /// Gets the token balance of an address.
     TokenBalance {
-        #[arg(short, long, value_parser = clap::value_parser!(Address))]
+        #[arg(value_parser = clap::value_parser!(Address))]
         address: Address,
     },
     /// Gets information about the HOPR on-chain deployment.
