@@ -53,6 +53,8 @@ pub enum ErrorKind {
         code: String,
         message: String,
     },
+    #[error("invalid query input: {0}")]
+    InvalidInput(&'static str),
     #[error("transaction tracking error: {0:?}")]
     TrackingError(TrackingErrorKind),
     #[error("data returned from blokli was unparseable")]

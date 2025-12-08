@@ -62,7 +62,7 @@ impl std::fmt::Debug for AccountSelector {
 #[derive(Debug, Clone)]
 pub struct ChannelSelector {
     /// Filter for the selected channels.
-    pub filter: ChannelFilter,
+    pub filter: Option<ChannelFilter>,
     /// Optional status filter for the selected channels.
     pub status: Option<types::ChannelStatus>,
 }

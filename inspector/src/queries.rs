@@ -1,6 +1,6 @@
 use blokli_client::{
     BlokliClient,
-    api::{BlokliQueryClient, SafeSelector},
+    api::{AccountSelector, BlokliQueryClient, SafeSelector},
 };
 use clap::Subcommand;
 use hopr_primitive_types::prelude::Address;
@@ -61,7 +61,14 @@ impl QueryTarget {
                     })
                     .await?,
             ),
-            QueryTarget::Account(sel) => format.serialize(client.query_accounts(sel.try_into()?).await?),
+            QueryTarget::Account(sel) => format.serialize(
+                client
+                    .query_accounts(
+                        Option::<AccountSelector>::try_from(sel)?
+                            .ok_or(anyhow::anyhow!("account selector must be specified"))?,
+                    )
+                    .await?,
+            ),
             QueryTarget::Channel(sel) => format.serialize(client.query_channels(sel.try_into()?).await?),
         }
     }

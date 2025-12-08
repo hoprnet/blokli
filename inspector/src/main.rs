@@ -86,17 +86,18 @@ impl TryFrom<ChannelArgs> for ChannelSelector {
         } = value;
         Ok(ChannelSelector {
             filter: match (src_key_id, dst_key_id, channel_id) {
-                (Some(src), None, None) => ChannelFilter::SourceKeyId(src),
-                (None, Some(dst), None) => ChannelFilter::DestinationKeyId(dst),
-                (Some(src), Some(dst), None) => ChannelFilter::SourceAndDestinationKeyIds(src, dst),
-                (None, None, Some(channel_id)) => ChannelFilter::ChannelId(
+                (Some(src), None, None) => Some(ChannelFilter::SourceKeyId(src)),
+                (None, Some(dst), None) => Some(ChannelFilter::DestinationKeyId(dst)),
+                (Some(src), Some(dst), None) => Some(ChannelFilter::SourceAndDestinationKeyIds(src, dst)),
+                (None, None, Some(channel_id)) => Some(ChannelFilter::ChannelId(
                     hex::decode(channel_id)?
                         .try_into()
                         .map_err(|_| anyhow::anyhow!("invalid channel ID"))?,
-                ),
+                )),
+                (None, None, None) => None,
                 _ => {
                     return Err(anyhow::anyhow!(
-                        "At least one of --src-key-id or --dst-key-id must be specified, or a --channel-id given."
+                        "Invalid combination of --src-key-id, --dst-key-id and --channel-id given."
                     ));
                 }
             },
@@ -119,15 +120,16 @@ pub(crate) struct AccountArgs {
     key_id: Option<u32>,
 }
 
-impl TryFrom<AccountArgs> for AccountSelector {
+impl TryFrom<AccountArgs> for Option<AccountSelector> {
     type Error = anyhow::Error;
 
     fn try_from(value: AccountArgs) -> Result<Self, Self::Error> {
         let AccountArgs { address, key_id } = value;
         match (address, key_id) {
-            (Some(address), None) => Ok(AccountSelector::Address(address.into())),
-            (None, Some(key_id)) => Ok(AccountSelector::KeyId(key_id)),
-            _ => Err(anyhow::anyhow!("Either --address or --key-id must be specified.")),
+            (Some(address), None) => Ok(Some(AccountSelector::Address(address.into()))),
+            (None, Some(key_id)) => Ok(Some(AccountSelector::KeyId(key_id))),
+            (None, None) => Ok(None),
+            _ => Err(anyhow::anyhow!("Cannot specify both --address and --key-id.")),
         }
     }
 }

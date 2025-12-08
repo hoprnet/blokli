@@ -70,7 +70,7 @@ impl SubscriptionTarget {
                 .boxed()),
 
             SubscriptionTarget::Accounts(sel) => Ok(client
-                .subscribe_accounts(Some(sel.try_into()?))?
+                .subscribe_accounts(sel.try_into()?)?
                 .map_err(anyhow::Error::from)
                 .filter_map(move |f| {
                     futures::future::ready(

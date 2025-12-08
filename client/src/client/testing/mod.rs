@@ -274,12 +274,13 @@ pub struct BlokliTestClient<M> {
 
 fn channel_matches(channel: &Channel, selector: &ChannelSelector) -> bool {
     let filter = match selector.filter {
-        ChannelFilter::ChannelId(id) => channel.concrete_channel_id == hex::encode(id),
-        ChannelFilter::DestinationKeyId(dst_id) => channel.destination as u32 == dst_id,
-        ChannelFilter::SourceKeyId(src_id) => channel.source as u32 == src_id,
-        ChannelFilter::SourceAndDestinationKeyIds(src_id, dst_id) => {
+        Some(ChannelFilter::ChannelId(id)) => channel.concrete_channel_id == hex::encode(id),
+        Some(ChannelFilter::DestinationKeyId(dst_id)) => channel.destination as u32 == dst_id,
+        Some(ChannelFilter::SourceKeyId(src_id)) => channel.source as u32 == src_id,
+        Some(ChannelFilter::SourceAndDestinationKeyIds(src_id, dst_id)) => {
             channel.source as u32 == src_id && channel.destination as u32 == dst_id
         }
+        None => true,
     };
     filter && selector.status.is_none_or(|status| channel.status == status)
 }
