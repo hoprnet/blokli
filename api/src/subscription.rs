@@ -2,6 +2,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    sync::Arc,
     time::Duration,
 };
 
@@ -9,9 +10,10 @@ use async_broadcast::Receiver;
 use async_graphql::{Context, Result, Subscription};
 use async_stream::stream;
 use blokli_api_types::{
-    Account, Channel, ChannelUpdate, HoprBalance, NativeBalance, OpenedChannelsGraphEntry, Safe, TicketParameters,
-    TokenValueString, UInt64,
+    Account, Channel, ChannelUpdate, Hex32, HoprBalance, NativeBalance, OpenedChannelsGraphEntry, Safe,
+    TicketParameters, TokenValueString, Transaction, TransactionStatus as GqlTransactionStatus, UInt64,
 };
+use blokli_chain_api::transaction_store::{TransactionStatus as StoreTransactionStatus, TransactionStore};
 use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
 use blokli_db::notifications::SqliteNotificationManager;
 use blokli_db_entity::{
@@ -29,6 +31,7 @@ use hopr_primitive_types::{
 };
 use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use tokio::time::sleep;
+use uuid::Uuid;
 
 use crate::conversions::{hopr_balance_from_model, native_balance_from_model};
 
@@ -767,6 +770,64 @@ impl SubscriptionRoot {
                         }
                     }
                 }
+            }
+        })
+    }
+
+    /// Subscribe to real-time updates of a specific transaction
+    ///
+    /// Provides updates whenever the status of the specified transaction changes,
+    /// including validation, submission, confirmation, revert, and failure events.
+    #[graphql(name = "transactionUpdated")]
+    async fn transaction_updated(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Transaction ID to monitor (UUID)")] id: String,
+    ) -> Result<impl Stream<Item = Transaction>> {
+        // Parse UUID from string
+        let transaction_id = Uuid::parse_str(&id).map_err(|e| {
+            async_graphql::Error::new(format!("Invalid transaction ID format: {}. Expected UUID format.", e))
+        })?;
+
+        let transaction_store = ctx.data::<Arc<TransactionStore>>()?.clone();
+
+        Ok(stream! {
+            // Track last status to emit only when it changes
+            let mut last_status: Option<StoreTransactionStatus> = None;
+
+            loop {
+                // Poll the transaction store periodically
+                sleep(Duration::from_millis(100)).await;
+
+                // Try to get the transaction from the store
+                if let Ok(record) = transaction_store.get(transaction_id) {
+                    // Only emit if status has changed
+                    if last_status.as_ref() != Some(&record.status) {
+                        last_status = Some(record.status);
+
+                        // Convert store transaction status to GraphQL status
+                        let gql_status = match record.status {
+                            StoreTransactionStatus::Pending => GqlTransactionStatus::Pending,
+                            StoreTransactionStatus::Submitted => GqlTransactionStatus::Submitted,
+                            StoreTransactionStatus::Confirmed => GqlTransactionStatus::Confirmed,
+                            StoreTransactionStatus::Reverted => GqlTransactionStatus::Reverted,
+                            StoreTransactionStatus::Timeout => GqlTransactionStatus::Timeout,
+                            StoreTransactionStatus::ValidationFailed => GqlTransactionStatus::ValidationFailed,
+                            StoreTransactionStatus::SubmissionFailed => GqlTransactionStatus::SubmissionFailed,
+                        };
+
+                        // Convert transaction hash to hex string
+                        let hash_hex = record.transaction_hash.to_hex();
+
+                        yield Transaction {
+                            id: record.id.to_string(),
+                            status: gql_status,
+                            submitted_at: record.submitted_at,
+                            transaction_hash: Hex32(hash_hex),
+                        };
+                    }
+                }
+                // If transaction not found, continue polling (it might be added later)
             }
         })
     }
