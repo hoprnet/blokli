@@ -5,8 +5,6 @@ use anyhow::{Context, Result, anyhow};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use tokio::time::{Instant, sleep};
-use tracing::info;
 
 pub struct RpcClient {
     http: Client,
@@ -53,49 +51,6 @@ impl RpcClient {
         parse_u256(value.as_str().context("eth_getBalance returned non-string result")?)
     }
 
-    pub async fn wait_for_receipt(
-        &self,
-        tx_hash: &str,
-        timeout: Duration,
-        poll_interval: Duration,
-    ) -> Result<TransactionReceipt> {
-        let start = Instant::now();
-        loop {
-            if let Some(value) = self.call_raw("eth_getTransactionReceipt", vec![json!(tx_hash)]).await? {
-                let receipt: RpcTransactionReceipt = serde_json::from_value(value)?;
-                let block_number = receipt
-                    .block_number
-                    .as_deref()
-                    .map(parse_hex_quantity)
-                    .transpose()?
-                    .unwrap_or(0);
-                let success = match receipt.status.as_deref() {
-                    Some("0x1") => true,
-                    Some("0x0") => false,
-                    Some(other) => {
-                        return Err(anyhow!("Unexpected receipt status value: {}", other));
-                    }
-                    None => false,
-                };
-
-                info!(hash = %receipt.transaction_hash, success, "received transaction receipt");
-
-                return Ok(TransactionReceipt {
-                    transaction_hash: receipt.transaction_hash,
-                    block_number,
-                    success,
-                });
-            }
-
-            if start.elapsed() >= timeout {
-                break;
-            }
-            sleep(poll_interval).await;
-        }
-
-        Err(anyhow!("Timed out waiting for receipt of transaction {}", tx_hash))
-    }
-
     async fn call_raw(&self, method: &str, params: Vec<Value>) -> Result<Option<Value>> {
         let request = JsonRpcRequest {
             jsonrpc: "2.0",
@@ -130,13 +85,24 @@ impl RpcClient {
 
         Ok(payload.result)
     }
-}
 
-#[derive(Debug)]
-pub struct TransactionReceipt {
-    pub transaction_hash: String,
-    pub block_number: u64,
-    pub success: bool,
+    pub async fn execute_transaction(&self, raw_tx: &str) -> Result<[u8; 32]> {
+        let value = self
+            .call_raw("eth_sendRawTransaction", vec![json!(raw_tx)])
+            .await?
+            .context("eth_sendRawTransaction returned no result")?;
+
+        let tx_hash_str = value
+            .as_str()
+            .context("eth_sendRawTransaction returned non-string result")?;
+
+        let tx_hash_bytes =
+            hex::decode(tx_hash_str.trim_start_matches("0x")).context("Failed to decode transaction hash from hex")?;
+
+        let mut tx_hash = [0u8; 32];
+        tx_hash.copy_from_slice(&tx_hash_bytes);
+        Ok(tx_hash)
+    }
 }
 
 #[derive(Serialize)]
@@ -157,16 +123,6 @@ struct JsonRpcResponse {
 struct JsonRpcError {
     code: i64,
     message: String,
-    #[serde(default)]
-    data: Option<Value>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct RpcTransactionReceipt {
-    status: Option<String>,
-    block_number: Option<String>,
-    transaction_hash: String,
 }
 
 fn parse_hex_quantity(value: &str) -> Result<u64> {

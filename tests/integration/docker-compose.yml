@@ -1,8 +1,8 @@
 # Docker Compose configuration for integration testing blokli
 #
 # Environment variables:
-#   REGISTRY_PORT       - Local registry port (default: 5000)
-#   BLOKLID_IMAGE       - Docker image to test (default: localhost:5000/bloklid:integration-test)
+#   REGISTRY_PORT       - Local registry port (default: 1)
+#   BLOKLID_IMAGE       - Docker image to test (default: localhost:5001/bloklid:integration-test)
 #   INTEGRATION_CONFIG  - Path to blokli config file (default: config-integration-anvil.toml)
 services:
   registry:
@@ -11,7 +11,7 @@ services:
       dockerfile: Dockerfile.registry
     container_name: blokli-integration-registry
     ports:
-      - "${REGISTRY_PORT:-5000}:5000"
+      - "${REGISTRY_PORT:-5001}:5001"
     healthcheck:
       test: ["CMD", "wget", "--spider", "-q", "http://localhost:5000/v2/"]
       interval: 2s

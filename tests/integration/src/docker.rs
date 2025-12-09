@@ -1,18 +1,18 @@
 use std::{fs, path::PathBuf, process::Command, sync::Arc};
 
 use anyhow::{Result, bail};
-use chrono::Utc;
+use chrono::{DateTime, Utc};
 use tracing::{info, warn};
 
 use crate::{
-    TestConfig,
-    util::{capture_command, run_command},
+    config::TestConfig,
+    util::{build_command, capture_command, run_command},
 };
 
-pub struct AnvilAccounts {
-    pub sender_private_key: String,
-    pub sender_address: String,
-    pub recipient_address: String,
+#[derive(Clone, Debug)]
+pub struct AnvilAccount {
+    pub private_key: String,
+    pub address: String,
 }
 
 pub struct DockerEnvironment {
@@ -29,14 +29,11 @@ impl DockerEnvironment {
         let remote = &self.config.remote_image;
         info!(remote = %remote, "pulling bloklid Docker image from registry");
 
-        let mut cmd = Command::new("docker");
-        cmd.arg("pull").arg("--platform").arg("linux/amd64").arg(remote);
-        run_command(cmd, "docker pull bloklid image")?;
+        let cmd = build_command("docker", &["pull", "--platform", "linux/amd64", remote]);
+        run_command(cmd, true, "docker pull bloklid image")?;
 
-        let mut cmd = Command::new("docker");
-        cmd.arg("tag").arg(remote).arg(&self.config.bloklid_image);
-        run_command(cmd, "docker tag bloklid remote image")?;
-
+        let cmd = build_command("docker", &["tag", remote, &self.config.bloklid_image]);
+        run_command(cmd, true, "docker tag bloklid remote image")?;
         Ok(())
     }
 
@@ -44,7 +41,8 @@ impl DockerEnvironment {
         info!("starting docker-compose stack for blokli integration tests");
         let mut cmd = self.compose_command();
         cmd.arg("up").arg("-d");
-        run_command(cmd, "docker compose up")?;
+
+        run_command(cmd, true, "docker compose up")?;
         self.running = true;
         Ok(())
     }
@@ -57,47 +55,42 @@ impl DockerEnvironment {
         info!("stopping docker-compose stack");
         let mut cmd = self.compose_command();
         cmd.arg("down").arg("-v").arg("--remove-orphans");
-        run_command(cmd, "docker compose down")?;
+
+        run_command(cmd, true, "docker compose down")?;
         self.running = false;
         Ok(())
     }
 
-    pub fn collect_logs(&self) -> Result<PathBuf> {
+    pub fn collect_logs(&self, name: &str, timestamp: DateTime<Utc>) -> Result<PathBuf> {
         if !self.running {
-            anyhow::bail!("Docker stack not running");
+            bail!("Docker stack not running");
         }
-        info!("collecting bloklid container logs");
+        info!(name, "collecting container logs");
 
-        let mut command = Command::new("docker");
-        command.arg("logs").arg("blokli-integration-bloklid");
-
-        let logs = capture_command(command, "docker logs blokli-integration-bloklid")?;
-        let timestamp = Utc::now().format("%Y%m%d_%H%M%S");
-        let filename = format!(
-            "blokli-integration-{}-{}.log",
-            self.config.integration_config_name, timestamp
-        );
+        let command = build_command("docker", &["logs", &format!("blokli-integration-{}", name)]);
+        let logs = capture_command(command, &format!("docker logs blokli-integration-{}", name))?;
+        let timestamp = timestamp.format("%Y%m%d_%H%M%S");
+        let filename = format!("blokli-integration/{}/{}.log", timestamp, name);
         let log_path = PathBuf::from("/tmp").join(filename);
+
+        fs::create_dir_all(log_path.parent().unwrap())?;
         fs::write(&log_path, logs)?;
-        info!(path = %log_path.display(), "saved bloklid logs");
+        info!(path = %log_path.display(), name, "saved logs");
         Ok(log_path)
     }
 
     fn compose_command(&self) -> Command {
-        let mut cmd = Command::new("docker");
-        cmd.current_dir(&self.config.integration_dir)
-            .arg("compose")
-            .arg("-f")
-            .arg("docker-compose.yml");
+        let mut cmd = build_command("docker", &["compose", "-f", "docker-compose.yml"]);
+
+        cmd.current_dir(&self.config.integration_dir);
         cmd.env("BLOKLID_IMAGE", &self.config.bloklid_image);
         cmd.env("INTEGRATION_CONFIG", &self.config.integration_config);
         cmd.env("REGISTRY_PORT", self.config.registry_port.to_string());
         cmd
     }
 
-    pub fn fetch_anvil_accounts(&self) -> Result<AnvilAccounts> {
-        let mut cmd = Command::new("docker");
-        cmd.arg("logs").arg("blokli-integration-anvil");
+    pub fn fetch_anvil_accounts(&self) -> Result<Vec<AnvilAccount>> {
+        let cmd = build_command("docker", &["logs", "blokli-integration-anvil"]);
         let logs = capture_command(cmd, "docker logs blokli-integration-anvil")?;
         parse_anvil_accounts(&logs)
     }
@@ -105,9 +98,16 @@ impl DockerEnvironment {
 
 impl Drop for DockerEnvironment {
     fn drop(&mut self) {
+        let timestamp = Utc::now();
         if self.running {
-            if let Err(err) = self.collect_logs() {
+            if let Err(err) = self.collect_logs("bloklid", timestamp) {
                 warn!(error = ?err, "failed to collect bloklid logs");
+            }
+            if let Err(err) = self.collect_logs("anvil", timestamp) {
+                warn!(error = ?err, "failed to collect anvil logs");
+            }
+            if let Err(err) = self.collect_logs("registry", timestamp) {
+                warn!(error = ?err, "failed to collect registry logs");
             }
             if let Err(err) = self.compose_down() {
                 warn!(error = ?err, "failed to stop docker-compose stack");
@@ -116,22 +116,28 @@ impl Drop for DockerEnvironment {
     }
 }
 
-fn parse_anvil_accounts(logs: &str) -> Result<AnvilAccounts> {
+fn parse_anvil_accounts(logs: &str) -> Result<Vec<AnvilAccount>> {
     let addresses = extract_section_values(logs, "Available Accounts");
     let keys = extract_section_values(logs, "Private Keys");
 
-    if addresses.len() < 2 {
+    if addresses.is_empty() {
         bail!("Failed to parse Anvil addresses from logs");
     }
-    if keys.is_empty() {
+    if addresses.len() != keys.len() {
+        bail!("Mismatch between addresses and private keys in Anvil logs");
+    }
+
+    let accounts: Vec<AnvilAccount> = addresses
+        .into_iter()
+        .zip(keys)
+        .map(|(address, private_key)| AnvilAccount { private_key, address })
+        .collect();
+
+    if accounts.is_empty() {
         bail!("Failed to parse Anvil private keys from logs");
     }
 
-    Ok(AnvilAccounts {
-        sender_private_key: keys[0].clone(),
-        sender_address: addresses[0].clone(),
-        recipient_address: addresses[1].clone(),
-    })
+    Ok(accounts)
 }
 
 fn extract_section_values(logs: &str, marker: &str) -> Vec<String> {

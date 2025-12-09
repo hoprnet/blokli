@@ -102,6 +102,7 @@ rand = "0.9.2" # ignored in renovate, cannot be updated, dependencies reference 
 reqwest = { version = "0.12.23", features = ["json"] }
 ringbuffer = "0.16.0"
 rstest = "0.26.1"
+rstest-log = "0.2.0"
 rust-stream-ext-concurrent = "1.0.0"
 rustls = { version = "0.23", default-features = false, features = ["std"] }
 rustls-pemfile = "2.1"
@@ -130,6 +131,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.143"
 serde_with = { version = "3.14.0" }
 serde_yaml = "0.9"
+serial_test = "3.2.0"
 smart-default = "0.7.1"
 sqlx = { version = "0.8.6", default-features = false, features = [
   "postgres",
