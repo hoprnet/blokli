@@ -33,7 +33,10 @@ use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilt
 use tokio::time::sleep;
 use uuid::Uuid;
 
-use crate::conversions::{hopr_balance_from_model, native_balance_from_model};
+use crate::{
+    conversions::{hopr_balance_from_model, native_balance_from_model},
+    errors,
+};
 
 /// Watermark representing the last fully processed blockchain position
 ///
@@ -83,8 +86,8 @@ async fn capture_watermark_synchronized(
     let chain_info = blokli_db_entity::chain_info::Entity::find()
         .one(db)
         .await
-        .map_err(|e| async_graphql::Error::new(format!("Failed to query chain_info: {}", e)))?
-        .ok_or_else(|| async_graphql::Error::new("chain_info not initialized"))?;
+        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("chain_info query", e)))?
+        .ok_or_else(|| async_graphql::Error::new(errors::messages::not_found("chain_info", "not initialized")))?;
 
     let watermark = Watermark {
         block: chain_info.last_indexed_block,
@@ -127,7 +130,7 @@ async fn query_channels_at_watermark(
     let channels = channel::Entity::find()
         .all(db)
         .await
-        .map_err(|e| async_graphql::Error::new(format!("Failed to query channels: {}", e)))?;
+        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channels query", e)))?;
 
     if channels.is_empty() {
         return Ok(Vec::new());
@@ -161,7 +164,7 @@ async fn query_channels_at_watermark(
     let channel_states = channel_states_query
         .all(db)
         .await
-        .map_err(|e| async_graphql::Error::new(format!("Failed to query channel_state: {}", e)))?;
+        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channel_state query", e)))?;
 
     // Build map of channel_id -> latest state (first occurrence due to ordering)
     let mut state_map: HashMap<i64, channel_state::Model> = HashMap::new();
@@ -191,7 +194,7 @@ async fn query_channels_at_watermark(
     let accounts_result =
         blokli_db_entity::conversions::account_aggregation::fetch_accounts_by_keyids(db, account_ids.clone())
             .await
-            .map_err(|e| async_graphql::Error::new(format!("Failed to fetch accounts: {}", e)))?;
+            .map_err(|e| async_graphql::Error::new(errors::messages::query_error("accounts fetch", e)))?;
 
     // Build account map for quick lookup
     let account_map: HashMap<i64, blokli_db_entity::conversions::account_aggregation::AggregatedAccount> =
@@ -204,10 +207,10 @@ async fn query_channels_at_watermark(
 
         let source_account = account_map
             .get(&channel.source)
-            .ok_or_else(|| async_graphql::Error::new(format!("Source account {} not found", channel.source)))?;
+            .ok_or_else(|| async_graphql::Error::new(errors::messages::not_found("Source account", channel.source)))?;
 
         let dest_account = account_map.get(&channel.destination).ok_or_else(|| {
-            async_graphql::Error::new(format!("Destination account {} not found", channel.destination))
+            async_graphql::Error::new(errors::messages::not_found("Destination account", channel.destination))
         })?;
 
         // Convert to GraphQL types
@@ -218,12 +221,17 @@ async fn query_channels_at_watermark(
             balance: TokenValueString(PrimitiveHoprBalance::from_be_bytes(&state.balance).amount().to_string()),
             status: state.status.into(),
             epoch: i32::try_from(state.epoch).map_err(|e| {
-                async_graphql::Error::new(format!("Channel epoch {} out of range for i32: {}", state.epoch, e))
+                async_graphql::Error::new(errors::messages::conversion_error(
+                    "i64",
+                    "i32",
+                    format!("{} ({})", state.epoch, e),
+                ))
             })?,
             ticket_index: blokli_api_types::UInt64(u64::try_from(state.ticket_index).map_err(|e| {
-                async_graphql::Error::new(format!(
-                    "Channel ticket_index {} is negative or out of range: {}",
-                    state.ticket_index, e
+                async_graphql::Error::new(errors::messages::conversion_error(
+                    "i64",
+                    "u64",
+                    format!("{} ({})", state.ticket_index, e),
                 ))
             })?),
             closure_time: state.closure_time,
@@ -424,7 +432,7 @@ impl SubscriptionRoot {
         let db = ctx.data::<DatabaseConnection>()?.clone();
         let indexer_state = ctx
             .data::<IndexerState>()
-            .map_err(|_| async_graphql::Error::new("IndexerState not available in context"))?
+            .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
             .clone();
 
         // Capture watermark and subscribe to event bus (synchronized)
@@ -612,7 +620,7 @@ impl SubscriptionRoot {
         let db = ctx.data::<DatabaseConnection>()?.clone();
         let indexer_state = ctx
             .data::<IndexerState>()
-            .map_err(|_| async_graphql::Error::new("IndexerState not available in context"))?
+            .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
             .clone();
 
         Ok(stream! {
@@ -708,7 +716,7 @@ impl SubscriptionRoot {
         let db = ctx.data::<DatabaseConnection>()?.clone();
         let indexer_state = ctx
             .data::<IndexerState>()
-            .map_err(|_| async_graphql::Error::new("IndexerState not available in context"))?
+            .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
             .clone();
 
         // Capture watermark and subscribe to event bus (synchronized)
@@ -841,7 +849,7 @@ impl SubscriptionRoot {
     ) -> Result<Option<NativeBalance>, sea_orm::DbErr> {
         // Convert hex string address to binary for database query
         let binary_address = Address::from_hex(address)
-            .map_err(|e| sea_orm::DbErr::Custom(format!("Invalid address: {}", e)))?
+            .map_err(|e| sea_orm::DbErr::Custom(errors::messages::invalid_address(address, e)))?
             .as_ref()
             .to_vec();
 
@@ -856,7 +864,7 @@ impl SubscriptionRoot {
     async fn fetch_hopr_balance(db: &DatabaseConnection, address: &str) -> Result<Option<HoprBalance>, sea_orm::DbErr> {
         // Convert hex string address to binary for database query
         let binary_address = Address::from_hex(address)
-            .map_err(|e| sea_orm::DbErr::Custom(format!("Invalid address: {}", e)))?
+            .map_err(|e| sea_orm::DbErr::Custom(errors::messages::invalid_address(address, e)))?
             .as_ref()
             .to_vec();
 
@@ -918,12 +926,17 @@ impl SubscriptionRoot {
                     balance: TokenValueString(agg.balance.clone()),
                     status: agg.status.into(),
                     epoch: i32::try_from(agg.epoch).map_err(|e| {
-                        sea_orm::DbErr::Custom(format!("Channel epoch {} out of range for i32: {}", agg.epoch, e))
+                        sea_orm::DbErr::Custom(errors::messages::conversion_error(
+                            "i64",
+                            "i32",
+                            format!("{} ({})", agg.epoch, e),
+                        ))
                     })?,
                     ticket_index: UInt64(u64::try_from(agg.ticket_index).map_err(|e| {
-                        sea_orm::DbErr::Custom(format!(
-                            "Channel ticket_index {} is negative or out of range: {}",
-                            agg.ticket_index, e
+                        sea_orm::DbErr::Custom(errors::messages::conversion_error(
+                            "i64",
+                            "u64",
+                            format!("{} ({})", agg.ticket_index, e),
                         ))
                     })?),
                     closure_time: agg.closure_time,
@@ -1198,7 +1211,13 @@ mod tests {
         let result = capture_watermark_synchronized(&indexer_state, db.conn(blokli_db::TargetDb::Index)).await;
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().message.contains("chain_info not initialized"));
+        let error = result.unwrap_err();
+        // Check that the error message contains expected content (from error_builders::not_found)
+        assert!(
+            error.message.contains("chain_info") && error.message.contains("not found"),
+            "Expected error about chain_info not found, got: {}",
+            error.message
+        );
     }
 
     #[tokio::test]

@@ -171,6 +171,158 @@ pub enum IndexerError {
 }
 ```
 
+#### GraphQL API Error Management
+
+The GraphQL API uses a **centralized error management system** for consistent, maintainable error handling across all resolvers, mutations, and subscriptions.
+
+**Key Module:**
+
+- `api/src/errors.rs` - All error handling in one place
+  - Server-level errors (`ApiError` enum)
+  - GraphQL error codes (`codes` submodule)
+  - Error message templates (`messages` submodule)
+  - Error builder functions
+
+**Error Code Constants** (`errors::codes`):
+
+All error codes are defined as constants in the `codes` module:
+
+```rust
+use crate::errors::codes;
+
+// Available error codes:
+codes::CONTEXT_ERROR        // Context retrieval failures
+codes::QUERY_FAILED         // Database query failures
+codes::NOT_FOUND           // Resource not found
+codes::INVALID_ADDRESS     // Address validation failures
+codes::CONVERSION_ERROR    // Type conversion failures
+codes::OVERFLOW            // Numeric overflow
+codes::RPC_ERROR          // Blockchain RPC failures
+codes::VALIDATION_FAILED   // Transaction validation failures
+// ... and more
+```
+
+**Error Builder Functions** (`errors`):
+
+Always use error builder functions instead of inline error construction:
+
+```rust
+use crate::errors;
+
+// ✅ Good: Use error builders
+return AccountsResult::QueryFailed(errors::db_connection_error(e));
+return AccountsResult::QueryFailed(errors::query_failed("fetch accounts", e));
+return SafeResult::InvalidAddress(errors::invalid_address_error(address, e));
+
+// ❌ Bad: Inline error construction
+return AccountsResult::QueryFailed(QueryFailedError {
+    code: "CONTEXT_ERROR".to_string(),
+    message: format!("Failed to get database connection: {:?}", e),
+});
+```
+
+**Common Error Builder Functions:**
+
+```rust
+// Context and database errors
+errors::context_error(context_type, error)
+errors::db_connection_error(error)
+errors::query_failed(operation, error)
+
+// Validation errors
+errors::invalid_address_error(address, error)
+errors::empty_address_error()
+errors::validation_failed(reason)
+
+// RPC errors
+errors::rpc_error(operation, error)          // Returns RpcError
+errors::rpc_query_failed(operation, error)   // Returns QueryFailedError
+
+// Resource errors
+errors::not_found(resource_type, identifier)
+errors::missing_filter_error(filter_name, context)
+
+// Conversion errors
+errors::conversion_error(from_type, to_type, value)
+errors::overflow_error(operation, value)
+
+// Domain-specific errors
+errors::channel_not_found(channel_id)
+errors::invalid_pagination(reason)
+errors::ticket_params_incomplete()
+errors::network_status_unavailable()
+```
+
+**Error Message Templates** (`errors::messages`):
+
+For custom error scenarios, use message templates directly:
+
+```rust
+use crate::errors::messages;
+
+// Create custom error with consistent formatting
+let error_message = messages::query_error("custom operation", error);
+let error_message = messages::invalid_address(address, error);
+```
+
+**Best Practices:**
+
+1. **Never create errors inline** - Always use error builder functions
+2. **Never hardcode error codes** - Use `errors::codes::*` constants
+3. **Provide context** - Pass descriptive operation names and error details
+4. **Use appropriate builders** - Choose the builder that matches the error type needed
+5. **Add new builders when needed** - If a pattern repeats, create a new builder function
+
+**Example: Complete Resolver with Error Handling:**
+
+```rust
+use crate::errors;
+
+async fn accounts(
+    &self,
+    ctx: &Context<'_>,
+    keyid: Option<i64>,
+) -> AccountsResult {
+    // Validate required filters
+    if keyid.is_none() {
+        return AccountsResult::MissingFilter(
+            errors::missing_filter_error("keyid", "accounts query")
+        );
+    }
+
+    // Get database connection
+    let db = match ctx.data::<DatabaseConnection>() {
+        Ok(db) => db,
+        Err(e) => {
+            return AccountsResult::QueryFailed(
+                errors::db_connection_error(format!("{:?}", e))
+            );
+        }
+    };
+
+    // Fetch accounts
+    let accounts = match fetch_accounts(db, keyid).await {
+        Ok(accounts) => accounts,
+        Err(e) => {
+            return AccountsResult::QueryFailed(
+                errors::query_failed("fetch accounts", e)
+            );
+        }
+    };
+
+    AccountsResult::Accounts(AccountsList { accounts })
+}
+```
+
+**Benefits:**
+
+- **Single source of truth** - All error handling in one `errors.rs` module
+- **Consistency** - Uniform error format across the entire API
+- **Maintainability** - Change messages globally in one location
+- **Testability** - Easy to verify error codes without hardcoded strings
+- **Type safety** - Compiler ensures correct error structure
+- **Clean imports** - Just `use crate::errors` for everything
+
 ### Documentation
 
 Use standard Rust documentation patterns with examples:

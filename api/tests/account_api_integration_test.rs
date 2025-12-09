@@ -282,7 +282,7 @@ async fn test_accounts_query_requires_filter() -> anyhow::Result<()> {
         data["accounts"]["message"]
             .as_str()
             .unwrap()
-            .contains("At least one filter parameter is required")
+            .contains("Missing required filter")
     );
 
     Ok(())

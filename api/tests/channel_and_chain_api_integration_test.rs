@@ -440,7 +440,12 @@ async fn test_channels_query_missing_filter_returns_error() -> Result<()> {
 
     assert_eq!(data["channels"]["__typename"], "MissingFilterError");
     assert_eq!(data["channels"]["code"], "MISSING_FILTER");
-    assert!(data["channels"]["message"].as_str().unwrap().contains("At least one"));
+    assert!(
+        data["channels"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Missing required filter")
+    );
 
     Ok(())
 }

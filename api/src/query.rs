@@ -5,9 +5,8 @@ use std::sync::Arc;
 use async_graphql::{Context, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
     Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelsList, ChannelsResult,
-    ContractAddressMap, CountResult, Hex32, HoprBalance, InvalidAddressError, InvalidTransactionIdError,
-    MissingFilterError, NativeBalance, QueryFailedError, Safe, SafeHoprAllowance, SafeTransactionCount,
-    TokenValueString, Transaction, UInt64,
+    ContractAddressMap, CountResult, Hex32, HoprBalance, InvalidAddressError, NativeBalance, QueryFailedError, Safe,
+    SafeHoprAllowance, SafeTransactionCount, TokenValueString, Transaction, UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
@@ -22,7 +21,7 @@ use hopr_primitive_types::{
 };
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
 
-use crate::{mutation::TransactionResult, validation::validate_eth_address};
+use crate::{errors, mutation::TransactionResult, validation::validate_eth_address};
 
 /// Result type for HOPR balance queries
 #[derive(Union)]
@@ -94,23 +93,15 @@ pub enum SafesResult {
 fn parse_safe_address(address: String) -> std::result::Result<Vec<u8>, SafeResult> {
     // Validate address format
     if let Err(e) = validate_eth_address(&address) {
-        return Err(SafeResult::InvalidAddress(InvalidAddressError {
-            code: "INVALID_ADDRESS".to_string(),
-            message: e.message,
-            address,
-        }));
+        return Err(SafeResult::InvalidAddress(errors::invalid_address_from_message(
+            address, e.message,
+        )));
     }
 
     // Convert hex string to Address and then to binary
     Address::from_hex(&address)
         .map(|addr| addr.as_ref().to_vec())
-        .map_err(|e| {
-            SafeResult::InvalidAddress(InvalidAddressError {
-                code: "INVALID_ADDRESS".to_string(),
-                message: format!("Invalid address: {}", e),
-                address,
-            })
-        })
+        .map_err(|e| SafeResult::InvalidAddress(errors::invalid_address_error(address, e)))
 }
 
 /// Helper function to convert database Safe model to GraphQL Safe type
@@ -165,31 +156,23 @@ impl QueryRoot {
     ) -> AccountsResult {
         // Require at least one identity filter to prevent excessive data retrieval
         if keyid.is_none() && packet_key.is_none() && chain_key.is_none() {
-            return AccountsResult::MissingFilter(MissingFilterError {
-                code: "MISSING_FILTER".to_string(),
-                message: "At least one filter parameter is required (keyid, packetKey, or chainKey). Example: \
-                          accounts(keyid: 1) or accounts(chainKey: \"0x1234...\")"
-                    .to_string(),
-            });
+            return AccountsResult::MissingFilter(errors::missing_filter_error(
+                "keyid, packetKey, or chainKey",
+                "accounts query. Example: accounts(keyid: 1) or accounts(chainKey: \"0x1234...\")",
+            ));
         }
 
         // Validate chain_key before DB access
         if let Some(ref ck) = chain_key
             && let Err(e) = validate_eth_address(ck)
         {
-            return AccountsResult::QueryFailed(QueryFailedError {
-                code: "INVALID_ADDRESS".to_string(),
-                message: e.message,
-            });
+            return AccountsResult::QueryFailed(errors::invalid_address_query_failed(e.message));
         }
 
         let db = match ctx.data::<DatabaseConnection>() {
             Ok(db) => db,
             Err(e) => {
-                return AccountsResult::QueryFailed(QueryFailedError {
-                    code: "CONTEXT_ERROR".to_string(),
-                    message: format!("Failed to get database connection: {:?}", e),
-                });
+                return AccountsResult::QueryFailed(errors::db_connection_error(format!("{:?}", e)));
             }
         };
 
@@ -197,10 +180,7 @@ impl QueryRoot {
         let aggregated_accounts = match fetch_accounts_with_filters(db, keyid, packet_key, chain_key).await {
             Ok(accounts) => accounts,
             Err(e) => {
-                return AccountsResult::QueryFailed(QueryFailedError {
-                    code: "QUERY_FAILED".to_string(),
-                    message: format!("Failed to fetch accounts: {}", e),
-                });
+                return AccountsResult::QueryFailed(errors::query_failed("fetch accounts", e));
             }
         };
 
@@ -235,19 +215,13 @@ impl QueryRoot {
         if let Some(ref ck) = chain_key
             && let Err(e) = validate_eth_address(ck)
         {
-            return CountResult::QueryFailed(QueryFailedError {
-                code: "INVALID_ADDRESS".to_string(),
-                message: e.message,
-            });
+            return CountResult::QueryFailed(errors::invalid_address_query_failed(e.message));
         }
 
         let db = match ctx.data::<DatabaseConnection>() {
             Ok(db) => db,
             Err(e) => {
-                return CountResult::QueryFailed(QueryFailedError {
-                    code: "CONTEXT_ERROR".to_string(),
-                    message: format!("Failed to get database connection: {:?}", e),
-                });
+                return CountResult::QueryFailed(errors::db_connection_error(format!("{:?}", e)));
             }
         };
 
@@ -267,10 +241,10 @@ impl QueryRoot {
             let binary_chain_key = match Address::from_hex(&ck) {
                 Ok(addr) => addr.as_ref().to_vec(),
                 Err(e) => {
-                    return CountResult::QueryFailed(QueryFailedError {
-                        code: "INVALID_ADDRESS".to_string(),
-                        message: format!("Invalid address: {}", e),
-                    });
+                    return CountResult::QueryFailed(errors::invalid_address_query_failed(format!(
+                        "Invalid address: {}",
+                        e
+                    )));
                 }
             };
             query = query.filter(blokli_db_entity::account::Column::ChainKey.eq(binary_chain_key));
@@ -280,10 +254,7 @@ impl QueryRoot {
         let count_u64 = match query.count(db).await {
             Ok(count) => count,
             Err(e) => {
-                return CountResult::QueryFailed(QueryFailedError {
-                    code: "QUERY_FAILED".to_string(),
-                    message: format!("Failed to count accounts: {}", e),
-                });
+                return CountResult::QueryFailed(errors::query_failed("count accounts", e));
             }
         };
 
@@ -291,10 +262,7 @@ impl QueryRoot {
         let count = match i32::try_from(count_u64) {
             Ok(c) => c,
             Err(_) => {
-                return CountResult::QueryFailed(QueryFailedError {
-                    code: "OVERFLOW".to_string(),
-                    message: format!("Account count {} exceeds i32::MAX (2,147,483,647)", count_u64),
-                });
+                return CountResult::QueryFailed(errors::overflow_error("account count", count_u64.to_string()));
             }
         };
 
@@ -319,10 +287,7 @@ impl QueryRoot {
         let db = match ctx.data::<DatabaseConnection>() {
             Ok(db) => db,
             Err(e) => {
-                return CountResult::QueryFailed(QueryFailedError {
-                    code: "CONTEXT_ERROR".to_string(),
-                    message: format!("Failed to get database connection: {:?}", e),
-                });
+                return CountResult::QueryFailed(errors::db_connection_error(format!("{:?}", e)));
             }
         };
 
@@ -343,21 +308,15 @@ impl QueryRoot {
         // TODO(Phase 2-3): Status filtering requires querying channel_state table
         // Status column has been moved to channel_state table
         if let Some(_status_filter) = status {
-            return CountResult::QueryFailed(QueryFailedError {
-                code: "NOT_IMPLEMENTED".to_string(),
-                message: "Channel status filtering is temporarily unavailable during schema migration. Use other \
-                          filters (sourceKeyId, destinationKeyId, or concreteChannelId) without status."
-                    .to_string(),
-            });
+            return CountResult::QueryFailed(errors::not_implemented(
+                "Channel status filtering during schema migration",
+            ));
         }
 
         let count_u64 = match query.count(db).await {
             Ok(count) => count,
             Err(e) => {
-                return CountResult::QueryFailed(QueryFailedError {
-                    code: "QUERY_FAILED".to_string(),
-                    message: format!("Failed to count channels: {}", e),
-                });
+                return CountResult::QueryFailed(errors::query_failed("count channels", e));
             }
         };
 
@@ -365,10 +324,7 @@ impl QueryRoot {
         let count = match i32::try_from(count_u64) {
             Ok(c) => c,
             Err(_) => {
-                return CountResult::QueryFailed(QueryFailedError {
-                    code: "OVERFLOW".to_string(),
-                    message: format!("Channel count {} exceeds i32::MAX (2,147,483,647)", count_u64),
-                });
+                return CountResult::QueryFailed(errors::overflow_error("channel count", count_u64.to_string()));
             }
         };
 
@@ -394,22 +350,17 @@ impl QueryRoot {
         // Require at least one identity filter to prevent excessive data retrieval
         // Note: status alone is not sufficient as it could still return thousands of channels
         if source_key_id.is_none() && destination_key_id.is_none() && concrete_channel_id.is_none() {
-            return ChannelsResult::MissingFilter(MissingFilterError {
-                code: "MISSING_FILTER".to_string(),
-                message: "At least one identity filter is required (sourceKeyId, destinationKeyId, or \
-                          concreteChannelId). The status filter can be used in combination but not alone. Example: \
-                          channels(sourceKeyId: 1) or channels(sourceKeyId: 1, status: OPEN)"
-                    .to_string(),
-            });
+            return ChannelsResult::MissingFilter(errors::missing_filter_error(
+                "sourceKeyId, destinationKeyId, or concreteChannelId",
+                "channels query. The status filter can be used in combination but not alone. Example: \
+                 channels(sourceKeyId: 1) or channels(sourceKeyId: 1, status: OPEN)",
+            ));
         }
 
         let db = match ctx.data::<DatabaseConnection>() {
             Ok(db) => db,
             Err(e) => {
-                return ChannelsResult::QueryFailed(QueryFailedError {
-                    code: "CONTEXT_ERROR".to_string(),
-                    message: format!("Failed to get database connection: {:?}", e),
-                });
+                return ChannelsResult::QueryFailed(errors::db_connection_error(format!("{:?}", e)));
             }
         };
 
@@ -432,10 +383,7 @@ impl QueryRoot {
         {
             Ok(channels) => channels,
             Err(e) => {
-                return ChannelsResult::QueryFailed(QueryFailedError {
-                    code: "QUERY_FAILED".to_string(),
-                    message: format!("Failed to fetch channels: {}", e),
-                });
+                return ChannelsResult::QueryFailed(errors::query_failed("fetch channels", e));
             }
         };
 
@@ -500,11 +448,9 @@ impl QueryRoot {
     ) -> Result<HoprBalanceResult> {
         // Validate address format
         if let Err(e) = validate_eth_address(&address) {
-            return Ok(HoprBalanceResult::InvalidAddress(InvalidAddressError {
-                code: "INVALID_ADDRESS".to_string(),
-                message: e.message,
-                address,
-            }));
+            return Ok(HoprBalanceResult::InvalidAddress(errors::invalid_address_from_message(
+                address, e.message,
+            )));
         }
 
         // Convert hex string address to Address type
@@ -520,10 +466,10 @@ impl QueryRoot {
                 address,
                 balance: TokenValueString(balance.to_string()),
             })),
-            Err(e) => Ok(HoprBalanceResult::QueryFailed(QueryFailedError {
-                code: "QUERY_FAILED".to_string(),
-                message: format!("Failed to query HOPR balance from RPC: {}", e),
-            })),
+            Err(e) => Ok(HoprBalanceResult::QueryFailed(errors::rpc_query_failed(
+                "query HOPR balance",
+                e,
+            ))),
         }
     }
 
@@ -539,11 +485,9 @@ impl QueryRoot {
     ) -> Result<NativeBalanceResult> {
         // Validate address format
         if let Err(e) = validate_eth_address(&address) {
-            return Ok(NativeBalanceResult::InvalidAddress(InvalidAddressError {
-                code: "INVALID_ADDRESS".to_string(),
-                message: e.message,
-                address,
-            }));
+            return Ok(NativeBalanceResult::InvalidAddress(
+                errors::invalid_address_from_message(address, e.message),
+            ));
         }
 
         // Convert hex string address to Address type
@@ -559,10 +503,10 @@ impl QueryRoot {
                 address,
                 balance: TokenValueString(balance.to_string()),
             })),
-            Err(e) => Ok(NativeBalanceResult::QueryFailed(QueryFailedError {
-                code: "QUERY_FAILED".to_string(),
-                message: format!("Failed to query native balance from RPC: {}", e),
-            })),
+            Err(e) => Ok(NativeBalanceResult::QueryFailed(errors::rpc_query_failed(
+                "query native balance",
+                e,
+            ))),
         }
     }
 
@@ -581,11 +525,9 @@ impl QueryRoot {
     ) -> Result<SafeHoprAllowanceResult> {
         // Validate address format
         if let Err(e) = validate_eth_address(&address) {
-            return Ok(SafeHoprAllowanceResult::InvalidAddress(InvalidAddressError {
-                code: "INVALID_ADDRESS".to_string(),
-                message: e.message,
-                address,
-            }));
+            return Ok(SafeHoprAllowanceResult::InvalidAddress(
+                errors::invalid_address_from_message(address, e.message),
+            ));
         }
 
         // Convert hex string address to Address type
@@ -605,10 +547,10 @@ impl QueryRoot {
                 address,
                 allowance: TokenValueString(allowance.to_string()),
             })),
-            Err(e) => Ok(SafeHoprAllowanceResult::QueryFailed(QueryFailedError {
-                code: "QUERY_FAILED".to_string(),
-                message: format!("Failed to query HOPR allowance from RPC: {}", e),
-            })),
+            Err(e) => Ok(SafeHoprAllowanceResult::QueryFailed(errors::rpc_query_failed(
+                "query HOPR allowance",
+                e,
+            ))),
         }
     }
 
@@ -653,11 +595,9 @@ impl QueryRoot {
     ) -> Result<SafeTransactionCountResult> {
         // Validate address format
         if let Err(e) = validate_eth_address(&address) {
-            return Ok(SafeTransactionCountResult::InvalidAddress(InvalidAddressError {
-                code: "INVALID_ADDRESS".to_string(),
-                message: e.message,
-                address,
-            }));
+            return Ok(SafeTransactionCountResult::InvalidAddress(
+                errors::invalid_address_from_message(address, e.message),
+            ));
         }
 
         // Convert hex string address to Address type
@@ -673,10 +613,10 @@ impl QueryRoot {
                 address,
                 count: UInt64(count),
             })),
-            Err(e) => Ok(SafeTransactionCountResult::QueryFailed(QueryFailedError {
-                code: "QUERY_FAILED".to_string(),
-                message: format!("Failed to query Safe transaction count from RPC: {}", e),
-            })),
+            Err(e) => Ok(SafeTransactionCountResult::QueryFailed(errors::rpc_query_failed(
+                "query Safe transaction count",
+                e,
+            ))),
         }
     }
 
@@ -724,16 +664,13 @@ impl QueryRoot {
         {
             Ok(Some(safe)) => match safe_from_db_model(safe) {
                 Ok(safe_data) => Ok(Some(SafeResult::Safe(safe_data))),
-                Err(e) => Ok(Some(SafeResult::QueryFailed(QueryFailedError {
-                    code: "INVALID_DB_DATA".to_string(),
-                    message: format!("Database contains malformed data: {}", e),
-                }))),
+                Err(e) => Ok(Some(SafeResult::QueryFailed(errors::invalid_db_data(
+                    "safe addresses",
+                    &e,
+                )))),
             },
             Ok(None) => Ok(None),
-            Err(e) => Ok(Some(SafeResult::QueryFailed(QueryFailedError {
-                code: "QUERY_FAILED".to_string(),
-                message: format!("Database query failed: {}", e),
-            }))),
+            Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed("fetch safe", e)))),
         }
     }
 
@@ -788,16 +725,16 @@ impl QueryRoot {
         {
             Ok(Some(safe)) => match safe_from_db_model(safe) {
                 Ok(safe_data) => Ok(Some(SafeResult::Safe(safe_data))),
-                Err(e) => Ok(Some(SafeResult::QueryFailed(QueryFailedError {
-                    code: "INVALID_DB_DATA".to_string(),
-                    message: format!("Database contains malformed data: {}", e),
-                }))),
+                Err(e) => Ok(Some(SafeResult::QueryFailed(errors::invalid_db_data(
+                    "safe addresses",
+                    &e,
+                )))),
             },
             Ok(None) => Ok(None),
-            Err(e) => Ok(Some(SafeResult::QueryFailed(QueryFailedError {
-                code: "QUERY_FAILED".to_string(),
-                message: format!("Database query failed: {}", e),
-            }))),
+            Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed(
+                "fetch safe by chain key",
+                e,
+            )))),
         }
     }
 
@@ -837,16 +774,10 @@ impl QueryRoot {
 
                 match safe_results {
                     Ok(safe_list) => Ok(SafesResult::Safes(SafesList { safes: safe_list })),
-                    Err(e) => Ok(SafesResult::QueryFailed(QueryFailedError {
-                        code: "INVALID_DB_DATA".to_string(),
-                        message: format!("Database contains malformed data: {}", e),
-                    })),
+                    Err(e) => Ok(SafesResult::QueryFailed(errors::invalid_db_data("safe addresses", &e))),
                 }
             }
-            Err(e) => Ok(SafesResult::QueryFailed(QueryFailedError {
-                code: "QUERY_FAILED".to_string(),
-                message: format!("Database query failed: {}", e),
-            })),
+            Err(e) => Ok(SafesResult::QueryFailed(errors::query_failed("fetch safes", e))),
         }
     }
 
@@ -871,37 +802,25 @@ impl QueryRoot {
         let db = match ctx.data::<DatabaseConnection>() {
             Ok(db) => db,
             Err(e) => {
-                return ChainInfoResult::QueryFailed(QueryFailedError {
-                    code: "CONTEXT_ERROR".to_string(),
-                    message: format!("Failed to get database connection: {:?}", e),
-                });
+                return ChainInfoResult::QueryFailed(errors::db_connection_error(format!("{:?}", e)));
             }
         };
         let chain_id = match ctx.data::<u64>() {
             Ok(id) => id,
             Err(e) => {
-                return ChainInfoResult::QueryFailed(QueryFailedError {
-                    code: "CONTEXT_ERROR".to_string(),
-                    message: format!("Failed to get chain ID: {:?}", e),
-                });
+                return ChainInfoResult::QueryFailed(errors::context_error("chain ID", format!("{:?}", e)));
             }
         };
         let network = match ctx.data::<String>() {
             Ok(net) => net,
             Err(e) => {
-                return ChainInfoResult::QueryFailed(QueryFailedError {
-                    code: "CONTEXT_ERROR".to_string(),
-                    message: format!("Failed to get network name: {:?}", e),
-                });
+                return ChainInfoResult::QueryFailed(errors::context_error("network name", format!("{:?}", e)));
             }
         };
         let contract_addresses = match ctx.data::<ContractAddresses>() {
             Ok(addrs) => addrs,
             Err(e) => {
-                return ChainInfoResult::QueryFailed(QueryFailedError {
-                    code: "CONTEXT_ERROR".to_string(),
-                    message: format!("Failed to get contract addresses: {:?}", e),
-                });
+                return ChainInfoResult::QueryFailed(errors::context_error("contract addresses", format!("{:?}", e)));
             }
         };
 
@@ -909,16 +828,10 @@ impl QueryRoot {
         let chain_info = match blokli_db_entity::chain_info::Entity::find_by_id(1).one(db).await {
             Ok(Some(info)) => info,
             Ok(None) => {
-                return ChainInfoResult::QueryFailed(QueryFailedError {
-                    code: "NOT_FOUND".to_string(),
-                    message: "Chain info not found in database".to_string(),
-                });
+                return ChainInfoResult::QueryFailed(errors::not_found("chain info", "database"));
             }
             Err(e) => {
-                return ChainInfoResult::QueryFailed(QueryFailedError {
-                    code: "QUERY_FAILED".to_string(),
-                    message: format!("Failed to fetch chain info: {}", e),
-                });
+                return ChainInfoResult::QueryFailed(errors::query_failed("fetch chain info", e));
             }
         };
 
@@ -940,10 +853,11 @@ impl QueryRoot {
         let block_number = match i32::try_from(chain_info.last_indexed_block) {
             Ok(bn) => bn,
             Err(_) => {
-                return ChainInfoResult::QueryFailed(QueryFailedError {
-                    code: "CONVERSION_ERROR".to_string(),
-                    message: format!("block number {} exceeds i32::MAX", chain_info.last_indexed_block),
-                });
+                return ChainInfoResult::QueryFailed(errors::conversion_error(
+                    "i64",
+                    "i32",
+                    chain_info.last_indexed_block.to_string(),
+                ));
             }
         };
 
@@ -951,10 +865,7 @@ impl QueryRoot {
         let chain_id_i32 = match i32::try_from(*chain_id) {
             Ok(id) => id,
             Err(_) => {
-                return ChainInfoResult::QueryFailed(QueryFailedError {
-                    code: "CONVERSION_ERROR".to_string(),
-                    message: format!("chain ID {} exceeds i32::MAX", chain_id),
-                });
+                return ChainInfoResult::QueryFailed(errors::conversion_error("u64", "i32", chain_id.to_string()));
             }
         };
 
@@ -968,10 +879,10 @@ impl QueryRoot {
                 let bytes: &[u8; 32] = match b.as_slice().try_into() {
                     Ok(bytes) => bytes,
                     Err(_) => {
-                        return ChainInfoResult::QueryFailed(QueryFailedError {
-                            code: "CONVERSION_ERROR".to_string(),
-                            message: format!("channels_dst must be 32 bytes, got {} bytes", b.len()),
-                        });
+                        return ChainInfoResult::QueryFailed(errors::invalid_db_data(
+                            "channels_dst",
+                            &format!("must be 32 bytes, got {} bytes", b.len()),
+                        ));
                     }
                 };
                 Some(Hex32::from(bytes))
@@ -983,10 +894,10 @@ impl QueryRoot {
                 let bytes: &[u8; 32] = match b.as_slice().try_into() {
                     Ok(bytes) => bytes,
                     Err(_) => {
-                        return ChainInfoResult::QueryFailed(QueryFailedError {
-                            code: "CONVERSION_ERROR".to_string(),
-                            message: format!("ledger_dst must be 32 bytes, got {} bytes", b.len()),
-                        });
+                        return ChainInfoResult::QueryFailed(errors::invalid_db_data(
+                            "ledger_dst",
+                            &format!("must be 32 bytes, got {} bytes", b.len()),
+                        ));
                     }
                 };
                 Some(Hex32::from(bytes))
@@ -998,10 +909,10 @@ impl QueryRoot {
                 let bytes: &[u8; 32] = match b.as_slice().try_into() {
                     Ok(bytes) => bytes,
                     Err(_) => {
-                        return ChainInfoResult::QueryFailed(QueryFailedError {
-                            code: "CONVERSION_ERROR".to_string(),
-                            message: format!("safe_registry_dst must be 32 bytes, got {} bytes", b.len()),
-                        });
+                        return ChainInfoResult::QueryFailed(errors::invalid_db_data(
+                            "safe_registry_dst",
+                            &format!("must be 32 bytes, got {} bytes", b.len()),
+                        ));
                     }
                 };
                 Some(Hex32::from(bytes))
@@ -1014,10 +925,7 @@ impl QueryRoot {
             Some(period) => match u64::try_from(period) {
                 Ok(p) => Some(p),
                 Err(_) => {
-                    return ChainInfoResult::QueryFailed(QueryFailedError {
-                        code: "CONVERSION_ERROR".to_string(),
-                        message: format!("channel_closure_grace_period must be non-negative, got {}", period),
-                    });
+                    return ChainInfoResult::QueryFailed(errors::conversion_error("i64", "u64", period.to_string()));
                 }
             },
             None => None,
@@ -1062,11 +970,9 @@ impl QueryRoot {
         let uuid = match uuid::Uuid::parse_str(id.as_str()) {
             Ok(uuid) => uuid,
             Err(_) => {
-                return Ok(Some(TransactionResult::InvalidId(InvalidTransactionIdError {
-                    code: "INVALID_TRANSACTION_ID".to_string(),
-                    message: format!("Invalid transaction ID format: {}", id.as_str()),
-                    transaction_id: id.to_string(),
-                })));
+                return Ok(Some(TransactionResult::InvalidId(errors::invalid_transaction_id(
+                    id.to_string(),
+                ))));
             }
         };
 

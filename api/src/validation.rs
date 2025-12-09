@@ -2,6 +2,8 @@
 
 use async_graphql::Error;
 
+use crate::errors;
+
 /// Validate an Ethereum address format
 ///
 /// Ensures the address:
@@ -15,20 +17,17 @@ use async_graphql::Error;
 /// * `Result<(), Error>` - Ok if valid, Error with message if invalid
 pub fn validate_eth_address(address: &str) -> Result<(), Error> {
     if address.is_empty() {
-        return Err(Error::new("Address cannot be empty"));
+        return Err(Error::new(errors::messages::empty_address()));
     }
 
     let hex_part = address.strip_prefix("0x").unwrap_or(address);
 
     if hex_part.len() != 40 {
-        return Err(Error::new(format!(
-            "Invalid address: must be 40 hex characters (20 bytes), got {} characters",
-            hex_part.len()
-        )));
+        return Err(Error::new(errors::messages::invalid_address_length(hex_part.len())));
     }
 
     if !hex_part.chars().all(|c| c.is_ascii_hexdigit()) {
-        return Err(Error::new("Invalid address: contains non-hexadecimal characters"));
+        return Err(Error::new(errors::messages::invalid_address_characters()));
     }
 
     Ok(())
