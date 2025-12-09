@@ -19,6 +19,20 @@ services:
       retries: 5
     networks:
       - integration-test
+  postgres:
+    image: postgres:18-alpine
+    container_name: blokli-integration-postgres
+    environment:
+      POSTGRES_USER: bloklid
+      POSTGRES_PASSWORD: bloklid_integration_test
+      POSTGRES_DB: bloklid
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bloklid"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    networks:
+      - integration-test
   anvil:
     image: ghcr.io/foundry-rs/foundry:latest
     container_name: blokli-integration-anvil
@@ -46,6 +60,8 @@ services:
     container_name: blokli-integration-bloklid
     depends_on:
       registry:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
       anvil:
         condition: service_healthy

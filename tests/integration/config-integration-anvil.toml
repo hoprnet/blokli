@@ -16,7 +16,8 @@ max_rpc_requests_per_sec = 0
 
 # PostgreSQL database configuration
 [database]
-type = "in-memory"
+type = "postgresql"
+url  = "postgresql://bloklid:bloklid_integration_test@postgres:5432/bloklid"
 
 # Indexer configuration
 [indexer]
