@@ -1,0 +1,66 @@
+use std::str::FromStr;
+
+use alloy::{
+    consensus::{SignableTransaction, TxLegacy},
+    eips::eip2718::Encodable2718,
+    primitives::{Address as AlloyAddress, TxKind, U256},
+    signers::{Signer, local::PrivateKeySigner},
+};
+use anyhow::{Context, Result};
+
+pub struct TransactionBuilder {
+    signer: PrivateKeySigner,
+    sender_address: String,
+}
+
+impl TransactionBuilder {
+    pub fn new(private_key_hex: &str) -> Result<Self> {
+        let cleaned = private_key_hex.trim_start_matches("0x");
+        let bytes = hex::decode(cleaned).context("Failed to decode sender private key")?;
+        let signer = PrivateKeySigner::from_slice(&bytes).context("Failed to construct signer")?;
+        let address = format!("{:#x}", signer.address());
+
+        Ok(Self {
+            signer,
+            sender_address: address,
+        })
+    }
+
+    pub fn sender_address(&self) -> String {
+        self.sender_address.clone()
+    }
+
+    pub async fn build_legacy_transaction_hex(
+        &self,
+        chain_id: u64,
+        nonce: u64,
+        recipient: &str,
+        value: U256,
+        gas_price: u128,
+        gas_limit: u64,
+    ) -> Result<String> {
+        let to = AlloyAddress::from_str(recipient).context("Invalid recipient address")?;
+        let tx = TxLegacy {
+            chain_id: Some(chain_id),
+            nonce,
+            gas_price,
+            gas_limit,
+            to: TxKind::Call(to),
+            value,
+            input: Default::default(),
+        };
+
+        let tx_hash = tx.signature_hash();
+        let signature = self
+            .signer
+            .sign_hash(&tx_hash)
+            .await
+            .context("Failed to sign transaction hash")?;
+        let signed = tx.into_signed(signature);
+
+        let mut encoded = Vec::new();
+        signed.encode_2718(&mut encoded);
+
+        Ok(format!("0x{}", hex::encode(encoded)))
+    }
+}

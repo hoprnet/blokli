@@ -169,6 +169,8 @@ pub enum DatabaseConfig {
     PostgreSql(PostgreSqlConfig),
     #[serde(rename = "sqlite")]
     Sqlite(SqliteConfig),
+    #[serde(rename = "in-memory")]
+    InMemory,
 }
 
 fn default_max_connections() -> u32 {
@@ -214,6 +216,7 @@ impl DatabaseConfig {
             DatabaseConfig::Sqlite(sqlite_config) => {
                 format!("sqlite://{}?mode=rwc", sqlite_config.index_path)
             }
+            DatabaseConfig::InMemory => "sqlite::memory:".to_string(),
         }
     }
 
@@ -224,6 +227,7 @@ impl DatabaseConfig {
         match self {
             DatabaseConfig::PostgreSql(_) => None,
             DatabaseConfig::Sqlite(sqlite_config) => Some(format!("sqlite://{}?mode=rwc", sqlite_config.logs_path)),
+            DatabaseConfig::InMemory => Some("sqlite::memory:".to_string()),
         }
     }
 
@@ -232,7 +236,13 @@ impl DatabaseConfig {
         match self {
             DatabaseConfig::PostgreSql(pg_config) => pg_config.max_connections,
             DatabaseConfig::Sqlite(sqlite_config) => sqlite_config.max_connections,
+            DatabaseConfig::InMemory => 0,
         }
+    }
+
+    /// Inform if the db is stored in memory
+    pub fn is_in_memory(&self) -> bool {
+        matches!(self, DatabaseConfig::InMemory)
     }
 
     /// Display the database configuration with sensitive data redacted
@@ -271,6 +281,7 @@ impl DatabaseConfig {
                     sqlite_config.index_path, sqlite_config.logs_path, sqlite_config.max_connections
                 )
             }
+            DatabaseConfig::InMemory => "In-Memory Database".to_string(),
         }
     }
 }
