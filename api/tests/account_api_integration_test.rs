@@ -798,63 +798,37 @@ async fn test_accounts_query_with_union_result_types() -> anyhow::Result<()> {
 
     let response = execute_graphql_query(&schema, &query).await;
 
-    // Current implementation returns Result<Vec<Account>> instead of AccountsResult union
-    // This test documents the gap between target schema and current implementation
-    // Expected: Union type with AccountsList variant
-    // Actual: Direct array return or GraphQL error
+    // Assert no GraphQL errors
+    assert!(
+        response.errors.is_empty(),
+        "GraphQL query should not return errors: {:?}",
+        response.errors
+    );
 
-    if !response.errors.is_empty() {
-        // If there are errors, it means the schema doesn't support union types yet
-        println!("Schema doesn't support AccountsResult union type yet");
-        println!("Errors: {:?}", response.errors);
-        println!("This indicates the resolver needs to be updated to return AccountsResult union");
+    // Convert response data to JSON
+    let data = response.data.into_json()?;
 
-        // For now, verify the current implementation works with direct array access
-        let direct_query = format!(
-            r#"
-            query {{
-                accounts(chainKey: "{}") {{
-                    chainKey
-                    keyid
-                    multiAddresses
-                    packetKey
-                    safeAddress
-                }}
-            }}
-        "#,
-            chain_key.to_hex()
-        );
+    // Verify it's the AccountsList variant
+    assert_eq!(
+        data["accounts"]["__typename"].as_str(),
+        Some("AccountsList"),
+        "Should return AccountsList variant"
+    );
 
-        let direct_response = execute_graphql_query(&schema, &direct_query).await;
-        assert!(direct_response.errors.is_empty(), "Direct query should work");
+    // Extract and validate accounts array
+    let accounts = data["accounts"]["accounts"].as_array().unwrap();
+    assert_eq!(accounts.len(), 1);
 
-        let data = direct_response.data.into_json()?;
-        let accounts = data["accounts"].as_array().unwrap();
-        assert_eq!(accounts.len(), 1);
-        assert_eq!(accounts[0]["keyid"], 1);
-        assert_eq!(accounts[0]["chainKey"], chain_key.to_hex());
-    } else {
-        // If no errors, the union type is supported
-        let data = response.data.into_json()?;
+    // Validate account fields
+    assert_eq!(accounts[0]["keyid"], 1);
+    assert_eq!(accounts[0]["chainKey"], chain_key.to_hex());
+    assert_eq!(accounts[0]["packetKey"], packet_key.to_hex());
+    assert_eq!(accounts[0]["safeAddress"], safe_address.to_hex());
 
-        // Verify it's the AccountsList variant
-        assert_eq!(
-            data["accounts"]["__typename"].as_str(),
-            Some("AccountsList"),
-            "Should return AccountsList variant"
-        );
-
-        let accounts = data["accounts"]["accounts"].as_array().unwrap();
-        assert_eq!(accounts.len(), 1);
-        assert_eq!(accounts[0]["keyid"], 1);
-        assert_eq!(accounts[0]["chainKey"], chain_key.to_hex());
-        assert_eq!(accounts[0]["packetKey"], packet_key.to_hex());
-        assert_eq!(accounts[0]["safeAddress"], safe_address.to_hex());
-
-        let multi_addresses = accounts[0]["multiAddresses"].as_array().unwrap();
-        assert_eq!(multi_addresses.len(), 1);
-        assert_eq!(multi_addresses[0].as_str().unwrap(), multiaddr_str);
-    }
+    // Validate multiAddresses
+    let multi_addresses = accounts[0]["multiAddresses"].as_array().unwrap();
+    assert_eq!(multi_addresses.len(), 1);
+    assert_eq!(multi_addresses[0].as_str().unwrap(), multiaddr_str);
 
     Ok(())
 }
