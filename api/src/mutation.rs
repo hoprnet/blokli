@@ -165,7 +165,7 @@ fn hex_to_bytes(hex_str: &str) -> Result<Vec<u8>> {
 /// Convert TransactionRecord to GraphQL Transaction
 fn record_to_graphql(record: TransactionRecord) -> Transaction {
     Transaction {
-        id: record.id.to_string(),
+        id: async_graphql::ID::from(record.id.to_string()),
         status: crate::conversions::store_status_to_graphql(record.status),
         submitted_at: record.submitted_at,
         transaction_hash: record.transaction_hash.into(),

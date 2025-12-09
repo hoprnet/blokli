@@ -632,7 +632,8 @@ async fn test_chain_info_query() -> Result<()> {
     assert_eq!(chain_info["chainId"], 100);
     assert_eq!(chain_info["network"], "anvil-localhost");
     assert_eq!(chain_info["minTicketWinningProbability"], 0.5);
-    assert_eq!(chain_info["channelClosureGracePeriod"], 300);
+    // channelClosureGracePeriod is now UInt64, which is represented as a string
+    assert_eq!(chain_info["channelClosureGracePeriod"].as_str().unwrap(), "300");
 
     // Verify token values (0 balance represented as "0")
     assert_eq!(chain_info["ticketPrice"].as_str().unwrap(), "0");

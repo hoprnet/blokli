@@ -7,7 +7,7 @@ use std::{
 };
 
 use async_broadcast::Receiver;
-use async_graphql::{Context, Result, Subscription};
+use async_graphql::{Context, ID, Result, Subscription};
 use async_stream::stream;
 use blokli_api_types::{
     Account, Channel, ChannelUpdate, Hex32, HoprBalance, NativeBalance, OpenedChannelsGraphEntry, Safe,
@@ -790,10 +790,10 @@ impl SubscriptionRoot {
     async fn transaction_updated(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Transaction ID to monitor (UUID)")] id: String,
+        #[graphql(desc = "Transaction ID to monitor (UUID)")] id: ID,
     ) -> Result<impl Stream<Item = Transaction>> {
         // Parse UUID from string
-        let transaction_id = Uuid::parse_str(&id).map_err(|e| {
+        let transaction_id = Uuid::parse_str(id.as_str()).map_err(|e| {
             async_graphql::Error::new(format!("Invalid transaction ID format: {}. Expected UUID format.", e))
         })?;
 
@@ -828,7 +828,7 @@ impl SubscriptionRoot {
                         let hash_hex = record.transaction_hash.to_hex();
 
                         yield Transaction {
-                            id: record.id.to_string(),
+                            id: ID::from(record.id.to_string()),
                             status: gql_status,
                             submitted_at: record.submitted_at,
                             transaction_hash: Hex32(hash_hex),

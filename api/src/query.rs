@@ -920,10 +920,10 @@ impl QueryRoot {
             None => None,
         };
 
-        // Convert channel closure grace period from i64 to u64 with validation
+        // Convert channel closure grace period from i64 to UInt64 with validation
         let channel_closure_grace_period = match chain_info.channel_closure_grace_period {
             Some(period) => match u64::try_from(period) {
-                Ok(p) => Some(p),
+                Ok(p) => Some(UInt64(p)),
                 Err(_) => {
                     return ChainInfoResult::QueryFailed(errors::conversion_error("i64", "u64", period.to_string()));
                 }
@@ -984,7 +984,7 @@ impl QueryRoot {
             Ok(record) => {
                 // Convert to GraphQL Transaction type
                 let transaction = Transaction {
-                    id: record.id.to_string(),
+                    id: async_graphql::ID::from(record.id.to_string()),
                     status: crate::conversions::store_status_to_graphql(record.status),
                     submitted_at: record.submitted_at,
                     transaction_hash: record.transaction_hash.into(),

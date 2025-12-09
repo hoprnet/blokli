@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use async_graphql::{Enum, InputObject, InputValueError, NewType, Scalar, ScalarType, SimpleObject, Union, Value};
+use async_graphql::{Enum, ID, InputObject, InputValueError, Scalar, ScalarType, SimpleObject, Union, Value};
 use hopr_crypto_types::types::Hash;
 use hopr_primitive_types::prelude::ToHex;
 
@@ -14,8 +14,22 @@ use hopr_primitive_types::prelude::ToHex;
 /// This scalar type represents token amounts as decimal strings to avoid
 /// floating-point precision issues. Values are typically represented in
 /// the token's base unit (e.g., wei for native tokens, smallest unit for HOPR).
-#[derive(Debug, Clone, PartialEq, Eq, NewType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenValueString(pub String);
+
+#[Scalar]
+impl ScalarType for TokenValueString {
+    fn parse(value: Value) -> async_graphql::InputValueResult<Self> {
+        match value {
+            Value::String(s) => Ok(TokenValueString(s)),
+            _ => Err(InputValueError::custom("TokenValueString must be a string")),
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        Value::String(self.0.clone())
+    }
+}
 
 /// 32-byte hexadecimal string scalar type (with optional 0x prefix)
 ///
@@ -70,7 +84,7 @@ impl From<hopr_crypto_types::types::Hash> for Hex32 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UInt64(pub u64);
 
-#[Scalar]
+#[Scalar(name = "UInt64")]
 impl ScalarType for UInt64 {
     fn parse(value: Value) -> async_graphql::InputValueResult<Self> {
         match value {
@@ -222,7 +236,7 @@ pub struct ChainInfo {
     pub safe_registry_dst: Option<Hex32>,
     /// Channel closure grace period in seconds
     #[graphql(name = "channelClosureGracePeriod")]
-    pub channel_closure_grace_period: Option<u64>,
+    pub channel_closure_grace_period: Option<UInt64>,
 }
 
 /// Result type for chain info queries
@@ -445,7 +459,7 @@ pub struct TransactionInput {
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Transaction {
     /// Unique identifier for the transaction (UUID)
-    pub id: String,
+    pub id: ID,
     /// Current status of the transaction
     pub status: TransactionStatus,
     /// Timestamp when transaction was submitted
