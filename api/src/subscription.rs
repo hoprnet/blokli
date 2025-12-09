@@ -1,25 +1,20 @@
 //! GraphQL subscription root and resolver implementations
 
-use std::{
-    collections::{HashMap, HashSet},
-    time::Duration,
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use async_broadcast::Receiver;
-use async_graphql::{Context, Result, Subscription};
+use async_graphql::{Context, ID, Result, Subscription};
 use async_stream::stream;
 use blokli_api_types::{
-    Account, Channel, ChannelUpdate, HoprBalance, NativeBalance, OpenedChannelsGraph, Safe, TicketParameters,
-    TokenValueString, UInt64,
+    Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, Safe, TicketParameters, TokenValueString,
+    Transaction, TransactionStatus as GqlTransactionStatus, UInt64,
 };
+use blokli_chain_api::transaction_store::{TransactionStatus as StoreTransactionStatus, TransactionStore};
 use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
 use blokli_db::notifications::SqliteNotificationManager;
 use blokli_db_entity::{
     chain_info, channel, channel_state,
-    conversions::{
-        account_aggregation::{fetch_accounts_by_keyids, fetch_accounts_with_filters},
-        channel_aggregation::fetch_channels_with_state,
-    },
+    conversions::{account_aggregation::fetch_accounts_with_filters, channel_aggregation::fetch_channels_with_state},
 };
 use futures::{Stream, StreamExt};
 use hopr_primitive_types::{
@@ -29,8 +24,9 @@ use hopr_primitive_types::{
 };
 use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use tokio::time::sleep;
+use uuid::Uuid;
 
-use crate::conversions::{hopr_balance_from_model, native_balance_from_model};
+use crate::errors;
 
 /// Watermark representing the last fully processed blockchain position
 ///
@@ -48,7 +44,7 @@ pub struct Watermark {
 }
 
 /// Captures the current watermark synchronized with event bus subscription
-#[allow(dead_code)]
+///
 /// This function is the critical synchronization point that prevents race conditions
 /// in the 2-phase subscription model. It:
 /// 1. Acquires read lock from IndexerState (waits for any in-progress block processing)
@@ -80,8 +76,8 @@ async fn capture_watermark_synchronized(
     let chain_info = blokli_db_entity::chain_info::Entity::find()
         .one(db)
         .await
-        .map_err(|e| async_graphql::Error::new(format!("Failed to query chain_info: {}", e)))?
-        .ok_or_else(|| async_graphql::Error::new("chain_info not initialized"))?;
+        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("chain_info query", e)))?
+        .ok_or_else(|| async_graphql::Error::new(errors::messages::not_found("chain_info", "not initialized")))?;
 
     let watermark = Watermark {
         block: chain_info.last_indexed_block,
@@ -99,7 +95,7 @@ async fn capture_watermark_synchronized(
 }
 
 /// Queries all open channels at a specific watermark
-#[allow(dead_code)]
+///
 /// This implements the Phase 1 historical snapshot by querying all channels
 /// that were open at the watermark position. Uses temporal queries to get
 /// the state as it existed at that exact point in time.
@@ -124,7 +120,7 @@ async fn query_channels_at_watermark(
     let channels = channel::Entity::find()
         .all(db)
         .await
-        .map_err(|e| async_graphql::Error::new(format!("Failed to query channels: {}", e)))?;
+        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channels query", e)))?;
 
     if channels.is_empty() {
         return Ok(Vec::new());
@@ -158,7 +154,7 @@ async fn query_channels_at_watermark(
     let channel_states = channel_states_query
         .all(db)
         .await
-        .map_err(|e| async_graphql::Error::new(format!("Failed to query channel_state: {}", e)))?;
+        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channel_state query", e)))?;
 
     // Build map of channel_id -> latest state (first occurrence due to ordering)
     let mut state_map: HashMap<i64, channel_state::Model> = HashMap::new();
@@ -188,7 +184,7 @@ async fn query_channels_at_watermark(
     let accounts_result =
         blokli_db_entity::conversions::account_aggregation::fetch_accounts_by_keyids(db, account_ids.clone())
             .await
-            .map_err(|e| async_graphql::Error::new(format!("Failed to fetch accounts: {}", e)))?;
+            .map_err(|e| async_graphql::Error::new(errors::messages::query_error("accounts fetch", e)))?;
 
     // Build account map for quick lookup
     let account_map: HashMap<i64, blokli_db_entity::conversions::account_aggregation::AggregatedAccount> =
@@ -201,10 +197,10 @@ async fn query_channels_at_watermark(
 
         let source_account = account_map
             .get(&channel.source)
-            .ok_or_else(|| async_graphql::Error::new(format!("Source account {} not found", channel.source)))?;
+            .ok_or_else(|| async_graphql::Error::new(errors::messages::not_found("Source account", channel.source)))?;
 
         let dest_account = account_map.get(&channel.destination).ok_or_else(|| {
-            async_graphql::Error::new(format!("Destination account {} not found", channel.destination))
+            async_graphql::Error::new(errors::messages::not_found("Destination account", channel.destination))
         })?;
 
         // Convert to GraphQL types
@@ -215,12 +211,17 @@ async fn query_channels_at_watermark(
             balance: TokenValueString(PrimitiveHoprBalance::from_be_bytes(&state.balance).amount().to_string()),
             status: state.status.into(),
             epoch: i32::try_from(state.epoch).map_err(|e| {
-                async_graphql::Error::new(format!("Channel epoch {} out of range for i32: {}", state.epoch, e))
+                async_graphql::Error::new(errors::messages::conversion_error(
+                    "i64",
+                    "i32",
+                    format!("{} ({})", state.epoch, e),
+                ))
             })?,
             ticket_index: blokli_api_types::UInt64(u64::try_from(state.ticket_index).map_err(|e| {
-                async_graphql::Error::new(format!(
-                    "Channel ticket_index {} is negative or out of range: {}",
-                    state.ticket_index, e
+                async_graphql::Error::new(errors::messages::conversion_error(
+                    "i64",
+                    "u64",
+                    format!("{} ({})", state.ticket_index, e),
                 ))
             })?),
             closure_time: state.closure_time,
@@ -258,60 +259,6 @@ pub struct SubscriptionRoot;
 
 #[Subscription]
 impl SubscriptionRoot {
-    /// Subscribe to real-time updates of native balances for a specific address
-    ///
-    /// Provides updates whenever there is a change in the native token balance for the specified account.
-    /// Updates are sent immediately when balance changes occur on-chain.
-    #[graphql(name = "nativeBalanceUpdated")]
-    async fn native_balance_updated(
-        &self,
-        ctx: &Context<'_>,
-        #[graphql(desc = "On-chain address to monitor for balance changes (hexadecimal format)")] address: String,
-    ) -> Result<impl Stream<Item = NativeBalance>> {
-        let db = ctx.data::<DatabaseConnection>()?.clone();
-        let addr = address.clone();
-
-        Ok(stream! {
-            loop {
-                // TODO: Replace with actual database change notifications
-                // For now, poll the database periodically
-                sleep(Duration::from_secs(1)).await;
-
-                // Query the latest balance
-                if let Ok(Some(balance)) = Self::fetch_native_balance(&db, &addr).await {
-                    yield balance;
-                }
-            }
-        })
-    }
-
-    /// Subscribe to real-time updates of HOPR balances for a specific address
-    ///
-    /// Provides updates whenever there is a change in the HOPR token balance for the specified account.
-    /// Updates are sent immediately when balance changes occur on-chain.
-    #[graphql(name = "hoprBalanceUpdated")]
-    async fn hopr_balance_updated(
-        &self,
-        ctx: &Context<'_>,
-        #[graphql(desc = "On-chain address to monitor for balance changes (hexadecimal format)")] address: String,
-    ) -> Result<impl Stream<Item = HoprBalance>> {
-        let db = ctx.data::<DatabaseConnection>()?.clone();
-        let addr = address.clone();
-
-        Ok(stream! {
-            loop {
-                // TODO: Replace with actual database change notifications
-                // For now, poll the database periodically
-                sleep(Duration::from_secs(1)).await;
-
-                // Query the latest balance
-                if let Ok(Some(balance)) = Self::fetch_hopr_balance(&db, &addr).await {
-                    yield balance;
-                }
-            }
-        })
-    }
-
     /// Subscribe to real-time updates of payment channels
     ///
     /// Provides updates whenever there is a change in the state of any payment channel,
@@ -344,57 +291,42 @@ impl SubscriptionRoot {
         })
     }
 
-    /// Subscribe to a full stream of existing channels and channel updates.
+    /// Subscribe to the opened payment channels graph with real-time updates
     ///
-    /// Provides channel information on all open channels along with the accounts that participate in those channels.
-    /// This provides a complete view of the active payment channel network.
+    /// **Streaming Behavior:**
+    /// - Emits one OpenedChannelsGraphEntry per open channel
+    /// - Each entry contains a single channel with its source and destination accounts
+    /// - On subscription start, emits all existing open channels as separate entries
+    /// - Subsequently, emits updates when any channel changes
+    ///
+    /// **Building the Graph:**
+    /// Clients receive entries incrementally (one per channel) and should accumulate
+    /// them to build the complete network topology. The full graph is the union of all entries.
+    ///
+    /// **Update Triggers:**
+    /// An entry is re-emitted for a channel when:
+    /// - The channel's status changes (e.g., OPEN -> PENDINGTOCLOSE)
+    /// - The channel's balance changes
+    /// - The channel closes (no longer emitted)
+    /// - A new channel opens (new entry emitted)
+    ///
+    /// **Example:**
+    /// If the network has three open channels: channelA (A->B), channelB (B->A), channelC (A->C),
+    /// the subscription emits three separate OpenedChannelsGraphEntry objects, each containing
+    /// one channel with its source and destination accounts.
+    ///
+    /// **Note:** This is a directed graph. Bidirectional communication requires
+    /// channels in both directions, each emitted as a separate entry.
     #[graphql(name = "openedChannelGraphUpdated")]
-    async fn opened_channel_graph_updated(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = OpenedChannelsGraph>> {
-        let db = ctx.data::<DatabaseConnection>()?.clone();
-
-        Ok(stream! {
-            loop {
-                // TODO: Replace with actual database change notifications
-                // For now, poll the database periodically
-                sleep(Duration::from_secs(1)).await;
-
-                // Query the opened channels graph
-                if let Ok(graph) = Self::fetch_opened_channels_graph(&db).await {
-                    yield graph;
-                }
-            }
-        })
-    }
-
-    /// Streams opened payment channels with complete account information.
-    ///
-    /// Provides a two-phase stream: Phase 1 emits a historical snapshot of all channels
-    /// that were open at subscription time; Phase 2 emits real-time channel updates
-    /// from the indexer's event bus. The stream yields `ChannelUpdate` items and
-    /// terminates on shutdown, event-bus closure, or on a fatal query error.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// use futures::StreamExt;
-    ///
-    /// # async fn example(root: crate::SubscriptionRoot, ctx: &async_graphql::Context<'_>) -> Result<(), async_graphql::Error> {
-    /// let mut stream = root.opened_channels_graph_stream(ctx).await?;
-    /// // read one update (historical or real-time)
-    /// if let Some(update) = stream.next().await {
-    ///     // handle `ChannelUpdate`
-    ///     let _ = update;
-    /// }
-    /// # Ok(())
-    /// # }
-    /// ```
-    #[graphql(name = "openedChannelsGraphStream")]
-    async fn opened_channels_graph_stream(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = ChannelUpdate>> {
+    async fn opened_channel_graph_updated(
+        &self,
+        ctx: &Context<'_>,
+    ) -> Result<impl Stream<Item = OpenedChannelsGraphEntry>> {
         // Get dependencies from context
         let db = ctx.data::<DatabaseConnection>()?.clone();
         let indexer_state = ctx
             .data::<IndexerState>()
-            .map_err(|_| async_graphql::Error::new("IndexerState not available in context"))?
+            .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
             .clone();
 
         // Capture watermark and subscribe to event bus (synchronized)
@@ -409,7 +341,7 @@ impl SubscriptionRoot {
             match query_channels_at_watermark(&db, &watermark, BATCH_SIZE).await {
                 Ok(historical_channels) => {
                     for channel_update in historical_channels {
-                        yield channel_update;
+                        yield channel_update_to_graph_entry(channel_update);
                     }
                 }
                 Err(e) => {
@@ -443,8 +375,8 @@ impl SubscriptionRoot {
                     event_result = event_receiver.recv() => {
                         match event_result {
                             Ok(IndexerEvent::ChannelUpdated(channel_update)) => {
-                                // Event already contains complete data, just yield it
-                                yield *channel_update;
+                                // Convert from ChannelUpdate (internal) to OpenedChannelsGraphEntry (API)
+                                yield channel_update_to_graph_entry(*channel_update);
                             }
                             Ok(IndexerEvent::AccountUpdated(_)) => {
                                 // Account updates don't affect this subscription
@@ -582,7 +514,7 @@ impl SubscriptionRoot {
         let db = ctx.data::<DatabaseConnection>()?.clone();
         let indexer_state = ctx
             .data::<IndexerState>()
-            .map_err(|_| async_graphql::Error::new("IndexerState not available in context"))?
+            .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
             .clone();
 
         Ok(stream! {
@@ -678,7 +610,7 @@ impl SubscriptionRoot {
         let db = ctx.data::<DatabaseConnection>()?.clone();
         let indexer_state = ctx
             .data::<IndexerState>()
-            .map_err(|_| async_graphql::Error::new("IndexerState not available in context"))?
+            .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
             .clone();
 
         // Capture watermark and subscribe to event bus (synchronized)
@@ -743,43 +675,77 @@ impl SubscriptionRoot {
             }
         })
     }
+
+    /// Subscribe to real-time updates of a specific transaction
+    ///
+    /// Provides updates whenever the status of the specified transaction changes,
+    /// including validation, submission, confirmation, revert, and failure events.
+    #[graphql(name = "transactionUpdated")]
+    async fn transaction_updated(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Transaction ID to monitor (UUID)")] id: ID,
+    ) -> Result<impl Stream<Item = Transaction>> {
+        let transaction_id = Uuid::parse_str(id.as_str()).map_err(|e| {
+            async_graphql::Error::new(format!("Invalid transaction ID format: {}. Expected UUID format.", e))
+        })?;
+
+        let transaction_store = ctx.data::<Arc<TransactionStore>>()?.clone();
+
+        Ok(stream! {
+            // Track last status to emit only when it changes
+            let mut last_status: Option<StoreTransactionStatus> = None;
+
+            loop {
+                // Poll the transaction store periodically
+                // TODO: use event-driven approach
+                sleep(Duration::from_millis(100)).await;
+
+                // Try to get the transaction from the store
+                if let Ok(record) = transaction_store.get(transaction_id) {
+                    // Only emit if status has changed
+                    if last_status.as_ref() != Some(&record.status) {
+                        last_status = Some(record.status);
+
+                        // Convert store transaction status to GraphQL status
+                        let gql_status = match record.status {
+                            StoreTransactionStatus::Pending => GqlTransactionStatus::Pending,
+                            StoreTransactionStatus::Submitted => GqlTransactionStatus::Submitted,
+                            StoreTransactionStatus::Confirmed => GqlTransactionStatus::Confirmed,
+                            StoreTransactionStatus::Reverted => GqlTransactionStatus::Reverted,
+                            StoreTransactionStatus::Timeout => GqlTransactionStatus::Timeout,
+                            StoreTransactionStatus::ValidationFailed => GqlTransactionStatus::ValidationFailed,
+                            StoreTransactionStatus::SubmissionFailed => GqlTransactionStatus::SubmissionFailed,
+                        };
+
+                        // Convert transaction hash to hex string
+                        let hash_hex = record.transaction_hash.to_hex();
+
+                        yield Transaction {
+                            id: ID::from(record.id.to_string()),
+                            status: gql_status,
+                            submitted_at: record.submitted_at,
+                            transaction_hash: Hex32(hash_hex),
+                        };
+                    }
+                }
+                // If transaction not found, continue polling (it might be added later)
+            }
+        })
+    }
+}
+
+/// Convert ChannelUpdate (from events) to OpenedChannelsGraphEntry (for GraphQL)
+fn channel_update_to_graph_entry(update: ChannelUpdate) -> OpenedChannelsGraphEntry {
+    OpenedChannelsGraphEntry {
+        channel: update.channel,
+        source: update.source,
+        destination: update.destination,
+    }
 }
 
 // Helper methods for fetching data
 impl SubscriptionRoot {
-    async fn fetch_native_balance(
-        db: &DatabaseConnection,
-        address: &str,
-    ) -> Result<Option<NativeBalance>, sea_orm::DbErr> {
-        // Convert hex string address to binary for database query
-        let binary_address = Address::from_hex(address)
-            .map_err(|e| sea_orm::DbErr::Custom(format!("Invalid address: {}", e)))?
-            .as_ref()
-            .to_vec();
-
-        let balance = blokli_db_entity::native_balance::Entity::find()
-            .filter(blokli_db_entity::native_balance::Column::Address.eq(binary_address))
-            .one(db)
-            .await?;
-
-        Ok(balance.map(native_balance_from_model))
-    }
-
-    async fn fetch_hopr_balance(db: &DatabaseConnection, address: &str) -> Result<Option<HoprBalance>, sea_orm::DbErr> {
-        // Convert hex string address to binary for database query
-        let binary_address = Address::from_hex(address)
-            .map_err(|e| sea_orm::DbErr::Custom(format!("Invalid address: {}", e)))?
-            .as_ref()
-            .to_vec();
-
-        let balance = blokli_db_entity::hopr_balance::Entity::find()
-            .filter(blokli_db_entity::hopr_balance::Column::Address.eq(binary_address))
-            .one(db)
-            .await?;
-
-        Ok(balance.map(hopr_balance_from_model))
-    }
-
     async fn fetch_ticket_parameters(db: &DatabaseConnection) -> Result<Option<TicketParameters>, sea_orm::DbErr> {
         let chain_info = chain_info::Entity::find().one(db).await?;
 
@@ -804,35 +770,51 @@ impl SubscriptionRoot {
         concrete_channel_id: Option<String>,
         status: Option<blokli_api_types::ChannelStatus>,
     ) -> Result<Vec<Channel>, sea_orm::DbErr> {
-        // Build query with filters
-        let mut query = blokli_db_entity::channel::Entity::find();
+        // Convert i32 keyids to i64 for channel aggregation function
+        let source_i64 = source_key_id.map(|k| k as i64);
+        let dest_i64 = destination_key_id.map(|k| k as i64);
 
-        if let Some(src_keyid) = source_key_id {
-            query = query.filter(blokli_db_entity::channel::Column::Source.eq(src_keyid));
-        }
+        // Convert GraphQL ChannelStatus to internal status code (i8)
+        let status_code = status.map(|s| match s {
+            blokli_api_types::ChannelStatus::Closed => 0i8,
+            blokli_api_types::ChannelStatus::Open => 1i8,
+            blokli_api_types::ChannelStatus::PendingToClose => 2i8,
+        });
 
-        if let Some(dst_keyid) = destination_key_id {
-            query = query.filter(blokli_db_entity::channel::Column::Destination.eq(dst_keyid));
-        }
+        // Use optimized channel aggregation function
+        let aggregated_channels =
+            fetch_channels_with_state(db, source_i64, dest_i64, concrete_channel_id, status_code).await?;
 
-        if let Some(channel_id) = concrete_channel_id {
-            query = query.filter(blokli_db_entity::channel::Column::ConcreteChannelId.eq(channel_id));
-        }
+        // Convert to GraphQL Channel type
+        let channels: Vec<Channel> = aggregated_channels
+            .iter()
+            .map(|agg| -> Result<Channel, sea_orm::DbErr> {
+                Ok(Channel {
+                    concrete_channel_id: agg.concrete_channel_id.clone(),
+                    source: agg.source,
+                    destination: agg.destination,
+                    balance: TokenValueString(agg.balance.clone()),
+                    status: agg.status.into(),
+                    epoch: i32::try_from(agg.epoch).map_err(|e| {
+                        sea_orm::DbErr::Custom(errors::messages::conversion_error(
+                            "i64",
+                            "i32",
+                            format!("{} ({})", agg.epoch, e),
+                        ))
+                    })?,
+                    ticket_index: UInt64(u64::try_from(agg.ticket_index).map_err(|e| {
+                        sea_orm::DbErr::Custom(errors::messages::conversion_error(
+                            "i64",
+                            "u64",
+                            format!("{} ({})", agg.ticket_index, e),
+                        ))
+                    })?),
+                    closure_time: agg.closure_time,
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
-        // TODO(Phase 2-3): Status filtering requires querying channel_state table
-        if let Some(_status_filter) = status {
-            return Err(sea_orm::DbErr::Custom(
-                "Channel status filtering temporarily unavailable during schema migration".to_string(),
-            ));
-        }
-
-        let _channels = query.all(db).await?;
-
-        // TODO(Phase 2-3): Use proper channel query functions from blokli_db::channels
-        // that join with channel_state table to get complete channel data
-        Err(sea_orm::DbErr::Custom(
-            "Channel subscription temporarily unavailable during schema migration".to_string(),
-        ))
+        Ok(channels)
     }
 
     async fn fetch_filtered_accounts(
@@ -857,60 +839,6 @@ impl SubscriptionRoot {
             .collect();
 
         Ok(result)
-    }
-
-    async fn fetch_opened_channels_graph(db: &DatabaseConnection) -> Result<OpenedChannelsGraph, sea_orm::DbErr> {
-        // 1. Fetch all OPEN channels (status = 1) using channel aggregation
-        let aggregated_channels = fetch_channels_with_state(db, None, None, None, Some(1)).await?;
-
-        // Convert to GraphQL Channel type
-        let channels: Vec<Channel> = aggregated_channels
-            .iter()
-            .map(|agg| -> Result<Channel, sea_orm::DbErr> {
-                Ok(Channel {
-                    concrete_channel_id: agg.concrete_channel_id.clone(),
-                    source: agg.source,
-                    destination: agg.destination,
-                    balance: TokenValueString(agg.balance.clone()),
-                    status: agg.status.into(),
-                    epoch: i32::try_from(agg.epoch).map_err(|e| {
-                        sea_orm::DbErr::Custom(format!("Channel epoch {} out of range for i32: {}", agg.epoch, e))
-                    })?,
-                    ticket_index: UInt64(u64::try_from(agg.ticket_index).map_err(|e| {
-                        sea_orm::DbErr::Custom(format!(
-                            "Channel ticket_index {} is negative or out of range: {}",
-                            agg.ticket_index, e
-                        ))
-                    })?),
-                    closure_time: agg.closure_time,
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        // 2. Collect unique keyids from source and destination
-        let mut keyids = HashSet::new();
-        for channel in &aggregated_channels {
-            keyids.insert(channel.source);
-            keyids.insert(channel.destination);
-        }
-
-        // 3. Fetch accounts for those keyids with optimized batch loading
-        let keyid_vec: Vec<i64> = keyids.into_iter().collect();
-        let aggregated_accounts = fetch_accounts_by_keyids(db, keyid_vec).await?;
-
-        // Convert to GraphQL Account type
-        let accounts = aggregated_accounts
-            .into_iter()
-            .map(|agg| Account {
-                keyid: agg.keyid,
-                chain_key: agg.chain_key,
-                packet_key: agg.packet_key,
-                safe_address: agg.safe_address,
-                multi_addresses: agg.multi_addresses,
-            })
-            .collect();
-
-        Ok(OpenedChannelsGraph { channels, accounts })
     }
 }
 
@@ -1088,7 +1016,13 @@ mod tests {
         let result = capture_watermark_synchronized(&indexer_state, db.conn(blokli_db::TargetDb::Index)).await;
 
         assert!(result.is_err());
-        assert!(result.unwrap_err().message.contains("chain_info not initialized"));
+        let error = result.unwrap_err();
+        // Check that the error message contains expected content (from error_builders::not_found)
+        assert!(
+            error.message.contains("chain_info") && error.message.contains("not found"),
+            "Expected error about chain_info not found, got: {}",
+            error.message
+        );
     }
 
     #[tokio::test]
@@ -1380,79 +1314,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_fetch_native_balance_finds_existing_balance() {
-        let db = BlokliDb::new_in_memory().await.unwrap();
-
-        // Insert native balance
-        let balance_model = blokli_db_entity::native_balance::ActiveModel {
-            id: Default::default(),
-            address: Set(vec![1; 20]),
-            balance: Set(vec![10, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
-            last_changed_block: Set(0),
-            last_changed_tx_index: Set(0),
-            last_changed_log_index: Set(0),
-        };
-        balance_model.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
-
-        // Fetch balance using hex string address
-        let address = "0x0101010101010101010101010101010101010101";
-        let result = SubscriptionRoot::fetch_native_balance(db.conn(blokli_db::TargetDb::Index), address)
-            .await
-            .unwrap();
-
-        assert!(result.is_some());
-    }
-
-    #[tokio::test]
-    async fn test_fetch_native_balance_returns_none_for_missing() {
-        let db = BlokliDb::new_in_memory().await.unwrap();
-
-        // Try to fetch non-existent balance
-        let address = "0x0000000000000000000000000000000000000000";
-        let result = SubscriptionRoot::fetch_native_balance(db.conn(blokli_db::TargetDb::Index), address)
-            .await
-            .unwrap();
-
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
-    async fn test_fetch_hopr_balance_finds_existing_balance() {
-        let db = BlokliDb::new_in_memory().await.unwrap();
-
-        // Insert HOPR balance
-        let balance_model = blokli_db_entity::hopr_balance::ActiveModel {
-            id: Default::default(),
-            address: Set(vec![2; 20]),
-            balance: Set(vec![20, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]),
-            last_changed_block: Set(0),
-            last_changed_tx_index: Set(0),
-            last_changed_log_index: Set(0),
-        };
-        balance_model.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
-
-        // Fetch balance
-        let address = "0x0202020202020202020202020202020202020202";
-        let result = SubscriptionRoot::fetch_hopr_balance(db.conn(blokli_db::TargetDb::Index), address)
-            .await
-            .unwrap();
-
-        assert!(result.is_some());
-    }
-
-    #[tokio::test]
-    async fn test_fetch_hopr_balance_returns_none_for_missing() {
-        let db = BlokliDb::new_in_memory().await.unwrap();
-
-        let address = "0x0000000000000000000000000000000000000000";
-        let result = SubscriptionRoot::fetch_hopr_balance(db.conn(blokli_db::TargetDb::Index), address)
-            .await
-            .unwrap();
-
-        assert!(result.is_none());
-    }
-
-    #[tokio::test]
     async fn test_fetch_filtered_accounts_filters_by_keyid() {
         let db = BlokliDb::new_in_memory().await.unwrap();
 
@@ -1522,24 +1383,6 @@ mod tests {
             .unwrap();
 
         assert_eq!(result.len(), 3);
-    }
-
-    #[tokio::test]
-    async fn test_fetch_filtered_channels_returns_error_for_status_filter() {
-        let db = BlokliDb::new_in_memory().await.unwrap();
-
-        // Status filtering is not yet implemented
-        let result = SubscriptionRoot::fetch_filtered_channels(
-            db.conn(blokli_db::TargetDb::Index),
-            None,
-            None,
-            None,
-            Some(blokli_api_types::ChannelStatus::Open),
-        )
-        .await;
-
-        assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("temporarily unavailable"));
     }
 
     #[tokio::test]

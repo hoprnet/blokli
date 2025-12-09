@@ -399,6 +399,7 @@
               pkgs.solc
               pkgs.kubernetes-helm
               pkgs.yq
+              pkgs.uv
             ];
           };
           shells = {

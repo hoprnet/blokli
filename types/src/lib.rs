@@ -5,7 +5,7 @@
 
 use std::collections::HashMap;
 
-use async_graphql::{Enum, InputObject, InputValueError, NewType, Scalar, ScalarType, SimpleObject, Value};
+use async_graphql::{Enum, ID, InputObject, InputValueError, Scalar, ScalarType, SimpleObject, Union, Value};
 use hopr_crypto_types::types::Hash;
 use hopr_primitive_types::prelude::ToHex;
 
@@ -14,8 +14,22 @@ use hopr_primitive_types::prelude::ToHex;
 /// This scalar type represents token amounts as decimal strings to avoid
 /// floating-point precision issues. Values are typically represented in
 /// the token's base unit (e.g., wei for native tokens, smallest unit for HOPR).
-#[derive(Debug, Clone, PartialEq, Eq, NewType)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TokenValueString(pub String);
+
+#[Scalar]
+impl ScalarType for TokenValueString {
+    fn parse(value: Value) -> async_graphql::InputValueResult<Self> {
+        match value {
+            Value::String(s) => Ok(TokenValueString(s)),
+            _ => Err(InputValueError::custom("TokenValueString must be a string")),
+        }
+    }
+
+    fn to_value(&self) -> Value {
+        Value::String(self.0.clone())
+    }
+}
 
 /// 32-byte hexadecimal string scalar type (with optional 0x prefix)
 ///
@@ -70,7 +84,7 @@ impl From<hopr_crypto_types::types::Hash> for Hex32 {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UInt64(pub u64);
 
-#[Scalar]
+#[Scalar(name = "UInt64")]
 impl ScalarType for UInt64 {
     fn parse(value: Value) -> async_graphql::InputValueResult<Self> {
         match value {
@@ -210,19 +224,28 @@ pub struct ChainInfo {
     pub min_ticket_winning_probability: f64,
     /// Channel smart contract domain separator (hex string)
     #[graphql(name = "channelDst")]
-    pub channel_dst: Option<Hex32>,
+    pub channel_dst: Option<String>,
     /// Map of contract identifiers to their deployed addresses
     #[graphql(name = "contractAddresses")]
     pub contract_addresses: ContractAddressMap,
     /// Ledger smart contract domain separator (hex string)
     #[graphql(name = "ledgerDst")]
-    pub ledger_dst: Option<Hex32>,
+    pub ledger_dst: Option<String>,
     /// Safe Registry smart contract domain separator (hex string)
     #[graphql(name = "safeRegistryDst")]
-    pub safe_registry_dst: Option<Hex32>,
+    pub safe_registry_dst: Option<String>,
     /// Channel closure grace period in seconds
     #[graphql(name = "channelClosureGracePeriod")]
-    pub channel_closure_grace_period: Option<u64>,
+    pub channel_closure_grace_period: Option<UInt64>,
+}
+
+/// Result type for chain info queries
+#[derive(Union, Clone, Debug)]
+pub enum ChainInfoResult {
+    /// Successful chain info
+    ChainInfo(ChainInfo),
+    /// Query failed
+    QueryFailed(QueryFailedError),
 }
 
 /// Account information
@@ -246,6 +269,24 @@ pub struct Account {
     /// List of multiaddresses associated with the packet key
     #[graphql(name = "multiAddresses")]
     pub multi_addresses: Vec<String>,
+}
+
+/// Success response for accounts list query
+#[derive(SimpleObject, Clone, Debug)]
+pub struct AccountsList {
+    /// List of accounts
+    pub accounts: Vec<Account>,
+}
+
+/// Result type for accounts list query
+#[derive(Union, Clone, Debug)]
+pub enum AccountsResult {
+    /// Successful accounts list
+    Accounts(AccountsList),
+    /// Missing required filter parameter
+    MissingFilter(MissingFilterError),
+    /// Query failed
+    QueryFailed(QueryFailedError),
 }
 
 /// Network announcement with multiaddress information
@@ -283,6 +324,42 @@ pub struct Channel {
     pub closure_time: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// Success response for channels list query
+#[derive(SimpleObject, Clone, Debug)]
+pub struct ChannelsList {
+    /// List of channels
+    pub channels: Vec<Channel>,
+}
+
+/// Result type for channels list query
+#[derive(Union, Clone, Debug)]
+pub enum ChannelsResult {
+    /// Successful channels list
+    Channels(ChannelsList),
+    /// Missing required filter parameter
+    MissingFilter(MissingFilterError),
+    /// Query failed
+    QueryFailed(QueryFailedError),
+}
+
+/// Count value for count queries
+#[derive(SimpleObject, Clone, Debug)]
+pub struct Count {
+    /// Count value
+    pub count: i32,
+}
+
+/// Result type for count queries
+#[derive(Union, Clone, Debug)]
+pub enum CountResult {
+    /// Successful count
+    Count(Count),
+    /// Missing required filter parameter
+    MissingFilter(MissingFilterError),
+    /// Query failed
+    QueryFailed(QueryFailedError),
+}
+
 /// Channel update event for subscriptions
 ///
 /// Contains complete channel information along with source and destination account details.
@@ -297,13 +374,29 @@ pub struct ChannelUpdate {
     pub destination: Account,
 }
 
-/// Graph of opened payment channels with associated accounts
+/// A single edge in the opened payment channels graph
+///
+/// Represents one channel with its associated source and destination accounts.
+/// This is a directed edge: source → destination. If channels exist in both
+/// directions (A→B and B→A), these are emitted as separate entries.
+///
+/// **Structure:**
+/// - Each entry contains exactly one channel with its source and destination accounts
+/// - If multiple channels exist between the same account pair, each is emitted as a separate entry
+/// - The channel is always open (closed channels are not included)
+///
+/// **Usage in subscriptions:**
+/// The `openedChannelGraphUpdated` subscription streams these entries one at a time.
+/// Clients must accumulate entries to build the complete channel graph.
+/// An entry is emitted whenever that specific channel is updated.
 #[derive(SimpleObject, Clone, Debug)]
-pub struct OpenedChannelsGraph {
-    /// List of all open payment channels
-    pub channels: Vec<Channel>,
-    /// List of accounts referenced by the open channels (source and destination nodes)
-    pub accounts: Vec<Account>,
+pub struct OpenedChannelsGraphEntry {
+    /// The open payment channel from source to destination
+    pub channel: Channel,
+    /// Source account (sender end of the directed edge)
+    pub source: Account,
+    /// Destination account (recipient end of the directed edge)
+    pub destination: Account,
 }
 
 /// HOPR token balance information for a specific address
@@ -366,7 +459,7 @@ pub struct TransactionInput {
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Transaction {
     /// Unique identifier for the transaction (UUID)
-    pub id: String,
+    pub id: ID,
     /// Current status of the transaction
     pub status: TransactionStatus,
     /// Timestamp when transaction was submitted
@@ -460,6 +553,15 @@ pub struct InvalidAddressError {
 /// Database or internal query error
 #[derive(SimpleObject, Clone, Debug)]
 pub struct QueryFailedError {
+    /// Error code
+    pub code: String,
+    /// Human-readable error message
+    pub message: String,
+}
+
+/// Missing required filter parameter error
+#[derive(SimpleObject, Clone, Debug)]
+pub struct MissingFilterError {
     /// Error code
     pub code: String,
     /// Human-readable error message

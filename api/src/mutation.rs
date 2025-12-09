@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use async_graphql::{Context, Object, Result, Union};
+use async_graphql::{Context, ID, Object, Result, Union};
 use blokli_api_types::{
     ContractNotAllowedError, FunctionNotAllowedError, InvalidTransactionIdError, RpcError, SendTransactionSuccess,
     TimeoutError, Transaction, TransactionInput,
@@ -14,6 +14,8 @@ use blokli_chain_api::{
     transaction_store::{TransactionRecord, TransactionStore},
     transaction_validator::ValidationError,
 };
+
+use crate::errors;
 
 /// Root mutation type providing transaction submission capabilities
 pub struct MutationRoot;
@@ -163,7 +165,7 @@ fn hex_to_bytes(hex_str: &str) -> Result<Vec<u8>> {
 /// Convert TransactionRecord to GraphQL Transaction
 fn record_to_graphql(record: TransactionRecord) -> Transaction {
     Transaction {
-        id: record.id.to_string(),
+        id: ID::from(record.id.to_string()),
         status: crate::conversions::store_status_to_graphql(record.status),
         submitted_at: record.submitted_at,
         transaction_hash: record.transaction_hash.into(),
@@ -174,32 +176,16 @@ fn record_to_graphql(record: TransactionRecord) -> Transaction {
 fn executor_error_to_send_result(error: TransactionExecutorError) -> SendTransactionResult {
     match error {
         TransactionExecutorError::ValidationFailed(ValidationError::ContractNotAllowed(address)) => {
-            SendTransactionResult::ContractNotAllowed(ContractNotAllowedError {
-                code: "CONTRACT_NOT_ALLOWED".to_string(),
-                message: format!("Contract not allowed: {}", address),
-                contract_address: address,
-            })
+            SendTransactionResult::ContractNotAllowed(errors::contract_not_allowed(address))
         }
         TransactionExecutorError::ValidationFailed(ValidationError::FunctionNotAllowed(address, selector)) => {
-            SendTransactionResult::FunctionNotAllowed(FunctionNotAllowedError {
-                code: "FUNCTION_NOT_ALLOWED".to_string(),
-                message: format!("Function not allowed: contract={}, selector={}", address, selector),
-                contract_address: address,
-                function_selector: selector,
-            })
+            SendTransactionResult::FunctionNotAllowed(errors::function_not_allowed(address, selector))
         }
-        TransactionExecutorError::ValidationFailed(_) => SendTransactionResult::RpcError(RpcError {
-            code: "VALIDATION_FAILED".to_string(),
-            message: error.to_string(),
-        }),
-        TransactionExecutorError::RpcError(msg) => SendTransactionResult::RpcError(RpcError {
-            code: "RPC_ERROR".to_string(),
-            message: msg,
-        }),
-        _ => SendTransactionResult::RpcError(RpcError {
-            code: "INTERNAL_ERROR".to_string(),
-            message: error.to_string(),
-        }),
+        TransactionExecutorError::ValidationFailed(_) => {
+            SendTransactionResult::RpcError(errors::rpc_validation_failed(&error))
+        }
+        TransactionExecutorError::RpcError(msg) => SendTransactionResult::RpcError(errors::rpc_error_with_message(msg)),
+        _ => SendTransactionResult::RpcError(errors::rpc_internal_error(&error)),
     }
 }
 
@@ -207,32 +193,18 @@ fn executor_error_to_send_result(error: TransactionExecutorError) -> SendTransac
 fn executor_error_to_async_result(error: TransactionExecutorError) -> SendTransactionAsyncResult {
     match error {
         TransactionExecutorError::ValidationFailed(ValidationError::ContractNotAllowed(address)) => {
-            SendTransactionAsyncResult::ContractNotAllowed(ContractNotAllowedError {
-                code: "CONTRACT_NOT_ALLOWED".to_string(),
-                message: format!("Contract not allowed: {}", address),
-                contract_address: address,
-            })
+            SendTransactionAsyncResult::ContractNotAllowed(errors::contract_not_allowed(address))
         }
         TransactionExecutorError::ValidationFailed(ValidationError::FunctionNotAllowed(address, selector)) => {
-            SendTransactionAsyncResult::FunctionNotAllowed(FunctionNotAllowedError {
-                code: "FUNCTION_NOT_ALLOWED".to_string(),
-                message: format!("Function not allowed: contract={}, selector={}", address, selector),
-                contract_address: address,
-                function_selector: selector,
-            })
+            SendTransactionAsyncResult::FunctionNotAllowed(errors::function_not_allowed(address, selector))
         }
-        TransactionExecutorError::ValidationFailed(_) => SendTransactionAsyncResult::RpcError(RpcError {
-            code: "VALIDATION_FAILED".to_string(),
-            message: error.to_string(),
-        }),
-        TransactionExecutorError::RpcError(msg) => SendTransactionAsyncResult::RpcError(RpcError {
-            code: "RPC_ERROR".to_string(),
-            message: msg,
-        }),
-        _ => SendTransactionAsyncResult::RpcError(RpcError {
-            code: "INTERNAL_ERROR".to_string(),
-            message: error.to_string(),
-        }),
+        TransactionExecutorError::ValidationFailed(_) => {
+            SendTransactionAsyncResult::RpcError(errors::rpc_validation_failed(&error))
+        }
+        TransactionExecutorError::RpcError(msg) => {
+            SendTransactionAsyncResult::RpcError(errors::rpc_error_with_message(msg))
+        }
+        _ => SendTransactionAsyncResult::RpcError(errors::rpc_internal_error(&error)),
     }
 }
 
@@ -240,35 +212,20 @@ fn executor_error_to_async_result(error: TransactionExecutorError) -> SendTransa
 fn executor_error_to_sync_result(error: TransactionExecutorError) -> SendTransactionSyncResult {
     match error {
         TransactionExecutorError::ValidationFailed(ValidationError::ContractNotAllowed(address)) => {
-            SendTransactionSyncResult::ContractNotAllowed(ContractNotAllowedError {
-                code: "CONTRACT_NOT_ALLOWED".to_string(),
-                message: format!("Contract not allowed: {}", address),
-                contract_address: address,
-            })
+            SendTransactionSyncResult::ContractNotAllowed(errors::contract_not_allowed(address))
         }
         TransactionExecutorError::ValidationFailed(ValidationError::FunctionNotAllowed(address, selector)) => {
-            SendTransactionSyncResult::FunctionNotAllowed(FunctionNotAllowedError {
-                code: "FUNCTION_NOT_ALLOWED".to_string(),
-                message: format!("Function not allowed: contract={}, selector={}", address, selector),
-                contract_address: address,
-                function_selector: selector,
-            })
+            SendTransactionSyncResult::FunctionNotAllowed(errors::function_not_allowed(address, selector))
         }
-        TransactionExecutorError::ValidationFailed(_) => SendTransactionSyncResult::RpcError(RpcError {
-            code: "VALIDATION_FAILED".to_string(),
-            message: error.to_string(),
-        }),
-        TransactionExecutorError::RpcError(msg) => SendTransactionSyncResult::RpcError(RpcError {
-            code: "RPC_ERROR".to_string(),
-            message: msg,
-        }),
-        TransactionExecutorError::Timeout => SendTransactionSyncResult::Timeout(TimeoutError {
-            code: "TIMEOUT".to_string(),
-            message: "Transaction was not confirmed within the timeout window".to_string(),
-        }),
-        _ => SendTransactionSyncResult::RpcError(RpcError {
-            code: "INTERNAL_ERROR".to_string(),
-            message: error.to_string(),
-        }),
+        TransactionExecutorError::ValidationFailed(_) => {
+            SendTransactionSyncResult::RpcError(errors::rpc_validation_failed(&error))
+        }
+        TransactionExecutorError::RpcError(msg) => {
+            SendTransactionSyncResult::RpcError(errors::rpc_error_with_message(msg))
+        }
+        TransactionExecutorError::Timeout => SendTransactionSyncResult::Timeout(errors::timeout_error(
+            "Transaction was not confirmed within the timeout window",
+        )),
+        _ => SendTransactionSyncResult::RpcError(errors::rpc_internal_error(&error)),
     }
 }
