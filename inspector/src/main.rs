@@ -3,12 +3,13 @@ mod subscriptions;
 
 use blokli_client::{
     BlokliClient, BlokliClientConfig,
-    api::{AccountSelector, ChannelFilter, ChannelSelector, types::ChannelStatus},
+    api::{AccountSelector, BlokliTransactionClient, ChannelFilter, ChannelSelector, types::ChannelStatus},
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
-use futures::{StreamExt, TryFutureExt, pin_mut};
+use futures::{StreamExt, TryFuture, TryFutureExt, future::Either, pin_mut};
 use hopr_primitive_types::prelude::Address;
 use queries::QueryTarget;
+use tokio::io::AsyncReadExt;
 use tracing_subscriber::{EnvFilter, fmt};
 
 use crate::subscriptions::{ChannelAllowedStates, SubscriptionTarget};
@@ -17,10 +18,10 @@ use crate::subscriptions::{ChannelAllowedStates, SubscriptionTarget};
 #[command(version, about, long_about = None)]
 struct Cli {
     /// URL of Blokli instance connect to.
-    #[arg(short, long, value_parser = clap::value_parser!(url::Url))]
+    #[arg(short, long, env = "BLOKLI_URL", value_parser = clap::value_parser!(url::Url))]
     url: url::Url,
     /// Output format.
-    #[arg(short, long, value_enum, default_value = "json")]
+    #[arg(short, long, env, value_enum, default_value = "json")]
     format: Formats,
 
     #[clap(subcommand)]
@@ -47,14 +48,31 @@ impl Formats {
 #[derive(Subcommand, Debug)]
 enum Commands {
     /// Perform a query to Blokli.
+    #[clap(visible_alias = "q")]
     Query {
         #[clap(subcommand)]
         target: QueryTarget,
     },
     /// Subscribe to events from Blokli.
+    #[clap(visible_alias = "sub")]
     Subscribe {
         #[clap(subcommand)]
         target: SubscriptionTarget,
+    },
+    /// Submit an on-chain transaction using Blokli.
+    #[clap(visible_alias = "tx")]
+    Transaction {
+        /// Hex-encoded transaction payload.
+        ///
+        /// If not specified, reads the payload from the standard input as raw bytes.
+        #[arg(short, long)]
+        payload: Option<String>,
+        /// Number of blocks to wait for confirmation.
+        #[arg(short, long, group = "tx")]
+        wait_for_confirmation: Option<usize>,
+        /// Indicates whether to track the transaction status instead of waiting for confirmations.
+        #[arg(short, long, group = "tx")]
+        track: bool,
     },
 }
 
@@ -134,6 +152,19 @@ impl TryFrom<AccountArgs> for Option<AccountSelector> {
     }
 }
 
+fn either_err<A, B>(either: Either<(<A as TryFuture>::Error, B), (<B as TryFuture>::Error, A)>) -> anyhow::Error
+where
+    A: TryFuture,
+    B: TryFuture,
+    A::Error: Into<anyhow::Error>,
+    B::Error: Into<anyhow::Error>,
+{
+    match either {
+        Either::Left((e, _)) => e.into(),
+        Either::Right((e, _)) => e.into(),
+    }
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     fmt()
@@ -142,25 +173,91 @@ async fn main() -> anyhow::Result<()> {
         .compact()
         .init();
 
-    let cli = Cli::try_parse()?;
+    let cli = Cli::parse();
     let blokli_client = BlokliClient::new(cli.url, BlokliClientConfig::default());
+
+    let exit_fut = tokio::signal::ctrl_c().inspect_ok(|_| {
+        eprintln!("\nInterrupted.");
+    });
+    pin_mut!(exit_fut);
 
     match cli.command {
         Commands::Query { target } => {
-            println!("{}", target.execute(&blokli_client, cli.format).await?);
+            let exec_fut = target.execute(&blokli_client, cli.format);
+            pin_mut!(exec_fut);
+
+            if let Either::Right((value, _)) = futures::future::try_select(exit_fut, exec_fut)
+                .map_err(either_err)
+                .await?
+            {
+                println!("{value}");
+            }
         }
         Commands::Subscribe { target } => {
             let stream_fut = target.execute(&blokli_client, cli.format)?.for_each(|v| {
                 println!("{v}");
                 futures::future::ready(())
             });
-            let exit_fut = tokio::signal::ctrl_c().inspect_ok(|_| {
-                println!("\nExiting...");
-            });
-            pin_mut!(exit_fut);
             pin_mut!(stream_fut);
 
             futures::future::select(exit_fut, stream_fut).await;
+        }
+        Commands::Transaction {
+            payload,
+            wait_for_confirmation,
+            track,
+        } => {
+            let payload = if let Some(payload) = payload {
+                hex::decode(payload)?
+            } else {
+                eprintln!("Waiting for transaction payload from stdin...");
+                let mut payload = Vec::new();
+                tokio::io::stdin().read_to_end(&mut payload).await?;
+                payload
+            };
+
+            if let Some(confirmations) = wait_for_confirmation {
+                let tx_fut = blokli_client.submit_and_confirm_transaction(&payload, confirmations);
+                pin_mut!(tx_fut);
+
+                if let Either::Right((receipt, _)) = futures::future::try_select(exit_fut, tx_fut)
+                    .map_err(either_err)
+                    .await?
+                {
+                    println!("{}", hex::encode(receipt));
+                }
+            } else if track {
+                let track_tx_fut = tokio::time::timeout(
+                    std::time::Duration::from_secs(10),
+                    blokli_client.submit_and_track_transaction(&payload),
+                )
+                .map_err(anyhow::Error::from)
+                .and_then(|res| futures::future::ready(res.map_err(anyhow::Error::from)))
+                .inspect_ok(|tx_id| eprintln!("{tx_id}"))
+                .and_then(|tracking_id| {
+                    blokli_client
+                        .track_transaction(tracking_id, std::time::Duration::from_secs(60))
+                        .map_err(anyhow::Error::from)
+                });
+                pin_mut!(track_tx_fut);
+
+                if let Either::Right((transaction, _)) = futures::future::try_select(exit_fut, track_tx_fut)
+                    .map_err(either_err)
+                    .await?
+                {
+                    println!("{}", cli.format.serialize(transaction)?)
+                }
+            } else {
+                let tx_fut = blokli_client.submit_transaction(&payload);
+                pin_mut!(tx_fut);
+
+                if let Either::Right((receipt, _)) = futures::future::try_select(exit_fut, tx_fut)
+                    .map_err(either_err)
+                    .await?
+                {
+                    println!("{}", hex::encode(receipt));
+                }
+            }
         }
     };
 
