@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<module type="EMPTY_MODULE" version="4">
+  <component name="NewModuleRootManager">
+    <content url="file://$MODULE_DIR$">
+      <sourceFolder url="file://$MODULE_DIR$/bloklid/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/bloklid/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/chain/actions/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/chain/api/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/chain/indexer/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/chain/rpc/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/chain/types/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/client/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/db/api/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/db/entity/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/db/migration/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/db/sql/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/client/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/api/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/types/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/api/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/chain/api/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/chain/indexer/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/chain/rpc/tests" isTestSource="true" />
+      <sourceFolder url="file://$MODULE_DIR$/db/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/db/core/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/inspector/src" isTestSource="false" />
+      <excludeFolder url="file://$MODULE_DIR$/target" />
+    </content>
+    <orderEntry type="inheritedJdk" />
+    <orderEntry type="sourceFolder" forTests="false" />
+  </component>
+</module>

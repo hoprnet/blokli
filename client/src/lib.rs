@@ -6,9 +6,21 @@ pub mod errors;
 
 pub use client::{BlokliClient, BlokliClientConfig};
 #[cfg(feature = "testing")]
-pub use client::{BlokliTestClient, BlokliTestState, BlokliTestStateMutator, BlokliTestStateSnapshot, NopStateMutator};
+pub use client::{
+    BlokliTestClient, BlokliTestState, BlokliTestStateMutator, BlokliTestStateSnapshot, GraphQlQueries, NopStateMutator,
+};
 
 #[cfg(feature = "testing")]
+pub mod internal {
+    pub use super::api::internal::*;
+}
+
+#[doc(hidden)]
 pub mod exports {
-    pub use indexmap::{IndexMap, map::Entry};
+    pub use url::Url;
+    #[cfg(feature = "testing")]
+    pub use {
+        cynic::{Operation, StreamingOperation},
+        indexmap::{IndexMap, map::Entry},
+    };
 }
