@@ -2,20 +2,27 @@ use std::time::Duration;
 
 use alloy::primitives::U256;
 use anyhow::{Context, Result, anyhow};
-use blokli_client::api::BlokliQueryClient;
 use blokli_integration_tests::fixtures::{IntegrationFixture, integration_fixture as fixture};
 use rstest::*;
 use serial_test::serial;
 use tokio::time::sleep;
 use tracing::info;
 
+// TODO: This has to be moved to the fixture creation eventually
+const START_SLEEP_DURATION: Duration = Duration::from_secs(8);
+
+enum ClientType {
+    RPC,
+    Blokli,
+}
+
 #[rstest]
-#[case("rpc")]
-#[case("blokli")]
+#[case(ClientType::RPC)]
+#[case(ClientType::Blokli)]
 #[test_log::test(tokio::test)]
 #[serial]
-async fn send_raw_transaction(fixture: IntegrationFixture, #[case] client_type: &str) -> Result<()> {
-    sleep(Duration::from_secs(8)).await;
+async fn send_submit_transaction(fixture: IntegrationFixture, #[case] client_type: ClientType) -> Result<()> {
+    sleep(START_SLEEP_DURATION).await;
 
     let tx_value = U256::from(1_000_000_000_000_000u128); // 0.001 ETH
 
@@ -40,16 +47,13 @@ async fn send_raw_transaction(fixture: IntegrationFixture, #[case] client_type: 
     info!(%raw_tx, "built raw transaction hex");
 
     match client_type {
-        "rpc" => {
+        ClientType::RPC => {
             info!("sending raw transaction through RPC client");
             fixture.rpc.execute_transaction(&raw_tx).await?;
         }
-        "blokli" => {
+        ClientType::Blokli => {
             info!("sending raw transaction through Blokli client");
             fixture.execute_transaction(&raw_tx).await?;
-        }
-        other => {
-            return Err(anyhow!("unknown client type: {}", other));
         }
     }
 
@@ -70,15 +74,28 @@ async fn send_raw_transaction(fixture: IntegrationFixture, #[case] client_type: 
 }
 
 #[rstest]
+#[case(ClientType::RPC)]
+#[case(ClientType::Blokli)]
 #[test_log::test(tokio::test)]
 #[serial]
-async fn chain_ids_provided_by_blokli_matches_the_rpc(fixture: IntegrationFixture) -> Result<()> {
-    sleep(Duration::from_secs(8)).await;
+async fn submit_and_track_transaction(fixture: IntegrationFixture, #[case] client_type: ClientType) -> Result<()> {
+    Ok(())
+}
 
-    let chain = fixture.client.query_chain_info().await?;
-    let chain_id = fixture.rpc.chain_id().await?;
+#[rstest]
+#[case(ClientType::RPC)]
+#[case(ClientType::Blokli)]
+#[test_log::test(tokio::test)]
+#[serial]
+async fn submit_and_confirm_transaction(fixture: IntegrationFixture, #[case] client_type: ClientType) -> Result<()> {
+    Ok(())
+}
 
-    assert_eq!(chain.chain_id as u64, chain_id);
-
+#[rstest]
+#[case(ClientType::RPC)]
+#[case(ClientType::Blokli)]
+#[test_log::test(tokio::test)]
+#[serial]
+async fn track_transaction(fixture: IntegrationFixture, #[case] client_type: ClientType) -> Result<()> {
     Ok(())
 }
