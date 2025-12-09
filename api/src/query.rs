@@ -5,7 +5,7 @@ use std::sync::Arc;
 use async_graphql::{Context, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
     Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelsList, ChannelsResult,
-    ContractAddressMap, CountResult, Hex32, HoprBalance, InvalidAddressError, NativeBalance, QueryFailedError, Safe,
+    ContractAddressMap, CountResult, HoprBalance, InvalidAddressError, NativeBalance, QueryFailedError, Safe,
     SafeHoprAllowance, SafeTransactionCount, TokenValueString, Transaction, UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
@@ -14,6 +14,7 @@ use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::conversions::{
     account_aggregation::fetch_accounts_with_filters, channel_aggregation::fetch_channels_with_state,
 };
+use hopr_crypto_types::prelude::Hash;
 use hopr_primitive_types::{
     prelude::HoprBalance as PrimitiveHoprBalance,
     primitives::Address,
@@ -885,7 +886,7 @@ impl QueryRoot {
                         ));
                     }
                 };
-                Some(Hex32::from(bytes))
+                Some(Hash::from(*bytes).to_hex())
             }
             None => None,
         };
@@ -900,7 +901,7 @@ impl QueryRoot {
                         ));
                     }
                 };
-                Some(Hex32::from(bytes))
+                Some(Hash::from(*bytes).to_hex())
             }
             None => None,
         };
@@ -915,7 +916,7 @@ impl QueryRoot {
                         ));
                     }
                 };
-                Some(Hex32::from(bytes))
+                Some(Hash::from(*bytes).to_hex())
             }
             None => None,
         };
