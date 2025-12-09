@@ -74,7 +74,7 @@ jobs:
         env:
           USER: runner
       - name: Run unit tests using nextest
-        run: nix develop --command bash -c "cargo install nextest && just nextest"
+        run: nix develop --command bash -c "cargo install cargo-nextest && just nextest"
   schema-validation:
     name: Schema Validation
     runs-on: self-hosted-hoprnet-bigger
