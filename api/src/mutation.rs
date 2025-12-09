@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use async_graphql::{Context, Object, Result, Union};
+use async_graphql::{Context, ID, Object, Result, Union};
 use blokli_api_types::{
     ContractNotAllowedError, FunctionNotAllowedError, InvalidTransactionIdError, RpcError, SendTransactionSuccess,
     TimeoutError, Transaction, TransactionInput,
@@ -165,7 +165,7 @@ fn hex_to_bytes(hex_str: &str) -> Result<Vec<u8>> {
 /// Convert TransactionRecord to GraphQL Transaction
 fn record_to_graphql(record: TransactionRecord) -> Transaction {
     Transaction {
-        id: async_graphql::ID::from(record.id.to_string()),
+        id: ID::from(record.id.to_string()),
         status: crate::conversions::store_status_to_graphql(record.status),
         submitted_at: record.submitted_at,
         transaction_hash: record.transaction_hash.into(),

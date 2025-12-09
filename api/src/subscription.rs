@@ -305,13 +305,13 @@ impl SubscriptionRoot {
     ///
     /// **Update Triggers:**
     /// An entry is re-emitted for a channel when:
-    /// - The channel's status changes (e.g., OPEN → PENDINGTOCLOSE)
+    /// - The channel's status changes (e.g., OPEN -> PENDINGTOCLOSE)
     /// - The channel's balance changes
     /// - The channel closes (no longer emitted)
     /// - A new channel opens (new entry emitted)
     ///
     /// **Example:**
-    /// If the network has three open channels: channelA (A→B), channelB (B→A), channelC (A→C),
+    /// If the network has three open channels: channelA (A->B), channelB (B->A), channelC (A->C),
     /// the subscription emits three separate OpenedChannelsGraphEntry objects, each containing
     /// one channel with its source and destination accounts.
     ///
@@ -686,7 +686,6 @@ impl SubscriptionRoot {
         ctx: &Context<'_>,
         #[graphql(desc = "Transaction ID to monitor (UUID)")] id: ID,
     ) -> Result<impl Stream<Item = Transaction>> {
-        // Parse UUID from string
         let transaction_id = Uuid::parse_str(id.as_str()).map_err(|e| {
             async_graphql::Error::new(format!("Invalid transaction ID format: {}. Expected UUID format.", e))
         })?;
@@ -699,6 +698,7 @@ impl SubscriptionRoot {
 
             loop {
                 // Poll the transaction store periodically
+                // TODO: use event-driven approach
                 sleep(Duration::from_millis(100)).await;
 
                 // Try to get the transaction from the store
@@ -776,9 +776,9 @@ impl SubscriptionRoot {
 
         // Convert GraphQL ChannelStatus to internal status code (i8)
         let status_code = status.map(|s| match s {
+            blokli_api_types::ChannelStatus::Closed => 0i8,
             blokli_api_types::ChannelStatus::Open => 1i8,
-            blokli_api_types::ChannelStatus::PendingToClose => 0i8,
-            blokli_api_types::ChannelStatus::Closed => 2i8,
+            blokli_api_types::ChannelStatus::PendingToClose => 2i8,
         });
 
         // Use optimized channel aggregation function

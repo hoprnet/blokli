@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use async_graphql::{Context, Object, Result, SimpleObject, Union};
+use async_graphql::{Context, ID, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
     Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelsList, ChannelsResult,
     ContractAddressMap, CountResult, HoprBalance, InvalidAddressError, NativeBalance, QueryFailedError, Safe,
@@ -966,7 +966,7 @@ impl QueryRoot {
     /// Returns the current status of a previously submitted transaction.
     /// Returns Error with code INVALID_TRANSACTION_ID if ID format is invalid.
     /// Returns None if transaction ID is not found.
-    async fn transaction(&self, ctx: &Context<'_>, id: async_graphql::ID) -> Result<Option<TransactionResult>> {
+    async fn transaction(&self, ctx: &Context<'_>, id: ID) -> Result<Option<TransactionResult>> {
         // Parse UUID from ID string
         let uuid = match uuid::Uuid::parse_str(id.as_str()) {
             Ok(uuid) => uuid,
@@ -985,7 +985,7 @@ impl QueryRoot {
             Ok(record) => {
                 // Convert to GraphQL Transaction type
                 let transaction = Transaction {
-                    id: async_graphql::ID::from(record.id.to_string()),
+                    id: ID::from(record.id.to_string()),
                     status: crate::conversions::store_status_to_graphql(record.status),
                     submitted_at: record.submitted_at,
                     transaction_hash: record.transaction_hash.into(),
