@@ -2005,6 +2005,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "blokli-integration-tests"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "anyhow",
+ "blokli-client",
+ "chrono",
+ "clap",
+ "futures",
+ "hex",
+ "rand 0.9.2",
+ "reqwest",
+ "rstest",
+ "rstest-log",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "test-log",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "url",
+]
+
+[[package]]
 name = "bloklid"
 version = "0.2.1"
 dependencies = [
