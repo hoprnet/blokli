@@ -13,13 +13,14 @@ use std::{collections::HashSet, str::FromStr, sync::Arc, time::Duration};
 use alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
 use async_graphql::Schema;
 use blokli_api::{mutation::MutationRoot, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot};
+use blokli_api_types::{Account, Channel, ChannelStatus as ApiChannelStatus, TokenValueString, UInt64};
 use blokli_chain_api::{
     rpc_adapter::RpcAdapter,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
     transaction_store::TransactionStore,
     transaction_validator::TransactionValidator,
 };
-use blokli_chain_indexer::IndexerState;
+use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
 use blokli_chain_rpc::{
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
@@ -29,10 +30,15 @@ use blokli_db::{
     BlokliDbGeneralModelOperations, TargetDb, accounts::BlokliDbAccountOperations, channels::BlokliDbChannelOperations,
     db::BlokliDb,
 };
+use blokli_db_entity::{chain_info, channel, channel_state};
 use futures::StreamExt;
 use hopr_crypto_types::prelude::{ChainKeypair, Keypair, OffchainKeypair};
 use hopr_internal_types::channels::{ChannelEntry, ChannelStatus};
-use hopr_primitive_types::prelude::HoprBalance;
+use hopr_primitive_types::{
+    prelude::{Balance as PrimitiveBalance, HoprBalance, ToHex, WxHOPR},
+    traits::IntoEndian,
+};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 
 /// Helper to generate random keypair for testing
 fn random_keypair() -> ChainKeypair {
@@ -44,9 +50,124 @@ fn random_offchain_keypair() -> OffchainKeypair {
     OffchainKeypair::random()
 }
 
+/// Helper to create a ChannelUpdate event from database data for testing
+async fn create_channel_update_event(
+    db: &BlokliDb,
+    channel_id: &str,
+) -> Result<blokli_api_types::ChannelUpdate, Box<dyn std::error::Error>> {
+    // Find the channel
+    let channel_model = channel::Entity::find()
+        .filter(channel::Column::ConcreteChannelId.eq(channel_id))
+        .one(db.conn(TargetDb::Index))
+        .await?
+        .ok_or("Channel not found")?;
+
+    // Find the latest channel state
+    let state = channel_state::Entity::find()
+        .filter(channel_state::Column::ChannelId.eq(channel_model.id))
+        .order_by_desc(channel_state::Column::PublishedBlock)
+        .order_by_desc(channel_state::Column::PublishedTxIndex)
+        .order_by_desc(channel_state::Column::PublishedLogIndex)
+        .one(db.conn(TargetDb::Index))
+        .await?
+        .ok_or("Channel state not found")?;
+
+    // Fetch accounts
+    let accounts = blokli_db_entity::conversions::account_aggregation::fetch_accounts_by_keyids(
+        db.conn(TargetDb::Index),
+        vec![channel_model.source, channel_model.destination],
+    )
+    .await?;
+
+    let source_account = accounts
+        .iter()
+        .find(|a| a.keyid == channel_model.source)
+        .ok_or("Source account not found")?;
+    let dest_account = accounts
+        .iter()
+        .find(|a| a.keyid == channel_model.destination)
+        .ok_or("Destination account not found")?;
+
+    // Convert to GraphQL types
+    let channel_gql = Channel {
+        concrete_channel_id: channel_model.concrete_channel_id.clone(),
+        source: channel_model.source,
+        destination: channel_model.destination,
+        balance: TokenValueString(
+            PrimitiveBalance::<WxHOPR>::from_be_bytes(&state.balance)
+                .amount()
+                .to_string(),
+        ),
+        status: ApiChannelStatus::from(state.status),
+        epoch: i32::try_from(state.epoch)?,
+        ticket_index: UInt64(u64::try_from(state.ticket_index)?),
+        closure_time: state.closure_time,
+    };
+
+    let source_gql = Account {
+        keyid: source_account.keyid,
+        chain_key: source_account.chain_key.clone(),
+        packet_key: source_account.packet_key.clone(),
+        safe_address: source_account.safe_address.clone(),
+        multi_addresses: source_account.multi_addresses.clone(),
+    };
+
+    let dest_gql = Account {
+        keyid: dest_account.keyid,
+        chain_key: dest_account.chain_key.clone(),
+        packet_key: dest_account.packet_key.clone(),
+        safe_address: dest_account.safe_address.clone(),
+        multi_addresses: dest_account.multi_addresses.clone(),
+    };
+
+    Ok(blokli_api_types::ChannelUpdate {
+        channel: channel_gql,
+        source: source_gql,
+        destination: dest_gql,
+    })
+}
+
+/// Helper to update chain_info watermark for tests
+async fn update_watermark(db: &BlokliDb, block: i64, tx_index: i64, log_index: i64) {
+    let chain_info_model = chain_info::ActiveModel {
+        id: Set(1),
+        last_indexed_block: Set(block),
+        last_indexed_tx_index: Set(Some(tx_index)),
+        last_indexed_log_index: Set(Some(log_index)),
+        ticket_price: Set(None),
+        channels_dst: Set(None),
+        ledger_dst: Set(None),
+        safe_registry_dst: Set(None),
+        min_incoming_ticket_win_prob: Set(0.0),
+        channel_closure_grace_period: Set(None),
+        key_binding_fee: Set(None),
+    };
+
+    chain_info::Entity::insert(chain_info_model)
+        .on_conflict(
+            sea_orm::sea_query::OnConflict::column(chain_info::Column::Id)
+                .update_columns([
+                    chain_info::Column::LastIndexedBlock,
+                    chain_info::Column::LastIndexedTxIndex,
+                    chain_info::Column::LastIndexedLogIndex,
+                ])
+                .to_owned(),
+        )
+        .exec(db.conn(blokli_db::TargetDb::Index))
+        .await
+        .unwrap();
+}
+
 /// Create a minimal GraphQL schema for testing subscriptions
 fn create_test_schema(db: &BlokliDb) -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
-    let indexer_state = IndexerState::new(10, 100);
+    create_test_schema_with_state(db, IndexerState::new(10, 100))
+}
+
+/// Create a minimal GraphQL schema for testing subscriptions with a specific IndexerState
+fn create_test_schema_with_state(
+    db: &BlokliDb,
+    indexer_state: IndexerState,
+) -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
     let transaction_store = Arc::new(TransactionStore::new());
     let transaction_validator = Arc::new(TransactionValidator::new());
 
@@ -114,6 +235,9 @@ async fn test_opened_channel_graph_subscription_emits_initial_entry() {
     let balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
     let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
+
+    // Update watermark to include all test data
+    update_watermark(&db, 1000, 0, 0).await;
 
     // Create GraphQL schema
     let schema = create_test_schema(&db);
@@ -209,6 +333,9 @@ async fn test_opened_channel_graph_subscription_emits_multiple_entries() {
     let channel2 = ChannelEntry::new(addr2, addr3, balance2, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel2, 101, 0, 0).await.unwrap();
 
+    // Update watermark to include all test data
+    update_watermark(&db, 1000, 0, 0).await;
+
     let schema = create_test_schema(&db);
 
     let query = r#"
@@ -292,6 +419,9 @@ async fn test_opened_channel_graph_subscription_excludes_closed_channels() {
     let closed_channel = ChannelEntry::new(addr2, addr3, balance2, 0, ChannelStatus::Closed, 1);
     db.upsert_channel(None, closed_channel, 101, 0, 0).await.unwrap();
 
+    // Update watermark to include all test data
+    update_watermark(&db, 1000, 0, 0).await;
+
     let schema = create_test_schema(&db);
 
     let query = r#"
@@ -328,6 +458,7 @@ async fn test_opened_channel_graph_subscription_excludes_closed_channels() {
 #[tokio::test]
 async fn test_opened_channel_graph_subscription_receives_new_channel_entry() {
     let db = BlokliDb::new_in_memory().await.unwrap();
+    let indexer_state = IndexerState::new(10, 100);
 
     // Create accounts
     let keypair1 = random_keypair();
@@ -355,7 +486,10 @@ async fn test_opened_channel_graph_subscription_receives_new_channel_entry() {
     let channel1 = ChannelEntry::new(addr1, addr2, balance1, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel1, 100, 0, 0).await.unwrap();
 
-    let schema = create_test_schema(&db);
+    // Update watermark to include all test data
+    update_watermark(&db, 1000, 0, 0).await;
+
+    let schema = create_test_schema_with_state(&db, indexer_state.clone());
 
     let query = r#"
         subscription {
@@ -385,26 +519,26 @@ async fn test_opened_channel_graph_subscription_receives_new_channel_entry() {
     // Add a new open channel
     let balance2 = HoprBalance::from_str("2000 wxHOPR").unwrap();
     let channel2 = ChannelEntry::new(addr2, addr3, balance2, 0, ChannelStatus::Open, 1);
+    let channel2_id = channel2.get_id().to_hex();
     db.upsert_channel(None, channel2, 110, 0, 0).await.unwrap();
 
-    // Should receive entries for both channels (original + new)
-    let mut received_channels = HashSet::new();
+    // Publish event for the new channel to the event bus
+    let channel2_update = create_channel_update_event(&db, &channel2_id).await.unwrap();
+    indexer_state.publish_event(IndexerEvent::ChannelUpdated(Box::new(channel2_update)));
 
-    // Receive up to 2 entries within timeout
-    for _ in 0..2 {
-        if let Ok(Some(update)) = tokio::time::timeout(Duration::from_secs(3), stream.next()).await {
-            assert!(update.errors.is_empty());
-            let data = update.data.into_json().unwrap();
-            let entry = &data["openedChannelGraphUpdated"];
-            let source = entry["channel"]["source"].as_i64().unwrap();
-            let destination = entry["channel"]["destination"].as_i64().unwrap();
-            received_channels.insert((source, destination));
-        }
-    }
+    // Should receive entry for the new channel
+    let new_channel = tokio::time::timeout(Duration::from_secs(3), stream.next())
+        .await
+        .unwrap()
+        .unwrap();
 
-    // Should have received both channels
-    assert!(received_channels.contains(&(1, 2)));
-    assert!(received_channels.contains(&(2, 3)));
+    assert!(new_channel.errors.is_empty());
+    let new_data = new_channel.data.into_json().unwrap();
+    let new_entry = &new_data["openedChannelGraphUpdated"];
+
+    // Verify we received the new channel (2, 3)
+    assert_eq!(new_entry["channel"]["source"].as_i64().unwrap(), 2);
+    assert_eq!(new_entry["channel"]["destination"].as_i64().unwrap(), 3);
 }
 
 #[tokio::test]
@@ -430,6 +564,9 @@ async fn test_opened_channel_graph_subscription_receives_channel_closure_update(
     let balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
     let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
+
+    // Update watermark to include all test data
+    update_watermark(&db, 1000, 0, 0).await;
 
     let schema = create_test_schema(&db);
 
@@ -458,6 +595,9 @@ async fn test_opened_channel_graph_subscription_receives_channel_closure_update(
     let closed_channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Closed, 1);
     db.upsert_channel(None, closed_channel, 110, 0, 0).await.unwrap();
 
+    // Update watermark to include the channel closure
+    update_watermark(&db, 1001, 0, 0).await;
+
     // Next poll should return no entries (empty result set, no stream items)
     // The subscription will timeout because there are no open channels to emit
     let updated = tokio::time::timeout(Duration::from_secs(3), stream.next()).await;
@@ -474,6 +614,9 @@ async fn test_opened_channel_graph_subscription_receives_channel_closure_update(
 #[tokio::test]
 async fn test_opened_channel_graph_subscription_handles_empty_database() {
     let db = BlokliDb::new_in_memory().await.unwrap();
+
+    // Update watermark to include all test data
+    update_watermark(&db, 1000, 0, 0).await;
 
     let schema = create_test_schema(&db);
 
@@ -520,6 +663,9 @@ async fn test_opened_channel_graph_subscription_includes_channel_balance() {
     let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
+    // Update watermark to include all test data
+    update_watermark(&db, 1000, 0, 0).await;
+
     let schema = create_test_schema(&db);
 
     let query = r#"
@@ -549,6 +695,7 @@ async fn test_opened_channel_graph_subscription_includes_channel_balance() {
 #[tokio::test]
 async fn test_opened_channel_graph_subscription_balance_update() {
     let db = BlokliDb::new_in_memory().await.unwrap();
+    let indexer_state = IndexerState::new(10, 100);
 
     // Create accounts
     let keypair1 = random_keypair();
@@ -568,9 +715,13 @@ async fn test_opened_channel_graph_subscription_balance_update() {
     // Create channel
     let initial_balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
     let channel = ChannelEntry::new(addr1, addr2, initial_balance, 0, ChannelStatus::Open, 1);
+    let channel_id = channel.get_id().to_hex();
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
-    let schema = create_test_schema(&db);
+    // Update watermark to include all test data
+    update_watermark(&db, 1000, 0, 0).await;
+
+    let schema = create_test_schema_with_state(&db, indexer_state.clone());
 
     let query = r#"
         subscription {
@@ -601,6 +752,10 @@ async fn test_opened_channel_graph_subscription_balance_update() {
     let updated_balance = HoprBalance::from_str("2000 wxHOPR").unwrap();
     let updated_channel = ChannelEntry::new(addr1, addr2, updated_balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, updated_channel, 110, 0, 0).await.unwrap();
+
+    // Publish event for the updated channel to the event bus
+    let channel_update = create_channel_update_event(&db, &channel_id).await.unwrap();
+    indexer_state.publish_event(IndexerEvent::ChannelUpdated(Box::new(channel_update)));
 
     // Should receive updated balance entry
     let updated = tokio::time::timeout(Duration::from_secs(3), stream.next())
