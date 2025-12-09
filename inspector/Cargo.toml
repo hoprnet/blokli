@@ -5,7 +5,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-inspector"
 repository  = "https://github.com/hoprnet/blokli"
-version     = "0.2.0"
+version     = "0.3.0"
 
 
 [dependencies]
@@ -18,7 +18,7 @@ hopr-primitive-types = { workspace = true }
 serde                = { workspace = true }
 serde_json           = { workspace = true }
 serde_yaml           = { workspace = true }
-tokio                = { workspace = true, features = ["signal", "tracing"] }
+tokio                = { workspace = true, features = ["io-std", "signal", "tracing"] }
 tracing-subscriber   = { workspace = true }
 url                  = { workspace = true }
 
