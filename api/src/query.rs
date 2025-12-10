@@ -5,8 +5,8 @@ use std::sync::Arc;
 use async_graphql::{Context, ID, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
     Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelsList, ChannelsResult,
-    ContractAddressMap, CountResult, HoprBalance, InvalidAddressError, NativeBalance, QueryFailedError, Safe,
-    SafeHoprAllowance, SafeTransactionCount, TokenValueString, Transaction, UInt64,
+    ContractAddressMap, CountResult, HoprBalance, InvalidAddressError, ModuleAddress, NativeBalance,
+    QueryFailedError, Safe, SafeHoprAllowance, SafeTransactionCount, TokenValueString, Transaction, UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
@@ -75,6 +75,14 @@ pub struct SafesList {
 #[derive(Union)]
 pub enum SafesResult {
     Safes(SafesList),
+    QueryFailed(QueryFailedError),
+}
+
+/// Result type for module address calculation
+#[derive(Union)]
+pub enum CalculateModuleAddressResult {
+    ModuleAddress(ModuleAddress),
+    InvalidAddress(InvalidAddressError),
     QueryFailed(QueryFailedError),
 }
 
@@ -952,6 +960,51 @@ impl QueryRoot {
     /// Returns "ok" to indicate the service is running
     async fn health(&self) -> &str {
         "ok"
+    }
+
+    /// Calculate the predicted module address for a Safe deployment
+    ///
+    /// Calls the HoprNodeStakeFactory.predictModuleAddress_1 function to compute
+    /// the deterministic CREATE2 address for a HOPR node management module.
+    async fn calculate_module_address(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Safe owner address (hexadecimal format)")] owner: String,
+        #[graphql(desc = "Safe deployment nonce")] nonce: UInt64,
+        #[graphql(desc = "Safe contract address (hexadecimal format)")] safe_address: String,
+    ) -> Result<CalculateModuleAddressResult> {
+        // Validate owner address
+        if let Err(e) = validate_eth_address(&owner) {
+            return Ok(CalculateModuleAddressResult::InvalidAddress(
+                errors::invalid_address_from_message(owner, e.message),
+            ));
+        }
+
+        // Validate safe_address
+        if let Err(e) = validate_eth_address(&safe_address) {
+            return Ok(CalculateModuleAddressResult::InvalidAddress(
+                errors::invalid_address_from_message(safe_address, e.message),
+            ));
+        }
+
+        // Parse addresses
+        let owner_addr = Address::from_hex(&owner)
+            .map_err(|e| async_graphql::Error::new(format!("Invalid owner address: {}", e)))?;
+        let safe_addr = Address::from_hex(&safe_address)
+            .map_err(|e| async_graphql::Error::new(format!("Invalid safe address: {}", e)))?;
+
+        // Get RPC operations from context
+        let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
+
+        // Call RPC to calculate module address
+        match blokli_chain_rpc::HoprRpcOperations::calculate_module_address(&**rpc, owner_addr, nonce.0, safe_addr).await {
+            Ok(module_address) => Ok(CalculateModuleAddressResult::ModuleAddress(ModuleAddress {
+                module_address: module_address.to_hex(),
+            })),
+            Err(e) => Ok(CalculateModuleAddressResult::QueryFailed(
+                errors::rpc_query_failed("calculate module address", e),
+            )),
+        }
     }
 
     /// API version information
