@@ -33,10 +33,7 @@ mod common;
 
 use std::{sync::Arc, time::Duration};
 
-use alloy::{
-    primitives::U256,
-    sol,
-};
+use alloy::{primitives::U256, sol};
 use async_graphql::Schema;
 use blokli_api::{mutation::MutationRoot, query::QueryRoot, subscription::SubscriptionRoot};
 use hopr_crypto_types::keypairs::Keypair;
@@ -55,7 +52,6 @@ sol!(
         function incrementNonce() public;
     }
 );
-
 
 /// Executes a GraphQL query against the provided schema.
 ///

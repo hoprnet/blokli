@@ -14,9 +14,15 @@ async fn test_setup_environment_creates_all_components() -> anyhow::Result<()> {
     assert!(!ctx.anvil.endpoint().is_empty(), "Anvil should be running");
     assert!(!ctx.test_accounts.is_empty(), "Test accounts should be created");
     assert_eq!(ctx.test_accounts.len(), 3, "Should create 3 test accounts by default");
-    assert!(!ctx.contract_addrs.token.is_zero(), "Contract addresses should be configured");
+    assert!(
+        !ctx.contract_addrs.token.is_zero(),
+        "Contract addresses should be configured"
+    );
     assert_eq!(ctx.chain_id, 31337, "Chain ID should be Anvil default");
-    assert!(ctx.db.is_some(), "Database should be Some (always created for GraphQL schema)");
+    assert!(
+        ctx.db.is_some(),
+        "Database should be Some (always created for GraphQL schema)"
+    );
 
     Ok(())
 }

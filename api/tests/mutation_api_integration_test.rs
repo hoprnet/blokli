@@ -15,7 +15,6 @@ use std::{sync::Arc, time::Duration};
 use alloy::{
     consensus::{SignableTransaction, TxLegacy},
     eips::eip2718::Encodable2718,
-    node_bindings::AnvilInstance,
     primitives::{Address as AlloyAddress, TxKind, U256},
     signers::{SignerSync, local::PrivateKeySigner},
 };
@@ -25,14 +24,10 @@ use blokli_api::{mutation::MutationRoot, query::QueryRoot};
 use blokli_chain_api::{
     rpc_adapter::RpcAdapter,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
-    transaction_monitor::{TransactionMonitor, TransactionMonitorConfig},
+    transaction_monitor::TransactionMonitor,
     transaction_store::{TransactionStatus, TransactionStore},
-    transaction_validator::TransactionValidator,
 };
-use blokli_chain_rpc::{
-    rpc::{RpcOperations, RpcOperationsConfig},
-    transport::ReqwestClient,
-};
+use blokli_chain_rpc::transport::ReqwestClient;
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
@@ -40,20 +35,17 @@ use tokio::task::AbortHandle;
 
 /// Test context containing all components needed for GraphQL mutation tests
 struct TestContext {
-    anvil: AnvilInstance,
     chain_key: ChainKeypair,
-    executor: Arc<RawTransactionExecutor<RpcAdapter<ReqwestClient>>>,
+    chain_id: u64,
     store: Arc<TransactionStore>,
-    monitor: Arc<TransactionMonitor<RpcAdapter<ReqwestClient>>>,
-    _rpc_adapter: Arc<RpcAdapter<ReqwestClient>>,
-    monitor_handle: Option<AbortHandle>,
     schema: Schema<QueryRoot, MutationRoot, EmptySubscription>,
+    _monitor_handle: Option<AbortHandle>,
 }
 
 impl Drop for TestContext {
     fn drop(&mut self) {
         // Stop the monitor if it's running
-        if let Some(handle) = self.monitor_handle.take() {
+        if let Some(handle) = self._monitor_handle.take() {
             handle.abort();
         }
     }
@@ -65,93 +57,34 @@ async fn setup_test_environment(
     confirmations: u32,
     executor_config: RawTransactionExecutorConfig,
 ) -> Result<TestContext> {
-    // Initialize logging for tests
-    let _ = env_logger::builder().is_test(true).try_init();
-
-    // Use common setup but we need custom RPC config
-    let mut config = common::TestEnvironmentConfig::default();
-    config.expected_block_time = block_time;
-    config.num_test_accounts = 1;
-
-    let ctx = common::setup_test_environment(config).await?;
-
-    // Create RPC configuration with custom settings for mutations
-    let cfg = RpcOperationsConfig {
-        chain_id: ctx.chain_id,
-        tx_polling_interval: Duration::from_secs(1),
-        expected_block_time: block_time,
-        finality: confirmations,
-        gas_oracle_url: None,
-        contract_addrs: ContractAddresses::default(),
-        ..Default::default()
-    };
-
-    // Set up RPC client with retry policy
-    let transport_client = alloy::transports::http::ReqwestTransport::new(ctx.anvil.endpoint_url());
-    let rpc_client = alloy::rpc::client::ClientBuilder::default()
-        .layer(alloy::transports::layers::RetryBackoffLayer::new_with_policy(
-            2,
-            100,
-            100,
-            blokli_chain_rpc::client::DefaultRetryPolicy::default(),
-        ))
-        .transport(transport_client.clone(), transport_client.guess_local());
-
-    let rpc_operations = RpcOperations::new(rpc_client, ReqwestClient::new(), cfg, None)?;
-    let rpc_adapter = Arc::new(RpcAdapter::new(rpc_operations));
-
-    // Create transaction components
-    let transaction_store = Arc::new(TransactionStore::new());
-    let transaction_validator = Arc::new(TransactionValidator::new());
-
-    let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
-        rpc_adapter.clone(),
-        transaction_store.clone(),
-        transaction_validator.clone(),
-        executor_config,
-    ));
-
-    // Create and start transaction monitor
-    let monitor_config = TransactionMonitorConfig {
-        poll_interval: Duration::from_secs(1),
-        timeout: Duration::from_secs(30),
-        per_transaction_delay: Duration::from_millis(10),
-    };
-
-    let transaction_monitor = Arc::new(TransactionMonitor::new(
-        transaction_store.clone(),
-        (*rpc_adapter).clone(),
-        monitor_config,
-    ));
-
-    let monitor_clone = transaction_monitor.clone();
-    let monitor_handle = tokio::spawn(async move {
-        monitor_clone.start().await;
-    })
-    .abort_handle();
+    // Use common transaction test helper
+    let tx_ctx = common::setup_transaction_test_environment(
+        block_time,
+        Duration::from_secs(1), // poll_interval
+        confirmations,
+        Some(executor_config),
+    )
+    .await?;
 
     // Create in-memory database
     let db = BlokliDb::new_in_memory().await?;
 
-    // Build GraphQL schema
+    // Build GraphQL schema with EmptySubscription variant
     let schema = Schema::build(QueryRoot, MutationRoot, EmptySubscription)
         .data(db.conn(TargetDb::Index).clone())
-        .data(ctx.chain_id)
+        .data(31337u64) // Anvil chain ID
         .data("test".to_string())
         .data(ContractAddresses::default())
-        .data(transaction_executor.clone())
-        .data(transaction_store.clone())
+        .data(tx_ctx.executor.clone())
+        .data(tx_ctx.store.clone())
         .finish();
 
     Ok(TestContext {
-        anvil: ctx.anvil,
-        chain_key: ctx.test_accounts[0].clone(),
-        executor: transaction_executor,
-        store: transaction_store,
-        monitor: transaction_monitor,
-        _rpc_adapter: rpc_adapter,
-        monitor_handle: Some(monitor_handle),
+        chain_key: tx_ctx.chain_key.clone(),
+        chain_id: 31337, // Anvil chain ID
+        store: tx_ctx.store.clone(),
         schema,
+        _monitor_handle: tx_ctx.monitor_handle.clone(),
     })
 }
 
@@ -193,7 +126,7 @@ async fn test_send_transaction_returns_hash_immediately() -> Result<()> {
     let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     // Create a test transaction
-    let raw_tx = create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 0, ctx.anvil.chain_id());
+    let raw_tx = create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
     let raw_tx_hex = format!("0x{}", hex::encode(&raw_tx));
 
     let query = format!(
@@ -260,7 +193,7 @@ async fn test_send_transaction_async_returns_uuid_and_tracks() -> Result<()> {
     let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     // Create a test transaction
-    let raw_tx = create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 0, ctx.anvil.chain_id());
+    let raw_tx = create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
     let raw_tx_hex = format!("0x{}", hex::encode(&raw_tx));
 
     let query = format!(
@@ -321,7 +254,7 @@ async fn test_send_transaction_sync_waits_for_confirmations() -> Result<()> {
     let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     // Create a test transaction
-    let raw_tx = create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 0, ctx.anvil.chain_id());
+    let raw_tx = create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
     let raw_tx_hex = format!("0x{}", hex::encode(&raw_tx));
 
     let query = format!(
@@ -373,7 +306,7 @@ async fn test_send_transaction_sync_with_custom_confirmations() -> Result<()> {
     let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     // Create a test transaction
-    let raw_tx = create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 0, ctx.anvil.chain_id());
+    let raw_tx = create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
     let raw_tx_hex = format!("0x{}", hex::encode(&raw_tx));
 
     let query = format!(
@@ -441,7 +374,7 @@ async fn test_mutations_accept_hex_with_and_without_prefix() -> Result<()> {
     let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     // Create a test transaction
-    let raw_tx = create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 0, ctx.anvil.chain_id());
+    let raw_tx = create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
 
     // Test with 0x prefix
     let with_prefix = format!("0x{}", hex::encode(&raw_tx));
@@ -463,11 +396,8 @@ async fn test_mutations_accept_hex_with_and_without_prefix() -> Result<()> {
         "SendTransactionSuccess"
     );
 
-    // Test without 0x prefix
-    let without_prefix = hex::encode(&raw_tx);
-
-    // Create new transaction with different nonce to avoid duplicate
-    let raw_tx2 = create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 1, ctx.anvil.chain_id());
+    // Test without 0x prefix - create new transaction with different nonce to avoid duplicate
+    let raw_tx2 = create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 1, ctx.chain_id);
     let without_prefix2 = hex::encode(&raw_tx2);
 
     let query2 = format!(
@@ -507,7 +437,7 @@ async fn test_send_transaction_sync_timeout() -> Result<()> {
     .await?;
 
     // Create a test transaction
-    let raw_tx = create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 0, ctx.anvil.chain_id());
+    let raw_tx = create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
     let raw_tx_hex = format!("0x{}", hex::encode(&raw_tx));
 
     let query = format!(

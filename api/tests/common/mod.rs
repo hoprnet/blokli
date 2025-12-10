@@ -22,10 +22,19 @@ use alloy::{
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
 use async_graphql::Schema;
-use blokli_api::{mutation::MutationRoot, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot};
+use axum::Router;
+use blokli_api::{
+    config::{ApiConfig, HealthConfig},
+    mutation::MutationRoot,
+    query::QueryRoot,
+    schema::build_schema,
+    server::build_app,
+    subscription::SubscriptionRoot,
+};
 use blokli_chain_api::{
     rpc_adapter::RpcAdapter,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
+    transaction_monitor::{TransactionMonitor, TransactionMonitorConfig},
     transaction_store::TransactionStore,
     transaction_validator::TransactionValidator,
 };
@@ -37,7 +46,9 @@ use blokli_chain_rpc::{
 };
 use blokli_chain_types::{ContractAddresses, ContractInstances, utils::create_anvil};
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
+use migration::{Migrator, MigratorTrait};
 use sea_orm::DatabaseConnection;
+use tokio::task::AbortHandle;
 
 /// Test environment configuration options
 #[derive(Debug, Clone)]
@@ -107,8 +118,8 @@ pub struct TestContext {
 /// # Examples
 ///
 /// ```no_run
-/// use api::tests::common::{setup_test_environment, TestEnvironmentConfig};
-/// 
+/// use api::tests::common::{TestEnvironmentConfig, setup_test_environment};
+///
 /// let ctx = setup_test_environment(TestEnvironmentConfig::default()).await?;
 /// // Use ctx.anvil, ctx.rpc_operations, etc. in your tests
 /// ```
@@ -121,8 +132,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
     // Create test accounts from Anvil's deterministic keys
     let test_accounts: Vec<ChainKeypair> = (0..config.num_test_accounts)
         .map(|i| {
-            ChainKeypair::from_secret(anvil.keys()[i].to_bytes().as_ref())
-                .expect("Failed to create test account {i}")
+            ChainKeypair::from_secret(anvil.keys()[i].to_bytes().as_ref()).expect("Failed to create test account {i}")
         })
         .collect();
 
@@ -234,4 +244,212 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
 /// that don't need custom configuration.
 pub async fn setup_simple_test_environment() -> anyhow::Result<TestContext> {
     setup_test_environment(TestEnvironmentConfig::default()).await
+}
+
+/// Test context for HTTP endpoint tests (health checks, readiness gates)
+pub struct HttpTestContext {
+    /// Axum router with HTTP endpoints
+    pub app: Router,
+    /// Database connection for test data manipulation
+    pub db: DatabaseConnection,
+}
+
+/// Setup test environment for HTTP endpoint testing.
+///
+/// This helper creates an environment for testing HTTP endpoints like `/healthz` and `/readyz`.
+/// It builds a complete Axum router with health checks configured.
+///
+/// # Returns
+///
+/// Returns an `HttpTestContext` containing the HTTP router and database connection.
+///
+/// # Examples
+///
+/// ```no_run
+/// use api::tests::common::setup_http_test_environment;
+///
+/// let ctx = setup_http_test_environment().await?;
+/// // Make HTTP requests to ctx.app
+/// ```
+pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
+    // Use custom config to enable migrations and only 1 test account
+    let mut config = TestEnvironmentConfig::default();
+    config.run_migrations = true;
+    config.num_test_accounts = 1;
+
+    let ctx = setup_test_environment(config).await?;
+
+    // Run migrations to create chain_info table
+    let db = ctx.db.as_ref().expect("Database should be present");
+    Migrator::up(db, None).await.expect("Failed to run migrations");
+
+    // Create IndexerState for subscriptions (with small buffers)
+    let indexer_state = IndexerState::new(1, 1);
+
+    // Create API config with health settings
+    let api_config = ApiConfig {
+        playground_enabled: false,
+        chain_id: ctx.chain_id,
+        contract_addresses: ctx.contract_addrs.clone(),
+        health: HealthConfig {
+            max_indexer_lag: 10,
+            timeout: Duration::from_millis(5000),
+            readiness_check_interval: Duration::from_millis(100), // Fast updates for tests
+        },
+        ..Default::default()
+    };
+
+    // Build HTTP router
+    let app = build_app(
+        db.clone(),
+        "test-network".to_string(),
+        api_config,
+        indexer_state,
+        ctx.transaction_executor.clone(),
+        ctx.transaction_store.clone(),
+        ctx.rpc_operations.clone(),
+        None, // SQLite notification manager not needed for tests
+    )
+    .await
+    .expect("Failed to build app");
+
+    Ok(HttpTestContext { app, db: db.clone() })
+}
+
+/// Test context for transaction-related tests (mutations, queries, subscriptions)
+pub struct TransactionTestContext {
+    /// Anvil instance (must be kept alive)
+    pub anvil: AnvilInstance,
+    /// Test account with known private key
+    pub chain_key: ChainKeypair,
+    /// Transaction store for tracking transaction state
+    pub store: Arc<TransactionStore>,
+    /// Transaction monitor for polling transaction status
+    pub monitor: Arc<TransactionMonitor<RpcAdapter<ReqwestClient>>>,
+    /// Monitor task handle for cleanup
+    pub monitor_handle: Option<AbortHandle>,
+    /// Transaction executor
+    pub executor: Arc<RawTransactionExecutor<RpcAdapter<ReqwestClient>>>,
+    /// RPC adapter
+    pub rpc_adapter: Arc<RpcAdapter<ReqwestClient>>,
+}
+
+impl Drop for TransactionTestContext {
+    fn drop(&mut self) {
+        // Stop the monitor if it's running
+        if let Some(handle) = self.monitor_handle.take() {
+            handle.abort();
+        }
+    }
+}
+
+/// Setup test environment for transaction testing.
+///
+/// This helper creates an environment for testing transaction mutations, queries, and subscriptions.
+/// It configures custom RPC settings optimized for testing and starts a transaction monitor.
+///
+/// # Arguments
+///
+/// * `block_time` - Expected block time for Anvil
+/// * `poll_interval` - How often to poll for transaction updates
+/// * `finality` - Number of confirmations required
+/// * `executor_config` - Optional custom executor configuration (uses default if None)
+///
+/// # Returns
+///
+/// Returns a `TransactionTestContext` with transaction monitoring infrastructure.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::time::Duration;
+///
+/// use api::tests::common::setup_transaction_test_environment;
+///
+/// let ctx = setup_transaction_test_environment(Duration::from_secs(1), Duration::from_millis(100), 2, None).await?;
+/// ```
+pub async fn setup_transaction_test_environment(
+    block_time: Duration,
+    poll_interval: Duration,
+    finality: u32,
+    executor_config: Option<RawTransactionExecutorConfig>,
+) -> anyhow::Result<TransactionTestContext> {
+    // Initialize logging for tests
+    let _ = env_logger::builder().is_test(true).try_init();
+
+    // Use common setup but we need custom RPC config
+    let mut config = TestEnvironmentConfig::default();
+    config.expected_block_time = block_time;
+    config.num_test_accounts = 1;
+
+    let ctx = setup_test_environment(config).await?;
+
+    // Create RPC configuration with custom settings for transactions
+    let rpc_config = RpcOperationsConfig {
+        chain_id: ctx.chain_id,
+        tx_polling_interval: poll_interval,
+        expected_block_time: block_time,
+        finality,
+        gas_oracle_url: None,
+        contract_addrs: ContractAddresses::default(),
+        ..Default::default()
+    };
+
+    // Set up RPC client with retry policy
+    let transport_client = ReqwestTransport::new(ctx.anvil.endpoint_url());
+    let rpc_client = ClientBuilder::default()
+        .layer(RetryBackoffLayer::new_with_policy(
+            2,
+            100,
+            100,
+            DefaultRetryPolicy::default(),
+        ))
+        .transport(transport_client.clone(), transport_client.guess_local());
+
+    let rpc_operations = RpcOperations::new(rpc_client, ReqwestClient::new(), rpc_config, None)?;
+    let rpc_adapter = Arc::new(RpcAdapter::new(rpc_operations));
+
+    // Create transaction components
+    let transaction_store = Arc::new(TransactionStore::new());
+    let transaction_validator = Arc::new(TransactionValidator::new());
+
+    let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
+        rpc_adapter.clone(),
+        transaction_store.clone(),
+        transaction_validator.clone(),
+        executor_config.unwrap_or_default(),
+    ));
+
+    // Create and start transaction monitor
+    let monitor_config = TransactionMonitorConfig {
+        poll_interval,
+        timeout: Duration::from_secs(30),
+        per_transaction_delay: Duration::from_millis(10),
+    };
+
+    let transaction_monitor = Arc::new(TransactionMonitor::new(
+        transaction_store.clone(),
+        (*rpc_adapter).clone(),
+        monitor_config,
+    ));
+
+    let monitor_handle = Some(
+        tokio::spawn({
+            let monitor = transaction_monitor.clone();
+            async move {
+                monitor.start().await;
+            }
+        })
+        .abort_handle(),
+    );
+
+    Ok(TransactionTestContext {
+        anvil: ctx.anvil,
+        chain_key: ctx.test_accounts[0].clone(),
+        store: transaction_store,
+        monitor: transaction_monitor,
+        monitor_handle,
+        executor: transaction_executor,
+        rpc_adapter,
+    })
 }

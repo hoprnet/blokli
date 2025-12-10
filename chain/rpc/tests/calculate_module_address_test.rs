@@ -66,11 +66,7 @@ async fn test_calculate_module_address_basic() -> anyhow::Result<()> {
         Address::default(),
         "Module address should not be zero address"
     );
-    assert_eq!(
-        module_address.as_ref().len(),
-        20,
-        "Module address should be 20 bytes"
-    );
+    assert_eq!(module_address.as_ref().len(), 20, "Module address should be 20 bytes");
 
     Ok(())
 }

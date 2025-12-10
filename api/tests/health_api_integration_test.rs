@@ -8,79 +8,14 @@
 
 mod common;
 
-use std::time::Duration;
-
 use axum::{
     Router,
     body::Body,
     http::{Request, StatusCode},
 };
-use blokli_api::{
-    config::{ApiConfig, HealthConfig},
-    server::build_app,
-};
-use blokli_chain_indexer::IndexerState;
 use blokli_db_entity::codegen::chain_info;
-use migration::{Migrator, MigratorTrait};
 use sea_orm::{DatabaseConnection, EntityTrait, Set, sea_query::OnConflict};
 use tower::ServiceExt;
-
-/// Test context containing all components needed for health API testing
-struct TestContext {
-    /// Axum router with health endpoints
-    app: Router,
-    /// Database connection for test data manipulation
-    db: DatabaseConnection,
-}
-
-/// Setup test environment with Anvil, contracts, migrations, and HTTP router.
-async fn setup_test_environment() -> anyhow::Result<TestContext> {
-    // Use custom config to enable migrations and only 1 test account
-    let mut config = common::TestEnvironmentConfig::default();
-    config.run_migrations = true;
-    config.num_test_accounts = 1;
-
-    let ctx = common::setup_test_environment(config).await?;
-
-    // Run migrations to create chain_info table
-    let db = ctx.db.as_ref().expect("Database should be present");
-    Migrator::up(db, None).await.expect("Failed to run migrations");
-
-    // Create IndexerState for subscriptions (with small buffers)
-    let indexer_state = IndexerState::new(1, 1);
-
-    // Create API config with health settings
-    let api_config = ApiConfig {
-        playground_enabled: false,
-        chain_id: ctx.chain_id,
-        contract_addresses: ctx.contract_addrs.clone(),
-        health: HealthConfig {
-            max_indexer_lag: 10,
-            timeout: Duration::from_millis(5000),
-            readiness_check_interval: Duration::from_millis(100), // Fast updates for tests
-        },
-        ..Default::default()
-    };
-
-    // Build HTTP router
-    let app = build_app(
-        db.clone(),
-        "test-network".to_string(),
-        api_config,
-        indexer_state,
-        ctx.transaction_executor.clone(),
-        ctx.transaction_store.clone(),
-        ctx.rpc_operations.clone(),
-        None, // SQLite notification manager not needed for tests
-    )
-    .await
-    .expect("Failed to build app");
-
-    Ok(TestContext {
-        app,
-        db: db.clone(),
-    })
-}
 
 /// Helper to make HTTP request and get response
 async fn make_request(app: Router, path: &str) -> (StatusCode, serde_json::Value) {
@@ -139,7 +74,7 @@ async fn delete_chain_info(db: &DatabaseConnection) -> anyhow::Result<()> {
 /// Test that /healthz returns 200 OK with healthy status
 #[test_log::test(tokio::test)]
 async fn test_healthz_returns_ok() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_http_test_environment().await?;
 
     let (status, json) = make_request(ctx.app, "/healthz").await;
 
@@ -153,7 +88,7 @@ async fn test_healthz_returns_ok() -> anyhow::Result<()> {
 /// Test that /healthz returns the correct version
 #[test_log::test(tokio::test)]
 async fn test_healthz_returns_version() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_http_test_environment().await?;
 
     let (status, json) = make_request(ctx.app, "/healthz").await;
 
@@ -171,7 +106,7 @@ async fn test_healthz_returns_version() -> anyhow::Result<()> {
 /// Test that /readyz returns 200 OK when all checks pass
 #[test_log::test(tokio::test)]
 async fn test_readyz_all_healthy() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_http_test_environment().await?;
 
     // Get current block number from Anvil (usually starts at 0 or low number)
     // We'll update chain_info with a recent block to ensure lag is within threshold
@@ -193,7 +128,7 @@ async fn test_readyz_all_healthy() -> anyhow::Result<()> {
 /// Test that /readyz shows correct indexer lag calculation
 #[test_log::test(tokio::test)]
 async fn test_readyz_shows_indexer_lag() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_http_test_environment().await?;
 
     // Update chain_info with block 0
     update_chain_info(&ctx.db, 0).await?;
@@ -215,7 +150,7 @@ async fn test_readyz_shows_indexer_lag() -> anyhow::Result<()> {
 /// Test that /readyz returns 503 when no chain_info exists (indexer not started)
 #[test_log::test(tokio::test)]
 async fn test_readyz_no_chain_info() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_http_test_environment().await?;
 
     // Delete chain_info - simulates indexer not started
     delete_chain_info(&ctx.db).await?;
@@ -238,7 +173,7 @@ async fn test_readyz_no_chain_info() -> anyhow::Result<()> {
 /// Test that /readyz returns 503 when indexer lag exceeds threshold
 #[test_log::test(tokio::test)]
 async fn test_readyz_indexer_lag_exceeded() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_http_test_environment().await?;
 
     // Update chain_info with block 0
     update_chain_info(&ctx.db, 0).await?;
@@ -266,7 +201,7 @@ async fn test_readyz_indexer_lag_exceeded() -> anyhow::Result<()> {
 /// Test that /readyz includes version in response
 #[test_log::test(tokio::test)]
 async fn test_readyz_includes_version() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_http_test_environment().await?;
 
     update_chain_info(&ctx.db, 0).await?;
 
@@ -285,7 +220,7 @@ async fn test_readyz_includes_version() -> anyhow::Result<()> {
 /// Test that error responses have proper structure
 #[test_log::test(tokio::test)]
 async fn test_readyz_error_response_structure() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_http_test_environment().await?;
 
     // Delete chain_info - will cause error
     delete_chain_info(&ctx.db).await?;
@@ -310,7 +245,7 @@ async fn test_readyz_error_response_structure() -> anyhow::Result<()> {
 /// Test that successful responses omit error fields
 #[test_log::test(tokio::test)]
 async fn test_readyz_success_omits_error_fields() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_http_test_environment().await?;
 
     update_chain_info(&ctx.db, 0).await?;
 

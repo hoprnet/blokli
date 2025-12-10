@@ -6,80 +6,15 @@
 
 mod common;
 
-use std::time::Duration;
-
 use axum::{
     Router,
     body::Body,
     http::{Request, StatusCode},
 };
-use blokli_api::{
-    config::{ApiConfig, HealthConfig},
-    server::build_app,
-};
-use blokli_chain_indexer::IndexerState;
 use blokli_db_entity::codegen::chain_info;
-use migration::{Migrator, MigratorTrait};
 use sea_orm::{DatabaseConnection, EntityTrait, Set, sea_query::OnConflict};
 use serde_json::json;
 use tower::ServiceExt;
-
-/// Test context containing all components needed for GraphQL readiness testing
-struct TestContext {
-    /// Axum router with GraphQL endpoint
-    app: Router,
-    /// Database connection for test data manipulation
-    db: DatabaseConnection,
-}
-
-/// Setup test environment with Anvil, contracts, migrations, and HTTP router.
-async fn setup_test_environment() -> anyhow::Result<TestContext> {
-    // Use custom config to enable migrations and only 1 test account
-    let mut config = common::TestEnvironmentConfig::default();
-    config.run_migrations = true;
-    config.num_test_accounts = 1;
-
-    let ctx = common::setup_test_environment(config).await?;
-
-    // Run migrations to create chain_info table
-    let db = ctx.db.as_ref().expect("Database should be present");
-    Migrator::up(db, None).await.expect("Failed to run migrations");
-
-    // Create IndexerState for subscriptions (with small buffers)
-    let indexer_state = IndexerState::new(1, 1);
-
-    // Create API config with health settings
-    let api_config = ApiConfig {
-        playground_enabled: false,
-        chain_id: ctx.chain_id,
-        contract_addresses: ctx.contract_addrs.clone(),
-        health: HealthConfig {
-            max_indexer_lag: 10,
-            timeout: Duration::from_millis(5000),
-            readiness_check_interval: Duration::from_millis(100), // Fast updates for tests
-        },
-        ..Default::default()
-    };
-
-    // Build HTTP router
-    let app = build_app(
-        db.clone(),
-        "test-network".to_string(),
-        api_config,
-        indexer_state,
-        ctx.transaction_executor.clone(),
-        ctx.transaction_store.clone(),
-        ctx.rpc_operations.clone(),
-        None, // SQLite notification manager not needed for tests
-    )
-    .await
-    .expect("Failed to build app");
-
-    Ok(TestContext {
-        app,
-        db: db.clone(),
-    })
-}
 
 /// Helper to make HTTP POST request to GraphQL endpoint
 async fn make_graphql_request(app: Router, query: &str) -> (StatusCode, serde_json::Value) {
@@ -144,7 +79,7 @@ async fn delete_chain_info(db: &DatabaseConnection) -> anyhow::Result<()> {
 /// Test that GraphQL returns 503 when server is not ready (no chain_info)
 #[test_log::test(tokio::test)]
 async fn test_graphql_returns_503_when_not_ready() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_http_test_environment().await?;
 
     // Delete chain_info to simulate server not ready
     delete_chain_info(&ctx.db).await?;
@@ -170,7 +105,7 @@ async fn test_graphql_returns_503_when_not_ready() -> anyhow::Result<()> {
 /// Test that GraphQL returns 200 when server is ready
 #[test_log::test(tokio::test)]
 async fn test_graphql_returns_200_when_ready() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_http_test_environment().await?;
 
     // Set up chain_info to make server ready
     update_chain_info(&ctx.db, 0).await?;
@@ -200,7 +135,7 @@ async fn test_graphql_returns_200_when_ready() -> anyhow::Result<()> {
 /// Test that GraphQL error message is clear when indexer is catching up
 #[test_log::test(tokio::test)]
 async fn test_graphql_error_message_mentions_indexer() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_http_test_environment().await?;
 
     // Delete chain_info to simulate server not ready
     delete_chain_info(&ctx.db).await?;
@@ -221,7 +156,7 @@ async fn test_graphql_error_message_mentions_indexer() -> anyhow::Result<()> {
 /// Test that different query types are all blocked when not ready
 #[test_log::test(tokio::test)]
 async fn test_graphql_all_request_types_blocked_when_not_ready() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_http_test_environment().await?;
 
     // Delete chain_info to simulate server not ready
     delete_chain_info(&ctx.db).await?;
@@ -249,7 +184,7 @@ async fn test_graphql_all_request_types_blocked_when_not_ready() -> anyhow::Resu
 /// Test that readiness state transitions from not ready to ready
 #[test_log::test(tokio::test)]
 async fn test_graphql_readiness_transition() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_http_test_environment().await?;
 
     let query = r#"query { __typename }"#;
 
@@ -278,7 +213,7 @@ async fn test_graphql_readiness_transition() -> anyhow::Result<()> {
 /// Test that /readyz and GraphQL gating are in sync
 #[test_log::test(tokio::test)]
 async fn test_graphql_readiness_synced_with_readyz() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_http_test_environment().await?;
 
     // Helper to check readyz status
     let check_readyz = async |app: &Router| {

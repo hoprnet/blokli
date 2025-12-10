@@ -109,15 +109,11 @@ async fn test_calculate_module_address_success() -> anyhow::Result<()> {
     );
 
     // Verify it starts with 0x
-    assert!(
-        module_address.starts_with("0x"),
-        "Module address should start with 0x"
-    );
+    assert!(module_address.starts_with("0x"), "Module address should start with 0x");
 
     // Verify it's not zero address
     assert_ne!(
-        module_address,
-        "0x0000000000000000000000000000000000000000",
+        module_address, "0x0000000000000000000000000000000000000000",
         "Module address should not be zero address"
     );
 
@@ -267,8 +263,18 @@ async fn test_calculate_module_address_accepts_no_prefix() -> anyhow::Result<()>
     let ctx = common::setup_simple_test_environment().await?;
 
     // Strip 0x prefix from addresses
-    let owner_address = ctx.test_accounts[0].public().to_address().to_hex().trim_start_matches("0x").to_string();
-    let safe_address = ctx.test_accounts[1].public().to_address().to_hex().trim_start_matches("0x").to_string();
+    let owner_address = ctx.test_accounts[0]
+        .public()
+        .to_address()
+        .to_hex()
+        .trim_start_matches("0x")
+        .to_string();
+    let safe_address = ctx.test_accounts[1]
+        .public()
+        .to_address()
+        .to_hex()
+        .trim_start_matches("0x")
+        .to_string();
 
     // Query without 0x prefix
     let data = query_calculate_module_address(&ctx.schema, &owner_address, 0, &safe_address).await?;
@@ -317,10 +323,7 @@ async fn test_calculate_module_address_with_zero_nonce() -> anyhow::Result<()> {
     let result = &data["calculateModuleAddress"];
 
     // Should succeed
-    assert!(
-        result["moduleAddress"].is_string(),
-        "Query should handle nonce = 0"
-    );
+    assert!(result["moduleAddress"].is_string(), "Query should handle nonce = 0");
 
     Ok(())
 }
@@ -423,9 +426,18 @@ async fn test_calculate_module_address_with_different_parameters() -> anyhow::Re
     let address3 = data3["calculateModuleAddress"]["moduleAddress"].as_str().unwrap();
 
     // Verify each query returns a different, valid module address
-    assert_ne!(address1, address2, "Different parameters should produce different addresses");
-    assert_ne!(address1, address3, "Different parameters should produce different addresses");
-    assert_ne!(address2, address3, "Different parameters should produce different addresses");
+    assert_ne!(
+        address1, address2,
+        "Different parameters should produce different addresses"
+    );
+    assert_ne!(
+        address1, address3,
+        "Different parameters should produce different addresses"
+    );
+    assert_ne!(
+        address2, address3,
+        "Different parameters should produce different addresses"
+    );
 
     // All addresses should be valid (42 chars with 0x prefix)
     assert_eq!(address1.len(), 42, "Address 1 should be valid");

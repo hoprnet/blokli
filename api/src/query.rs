@@ -5,8 +5,8 @@ use std::sync::Arc;
 use async_graphql::{Context, ID, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
     Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelsList, ChannelsResult,
-    ContractAddressMap, CountResult, HoprBalance, InvalidAddressError, ModuleAddress, NativeBalance,
-    QueryFailedError, Safe, SafeHoprAllowance, SafeTransactionCount, TokenValueString, Transaction, UInt64,
+    ContractAddressMap, CountResult, HoprBalance, InvalidAddressError, ModuleAddress, NativeBalance, QueryFailedError,
+    Safe, SafeHoprAllowance, SafeTransactionCount, TokenValueString, Transaction, UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
@@ -997,13 +997,16 @@ impl QueryRoot {
         let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
 
         // Call RPC to calculate module address
-        match blokli_chain_rpc::HoprRpcOperations::calculate_module_address(&**rpc, owner_addr, nonce.0, safe_addr).await {
+        match blokli_chain_rpc::HoprRpcOperations::calculate_module_address(&**rpc, owner_addr, nonce.0, safe_addr)
+            .await
+        {
             Ok(module_address) => Ok(CalculateModuleAddressResult::ModuleAddress(ModuleAddress {
                 module_address: module_address.to_hex(),
             })),
-            Err(e) => Ok(CalculateModuleAddressResult::QueryFailed(
-                errors::rpc_query_failed("calculate module address", e),
-            )),
+            Err(e) => Ok(CalculateModuleAddressResult::QueryFailed(errors::rpc_query_failed(
+                "calculate module address",
+                e,
+            ))),
         }
     }
 
