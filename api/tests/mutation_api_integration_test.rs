@@ -17,6 +17,7 @@ use alloy::{
     eips::eip2718::Encodable2718,
     node_bindings::AnvilInstance,
     primitives::{Address as AlloyAddress, TxKind, U256},
+    providers::{Provider, ProviderBuilder},
     signers::{SignerSync, local::PrivateKeySigner},
 };
 use anyhow::Result;
@@ -119,12 +120,28 @@ async fn execute_mutation(
     serde_json::to_value(response).expect("Failed to serialize response")
 }
 
+/// Helper to get the current nonce for the test account from RPC
+async fn get_current_nonce(ctx: &TestContext) -> u64 {
+    let address = ctx.chain_key().public().to_address();
+    let alloy_address = AlloyAddress::from_slice(address.as_ref());
+
+    let provider = ProviderBuilder::new().on_http(ctx._tx_ctx.anvil.endpoint_url());
+
+    provider
+        .get_transaction_count(alloy_address)
+        .await
+        .expect("Failed to get transaction count")
+}
+
 #[tokio::test]
 async fn test_send_transaction_returns_hash_immediately() -> Result<()> {
     let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
+    // Get current nonce from RPC
+    let nonce = get_current_nonce(&ctx).await;
+
     // Create a test transaction
-    let raw_tx = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
+    let raw_tx = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, nonce, ctx.chain_id);
     let raw_tx_hex = format!("0x{}", hex::encode(&raw_tx));
 
     let query = format!(
@@ -190,8 +207,11 @@ async fn test_send_transaction_with_invalid_hex() -> Result<()> {
 async fn test_send_transaction_async_returns_uuid_and_tracks() -> Result<()> {
     let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
+    // Get current nonce from RPC
+    let nonce = get_current_nonce(&ctx).await;
+
     // Create a test transaction
-    let raw_tx = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
+    let raw_tx = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, nonce, ctx.chain_id);
     let raw_tx_hex = format!("0x{}", hex::encode(&raw_tx));
 
     let query = format!(
@@ -251,8 +271,11 @@ async fn test_send_transaction_async_returns_uuid_and_tracks() -> Result<()> {
 async fn test_send_transaction_sync_waits_for_confirmations() -> Result<()> {
     let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
+    // Get current nonce from RPC
+    let nonce = get_current_nonce(&ctx).await;
+
     // Create a test transaction
-    let raw_tx = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
+    let raw_tx = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, nonce, ctx.chain_id);
     let raw_tx_hex = format!("0x{}", hex::encode(&raw_tx));
 
     let query = format!(
@@ -303,8 +326,11 @@ async fn test_send_transaction_sync_waits_for_confirmations() -> Result<()> {
 async fn test_send_transaction_sync_with_custom_confirmations() -> Result<()> {
     let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
+    // Get current nonce from RPC
+    let nonce = get_current_nonce(&ctx).await;
+
     // Create a test transaction
-    let raw_tx = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
+    let raw_tx = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, nonce, ctx.chain_id);
     let raw_tx_hex = format!("0x{}", hex::encode(&raw_tx));
 
     let query = format!(
@@ -371,8 +397,11 @@ async fn test_send_transaction_async_with_empty_input() -> Result<()> {
 async fn test_mutations_accept_hex_with_and_without_prefix() -> Result<()> {
     let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
+    // Get current nonce from RPC
+    let nonce = get_current_nonce(&ctx).await;
+
     // Create a test transaction
-    let raw_tx = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
+    let raw_tx = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, nonce, ctx.chain_id);
 
     // Test with 0x prefix
     let with_prefix = format!("0x{}", hex::encode(&raw_tx));
@@ -395,7 +424,7 @@ async fn test_mutations_accept_hex_with_and_without_prefix() -> Result<()> {
     );
 
     // Test without 0x prefix - create new transaction with different nonce to avoid duplicate
-    let raw_tx2 = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, 1, ctx.chain_id);
+    let raw_tx2 = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, nonce + 1, ctx.chain_id);
     let without_prefix2 = hex::encode(&raw_tx2);
 
     let query2 = format!(
@@ -434,8 +463,11 @@ async fn test_send_transaction_sync_timeout() -> Result<()> {
     )
     .await?;
 
+    // Get current nonce from RPC
+    let nonce = get_current_nonce(&ctx).await;
+
     // Create a test transaction
-    let raw_tx = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
+    let raw_tx = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, nonce, ctx.chain_id);
     let raw_tx_hex = format!("0x{}", hex::encode(&raw_tx));
 
     let query = format!(
