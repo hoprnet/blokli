@@ -311,12 +311,12 @@ async fn test_safe_transaction_count_eoa_address_returns_error() -> anyhow::Resu
     let data = query_safe_transaction_count(&ctx.schema, &eoa_address).await?;
     let result = &data["safeTransactionCount"];
 
-    // Verify we get a QueryFailedError (EOAs are not Safe contracts)
+    // Verify we get a QueryFailedError with RPC_ERROR code (EOAs are not Safe contracts)
     assert!(result["code"].is_string(), "Expected code field in error response");
     assert_eq!(
         result["code"].as_str().unwrap(),
-        "QUERY_FAILED",
-        "Should return QUERY_FAILED error code for EOA address"
+        "RPC_ERROR",
+        "Should return RPC_ERROR error code for RPC failures"
     );
     assert!(
         result["message"].is_string(),
@@ -324,8 +324,8 @@ async fn test_safe_transaction_count_eoa_address_returns_error() -> anyhow::Resu
     );
     let message = result["message"].as_str().unwrap();
     assert!(
-        message.starts_with("Failed to query Safe transaction count from RPC:"),
-        "Error message should use standard resolver prefix, got: {}",
+        message.starts_with("RPC error during query Safe transaction count:"),
+        "Error message should use standard RPC error format, got: {}",
         message
     );
 

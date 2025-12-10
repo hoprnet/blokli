@@ -86,7 +86,8 @@ impl BlokliTransactionClient for BlokliClient {
 
         let tx: Result<Transaction> = response_to_data(resp)?.send_transaction_sync.into();
 
-        Ok(hex::decode(tx?.transaction_hash.0)
+        let hash = tx?.transaction_hash.0.to_lowercase();
+        Ok(hex::decode(hash.trim_start_matches("0x"))
             .map_err(|_| ErrorKind::ParseError)
             .and_then(|d| d.try_into().map_err(|_| ErrorKind::ParseError))?)
     }
