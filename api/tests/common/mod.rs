@@ -132,7 +132,8 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
     // Create test accounts from Anvil's deterministic keys
     let test_accounts: Vec<ChainKeypair> = (0..config.num_test_accounts)
         .map(|i| {
-            ChainKeypair::from_secret(anvil.keys()[i].to_bytes().as_ref()).expect("Failed to create test account {i}")
+            ChainKeypair::from_secret(anvil.keys()[i].to_bytes().as_ref())
+                .expect(&format!("Failed to create test account {}", i))
         })
         .collect();
 
@@ -182,6 +183,13 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
     let db = sea_orm::Database::connect("sqlite::memory:")
         .await
         .expect("Failed to create test database");
+
+    // Run migrations if configured
+    if config.run_migrations {
+        Migrator::up(&db, None)
+            .await
+            .expect("Failed to run database migrations");
+    }
 
     // Create transaction components for GraphQL API
     let transaction_store = Arc::new(TransactionStore::new());
@@ -281,9 +289,8 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
 
     let ctx = setup_test_environment(config).await?;
 
-    // Run migrations to create chain_info table
+    // Database connection with migrations already applied (via config.run_migrations)
     let db = ctx.db.as_ref().expect("Database should be present");
-    Migrator::up(db, None).await.expect("Failed to run migrations");
 
     // Create IndexerState for subscriptions (with small buffers)
     let indexer_state = IndexerState::new(1, 1);
@@ -397,7 +404,7 @@ pub async fn setup_transaction_test_environment(
         expected_block_time: block_time,
         finality,
         gas_oracle_url: None,
-        contract_addrs: ContractAddresses::default(),
+        contract_addrs: ctx.contract_addrs.clone(),
         ..Default::default()
     };
 

@@ -21,7 +21,7 @@ async fn test_setup_environment_creates_all_components() -> anyhow::Result<()> {
     assert_eq!(ctx.chain_id, 31337, "Chain ID should be Anvil default");
     assert!(
         ctx.db.is_some(),
-        "Database should be Some (always created for GraphQL schema)"
+        "Database should be Some (always created, regardless of run_migrations flag)"
     );
 
     Ok(())
@@ -40,7 +40,10 @@ async fn test_custom_configuration() -> anyhow::Result<()> {
 
     // Verify custom configuration is applied
     assert_eq!(ctx.test_accounts.len(), 5, "Should create 5 test accounts");
-    assert!(ctx.db.is_some(), "Database should be Some when run_migrations is true");
+    assert!(
+        ctx.db.is_some(),
+        "Database should be Some (always created; run_migrations flag only controls whether migrations are executed)"
+    );
 
     Ok(())
 }

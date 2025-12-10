@@ -245,8 +245,20 @@ async fn test_graphql_readiness_synced_with_readyz() -> anyhow::Result<()> {
 
     // Scenario 2: Both should be available when ready
     update_chain_info(&ctx.db, 0).await?;
-    // Wait for periodic check to update cached state (interval is 100ms in test config)
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    // Poll /readyz until ready or timeout (readiness check interval is 100ms in test config)
+    let poll_start = std::time::Instant::now();
+    let poll_timeout = std::time::Duration::from_secs(5);
+    loop {
+        let readyz_status = check_readyz(&ctx.app).await;
+        if readyz_status == StatusCode::OK {
+            break;
+        }
+        if poll_start.elapsed() > poll_timeout {
+            panic!("Timeout waiting for /readyz to return 200 OK");
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+
     let readyz_status = check_readyz(&ctx.app).await;
     let (graphql_status, _) = make_graphql_request(ctx.app, r#"query { __typename }"#).await;
 
