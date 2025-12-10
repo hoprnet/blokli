@@ -11,9 +11,9 @@ impl BlokliClientError {
     }
 }
 
-impl From<ErrorKind> for BlokliClientError {
-    fn from(kind: ErrorKind) -> Self {
-        Self(Box::new(kind))
+impl<T: Into<ErrorKind>> From<T> for BlokliClientError {
+    fn from(kind: T) -> Self {
+        Self(Box::new(kind.into()))
     }
 }
 
