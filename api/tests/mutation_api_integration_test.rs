@@ -15,6 +15,7 @@ use std::{sync::Arc, time::Duration};
 use alloy::{
     consensus::{SignableTransaction, TxLegacy},
     eips::eip2718::Encodable2718,
+    node_bindings::AnvilInstance,
     primitives::{Address as AlloyAddress, TxKind, U256},
     signers::{SignerSync, local::PrivateKeySigner},
 };
@@ -35,19 +36,18 @@ use tokio::task::AbortHandle;
 
 /// Test context containing all components needed for GraphQL mutation tests
 struct TestContext {
-    chain_key: ChainKeypair,
+    _tx_ctx: common::TransactionTestContext,
     chain_id: u64,
-    store: Arc<TransactionStore>,
     schema: Schema<QueryRoot, MutationRoot, EmptySubscription>,
-    _monitor_handle: Option<AbortHandle>,
 }
 
-impl Drop for TestContext {
-    fn drop(&mut self) {
-        // Stop the monitor if it's running
-        if let Some(handle) = self._monitor_handle.take() {
-            handle.abort();
-        }
+impl TestContext {
+    fn chain_key(&self) -> &ChainKeypair {
+        &self._tx_ctx.chain_key
+    }
+
+    fn store(&self) -> &Arc<TransactionStore> {
+        &self._tx_ctx.store
     }
 }
 
@@ -80,11 +80,9 @@ async fn setup_test_environment(
         .finish();
 
     Ok(TestContext {
-        chain_key: tx_ctx.chain_key.clone(),
+        _tx_ctx: tx_ctx,
         chain_id: 31337, // Anvil chain ID
-        store: tx_ctx.store.clone(),
         schema,
-        _monitor_handle: tx_ctx.monitor_handle.clone(),
     })
 }
 
@@ -126,7 +124,7 @@ async fn test_send_transaction_returns_hash_immediately() -> Result<()> {
     let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     // Create a test transaction
-    let raw_tx = create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
+    let raw_tx = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
     let raw_tx_hex = format!("0x{}", hex::encode(&raw_tx));
 
     let query = format!(
@@ -156,7 +154,7 @@ async fn test_send_transaction_returns_hash_immediately() -> Result<()> {
     assert!(tx_hash.starts_with("0x"));
 
     // Verify transaction was NOT stored (fire-and-forget mode)
-    assert_eq!(ctx.store.count(), 0);
+    assert_eq!(ctx.store().count(), 0);
 
     Ok(())
 }
@@ -193,7 +191,7 @@ async fn test_send_transaction_async_returns_uuid_and_tracks() -> Result<()> {
     let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     // Create a test transaction
-    let raw_tx = create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
+    let raw_tx = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
     let raw_tx_hex = format!("0x{}", hex::encode(&raw_tx));
 
     let query = format!(
@@ -236,14 +234,14 @@ async fn test_send_transaction_async_returns_uuid_and_tracks() -> Result<()> {
     assert!(data["transactionHash"].is_string());
 
     // Verify transaction was stored
-    assert_eq!(ctx.store.count(), 1);
+    assert_eq!(ctx.store().count(), 1);
 
     // Wait for confirmation
     tokio::time::sleep(Duration::from_secs(1)).await;
 
     // Verify transaction status updated to CONFIRMED
     let uuid_id = uuid::Uuid::parse_str(tx_id)?;
-    let record = ctx.store.get(uuid_id)?;
+    let record = ctx.store().get(uuid_id)?;
     assert_eq!(record.status, TransactionStatus::Confirmed);
 
     Ok(())
@@ -254,7 +252,7 @@ async fn test_send_transaction_sync_waits_for_confirmations() -> Result<()> {
     let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     // Create a test transaction
-    let raw_tx = create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
+    let raw_tx = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
     let raw_tx_hex = format!("0x{}", hex::encode(&raw_tx));
 
     let query = format!(
@@ -296,7 +294,7 @@ async fn test_send_transaction_sync_waits_for_confirmations() -> Result<()> {
     assert!(elapsed >= Duration::from_millis(150));
 
     // Verify transaction was stored
-    assert_eq!(ctx.store.count(), 1);
+    assert_eq!(ctx.store().count(), 1);
 
     Ok(())
 }
@@ -306,7 +304,7 @@ async fn test_send_transaction_sync_with_custom_confirmations() -> Result<()> {
     let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     // Create a test transaction
-    let raw_tx = create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
+    let raw_tx = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
     let raw_tx_hex = format!("0x{}", hex::encode(&raw_tx));
 
     let query = format!(
@@ -374,7 +372,7 @@ async fn test_mutations_accept_hex_with_and_without_prefix() -> Result<()> {
     let ctx = setup_test_environment(Duration::from_secs(1), 2, RawTransactionExecutorConfig::default()).await?;
 
     // Create a test transaction
-    let raw_tx = create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
+    let raw_tx = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
 
     // Test with 0x prefix
     let with_prefix = format!("0x{}", hex::encode(&raw_tx));
@@ -397,7 +395,7 @@ async fn test_mutations_accept_hex_with_and_without_prefix() -> Result<()> {
     );
 
     // Test without 0x prefix - create new transaction with different nonce to avoid duplicate
-    let raw_tx2 = create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 1, ctx.chain_id);
+    let raw_tx2 = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, 1, ctx.chain_id);
     let without_prefix2 = hex::encode(&raw_tx2);
 
     let query2 = format!(
@@ -437,7 +435,7 @@ async fn test_send_transaction_sync_timeout() -> Result<()> {
     .await?;
 
     // Create a test transaction
-    let raw_tx = create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
+    let raw_tx = create_test_transaction(ctx.chain_key(), AlloyAddress::ZERO, 1_000_000, 0, ctx.chain_id);
     let raw_tx_hex = format!("0x{}", hex::encode(&raw_tx));
 
     let query = format!(

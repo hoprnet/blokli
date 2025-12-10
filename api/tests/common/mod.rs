@@ -248,6 +248,8 @@ pub async fn setup_simple_test_environment() -> anyhow::Result<TestContext> {
 
 /// Test context for HTTP endpoint tests (health checks, readiness gates)
 pub struct HttpTestContext {
+    /// Anvil instance (must be kept alive)
+    pub anvil: AnvilInstance,
     /// Axum router with HTTP endpoints
     pub app: Router,
     /// Database connection for test data manipulation
@@ -313,7 +315,11 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
     .await
     .expect("Failed to build app");
 
-    Ok(HttpTestContext { app, db: db.clone() })
+    Ok(HttpTestContext {
+        anvil: ctx.anvil,
+        app,
+        db: db.clone(),
+    })
 }
 
 /// Test context for transaction-related tests (mutations, queries, subscriptions)
