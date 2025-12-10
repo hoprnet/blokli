@@ -321,7 +321,7 @@ impl BlokliDb {
                     };
                     ChainInfo::insert(chain_info_model)
                         .on_conflict(OnConflict::column(chain_info::Column::Id).do_nothing().to_owned())
-                        .exec(tx.as_ref())
+                        .exec_without_returning(tx.as_ref())
                         .await?;
 
                     // Insert NodeInfo singleton with ON CONFLICT DO NOTHING for idempotency
@@ -331,7 +331,7 @@ impl BlokliDb {
                     };
                     NodeInfo::insert(node_info_model)
                         .on_conflict(OnConflict::column(node_info::Column::Id).do_nothing().to_owned())
-                        .exec(tx.as_ref())
+                        .exec_without_returning(tx.as_ref())
                         .await?;
 
                     Ok::<(), DbSqlError>(())
@@ -384,9 +384,11 @@ impl BlokliDbAllOperations for BlokliDb {}
 
 #[cfg(test)]
 mod tests {
+    use blokli_db_entity::codegen::prelude::{ChainInfo, NodeInfo};
     use migration::{Migrator, MigratorTrait};
+    use sea_orm::{EntityTrait, PaginatorTrait};
 
-    use crate::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
+    use crate::{BlokliDbGeneralModelOperations, SINGULAR_TABLE_FIXED_ID, TargetDb, db::BlokliDb};
 
     #[tokio::test]
     async fn test_basic_db_init() -> anyhow::Result<()> {
@@ -394,6 +396,125 @@ mod tests {
 
         // For SQLite, check the unified Migrator status
         Migrator::status(db.conn(TargetDb::Index)).await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ensure_singletons_creates_records_first_time() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        // Verify ChainInfo singleton exists with correct ID
+        let chain_info = ChainInfo::find_by_id(SINGULAR_TABLE_FIXED_ID)
+            .one(db.conn(TargetDb::Index))
+            .await?;
+        assert!(chain_info.is_some(), "ChainInfo singleton should exist");
+        assert_eq!(chain_info.unwrap().id, SINGULAR_TABLE_FIXED_ID);
+
+        // Verify NodeInfo singleton exists with correct ID
+        let node_info = NodeInfo::find_by_id(SINGULAR_TABLE_FIXED_ID)
+            .one(db.conn(TargetDb::Index))
+            .await?;
+        assert!(node_info.is_some(), "NodeInfo singleton should exist");
+        assert_eq!(node_info.unwrap().id, SINGULAR_TABLE_FIXED_ID);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ensure_singletons_is_idempotent() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        // First call already happened in new_in_memory()
+        // Verify records exist
+        let chain_info_before = ChainInfo::find_by_id(SINGULAR_TABLE_FIXED_ID)
+            .one(db.conn(TargetDb::Index))
+            .await?;
+        let node_info_before = NodeInfo::find_by_id(SINGULAR_TABLE_FIXED_ID)
+            .one(db.conn(TargetDb::Index))
+            .await?;
+
+        assert!(chain_info_before.is_some());
+        assert!(node_info_before.is_some());
+
+        // Call ensure_singletons() again - should succeed without error
+        db.ensure_singletons().await?;
+
+        // Verify records still exist with same IDs
+        let chain_info_after = ChainInfo::find_by_id(SINGULAR_TABLE_FIXED_ID)
+            .one(db.conn(TargetDb::Index))
+            .await?;
+        let node_info_after = NodeInfo::find_by_id(SINGULAR_TABLE_FIXED_ID)
+            .one(db.conn(TargetDb::Index))
+            .await?;
+
+        assert!(chain_info_after.is_some());
+        assert!(node_info_after.is_some());
+        assert_eq!(chain_info_after.unwrap().id, SINGULAR_TABLE_FIXED_ID);
+        assert_eq!(node_info_after.unwrap().id, SINGULAR_TABLE_FIXED_ID);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ensure_singletons_concurrent_calls() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        // Spawn multiple concurrent calls to ensure_singletons
+        let handles: Vec<_> = (0..5)
+            .map(|_| {
+                let db_clone = db.clone();
+                tokio::spawn(async move { db_clone.ensure_singletons().await })
+            })
+            .collect();
+
+        // All calls should succeed
+        for handle in handles {
+            handle.await??;
+        }
+
+        // Verify only one record of each type exists
+        let chain_info_count = ChainInfo::find().count(db.conn(TargetDb::Index)).await?;
+        let node_info_count = NodeInfo::find().count(db.conn(TargetDb::Index)).await?;
+
+        assert_eq!(chain_info_count, 1, "Should have exactly one ChainInfo record");
+        assert_eq!(node_info_count, 1, "Should have exactly one NodeInfo record");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_ensure_singletons_after_restart() -> anyhow::Result<()> {
+        // Create DB without calling new_in_memory() to avoid automatic ensure_singletons
+        let index_url = "sqlite::memory:";
+        let logs_url = "sqlite::memory:";
+
+        let db = BlokliDb::new(index_url, Some(logs_url), Default::default()).await?;
+
+        // First call to ensure_singletons - should succeed
+        db.ensure_singletons().await?;
+
+        // Now call ensure_singletons again on already-initialized database
+        // This simulates a restart where database already has singletons
+        // This should succeed (was failing before the fix)
+        let result = db.ensure_singletons().await;
+
+        assert!(
+            result.is_ok(),
+            "ensure_singletons should succeed on restart: {:?}",
+            result.err()
+        );
+
+        // Verify singletons still exist
+        let chain_info = ChainInfo::find_by_id(SINGULAR_TABLE_FIXED_ID)
+            .one(db.conn(TargetDb::Index))
+            .await?;
+        let node_info = NodeInfo::find_by_id(SINGULAR_TABLE_FIXED_ID)
+            .one(db.conn(TargetDb::Index))
+            .await?;
+
+        assert!(chain_info.is_some(), "ChainInfo should still exist");
+        assert!(node_info.is_some(), "NodeInfo should still exist");
 
         Ok(())
     }
