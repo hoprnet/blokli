@@ -395,7 +395,7 @@
               bun
               ast-grep
               foundry-bin
-              solc
+              pkgs.solc
               kubernetes-helm
               yq
               uv
