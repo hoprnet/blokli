@@ -8,12 +8,13 @@
 //! - Multiple concurrent subscriptions
 //! - Subscription lifecycle
 
+mod common;
+
 use std::{sync::Arc, time::Duration};
 
 use alloy::{
     consensus::{SignableTransaction, TxLegacy},
     eips::eip2718::Encodable2718,
-    node_bindings::AnvilInstance,
     primitives::{Address as AlloyAddress, TxKind, U256},
     signers::{SignerSync, local::PrivateKeySigner},
 };
@@ -28,11 +29,10 @@ use blokli_chain_api::{
     transaction_validator::TransactionValidator,
 };
 use blokli_chain_rpc::{
-    client::DefaultRetryPolicy,
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
 };
-use blokli_chain_types::{ContractAddresses, utils::create_anvil};
+use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 use futures::StreamExt;
 use hopr_crypto_types::{
@@ -43,7 +43,6 @@ use tokio::task::AbortHandle;
 
 /// Test context for subscription tests
 struct TestContext {
-    _anvil: AnvilInstance,
     chain_key: ChainKeypair,
     store: Arc<TransactionStore>,
     schema: Schema<QueryRoot, EmptyMutation, SubscriptionRoot>,
@@ -64,13 +63,16 @@ async fn setup_test_environment() -> Result<TestContext> {
     // Initialize logging for tests
     let _ = env_logger::builder().is_test(true).try_init();
 
-    // Start Anvil
-    let anvil = create_anvil(Some(Duration::from_secs(1)));
-    let chain_key = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
+    // Use common setup
+    let mut config = common::TestEnvironmentConfig::default();
+    config.expected_block_time = Duration::from_secs(1);
+    config.num_test_accounts = 1;
+
+    let ctx = common::setup_test_environment(config).await?;
 
     // Create RPC configuration
     let cfg = RpcOperationsConfig {
-        chain_id: anvil.chain_id(),
+        chain_id: ctx.chain_id,
         tx_polling_interval: Duration::from_millis(100),
         expected_block_time: Duration::from_millis(100),
         finality: 2,
@@ -80,13 +82,13 @@ async fn setup_test_environment() -> Result<TestContext> {
     };
 
     // Set up RPC client
-    let transport_client = alloy::transports::http::ReqwestTransport::new(anvil.endpoint_url());
+    let transport_client = alloy::transports::http::ReqwestTransport::new(ctx.anvil.endpoint_url());
     let rpc_client = alloy::rpc::client::ClientBuilder::default()
         .layer(alloy::transports::layers::RetryBackoffLayer::new_with_policy(
             2,
             100,
             100,
-            DefaultRetryPolicy::default(),
+            blokli_chain_rpc::client::DefaultRetryPolicy::default(),
         ))
         .transport(transport_client.clone(), transport_client.guess_local());
 
@@ -129,7 +131,7 @@ async fn setup_test_environment() -> Result<TestContext> {
     // Build GraphQL schema with subscriptions
     let schema = Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot)
         .data(db.conn(TargetDb::Index).clone())
-        .data(anvil.chain_id())
+        .data(ctx.chain_id)
         .data("test".to_string())
         .data(ContractAddresses::default())
         .data(transaction_executor.clone())
@@ -137,8 +139,7 @@ async fn setup_test_environment() -> Result<TestContext> {
         .finish();
 
     Ok(TestContext {
-        _anvil: anvil,
-        chain_key,
+        chain_key: ctx.test_accounts[0].clone(),
         store: transaction_store,
         schema,
         _monitor_handle: Some(monitor_handle),

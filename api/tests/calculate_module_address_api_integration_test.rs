@@ -29,161 +29,14 @@
 //! - Runs fast with no external dependencies
 //! - Ensures deterministic CREATE2 address calculation
 
-use std::{sync::Arc, time::Duration};
+mod common;
 
-use alloy::{
-    node_bindings::AnvilInstance,
-    primitives::{Address as AlloyAddress, FixedBytes, U256},
-    rpc::client::ClientBuilder,
-    transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
-};
+use alloy::primitives::{Address as AlloyAddress, FixedBytes, U256};
 use async_graphql::Schema;
-use blokli_api::{mutation::MutationRoot, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot};
-use blokli_chain_api::{
-    rpc_adapter::RpcAdapter,
-    transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
-    transaction_store::TransactionStore,
-    transaction_validator::TransactionValidator,
-};
-use blokli_chain_indexer::IndexerState;
-use blokli_chain_rpc::{
-    client::{DefaultRetryPolicy, create_rpc_client_to_anvil},
-    rpc::{RpcOperations, RpcOperationsConfig},
-    transport::ReqwestClient,
-};
-use blokli_chain_types::{AlloyAddressExt, ContractAddresses, ContractInstances, utils::create_anvil};
-use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
+use blokli_api::{mutation::MutationRoot, query::QueryRoot, subscription::SubscriptionRoot};
+use blokli_chain_types::AlloyAddressExt;
+use hopr_crypto_types::keypairs::Keypair;
 use hopr_primitive_types::traits::ToHex;
-use sea_orm::{Database, DatabaseConnection};
-
-/// Test context containing all components needed for API testing
-struct TestContext {
-    /// Anvil instance (must be kept alive)
-    _anvil: AnvilInstance,
-    /// GraphQL schema with all resolvers
-    schema: Schema<QueryRoot, MutationRoot, SubscriptionRoot>,
-    /// Deployed contract instances
-    contract_instances: ContractInstances<Arc<blokli_chain_rpc::client::AnvilRpcClient>>,
-    /// Test accounts with known private keys
-    test_accounts: Vec<ChainKeypair>,
-    /// Database connection
-    _db: DatabaseConnection,
-    /// Contract addresses for test verification
-    contract_addrs: ContractAddresses,
-}
-
-/// Setup test environment with Anvil, contracts, and GraphQL schema.
-async fn setup_test_environment() -> anyhow::Result<TestContext> {
-    let _ = env_logger::builder().is_test(true).try_init();
-
-    // Start Anvil with 1-second block time for fast testing
-    let expected_block_time = Duration::from_secs(1);
-    let anvil = create_anvil(Some(expected_block_time));
-
-    // Create test accounts from Anvil's deterministic keys
-    let test_accounts = vec![
-        ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref()).expect("Failed to create test account 0"),
-        ChainKeypair::from_secret(anvil.keys()[1].to_bytes().as_ref()).expect("Failed to create test account 1"),
-        ChainKeypair::from_secret(anvil.keys()[2].to_bytes().as_ref()).expect("Failed to create test account 2"),
-        ChainKeypair::from_secret(anvil.keys()[3].to_bytes().as_ref()).expect("Failed to create test account 3"),
-    ];
-
-    // Deploy HOPR contracts
-    let contract_instances = {
-        let client = create_rpc_client_to_anvil(&anvil, &test_accounts[0]);
-        ContractInstances::deploy_for_testing(client, &test_accounts[0])
-            .await
-            .expect("Failed to deploy contracts")
-    };
-
-    let contract_addrs = ContractAddresses::from(&contract_instances);
-
-    // Wait for contract deployments to be final
-    tokio::time::sleep((1 + 2) * expected_block_time).await;
-
-    // Setup in-memory SQLite database for testing
-    let db = Database::connect("sqlite::memory:")
-        .await
-        .expect("Failed to create test database");
-
-    // Create RPC operations
-    let transport_client = ReqwestTransport::new(anvil.endpoint_url());
-    let rpc_client = ClientBuilder::default()
-        .layer(RetryBackoffLayer::new_with_policy(
-            2,
-            100,
-            100,
-            DefaultRetryPolicy::default(),
-        ))
-        .transport(transport_client.clone(), transport_client.guess_local());
-
-    let chain_id = 31337; // Anvil default chain ID
-
-    let rpc_operations = Arc::new(
-        RpcOperations::new(
-            rpc_client.clone(),
-            ReqwestClient::new(),
-            RpcOperationsConfig {
-                chain_id,
-                contract_addrs,
-                expected_block_time,
-                ..Default::default()
-            },
-            None,
-        )
-        .expect("Failed to create RPC operations"),
-    );
-
-    // Create transaction components
-    let transaction_store = Arc::new(TransactionStore::new());
-    let transaction_validator = Arc::new(TransactionValidator::new());
-    let rpc_adapter = Arc::new(RpcAdapter::new(
-        RpcOperations::new(
-            rpc_client,
-            ReqwestClient::new(),
-            RpcOperationsConfig {
-                chain_id,
-                contract_addrs,
-                expected_block_time,
-                ..Default::default()
-            },
-            None,
-        )
-        .expect("Failed to create RPC adapter operations"),
-    ));
-
-    let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
-        rpc_adapter,
-        transaction_store.clone(),
-        transaction_validator,
-        RawTransactionExecutorConfig::default(),
-    ));
-
-    // Create IndexerState for subscriptions
-    let indexer_state = IndexerState::new(1, 1);
-
-    // Build GraphQL schema with all dependencies
-    let schema = build_schema(
-        db.clone(),
-        chain_id,
-        "test-network".to_string(),
-        contract_addrs,
-        indexer_state,
-        transaction_executor,
-        transaction_store,
-        rpc_operations,
-        None,
-    );
-
-    Ok(TestContext {
-        _anvil: anvil,
-        schema,
-        contract_instances,
-        test_accounts,
-        _db: db,
-        contract_addrs,
-    })
-}
 
 /// Executes a GraphQL query against the provided schema.
 async fn execute_graphql_query(
@@ -231,7 +84,7 @@ async fn query_calculate_module_address(
 
 #[tokio::test]
 async fn test_calculate_module_address_success() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_simple_test_environment().await?;
 
     let owner_address = ctx.test_accounts[0].public().to_address().to_hex();
     let safe_address = ctx.test_accounts[1].public().to_address().to_hex();
@@ -280,7 +133,7 @@ async fn test_calculate_module_address_success() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_calculate_module_address_invalid_owner_format() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_simple_test_environment().await?;
 
     let invalid_owner = "not-a-valid-address";
     let safe_address = ctx.test_accounts[1].public().to_address().to_hex();
@@ -311,7 +164,7 @@ async fn test_calculate_module_address_invalid_owner_format() -> anyhow::Result<
 
 #[tokio::test]
 async fn test_calculate_module_address_invalid_safe_format() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_simple_test_environment().await?;
 
     let owner_address = ctx.test_accounts[0].public().to_address().to_hex();
     let invalid_safe = "0xZZZ";
@@ -342,7 +195,7 @@ async fn test_calculate_module_address_invalid_safe_format() -> anyhow::Result<(
 
 #[tokio::test]
 async fn test_calculate_module_address_empty_owner() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_simple_test_environment().await?;
 
     let empty_owner = "";
     let safe_address = ctx.test_accounts[1].public().to_address().to_hex();
@@ -364,7 +217,7 @@ async fn test_calculate_module_address_empty_owner() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_calculate_module_address_empty_safe() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_simple_test_environment().await?;
 
     let owner_address = ctx.test_accounts[0].public().to_address().to_hex();
     let empty_safe = "";
@@ -386,7 +239,7 @@ async fn test_calculate_module_address_empty_safe() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_calculate_module_address_accepts_0x_prefix() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_simple_test_environment().await?;
 
     // to_hex() already includes 0x prefix
     let owner_address = ctx.test_accounts[0].public().to_address().to_hex();
@@ -411,11 +264,11 @@ async fn test_calculate_module_address_accepts_0x_prefix() -> anyhow::Result<()>
 
 #[tokio::test]
 async fn test_calculate_module_address_accepts_no_prefix() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_simple_test_environment().await?;
 
-    // No 0x prefix
-    let owner_address = ctx.test_accounts[0].public().to_address().to_hex();
-    let safe_address = ctx.test_accounts[1].public().to_address().to_hex();
+    // Strip 0x prefix from addresses
+    let owner_address = ctx.test_accounts[0].public().to_address().to_hex().trim_start_matches("0x").to_string();
+    let safe_address = ctx.test_accounts[1].public().to_address().to_hex().trim_start_matches("0x").to_string();
 
     // Query without 0x prefix
     let data = query_calculate_module_address(&ctx.schema, &owner_address, 0, &safe_address).await?;
@@ -432,7 +285,7 @@ async fn test_calculate_module_address_accepts_no_prefix() -> anyhow::Result<()>
 
 #[tokio::test]
 async fn test_calculate_module_address_with_large_nonce() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_simple_test_environment().await?;
 
     let owner_address = ctx.test_accounts[0].public().to_address().to_hex();
     let safe_address = ctx.test_accounts[1].public().to_address().to_hex();
@@ -454,7 +307,7 @@ async fn test_calculate_module_address_with_large_nonce() -> anyhow::Result<()> 
 
 #[tokio::test]
 async fn test_calculate_module_address_with_zero_nonce() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_simple_test_environment().await?;
 
     let owner_address = ctx.test_accounts[0].public().to_address().to_hex();
     let safe_address = ctx.test_accounts[1].public().to_address().to_hex();
@@ -474,7 +327,7 @@ async fn test_calculate_module_address_with_zero_nonce() -> anyhow::Result<()> {
 
 #[tokio::test]
 async fn test_calculate_module_address_deterministic_via_api() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_simple_test_environment().await?;
 
     let owner_address = ctx.test_accounts[0].public().to_address().to_hex();
     let safe_address = ctx.test_accounts[1].public().to_address().to_hex();
@@ -504,7 +357,7 @@ async fn test_calculate_module_address_deterministic_via_api() -> anyhow::Result
 
 #[tokio::test]
 async fn test_calculate_module_address_matches_direct_contract_call() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_simple_test_environment().await?;
 
     let owner_hopr = ctx.test_accounts[0].public().to_address();
     let safe_hopr = ctx.test_accounts[1].public().to_address();
@@ -550,7 +403,10 @@ async fn test_calculate_module_address_matches_direct_contract_call() -> anyhow:
 
 #[tokio::test]
 async fn test_calculate_module_address_with_different_parameters() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    // This test needs 4 accounts
+    let mut config = common::TestEnvironmentConfig::default();
+    config.num_test_accounts = 4;
+    let ctx = common::setup_test_environment(config).await?;
 
     // Query with different parameter combinations
     let owner_a = ctx.test_accounts[0].public().to_address().to_hex();

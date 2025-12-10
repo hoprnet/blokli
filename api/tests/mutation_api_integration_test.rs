@@ -8,6 +8,8 @@
 //! - Input validation and error scenarios
 //! - Transaction tracking and status updates
 
+mod common;
+
 use std::{sync::Arc, time::Duration};
 
 use alloy::{
@@ -21,7 +23,6 @@ use anyhow::Result;
 use async_graphql::{EmptySubscription, Schema};
 use blokli_api::{mutation::MutationRoot, query::QueryRoot};
 use blokli_chain_api::{
-    DefaultHttpRequestor,
     rpc_adapter::RpcAdapter,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
     transaction_monitor::{TransactionMonitor, TransactionMonitorConfig},
@@ -29,11 +30,10 @@ use blokli_chain_api::{
     transaction_validator::TransactionValidator,
 };
 use blokli_chain_rpc::{
-    client::DefaultRetryPolicy,
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
 };
-use blokli_chain_types::{ContractAddresses, utils::create_anvil};
+use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
 use tokio::task::AbortHandle;
@@ -42,10 +42,10 @@ use tokio::task::AbortHandle;
 struct TestContext {
     anvil: AnvilInstance,
     chain_key: ChainKeypair,
-    executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
+    executor: Arc<RawTransactionExecutor<RpcAdapter<ReqwestClient>>>,
     store: Arc<TransactionStore>,
-    monitor: Arc<TransactionMonitor<RpcAdapter<DefaultHttpRequestor>>>,
-    _rpc_adapter: Arc<RpcAdapter<DefaultHttpRequestor>>,
+    monitor: Arc<TransactionMonitor<RpcAdapter<ReqwestClient>>>,
+    _rpc_adapter: Arc<RpcAdapter<ReqwestClient>>,
     monitor_handle: Option<AbortHandle>,
     schema: Schema<QueryRoot, MutationRoot, EmptySubscription>,
 }
@@ -68,13 +68,16 @@ async fn setup_test_environment(
     // Initialize logging for tests
     let _ = env_logger::builder().is_test(true).try_init();
 
-    // Start Anvil with specified block time
-    let anvil = create_anvil(Some(block_time));
-    let chain_key = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
+    // Use common setup but we need custom RPC config
+    let mut config = common::TestEnvironmentConfig::default();
+    config.expected_block_time = block_time;
+    config.num_test_accounts = 1;
 
-    // Create RPC configuration
+    let ctx = common::setup_test_environment(config).await?;
+
+    // Create RPC configuration with custom settings for mutations
     let cfg = RpcOperationsConfig {
-        chain_id: anvil.chain_id(),
+        chain_id: ctx.chain_id,
         tx_polling_interval: Duration::from_secs(1),
         expected_block_time: block_time,
         finality: confirmations,
@@ -84,13 +87,13 @@ async fn setup_test_environment(
     };
 
     // Set up RPC client with retry policy
-    let transport_client = alloy::transports::http::ReqwestTransport::new(anvil.endpoint_url());
+    let transport_client = alloy::transports::http::ReqwestTransport::new(ctx.anvil.endpoint_url());
     let rpc_client = alloy::rpc::client::ClientBuilder::default()
         .layer(alloy::transports::layers::RetryBackoffLayer::new_with_policy(
             2,
             100,
             100,
-            DefaultRetryPolicy::default(),
+            blokli_chain_rpc::client::DefaultRetryPolicy::default(),
         ))
         .transport(transport_client.clone(), transport_client.guess_local());
 
@@ -133,7 +136,7 @@ async fn setup_test_environment(
     // Build GraphQL schema
     let schema = Schema::build(QueryRoot, MutationRoot, EmptySubscription)
         .data(db.conn(TargetDb::Index).clone())
-        .data(anvil.chain_id())
+        .data(ctx.chain_id)
         .data("test".to_string())
         .data(ContractAddresses::default())
         .data(transaction_executor.clone())
@@ -141,8 +144,8 @@ async fn setup_test_environment(
         .finish();
 
     Ok(TestContext {
-        anvil,
-        chain_key,
+        anvil: ctx.anvil,
+        chain_key: ctx.test_accounts[0].clone(),
         executor: transaction_executor,
         store: transaction_store,
         monitor: transaction_monitor,
