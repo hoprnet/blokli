@@ -234,10 +234,13 @@ pub enum SendTransactionResult {
 impl From<SendTransactionResult> for Result<TxReceipt, BlokliClientError> {
     fn from(value: SendTransactionResult) -> Self {
         match value {
-            SendTransactionResult::SendTransactionSuccess(t) => Ok(hex::decode(t.transaction_hash.0)
-                .map_err(|_| ErrorKind::ParseError)?
-                .try_into()
-                .map_err(|_| ErrorKind::ParseError)?),
+            SendTransactionResult::SendTransactionSuccess(t) => {
+                let hash = t.transaction_hash.0.to_lowercase();
+                Ok(hex::decode(hash.trim_start_matches("0x"))
+                    .map_err(|_| ErrorKind::ParseError)?
+                    .try_into()
+                    .map_err(|_| ErrorKind::ParseError)?)
+            }
             SendTransactionResult::ContractNotAllowedError(e) => Err(e.into()),
             SendTransactionResult::FunctionNotAllowedError(e) => Err(e.into()),
             SendTransactionResult::RpcError(e) => Err(e.into()),
