@@ -382,7 +382,26 @@ async fn run() -> errors::Result<()> {
             },
             log_slow_queries: Duration::from_secs(1),
         };
-        let db = BlokliDb::new(&database_path, logs_database_path.as_deref(), db_config).await?;
+
+        let is_in_memory = {
+            let cfg = config
+                .read()
+                .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
+            cfg.database
+                .as_ref()
+                .ok_or_else(|| {
+                    BloklidError::DatabaseNotConfigured(
+                        "Failed to read database configuration during connection pool initialization".to_string(),
+                    )
+                })?
+                .is_in_memory()
+        };
+
+        let db = if is_in_memory {
+            BlokliDb::new_in_memory().await?
+        } else {
+            BlokliDb::new(&database_path, logs_database_path.as_deref(), db_config).await?
+        };
 
         // Initialize singleton entries for chain_info and node_info
         db.ensure_singletons()
