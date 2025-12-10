@@ -158,7 +158,8 @@ impl MutationRoot {
 
 /// Helper function to convert hex string to bytes
 fn hex_to_bytes(hex_str: &str) -> Result<Vec<u8>> {
-    let hex_str = hex_str.strip_prefix("0x").unwrap_or(hex_str);
+    let hex_str = hex_str.to_lowercase();
+    let hex_str = hex_str.strip_prefix("0x").unwrap_or(&hex_str);
     hex::decode(hex_str).map_err(|e| async_graphql::Error::new(format!("Invalid hex string: {}", e)))
 }
 

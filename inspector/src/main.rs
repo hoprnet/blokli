@@ -107,11 +107,14 @@ impl TryFrom<ChannelArgs> for ChannelSelector {
                 (Some(src), None, None) => Some(ChannelFilter::SourceKeyId(src)),
                 (None, Some(dst), None) => Some(ChannelFilter::DestinationKeyId(dst)),
                 (Some(src), Some(dst), None) => Some(ChannelFilter::SourceAndDestinationKeyIds(src, dst)),
-                (None, None, Some(channel_id)) => Some(ChannelFilter::ChannelId(
-                    hex::decode(channel_id)?
-                        .try_into()
-                        .map_err(|_| anyhow::anyhow!("invalid channel ID"))?,
-                )),
+                (None, None, Some(channel_id)) => {
+                    let channel_id = channel_id.to_lowercase();
+                    Some(ChannelFilter::ChannelId(
+                        hex::decode(channel_id.trim_start_matches("0x"))?
+                            .try_into()
+                            .map_err(|_| anyhow::anyhow!("invalid channel ID"))?,
+                    ))
+                }
                 (None, None, None) => None,
                 _ => {
                     return Err(anyhow::anyhow!(
@@ -208,7 +211,8 @@ async fn main() -> anyhow::Result<()> {
             track,
         } => {
             let payload = if let Some(payload) = payload {
-                hex::decode(payload)?
+                let payload = payload.to_lowercase();
+                hex::decode(payload.trim_start_matches("0x"))?
             } else {
                 eprintln!("Waiting for transaction payload from stdin...");
                 let mut payload = Vec::new();
