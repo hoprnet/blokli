@@ -389,17 +389,16 @@
               export PATH=$NPM_CONFIG_PREFIX/bin:$PATH
 
               echo "Install helm-chart readme-generator"
-              npm install -g @bitnami/readme-generator-for-helm@2.7.2
+              bun install -g @bitnami/readme-generator-for-helm@2.7.2
             '';
-            extraPackages = [
-              pkgs.nodejs
-              pkgs.actionlint
-              pkgs.ast-grep
-              pkgs.foundry-bin
-              pkgs.solc
-              pkgs.kubernetes-helm
-              pkgs.yq
-              pkgs.uv
+            extraPackages = with pkgs; [
+              bun
+              ast-grep
+              foundry-bin
+              solc
+              kubernetes-helm
+              yq
+              uv
             ];
           };
           shells = {
@@ -472,12 +471,11 @@
               settings.formatter.format-graphql = {
                 command = pkgs.writeShellApplication {
                   name = "format-graphql";
-                  runtimeInputs = [
-                    pkgs.nodejs
-                    pkgs.nodePackages.npm
+                  runtimeInputs = with pkgs; [
+                    bun
                   ];
                   text = ''
-                    npx --yes format-graphql --sort-fields false --write=true "$@"
+                    bunx format-graphql --sort-fields false --write=true "$@"
                   '';
                 };
                 includes = [ "design/*.graphql" ];
@@ -486,12 +484,11 @@
               settings.formatter.graphql-schema-linter = {
                 command = pkgs.writeShellApplication {
                   name = "graphql-schema-linter";
-                  runtimeInputs = [
-                    pkgs.nodejs
-                    pkgs.nodePackages.npm
+                  runtimeInputs = with pkgs; [
+                    bun
                   ];
                   text = ''
-                    npx --yes graphql-schema-linter "$@"
+                    bunx graphql-schema-linter "$@"
                   '';
                 };
                 includes = [ "design/*.graphql" ];
@@ -500,12 +497,11 @@
               settings.formatter.markdownlint-cli2 = {
                 command = pkgs.writeShellApplication {
                   name = "markdownlint-cli2";
-                  runtimeInputs = [
-                    pkgs.nodejs
-                    pkgs.nodePackages.npm
+                  runtimeInputs = with pkgs; [
+                    bun
                   ];
                   text = ''
-                    npx --yes markdownlint-cli2 --fix "$@"
+                    bunx markdownlint-cli2 --fix "$@"
                   '';
                 };
                 includes = [

@@ -384,11 +384,11 @@ impl BlokliDbAllOperations for BlokliDb {}
 
 #[cfg(test)]
 mod tests {
-    use migration::{Migrator, MigratorTrait};
-
-    use crate::{BlokliDbGeneralModelOperations, TargetDb, SINGULAR_TABLE_FIXED_ID, db::BlokliDb};
     use blokli_db_entity::codegen::prelude::{ChainInfo, NodeInfo};
+    use migration::{Migrator, MigratorTrait};
     use sea_orm::{EntityTrait, PaginatorTrait};
+
+    use crate::{BlokliDbGeneralModelOperations, SINGULAR_TABLE_FIXED_ID, TargetDb, db::BlokliDb};
 
     #[tokio::test]
     async fn test_basic_db_init() -> anyhow::Result<()> {
@@ -477,10 +477,7 @@ mod tests {
         let chain_info_count = ChainInfo::find().count(db.conn(TargetDb::Index)).await?;
         let node_info_count = NodeInfo::find().count(db.conn(TargetDb::Index)).await?;
 
-        assert_eq!(
-            chain_info_count, 1,
-            "Should have exactly one ChainInfo record"
-        );
+        assert_eq!(chain_info_count, 1, "Should have exactly one ChainInfo record");
         assert_eq!(node_info_count, 1, "Should have exactly one NodeInfo record");
 
         Ok(())
