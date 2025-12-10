@@ -5,7 +5,7 @@
 use std::{sync::Arc, time::Duration};
 
 use alloy::{
-    primitives::Address as AlloyAddress,
+    primitives::{Address as AlloyAddress, FixedBytes, U256},
     providers::{
         Identity, PendingTransaction, Provider, ProviderBuilder, RootProvider,
         fillers::{BlobGasFiller, CachedNonceManager, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
@@ -254,8 +254,6 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         nonce: u64,
         safe_address: Address,
     ) -> Result<Address> {
-        use alloy::primitives::{FixedBytes, U256};
-
         // Construct defaultTarget as concatenated bytes32:
         // hopr_channels_address (20 bytes) + DEFAULT_CAPABILITY_PERMISSIONS (12 bytes)
         let channels_addr_bytes = self.cfg.contract_addrs.channels.as_ref();

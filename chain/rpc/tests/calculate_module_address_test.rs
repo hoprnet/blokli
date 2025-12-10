@@ -8,11 +8,12 @@ mod common;
 use std::time::Duration;
 
 use alloy::{
+    primitives::{Address as AlloyAddress, FixedBytes, U256},
     rpc::client::ClientBuilder,
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
 use blokli_chain_rpc::{HoprRpcOperations, rpc::RpcOperationsConfig};
-use blokli_chain_types::{ContractAddresses, ContractInstances};
+use blokli_chain_types::{AlloyAddressExt, ContractAddresses, ContractInstances};
 use common::{TEST_BLOCK_TIME, TEST_FINALITY, create_rpc_client_to_anvil, wait_for_finality};
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
 use hopr_primitive_types::prelude::Address;
@@ -354,9 +355,6 @@ async fn test_calculate_module_address_matches_contract_expectation() -> anyhow:
     let address_via_rpc = rpc.calculate_module_address(owner, nonce, safe_address).await?;
 
     // Call directly via contract (replicates what calculate_module_address does internally)
-    use alloy::primitives::{Address as AlloyAddress, FixedBytes, U256};
-    use blokli_chain_types::AlloyAddressExt;
-
     let channels_addr_bytes = channels_address.as_ref();
     let capability_permissions: [u8; 12] = [0x01, 0x01, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03];
     let mut default_target = [0u8; 32];

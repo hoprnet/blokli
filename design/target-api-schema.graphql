@@ -33,6 +33,9 @@ type AccountsList {
 """Result type for accounts list query"""
 union AccountsResult = AccountsList | MissingFilterError | QueryFailedError
 
+"""Result type for module address calculation"""
+union CalculateModuleAddressResult = ModuleAddress | InvalidAddressError | QueryFailedError
+
 """Blockchain and HOPR network information"""
 type ChainInfo {
   "Current block number of the blockchain"
@@ -184,6 +187,12 @@ type MissingFilterError {
   message: String!
 }
 
+"""Calculated module address"""
+type ModuleAddress {
+  "Predicted module address (hexadecimal format)"
+  moduleAddress: String!
+}
+
 """Root mutation type providing transaction submission capabilities"""
 type MutationRoot {
   """
@@ -304,6 +313,26 @@ type QueryRoot {
     "Filter by packet key (peer ID format)"
     packetKey: String
   ): AccountsResult!
+  """
+  Calculate the predicted module address for a Safe deployment
+  
+  Calls the HoprNodeStakeFactory.predictModuleAddress_1 function to compute
+  the deterministic CREATE2 address for a HOPR node management module.
+  
+  The channels contract address and capability permissions are automatically
+  obtained from the system configuration.
+  
+  Returns Error with code INVALID_ADDRESS if owner or safeAddress format is invalid.
+  Returns Error with code QUERY_FAILED if RPC call fails.
+  """
+  calculateModuleAddress(
+    "Safe deployment nonce"
+    nonce: UInt64!
+    "Safe owner address (hexadecimal format)"
+    owner: String!
+    "Safe contract address (hexadecimal format)"
+    safeAddress: String!
+  ): CalculateModuleAddressResult!
   """Retrieve chain information"""
   chainInfo: ChainInfoResult!
   """
@@ -476,28 +505,8 @@ type QueryRoot {
     id: ID!
   ): TransactionResult
   """
-  Calculate the predicted module address for a Safe deployment
-
-  Calls the HoprNodeStakeFactory.predictModuleAddress_1 function to compute
-  the deterministic CREATE2 address for a HOPR node management module.
-
-  The channels contract address and capability permissions are automatically
-  obtained from the system configuration.
-
-  Returns Error with code INVALID_ADDRESS if owner or safeAddress format is invalid.
-  Returns Error with code QUERY_FAILED if RPC call fails.
-  """
-  calculateModuleAddress(
-    "Safe owner address (hexadecimal format)"
-    owner: String!
-    "Safe deployment nonce"
-    nonce: UInt64!
-    "Safe contract address (hexadecimal format)"
-    safeAddress: String!
-  ): CalculateModuleAddressResult!
-  """
   API version information
-
+  
   Returns the current version of the blokli-api package
   """
   version: String!
@@ -554,15 +563,6 @@ type SafeTransactionCount {
 
 """Result type for Safe transaction count queries"""
 union SafeTransactionCountResult = SafeTransactionCount | InvalidAddressError | QueryFailedError
-
-"""Calculated module address"""
-type ModuleAddress {
-  "Predicted module address (hexadecimal format)"
-  moduleAddress: String!
-}
-
-"""Result type for module address calculation"""
-union CalculateModuleAddressResult = ModuleAddress | InvalidAddressError | QueryFailedError
 
 """Result type for asynchronous transaction submission"""
 union SendTransactionAsyncResult = Transaction | ContractNotAllowedError | FunctionNotAllowedError | RpcError
