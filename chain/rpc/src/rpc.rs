@@ -248,6 +248,20 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         Ok(nonce_u64)
     }
 
+    pub(crate) async fn get_channel_closure_notice_period(&self) -> Result<Duration> {
+        // TODO: should we cache this value internally ?
+        match self
+            .contract_instances
+            .channels
+            .NOTICE_PERIOD_CHANNEL_CLOSURE()
+            .call()
+            .await
+        {
+            Ok(returned_result) => Ok(Duration::from_secs(returned_result.into())),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     pub(crate) async fn calculate_module_address(
         &self,
         owner: Address,
@@ -289,22 +303,6 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
         Ok(self.get_block(block_number).await?.map(|b| b.header.timestamp))
     }
 
-    async fn get_xdai_balance(&self, address: Address) -> Result<XDaiBalance> {
-        self.get_xdai_balance(address).await
-    }
-
-    async fn get_hopr_balance(&self, address: Address) -> Result<HoprBalance> {
-        self.get_hopr_balance(address).await
-    }
-
-    async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> Result<HoprBalance> {
-        self.get_hopr_allowance(owner, spender).await
-    }
-
-    async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64> {
-        self.get_safe_transaction_count(safe_address).await
-    }
-
     async fn calculate_module_address(&self, owner: Address, nonce: u64, safe_address: Address) -> Result<Address> {
         self.calculate_module_address(owner, nonce, safe_address).await
     }
@@ -340,20 +338,6 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
             .await
         {
             Ok(returned_result) => Ok(returned_result.to_hopr_address()),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    async fn get_channel_closure_notice_period(&self) -> Result<Duration> {
-        // TODO: should we cache this value internally ?
-        match self
-            .contract_instances
-            .channels
-            .NOTICE_PERIOD_CHANNEL_CLOSURE()
-            .call()
-            .await
-        {
-            Ok(returned_result) => Ok(Duration::from_secs(returned_result.into())),
             Err(e) => Err(e.into()),
         }
     }

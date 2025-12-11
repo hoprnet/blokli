@@ -314,6 +314,26 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
             }
         }))
     }
+
+    async fn get_xdai_balance(&self, address: Address) -> Result<XDaiBalance> {
+        self.get_xdai_balance(address).await
+    }
+
+    async fn get_hopr_balance(&self, address: Address) -> Result<HoprBalance> {
+        self.get_hopr_balance(address).await
+    }
+
+    async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> Result<HoprBalance> {
+        self.get_hopr_allowance(owner, spender).await
+    }
+
+    async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64> {
+        self.get_safe_transaction_count(safe_address).await
+    }
+
+    async fn get_channel_closure_notice_period(&self) -> Result<std::time::Duration> {
+        self.get_channel_closure_notice_period().await
+    }
 }
 
 #[cfg(test)]

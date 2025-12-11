@@ -9,7 +9,7 @@ use blokli_api_types::{
     Safe, SafeHoprAllowance, SafeTransactionCount, TokenValueString, Transaction, UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
-use blokli_chain_rpc::{HoprRpcOperations, rpc::RpcOperations};
+use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
 use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::conversions::{
     account_aggregation::fetch_accounts_with_filters, channel_aggregation::fetch_channels_with_state,

@@ -262,25 +262,6 @@ pub trait HoprRpcOperations {
     /// Retrieves the timestamp from the given block number.
     async fn get_timestamp(&self, block_number: u64) -> Result<Option<u64>>;
 
-    /// Retrieves on-chain xdai balance of the given address.
-    async fn get_xdai_balance(&self, address: Address) -> Result<XDaiBalance>;
-
-    /// Retrieves on-chain wxHOPR token balance of the given address.
-    async fn get_hopr_balance(&self, address: Address) -> Result<HoprBalance>;
-
-    /// Retrieves the wxHOPR token allowance for the given owner and spender.
-    async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> Result<HoprBalance>;
-
-    /// Retrieves the transaction count (nonce) for a Safe contract.
-    ///
-    /// # Arguments
-    /// * `safe_address` - The Safe contract address
-    ///
-    /// # Returns
-    /// * `Ok(u64)` - The current transaction count/nonce
-    /// * `Err(RpcError)` - If the call fails or address is not a Safe contract
-    async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64>;
-
     /// Calculates the predicted module address for a Safe deployment.
     ///
     /// Calls the HoprNodeStakeFactory.predictModuleAddress_1 function to compute
@@ -306,9 +287,6 @@ pub trait HoprRpcOperations {
 
     /// Retrieves the safe address of the given node address from the registry.
     async fn get_safe_from_node_safe_registry(&self, node: Address) -> Result<Address>;
-
-    /// Retrieves the notice period of channel closure from the Channels contract.
-    async fn get_channel_closure_notice_period(&self) -> Result<Duration>;
 
     /// Sends transaction to the RPC provider, does not await confirmation.
     async fn send_transaction(&self, tx: TransactionRequest) -> Result<PendingTransaction>;
@@ -346,7 +324,7 @@ impl BlockWithLogs {
 
 /// Trait with RPC provider functionality required by the Indexer.
 #[async_trait]
-pub trait HoprIndexerRpcOperations: HoprRpcOperations {
+pub trait HoprIndexerRpcOperations {
     /// Retrieves the latest block number.
     async fn block_number(&self) -> Result<u64>;
 
@@ -401,6 +379,28 @@ pub trait HoprIndexerRpcOperations: HoprRpcOperations {
         filters: FilterSet,
         is_synced: bool,
     ) -> Result<Pin<Box<dyn Stream<Item = BlockWithLogs> + Send + 'a>>>;
+
+    /// Retrieves on-chain xdai balance of the given address.
+    async fn get_xdai_balance(&self, address: Address) -> Result<XDaiBalance>;
+
+    /// Retrieves on-chain wxHOPR token balance of the given address.
+    async fn get_hopr_balance(&self, address: Address) -> Result<HoprBalance>;
+
+    /// Retrieves the wxHOPR token allowance for the given owner and spender.
+    async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> Result<HoprBalance>;
+
+    /// Retrieves the transaction count (nonce) for a Safe contract.
+    ///
+    /// # Arguments
+    /// * `safe_address` - The Safe contract address
+    ///
+    /// # Returns
+    /// * `Ok(u64)` - The current transaction count/nonce
+    /// * `Err(RpcError)` - If the call fails or address is not a Safe contract
+    async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64>;
+
+    /// Retrieves the notice period of channel closure from the Channels contract.
+    async fn get_channel_closure_notice_period(&self) -> Result<Duration>;
 }
 
 #[cfg(test)]
