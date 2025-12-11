@@ -108,13 +108,13 @@ impl BlokliClient {
             .stream()
             .fuse()
             .inspect(|res| tracing::debug!(?res, "SSE response"))
-            .map_err(|e| BlokliClientError::from(ErrorKind::from(e)))
+            .map_err(BlokliClientError::from)
             .try_filter_map(move |item| {
                 futures::future::ready(match item {
                     eventsource_client::SSE::Event(event) => {
                         tracing::debug!(?event, "SSE event");
                         serde_json::from_str::<GraphQlResponse<Q>>(&event.data)
-                            .map_err(|e| BlokliClientError::from(ErrorKind::from(e)))
+                            .map_err(BlokliClientError::from)
                             .and_then(response_to_data)
                             .map(Some)
                     }
@@ -146,9 +146,13 @@ impl BlokliClient {
             .header("Accept", "application/json")
             .json(&op)
             .send()
-            .and_then(|resp| resp.json::<GraphQlResponse<Q>>())
-            .inspect_ok(|resp| tracing::debug!(?resp, "received Blokli response"))
-            .map_err(|e| ErrorKind::from(e).into()))
+            .map_err(BlokliClientError::from)
+            .and_then(|resp| async {
+                let body = resp.bytes().await.map_err(BlokliClientError::from)?;
+                tracing::trace!(body = %String::from_utf8_lossy(body.as_ref()), "received Blokli response");
+                serde_json::from_slice(&body).map_err(BlokliClientError::from)
+            })
+            .inspect_ok(|resp| tracing::debug!(?resp, "decoded Blokli response")))
     }
 }
 

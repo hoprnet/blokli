@@ -45,12 +45,6 @@ impl From<ChannelSelector> for ChannelsVariables {
     }
 }
 
-impl From<Option<ChannelSelector>> for ChannelsVariables {
-    fn from(value: Option<ChannelSelector>) -> Self {
-        value.map_or_else(Default::default, From::from)
-    }
-}
-
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "QueryRoot", variables = "ChannelsVariables")]
 pub struct QueryChannels {

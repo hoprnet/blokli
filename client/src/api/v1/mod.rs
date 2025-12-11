@@ -4,11 +4,12 @@ mod graphql;
 pub mod types {
     pub use super::graphql::{
         ChannelStatus, DateTime, Hex32, TokenValueString, Uint64,
-        accounts::{Account, Safe},
+        accounts::Account,
         balances::{HoprBalance, NativeBalance, SafeHoprAllowance},
         channels::Channel,
         graph::OpenedChannelsGraphEntry,
         info::{ChainInfo, ContractAddressMap, TicketParameters},
+        safe::{ModuleAddress, Safe},
         txs::{Transaction, TransactionStatus},
     };
 }
@@ -16,13 +17,16 @@ pub mod types {
 pub(crate) mod internal {
     pub use super::graphql::{
         accounts::{
-            AccountVariables, QueryAccountCount, QueryAccounts, QuerySafeByAddress, QuerySafeByChainKey, QueryTxCount,
-            SafeVariables, SubscribeAccounts, SubscribeSafeDeployment, TxCountVariables,
+            AccountVariables, QueryAccountCount, QueryAccounts, QueryTxCount, SubscribeAccounts, TxCountVariables,
         },
         balances::{BalanceVariables, QueryHoprBalance, QueryNativeBalance, QuerySafeAllowance},
         channels::{ChannelsVariables, QueryChannelCount, QueryChannels, SubscribeChannels},
         graph::SubscribeGraph,
         info::{QueryChainInfo, QueryHealth, QueryVersion, SubscribeTicketParams},
+        safe::{
+            ModuleAddressVariables, QueryModuleAddress, QuerySafeByAddress, QuerySafeByChainKey, SafeVariables,
+            SubscribeSafeDeployment,
+        },
         txs::{
             ConfirmTransactionVariables, MutateConfirmTransaction, MutateSendTransaction, MutateTrackTransaction,
             QueryTransaction, SendTransactionVariables, SubscribeTransaction, TransactionsVariables,
@@ -46,6 +50,8 @@ pub enum AccountSelector {
     Address(ChainAddress),
     /// Select an account by its packet key.
     PacketKey(PacketKey),
+    /// Matches any account.
+    Any,
 }
 
 impl std::fmt::Debug for AccountSelector {
@@ -54,6 +60,7 @@ impl std::fmt::Debug for AccountSelector {
             Self::KeyId(key_id) => write!(f, "KeyId({})", key_id),
             Self::Address(address) => write!(f, "Address({})", hex::encode(address)),
             Self::PacketKey(packet_key) => write!(f, "PacketKey({})", hex::encode(packet_key)),
+            AccountSelector::Any => write!(f, "Any"),
         }
     }
 }
@@ -65,6 +72,13 @@ pub struct ChannelSelector {
     pub filter: Option<ChannelFilter>,
     /// Optional status filter for the selected channels.
     pub status: Option<types::ChannelStatus>,
+}
+
+impl ChannelSelector {
+    /// Returns `true` if the selector matches any channel.
+    pub fn matches_all(&self) -> bool {
+        self.filter.is_none() && self.status.is_none()
+    }
 }
 
 /// Allows filtering [`Channels`](types::Channel) by their channel id, source and/or destination key id.
@@ -100,7 +114,7 @@ impl std::fmt::Debug for ChannelFilter {
 pub enum SafeSelector {
     /// Select a safe by its address.
     SafeAddress(ChainAddress),
-    /// Select a safe by its owning chain key.
+    /// Select a safe by the owner's chain key.
     ChainKey(ChainAddress),
 }
 
@@ -113,13 +127,34 @@ impl std::fmt::Debug for SafeSelector {
     }
 }
 
+/// Input for the [`query_module_address_prediction`] query.
+#[derive(Clone, PartialEq, Eq)]
+pub struct ModulePredictionInput {
+    /// Safe deployment nonce.
+    pub nonce: u64,
+    /// Owner of the deployed Safe.
+    pub owner: ChainAddress,
+    /// Predicted Safe address.
+    pub safe_address: ChainAddress,
+}
+
+impl std::fmt::Debug for ModulePredictionInput {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ModulePredictionInput")
+            .field("nonce", &self.nonce)
+            .field("owner", &hex::encode(self.owner))
+            .field("safe_address", &hex::encode(self.safe_address))
+            .finish()
+    }
+}
+
 pub(crate) type Result<T> = std::result::Result<T, crate::errors::BlokliClientError>;
 
 /// Trait defining restricted queries to Blokli API.
 #[async_trait::async_trait]
 pub trait BlokliQueryClient {
     /// Counts the number of accounts optionally matching the given [`selector`](AccountSelector).
-    async fn count_accounts(&self, selector: Option<AccountSelector>) -> Result<u32>;
+    async fn count_accounts(&self, selector: AccountSelector) -> Result<u32>;
     /// Queries the accounts matching the given [`selector`](AccountSelector).
     async fn query_accounts(&self, selector: AccountSelector) -> Result<Vec<types::Account>>;
     /// Queries the native balance of the given account.
@@ -132,8 +167,10 @@ pub trait BlokliQueryClient {
     async fn query_safe_allowance(&self, address: &ChainAddress) -> Result<types::SafeHoprAllowance>;
     /// Queries the deployed Safe by the given [`selector`](SafeSelector).
     async fn query_safe(&self, selector: SafeSelector) -> Result<Option<types::Safe>>;
-    /// Counts the number of channels optionally matching the given [`selector`](ChannelSelector).
-    async fn count_channels(&self, selector: Option<ChannelSelector>) -> Result<u32>;
+    /// Queries the module address prediction of the given [Safe deployment data](ModulePredictionInput).
+    async fn query_module_address_prediction(&self, input: ModulePredictionInput) -> Result<ChainAddress>;
+    /// Counts the number of channels matching the given [`selector`](ChannelSelector).
+    async fn count_channels(&self, selector: ChannelSelector) -> Result<u32>;
     /// Queries the channels matching the given [`selector`](ChannelSelector).
     async fn query_channels(&self, selector: ChannelSelector) -> Result<Vec<types::Channel>>;
     /// Queries the status of the transaction given the `tx_id` previously returned by
@@ -149,19 +186,19 @@ pub trait BlokliQueryClient {
 
 /// Trait defining subscriptions to Blokli API.
 pub trait BlokliSubscriptionClient {
-    /// Subscribes to channel updates optionally matching the given [`selector`](ChannelSelector).
+    /// Subscribes to channel updates matching the given [`selector`](ChannelSelector).
     ///
     /// If no selector is given, subscribes to all channel updates.
     fn subscribe_channels(
         &self,
-        selector: Option<ChannelSelector>,
+        selector: ChannelSelector,
     ) -> Result<impl futures::Stream<Item = Result<types::Channel>> + Send>;
     /// Subscribes to account updates optionally matching the given [`selector`](AccountSelector).
     ///
     /// If no selector is given, subscribes to all account updates.
     fn subscribe_accounts(
         &self,
-        selector: Option<AccountSelector>,
+        selector: AccountSelector,
     ) -> Result<impl futures::Stream<Item = Result<types::Account>> + Send>;
     /// Subscribes to updates of the entire channel graph.
     fn subscribe_graph(&self) -> Result<impl futures::Stream<Item = Result<types::OpenedChannelsGraphEntry>> + Send>;

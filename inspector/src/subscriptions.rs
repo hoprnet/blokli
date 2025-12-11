@@ -81,7 +81,7 @@ impl SubscriptionTarget {
                 })
                 .boxed()),
             SubscriptionTarget::Channels(sel) => Ok(client
-                .subscribe_channels(Some(sel.try_into()?))?
+                .subscribe_channels(sel.try_into()?)?
                 .map_err(anyhow::Error::from)
                 .filter_map(move |f| {
                     futures::future::ready(
