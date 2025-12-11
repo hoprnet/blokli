@@ -346,56 +346,9 @@ impl BlockWithLogs {
 
 /// Trait with RPC provider functionality required by the Indexer.
 #[async_trait]
-pub trait HoprIndexerRpcOperations {
+pub trait HoprIndexerRpcOperations: HoprRpcOperations {
     /// Retrieves the latest block number.
     async fn block_number(&self) -> Result<u64>;
-
-    /// Queries the HOPR token allowance between owner and spender addresses.
-    ///
-    /// This method queries the HOPR token contract to determine how many tokens
-    /// the owner has approved the spender to transfer on their behalf.
-    ///
-    /// # Arguments
-    /// * `owner` - The address that owns the tokens and grants the allowance
-    /// * `spender` - The address that is approved to spend the tokens
-    ///
-    /// # Returns
-    /// * `Result<HoprBalance>` - The current allowance amount
-    async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> Result<HoprBalance>;
-
-    /// Queries the xDAI (native token) balance for a specific address.
-    ///
-    /// This method queries the current xDAI balance of the specified address
-    /// from the blockchain.
-    ///
-    /// # Arguments
-    /// * `address` - The Ethereum address to query the balance for
-    ///
-    /// # Returns
-    /// * `Result<XDaiBalance>` - The current xDAI balance
-    async fn get_xdai_balance(&self, address: Address) -> Result<XDaiBalance>;
-
-    /// Queries the HOPR token balance for a specific address.
-    ///
-    /// This method directly queries the HOPR token contract to get the current
-    /// token balance of the specified address.
-    ///
-    /// # Arguments
-    /// * `address` - The Ethereum address to query the balance for
-    ///
-    /// # Returns
-    /// * `Result<HoprBalance>` - The current HOPR token balance
-    async fn get_hopr_balance(&self, address: Address) -> Result<HoprBalance>;
-
-    /// Retrieves the transaction count (nonce) for a Safe contract.
-    ///
-    /// # Arguments
-    /// * `safe_address` - The Safe contract address
-    ///
-    /// # Returns
-    /// * `Ok(u64)` - The current transaction count/nonce
-    /// * `Err(RpcError)` - If the call fails or address is not a Safe contract
-    async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64>;
 
     /// Get transaction sender (from address) by transaction hash
     ///

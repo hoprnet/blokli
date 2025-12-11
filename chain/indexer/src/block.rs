@@ -1166,10 +1166,6 @@ mod tests {
         #[async_trait]
         impl HoprIndexerRpcOperations for HoprIndexerOps {
             async fn block_number(&self) -> blokli_chain_rpc::errors::Result<u64>;
-            async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
-            async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance>;
-            async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
-            async fn get_safe_transaction_count(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<u64>;
             async fn get_transaction_sender(&self, tx_hash: hopr_crypto_types::types::Hash) -> blokli_chain_rpc::errors::Result<Address>;
 
             fn try_stream_logs<'a>(
@@ -1178,6 +1174,22 @@ mod tests {
                 filters: FilterSet,
                 is_synced: bool,
             ) -> blokli_chain_rpc::errors::Result<Pin<Box<dyn Stream<Item = BlockWithLogs> + Send + 'a>>>;
+        }
+
+        #[async_trait]
+        impl HoprRpcOperations for HoprIndexerOps {
+            async fn get_timestamp(&self, block_number: u64) -> blokli_chain_rpc::errors::Result<Option<u64>>;
+            async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance>;
+            async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
+            async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
+            async fn get_safe_transaction_count(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<u64>;
+            async fn calculate_module_address(&self, owner: Address, nonce: u64, safe_address: Address) -> blokli_chain_rpc::errors::Result<Address>;
+            async fn get_minimum_network_winning_probability(&self) -> blokli_chain_rpc::errors::Result<hopr_internal_types::prelude::WinningProbability>;
+            async fn get_minimum_network_ticket_price(&self) -> blokli_chain_rpc::errors::Result<HoprBalance>;
+            async fn get_safe_from_node_safe_registry(&self, node: Address) -> blokli_chain_rpc::errors::Result<Address>;
+            async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<std::time::Duration>;
+            async fn send_transaction(&self, tx: alloy::rpc::types::TransactionRequest) -> blokli_chain_rpc::errors::Result<alloy::providers::PendingTransaction>;
+            async fn send_transaction_with_confirm(&self, tx: alloy::rpc::types::TransactionRequest) -> blokli_chain_rpc::errors::Result<hopr_crypto_types::types::Hash>;
         }
     }
 

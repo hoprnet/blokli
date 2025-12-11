@@ -3,7 +3,7 @@ pub(super) mod test_helpers {
     use std::sync::Arc;
 
     use alloy::{primitives::B256, sol_types::private::IntoLogData};
-    use blokli_chain_rpc::HoprIndexerRpcOperations;
+    use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations};
     use blokli_chain_types::ContractAddresses;
     use blokli_db::{BlokliDbAllOperations, accounts::BlokliDbAccountOperations, db::BlokliDb};
     use hex_literal::hex;
@@ -42,23 +42,30 @@ pub(super) mod test_helpers {
         #[async_trait::async_trait]
         impl HoprIndexerRpcOperations for IndexerRpcOperations {
             async fn block_number(&self) -> blokli_chain_rpc::errors::Result<u64>;
+            async fn get_transaction_sender(&self, tx_hash: hopr_crypto_types::types::Hash) -> blokli_chain_rpc::errors::Result<Address>;
 
-        async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
+            fn try_stream_logs<'a>(
+                &'a self,
+                start_block_number: u64,
+                filters: blokli_chain_rpc::FilterSet,
+                is_synced: bool,
+            ) -> blokli_chain_rpc::errors::Result<std::pin::Pin<Box<dyn futures::Stream<Item=blokli_chain_rpc::BlockWithLogs> + Send + 'a> > >;
+        }
 
-        async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance>;
-
-        async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
-
-        async fn get_safe_transaction_count(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<u64>;
-
-        async fn get_transaction_sender(&self, tx_hash: hopr_crypto_types::types::Hash) -> blokli_chain_rpc::errors::Result<Address>;
-
-        fn try_stream_logs<'a>(
-            &'a self,
-            start_block_number: u64,
-            filters: blokli_chain_rpc::FilterSet,
-            is_synced: bool,
-        ) -> blokli_chain_rpc::errors::Result<std::pin::Pin<Box<dyn futures::Stream<Item=blokli_chain_rpc::BlockWithLogs> + Send + 'a> > >;
+        #[async_trait::async_trait]
+        impl HoprRpcOperations for IndexerRpcOperations {
+            async fn get_timestamp(&self, block_number: u64) -> blokli_chain_rpc::errors::Result<Option<u64>>;
+            async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance>;
+            async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
+            async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
+            async fn get_safe_transaction_count(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<u64>;
+            async fn calculate_module_address(&self, owner: Address, nonce: u64, safe_address: Address) -> blokli_chain_rpc::errors::Result<Address>;
+            async fn get_minimum_network_winning_probability(&self) -> blokli_chain_rpc::errors::Result<hopr_internal_types::prelude::WinningProbability>;
+            async fn get_minimum_network_ticket_price(&self) -> blokli_chain_rpc::errors::Result<HoprBalance>;
+            async fn get_safe_from_node_safe_registry(&self, node: Address) -> blokli_chain_rpc::errors::Result<Address>;
+            async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<std::time::Duration>;
+            async fn send_transaction(&self, tx: alloy::rpc::types::TransactionRequest) -> blokli_chain_rpc::errors::Result<alloy::providers::PendingTransaction>;
+            async fn send_transaction_with_confirm(&self, tx: alloy::rpc::types::TransactionRequest) -> blokli_chain_rpc::errors::Result<hopr_crypto_types::types::Hash>;
         }
     }
 
@@ -73,12 +80,29 @@ pub(super) mod test_helpers {
             self.inner.block_number().await
         }
 
-        async fn get_hopr_allowance(
+        async fn get_transaction_sender(
             &self,
-            owner: Address,
-            spender: Address,
-        ) -> blokli_chain_rpc::errors::Result<HoprBalance> {
-            self.inner.get_hopr_allowance(owner, spender).await
+            tx_hash: hopr_crypto_types::types::Hash,
+        ) -> blokli_chain_rpc::errors::Result<Address> {
+            self.inner.get_transaction_sender(tx_hash).await
+        }
+
+        fn try_stream_logs<'a>(
+            &'a self,
+            start_block_number: u64,
+            filters: blokli_chain_rpc::FilterSet,
+            is_synced: bool,
+        ) -> blokli_chain_rpc::errors::Result<
+            std::pin::Pin<Box<dyn futures::Stream<Item = blokli_chain_rpc::BlockWithLogs> + Send + 'a>>,
+        > {
+            self.inner.try_stream_logs(start_block_number, filters, is_synced)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl HoprRpcOperations for ClonableMockOperations {
+        async fn get_timestamp(&self, block_number: u64) -> blokli_chain_rpc::errors::Result<Option<u64>> {
+            self.inner.get_timestamp(block_number).await
         }
 
         async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {
@@ -89,92 +113,57 @@ pub(super) mod test_helpers {
             self.inner.get_hopr_balance(address).await
         }
 
-        /// Retrieves the number of transactions associated with a Gnosis Safe address.
-        ///
-        /// # Parameters
-        ///
-        /// - `safe_address`: The safe (contract) address whose transaction count will be queried.
-        ///
-        /// # Returns
-        ///
-        /// `u64` representing the number of transactions recorded for the specified safe address.
-        ///
-        /// # Examples
-        ///
-        /// ```
-        /// # use hopr_crypto_types::types::Address;
-        /// # async fn example<R: crate::HoprIndexerRpcOperations>(rpc: &R, addr: Address) -> anyhow::Result<()> {
-        /// let count = rpc.get_safe_transaction_count(addr).await?;
-        /// println!("safe tx count = {}", count);
-        /// # Ok(())
-        /// # }
-        /// ```
+        async fn get_hopr_allowance(
+            &self,
+            owner: Address,
+            spender: Address,
+        ) -> blokli_chain_rpc::errors::Result<HoprBalance> {
+            self.inner.get_hopr_allowance(owner, spender).await
+        }
+
         async fn get_safe_transaction_count(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<u64> {
             self.inner.get_safe_transaction_count(safe_address).await
         }
 
-        /// Fetches the sender address for a given transaction hash.
-        ///
-        /// # Parameters
-        ///
-        /// - `tx_hash`: Transaction hash to look up.
-        ///
-        /// # Returns
-        ///
-        /// The sender `Address` corresponding to the provided transaction hash.
-        ///
-        /// # Examples
-        ///
-        /// ```
-        /// # async fn example<O: std::ops::Deref<Target = impl std::future::Future<Output = ()>>>() {}
-        /// // Assume `ops` implements `HoprIndexerRpcOperations`.
-        /// // let addr = ops.get_transaction_sender(tx_hash).await.unwrap();
-        /// ```
-        async fn get_transaction_sender(
+        async fn calculate_module_address(
             &self,
-            tx_hash: hopr_crypto_types::types::Hash,
+            owner: Address,
+            nonce: u64,
+            safe_address: Address,
         ) -> blokli_chain_rpc::errors::Result<Address> {
-            self.inner.get_transaction_sender(tx_hash).await
+            self.inner.calculate_module_address(owner, nonce, safe_address).await
         }
 
-        /// Creates a stream of `BlockWithLogs` items starting from `start_block_number` that match `filters`.
-        ///
-        /// `is_synced` controls whether the RPC call should assume the node is synced when retrieving logs.
-        ///
-        /// # Parameters
-        ///
-        /// * `start_block_number` — block number to start streaming from (inclusive).
-        /// * `filters` — filter set used to select logs to include in the stream.
-        /// * `is_synced` — when `true`, treat the RPC node as synced for log retrieval semantics.
-        ///
-        /// # Returns
-        ///
-        /// `Ok` with a pinned, boxed stream that yields `BlockWithLogs` items; `Err` on RPC errors.
-        ///
-        /// # Examples
-        ///
-        /// ```
-        /// # use futures::executor::block_on;
-        /// # use futures::stream::StreamExt;
-        /// # async fn run_example(rpc: &impl HoprIndexerRpcOperations) {
-        /// let start = 10u64;
-        /// let filters = blokli_chain_rpc::FilterSet::default();
-        /// let mut stream = rpc.try_stream_logs(start, filters, true).unwrap();
-        /// // consume one block (if available)
-        /// if let Some(block) = stream.next().await {
-        ///     println!("got block with number: {}", block.block_number);
-        /// }
-        /// # }
-        /// ```
-        fn try_stream_logs<'a>(
-            &'a self,
-            start_block_number: u64,
-            filters: blokli_chain_rpc::FilterSet,
-            is_synced: bool,
-        ) -> blokli_chain_rpc::errors::Result<
-            std::pin::Pin<Box<dyn futures::Stream<Item = blokli_chain_rpc::BlockWithLogs> + Send + 'a>>,
-        > {
-            self.inner.try_stream_logs(start_block_number, filters, is_synced)
+        async fn get_minimum_network_winning_probability(
+            &self,
+        ) -> blokli_chain_rpc::errors::Result<hopr_internal_types::prelude::WinningProbability> {
+            self.inner.get_minimum_network_winning_probability().await
+        }
+
+        async fn get_minimum_network_ticket_price(&self) -> blokli_chain_rpc::errors::Result<HoprBalance> {
+            self.inner.get_minimum_network_ticket_price().await
+        }
+
+        async fn get_safe_from_node_safe_registry(&self, node: Address) -> blokli_chain_rpc::errors::Result<Address> {
+            self.inner.get_safe_from_node_safe_registry(node).await
+        }
+
+        async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<std::time::Duration> {
+            self.inner.get_channel_closure_notice_period().await
+        }
+
+        async fn send_transaction(
+            &self,
+            tx: alloy::rpc::types::TransactionRequest,
+        ) -> blokli_chain_rpc::errors::Result<alloy::providers::PendingTransaction> {
+            self.inner.send_transaction(tx).await
+        }
+
+        async fn send_transaction_with_confirm(
+            &self,
+            tx: alloy::rpc::types::TransactionRequest,
+        ) -> blokli_chain_rpc::errors::Result<hopr_crypto_types::types::Hash> {
+            self.inner.send_transaction_with_confirm(tx).await
         }
     }
 
