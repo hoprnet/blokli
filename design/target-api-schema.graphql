@@ -330,7 +330,7 @@ type QueryRoot {
     nonce: UInt64!
     "Safe owner address (hexadecimal format)"
     owner: String!
-    "Safe contract address (hexadecimal format)"
+    "Predicted Safe contract address (hexadecimal format)"
     safeAddress: String!
   ): CalculateModuleAddressResult!
   """Retrieve chain information"""
