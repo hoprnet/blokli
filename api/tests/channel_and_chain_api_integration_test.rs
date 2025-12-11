@@ -835,9 +835,12 @@ async fn test_chain_info_query_with_null_optional_fields() -> Result<()> {
         chain_info["safeRegistryDst"].is_null(),
         "safeRegistryDst should be null"
     );
-    assert!(
-        chain_info["channelClosureGracePeriod"].is_null(),
-        "channelClosureGracePeriod should be null"
+
+    // channelClosureGracePeriod should always be non-null with default value of 300
+    assert_eq!(
+        chain_info["channelClosureGracePeriod"].as_str().unwrap(),
+        "300",
+        "channelClosureGracePeriod should default to 300 when not explicitly set"
     );
 
     Ok(())

@@ -1,6 +1,8 @@
+use std::collections::HashMap;
+
 use async_graphql::ScalarType;
 use blokli_api_types::ContractAddressMap;
-use std::collections::HashMap;
+use blokli_chain_types::ContractAddresses;
 
 #[test]
 fn test_contract_address_map_serializes_as_json_string() {
@@ -25,25 +27,17 @@ fn test_contract_address_map_serializes_as_json_string() {
     // Extract and validate the JSON string
     if let async_graphql::Value::String(json_str) = serialized {
         // Verify it contains valid JSON
-        let parsed: serde_json::Value = serde_json::from_str(&json_str)
-            .expect("contractAddresses should be valid JSON string");
+        let parsed: serde_json::Value =
+            serde_json::from_str(&json_str).expect("contractAddresses should be valid JSON string");
 
         // Verify it's an object with expected keys
         assert!(parsed.is_object(), "Parsed value should be a JSON object");
 
-        let obj = parsed
-            .as_object()
-            .expect("Should be able to parse as object");
+        let obj = parsed.as_object().expect("Should be able to parse as object");
 
         assert_eq!(obj.get("token").and_then(|v| v.as_str()), Some("0xaabbccdd"));
-        assert_eq!(
-            obj.get("channels").and_then(|v| v.as_str()),
-            Some("0x11223344")
-        );
-        assert_eq!(
-            obj.get("announcements").and_then(|v| v.as_str()),
-            Some("0x55667788")
-        );
+        assert_eq!(obj.get("channels").and_then(|v| v.as_str()), Some("0x11223344"));
+        assert_eq!(obj.get("announcements").and_then(|v| v.as_str()), Some("0x55667788"));
     } else {
         panic!("Expected string value");
     }
@@ -68,8 +62,8 @@ fn test_contract_address_map_roundtrip_serialization() {
     );
 
     // Parse it back
-    let parsed = <ContractAddressMap as async_graphql::ScalarType>::parse(serialized)
-        .expect("Should parse back successfully");
+    let parsed =
+        <ContractAddressMap as async_graphql::ScalarType>::parse(serialized).expect("Should parse back successfully");
 
     // Verify they match
     assert_eq!(original.0, parsed.0, "Should match after roundtrip");
@@ -77,8 +71,6 @@ fn test_contract_address_map_roundtrip_serialization() {
 
 #[test]
 fn test_contract_address_map_from_chain_types() {
-    use blokli_chain_types::ContractAddresses;
-
     // Create a ContractAddresses instance
     let chain_addresses = ContractAddresses::default();
 
@@ -96,8 +88,7 @@ fn test_contract_address_map_from_chain_types() {
 
     // Extract and validate the JSON string
     if let async_graphql::Value::String(json_str) = serialized {
-        let parsed: serde_json::Value = serde_json::from_str(&json_str)
-            .expect("Should be valid JSON");
+        let parsed: serde_json::Value = serde_json::from_str(&json_str).expect("Should be valid JSON");
 
         let obj = parsed.as_object().expect("Should be an object");
 
@@ -113,11 +104,7 @@ fn test_contract_address_map_from_chain_types() {
         ];
 
         for key in expected_keys {
-            assert!(
-                obj.contains_key(key),
-                "contractAddresses should contain key: {}",
-                key
-            );
+            assert!(obj.contains_key(key), "contractAddresses should contain key: {}", key);
             let value = obj.get(key).and_then(|v| v.as_str());
             assert!(
                 !value.unwrap_or("").is_empty(),

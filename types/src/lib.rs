@@ -242,7 +242,7 @@ pub struct ChainInfo {
     pub safe_registry_dst: Option<String>,
     /// Channel closure grace period in seconds
     #[graphql(name = "channelClosureGracePeriod")]
-    pub channel_closure_grace_period: Option<UInt64>,
+    pub channel_closure_grace_period: UInt64,
 }
 
 /// Result type for chain info queries

@@ -43,7 +43,7 @@ type ChainInfo {
   "Chain ID of the connected blockchain network"
   chainId: Int!
   "Channel closure grace period in seconds"
-  channelClosureGracePeriod: UInt64
+  channelClosureGracePeriod: UInt64!
   "Channel smart contract domain separator (hex string)"
   channelDst: String
   "Map of contract identifiers to their deployed addresses"
