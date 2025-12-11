@@ -149,7 +149,7 @@ impl BlokliClient {
             .map_err(BlokliClientError::from)
             .and_then(|resp| async {
                 let body = resp.bytes().await.map_err(BlokliClientError::from)?;
-                tracing::debug!(body = %String::from_utf8_lossy(body.as_ref()), "received Blokli response");
+                tracing::trace!(body = %String::from_utf8_lossy(body.as_ref()), "received Blokli response");
                 serde_json::from_slice(&body).map_err(BlokliClientError::from)
             })
             .inspect_ok(|resp| tracing::debug!(?resp, "decoded Blokli response")))
