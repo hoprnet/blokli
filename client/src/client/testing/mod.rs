@@ -76,7 +76,7 @@ impl Default for BlokliTestState {
             tx_counts: Default::default(),
             channels: Default::default(),
             chain_info: ChainInfo {
-                channel_closure_grace_period: Some(Uint64("300".into())),
+                channel_closure_grace_period: Uint64("300".into()),
                 channel_dst: Some("0000000000000000000000000000000000000000000000000000000000000000".into()),
                 block_number: 1,
                 chain_id: 100,
