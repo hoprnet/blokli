@@ -599,6 +599,14 @@ pub struct Safe {
     pub chain_key: String,
 }
 
+/// Calculated module address
+#[derive(SimpleObject, Clone, Debug)]
+pub struct ModuleAddress {
+    /// Predicted module address (hexadecimal format)
+    #[graphql(name = "moduleAddress")]
+    pub module_address: String,
+}
+
 /// Ticket price and winning probability parameters
 #[derive(SimpleObject, Clone, Debug, PartialEq)]
 pub struct TicketParameters {
