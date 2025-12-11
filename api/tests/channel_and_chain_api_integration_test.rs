@@ -665,7 +665,13 @@ async fn test_chain_info_query() -> Result<()> {
     assert!(safe_registry_dst[2..].chars().all(|c| c.is_ascii_hexdigit()));
 
     // Verify contractAddresses contains all required keys
-    let contract_addresses = chain_info["contractAddresses"].as_object().unwrap();
+    // contractAddresses is a stringified JSON object
+    let contract_addresses_str = chain_info["contractAddresses"]
+        .as_str()
+        .expect("contractAddresses should be a string");
+    let contract_addresses: serde_json::Map<String, serde_json::Value> =
+        serde_json::from_str(contract_addresses_str).expect("contractAddresses should be valid JSON");
+
     let expected_keys = vec![
         "token",
         "channels",

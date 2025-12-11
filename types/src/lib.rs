@@ -5,6 +5,8 @@
 
 use std::collections::HashMap;
 
+mod tests;
+
 use async_graphql::{Enum, ID, InputObject, InputValueError, Scalar, ScalarType, SimpleObject, Union, Value};
 use hopr_crypto_types::types::Hash;
 use hopr_primitive_types::prelude::ToHex;
@@ -113,6 +115,9 @@ impl ScalarType for UInt64 {
 /// This scalar type represents a mapping from contract identifier strings
 /// (e.g., "token", "channels") to their deployed addresses in hexadecimal format.
 /// Keys: token, channels, announcements, safe_registry, price_oracle, win_prob_oracle, stake_factory
+///
+/// Serialized as a stringified JSON object. For example:
+/// `{"token":"0x123abc","channels":"0x456def","announcements":"0x789ghi"}`
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ContractAddressMap(pub HashMap<String, String>);
 
@@ -120,28 +125,29 @@ pub struct ContractAddressMap(pub HashMap<String, String>);
 impl ScalarType for ContractAddressMap {
     fn parse(value: Value) -> async_graphql::InputValueResult<Self> {
         match value {
-            Value::Object(obj) => {
+            Value::String(json_str) => {
+                // Parse the JSON string to extract the map
+                let parsed: std::collections::BTreeMap<String, serde_json::Value> = serde_json::from_str(&json_str)
+                    .map_err(|e| InputValueError::custom(format!("Invalid JSON string: {}", e)))?;
+
                 let mut map = HashMap::new();
-                for (key, val) in obj {
-                    if let Value::String(addr) = val {
-                        map.insert(key.to_string(), addr);
+                for (key, val) in parsed {
+                    if let Some(addr_str) = val.as_str() {
+                        map.insert(key, addr_str.to_string());
                     } else {
                         return Err(InputValueError::custom("ContractAddressMap values must be strings"));
                     }
                 }
                 Ok(ContractAddressMap(map))
             }
-            _ => Err(InputValueError::custom("ContractAddressMap must be an object")),
+            _ => Err(InputValueError::custom("ContractAddressMap must be a JSON string")),
         }
     }
 
     fn to_value(&self) -> Value {
-        let map = self
-            .0
-            .iter()
-            .map(|(k, v)| (async_graphql::Name::new(k.clone()), Value::String(v.clone())))
-            .collect();
-        Value::Object(map)
+        // Serialize the map to a JSON string
+        let json = serde_json::to_string(&self.0).unwrap_or_else(|_| "{}".to_string());
+        Value::String(json)
     }
 }
 

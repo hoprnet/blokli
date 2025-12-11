@@ -1737,6 +1737,7 @@ dependencies = [
  "hopr-crypto-types",
  "hopr-primitive-types",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
