@@ -290,6 +290,7 @@ fn account_matches(account: &Account, selector: &AccountSelector) -> bool {
         AccountSelector::Address(address) => account.chain_key == hex::encode(address),
         AccountSelector::KeyId(id) => account.keyid as u32 == *id,
         AccountSelector::PacketKey(packet_key) => account.packet_key == hex::encode(packet_key),
+        AccountSelector::Any => true,
     }
 }
 
@@ -415,10 +416,10 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
 
 #[async_trait::async_trait]
 impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestClient<M> {
-    async fn count_accounts(&self, selector: Option<AccountSelector>) -> Result<u32> {
+    async fn count_accounts(&self, selector: AccountSelector) -> Result<u32> {
         Ok(match selector {
-            None => self.state.read().accounts.len() as u32,
-            Some(selector) => self.query_accounts(selector).await?.len() as u32,
+            AccountSelector::Any => self.state.read().accounts.len() as u32,
+            selector => self.query_accounts(selector).await?.len() as u32,
         })
     }
 
@@ -479,10 +480,21 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
         }
     }
 
-    async fn count_channels(&self, selector: Option<ChannelSelector>) -> Result<u32> {
-        Ok(match selector {
-            None => self.state.read().channels.len() as u32,
-            Some(selector) => self.query_channels(selector).await?.len() as u32,
+    async fn query_module_address_prediction(&self, input: ModulePredictionInput) -> Result<ChainAddress> {
+        let hash = hopr_crypto_types::types::Hash::create(&[
+            input.nonce.to_be_bytes().as_ref(),
+            input.owner.as_ref(),
+            input.safe_address.as_ref(),
+        ]);
+
+        hash.as_ref()[0..20].try_into().map_err(|_| ErrorKind::NoData.into())
+    }
+
+    async fn count_channels(&self, selector: ChannelSelector) -> Result<u32> {
+        Ok(if selector.matches_all() {
+            self.state.read().channels.len() as u32
+        } else {
+            self.query_channels(selector).await?.len() as u32
         })
     }
 
@@ -513,24 +525,20 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
 }
 
 impl<M: BlokliTestStateMutator + Send + Sync> BlokliSubscriptionClient for BlokliTestClient<M> {
-    fn subscribe_channels(
-        &self,
-        selector: Option<ChannelSelector>,
-    ) -> Result<impl Stream<Item = Result<Channel>> + Send> {
-        Ok(match selector {
-            None => {
-                let channels = self.state.read().channels.clone();
-                futures::stream::iter(channels.into_values())
-                    .map(Ok)
-                    .chain(
-                        self.channels_channel
-                            .1
-                            .activate_cloned()
-                            .map(|(_, channel, _)| Ok(channel)),
-                    )
-                    .boxed()
-            }
-            Some(selector) => futures::stream::iter(self.do_query_channels(selector.clone())?)
+    fn subscribe_channels(&self, selector: ChannelSelector) -> Result<impl Stream<Item = Result<Channel>> + Send> {
+        Ok(if selector.matches_all() {
+            let channels = self.state.read().channels.clone();
+            futures::stream::iter(channels.into_values())
+                .map(Ok)
+                .chain(
+                    self.channels_channel
+                        .1
+                        .activate_cloned()
+                        .map(|(_, channel, _)| Ok(channel)),
+                )
+                .boxed()
+        } else {
+            futures::stream::iter(self.do_query_channels(selector.clone())?)
                 .map(Ok)
                 .chain(
                     self.channels_channel
@@ -539,23 +547,20 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliSubscriptionClient for Blokl
                         .filter(move |(_, c, _)| futures::future::ready(channel_matches(c, &selector)))
                         .map(|(_, channel, _)| Ok(channel)),
                 )
-                .boxed(),
+                .boxed()
         })
     }
 
-    fn subscribe_accounts(
-        &self,
-        selector: Option<AccountSelector>,
-    ) -> Result<impl Stream<Item = Result<Account>> + Send> {
+    fn subscribe_accounts(&self, selector: AccountSelector) -> Result<impl Stream<Item = Result<Account>> + Send> {
         Ok(match selector {
-            None => {
+            AccountSelector::Any => {
                 let accounts = self.state.read().accounts.clone();
                 futures::stream::iter(accounts.into_values())
                     .map(Ok)
                     .chain(self.accounts_channel.1.activate_cloned().map(Ok))
                     .boxed()
             }
-            Some(selector) => futures::stream::iter(self.do_query_accounts(selector.clone())?)
+            selector => futures::stream::iter(self.do_query_accounts(selector.clone())?)
                 .map(Ok)
                 .chain(
                     self.accounts_channel
