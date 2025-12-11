@@ -315,13 +315,13 @@ type QueryRoot {
   ): AccountsResult!
   """
   Calculate the predicted module address for a Safe deployment
-
+  
   Calls the HoprNodeStakeFactory.predictModuleAddress_1 function to compute
   the deterministic CREATE2 address for a HOPR node management module.
-
+  
   The channels contract address and capability permissions are automatically
   obtained from the system configuration.
-
+  
   Returns Error with code INVALID_ADDRESS if owner or safeAddress format is invalid.
   Returns Error with code QUERY_FAILED if RPC call fails.
   """
@@ -395,23 +395,23 @@ type QueryRoot {
   ```graphql
   # Request 1: Get the account's Safe address
   query GetAccount {
-  accounts(keyid: 1) {
-  ... on AccountsList {
-  accounts {
-  safeAddress
-  }
-  }
-  }
+    accounts(keyid: 1) {
+      ... on AccountsList {
+        accounts {
+          safeAddress
+        }
+      }
+    }
   }
   
   # Request 2: Query the Safe's HOPR balance using address from first response
   query GetSafeHoprBalance($safeAddress: String!) {
-  hoprBalance(address: $safeAddress) {
-  ... on HoprBalance {
-  address
-  balance
-  }
-  }
+    hoprBalance(address: $safeAddress) {
+      ... on HoprBalance {
+        address
+        balance
+      }
+    }
   }
   ```
   """
@@ -695,10 +695,10 @@ type TimeoutError {
 Human-readable token representation.
 Format: value [wei] token
 Examples:
-10 wei wxHOPR
-10 wxHOPR
-10.1 wxHOPR
-.1 wxHOPR
+  10 wei wxHOPR
+  10 wxHOPR
+  10.1 wxHOPR
+  .1 wxHOPR
 """
 scalar TokenValueString
 
