@@ -8,7 +8,7 @@ use std::{
 };
 
 use alloy::{primitives::Address as AlloyAddress, sol_types::SolEvent};
-use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
+use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations, HoprRpcOperations};
 use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{
     BlokliDbGeneralModelOperations, TargetDb, api::logs::BlokliDbLogOperations, info::BlokliDbInfoOperations,
@@ -19,7 +19,7 @@ use hopr_bindings::hopr_token::HoprToken::{Approval, Transfer};
 use hopr_crypto_types::types::Hash;
 use hopr_primitive_types::prelude::{Address, SerializableLog};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder};
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     IndexerConfig, IndexerState,
@@ -81,7 +81,7 @@ pub struct ReorgInfo {
 #[derive(Debug, Clone)]
 pub struct Indexer<T, U, Db>
 where
-    T: HoprIndexerRpcOperations + Send + 'static,
+    T: HoprIndexerRpcOperations + HoprRpcOperations + Send + 'static,
     U: ChainLogHandler + Send + 'static,
     Db: BlokliDbGeneralModelOperations + BlokliDbInfoOperations + BlokliDbLogOperations + Clone + Send + Sync + 'static,
 {
@@ -97,7 +97,7 @@ where
 
 impl<T, U, Db> Indexer<T, U, Db>
 where
-    T: HoprIndexerRpcOperations + Sync + Send + 'static,
+    T: HoprIndexerRpcOperations + HoprRpcOperations + Sync + Send + 'static,
     U: ChainLogHandler + Send + Sync + 'static,
     Db: BlokliDbGeneralModelOperations + BlokliDbInfoOperations + BlokliDbLogOperations + Clone + Send + Sync + 'static,
 {
@@ -402,6 +402,33 @@ where
                 }
                 Err(e) => {
                     error!("Failed to download logs snapshot: {}. Continuing with regular sync.", e);
+                }
+            }
+        }
+
+        // Initialize channel closure grace period from contract
+        if let Some(rpc) = &self.rpc {
+            info!("Fetching channel closure grace period from contract...");
+            match rpc.get_channel_closure_notice_period().await {
+                Ok(period) => {
+                    let seconds = period.as_secs();
+                    match self.db.set_channel_closure_grace_period(None, seconds).await {
+                        Ok(_) => {
+                            info!("Channel closure grace period initialized: {} seconds", seconds);
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to store channel closure grace period in database: {}. Continuing startup.",
+                                e
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to fetch channel closure grace period from contract: {}. Continuing startup.",
+                        e
+                    );
                 }
             }
         }
