@@ -315,13 +315,13 @@ type QueryRoot {
   ): AccountsResult!
   """
   Calculate the predicted module address for a Safe deployment
-  
+
   Calls the HoprNodeStakeFactory.predictModuleAddress_1 function to compute
   the deterministic CREATE2 address for a HOPR node management module.
-  
+
   The channels contract address and capability permissions are automatically
   obtained from the system configuration.
-  
+
   Returns Error with code INVALID_ADDRESS if owner or safeAddress format is invalid.
   Returns Error with code QUERY_FAILED if RPC call fails.
   """
@@ -330,7 +330,7 @@ type QueryRoot {
     nonce: UInt64!
     "Safe owner address (hexadecimal format)"
     owner: String!
-    "Safe contract address (hexadecimal format)"
+    "Predicted Safe contract address (hexadecimal format)"
     safeAddress: String!
   ): CalculateModuleAddressResult!
   """Retrieve chain information"""

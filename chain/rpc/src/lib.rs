@@ -281,6 +281,21 @@ pub trait HoprRpcOperations {
     /// * `Err(RpcError)` - If the call fails or address is not a Safe contract
     async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64>;
 
+    /// Calculates the predicted module address for a Safe deployment.
+    ///
+    /// Calls the HoprNodeStakeFactory.predictModuleAddress_1 function to compute
+    /// the deterministic CREATE2 address for a HOPR node management module.
+    ///
+    /// # Arguments
+    /// * `owner` - The Safe owner's address
+    /// * `nonce` - Safe deployment nonce
+    /// * `safe_address` - The Safe contract address
+    ///
+    /// # Returns
+    /// * `Ok(Address)` - The predicted module address
+    /// * `Err(RpcError)` - If the RPC call fails
+    async fn calculate_module_address(&self, owner: Address, nonce: u64, safe_address: Address) -> Result<Address>;
+
     /// Retrieves the minimum incoming ticket winning probability by directly
     /// calling the network's winning probability oracle.
     async fn get_minimum_network_winning_probability(&self) -> Result<WinningProbability>;
