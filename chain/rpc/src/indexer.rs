@@ -142,35 +142,6 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
         self.get_block_number().await
     }
 
-    async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> Result<HoprBalance> {
-        self.get_hopr_allowance(owner, spender).await
-    }
-
-    async fn get_xdai_balance(&self, address: Address) -> Result<XDaiBalance> {
-        self.get_xdai_balance(address).await
-    }
-
-    async fn get_hopr_balance(&self, address: Address) -> Result<HoprBalance> {
-        self.get_hopr_balance(address).await
-    }
-
-    /// Fetches the current transaction count for the Safe at the given address.
-    ///
-    /// Returns the Safe's transaction count as a `u64`.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// # async fn example(op: &RpcOperations<impl Provider>, safe_address: Address) -> Result<()> {
-    /// let count = op.get_safe_transaction_count(safe_address).await?;
-    /// assert!(count >= 0);
-    /// # Ok(())
-    /// # }
-    /// ```
-    async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64> {
-        self.get_safe_transaction_count(safe_address).await
-    }
-
     /// Retrieves the sender (signer) address for a given transaction hash.
     ///
     /// # Returns
@@ -342,6 +313,26 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
                 futures_timer::Delay::new(self.cfg.expected_block_time).await;
             }
         }))
+    }
+
+    async fn get_xdai_balance(&self, address: Address) -> Result<XDaiBalance> {
+        self.get_xdai_balance(address).await
+    }
+
+    async fn get_hopr_balance(&self, address: Address) -> Result<HoprBalance> {
+        self.get_hopr_balance(address).await
+    }
+
+    async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> Result<HoprBalance> {
+        self.get_hopr_allowance(owner, spender).await
+    }
+
+    async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64> {
+        self.get_safe_transaction_count(safe_address).await
+    }
+
+    async fn get_channel_closure_notice_period(&self) -> Result<std::time::Duration> {
+        self.get_channel_closure_notice_period().await
     }
 }
 

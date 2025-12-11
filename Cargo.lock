@@ -1676,7 +1676,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "alloy",
  "anyhow",
@@ -1728,7 +1728,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api-types"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "async-graphql",
  "blokli-chain-types",
@@ -1737,11 +1737,12 @@ dependencies = [
  "hopr-crypto-types",
  "hopr-primitive-types",
  "serde",
+ "serde_json",
 ]
 
 [[package]]
 name = "blokli-chain-api"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "alloy",
  "anyhow",
@@ -1778,7 +1779,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-indexer"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "alloy",
  "anyhow",
@@ -1821,7 +1822,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-rpc"
-version = "0.4.0"
+version = "0.4.1"
 dependencies = [
  "alloy",
  "anyhow",
@@ -1884,7 +1885,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-client"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "async-broadcast",

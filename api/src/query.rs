@@ -930,14 +930,15 @@ impl QueryRoot {
         };
 
         // Convert channel closure grace period from i64 to UInt64 with validation
+        // Default to 300 seconds if not set
         let channel_closure_grace_period = match chain_info.channel_closure_grace_period {
             Some(period) => match u64::try_from(period) {
-                Ok(p) => Some(UInt64(p)),
+                Ok(p) => UInt64(p),
                 Err(_) => {
                     return ChainInfoResult::QueryFailed(errors::conversion_error("i64", "u64", period.to_string()));
                 }
             },
-            None => None,
+            None => UInt64(300), // Default grace period: 300 seconds (5 minutes)
         };
 
         ChainInfoResult::ChainInfo(ChainInfo {

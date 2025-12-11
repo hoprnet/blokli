@@ -6,7 +6,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-api-types"
 repository  = "https://github.com/hoprnet/hoprnet"
-version     = "0.3.0"
+version     = "0.3.1"
 
 [dependencies]
 # GraphQL
@@ -16,7 +16,8 @@ async-graphql = { workspace = true }
 chrono = { workspace = true }
 
 # Serialization
-serde = { workspace = true }
+serde      = { workspace = true }
+serde_json = { workspace = true }
 
 # Encoding
 hex = { workspace = true }
