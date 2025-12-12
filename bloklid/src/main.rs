@@ -225,6 +225,8 @@ impl Args {
             token: network_config.addresses.token.to_hopr_address(),
             channels: network_config.addresses.channels.to_hopr_address(),
             announcements: network_config.addresses.announcements.to_hopr_address(),
+            module_implementation: network_config.addresses.module_implementation.to_hopr_address(),
+            node_safe_migration: network_config.addresses.node_safe_migration.to_hopr_address(),
             node_safe_registry: network_config.addresses.node_safe_registry.to_hopr_address(),
             ticket_price_oracle: network_config.addresses.ticket_price_oracle.to_hopr_address(),
             winning_probability_oracle: network_config.addresses.winning_probability_oracle.to_hopr_address(),

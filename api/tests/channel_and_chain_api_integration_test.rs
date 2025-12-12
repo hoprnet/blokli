@@ -676,10 +676,12 @@ async fn test_chain_info_query() -> Result<()> {
         "token",
         "channels",
         "announcements",
-        "safe_registry",
-        "price_oracle",
-        "win_prob_oracle",
-        "stake_factory",
+        "module_implementation",
+        "node_safe_migration",
+        "node_safe_registry",
+        "ticket_price_oracle",
+        "winning_probability_oracle",
+        "node_stake_v2_factory",
     ];
 
     for key in expected_keys {
