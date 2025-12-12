@@ -7,7 +7,6 @@ version = "0.1.0"
 [dependencies]
 alloy                = { workspace = true }
 anyhow               = { workspace = true }
-blokli-chain-types   = { workspace = true }
 blokli-client        = { path = "../../client" }
 chrono               = { workspace = true }
 clap                 = { workspace = true, features = ["derive"] }
@@ -23,7 +22,6 @@ libc                 = { workspace = true }
 rand                 = { workspace = true }
 reqwest              = { workspace = true }
 rstest               = { workspace = true }
-rstest-log           = { workspace = true }
 semver               = { workspace = true }
 serde                = { workspace = true, features = ["derive"] }
 serde_json           = { workspace = true }
@@ -31,5 +29,4 @@ serial_test          = { workspace = true }
 test-log             = { workspace = true }
 tokio                = { workspace = true }
 tracing              = { workspace = true }
-tracing-subscriber   = { workspace = true }
 url                  = { workspace = true }

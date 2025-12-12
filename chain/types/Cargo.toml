@@ -23,7 +23,6 @@ multiaddr = { workspace = true }
 serde = { workspace = true }
 strum = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true }
 
 hopr-bindings        = { workspace = true }
 hopr-crypto-types    = { workspace = true }
