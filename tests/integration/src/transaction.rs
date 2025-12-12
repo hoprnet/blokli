@@ -1,7 +1,7 @@
 use std::str::FromStr;
 
 use alloy::{
-    consensus::{SignableTransaction, TxLegacy},
+    consensus::{SignableTransaction, TxEip1559},
     eips::eip2718::Encodable2718,
     primitives::{Address as AlloyAddress, TxKind, U256},
     signers::{Signer, local::PrivateKeySigner},
@@ -30,23 +30,27 @@ impl TransactionBuilder {
         self.sender_address.clone()
     }
 
-    pub async fn build_legacy_transaction_hex(
+    #[allow(clippy::too_many_arguments)]
+    pub async fn build_eip1559_transaction_hex(
         &self,
         chain_id: u64,
         nonce: u64,
         recipient: &str,
         value: U256,
-        gas_price: u128,
+        max_fee_per_gas: u128,
+        max_priority_fee_per_gas: u128,
         gas_limit: u64,
     ) -> Result<String> {
         let to = AlloyAddress::from_str(recipient).context("Invalid recipient address")?;
-        let tx = TxLegacy {
-            chain_id: Some(chain_id),
+        let tx = TxEip1559 {
+            chain_id,
             nonce,
-            gas_price,
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
             gas_limit,
             to: TxKind::Call(to),
             value,
+            access_list: Default::default(),
             input: Default::default(),
         };
 

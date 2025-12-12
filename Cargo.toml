@@ -13,8 +13,8 @@ members = [
   "db/core",
   "db/entity",
   "db/migration",
-  "tests/integration",
   "inspector",
+  "tests/integration",
   "types",
 ]
 
@@ -66,8 +66,11 @@ futures-timer = "3.0.3"
 futures-util = "0.3.31"
 hex = "0.4.3"
 hex-literal = "1.0.0"
+hopli = { git = "https://github.com/hoprnet/hopli", branch = "q/update-to-v4-compatible" } # TODO: change back to master once v4 compatibility changes are merged
 hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
-hopr-bindings = { git = "https://github.com/hoprnet/contracts", branch = "main" }
+hopr-bindings = { git = "https://github.com/hoprnet/contracts", rev = "107ca1c9d838678424d72471463b0d502150a119" }
+hopr-chain-connector = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-chain-types = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
 hopr-crypto-packet = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
 hopr-crypto-random = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
 hopr-crypto-types = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
@@ -88,6 +91,7 @@ humantime-serde = "1.1"
 indexmap = "2.12.1"
 insta = "1.43.2"
 lazy_static = "1.5.0"
+libc = "0.2.178"
 libp2p-identity = { version = "0.2.12", features = [
   "ed25519",
   "peerid",

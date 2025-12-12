@@ -139,7 +139,7 @@ fn parse_u256(value: &str) -> Result<U256> {
         return Ok(U256::ZERO);
     }
 
-    let padded = if trimmed.len() % 2 == 0 {
+    let padded = if trimmed.len().is_multiple_of(2) {
         trimmed.to_string()
     } else {
         format!("0{trimmed}")

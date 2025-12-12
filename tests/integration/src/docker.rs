@@ -5,15 +5,10 @@ use chrono::{DateTime, Utc};
 use tracing::{info, warn};
 
 use crate::{
+    anvil::AnvilAccount,
     config::TestConfig,
     util::{build_command, capture_command, run_command},
 };
-
-#[derive(Clone, Debug)]
-pub struct AnvilAccount {
-    pub private_key: String,
-    pub address: String,
-}
 
 pub struct DockerEnvironment {
     config: Arc<TestConfig>,
