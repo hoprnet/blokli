@@ -5,163 +5,18 @@
 //! - Executing GraphQL queries against the schema
 //! - Verifying balance values are correctly fetched from the blockchain via RPC
 
-use std::{str::FromStr, sync::Arc, time::Duration};
+mod common;
 
-use alloy::{
-    node_bindings::AnvilInstance,
-    primitives::U256,
-    rpc::client::ClientBuilder,
-    transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
-};
+use std::{str::FromStr, time::Duration};
+
+use alloy::primitives::U256;
 use async_graphql::Schema;
-use blokli_api::{mutation::MutationRoot, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot};
-use blokli_chain_api::{
-    rpc_adapter::RpcAdapter,
-    transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
-    transaction_store::TransactionStore,
-    transaction_validator::TransactionValidator,
-};
-use blokli_chain_indexer::IndexerState;
-use blokli_chain_rpc::{
-    client::{DefaultRetryPolicy, create_rpc_client_to_anvil},
-    rpc::{RpcOperations, RpcOperationsConfig},
-    transport::ReqwestClient,
-};
-use blokli_chain_types::{ContractAddresses, ContractInstances, utils::create_anvil};
-use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
+use blokli_api::{mutation::MutationRoot, query::QueryRoot, subscription::SubscriptionRoot};
+use hopr_crypto_types::keypairs::Keypair;
 use hopr_primitive_types::{
     prelude::{HoprBalance, XDaiBalance},
     traits::ToHex,
 };
-use sea_orm::{Database, DatabaseConnection};
-
-/// Test context containing all components needed for balance API testing
-struct TestContext {
-    /// Anvil instance (must be kept alive)
-    _anvil: AnvilInstance,
-    /// GraphQL schema with all resolvers
-    schema: Schema<QueryRoot, MutationRoot, SubscriptionRoot>,
-    /// Deployed contract instances for token operations
-    contract_instances: ContractInstances<Arc<blokli_chain_rpc::client::AnvilRpcClient>>,
-    /// Test accounts with known private keys
-    test_accounts: Vec<ChainKeypair>,
-    /// Database connection
-    _db: DatabaseConnection,
-}
-
-/// Setup test environment with Anvil, contracts, and GraphQL schema.
-/// Each test calls this function to get its own independent test context.
-async fn setup_test_environment() -> anyhow::Result<TestContext> {
-    let _ = env_logger::builder().is_test(true).try_init();
-
-    // Start Anvil with 1-second block time for fast testing
-    let expected_block_time = Duration::from_secs(1);
-    let anvil = create_anvil(Some(expected_block_time));
-
-    // Create test accounts from Anvil's deterministic keys
-    let test_accounts = vec![
-        ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref()).expect("Failed to create test account 0"),
-        ChainKeypair::from_secret(anvil.keys()[1].to_bytes().as_ref()).expect("Failed to create test account 1"),
-        ChainKeypair::from_secret(anvil.keys()[2].to_bytes().as_ref()).expect("Failed to create test account 2"),
-    ];
-
-    // Deploy HOPR contracts
-    let contract_instances = {
-        let client = create_rpc_client_to_anvil(&anvil, &test_accounts[0]);
-        ContractInstances::deploy_for_testing(client, &test_accounts[0])
-            .await
-            .expect("Failed to deploy contracts")
-    };
-
-    let contract_addrs = ContractAddresses::from(&contract_instances);
-
-    // Wait for contract deployments to be final
-    tokio::time::sleep((1 + 2) * expected_block_time).await;
-
-    // Setup in-memory SQLite database for testing
-    // We don't need actual database tables for balance API tests since
-    // balances are queried directly from RPC, not from the database
-    let db = Database::connect("sqlite::memory:")
-        .await
-        .expect("Failed to create test database");
-
-    // Create RPC operations for balance queries
-    let transport_client = ReqwestTransport::new(anvil.endpoint_url());
-    let rpc_client = ClientBuilder::default()
-        .layer(RetryBackoffLayer::new_with_policy(
-            2,
-            100,
-            100,
-            DefaultRetryPolicy::default(),
-        ))
-        .transport(transport_client.clone(), transport_client.guess_local());
-
-    let chain_id = 31337; // Anvil default chain ID
-
-    let rpc_operations = Arc::new(
-        RpcOperations::new(
-            rpc_client.clone(),
-            ReqwestClient::new(),
-            RpcOperationsConfig {
-                chain_id,
-                contract_addrs,
-                expected_block_time,
-                ..Default::default()
-            },
-            None,
-        )
-        .expect("Failed to create RPC operations"),
-    );
-
-    // Create stub transaction components (not used for balance queries)
-    let transaction_store = Arc::new(TransactionStore::new());
-    let transaction_validator = Arc::new(TransactionValidator::new());
-    let rpc_adapter = Arc::new(RpcAdapter::new(
-        RpcOperations::new(
-            rpc_client,
-            ReqwestClient::new(),
-            RpcOperationsConfig {
-                chain_id,
-                contract_addrs,
-                expected_block_time,
-                ..Default::default()
-            },
-            None,
-        )
-        .expect("Failed to create RPC adapter operations"),
-    ));
-
-    let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
-        rpc_adapter,
-        transaction_store.clone(),
-        transaction_validator,
-        RawTransactionExecutorConfig::default(),
-    ));
-
-    // Create IndexerState for subscriptions (with small buffers)
-    let indexer_state = IndexerState::new(1, 1);
-
-    // Build GraphQL schema with all dependencies
-    let schema = build_schema(
-        db.clone(),
-        chain_id,
-        "test-network".to_string(),
-        contract_addrs,
-        indexer_state,
-        transaction_executor,
-        transaction_store,
-        rpc_operations,
-        None, // No SQLite notification manager for balance tests
-    );
-
-    Ok(TestContext {
-        _anvil: anvil,
-        schema,
-        contract_instances,
-        test_accounts,
-        _db: db,
-    })
-}
 
 /// Execute a GraphQL query against the schema and return the response
 async fn execute_graphql_query(
@@ -292,7 +147,7 @@ async fn query_safe_hopr_allowance(
 /// This consolidated test runs setup once for optimal performance.
 #[test_log::test(tokio::test)]
 async fn test_balance_api_integration() -> anyhow::Result<()> {
-    let ctx = setup_test_environment().await?;
+    let ctx = common::setup_simple_test_environment().await?;
 
     // ========================================
     // Phase 1: Input Validation Tests

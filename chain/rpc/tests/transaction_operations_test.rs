@@ -11,7 +11,7 @@ use alloy::{
     rpc::client::ClientBuilder,
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
-use blokli_chain_rpc::HoprRpcOperations;
+use blokli_chain_rpc::HoprIndexerRpcOperations;
 use blokli_chain_types::utils::create_native_transfer;
 use common::{
     TEST_BLOCK_TIME, TEST_FINALITY, create_rpc_client_to_anvil, create_test_rpc_operations, wait_for_finality,

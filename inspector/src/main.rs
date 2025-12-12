@@ -141,15 +141,15 @@ pub(crate) struct AccountArgs {
     key_id: Option<u32>,
 }
 
-impl TryFrom<AccountArgs> for Option<AccountSelector> {
+impl TryFrom<AccountArgs> for AccountSelector {
     type Error = anyhow::Error;
 
     fn try_from(value: AccountArgs) -> Result<Self, Self::Error> {
         let AccountArgs { address, key_id } = value;
         match (address, key_id) {
-            (Some(address), None) => Ok(Some(AccountSelector::Address(address.into()))),
-            (None, Some(key_id)) => Ok(Some(AccountSelector::KeyId(key_id))),
-            (None, None) => Ok(None),
+            (Some(address), None) => Ok(AccountSelector::Address(address.into())),
+            (None, Some(key_id)) => Ok(AccountSelector::KeyId(key_id)),
+            (None, None) => Ok(AccountSelector::Any),
             _ => Err(anyhow::anyhow!("Cannot specify both --address and --key-id.")),
         }
     }

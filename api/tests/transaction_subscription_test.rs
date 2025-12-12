@@ -8,31 +8,21 @@
 //! - Multiple concurrent subscriptions
 //! - Subscription lifecycle
 
+mod common;
+
 use std::{sync::Arc, time::Duration};
 
 use alloy::{
     consensus::{SignableTransaction, TxLegacy},
     eips::eip2718::Encodable2718,
-    node_bindings::AnvilInstance,
     primitives::{Address as AlloyAddress, TxKind, U256},
     signers::{SignerSync, local::PrivateKeySigner},
 };
 use anyhow::Result;
 use async_graphql::{EmptyMutation, Schema};
 use blokli_api::{query::QueryRoot, subscription::SubscriptionRoot};
-use blokli_chain_api::{
-    rpc_adapter::RpcAdapter,
-    transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
-    transaction_monitor::{TransactionMonitor, TransactionMonitorConfig},
-    transaction_store::{TransactionRecord, TransactionStatus, TransactionStore},
-    transaction_validator::TransactionValidator,
-};
-use blokli_chain_rpc::{
-    client::DefaultRetryPolicy,
-    rpc::{RpcOperations, RpcOperationsConfig},
-    transport::ReqwestClient,
-};
-use blokli_chain_types::{ContractAddresses, utils::create_anvil};
+use blokli_chain_api::transaction_store::{TransactionRecord, TransactionStatus, TransactionStore};
+use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 use futures::StreamExt;
 use hopr_crypto_types::{
@@ -43,7 +33,6 @@ use tokio::task::AbortHandle;
 
 /// Test context for subscription tests
 struct TestContext {
-    _anvil: AnvilInstance,
     chain_key: ChainKeypair,
     store: Arc<TransactionStore>,
     schema: Schema<QueryRoot, EmptyMutation, SubscriptionRoot>,
@@ -61,87 +50,33 @@ impl Drop for TestContext {
 
 /// Set up test environment with subscription support
 async fn setup_test_environment() -> Result<TestContext> {
-    // Initialize logging for tests
-    let _ = env_logger::builder().is_test(true).try_init();
-
-    // Start Anvil
-    let anvil = create_anvil(Some(Duration::from_secs(1)));
-    let chain_key = ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?;
-
-    // Create RPC configuration
-    let cfg = RpcOperationsConfig {
-        chain_id: anvil.chain_id(),
-        tx_polling_interval: Duration::from_millis(100),
-        expected_block_time: Duration::from_millis(100),
-        finality: 2,
-        gas_oracle_url: None,
-        contract_addrs: ContractAddresses::default(),
-        ..Default::default()
-    };
-
-    // Set up RPC client
-    let transport_client = alloy::transports::http::ReqwestTransport::new(anvil.endpoint_url());
-    let rpc_client = alloy::rpc::client::ClientBuilder::default()
-        .layer(alloy::transports::layers::RetryBackoffLayer::new_with_policy(
-            2,
-            100,
-            100,
-            DefaultRetryPolicy::default(),
-        ))
-        .transport(transport_client.clone(), transport_client.guess_local());
-
-    let rpc_operations = RpcOperations::new(rpc_client, ReqwestClient::new(), cfg, None)?;
-    let rpc_adapter = Arc::new(RpcAdapter::new(rpc_operations));
-
-    // Create transaction components
-    let transaction_store = Arc::new(TransactionStore::new());
-    let transaction_validator = Arc::new(TransactionValidator::new());
-
-    let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
-        rpc_adapter.clone(),
-        transaction_store.clone(),
-        transaction_validator.clone(),
-        RawTransactionExecutorConfig::default(),
-    ));
-
-    // Create and start transaction monitor
-    let monitor_config = TransactionMonitorConfig {
-        poll_interval: Duration::from_millis(50), // Fast polling for tests
-        timeout: Duration::from_secs(30),
-        per_transaction_delay: Duration::from_millis(10),
-    };
-
-    let transaction_monitor = Arc::new(TransactionMonitor::new(
-        transaction_store.clone(),
-        (*rpc_adapter).clone(),
-        monitor_config,
-    ));
-
-    let monitor_clone = transaction_monitor.clone();
-    let monitor_handle = tokio::spawn(async move {
-        monitor_clone.start().await;
-    })
-    .abort_handle();
+    // Use common transaction test helper with faster polling for subscriptions
+    let tx_ctx = common::setup_transaction_test_environment(
+        Duration::from_secs(1),    // block_time
+        Duration::from_millis(50), // poll_interval (faster for subscription tests)
+        2,                         // finality
+        None,                      // executor_config (use default)
+    )
+    .await?;
 
     // Create in-memory database
     let db = BlokliDb::new_in_memory().await?;
 
-    // Build GraphQL schema with subscriptions
+    // Build GraphQL schema with SubscriptionRoot (EmptyMutation variant)
     let schema = Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot)
         .data(db.conn(TargetDb::Index).clone())
-        .data(anvil.chain_id())
+        .data(31337u64) // Anvil chain ID
         .data("test".to_string())
         .data(ContractAddresses::default())
-        .data(transaction_executor.clone())
-        .data(transaction_store.clone())
+        .data(tx_ctx.executor.clone())
+        .data(tx_ctx.store.clone())
         .finish();
 
     Ok(TestContext {
-        _anvil: anvil,
-        chain_key,
-        store: transaction_store,
+        chain_key: tx_ctx.chain_key.clone(),
+        store: tx_ctx.store.clone(),
         schema,
-        _monitor_handle: Some(monitor_handle),
+        _monitor_handle: tx_ctx.monitor_handle.clone(),
     })
 }
 

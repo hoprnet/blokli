@@ -5,7 +5,7 @@
 use std::{sync::Arc, time::Duration};
 
 use alloy::{
-    primitives::Address as AlloyAddress,
+    primitives::{Address as AlloyAddress, FixedBytes, U256},
     providers::{
         Identity, PendingTransaction, Provider, ProviderBuilder, RootProvider,
         fillers::{BlobGasFiller, CachedNonceManager, ChainIdFiller, FillProvider, GasFiller, JoinFill, NonceFiller},
@@ -247,6 +247,54 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         let nonce_u64 = nonce.try_into().map_err(|_| RpcError::SafeNonceOverflow(nonce))?;
         Ok(nonce_u64)
     }
+
+    pub(crate) async fn get_channel_closure_notice_period(&self) -> Result<Duration> {
+        // TODO: should we cache this value internally ?
+        match self
+            .contract_instances
+            .channels
+            .NOTICE_PERIOD_CHANNEL_CLOSURE()
+            .call()
+            .await
+        {
+            Ok(returned_result) => Ok(Duration::from_secs(returned_result.into())),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub(crate) async fn calculate_module_address(
+        &self,
+        owner: Address,
+        nonce: u64,
+        safe_address: Address,
+    ) -> Result<Address> {
+        // Construct defaultTarget as concatenated bytes32:
+        // hopr_channels_address (20 bytes) + DEFAULT_CAPABILITY_PERMISSIONS (12 bytes)
+        let channels_addr_bytes = self.cfg.contract_addrs.channels.as_ref();
+        let capability_permissions: [u8; 12] = [0x01, 0x01, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03, 0x03];
+
+        let mut default_target = [0u8; 32];
+        default_target[0..20].copy_from_slice(channels_addr_bytes);
+        default_target[20..32].copy_from_slice(&capability_permissions);
+
+        // Call predictModuleAddress_1 on stake_factory contract
+        let predicted_address_fixed = self
+            .contract_instances
+            .stake_factory
+            .predictModuleAddress_1(
+                AlloyAddress::from_hopr_address(owner),
+                U256::from(nonce), // Convert u64 to U256
+                AlloyAddress::from_hopr_address(safe_address),
+                FixedBytes::from(default_target), // Convert [u8; 32] to B256
+            )
+            .call()
+            .await?
+            .0; // Extract the FixedBytes<20> from the return value
+
+        // Convert FixedBytes<20> to AlloyAddress and then to hopr Address
+        let predicted_address = AlloyAddress::from(predicted_address_fixed);
+        Ok(predicted_address.to_hopr_address())
+    }
 }
 
 #[async_trait]
@@ -255,20 +303,8 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
         Ok(self.get_block(block_number).await?.map(|b| b.header.timestamp))
     }
 
-    async fn get_xdai_balance(&self, address: Address) -> Result<XDaiBalance> {
-        self.get_xdai_balance(address).await
-    }
-
-    async fn get_hopr_balance(&self, address: Address) -> Result<HoprBalance> {
-        self.get_hopr_balance(address).await
-    }
-
-    async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> Result<HoprBalance> {
-        self.get_hopr_allowance(owner, spender).await
-    }
-
-    async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64> {
-        self.get_safe_transaction_count(safe_address).await
+    async fn calculate_module_address(&self, owner: Address, nonce: u64, safe_address: Address) -> Result<Address> {
+        self.calculate_module_address(owner, nonce, safe_address).await
     }
 
     async fn get_minimum_network_winning_probability(&self) -> Result<WinningProbability> {
@@ -302,20 +338,6 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
             .await
         {
             Ok(returned_result) => Ok(returned_result.to_hopr_address()),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    async fn get_channel_closure_notice_period(&self) -> Result<Duration> {
-        // TODO: should we cache this value internally ?
-        match self
-            .contract_instances
-            .channels
-            .NOTICE_PERIOD_CHANNEL_CLOSURE()
-            .call()
-            .await
-        {
-            Ok(returned_result) => Ok(Duration::from_secs(returned_result.into())),
             Err(e) => Err(e.into()),
         }
     }

@@ -1,6 +1,6 @@
 use blokli_client::{
     BlokliClient,
-    api::{AccountSelector, BlokliQueryClient, SafeSelector},
+    api::{BlokliQueryClient, ModulePredictionInput, SafeSelector},
 };
 use clap::Subcommand;
 use hopr_primitive_types::prelude::Address;
@@ -25,6 +25,11 @@ pub(crate) enum QueryTarget {
     },
     /// Gets information about the HOPR on-chain deployment.
     ChainInfo,
+    /// Gets the number of transactions sent by an address.
+    TxCount {
+        #[arg(value_parser = clap::value_parser!(Address))]
+        address: Address,
+    },
     /// Gets information about a Safe.
     Safe {
         /// Safe address.
@@ -34,8 +39,24 @@ pub(crate) enum QueryTarget {
         #[arg(short, long, value_parser = clap::value_parser!(Address), group = "selector")]
         owner: Option<Address>,
     },
+    /// Gets the module address prediction.
+    ModuleAddress {
+        /// Nonce of the Safe deployment.
+        #[arg(short, long)]
+        nonce: u64,
+        /// Safe owner address.
+        #[arg(short, long, value_parser = clap::value_parser!(Address), group = "selector")]
+        owner: Address,
+        /// Predicted Safe address.
+        #[arg(short, long, value_parser = clap::value_parser!(Address), group = "selector")]
+        safe_address: Address,
+    },
+    /// Gets the number of accounts.
+    CountAccounts(AccountArgs),
     /// Gets information about an account.
     Account(AccountArgs),
+    /// Gets the number of channels.
+    CountChannels(ChannelArgs),
     /// Gets information about channels.
     Channel(ChannelArgs),
 }
@@ -61,15 +82,26 @@ impl QueryTarget {
                     })
                     .await?,
             ),
-            QueryTarget::Account(sel) => format.serialize(
+            QueryTarget::Account(sel) => format.serialize(client.query_accounts(sel.try_into()?).await?),
+            QueryTarget::Channel(sel) => format.serialize(client.query_channels(sel.try_into()?).await?),
+            QueryTarget::ModuleAddress {
+                nonce,
+                owner,
+                safe_address,
+            } => format.serialize(
                 client
-                    .query_accounts(
-                        Option::<AccountSelector>::try_from(sel)?
-                            .ok_or(anyhow::anyhow!("account selector must be specified"))?,
-                    )
+                    .query_module_address_prediction(ModulePredictionInput {
+                        nonce,
+                        owner: owner.into(),
+                        safe_address: safe_address.into(),
+                    })
                     .await?,
             ),
-            QueryTarget::Channel(sel) => format.serialize(client.query_channels(sel.try_into()?).await?),
+            QueryTarget::TxCount { address } => {
+                format.serialize(client.query_transaction_count(&address.into()).await?)
+            }
+            QueryTarget::CountAccounts(sel) => format.serialize(client.count_accounts(sel.try_into()?).await?),
+            QueryTarget::CountChannels(sel) => format.serialize(client.count_channels(sel.try_into()?).await?),
         }
     }
 }

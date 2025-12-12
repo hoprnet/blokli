@@ -14,14 +14,14 @@ use crate::api::{
 impl GraphQlQueries {
     /// `SubscribeChannels` subscription GraphQL query.
     pub fn subscribe_channels(
-        selector: Option<ChannelSelector>,
+        selector: ChannelSelector,
     ) -> cynic::StreamingOperation<SubscribeChannels, ChannelsVariables> {
         SubscribeChannels::build(ChannelsVariables::from(selector))
     }
 
     /// `SubscribeAccounts` subscription GraphQL query.
     pub fn subscribe_accounts(
-        selector: Option<AccountSelector>,
+        selector: AccountSelector,
     ) -> cynic::StreamingOperation<SubscribeAccounts, AccountVariables> {
         SubscribeAccounts::build(AccountVariables::from(selector))
     }
@@ -44,20 +44,14 @@ impl GraphQlQueries {
 
 impl BlokliSubscriptionClient for BlokliClient {
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
-    fn subscribe_channels(
-        &self,
-        selector: Option<ChannelSelector>,
-    ) -> Result<impl Stream<Item = Result<Channel>> + Send> {
+    fn subscribe_channels(&self, selector: ChannelSelector) -> Result<impl Stream<Item = Result<Channel>> + Send> {
         Ok(self
             .build_subscription_stream(GraphQlQueries::subscribe_channels(selector))?
             .try_filter_map(|item| futures::future::ok(Some(item.channel_updated))))
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
-    fn subscribe_accounts(
-        &self,
-        selector: Option<AccountSelector>,
-    ) -> Result<impl Stream<Item = Result<Account>> + Send> {
+    fn subscribe_accounts(&self, selector: AccountSelector) -> Result<impl Stream<Item = Result<Account>> + Send> {
         Ok(self
             .build_subscription_stream(GraphQlQueries::subscribe_accounts(selector))?
             .try_filter_map(|item| futures::future::ok(Some(item.account_updated))))

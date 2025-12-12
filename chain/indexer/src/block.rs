@@ -19,7 +19,7 @@ use hopr_bindings::hopr_token::HoprToken::{Approval, Transfer};
 use hopr_crypto_types::types::Hash;
 use hopr_primitive_types::prelude::{Address, SerializableLog};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder};
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     IndexerConfig, IndexerState,
@@ -402,6 +402,33 @@ where
                 }
                 Err(e) => {
                     error!("Failed to download logs snapshot: {}. Continuing with regular sync.", e);
+                }
+            }
+        }
+
+        // Initialize channel closure grace period from contract
+        if let Some(rpc) = &self.rpc {
+            info!("Fetching channel closure grace period from contract...");
+            match rpc.get_channel_closure_notice_period().await {
+                Ok(period) => {
+                    let seconds = period.as_secs();
+                    match self.db.set_channel_closure_grace_period(None, seconds).await {
+                        Ok(_) => {
+                            info!("Channel closure grace period initialized: {} seconds", seconds);
+                        }
+                        Err(e) => {
+                            warn!(
+                                "Failed to store channel closure grace period in database: {}. Continuing startup.",
+                                e
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    warn!(
+                        "Failed to fetch channel closure grace period from contract: {}. Continuing startup.",
+                        e
+                    );
                 }
             }
         }
@@ -1139,10 +1166,6 @@ mod tests {
         #[async_trait]
         impl HoprIndexerRpcOperations for HoprIndexerOps {
             async fn block_number(&self) -> blokli_chain_rpc::errors::Result<u64>;
-            async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
-            async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance>;
-            async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
-            async fn get_safe_transaction_count(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<u64>;
             async fn get_transaction_sender(&self, tx_hash: hopr_crypto_types::types::Hash) -> blokli_chain_rpc::errors::Result<Address>;
 
             fn try_stream_logs<'a>(
@@ -1151,6 +1174,12 @@ mod tests {
                 filters: FilterSet,
                 is_synced: bool,
             ) -> blokli_chain_rpc::errors::Result<Pin<Box<dyn Stream<Item = BlockWithLogs> + Send + 'a>>>;
+
+            async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance>;
+            async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
+            async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
+            async fn get_safe_transaction_count(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<u64>;
+            async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<std::time::Duration>;
         }
     }
 

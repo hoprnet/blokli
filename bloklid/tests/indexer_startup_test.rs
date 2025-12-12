@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use blokli_chain_indexer::{IndexerConfig, block::Indexer, handlers::ContractEventHandlers, traits::ChainLogHandler};
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::ContractAddresses;
-use blokli_db::{api::logs::BlokliDbLogOperations, db::BlokliDb};
+use blokli_db::{api::logs::BlokliDbLogOperations, db::BlokliDb, info::BlokliDbInfoOperations};
 use futures::stream::{self, StreamExt};
 use hopr_crypto_types::types::Hash;
 use hopr_primitive_types::prelude::*;
@@ -16,6 +16,7 @@ struct MockRpcOperations {
     block_number: u64,
     hopr_balance: HoprBalance,
     xdai_balance: XDaiBalance,
+    channel_closure_notice_period: Duration,
 }
 
 impl MockRpcOperations {
@@ -24,6 +25,7 @@ impl MockRpcOperations {
             block_number: 2, // Set close to the blocks we'll provide (0, 1, 2)
             hopr_balance: HoprBalance::from(1000u64),
             xdai_balance: XDaiBalance::from(1000u64),
+            channel_closure_notice_period: Duration::from_secs(300), // 5 minutes
         }
     }
 }
@@ -32,26 +34,6 @@ impl MockRpcOperations {
 impl HoprIndexerRpcOperations for MockRpcOperations {
     async fn block_number(&self) -> blokli_chain_rpc::errors::Result<u64> {
         Ok(self.block_number)
-    }
-
-    async fn get_hopr_allowance(
-        &self,
-        _owner: Address,
-        _spender: Address,
-    ) -> blokli_chain_rpc::errors::Result<HoprBalance> {
-        Ok(self.hopr_balance.clone())
-    }
-
-    async fn get_xdai_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {
-        Ok(self.xdai_balance.clone())
-    }
-
-    async fn get_hopr_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance> {
-        Ok(self.hopr_balance.clone())
-    }
-
-    async fn get_safe_transaction_count(&self, _safe_address: Address) -> blokli_chain_rpc::errors::Result<u64> {
-        Ok(0)
     }
 
     async fn get_transaction_sender(&self, _tx_hash: Hash) -> blokli_chain_rpc::errors::Result<Address> {
@@ -89,6 +71,30 @@ impl HoprIndexerRpcOperations for MockRpcOperations {
         });
 
         Ok(Box::pin(stream))
+    }
+
+    async fn get_xdai_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {
+        Ok(self.xdai_balance.clone())
+    }
+
+    async fn get_hopr_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance> {
+        Ok(self.hopr_balance.clone())
+    }
+
+    async fn get_hopr_allowance(
+        &self,
+        _owner: Address,
+        _spender: Address,
+    ) -> blokli_chain_rpc::errors::Result<HoprBalance> {
+        Ok(self.hopr_balance.clone())
+    }
+
+    async fn get_safe_transaction_count(&self, _safe_address: Address) -> blokli_chain_rpc::errors::Result<u64> {
+        Ok(0)
+    }
+
+    async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<Duration> {
+        Ok(self.channel_closure_notice_period)
     }
 }
 
@@ -254,26 +260,6 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
             self.inner.block_number().await
         }
 
-        async fn get_hopr_allowance(
-            &self,
-            owner: Address,
-            spender: Address,
-        ) -> blokli_chain_rpc::errors::Result<HoprBalance> {
-            self.inner.get_hopr_allowance(owner, spender).await
-        }
-
-        async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {
-            self.inner.get_xdai_balance(address).await
-        }
-
-        async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance> {
-            self.inner.get_hopr_balance(address).await
-        }
-
-        async fn get_safe_transaction_count(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<u64> {
-            self.inner.get_safe_transaction_count(safe_address).await
-        }
-
         async fn get_transaction_sender(&self, tx_hash: Hash) -> blokli_chain_rpc::errors::Result<Address> {
             self.inner.get_transaction_sender(tx_hash).await
         }
@@ -314,6 +300,30 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
             });
 
             Ok(Box::pin(stream))
+        }
+
+        async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {
+            self.inner.get_xdai_balance(address).await
+        }
+
+        async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance> {
+            self.inner.get_hopr_balance(address).await
+        }
+
+        async fn get_hopr_allowance(
+            &self,
+            owner: Address,
+            spender: Address,
+        ) -> blokli_chain_rpc::errors::Result<HoprBalance> {
+            self.inner.get_hopr_allowance(owner, spender).await
+        }
+
+        async fn get_safe_transaction_count(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<u64> {
+            self.inner.get_safe_transaction_count(safe_address).await
+        }
+
+        async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<Duration> {
+            self.inner.get_channel_closure_notice_period().await
         }
     }
 
@@ -387,6 +397,95 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
 
     // Cleanup
     indexer_handle.abort();
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::Result<()> {
+    // This test verifies that when the indexer starts via pre_start(),
+    // it fetches the channel closure grace period from the contract
+    // and stores it in the database.
+
+    // Setup temporary directory for database
+    let temp_dir = TempDir::new()?;
+    let db_path = temp_dir.path();
+
+    // Initialize database
+    let db = BlokliDb::new_in_memory().await?;
+
+    // Ensure singletons are created
+    db.ensure_singletons().await?;
+
+    // Verify grace period is initially None
+    let initial_data = db.get_indexer_data(None).await?;
+    assert!(
+        initial_data.channel_closure_grace_period.is_none(),
+        "Grace period should initially be None"
+    );
+
+    // Create mock RPC operations with a specific grace period value
+    let expected_grace_period = Duration::from_secs(600); // 10 minutes
+    let mock_rpc = MockRpcOperations {
+        block_number: 2,
+        hopr_balance: HoprBalance::from(1000u64),
+        xdai_balance: XDaiBalance::from(1000u64),
+        channel_closure_notice_period: expected_grace_period,
+    };
+
+    // Create contract addresses
+    let contract_addresses = ContractAddresses {
+        token: Address::from([1; 20]),
+        channels: Address::from([2; 20]),
+        announcements: Address::from([3; 20]),
+        node_safe_registry: Address::from([4; 20]),
+        ticket_price_oracle: Address::from([5; 20]),
+        winning_probability_oracle: Address::from([6; 20]),
+        node_stake_v2_factory: Address::from([7; 20]),
+    };
+
+    // Create indexer state for subscriptions
+    let indexer_state = blokli_chain_indexer::IndexerState::new(1000, 10);
+
+    // Create event handlers
+    let handlers = ContractEventHandlers::new(contract_addresses, db.clone(), mock_rpc.clone(), indexer_state.clone());
+
+    // Initialize logs origin data
+    let mut address_topics = vec![];
+    for address in handlers.contract_addresses() {
+        if address != handlers.contract_addresses_map().token {
+            let topics = handlers.contract_address_topics(address);
+            for topic in topics {
+                address_topics.push((address, Hash::from(topic.0)));
+            }
+        }
+    }
+    db.ensure_logs_origin(address_topics).await?;
+
+    // Configure indexer
+    let indexer_config = IndexerConfig {
+        start_block_number: 0,
+        fast_sync: false,
+        enable_logs_snapshot: false,
+        logs_snapshot_url: None,
+        data_directory: db_path.to_string_lossy().to_string(),
+        event_bus_capacity: 1000,
+        shutdown_signal_capacity: 10,
+    };
+
+    // Create indexer
+    let indexer = Indexer::new(mock_rpc, handlers, db.clone(), indexer_config, indexer_state);
+
+    // Call pre_start() which should initialize the grace period
+    indexer.pre_start().await?;
+
+    // Verify the grace period was fetched from contract and stored in database
+    let updated_data = db.get_indexer_data(None).await?;
+    assert_eq!(
+        updated_data.channel_closure_grace_period,
+        Some(expected_grace_period.as_secs()),
+        "Grace period should be initialized from contract during pre_start"
+    );
 
     Ok(())
 }

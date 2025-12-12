@@ -383,8 +383,6 @@ async fn run() -> errors::Result<()> {
             log_slow_queries: Duration::from_secs(1),
         };
 
-        // Read the minimal information we need from the shared config inside a short scope
-        // so the RwLock guard is dropped before we hit any `.await` points.
         let is_in_memory = {
             let cfg = config
                 .read()

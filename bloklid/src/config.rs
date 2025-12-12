@@ -161,6 +161,14 @@ fn default_sqlite_logs_path() -> String {
     "data/bloklid-logs.db".to_string()
 }
 
+/// In-memory database configuration
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct InMemoryConfig {
+    #[serde(default = "default_max_connections")]
+    pub max_connections: u32,
+}
+
 /// Database configuration supporting both PostgreSQL and SQLite
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
@@ -170,7 +178,7 @@ pub enum DatabaseConfig {
     #[serde(rename = "sqlite")]
     Sqlite(SqliteConfig),
     #[serde(rename = "in-memory")]
-    InMemory,
+    InMemory(InMemoryConfig),
 }
 
 fn default_max_connections() -> u32 {
@@ -216,7 +224,7 @@ impl DatabaseConfig {
             DatabaseConfig::Sqlite(sqlite_config) => {
                 format!("sqlite://{}?mode=rwc", sqlite_config.index_path)
             }
-            DatabaseConfig::InMemory => "sqlite::memory:".to_string(),
+            DatabaseConfig::InMemory(_) => "sqlite::memory:".to_string(),
         }
     }
 
@@ -227,7 +235,7 @@ impl DatabaseConfig {
         match self {
             DatabaseConfig::PostgreSql(_) => None,
             DatabaseConfig::Sqlite(sqlite_config) => Some(format!("sqlite://{}?mode=rwc", sqlite_config.logs_path)),
-            DatabaseConfig::InMemory => Some("sqlite::memory:".to_string()),
+            DatabaseConfig::InMemory(_) => Some("sqlite::memory:".to_string()),
         }
     }
 
@@ -236,13 +244,13 @@ impl DatabaseConfig {
         match self {
             DatabaseConfig::PostgreSql(pg_config) => pg_config.max_connections,
             DatabaseConfig::Sqlite(sqlite_config) => sqlite_config.max_connections,
-            DatabaseConfig::InMemory => 0,
+            DatabaseConfig::InMemory(in_memory_config) => in_memory_config.max_connections,
         }
     }
 
     /// Inform if the db is stored in memory
     pub fn is_in_memory(&self) -> bool {
-        matches!(self, DatabaseConfig::InMemory)
+        matches!(self, DatabaseConfig::InMemory(_))
     }
 
     /// Display the database configuration with sensitive data redacted
@@ -281,7 +289,12 @@ impl DatabaseConfig {
                     sqlite_config.index_path, sqlite_config.logs_path, sqlite_config.max_connections
                 )
             }
-            DatabaseConfig::InMemory => "In-Memory Database".to_string(),
+            DatabaseConfig::InMemory(in_memory_config) => {
+                format!(
+                    "In-Memory Database: max_connections={}",
+                    in_memory_config.max_connections
+                )
+            }
         }
     }
 }

@@ -9,7 +9,7 @@ use crate::{
 
 impl GraphQlQueries {
     /// `AccountCount` GraphQL query.
-    pub fn count_accounts(selector: Option<AccountSelector>) -> cynic::Operation<QueryAccountCount, AccountVariables> {
+    pub fn count_accounts(selector: AccountSelector) -> cynic::Operation<QueryAccountCount, AccountVariables> {
         QueryAccountCount::build(AccountVariables::from(selector))
     }
 
@@ -60,10 +60,19 @@ impl GraphQlQueries {
         })
     }
 
+    /// `ModuleAddressPrediction` GraphQL query.
+    pub fn query_module_address_prediction(
+        input: ModulePredictionInput,
+    ) -> cynic::Operation<QueryModuleAddress, ModuleAddressVariables> {
+        QueryModuleAddress::build(ModuleAddressVariables {
+            nonce: Uint64(input.nonce.to_string()),
+            owner: input.owner.encode_hex(),
+            safe_address: input.safe_address.encode_hex(),
+        })
+    }
+
     /// `ChannelCount` GraphQL query.
-    pub fn query_channel_count(
-        selector: Option<ChannelSelector>,
-    ) -> cynic::Operation<QueryChannelCount, ChannelsVariables> {
+    pub fn query_channel_count(selector: ChannelSelector) -> cynic::Operation<QueryChannelCount, ChannelsVariables> {
         QueryChannelCount::build(ChannelsVariables::from(selector))
     }
 
@@ -96,7 +105,7 @@ impl GraphQlQueries {
 #[async_trait::async_trait]
 impl BlokliQueryClient for BlokliClient {
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
-    async fn count_accounts(&self, selector: Option<AccountSelector>) -> Result<u32> {
+    async fn count_accounts(&self, selector: AccountSelector) -> Result<u32> {
         let resp = self.build_query(GraphQlQueries::count_accounts(selector))?.await?;
 
         response_to_data(resp)?.account_count.into()
@@ -104,6 +113,10 @@ impl BlokliQueryClient for BlokliClient {
 
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
     async fn query_accounts(&self, selector: AccountSelector) -> Result<Vec<Account>> {
+        if matches!(selector, AccountSelector::Any) {
+            return Err(ErrorKind::InvalidInput("filter must be specified on account query").into());
+        }
+
         let resp = self.build_query(GraphQlQueries::query_accounts(selector))?.await?;
 
         response_to_data(resp)?.accounts.into()
@@ -165,8 +178,16 @@ impl BlokliQueryClient for BlokliClient {
         }
     }
 
+    async fn query_module_address_prediction(&self, input: ModulePredictionInput) -> Result<ChainAddress> {
+        let resp = self
+            .build_query(GraphQlQueries::query_module_address_prediction(input))?
+            .await?;
+
+        response_to_data(resp)?.calculate_module_address.into()
+    }
+
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
-    async fn count_channels(&self, selector: Option<ChannelSelector>) -> Result<u32> {
+    async fn count_channels(&self, selector: ChannelSelector) -> Result<u32> {
         let resp = self.build_query(GraphQlQueries::query_channel_count(selector))?.await?;
 
         response_to_data(resp)?.channel_count.into()
