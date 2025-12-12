@@ -115,7 +115,7 @@ impl ScalarType for UInt64 {
 /// This scalar type represents a mapping from contract identifier strings
 /// (e.g., "token", "channels") to their deployed addresses in hexadecimal format.
 /// Keys: token, channels, announcements, module_implementation, node_safe_migration, node_safe_registry,
-/// ticket_price_oracle, winning_probability_oracle, node_stake_v2_factory
+/// ticket_price_oracle, winning_probability_oracle, node_stake_factory
 ///
 /// Serialized as a stringified JSON object. For example:
 /// `{"token":"0x123abc","channels":"0x456def","announcements":"0x789ghi"}`
@@ -636,7 +636,7 @@ impl From<&blokli_chain_types::ContractAddresses> for ContractAddressMap {
             ("node_safe_registry", &addresses.node_safe_registry),
             ("ticket_price_oracle", &addresses.ticket_price_oracle),
             ("winning_probability_oracle", &addresses.winning_probability_oracle),
-            ("node_stake_v2_factory", &addresses.node_stake_v2_factory),
+            ("node_stake_factory", &addresses.node_stake_factory),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))

@@ -681,7 +681,7 @@ async fn test_chain_info_query() -> Result<()> {
         "node_safe_registry",
         "ticket_price_oracle",
         "winning_probability_oracle",
-        "node_stake_v2_factory",
+        "node_stake_factory",
     ];
 
     for key in expected_keys {

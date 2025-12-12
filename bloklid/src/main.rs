@@ -230,7 +230,7 @@ impl Args {
             node_safe_registry: network_config.addresses.node_safe_registry.to_hopr_address(),
             ticket_price_oracle: network_config.addresses.ticket_price_oracle.to_hopr_address(),
             winning_probability_oracle: network_config.addresses.winning_probability_oracle.to_hopr_address(),
-            node_stake_v2_factory: network_config.addresses.node_stake_factory.to_hopr_address(),
+            node_stake_factory: network_config.addresses.node_stake_factory.to_hopr_address(),
         };
 
         info!(

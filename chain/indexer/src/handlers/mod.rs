@@ -171,7 +171,7 @@ where
             let event = HoprAnnouncementsEvents::decode_log(&primitive_log)?;
             self.on_announcement_event(tx, event.data, bn, tx_idx, log_idx, is_synced)
                 .await
-        } else if log.address.eq(&self.addresses.node_stake_v2_factory) {
+        } else if log.address.eq(&self.addresses.node_stake_factory) {
             let event = HoprNodeStakeFactoryEvents::decode_log(&primitive_log)?;
             let block = log.block_number;
             let tx_idx = log.tx_index;
@@ -236,7 +236,7 @@ where
     ///
     /// `Vec<Address>` containing the monitored contract addresses in the following order:
     /// announcements, channels, ticket_price_oracle, winning_probability_oracle,
-    /// node_safe_registry, node_stake_v2_factory, token.
+    /// node_safe_registry, node_stake_factory, token.
     ///
     /// # Examples
     ///
@@ -244,7 +244,7 @@ where
     /// let addrs = handlers.contract_addresses();
     /// assert_eq!(addrs.len(), 7);
     /// // order: announcements, channels, ticket_price_oracle, winning_probability_oracle,
-    /// // node_safe_registry, node_stake_v2_factory, token
+    /// // node_safe_registry, node_stake_factory, token
     /// ```
     fn contract_addresses(&self) -> Vec<Address> {
         vec![
@@ -253,7 +253,7 @@ where
             self.addresses.ticket_price_oracle,
             self.addresses.winning_probability_oracle,
             self.addresses.node_safe_registry,
-            self.addresses.node_stake_v2_factory,
+            self.addresses.node_stake_factory,
             self.addresses.token,
         ]
     }
@@ -289,7 +289,7 @@ where
             crate::constants::topics::winning_prob_oracle()
         } else if contract.eq(&self.addresses.node_safe_registry) {
             crate::constants::topics::node_safe_registry()
-        } else if contract.eq(&self.addresses.node_stake_v2_factory) {
+        } else if contract.eq(&self.addresses.node_stake_factory) {
             crate::constants::topics::stake_factory()
         } else if contract.eq(&self.addresses.token) {
             crate::constants::topics::token()

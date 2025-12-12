@@ -280,7 +280,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         // Call predictModuleAddress_1 on stake_factory contract
         let predicted_address_fixed = self
             .contract_instances
-            .node_stake_v2_factory
+            .node_stake_factory
             .predictModuleAddress_1(
                 AlloyAddress::from_hopr_address(owner),
                 U256::from(nonce), // Convert u64 to U256

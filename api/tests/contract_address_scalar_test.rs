@@ -102,7 +102,7 @@ fn test_contract_address_map_from_chain_types() {
             "node_safe_registry",
             "ticket_price_oracle",
             "winning_probability_oracle",
-            "node_stake_v2_factory",
+            "node_stake_factory",
         ];
 
         for key in expected_keys {

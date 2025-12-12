@@ -104,7 +104,7 @@ pub struct ContractAddresses {
     /// Minimum ticket winning probability contract
     pub winning_probability_oracle: Address,
     /// Stake factory contract
-    pub node_stake_v2_factory: Address,
+    pub node_stake_factory: Address,
 }
 
 /// Holds instances to contracts.
@@ -118,7 +118,7 @@ pub struct ContractInstances<P> {
     pub node_safe_registry: HoprNodeSafeRegistryInstance<P>,
     pub ticket_price_oracle: HoprTicketPriceOracleInstance<P>,
     pub winning_probability_oracle: HoprWinningProbabilityOracleInstance<P>,
-    pub node_stake_v2_factory: HoprNodeStakeFactoryInstance<P>,
+    pub node_stake_factory: HoprNodeStakeFactoryInstance<P>,
 }
 
 impl<P> ContractInstances<P>
@@ -159,8 +159,8 @@ where
                 AlloyAddress::from_hopr_address(contract_addresses.winning_probability_oracle),
                 provider.clone(),
             ),
-            node_stake_v2_factory: HoprNodeStakeFactoryInstance::new(
-                AlloyAddress::from_hopr_address(contract_addresses.node_stake_v2_factory),
+            node_stake_factory: HoprNodeStakeFactoryInstance::new(
+                AlloyAddress::from_hopr_address(contract_addresses.node_stake_factory),
                 provider.clone(),
             ),
         }
@@ -234,7 +234,7 @@ where
             node_safe_registry: safe_registry,
             ticket_price_oracle: price_oracle,
             winning_probability_oracle: win_prob_oracle,
-            node_stake_v2_factory: stake_factory,
+            node_stake_factory: stake_factory,
         })
     }
 
@@ -267,7 +267,7 @@ where
             node_safe_registry: instances.node_safe_registry.address().to_hopr_address(),
             ticket_price_oracle: instances.ticket_price_oracle.address().to_hopr_address(),
             winning_probability_oracle: instances.winning_probability_oracle.address().to_hopr_address(),
-            node_stake_v2_factory: instances.node_stake_v2_factory.address().to_hopr_address(),
+            node_stake_factory: instances.node_stake_factory.address().to_hopr_address(),
         }
     }
 }

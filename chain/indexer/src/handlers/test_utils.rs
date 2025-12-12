@@ -138,7 +138,7 @@ pub(super) mod test_helpers {
                 node_safe_migration: Default::default(),
                 ticket_price_oracle: *TICKET_PRICE_ORACLE_ADDR,
                 winning_probability_oracle: *WIN_PROB_ORACLE_ADDR,
-                node_stake_v2_factory: Default::default(),
+                node_stake_factory: Default::default(),
             },
             db,
             rpc_operations,
