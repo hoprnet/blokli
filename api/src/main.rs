@@ -92,10 +92,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             token: Address::default(),
                             channels: Address::default(),
                             announcements: Address::default(),
+                            module_implementation: Address::default(),
+                            node_safe_migration: Address::default(),
                             node_safe_registry: Address::default(),
                             ticket_price_oracle: Address::default(),
                             winning_probability_oracle: Address::default(),
-                            node_stake_v2_factory: Address::default(),
+                            node_stake_factory: Address::default(),
                         },
                         ..Default::default()
                     },

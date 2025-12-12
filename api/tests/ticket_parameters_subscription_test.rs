@@ -144,8 +144,8 @@ async fn test_ticket_parameters_subscription_emits_initial_values() {
     let data = response.data.into_json().unwrap();
     let params = &data["ticketParametersUpdated"];
 
-    // Verify ticket price (1000 wei)
-    assert_eq!(params["ticketPrice"].as_str().unwrap(), "1000");
+    // Verify ticket price (1000 wei converted to human format: 0.000...001 wxHOPR)
+    assert_eq!(params["ticketPrice"].as_str().unwrap(), "0.000000000000001 wxHOPR");
 
     // Verify winning probability
     let prob = params["minTicketWinningProbability"].as_f64().unwrap();
@@ -203,8 +203,8 @@ async fn test_ticket_parameters_subscription_handles_missing_ticket_price() {
     let data = response.data.into_json().unwrap();
     let params = &data["ticketParametersUpdated"];
 
-    // Default to "0" when ticket_price is None
-    assert_eq!(params["ticketPrice"].as_str().unwrap(), "0");
+    // Default to "0 wxHOPR" when ticket_price is None
+    assert_eq!(params["ticketPrice"].as_str().unwrap(), "0 wxHOPR");
     let prob = params["minTicketWinningProbability"].as_f64().unwrap();
     assert!((prob - 0.5).abs() < 0.001);
 }
@@ -244,7 +244,7 @@ async fn test_ticket_parameters_subscription_handles_zero_values() {
     let data = response.data.into_json().unwrap();
     let params = &data["ticketParametersUpdated"];
 
-    assert_eq!(params["ticketPrice"].as_str().unwrap(), "0");
+    assert_eq!(params["ticketPrice"].as_str().unwrap(), "0 wxHOPR");
     let prob = params["minTicketWinningProbability"].as_f64().unwrap();
     assert!((prob - 0.0).abs() < 0.001);
 }
@@ -284,8 +284,8 @@ async fn test_ticket_parameters_subscription_handles_max_values() {
     let data = response.data.into_json().unwrap();
     let params = &data["ticketParametersUpdated"];
 
-    // Max u64 value = 18446744073709551615
-    assert_eq!(params["ticketPrice"].as_str().unwrap(), "18446744073709551615");
+    // Max u64 value with token identifier
+    assert_eq!(params["ticketPrice"].as_str().unwrap(), "18.446744073709551615 wxHOPR");
     let prob = params["minTicketWinningProbability"].as_f64().unwrap();
     assert!((prob - 1.0).abs() < 0.001);
 }
@@ -322,7 +322,7 @@ async fn test_subscription_receives_ticket_price_update() {
     let initial_data = initial.data.into_json().unwrap();
     assert_eq!(
         initial_data["ticketParametersUpdated"]["ticketPrice"].as_str().unwrap(),
-        "1000"
+        "0.000000000000001 wxHOPR"
     );
     assert_eq!(
         initial_data["ticketParametersUpdated"]["minTicketWinningProbability"]
@@ -346,7 +346,7 @@ async fn test_subscription_receives_ticket_price_update() {
     let updated_data = updated.data.into_json().unwrap();
     assert_eq!(
         updated_data["ticketParametersUpdated"]["ticketPrice"].as_str().unwrap(),
-        "2000"
+        "0.000000000000002 wxHOPR"
     );
     assert_eq!(
         updated_data["ticketParametersUpdated"]["minTicketWinningProbability"]
@@ -412,7 +412,7 @@ async fn test_subscription_receives_winning_probability_update() {
     assert!((prob - 0.9).abs() < 0.01, "Expected ~0.9, got {}", prob);
     assert_eq!(
         updated_data["ticketParametersUpdated"]["ticketPrice"].as_str().unwrap(),
-        "1000"
+        "0.000000000000001 wxHOPR"
     );
 }
 
@@ -461,7 +461,7 @@ async fn test_subscription_receives_both_parameters_update() {
     let updated_data = updated.data.into_json().unwrap();
     assert_eq!(
         updated_data["ticketParametersUpdated"]["ticketPrice"].as_str().unwrap(),
-        "3000"
+        "0.000000000000003 wxHOPR"
     );
     let prob = updated_data["ticketParametersUpdated"]["minTicketWinningProbability"]
         .as_f64()
@@ -510,7 +510,7 @@ async fn test_subscription_receives_multiple_updates() {
         update1.data.into_json().unwrap()["ticketParametersUpdated"]["ticketPrice"]
             .as_str()
             .unwrap(),
-        "200"
+        "0.0000000000000002 wxHOPR"
     );
 
     // Update 2
@@ -526,6 +526,6 @@ async fn test_subscription_receives_multiple_updates() {
         update2.data.into_json().unwrap()["ticketParametersUpdated"]["ticketPrice"]
             .as_str()
             .unwrap(),
-        "300"
+        "0.0000000000000003 wxHOPR"
     );
 }

@@ -208,7 +208,7 @@ async fn query_channels_at_watermark(
             concrete_channel_id: channel.concrete_channel_id,
             source: channel.source,
             destination: channel.destination,
-            balance: TokenValueString(PrimitiveHoprBalance::from_be_bytes(&state.balance).amount().to_string()),
+            balance: TokenValueString(PrimitiveHoprBalance::from_be_bytes(&state.balance).to_string()),
             status: state.status.into(),
             epoch: i32::try_from(state.epoch).map_err(|e| {
                 async_graphql::Error::new(errors::messages::conversion_error(
@@ -529,7 +529,7 @@ impl SubscriptionRoot {
             match chain_info::Entity::find().one(&db).await {
                 Ok(Some(info)) => {
                     if let Some(bytes) = info.key_binding_fee.as_ref() {
-                        let fee_str = PrimitiveHoprBalance::from_be_bytes(bytes).amount().to_string();
+                        let fee_str = PrimitiveHoprBalance::from_be_bytes(bytes).to_string();
                         let current = TokenValueString(fee_str);
                         last_fee = Some(current.clone());
                         yield current;
@@ -751,9 +751,9 @@ impl SubscriptionRoot {
 
         Ok(chain_info.map(|info| {
             let ticket_price = if let Some(price_bytes) = info.ticket_price {
-                PrimitiveHoprBalance::from_be_bytes(&price_bytes).amount().to_string()
+                PrimitiveHoprBalance::from_be_bytes(&price_bytes).to_string()
             } else {
-                "0".to_string()
+                "0 wxHOPR".to_string()
             };
 
             TicketParameters {
@@ -1235,8 +1235,8 @@ mod tests {
 
         // Should return channel with latest balance (2 wei, not 2 HOPR)
         assert_eq!(result.len(), 1);
-        // Balance is 2 wei (raw decimal value)
-        assert_eq!(result[0].channel.balance.0, "2");
+        // Balance is 2 wei with token identifier
+        assert_eq!(result[0].channel.balance.0, "0.000000000000000002 wxHOPR");
     }
 
     #[tokio::test]
@@ -1426,10 +1426,11 @@ mod tests {
         // 1. Expect initial value
         let response = stream.next().await.expect("Stream should return initial value");
         let data = response.into_result().expect("Response should be ok").data;
+        // Balance is expected in format: "amount unit" (e.g., "0.000000000000012345 wxHOPR")
+        let expected_fee = PrimitiveHoprBalance::from_be_bytes(&starting_fee.to_be_bytes()).to_string();
         assert_eq!(
             data,
-            async_graphql::Value::from_json(serde_json::json!({ "keyBindingFeeUpdated": starting_fee.to_string() }))
-                .unwrap()
+            async_graphql::Value::from_json(serde_json::json!({ "keyBindingFeeUpdated": expected_fee })).unwrap()
         );
 
         // 2. Publish update via event bus

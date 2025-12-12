@@ -118,8 +118,8 @@ async fn test_key_binding_fee_subscription_emits_initial_fee() {
     let data = response.data.into_json().unwrap();
     let fee_str = data["keyBindingFeeUpdated"].as_str().unwrap();
 
-    // Fee is in wei (10^18 per HOPR)
-    assert_eq!(fee_str, "100000000000000000000");
+    // Fee includes token identifier
+    assert_eq!(fee_str, "100 wxHOPR");
 }
 
 #[tokio::test]
@@ -154,13 +154,10 @@ async fn test_key_binding_fee_subscription_receives_update_event() {
 
     assert!(initial.errors.is_empty());
     let initial_data = initial.data.into_json().unwrap();
-    assert_eq!(
-        initial_data["keyBindingFeeUpdated"].as_str().unwrap(),
-        "100000000000000000000"
-    );
+    assert_eq!(initial_data["keyBindingFeeUpdated"].as_str().unwrap(), "100 wxHOPR");
 
     // Publish update event with new fee
-    let new_fee = TokenValueString("200000000000000000000".to_string());
+    let new_fee = TokenValueString("200 wxHOPR".to_string());
     indexer_state.publish_event(IndexerEvent::KeyBindingFeeUpdated(new_fee));
 
     // Should receive updated fee
@@ -171,10 +168,7 @@ async fn test_key_binding_fee_subscription_receives_update_event() {
 
     assert!(updated.errors.is_empty());
     let updated_data = updated.data.into_json().unwrap();
-    assert_eq!(
-        updated_data["keyBindingFeeUpdated"].as_str().unwrap(),
-        "200000000000000000000"
-    );
+    assert_eq!(updated_data["keyBindingFeeUpdated"].as_str().unwrap(), "200 wxHOPR");
 }
 
 #[tokio::test]
@@ -210,7 +204,7 @@ async fn test_key_binding_fee_subscription_no_duplicate_emissions() {
     assert!(initial.errors.is_empty());
 
     // Publish same fee value again (should not emit duplicate)
-    let same_fee = TokenValueString("100000000000000000000".to_string());
+    let same_fee = TokenValueString("100 wxHOPR".to_string());
     indexer_state.publish_event(IndexerEvent::KeyBindingFeeUpdated(same_fee));
 
     // Should NOT receive duplicate emission within timeout
@@ -326,7 +320,7 @@ async fn test_key_binding_fee_subscription_zero_fee() {
 
     assert!(result.errors.is_empty());
     let data = result.data.into_json().unwrap();
-    assert_eq!(data["keyBindingFeeUpdated"].as_str().unwrap(), "0");
+    assert_eq!(data["keyBindingFeeUpdated"].as_str().unwrap(), "0 wxHOPR");
 }
 
 #[tokio::test]
@@ -360,11 +354,8 @@ async fn test_key_binding_fee_subscription_large_fee() {
 
     assert!(result.errors.is_empty());
     let data = result.data.into_json().unwrap();
-    // 1,000,000 HOPR = 1,000,000 * 10^18 wei
-    assert_eq!(
-        data["keyBindingFeeUpdated"].as_str().unwrap(),
-        "1000000000000000000000000"
-    );
+    // 1,000,000 HOPR with token identifier
+    assert_eq!(data["keyBindingFeeUpdated"].as_str().unwrap(), "1000000 wxHOPR");
 }
 
 #[tokio::test]

@@ -848,15 +848,15 @@ impl QueryRoot {
         let ticket_price = chain_info
             .ticket_price
             .as_ref()
-            .map(|bytes| TokenValueString(PrimitiveHoprBalance::from_be_bytes(bytes).amount().to_string()))
-            .unwrap_or_else(|| TokenValueString(PrimitiveHoprBalance::zero().amount().to_string()));
+            .map(|bytes| TokenValueString(PrimitiveHoprBalance::from_be_bytes(bytes).to_string()))
+            .unwrap_or_else(|| TokenValueString(PrimitiveHoprBalance::zero().to_string()));
 
         // Convert key_binding_fee from binary to human-readable string
         let key_binding_fee = chain_info
             .key_binding_fee
             .as_ref()
-            .map(|bytes| TokenValueString(PrimitiveHoprBalance::from_be_bytes(bytes).amount().to_string()))
-            .unwrap_or_else(|| TokenValueString(PrimitiveHoprBalance::zero().amount().to_string()));
+            .map(|bytes| TokenValueString(PrimitiveHoprBalance::from_be_bytes(bytes).to_string()))
+            .unwrap_or_else(|| TokenValueString(PrimitiveHoprBalance::zero().to_string()));
 
         // Convert last_indexed_block from i64 to i32 with validation
         let block_number = match i32::try_from(chain_info.last_indexed_block) {

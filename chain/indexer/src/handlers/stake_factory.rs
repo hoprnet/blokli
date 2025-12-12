@@ -178,7 +178,7 @@ mod tests {
 
         let encoded_data = event.encode_log_data();
         let log = SerializableLog {
-            address: handlers.addresses.node_stake_v2_factory,
+            address: handlers.addresses.node_stake_factory,
             topics: encoded_data.topics().iter().map(|t| t.0).collect(),
             data: encoded_data.data.to_vec(),
             tx_hash: tx_hash.into(),
@@ -239,7 +239,7 @@ mod tests {
 
         let encoded_data = event.encode_log_data();
         let log = SerializableLog {
-            address: handlers.addresses.node_stake_v2_factory,
+            address: handlers.addresses.node_stake_factory,
             topics: encoded_data.topics().iter().map(|t| t.0).collect(),
             data: encoded_data.data.to_vec(),
             ..test_log()
@@ -282,7 +282,7 @@ mod tests {
 
         let encoded_data = event.encode_log_data();
         let log = SerializableLog {
-            address: handlers.addresses.node_stake_v2_factory,
+            address: handlers.addresses.node_stake_factory,
             topics: encoded_data.topics().iter().map(|t| t.0).collect(),
             data: encoded_data.data.to_vec(),
             tx_hash: tx_hash.into(),
