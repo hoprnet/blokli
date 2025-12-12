@@ -188,10 +188,12 @@ mod integration_tests {
                 channels: *CHANNELS_ADDR,
                 announcements: *ANNOUNCEMENTS_ADDR,
                 token: Address::default(),
-                safe_registry: Address::default(),
-                price_oracle: Address::default(),
-                win_prob_oracle: Address::default(),
-                stake_factory: Address::default(),
+                module_implementation: Address::default(),
+                node_safe_migration: Address::default(),
+                node_safe_registry: Address::default(),
+                ticket_price_oracle: Address::default(),
+                winning_probability_oracle: Address::default(),
+                node_stake_v2_factory: Address::default(),
             });
 
             let handlers = ContractEventHandlers {

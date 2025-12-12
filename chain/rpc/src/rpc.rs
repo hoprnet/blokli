@@ -280,7 +280,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         // Call predictModuleAddress_1 on stake_factory contract
         let predicted_address_fixed = self
             .contract_instances
-            .stake_factory
+            .node_stake_v2_factory
             .predictModuleAddress_1(
                 AlloyAddress::from_hopr_address(owner),
                 U256::from(nonce), // Convert u64 to U256
@@ -308,7 +308,13 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
     }
 
     async fn get_minimum_network_winning_probability(&self) -> Result<WinningProbability> {
-        match self.contract_instances.win_prob_oracle.currentWinProb().call().await {
+        match self
+            .contract_instances
+            .winning_probability_oracle
+            .currentWinProb()
+            .call()
+            .await
+        {
             Ok(encoded_win_prob) => {
                 let mut encoded: EncodedWinProb = Default::default();
                 encoded.copy_from_slice(&encoded_win_prob.to_be_bytes_vec());
@@ -321,7 +327,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
     async fn get_minimum_network_ticket_price(&self) -> Result<HoprBalance> {
         Ok(HoprBalance::from_be_bytes(
             self.contract_instances
-                .price_oracle
+                .ticket_price_oracle
                 .currentTicketPrice()
                 .call()
                 .await?
@@ -332,7 +338,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
     async fn get_safe_from_node_safe_registry(&self, node_address: Address) -> Result<Address> {
         match self
             .contract_instances
-            .safe_registry
+            .node_safe_registry
             .nodeToSafe(AlloyAddress::from_hopr_address(node_address))
             .call()
             .await

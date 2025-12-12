@@ -10,7 +10,7 @@ use hopr_bindings::{
     hopr_announcements::HoprAnnouncements::{self, HoprAnnouncementsInstance},
     hopr_channels::HoprChannels::{self, HoprChannelsInstance},
     hopr_node_management_module::HoprNodeManagementModule::{self, HoprNodeManagementModuleInstance},
-    hopr_node_safe_migration::HoprNodeSafeMigration::{self, HoprNodeSafeMigrationInstance},
+    hopr_node_safe_migration::HoprNodeSafeMigration::HoprNodeSafeMigrationInstance,
     hopr_node_safe_registry::HoprNodeSafeRegistry::{self, HoprNodeSafeRegistryInstance},
     hopr_node_stake_factory::HoprNodeStakeFactory::{self, HoprNodeStakeFactoryInstance},
     hopr_ticket_price_oracle::HoprTicketPriceOracle::{self, HoprTicketPriceOracleInstance},
@@ -115,10 +115,10 @@ pub struct ContractInstances<P> {
     pub announcements: HoprAnnouncementsInstance<P>,
     pub module_implementation: HoprNodeManagementModuleInstance<P>,
     pub node_safe_migration: HoprNodeSafeMigrationInstance<P>,
-    pub safe_registry: HoprNodeSafeRegistryInstance<P>,
-    pub price_oracle: HoprTicketPriceOracleInstance<P>,
-    pub win_prob_oracle: HoprWinningProbabilityOracleInstance<P>,
-    pub stake_factory: HoprNodeStakeFactoryInstance<P>,
+    pub node_safe_registry: HoprNodeSafeRegistryInstance<P>,
+    pub ticket_price_oracle: HoprTicketPriceOracleInstance<P>,
+    pub winning_probability_oracle: HoprWinningProbabilityOracleInstance<P>,
+    pub node_stake_v2_factory: HoprNodeStakeFactoryInstance<P>,
 }
 
 impl<P> ContractInstances<P>
@@ -147,19 +147,19 @@ where
                 AlloyAddress::from_hopr_address(contract_addresses.node_safe_migration),
                 provider.clone(),
             ),
-            safe_registry: HoprNodeSafeRegistryInstance::new(
+            node_safe_registry: HoprNodeSafeRegistryInstance::new(
                 AlloyAddress::from_hopr_address(contract_addresses.node_safe_registry),
                 provider.clone(),
             ),
-            price_oracle: HoprTicketPriceOracleInstance::new(
+            ticket_price_oracle: HoprTicketPriceOracleInstance::new(
                 AlloyAddress::from_hopr_address(contract_addresses.ticket_price_oracle),
                 provider.clone(),
             ),
-            win_prob_oracle: HoprWinningProbabilityOracleInstance::new(
+            winning_probability_oracle: HoprWinningProbabilityOracleInstance::new(
                 AlloyAddress::from_hopr_address(contract_addresses.winning_probability_oracle),
                 provider.clone(),
             ),
-            stake_factory: HoprNodeStakeFactoryInstance::new(
+            node_stake_v2_factory: HoprNodeStakeFactoryInstance::new(
                 AlloyAddress::from_hopr_address(contract_addresses.node_stake_v2_factory),
                 provider.clone(),
             ),
@@ -231,10 +231,10 @@ where
             announcements,
             module_implementation,
             node_safe_migration,
-            safe_registry,
-            price_oracle,
-            win_prob_oracle,
-            stake_factory,
+            node_safe_registry: safe_registry,
+            ticket_price_oracle: price_oracle,
+            winning_probability_oracle: win_prob_oracle,
+            node_stake_v2_factory: stake_factory,
         })
     }
 
@@ -264,10 +264,10 @@ where
             announcements: instances.announcements.address().to_hopr_address(),
             module_implementation: instances.module_implementation.address().to_hopr_address(),
             node_safe_migration: instances.node_safe_migration.address().to_hopr_address(),
-            node_safe_registry: instances.safe_registry.address().to_hopr_address(),
-            ticket_price_oracle: instances.price_oracle.address().to_hopr_address(),
-            winning_probability_oracle: instances.win_prob_oracle.address().to_hopr_address(),
-            node_stake_v2_factory: instances.stake_factory.address().to_hopr_address(),
+            node_safe_registry: instances.node_safe_registry.address().to_hopr_address(),
+            ticket_price_oracle: instances.ticket_price_oracle.address().to_hopr_address(),
+            winning_probability_oracle: instances.winning_probability_oracle.address().to_hopr_address(),
+            node_stake_v2_factory: instances.node_stake_v2_factory.address().to_hopr_address(),
         }
     }
 }

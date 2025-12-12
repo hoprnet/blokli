@@ -114,7 +114,8 @@ impl ScalarType for UInt64 {
 ///
 /// This scalar type represents a mapping from contract identifier strings
 /// (e.g., "token", "channels") to their deployed addresses in hexadecimal format.
-/// Keys: token, channels, announcements, safe_registry, price_oracle, win_prob_oracle, stake_factory
+/// Keys: token, channels, announcements, module_implementation, node_safe_migration, node_safe_registry,
+/// ticket_price_oracle, winning_probability_oracle, node_stake_v2_factory
 ///
 /// Serialized as a stringified JSON object. For example:
 /// `{"token":"0x123abc","channels":"0x456def","announcements":"0x789ghi"}`
