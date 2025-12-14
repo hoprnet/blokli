@@ -584,12 +584,16 @@ pub struct SafeHoprAllowance {
     pub allowance: TokenValueString,
 }
 
-/// Safe contract transaction count information
+/// Transaction count information for any Ethereum address
+///
+/// For EOAs (Externally Owned Accounts): Returns the transaction count via eth_getTransactionCount
+/// For Safe contracts: Returns the internal nonce via nonce() function
+/// For other contracts: Attempts nonce() call, falls back to eth_getTransactionCount
 #[derive(SimpleObject, Clone, Debug)]
-pub struct SafeTransactionCount {
-    /// Safe contract address
+pub struct TransactionCount {
+    /// Address queried (hexadecimal format)
     pub address: String,
-    /// Current transaction count (nonce) for the Safe contract
+    /// Current transaction count or nonce for the address
     pub count: UInt64,
 }
 

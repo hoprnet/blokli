@@ -54,7 +54,7 @@ pub(super) mod test_helpers {
             async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance>;
             async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
             async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
-            async fn get_safe_transaction_count(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<u64>;
+            async fn get_transaction_count(&self, address: Address) -> blokli_chain_rpc::errors::Result<u64>;
             async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<std::time::Duration>;
         }
     }
@@ -104,8 +104,8 @@ pub(super) mod test_helpers {
             self.inner.get_hopr_allowance(owner, spender).await
         }
 
-        async fn get_safe_transaction_count(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<u64> {
-            self.inner.get_safe_transaction_count(safe_address).await
+        async fn get_transaction_count(&self, address: Address) -> blokli_chain_rpc::errors::Result<u64> {
+            self.inner.get_transaction_count(address).await
         }
 
         async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<std::time::Duration> {

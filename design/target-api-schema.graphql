@@ -197,7 +197,7 @@ type ModuleAddress {
 type MutationRoot {
   """
   Submit a transaction with fire-and-forget mode
-  
+
   Validates the pre-signed raw transaction data and submits it to the chain.
   Returns the transaction hash immediately after submission.
   Does not wait for confirmation and does not track transaction status.
@@ -209,7 +209,7 @@ type MutationRoot {
   ): SendTransactionResult!
   """
   Submit a transaction asynchronously
-  
+
   Validates the pre-signed raw transaction data and submits it to the chain immediately.
   Returns the transaction ID that can be used to query status later.
   Does not wait for on-chain confirmation. Background monitor tracks confirmation.
@@ -220,7 +220,7 @@ type MutationRoot {
   ): SendTransactionAsyncResult!
   """
   Submit a transaction synchronously
-  
+
   Validates the pre-signed raw transaction data, submits it to the chain, and waits for
   the specified number of confirmations (default: 8 blocks) before returning.
   Transaction can be queried later.
@@ -282,7 +282,7 @@ type QueryFailedError {
 type QueryRoot {
   """
   Count accounts matching optional filters
-  
+
   If no filters are provided, returns total account count.
   Filters can be combined to narrow results.
   Returns Error if query fails.
@@ -297,12 +297,12 @@ type QueryRoot {
   ): CountResult!
   """
   Retrieve accounts with required filtering
-  
+
   **At least one filter parameter must be provided** (keyid, packetKey, or chainKey).
   Returns Error with code MISSING_REQUIRED_FILTER if no filters are specified.
-  
+
   Filters can be combined to narrow results further.
-  
+
   Example: accounts(keyid: 1) or accounts(chainKey: "0x1234...")
   """
   accounts(
@@ -315,13 +315,13 @@ type QueryRoot {
   ): AccountsResult!
   """
   Calculate the predicted module address for a Safe deployment
-  
+
   Calls the HoprNodeStakeFactory.predictModuleAddress_1 function to compute
   the deterministic CREATE2 address for a HOPR node management module.
-  
+
   The channels contract address and capability permissions are automatically
   obtained from the system configuration.
-  
+
   Returns Error with code INVALID_ADDRESS if owner or safeAddress format is invalid.
   Returns Error with code QUERY_FAILED if RPC call fails.
   """
@@ -337,7 +337,7 @@ type QueryRoot {
   chainInfo: ChainInfoResult!
   """
   Count channels matching optional filters
-  
+
   If no filters are provided, returns total channels count.
   Filters can be combined to narrow results.
   Returns Error if query fails.
@@ -354,13 +354,13 @@ type QueryRoot {
   ): CountResult!
   """
   Retrieve channels with required filtering
-  
+
   **At least one identity filter must be provided** (sourceKeyId, destinationKeyId, or concreteChannelId).
   The status filter is optional and can be used in combination with identity filters.
   Returns Error with code MISSING_REQUIRED_FILTER if no identity filters are specified.
-  
+
   Filters can be combined to narrow results further.
-  
+
   Example: channels(sourceKeyId: 1) or channels(sourceKeyId: 1, status: OPEN)
   """
   channels(
@@ -375,22 +375,22 @@ type QueryRoot {
   ): ChannelsResult!
   """
   Health check endpoint
-  
+
   Returns "ok" to indicate the service is running
   """
   health: String!
   """
   Retrieve HOPR token balance for a specific address
-  
+
   This query can be used to get balances for any on-chain address, including:
   - Account chain keys (Account.chainKey)
   - Safe contract addresses (Account.safeAddress)
   - Any other Ethereum-compatible address
-  
+
   Returns Error with code INVALID_ADDRESS if address format is invalid.
   Returns Error with code QUERY_FAILED if query fails.
   Returns None if no balance exists for the address.
-  
+
   Example (querying a Safe balance requires two separate requests):
   ```graphql
   # Request 1: Get the account's Safe address
@@ -403,7 +403,7 @@ type QueryRoot {
       }
     }
   }
-  
+
   # Request 2: Query the Safe's HOPR balance using address from first response
   query GetSafeHoprBalance($safeAddress: String!) {
     hoprBalance(address: $safeAddress) {
@@ -421,12 +421,12 @@ type QueryRoot {
   ): HoprBalanceResult!
   """
   Retrieve native token balance for a specific address
-  
+
   This query can be used to get balances for any on-chain address, including:
   - Account chain keys (Account.chainKey)
   - Safe contract addresses (Account.safeAddress)
   - Any other Ethereum-compatible address
-  
+
   Returns Error with code INVALID_ADDRESS if address format is invalid.
   Returns Error with code QUERY_FAILED if query fails.
   Returns None if no balance exists for the address.
@@ -437,7 +437,7 @@ type QueryRoot {
   ): NativeBalanceResult!
   """
   Retrieve safe by contract address
-  
+
   Returns Error with code INVALID_ADDRESS if address format is invalid.
   Returns Error with code QUERY_FAILED if query fails.
   Returns None if safe is not found.
@@ -448,7 +448,7 @@ type QueryRoot {
   ): SafeResult
   """
   Retrieve safe by chain key (owner address)
-  
+
   Returns Error with code INVALID_ADDRESS if address format is invalid.
   Returns Error with code QUERY_FAILED if query fails.
   Returns None if safe is not found.
@@ -459,10 +459,10 @@ type QueryRoot {
   ): SafeResult
   """
   Retrieve Safe HOPR token allowance for a specific Safe address
-  
+
   This query returns the wxHOPR token allowance that the specified Safe contract
   has granted to the HOPR channels contract.
-  
+
   Returns Error with code INVALID_ADDRESS if address format is invalid.
   Returns Error with code QUERY_FAILED if query fails.
   Returns None if no allowance data exists for the address.
@@ -472,29 +472,15 @@ type QueryRoot {
     address: String!
   ): SafeHoprAllowanceResult!
   """
-  Retrieve Safe contract transaction count
-  
-  This query returns the current nonce/transaction count for a HOPR Safe contract
-  directly from the blockchain. The transaction count increments with each transaction
-  executed by the Safe.
-  
-  Returns Error with code INVALID_ADDRESS if address format is invalid.
-  Returns Error with code QUERY_FAILED if blockchain query fails.
-  """
-  safeTransactionCount(
-    "Safe contract address to query (hexadecimal format)"
-    address: String!
-  ): SafeTransactionCountResult!
-  """
   Retrieve all safes
-  
+
   Returns all safe contracts indexed by the system.
   Returns Error with code QUERY_FAILED if query fails.
   """
   safes: SafesResult!
   """
   Retrieve transaction status by ID
-  
+
   Returns the current status of a previously submitted transaction.
   Returns Error with code INVALID_TRANSACTION_ID if ID format is invalid.
   Returns Error with code QUERY_FAILED if query fails.
@@ -505,8 +491,25 @@ type QueryRoot {
     id: ID!
   ): TransactionResult
   """
+  Retrieve transaction count for any Ethereum address
+
+  This query returns the transaction count for any address type:
+  - For EOAs (Externally Owned Accounts): Returns the transaction count via eth_getTransactionCount
+  - For Safe contracts: Returns the Safe's internal nonce via nonce() function
+  - For other contracts: Attempts nonce() call, falls back to eth_getTransactionCount
+
+  The transaction count increments with each transaction sent or executed by the address.
+
+  Returns Error with code INVALID_ADDRESS if address format is invalid.
+  Returns Error with code QUERY_FAILED if blockchain query fails.
+  """
+  transactionCount(
+    "Address to query (hexadecimal format) - supports EOAs and contracts"
+    address: String!
+  ): TransactionCountResult!
+  """
   API version information
-  
+
   Returns the current version of the blokli-api package
   """
   version: String!
@@ -553,17 +556,6 @@ type SafesList {
 """Result type for safes list query"""
 union SafesResult = SafesList | QueryFailedError
 
-"""Safe contract transaction count information"""
-type SafeTransactionCount {
-  "Safe contract address"
-  address: String!
-  "Current transaction count (nonce) for the Safe contract"
-  count: UInt64!
-}
-
-"""Result type for Safe transaction count queries"""
-union SafeTransactionCountResult = SafeTransactionCount | InvalidAddressError | QueryFailedError
-
 """Result type for asynchronous transaction submission"""
 union SendTransactionAsyncResult = Transaction | ContractNotAllowedError | FunctionNotAllowedError | RpcError
 
@@ -583,7 +575,7 @@ union SendTransactionSyncResult = Transaction | ContractNotAllowedError | Functi
 type SubscriptionRoot {
   """
   Subscribe to real-time updates of account information
-  
+
   Provides updates whenever there is a change in account information, including
   balance changes, Safe address linking, and multiaddress announcements.
   Optional filters can be applied to only receive updates for specific accounts.
@@ -598,7 +590,7 @@ type SubscriptionRoot {
   ): Account!
   """
   Subscribe to real-time updates of payment channels
-  
+
   Provides updates whenever there is a change in the state of any payment channel,
   including channel opening, balance updates, status changes, and channel closure.
   Optional filters can be applied to only receive updates for specific channels.
@@ -615,49 +607,49 @@ type SubscriptionRoot {
   ): Channel!
   """
   Subscribe to real-time updates of key binding fee
-  
+
   Emits the current fee once on subscription, then streams updates whenever
   the indexer processes a KeyBindingFeeUpdate event.
   """
   keyBindingFeeUpdated: TokenValueString!
   """
   Subscribe to the opened payment channels graph with real-time updates
-  
+
   **Streaming Behavior:**
   - Emits one OpenedChannelsGraphEntry per open channel
   - Each entry contains a single channel with its source and destination accounts
   - On subscription start, emits all existing open channels as separate entries
   - Subsequently, emits updates when any channel changes
-  
+
   **Building the Graph:**
   Clients receive entries incrementally (one per channel) and should accumulate
   them to build the complete network topology. The full graph is the union of all entries.
-  
+
   **Update Triggers:**
   An entry is re-emitted for a channel when:
   - The channel's status changes (e.g., OPEN → PENDINGTOCLOSE)
   - The channel's balance changes
   - The channel closes (no longer emitted)
   - A new channel opens (new entry emitted)
-  
+
   **Example:**
   If the network has three open channels: channelA (A→B), channelB (B→A), channelC (A→C),
   the subscription emits three separate OpenedChannelsGraphEntry objects, each containing
   one channel with its source and destination accounts.
-  
+
   **Note:** This is a directed graph. Bidirectional communication requires
   channels in both directions, each emitted as a separate entry.
   """
   openedChannelGraphUpdated: OpenedChannelsGraphEntry!
   """
   Subscribe to newly deployed safes
-  
+
   Emits Safe deployment events in real-time as they are indexed.
   """
   safeDeployed: Safe!
   """
   Subscribe to real-time updates of ticket price and winning probability
-  
+
   Provides updates whenever there is a change in the ticket price or minimum
   winning probability on-chain. These values are essential for ticket validation
   and payment channel operation.
@@ -665,7 +657,7 @@ type SubscriptionRoot {
   ticketParametersUpdated: TicketParameters!
   """
   Subscribe to real-time updates of a specific transaction
-  
+
   Provides updates whenever the status of the specified transaction changes,
   including validation, submission, confirmation, revert, and failure events.
   """
@@ -713,6 +705,17 @@ type Transaction {
   "Transaction hash from successful blockchain submission"
   transactionHash: Hex32!
 }
+
+"""Transaction count information for any Ethereum address"""
+type TransactionCount {
+  "Address queried (hexadecimal format)"
+  address: String!
+  "Current transaction count or nonce for the address"
+  count: UInt64!
+}
+
+"""Result type for transaction count queries"""
+union TransactionCountResult = TransactionCount | InvalidAddressError | QueryFailedError
 
 """Input for transaction submission"""
 input TransactionInput {

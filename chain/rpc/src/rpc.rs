@@ -229,23 +229,22 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         ))
     }
 
-    pub(crate) async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64> {
-        let safe_address_alloy = AlloyAddress::from_hopr_address(safe_address);
+    pub(crate) async fn get_transaction_count(&self, address: Address) -> Result<u64> {
+        let address_alloy = AlloyAddress::from_hopr_address(address);
 
         // Get provider from any contract instance (they all share the same provider)
         let provider = self.contract_instances.token.provider();
 
-        // Create Safe contract instance
-        let safe_contract = SafeSingleton::new(safe_address_alloy, provider);
-
-        // Call nonce() method on Safe contract
-        let nonce = safe_contract.nonce().call().await?;
-
-        // Convert U256 to u64 with explicit overflow handling
-        // While practically impossible (requires ~584 billion years at 1 tx/sec to reach u64::MAX),
-        // proper error handling follows Rust best practices and avoids potential panics
-        let nonce_u64 = nonce.try_into().map_err(|_| RpcError::SafeNonceOverflow(nonce))?;
-        Ok(nonce_u64)
+        // Try Safe nonce() function first (for Safe contracts)
+        let safe_contract = SafeSingleton::new(address_alloy, provider);
+        match safe_contract.nonce().call().await {
+            Ok(nonce) => nonce.try_into().map_err(|_| RpcError::SafeNonceOverflow(nonce)),
+            Err(_) => {
+                // Fall back to eth_getTransactionCount
+                let tx_count = provider.get_transaction_count(address_alloy).await?;
+                Ok(tx_count)
+            }
+        }
     }
 
     pub(crate) async fn get_channel_closure_notice_period(&self) -> Result<Duration> {

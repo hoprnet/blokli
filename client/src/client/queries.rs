@@ -142,7 +142,7 @@ impl BlokliQueryClient for BlokliClient {
             .build_query(GraphQlQueries::query_transaction_count(address))?
             .await?;
 
-        response_to_data(resp)?.safe_transaction_count.into()
+        response_to_data(resp)?.transaction_count.into()
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(address = hex::encode(address)))]

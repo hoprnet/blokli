@@ -1,4 +1,4 @@
-//! Integration tests for Safe transaction count API queries (safeTransactionCount)
+//! Integration tests for transaction count API queries (transactionCount)
 //!
 //! These tests verify end-to-end functionality by:
 //! - Running a real Anvil instance with deployed HOPR contracts
@@ -10,12 +10,12 @@
 //! **Positive Path Tests**:
 //! - Mock Safe contract deployment and nonce queries
 //! - Nonce progression verification (0 → 1 → 2)
+//! - EOA transaction count queries (returns eth_getTransactionCount)
 //! - GraphQL response structure validation
 //! - Blockchain state changes reflected in API queries
 //!
 //! **Error Path Tests**:
 //! - Invalid address format handling (returns InvalidAddressError)
-//! - EOA address handling (returns QueryFailedError since EOAs aren't Safe contracts)
 //! - Address format variations (with/without 0x prefix)
 //!
 //! ## Mock Contract Approach
@@ -93,14 +93,14 @@ async fn execute_graphql_query(
 ///   }
 /// }
 /// ```
-async fn query_safe_transaction_count(
+async fn query_transaction_count(
     schema: &Schema<QueryRoot, MutationRoot, SubscriptionRoot>,
     address: &str,
 ) -> anyhow::Result<serde_json::Value> {
     let query = format!(
         r#"query {{
-            safeTransactionCount(address: "{}") {{
-                ... on SafeTransactionCount {{
+            transactionCount(address: "{}") {{
+                ... on TransactionCount {{
                     address
                     count
                 }}
@@ -154,47 +154,38 @@ async fn deploy_mock_safe(
 }
 
 #[tokio::test]
-async fn test_safe_transaction_count_eoa_address_returns_error() -> anyhow::Result<()> {
+async fn test_transaction_count_eoa_returns_success() -> anyhow::Result<()> {
     let ctx = common::setup_simple_test_environment().await?;
 
-    // Get an EOA address (test accounts are EOAs, not Safe contracts)
+    // Get an EOA address (test accounts are EOAs)
     let eoa_address = ctx.test_accounts[0].public().to_address().to_hex();
 
-    // Query transaction count on an EOA should return QueryFailedError
-    let data = query_safe_transaction_count(&ctx.schema, &eoa_address).await?;
-    let result = &data["safeTransactionCount"];
+    // Query transaction count on an EOA should now SUCCEED (not error!)
+    let data = query_transaction_count(&ctx.schema, &eoa_address).await?;
+    let result = &data["transactionCount"];
 
-    // Verify we get a QueryFailedError with RPC_ERROR code (EOAs are not Safe contracts)
-    assert!(result["code"].is_string(), "Expected code field in error response");
-    assert_eq!(
-        result["code"].as_str().unwrap(),
-        "RPC_ERROR",
-        "Should return RPC_ERROR error code for RPC failures"
-    );
-    assert!(
-        result["message"].is_string(),
-        "Expected message field in error response"
-    );
-    let message = result["message"].as_str().unwrap();
-    assert!(
-        message.starts_with("RPC error during query Safe transaction count:"),
-        "Error message should use standard RPC error format, got: {}",
-        message
-    );
+    // Verify successful response with transaction count
+    assert!(result["address"].is_string(), "Expected address field");
+    assert_eq!(result["address"].as_str().unwrap(), eoa_address);
+
+    // EOA should return a valid transaction count (parseable as u64)
+    let count_str = result["count"].as_str().expect("count should be a string");
+    let count: u64 = count_str.parse().expect("count should be a valid u64");
+    assert!(count < 20, "EOA transaction count should be reasonable: {}", count);
 
     Ok(())
 }
 
 #[tokio::test]
-async fn test_safe_transaction_count_invalid_address_format() -> anyhow::Result<()> {
+async fn test_transaction_count_invalid_address_format() -> anyhow::Result<()> {
     let ctx = common::setup_simple_test_environment().await?;
 
     // Use invalid address format
     let invalid_address = "not-a-valid-address";
 
     // Query transaction count
-    let data = query_safe_transaction_count(&ctx.schema, invalid_address).await?;
-    let result = &data["safeTransactionCount"];
+    let data = query_transaction_count(&ctx.schema, invalid_address).await?;
+    let result = &data["transactionCount"];
 
     // Verify error response
     assert!(result["code"].is_string(), "Expected code field in error response");
@@ -212,15 +203,15 @@ async fn test_safe_transaction_count_invalid_address_format() -> anyhow::Result<
 }
 
 #[tokio::test]
-async fn test_safe_transaction_count_accepts_0x_prefix() -> anyhow::Result<()> {
+async fn test_transaction_count_accepts_0x_prefix() -> anyhow::Result<()> {
     let ctx = common::setup_simple_test_environment().await?;
 
     // Get EOA address with 0x prefix
     let address_with_prefix = format!("0x{}", ctx.test_accounts[0].public().to_address().to_hex());
 
     // Query should accept the 0x prefix (though EOA will return error)
-    let data = query_safe_transaction_count(&ctx.schema, &address_with_prefix).await?;
-    let result = &data["safeTransactionCount"];
+    let data = query_transaction_count(&ctx.schema, &address_with_prefix).await?;
+    let result = &data["transactionCount"];
 
     // Should get either QueryFailedError (EOA not a Safe) or a valid response
     // Here we just verify the query accepted the 0x prefix format
@@ -233,15 +224,15 @@ async fn test_safe_transaction_count_accepts_0x_prefix() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_safe_transaction_count_accepts_no_prefix() -> anyhow::Result<()> {
+async fn test_transaction_count_accepts_no_prefix() -> anyhow::Result<()> {
     let ctx = common::setup_simple_test_environment().await?;
 
     // Get EOA address without 0x prefix
     let address_no_prefix = ctx.test_accounts[0].public().to_address().to_hex();
 
     // Query should accept address without 0x prefix (though EOA will return error)
-    let data = query_safe_transaction_count(&ctx.schema, &address_no_prefix).await?;
-    let result = &data["safeTransactionCount"];
+    let data = query_transaction_count(&ctx.schema, &address_no_prefix).await?;
+    let result = &data["transactionCount"];
 
     // Should get either QueryFailedError (EOA not a Safe) or a valid response
     // Here we just verify the query accepted the format without 0x prefix
@@ -254,7 +245,7 @@ async fn test_safe_transaction_count_accepts_no_prefix() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_safe_transaction_count_with_mock_safe_increments() -> anyhow::Result<()> {
+async fn test_transaction_count_with_mock_safe_increments() -> anyhow::Result<()> {
     let ctx = common::setup_simple_test_environment().await?;
 
     // Deploy mock Safe contract
@@ -266,8 +257,8 @@ async fn test_safe_transaction_count_with_mock_safe_increments() -> anyhow::Resu
     tokio::time::sleep(2 * expected_block_time).await;
 
     // Query initial nonce (should be 0)
-    let data = query_safe_transaction_count(&ctx.schema, &safe_address).await?;
-    let result = &data["safeTransactionCount"];
+    let data = query_transaction_count(&ctx.schema, &safe_address).await?;
+    let result = &data["transactionCount"];
     assert!(
         result["address"].is_string(),
         "Expected address field in successful response"
@@ -287,8 +278,8 @@ async fn test_safe_transaction_count_with_mock_safe_increments() -> anyhow::Resu
     tokio::time::sleep(2 * expected_block_time).await;
 
     // Query nonce again (should be 1)
-    let data = query_safe_transaction_count(&ctx.schema, &safe_address).await?;
-    let result = &data["safeTransactionCount"];
+    let data = query_transaction_count(&ctx.schema, &safe_address).await?;
+    let result = &data["transactionCount"];
     assert_eq!(
         result["count"].as_str().unwrap(),
         "1",
@@ -308,8 +299,8 @@ async fn test_safe_transaction_count_with_mock_safe_increments() -> anyhow::Resu
     tokio::time::sleep(2 * expected_block_time).await;
 
     // Query nonce again (should be 2)
-    let data = query_safe_transaction_count(&ctx.schema, &safe_address).await?;
-    let result = &data["safeTransactionCount"];
+    let data = query_transaction_count(&ctx.schema, &safe_address).await?;
+    let result = &data["transactionCount"];
     assert_eq!(
         result["count"].as_str().unwrap(),
         "2",
