@@ -89,7 +89,7 @@ impl HoprIndexerRpcOperations for MockRpcOperations {
         Ok(self.hopr_balance.clone())
     }
 
-    async fn get_safe_transaction_count(&self, _safe_address: Address) -> blokli_chain_rpc::errors::Result<u64> {
+    async fn get_transaction_count(&self, _address: Address) -> blokli_chain_rpc::errors::Result<u64> {
         Ok(0)
     }
 
@@ -322,8 +322,8 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
             self.inner.get_hopr_allowance(owner, spender).await
         }
 
-        async fn get_safe_transaction_count(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<u64> {
-            self.inner.get_safe_transaction_count(safe_address).await
+        async fn get_transaction_count(&self, address: Address) -> blokli_chain_rpc::errors::Result<u64> {
+            self.inner.get_transaction_count(address).await
         }
 
         async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<Duration> {

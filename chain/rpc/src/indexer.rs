@@ -327,8 +327,8 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
         self.get_hopr_allowance(owner, spender).await
     }
 
-    async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64> {
-        self.get_safe_transaction_count(safe_address).await
+    async fn get_transaction_count(&self, address: Address) -> Result<u64> {
+        self.get_transaction_count(address).await
     }
 
     async fn get_channel_closure_notice_period(&self) -> Result<std::time::Duration> {
