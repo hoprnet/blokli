@@ -41,6 +41,7 @@ sol!(
     contract SafeSingleton {
         function isModuleEnabled(address module) public view returns (bool);
         function nonce() public view returns (uint256);
+        function getThreshold() public view returns (uint256);
     }
 );
 
@@ -245,13 +246,31 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
             return Ok(tx_count);
         }
 
-        // Address has code, try Safe nonce() function
-        let safe_contract = SafeSingleton::new(address_alloy, provider);
-        match safe_contract.nonce().call().await {
-            Ok(nonce) => nonce.try_into().map_err(|_| RpcError::SafeNonceOverflow(nonce)),
+        // Address has code, verify it's a Safe contract by calling getThreshold()
+        // This prevents false positives from non-Safe contracts that have a nonce() method
+        debug!("Address {} has code, verifying if it's a Safe contract", address);
+        let safe_contract = SafeSingleton::new(address_alloy, provider.clone());
+
+        match safe_contract.getThreshold().call().await {
+            Ok(_threshold) => {
+                // Successfully called getThreshold(), this is a Safe contract
+                // Now get the Safe nonce (transaction count)
+                debug!("Address {} is a Safe contract, getting nonce", address);
+                match safe_contract.nonce().call().await {
+                    Ok(nonce) => nonce.try_into().map_err(|_| RpcError::SafeNonceOverflow(nonce)),
+                    Err(e) => {
+                        // This should rarely happen if getThreshold() succeeded
+                        tracing::error!(
+                            "Safe contract {} getThreshold() succeeded but nonce() failed: {}",
+                            address,
+                            e
+                        );
+                        Err(e.into())
+                    }
+                }
+            }
             Err(e) => {
-                // Discriminate errors: some errors indicate "not a Safe contract" (fallback OK),
-                // others indicate real RPC/network/contract issues (should propagate)
+                // getThreshold() failed - discriminate errors
                 let error_str = format!("{:?}", e);
                 let error_lower = error_str.to_lowercase();
 
@@ -262,9 +281,9 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
                     || error_lower.contains("decode");
 
                 if should_fallback {
-                    // Contract exists but doesn't implement Safe nonce() - fallback to eth_getTransactionCount
+                    // Contract exists but doesn't implement Safe interface - fallback to eth_getTransactionCount
                     debug!(
-                        "Address {} has code but nonce() call failed (not a Safe contract), falling back to \
+                        "Address {} has code but getThreshold() failed (not a Safe contract), falling back to \
                          eth_getTransactionCount. Error: {:?}",
                         address, e
                     );
@@ -272,7 +291,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
                     Ok(tx_count)
                 } else {
                     // Real error (RPC failure, network issue, etc.) - propagate it
-                    tracing::error!("Failed to get transaction count for address {}: {}", address, e);
+                    tracing::error!("Failed to verify Safe contract at address {}: {}", address, e);
                     Err(e.into())
                 }
             }
