@@ -3,7 +3,7 @@ pragma solidity ^0.8.28;
 
 /// @title MockSafe
 /// @notice Minimal mock implementation of Gnosis Safe for testing transaction count queries
-/// @dev Only implements the nonce() function needed for safeTransactionCount API testing
+/// @dev Only implements the nonce() function needed for transactionCount API testing
 contract MockSafe {
     /// @notice Internal nonce counter
     uint256 private _nonce;

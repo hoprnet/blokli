@@ -235,14 +235,46 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         // Get provider from any contract instance (they all share the same provider)
         let provider = self.contract_instances.token.provider();
 
-        // Try Safe nonce() function first (for Safe contracts)
+        // First, check if the address has code (is a contract)
+        let code = provider.get_code_at(address_alloy).await?;
+
+        if code.is_empty() {
+            // Empty code means EOA (Externally Owned Account), use eth_getTransactionCount
+            debug!("Address {} has no code (EOA), using eth_getTransactionCount", address);
+            let tx_count = provider.get_transaction_count(address_alloy).await?;
+            return Ok(tx_count);
+        }
+
+        // Address has code, try Safe nonce() function
         let safe_contract = SafeSingleton::new(address_alloy, provider);
         match safe_contract.nonce().call().await {
             Ok(nonce) => nonce.try_into().map_err(|_| RpcError::SafeNonceOverflow(nonce)),
-            Err(_) => {
-                // Fall back to eth_getTransactionCount
-                let tx_count = provider.get_transaction_count(address_alloy).await?;
-                Ok(tx_count)
+            Err(e) => {
+                // Discriminate errors: some errors indicate "not a Safe contract" (fallback OK),
+                // others indicate real RPC/network/contract issues (should propagate)
+                let error_str = format!("{:?}", e);
+                let error_lower = error_str.to_lowercase();
+
+                // Check if this is a "safe to fallback" error (contract doesn't implement Safe interface)
+                let should_fallback = error_lower.contains("execution reverted")
+                    || error_lower.contains("function selector not found")
+                    || error_lower.contains("abi")
+                    || error_lower.contains("decode");
+
+                if should_fallback {
+                    // Contract exists but doesn't implement Safe nonce() - fallback to eth_getTransactionCount
+                    debug!(
+                        "Address {} has code but nonce() call failed (not a Safe contract), falling back to \
+                         eth_getTransactionCount. Error: {:?}",
+                        address, e
+                    );
+                    let tx_count = provider.get_transaction_count(address_alloy).await?;
+                    Ok(tx_count)
+                } else {
+                    // Real error (RPC failure, network issue, etc.) - propagate it
+                    tracing::error!("Failed to get transaction count for address {}: {}", address, e);
+                    Err(e.into())
+                }
             }
         }
     }

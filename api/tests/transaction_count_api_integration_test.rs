@@ -70,11 +70,11 @@ async fn execute_graphql_query(
 
 /// Queries the Safe transaction count (nonce) for a given address via GraphQL.
 ///
-/// This helper constructs a GraphQL query for the `safeTransactionCount` field,
+/// This helper constructs a GraphQL query for the `transactionCount` field,
 /// executes it against the schema, and returns the parsed JSON response.
 ///
 /// # Arguments
-/// * `schema` - The GraphQL schema with the `safeTransactionCount` query
+/// * `schema` - The GraphQL schema with the `transactionCount` query
 /// * `address` - Hexadecimal address string (with or without 0x prefix)
 ///
 /// # Returns
@@ -87,7 +87,7 @@ async fn execute_graphql_query(
 /// # Example Response
 /// ```json
 /// {
-///   "safeTransactionCount": {
+///   "transactionCount": {
 ///     "address": "0x1234...",
 ///     "count": "5"
 ///   }
@@ -130,7 +130,7 @@ async fn query_transaction_count(
 /// Deploys a MockSafe contract to the Anvil test network.
 ///
 /// This helper function deploys a minimal Safe contract implementation that provides
-/// the `nonce()` function needed for testing the safeTransactionCount GraphQL query.
+/// the `nonce()` function needed for testing the transactionCount GraphQL query.
 ///
 /// # Arguments
 /// * `ctx` - Test context containing contract instances with RPC provider
