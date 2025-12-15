@@ -463,7 +463,7 @@ test_graphql() {
   local response
   response=$(curl -sf "${BLOKLID_URL}/graphql" \
     -H "Content-Type: application/json" \
-    -d '{"query": "{ chainInfo { network chainId } }"}')
+    -d '{"query": "{ chainInfo { ... on ChainInfo { network chainId } } }"}')
 
   local network chain_id
   network=$(extract_json_field "$response" '.data.chainInfo.network' '')
@@ -476,6 +476,151 @@ test_graphql() {
   fi
 
   log_info "GraphQL: network=${network}, chainId=${chain_id}"
+  return 0
+}
+
+# Check if initial indexing has reached at least 20 blocks
+check_initial_indexing() {
+  local response
+  response=$(curl -sf "${BLOKLID_URL}/readyz" || echo "{}")
+  local indexed_block
+  indexed_block=$(extract_json_field "$response" '.checks.indexer.last_indexed_block' '0')
+
+  log_info "    Indexed blocks: ${indexed_block}"
+  [ "$indexed_block" -ge 20 ]
+}
+
+# Check if container has fully stopped
+check_container_stopped() {
+  local container_status
+  container_status=$(docker inspect blokli-smoke-bloklid --format='{{.State.Status}}' 2>/dev/null || echo "unknown")
+  log_info "    Container status: ${container_status}"
+  [ "$container_status" = "exited" ]
+}
+
+# Check if indexer is making forward progress after restart
+# Uses global variable: block_after_restart
+check_forward_progress() {
+  local response
+  response=$(curl -sf "${BLOKLID_URL}/readyz" || echo "{}")
+  local current_block
+  current_block=$(extract_json_field "$response" '.checks.indexer.last_indexed_block' '0')
+
+  log_info "    Current: ${current_block}, Target: > ${block_after_restart}"
+  [ "$current_block" -gt "$block_after_restart" ]
+}
+
+# Test that bloklid correctly resumes from checkpoint after restart
+test_checkpoint_resume() {
+  log_info "Testing checkpoint resume after restart..."
+
+  # Phase 1: Wait for initial indexing
+  if ! retry_with_timeout 60 1 "Waiting for initial indexing (at least 20 blocks)" "check_initial_indexing"; then
+    local response initial_block
+    response=$(curl -sf "${BLOKLID_URL}/readyz" || echo "{}")
+    initial_block=$(extract_json_field "$response" '.checks.indexer.last_indexed_block' '0')
+    log_error "Initial indexing failed to reach 20 blocks within 60 seconds"
+    log_error "Only ${initial_block} blocks indexed"
+    return 1
+  fi
+
+  local response initial_block
+  response=$(curl -sf "${BLOKLID_URL}/readyz" || echo "{}")
+  initial_block=$(extract_json_field "$response" '.checks.indexer.last_indexed_block' '0')
+  log_info "Initial indexing complete: ${initial_block} blocks indexed"
+
+  # Phase 2: Capture pre-restart state
+  response=$(curl -sf "${BLOKLID_URL}/readyz" || echo "{}")
+  local block_before_restart rpc_before_restart
+  block_before_restart=$(extract_json_field "$response" '.checks.indexer.last_indexed_block' '0')
+  rpc_before_restart=$(extract_json_field "$response" '.checks.rpc.block_number' '0')
+
+  log_info "Preparing restart: last_indexed=${block_before_restart}, rpc_block=${rpc_before_restart}"
+
+  # Phase 3: Graceful shutdown
+  log_info "Stopping bloklid container..."
+  if ! docker compose -f "${COMPOSE_FILE}" stop bloklid; then
+    log_error "Failed to stop bloklid container"
+    return 1
+  fi
+
+  # Wait for container to fully stop
+  docker wait blokli-smoke-bloklid 2>/dev/null || true
+  if ! retry_with_timeout 10 1 "Waiting for container to fully stop" "check_container_stopped"; then
+    local container_status
+    container_status=$(docker inspect blokli-smoke-bloklid --format='{{.State.Status}}' 2>/dev/null || echo "unknown")
+    log_error "Container failed to stop cleanly within 10 seconds"
+    log_error "Container status: ${container_status} (expected: exited)"
+    return 1
+  fi
+
+  # Phase 4: Restart bloklid
+  log_info "Restarting bloklid container..."
+  if ! docker compose -f "${COMPOSE_FILE}" start bloklid; then
+    log_error "Failed to start bloklid container"
+    return 1
+  fi
+
+  # Wait for bloklid to become healthy after restart
+  if ! retry_with_timeout "$CHAIN_SYNC_TIMEOUT" "$CHAIN_SYNC_POLL_INTERVAL" \
+    "Waiting for bloklid to become healthy after restart" "check_bloklid_health"; then
+    log_error "bloklid failed to become healthy after restart"
+    return 1
+  fi
+
+  # Verify indexer resumed from checkpoint by checking logs
+  log_info "Verifying indexer start block from container logs..."
+  local indexer_logs
+  indexer_logs=$(docker logs blokli-smoke-bloklid 2>&1 | grep -i "resuming\|starting.*block" | tail -5 || echo "")
+
+  if [ -n "$indexer_logs" ]; then
+    log_info "Recent indexer log entries:"
+    echo "$indexer_logs" | while IFS= read -r line; do
+      log_info "  $line"
+    done
+  fi
+
+  # Check if logs indicate starting from block 1 (which would be bad)
+  if echo "$indexer_logs" | grep -qi "start.*block.*1\b"; then
+    log_error "WARNING: Logs may indicate indexer started from block 1"
+    log_error "This could mean checkpoint was not preserved correctly"
+  fi
+
+  # Phase 5: Verify checkpoint resume
+  response=$(curl -sf "${BLOKLID_URL}/readyz" || echo "{}")
+  block_after_restart=$(extract_json_field "$response" '.checks.indexer.last_indexed_block' '0')
+
+  log_info "Checkpoint verification: before=${block_before_restart}, after=${block_after_restart}"
+
+  # Critical check: Verify no checkpoint regression
+  if [ "$block_after_restart" -lt "$block_before_restart" ]; then
+    log_error "CHECKPOINT REGRESSION DETECTED!"
+    log_error "  Before restart: block ${block_before_restart}"
+    log_error "  After restart:  block ${block_after_restart}"
+    log_error "This indicates bloklid re-indexed from scratch instead of resuming from checkpoint"
+    log_error "The checksum persistence fix may not be working correctly"
+    return 1
+  fi
+
+  log_info "Checkpoint preserved: ${block_before_restart} -> ${block_after_restart}"
+
+  # Phase 6: Verify forward progress
+  if ! retry_with_timeout 30 1 "Verifying forward progress after restart" "check_forward_progress"; then
+    response=$(curl -sf "${BLOKLID_URL}/readyz" || echo "{}")
+    local final_block
+    final_block=$(extract_json_field "$response" '.checks.indexer.last_indexed_block' '0')
+    log_error "No forward progress detected within 30 seconds"
+    log_error "  After restart: block ${block_after_restart}"
+    log_error "  After 30s:     block ${final_block}"
+    log_error "Indexer appears to be stuck"
+    return 1
+  fi
+
+  response=$(curl -sf "${BLOKLID_URL}/readyz" || echo "{}")
+  local final_block
+  final_block=$(extract_json_field "$response" '.checks.indexer.last_indexed_block' '0')
+  log_info "Forward progress confirmed: ${block_after_restart} -> ${final_block}"
+  log_info "Checkpoint resume test PASSED"
   return 0
 }
 
@@ -595,6 +740,10 @@ main() {
   fi
 
   if ! test_graphql; then
+    tests_passed=false
+  fi
+
+  if ! test_checkpoint_resume; then
     tests_passed=false
   fi
 

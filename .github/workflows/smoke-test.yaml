@@ -29,6 +29,7 @@ jobs:
           install-sdk: 'false'
       - name: Run smoke tests
         run: |
+          set -o pipefail
           nix develop -c ./tests/smoke/run-smoke-test.sh 2>&1 | tee test.logs
         env:
           SOURCE_IMAGE: ${{ inputs.image }}
