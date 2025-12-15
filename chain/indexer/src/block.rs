@@ -668,7 +668,10 @@ where
                     Err(error) => error!(block_id, %error, "failed to update indexer state info"),
                 }
             }
-            Err(error) => error!(block_id, %error, "failed to update checksums for logs from block"),
+            Err(error) => {
+                error!(block_id, %error, "failed to update checksums for logs from block");
+                panic!("Critical: Failed to save indexer state. Cannot continue without persisting checksums.");
+            }
         }
 
         debug!(block_id, "processed block logs - events published via IndexerState",);

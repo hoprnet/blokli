@@ -463,7 +463,7 @@ test_graphql() {
   local response
   response=$(curl -sf "${BLOKLID_URL}/graphql" \
     -H "Content-Type: application/json" \
-    -d '{"query": "{ chainInfo { network chainId } }"}')
+    -d '{"query": "{ chainInfo { ... on ChainInfo { network chainId } } }"}')
 
   local network chain_id
   network=$(extract_json_field "$response" '.data.chainInfo.network' '')
