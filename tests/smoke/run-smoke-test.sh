@@ -619,6 +619,7 @@ test_checkpoint_resume() {
   response=$(curl -sf "${BLOKLID_URL}/readyz" || echo "{}")
   local final_block
   final_block=$(extract_json_field "$response" '.checks.indexer.last_indexed_block' '0')
+
   log_info "Forward progress confirmed: ${block_after_restart} -> ${final_block}"
   log_info "Checkpoint resume test PASSED"
   return 0

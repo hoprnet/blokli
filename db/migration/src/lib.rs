@@ -27,6 +27,7 @@ mod m023_alter_log_tables_id_bigint;
 mod m024_alter_index_tables_id_bigint;
 mod m025_create_schema_version_table;
 mod m026_add_module_and_chain_key_to_safe_contract;
+mod m027_drop_node_info_table;
 
 #[derive(PartialEq)]
 pub enum BackendType {
@@ -84,6 +85,7 @@ impl MigratorTrait for Migrator {
             Box::new(m024_alter_index_tables_id_bigint::Migration),
             Box::new(m025_create_schema_version_table::Migration),
             Box::new(m026_add_module_and_chain_key_to_safe_contract::Migration),
+            Box::new(m027_drop_node_info_table::Migration),
         ]
     }
 }
@@ -129,6 +131,7 @@ impl MigratorTrait for MigratorIndex {
             Box::new(m024_alter_index_tables_id_bigint::Migration),
             Box::new(m025_create_schema_version_table::Migration),
             Box::new(m026_add_module_and_chain_key_to_safe_contract::Migration),
+            Box::new(m027_drop_node_info_table::Migration),
         ]
     }
 }

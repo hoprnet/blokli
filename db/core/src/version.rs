@@ -161,7 +161,6 @@ async fn clear_index_data(db: &DatabaseConnection) -> Result<()> {
 
     // Info tables
     ChainInfo::delete_many().exec(db).await?;
-    NodeInfo::delete_many().exec(db).await?;
 
     Ok(())
 }
