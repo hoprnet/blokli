@@ -362,7 +362,7 @@ async fn test_calculate_module_address_matches_contract_expectation() -> anyhow:
     default_target[20..32].copy_from_slice(&capability_permissions);
 
     let address_via_contract = contract_instances
-        .stake_factory
+        .node_stake_factory
         .predictModuleAddress_1(
             AlloyAddress::from_hopr_address(owner),
             U256::from(nonce),

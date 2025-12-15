@@ -4,13 +4,16 @@
 use async_trait::async_trait;
 use blokli_db_entity::{
     chain_info, node_info,
-    prelude::{Account, Announcement, ChainInfo, Channel, NodeInfo},
+    prelude::{
+        Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, HoprBalance as HoprBalanceEntity,
+        HoprSafeContract, NativeBalance, NodeInfo,
+    },
 };
 use futures::TryFutureExt;
 use hopr_crypto_types::prelude::Hash;
 use hopr_internal_types::prelude::WinningProbability;
 use hopr_primitive_types::prelude::{HoprBalance, IntoEndian};
-use sea_orm::{ActiveModelTrait, EntityOrSelect, EntityTrait, IntoActiveModel, PaginatorTrait, Set};
+use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
 use tracing::trace;
 
 use crate::{
@@ -116,8 +119,7 @@ impl BlokliDbInfoOperations for BlokliDb {
     async fn index_is_empty(&self) -> Result<bool> {
         let c = self.conn(TargetDb::Index);
 
-        // There is always at least the node's own AccountEntry
-        if Account::find().select().count(c).await? > 1 {
+        if Account::find().one(c).await?.is_some() {
             return Ok(false);
         }
 
@@ -126,6 +128,29 @@ impl BlokliDbInfoOperations for BlokliDb {
         }
 
         if Channel::find().one(c).await?.is_some() {
+            return Ok(false);
+        }
+
+        // State history tables
+        if AccountState::find().one(c).await?.is_some() {
+            return Ok(false);
+        }
+
+        if ChannelState::find().one(c).await?.is_some() {
+            return Ok(false);
+        }
+
+        // Balance tables
+        if HoprBalanceEntity::find().one(c).await?.is_some() {
+            return Ok(false);
+        }
+
+        if NativeBalance::find().one(c).await?.is_some() {
+            return Ok(false);
+        }
+
+        // Safe contract table
+        if HoprSafeContract::find().one(c).await?.is_some() {
             return Ok(false);
         }
 

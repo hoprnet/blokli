@@ -6,7 +6,7 @@ use async_graphql::{Context, ID, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
     Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelsList, ChannelsResult,
     ContractAddressMap, CountResult, HoprBalance, InvalidAddressError, ModuleAddress, NativeBalance, QueryFailedError,
-    Safe, SafeHoprAllowance, SafeTransactionCount, TokenValueString, Transaction, UInt64,
+    Safe, SafeHoprAllowance, TokenValueString, Transaction, TransactionCount, UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
@@ -48,10 +48,10 @@ pub enum SafeHoprAllowanceResult {
     QueryFailed(QueryFailedError),
 }
 
-/// Result type for Safe transaction count queries
+/// Result type for transaction count queries
 #[derive(Union)]
-pub enum SafeTransactionCountResult {
-    TransactionCount(SafeTransactionCount),
+pub enum TransactionCountResult {
+    TransactionCount(TransactionCount),
     InvalidAddress(InvalidAddressError),
     QueryFailed(QueryFailedError),
 }
@@ -563,67 +563,71 @@ impl QueryRoot {
         }
     }
 
-    /// Fetches the current transaction count (nonce) for a Safe contract address from the blockchain.
+    /// Fetches the transaction count for any Ethereum address (EOA or contract).
     ///
     /// The `address` must be a hexadecimal Ethereum address. The resolver validates the address format,
-    /// queries the blockchain RPC for the Safe's transaction count, and returns a `SafeTransactionCountResult`
-    /// that indicates success, an invalid address error, or a query failure.
+    /// queries the blockchain RPC for the transaction count with smart detection, and returns a
+    /// `TransactionCountResult` that indicates success, an invalid address error, or a query failure.
+    ///
+    /// This method supports multiple address types:
+    /// - **EOAs (Externally Owned Accounts)**: Returns the transaction count via `eth_getTransactionCount`
+    /// - **Safe contracts**: Returns the Safe's internal nonce via `nonce()` function
+    /// - **Other contracts**: Attempts `nonce()` call, falls back to `eth_getTransactionCount`
     ///
     /// # Returns
     ///
-    /// - `SafeTransactionCountResult::TransactionCount` containing the queried `address` and the `count` on success.
-    /// - `SafeTransactionCountResult::InvalidAddress` if the provided address is not a valid hexadecimal Ethereum
-    ///   address.
-    /// - `SafeTransactionCountResult::QueryFailed` if the RPC call fails.
+    /// - `TransactionCountResult::TransactionCount` containing the queried `address` and the `count` on success.
+    /// - `TransactionCountResult::InvalidAddress` if the provided address is not a valid hexadecimal Ethereum address.
+    /// - `TransactionCountResult::QueryFailed` if the RPC call fails.
     ///
     /// # Examples
     ///
     /// ```ignore
-    /// # use api::query::SafeTransactionCountResult;
-    /// # use api::query::SafeTransactionCount;
+    /// # use api::query::TransactionCountResult;
+    /// # use api::query::TransactionCount;
     /// # use api::query::UInt64;
-    /// // Suppose `res` is the value returned by `safe_transaction_count`.
-    /// let res: SafeTransactionCountResult = SafeTransactionCountResult::TransactionCount(SafeTransactionCount {
+    /// // Suppose `res` is the value returned by `transaction_count`.
+    /// let res: TransactionCountResult = TransactionCountResult::TransactionCount(TransactionCount {
     ///     address: "0x0000000000000000000000000000000000000000".to_string(),
     ///     count: UInt64(42),
     /// });
     ///
     /// match res {
-    ///     SafeTransactionCountResult::TransactionCount(tc) => {
+    ///     TransactionCountResult::TransactionCount(tc) => {
     ///         assert_eq!(tc.count.0, 42);
     ///         assert_eq!(tc.address, "0x0000000000000000000000000000000000000000");
     ///     }
-    ///     SafeTransactionCountResult::InvalidAddress(err) => panic!("invalid address: {}", err.message),
-    ///     SafeTransactionCountResult::QueryFailed(err) => panic!("query failed: {}", err.message),
+    ///     TransactionCountResult::InvalidAddress(err) => panic!("invalid address: {}", err.message),
+    ///     TransactionCountResult::QueryFailed(err) => panic!("query failed: {}", err.message),
     /// }
     /// ```
-    async fn safe_transaction_count(
+    async fn transaction_count(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Safe contract address to query (hexadecimal format)")] address: String,
-    ) -> Result<SafeTransactionCountResult> {
+        #[graphql(desc = "Address to query (hexadecimal format) - supports EOAs and contracts")] address: String,
+    ) -> Result<TransactionCountResult> {
         // Validate address format
         if let Err(e) = validate_eth_address(&address) {
-            return Ok(SafeTransactionCountResult::InvalidAddress(
+            return Ok(TransactionCountResult::InvalidAddress(
                 errors::invalid_address_from_message(address, e.message),
             ));
         }
 
         // Convert hex string address to Address type
-        let safe_address =
+        let query_address =
             Address::from_hex(&address).map_err(|e| async_graphql::Error::new(format!("Invalid address: {}", e)))?;
 
         // Get RPC operations from context - using ReqwestClient as the concrete type
         let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
 
-        // Make RPC call to get transaction count from blockchain
-        match rpc.get_safe_transaction_count(safe_address).await {
-            Ok(count) => Ok(SafeTransactionCountResult::TransactionCount(SafeTransactionCount {
+        // Make RPC call to get transaction count from blockchain with smart detection
+        match rpc.get_transaction_count(query_address).await {
+            Ok(count) => Ok(TransactionCountResult::TransactionCount(TransactionCount {
                 address,
                 count: UInt64(count),
             })),
-            Err(e) => Ok(SafeTransactionCountResult::QueryFailed(errors::rpc_query_failed(
-                "query Safe transaction count",
+            Err(e) => Ok(TransactionCountResult::QueryFailed(errors::rpc_query_failed(
+                "query transaction count",
                 e,
             ))),
         }
@@ -848,15 +852,15 @@ impl QueryRoot {
         let ticket_price = chain_info
             .ticket_price
             .as_ref()
-            .map(|bytes| TokenValueString(PrimitiveHoprBalance::from_be_bytes(bytes).amount().to_string()))
-            .unwrap_or_else(|| TokenValueString(PrimitiveHoprBalance::zero().amount().to_string()));
+            .map(|bytes| TokenValueString(PrimitiveHoprBalance::from_be_bytes(bytes).to_string()))
+            .unwrap_or_else(|| TokenValueString(PrimitiveHoprBalance::zero().to_string()));
 
         // Convert key_binding_fee from binary to human-readable string
         let key_binding_fee = chain_info
             .key_binding_fee
             .as_ref()
-            .map(|bytes| TokenValueString(PrimitiveHoprBalance::from_be_bytes(bytes).amount().to_string()))
-            .unwrap_or_else(|| TokenValueString(PrimitiveHoprBalance::zero().amount().to_string()));
+            .map(|bytes| TokenValueString(PrimitiveHoprBalance::from_be_bytes(bytes).to_string()))
+            .unwrap_or_else(|| TokenValueString(PrimitiveHoprBalance::zero().to_string()));
 
         // Convert last_indexed_block from i64 to i32 with validation
         let block_number = match i32::try_from(chain_info.last_indexed_block) {

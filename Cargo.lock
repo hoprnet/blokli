@@ -1689,7 +1689,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api"
-version = "0.5.0"
+version = "0.7.0"
 dependencies = [
  "alloy",
  "anyhow",
@@ -1741,7 +1741,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api-types"
-version = "0.3.1"
+version = "0.5.0"
 dependencies = [
  "async-graphql",
  "blokli-chain-types",
@@ -1792,7 +1792,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-indexer"
-version = "0.3.1"
+version = "0.5.1"
 dependencies = [
  "alloy",
  "anyhow",
@@ -1834,7 +1834,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-rpc"
-version = "0.4.1"
+version = "0.6.0"
 dependencies = [
  "alloy",
  "anyhow",
@@ -1877,7 +1877,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-types"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "alloy",
  "hex",
@@ -1896,7 +1896,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-client"
-version = "0.13.0"
+version = "0.14.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1947,7 +1947,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -2071,7 +2071,7 @@ dependencies = [
 
 [[package]]
 name = "bloklid"
-version = "0.2.2"
+version = "0.3.1"
 dependencies = [
  "alloy",
  "anyhow",

@@ -275,17 +275,17 @@ helm-push:
 # Smoke Tests
 # ============================================================================
 
-# Run smoke tests with Docker Compose (PostgreSQL + Anvil)
+# Run smoke tests with Docker Compose (PostgreSQL + Anvil) - includes checkpoint resume validation
 smoke-test:
     ./tests/smoke/run-smoke-test.sh
 
-# Run smoke tests against Gnosis Chain RPC (allows high lag)
+# Run smoke tests against Gnosis Chain RPC (allows high lag) - includes checkpoint resume validation
 smoke-test-gnosis:
     SMOKE_CONFIG=config-smoke-gnosis.toml ./tests/smoke/run-smoke-test.sh
 
-# Run smoke tests against Gnosis Chain RPC with full sync (requires indexer to catch up within 10 blocks)
+# Run smoke tests against Gnosis Chain RPC with full sync (requires indexer to catch up within 10 blocks) - includes checkpoint resume validation
 smoke-test-gnosis-full-sync:
     SMOKE_CONFIG=config-smoke-gnosis-full-sync.toml ./tests/smoke/run-smoke-test.sh
 
-# Build Docker image and run all smoke tests (Anvil + Gnosis Chain connectivity + Gnosis Chain full sync)
+# Build Docker image and run all smoke tests (Anvil + Gnosis Chain connectivity + Gnosis Chain full sync) - all include checkpoint resume validation
 smoke-test-full: smoke-test smoke-test-gnosis smoke-test-gnosis-full-sync

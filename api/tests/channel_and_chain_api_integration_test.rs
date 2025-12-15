@@ -635,9 +635,9 @@ async fn test_chain_info_query() -> Result<()> {
     // channelClosureGracePeriod is now UInt64, which is represented as a string
     assert_eq!(chain_info["channelClosureGracePeriod"].as_str().unwrap(), "300");
 
-    // Verify token values (0 balance represented as "0")
-    assert_eq!(chain_info["ticketPrice"].as_str().unwrap(), "0");
-    assert_eq!(chain_info["keyBindingFee"].as_str().unwrap(), "0");
+    // Verify token values (0 balance represented as "0 wxHOPR")
+    assert_eq!(chain_info["ticketPrice"].as_str().unwrap(), "0 wxHOPR");
+    assert_eq!(chain_info["keyBindingFee"].as_str().unwrap(), "0 wxHOPR");
 
     // Verify domain separators are non-null hex strings
     assert!(!chain_info["channelDst"].is_null());
@@ -676,10 +676,12 @@ async fn test_chain_info_query() -> Result<()> {
         "token",
         "channels",
         "announcements",
-        "safe_registry",
-        "price_oracle",
-        "win_prob_oracle",
-        "stake_factory",
+        "module_implementation",
+        "node_safe_migration",
+        "node_safe_registry",
+        "ticket_price_oracle",
+        "winning_probability_oracle",
+        "node_stake_factory",
     ];
 
     for key in expected_keys {
@@ -824,9 +826,9 @@ async fn test_chain_info_query_with_null_optional_fields() -> Result<()> {
     assert_eq!(chain_info["network"], "test-network");
     assert_eq!(chain_info["minTicketWinningProbability"], 0.0);
 
-    // Verify optional token values default to "0" when not set (not null)
-    assert_eq!(chain_info["ticketPrice"].as_str().unwrap(), "0");
-    assert_eq!(chain_info["keyBindingFee"].as_str().unwrap(), "0");
+    // Verify optional token values default to "0 wxHOPR" when not set (not null)
+    assert_eq!(chain_info["ticketPrice"].as_str().unwrap(), "0 wxHOPR");
+    assert_eq!(chain_info["keyBindingFee"].as_str().unwrap(), "0 wxHOPR");
 
     // Verify optional domain separators are null when not set
     assert!(chain_info["channelDst"].is_null(), "channelDst should be null");
