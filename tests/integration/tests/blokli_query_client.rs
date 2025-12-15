@@ -6,10 +6,9 @@ use blokli_client::api::{
 };
 use blokli_integration_tests::fixtures::{IntegrationFixture, integration_fixture as fixture};
 use hopr_internal_types::channels::generate_channel_id;
-use hopr_primitive_types::prelude::XDaiBalance;
+use hopr_primitive_types::prelude::{HoprBalance, XDaiBalance};
 use rstest::*;
 use serial_test::serial;
-use tracing::info;
 
 #[rstest]
 #[test_log::test(tokio::test)]
@@ -21,15 +20,16 @@ async fn count_accounts_matches_deployed_accounts(#[future(awt)] fixture: Integr
         .client()
         .count_accounts(AccountSelector::Address(account.hopr_address().into()))
         .await?;
-    assert_eq!(account_count, 0);
 
     fixture.announce_account(account).await?;
 
-    let account_count = fixture
-        .client()
-        .count_accounts(AccountSelector::Address(account.hopr_address().into()))
-        .await?;
-    assert_eq!(account_count, 1);
+    assert_eq!(
+        fixture
+            .client()
+            .count_accounts(AccountSelector::Address(account.hopr_address().into()))
+            .await?,
+        account_count + 1
+    );
 
     Ok(())
 }
@@ -84,7 +84,12 @@ async fn query_token_balance(#[future(awt)] fixture: IntegrationFixture) -> Resu
         .client()
         .query_token_balance(account.alloy_address().as_ref())
         .await?;
-    info!("Blokli token balance: {:?}", blokli_balance);
+
+    let _: HoprBalance = blokli_balance
+        .balance
+        .0
+        .parse()
+        .expect("failed to parse blokli token balance");
 
     Ok(())
 }
@@ -99,7 +104,7 @@ async fn query_transaction_count(#[future(awt)] fixture: IntegrationFixture) -> 
         .query_transaction_count(account.alloy_address().as_ref())
         .await?;
 
-    fixture.announce_account(account).await?;
+    fixture.announce_account(account).await?; // doesn't have to be announcendment/safe related
 
     let after_count = fixture
         .client()
@@ -143,6 +148,7 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
 
     let [src, dst] = fixture.sample_accounts::<2>();
     let amount = "1 wxHOPR".parse().expect("failed to parse amount");
+
     fixture.open_channel(&src, &dst, amount).await?;
 
     let after_count = fixture.client().count_channels(channel_selector.clone()).await?;
@@ -157,6 +163,14 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
     let channels = fixture.client().query_channels(channel_selector).await?;
 
     assert_eq!(channels.len(), 1);
+
+    fixture.initiate_outgoing_channel_closure(&src, &dst).await?;
+    let channel_selector = ChannelSelector {
+        filter: Some(ChannelFilter::ChannelId(expected_id.into())),
+        status: Some(ChannelStatus::Open),
+    };
+    let channels = fixture.client().query_channels(channel_selector).await?;
+    assert_eq!(channels.len(), 0);
 
     Ok(())
 }

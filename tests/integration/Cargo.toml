@@ -11,8 +11,10 @@ blokli-client        = { path = "../../client" }
 chrono               = { workspace = true }
 clap                 = { workspace = true, features = ["derive"] }
 futures              = { workspace = true }
+futures-time         = { workspace = true }
 hex                  = { workspace = true }
 hopli                = { workspace = true }
+hopr-bindings        = { workspace = true }
 hopr-chain-connector = { workspace = true, features = ["runtime-tokio"] }
 hopr-chain-types     = { workspace = true }
 hopr-crypto-types    = { workspace = true }

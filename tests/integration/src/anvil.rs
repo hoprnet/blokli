@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use alloy::primitives::Address as AlloyAddress;
+use alloy::{network::EthereumWallet, primitives::Address as AlloyAddress, signers::local::PrivateKeySigner};
 use hopr_chain_connector::ChainKeypair;
 use hopr_crypto_types::keypairs::{Keypair, OffchainKeypair};
 use hopr_primitive_types::prelude::Address;
@@ -31,5 +31,11 @@ impl AnvilAccount {
             .expect("Invalid hex in private key");
 
         ChainKeypair::from_secret(&key_bytes).expect("Invalid private key hex")
+    }
+
+    pub fn as_wallet(&self) -> EthereumWallet {
+        PrivateKeySigner::from_slice(self.chain_key_pair().secret().as_ref())
+            .expect("failed to create wallet from owner's private key")
+            .into()
     }
 }

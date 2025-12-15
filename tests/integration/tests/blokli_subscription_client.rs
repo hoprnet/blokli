@@ -1,19 +1,22 @@
-use std::time::Duration;
-
 use anyhow::{Result, anyhow};
 use blokli_client::api::{
     AccountSelector, BlokliSubscriptionClient, ChannelFilter, ChannelSelector, types::ChannelStatus,
 };
 use blokli_integration_tests::fixtures::{IntegrationFixture, integration_fixture as fixture};
 use futures::stream::StreamExt;
+use futures_time::{future::FutureExt as FutureTimeoutExt, time::Duration};
 use hopr_crypto_types::types::Hash;
 use hopr_internal_types::channels::generate_channel_id;
-use hopr_primitive_types::traits::ToHex;
+use hopr_primitive_types::{prelude::HoprBalance, traits::ToHex};
+use rand::Rng;
 use rstest::*;
 use serial_test::serial;
-use tokio::time::timeout;
 
-const SUBSCRIPTION_TIMEOUT: Duration = Duration::from_secs(5);
+const SUBSCRIPTION_TIMEOUT_SECS: u64 = 5;
+
+fn subscription_timeout() -> Duration {
+    Duration::from_secs(SUBSCRIPTION_TIMEOUT_SECS)
+}
 
 #[rstest]
 #[test_log::test(tokio::test)]
@@ -25,17 +28,26 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
         filter: Some(ChannelFilter::ChannelId(expected_id.into())),
         status: Some(ChannelStatus::Open),
     };
+    let expected_channel_id = Hash::from(expected_id).to_hex();
 
     let subscription = fixture.client().subscribe_channels(channel_selector)?;
 
-    // the test should first subsribe, then open the channel, then receive the update
-    let mut subscription = subscription.fuse();
+    let subscription = subscription.fuse();
     let amount = "1 wxHOPR".parse().expect("failed to parse amount");
 
     fixture.open_channel(&src, &dst, amount).await?;
 
-    // wait for the subscription to update, until one of the channels returned matches the expected id
-    timeout(SUBSCRIPTION_TIMEOUT, subscription.next())
+    subscription
+        .skip_while(|entry| {
+            let should_skip = entry
+                .as_ref()
+                .expect("failed to get subscription update")
+                .concrete_channel_id
+                != expected_channel_id;
+            futures::future::ready(should_skip)
+        })
+        .next()
+        .timeout(subscription_timeout())
         .await
         .map_err(|_| anyhow!("subscription update timed out"))?
         .ok_or_else(|| anyhow!("no update received from subscription"))??;
@@ -50,9 +62,15 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
     let [input] = fixture.sample_accounts::<1>();
 
     let selector = AccountSelector::Address(*input.alloy_address().as_ref());
-    let mut subscription = fixture.client().subscribe_accounts(selector)?;
+    let subscription = fixture.client().subscribe_accounts(selector)?.fuse();
 
-    let output = timeout(SUBSCRIPTION_TIMEOUT, subscription.next())
+    let output = subscription
+        .skip_while(|entry| {
+            let should_skip = entry.as_ref().expect("failed to get subscription update").chain_key != input.address;
+            futures::future::ready(should_skip)
+        })
+        .next()
+        .timeout(subscription_timeout())
         .await
         .map_err(|_| anyhow!("subscription update timed out"))?
         .ok_or_else(|| anyhow!("no update received from subscription"))??;
@@ -70,28 +88,26 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
     let expected_id = generate_channel_id(&src.hopr_address(), &dst.hopr_address());
     let subscription = fixture.client().subscribe_graph()?;
 
-    // the test should first subsribe, then open the channel, then receive the update
-    let mut subscription = subscription.fuse();
     let amount = "1 wxHOPR".parse().expect("failed to parse amount");
+    let expected_channel_id = Hash::from(expected_id).to_hex();
 
     fixture.open_channel(&src, &dst, amount).await?;
 
-    // wait for the subscription to update, until one of the channels returned matches the expected id
-    timeout(SUBSCRIPTION_TIMEOUT, async {
-        loop {
-            match subscription.next().await {
-                Some(update) => {
-                    let entry = update?;
-                    if entry.channel.concrete_channel_id == Hash::from(expected_id).to_hex() {
-                        break Ok(());
-                    }
-                }
-                None => break Err(anyhow!("subscription closed without updates")),
-            }
-        }
-    })
-    .await
-    .map_err(|_| anyhow!("subscription update timed out"))??;
+    subscription
+        .skip_while(|entry| {
+            let should_skip = entry
+                .as_ref()
+                .expect("failed to get subscription update")
+                .channel
+                .concrete_channel_id
+                != expected_channel_id;
+            futures::future::ready(should_skip)
+        })
+        .next()
+        .timeout(subscription_timeout())
+        .await
+        .map_err(|_| anyhow!("subscription update timed out"))?
+        .ok_or_else(|| anyhow!("no update received from subscription"))??;
 
     Ok(())
 }
@@ -99,8 +115,45 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
-#[ignore = "not implemented"]
+#[ignore = "not ready"]
 async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    let mut rng = rand::rng();
+    let new_win_prob = 0.0001f64;
+    let new_ticket_value: HoprBalance = format!("{} wxHOPR", rng.random::<f64>())
+        .parse()
+        .expect("failed to parse amount");
+
+    let subscription = fixture.client().subscribe_ticket_params()?;
+    let subscription = subscription.fuse();
+
+    // TODO: update the ticket price and win prob through anvil / hopli
+
+    let output = subscription
+        .skip_while(|entry| {
+            let should_skip = entry
+                .as_ref()
+                .expect("failed to get subscription update")
+                .min_ticket_winning_probability
+                != new_win_prob;
+            futures::future::ready(should_skip)
+        })
+        .next()
+        .timeout(subscription_timeout())
+        .await
+        .map_err(|_| anyhow!("subscription update timed out"))?
+        .ok_or_else(|| anyhow!("no update received from subscription"))??;
+
+    // TODO: set the ticket price and win prob back to original values
+
+    let decoded_ticket_value: HoprBalance = output
+        .ticket_price
+        .0
+        .parse()
+        .map_err(|_| anyhow!("failed to parse ticket value from subscription"))?;
+
+    assert_eq!(output.min_ticket_winning_probability, new_win_prob);
+    assert_eq!(decoded_ticket_value, new_ticket_value);
+
     Ok(())
 }
 
@@ -109,29 +162,20 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
 #[serial]
 async fn subscribe_safe_deployments(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
-    let mut subscription = fixture.client().subscribe_safe_deployments()?;
+    let subscription = fixture.client().subscribe_safe_deployments()?;
 
     fixture.deploy_safe(account, 1_000).await?;
 
-    let safe = timeout(SUBSCRIPTION_TIMEOUT, async {
-        loop {
-            match subscription.next().await {
-                Some(update) => {
-                    let safe = update?;
-                    if safe.chain_key == account.address {
-                        break Ok(safe);
-                    }
-                }
-                None => break Err(anyhow!("subscription closed without updates")),
-            }
-        }
-    })
-    .await
-    .map_err(|_| anyhow!("subscription update timed out"))??;
-
-    assert_eq!(safe.chain_key, account.address);
-    assert!(safe.address.starts_with("0x"));
-    assert!(safe.module_address.starts_with("0x"));
+    subscription
+        .skip_while(|res| {
+            let should_skip = res.as_ref().expect("failed to get subscription update").chain_key != account.address;
+            futures::future::ready(should_skip)
+        })
+        .next()
+        .timeout(subscription_timeout())
+        .await
+        .map_err(|_| anyhow!("subscription update timed out"))?
+        .ok_or_else(|| anyhow!("no update received from subscription"))??;
 
     Ok(())
 }

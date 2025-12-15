@@ -24,7 +24,7 @@ path = "src/main.rs"
 sea-orm-migration = { workspace = true }
 tokio             = { workspace = true }
 
-hopr-internal-types  = { workspace = true }
+hopr-internal-types = { workspace = true }
 
 [dev-dependencies]
 sea-orm = { workspace = true }

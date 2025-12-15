@@ -5,6 +5,8 @@ use std::{
 };
 
 use alloy::{
+    eips::Encodable2718,
+    network::TransactionBuilder,
     primitives::U256,
     providers::{
         ProviderBuilder,
@@ -28,7 +30,8 @@ use tokio::sync::OnceCell;
 use tracing::{debug, info};
 
 use crate::{
-    anvil::AnvilAccount, config::TestConfig, docker::DockerEnvironment, rpc::RpcClient, transaction::TransactionBuilder,
+    anvil::AnvilAccount, config::TestConfig, docker::DockerEnvironment, rpc::RpcClient,
+    transaction::TransactionBuilder as TestTransactionBuilder,
 };
 
 const STACK_STARTUP_WAIT: Duration = Duration::from_secs(8);
@@ -77,8 +80,25 @@ impl IntegrationFixture {
         &self.inner.contract_addrs
     }
 
-    pub fn transaction_builder(&self, private_key: &str) -> Result<TransactionBuilder> {
-        TransactionBuilder::new(private_key)
+    pub async fn build_raw_tx(
+        &self,
+        value: U256,
+        sender: &AnvilAccount,
+        recipient: &AnvilAccount,
+        nonce: u64,
+    ) -> Result<String> {
+        let tx_builder = TestTransactionBuilder::new(&sender.private_key)?;
+        tx_builder
+            .build_eip1559_transaction_hex(
+                self.rpc().chain_id().await?,
+                nonce,
+                &recipient.address,
+                value,
+                self.config().max_fee_per_gas,
+                self.config().max_priority_fee_per_gas,
+                self.config().gas_limit,
+            )
+            .await
     }
 
     pub async fn submit_tx(&self, raw_tx: &str) -> Result<[u8; 32]> {
@@ -138,30 +158,63 @@ impl IntegrationFixture {
     }
 
     pub async fn announce_account(&self, account: &AnvilAccount) -> Result<()> {
+        let nonce = self.rpc().transaction_count(account.address.as_ref()).await?;
+
         let payload_generator = BasicPayloadGenerator::new(account.hopr_address(), *self.contract_addresses());
         let keybinding = KeyBinding::new(account.hopr_address(), &account.offchain_key_pair());
         let binding_fee = HoprBalance::zero();
-        let payload = payload_generator.announce(AnnouncementData::new(keybinding, None)?, binding_fee)?;
+        let payload = payload_generator
+            .announce(AnnouncementData::new(keybinding, None)?, binding_fee)?
+            .gas_limit(self.config().gas_limit)
+            .max_fee_per_gas(self.config().max_fee_per_gas)
+            .max_priority_fee_per_gas(self.config().max_priority_fee_per_gas)
+            .with_chain_id(self.rpc().chain_id().await?)
+            .nonce(nonce);
+        let wallet = account.as_wallet();
 
-        let tx_input = payload
-            .input
-            .input
-            .context("transaction input missing from announcement payload")?;
-        let raw_tx = hex::encode(&tx_input);
+        let payload_bytes = payload.build(&wallet).await?.encoded_2718();
 
-        self.submit_and_confirm_tx(&raw_tx, 1).await.map(|_| ())
+        self.submit_and_confirm_tx(&hex::encode(&payload_bytes), 1)
+            .await
+            .map(|_| ())
     }
 
     pub async fn open_channel(&self, from: &AnvilAccount, to: &AnvilAccount, amount: HoprBalance) -> Result<[u8; 32]> {
-        let payload_generator = BasicPayloadGenerator::new(from.hopr_address(), *self.contract_addresses());
+        let nonce = self.rpc().transaction_count(from.address.as_ref()).await?;
 
-        let payload = payload_generator.fund_channel(to.hopr_address(), amount)?;
-        let tx_input = payload
-            .input
-            .input
-            .context("transaction input missing from fund channel payload")?;
+        let payload_generator = BasicPayloadGenerator::new(from.hopr_address(), *self.contract_addresses()); // Could work. Could fail. SafePayloadGenerator maybe
 
-        self.submit_and_confirm_tx(&hex::encode(&tx_input), 1).await
+        let payload = payload_generator
+            .fund_channel(to.hopr_address(), amount)?
+            .gas_limit(self.config().gas_limit)
+            .max_fee_per_gas(self.config().max_fee_per_gas)
+            .max_priority_fee_per_gas(self.config().max_priority_fee_per_gas)
+            .with_chain_id(self.rpc().chain_id().await?)
+            .nonce(nonce);
+        let wallet = from.as_wallet();
+
+        let payload_bytes = payload.build(&wallet).await?.encoded_2718();
+
+        self.submit_and_confirm_tx(&hex::encode(&payload_bytes), 1).await
+    }
+
+    pub async fn initiate_outgoing_channel_closure(&self, from: &AnvilAccount, to: &AnvilAccount) -> Result<[u8; 32]> {
+        let nonce = self.rpc().transaction_count(from.address.as_ref()).await?;
+
+        let payload_generator = BasicPayloadGenerator::new(from.hopr_address(), *self.contract_addresses()); // Could work. Could fail. SafePayloadGenerator maybe
+
+        let payload = payload_generator
+            .initiate_outgoing_channel_closure(to.hopr_address())?
+            .gas_limit(self.config().gas_limit)
+            .max_fee_per_gas(self.config().max_fee_per_gas)
+            .max_priority_fee_per_gas(self.config().max_priority_fee_per_gas)
+            .with_chain_id(self.rpc().chain_id().await?)
+            .nonce(nonce);
+        let wallet = from.as_wallet();
+
+        let payload_bytes = payload.build(&wallet).await?.encoded_2718();
+
+        self.submit_and_confirm_tx(&hex::encode(&payload_bytes), 1).await
     }
 
     async fn safe_deployment_payload(&self, owner: &AnvilAccount, amount: u64) -> Result<Vec<u8>> {
@@ -176,14 +229,16 @@ impl IntegrationFixture {
             U256::from(amount),
             vec![owner.alloy_address()],
             true,
-        )?;
+        )?
+        .gas_limit(self.config().gas_limit)
+        .max_fee_per_gas(self.config().max_fee_per_gas)
+        .max_priority_fee_per_gas(self.config().max_priority_fee_per_gas)
+        .with_chain_id(self.rpc().chain_id().await?)
+        .nonce(nonce);
 
-        let tx_input = payload
-            .input
-            .input
-            .context("transaction input missing from safe deployment payload")?;
+        let wallet = owner.as_wallet();
+        let payload_bytes = payload.build(&wallet).await?.encoded_2718();
 
-        let payload_bytes: Vec<u8> = tx_input.into();
         Ok(payload_bytes)
     }
 
@@ -239,9 +294,12 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
         .wallet(wallet)
         .connect_http(config.rpc_url.clone());
 
-    let contract_instances = ContractInstances::deploy_for_testing(provider, &deployer).await?;
+    let contract_instances = ContractInstances::deploy_for_testing(provider, &deployer)
+        .await
+        .expect("failed to deploy hopr contracts for testing");
     info!("deployed hopr contracts for testing");
 
+    // TODO: use contract addresses from contract instances
     let contract_addresses = ContractAddresses {
         announcements: *contract_instances.announcements.address(),
         channels: *contract_instances.channels.address(),

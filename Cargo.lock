@@ -1896,6 +1896,27 @@ dependencies = [
 
 [[package]]
 name = "blokli-client"
+version = "0.13.0"
+source = "git+https://github.com/hoprnet/blokli?rev=02a25aa#02a25aa08f8f0d448bd7a1b2d12aa9589770bbd9"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "cynic",
+ "cynic-codegen",
+ "eventsource-client",
+ "futures",
+ "futures-time",
+ "hex",
+ "reqwest",
+ "serde_json",
+ "smart-default",
+ "thiserror 2.0.17",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "blokli-client"
 version = "0.14.0"
 dependencies = [
  "anyhow",
@@ -1920,27 +1941,6 @@ dependencies = [
  "smart-default",
  "thiserror 2.0.17",
  "tokio",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "blokli-client"
-version = "0.13.0"
-source = "git+https://github.com/hoprnet/blokli?rev=02a25aa#02a25aa08f8f0d448bd7a1b2d12aa9589770bbd9"
-dependencies = [
- "anyhow",
- "async-trait",
- "cynic",
- "cynic-codegen",
- "eventsource-client",
- "futures",
- "futures-time",
- "hex",
- "reqwest",
- "serde_json",
- "smart-default",
- "thiserror 2.0.17",
  "tracing",
  "url",
 ]
@@ -2025,7 +2025,7 @@ name = "blokli-inspector"
 version = "0.4.0"
 dependencies = [
  "anyhow",
- "blokli-client 0.13.0",
+ "blokli-client 0.14.0",
  "clap",
  "futures",
  "hex",
@@ -2044,12 +2044,14 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
- "blokli-client 0.13.0",
+ "blokli-client 0.14.0",
  "chrono",
  "clap",
  "futures",
+ "futures-time",
  "hex",
  "hopli",
+ "hopr-bindings 4.1.0",
  "hopr-chain-connector",
  "hopr-chain-types",
  "hopr-crypto-types",
@@ -4007,7 +4009,7 @@ dependencies = [
  "async-broadcast",
  "async-trait",
  "bincode",
- "blokli-client 0.13.0 (git+https://github.com/hoprnet/blokli?rev=02a25aa)",
+ "blokli-client 0.13.0",
  "dashmap",
  "futures",
  "futures-concurrency",
