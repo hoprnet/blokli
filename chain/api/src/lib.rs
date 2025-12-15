@@ -233,10 +233,6 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         Ok(self.db.get_indexer_data(None).await?.ticket_price)
     }
 
-    pub async fn safe_allowance(&self) -> errors::Result<HoprBalance> {
-        Ok(self.db.get_safe_hopr_allowance(None).await?)
-    }
-
     pub fn rpc(&self) -> &RpcOperations<DefaultHttpRequestor> {
         &self.rpc_operations
     }
