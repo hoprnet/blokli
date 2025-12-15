@@ -186,10 +186,22 @@ where
                 FastSyncMode::Continue
             }
             (false, true) => {
-                info!("Fast sync is disabled, but the index database is empty. Doing a full re-sync.");
-                // Clean the last processed log from the Log DB, to allow full resync
-                self.db.clear_index_db(None).await?;
-                self.db.set_logs_unprocessed(None, None).await?;
+                // Check if ANY blocks have been indexed before wiping state
+                let last_indexed = self.db.get_indexer_state_info(None).await?.latest_block_number;
+
+                if last_indexed == 0 {
+                    info!("Fast sync is disabled, index database is empty, starting fresh sync.");
+                    // Clean the last processed log from the Log DB, to allow full resync
+                    self.db.clear_index_db(None).await?;
+                    self.db.set_logs_unprocessed(None, None).await?;
+                } else {
+                    info!(
+                        last_indexed_block = last_indexed,
+                        "Fast sync is disabled, index database is empty but blocks have been indexed. Continuing \
+                         normal sync."
+                    );
+                    // Don't wipe state - blocks have been processed
+                }
                 FastSyncMode::None
             }
             (false, false) => {
@@ -266,7 +278,17 @@ where
                 self.cfg.start_block_number
             }
         } else {
-            self.cfg.start_block_number
+            // No checksummed logs - check if any blocks have been indexed
+            let last_indexed = self.db.get_indexer_state_info(None).await?.latest_block_number;
+            if last_indexed > 0 {
+                info!(
+                    start_block = last_indexed,
+                    "Resuming from last indexed block (no checksummed logs found)",
+                );
+                (last_indexed + 1) as u64
+            } else {
+                self.cfg.start_block_number
+            }
         };
 
         info!(next_block_to_process, "Indexer start point");

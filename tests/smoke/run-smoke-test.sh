@@ -479,6 +479,106 @@ test_graphql() {
   return 0
 }
 
+# Test that bloklid correctly resumes from checkpoint after restart
+test_checkpoint_resume() {
+  log_info "Testing checkpoint resume after restart..."
+
+  # Phase 1: Wait for initial indexing
+  log_info "Waiting for initial indexing (30 seconds)..."
+  sleep 30
+
+  local response initial_block
+  response=$(curl -sf "${BLOKLID_URL}/readyz" || echo "{}")
+  initial_block=$(extract_json_field "$response" '.checks.indexer.last_indexed_block' '0')
+
+  if [ "$initial_block" -lt 20 ]; then
+    log_error "Initial indexing too slow: only ${initial_block} blocks indexed"
+    log_error "Expected at least 20 blocks after 30 seconds"
+    return 1
+  fi
+
+  log_info "Initial indexing complete: ${initial_block} blocks indexed"
+
+  # Phase 2: Capture pre-restart state
+  response=$(curl -sf "${BLOKLID_URL}/readyz" || echo "{}")
+  local block_before_restart rpc_before_restart
+  block_before_restart=$(extract_json_field "$response" '.checks.indexer.last_indexed_block' '0')
+  rpc_before_restart=$(extract_json_field "$response" '.checks.rpc.block_number' '0')
+
+  log_info "Preparing restart: last_indexed=${block_before_restart}, rpc_block=${rpc_before_restart}"
+
+  # Phase 3: Graceful shutdown
+  log_info "Stopping bloklid container..."
+  if ! docker compose -f "${COMPOSE_FILE}" stop bloklid; then
+    log_error "Failed to stop bloklid container"
+    return 1
+  fi
+
+  # Wait for container to fully stop
+  docker wait blokli-smoke-bloklid 2>/dev/null || true
+  sleep 2
+
+  # Verify container is stopped
+  local container_status
+  container_status=$(docker inspect blokli-smoke-bloklid --format='{{.State.Status}}' 2>/dev/null || echo "unknown")
+  if [ "$container_status" != "exited" ]; then
+    log_warn "Container status after stop: ${container_status} (expected: exited)"
+  fi
+
+  # Phase 4: Restart bloklid
+  log_info "Restarting bloklid container..."
+  if ! docker compose -f "${COMPOSE_FILE}" start bloklid; then
+    log_error "Failed to start bloklid container"
+    return 1
+  fi
+
+  # Wait for bloklid to become healthy after restart
+  if ! retry_with_timeout "$CHAIN_SYNC_TIMEOUT" "$CHAIN_SYNC_POLL_INTERVAL" \
+    "Waiting for bloklid to become healthy after restart" "check_bloklid_health"; then
+    log_error "bloklid failed to become healthy after restart"
+    return 1
+  fi
+
+  # Phase 5: Verify checkpoint resume
+  response=$(curl -sf "${BLOKLID_URL}/readyz" || echo "{}")
+  local block_after_restart
+  block_after_restart=$(extract_json_field "$response" '.checks.indexer.last_indexed_block' '0')
+
+  log_info "Checkpoint verification: before=${block_before_restart}, after=${block_after_restart}"
+
+  # Critical check: Verify no checkpoint regression
+  if [ "$block_after_restart" -lt "$block_before_restart" ]; then
+    log_error "CHECKPOINT REGRESSION DETECTED!"
+    log_error "  Before restart: block ${block_before_restart}"
+    log_error "  After restart:  block ${block_after_restart}"
+    log_error "This indicates bloklid re-indexed from scratch instead of resuming from checkpoint"
+    log_error "The checksum persistence fix may not be working correctly"
+    return 1
+  fi
+
+  log_info "Checkpoint preserved: ${block_before_restart} -> ${block_after_restart}"
+
+  # Phase 6: Verify forward progress
+  log_info "Verifying forward progress (waiting 15 seconds)..."
+  sleep 15
+
+  response=$(curl -sf "${BLOKLID_URL}/readyz" || echo "{}")
+  local final_block
+  final_block=$(extract_json_field "$response" '.checks.indexer.last_indexed_block' '0')
+
+  if [ "$final_block" -le "$block_after_restart" ]; then
+    log_error "No forward progress after restart"
+    log_error "  After restart: block ${block_after_restart}"
+    log_error "  After 15s:     block ${final_block}"
+    log_error "Indexer appears to be stuck"
+    return 1
+  fi
+
+  log_info "Forward progress confirmed: ${block_after_restart} -> ${final_block}"
+  log_info "Checkpoint resume test PASSED"
+  return 0
+}
+
 # Check if blocks have been mined
 check_blocks_mined() {
   local response
@@ -595,6 +695,10 @@ main() {
   fi
 
   if ! test_graphql; then
+    tests_passed=false
+  fi
+
+  if ! test_checkpoint_resume; then
     tests_passed=false
   fi
 
