@@ -16,27 +16,41 @@ jobs:
       source_branch: ${{ github.event.pull_request.base.ref }}
       version_type: "pr"
     secrets: inherit
-  tag-latest:
-    name: Tag Docker manifest as latest
-    runs-on: self-hosted-hoprnet-small
+  deployment:
+    name: Deployment
     needs: build-docker
+    runs-on: self-hosted-hoprnet-small
     if: github.event.pull_request.merged == true
     steps:
-      - name: Setup GCP
-        uses: hoprnet/hopr-workflows/actions/setup-gcp@12c56020e16036982e6cc529848edeedfc705865 # master
-        with:
-          google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
-          login-artifact-registry: 'true'
-          install-sdk: 'true'
-      - name: Tag manifest as latest
+      - name: Deploy to production
         run: |
-          # Get the source manifest URL from build-docker output
-          SOURCE_MANIFEST="${{ needs.build-docker.outputs.manifest_url }}"
-          LATEST_TAG="${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:latest"
+          echo "Deploying bloklid image ${{ needs.build-docker.outputs.manifest_url }} to production..."
+          # Deployment commands go here
+        env:
+          DOCKER_IMAGE: ${{ needs.build-docker.outputs.manifest_url }}
 
-          echo "Tagging $SOURCE_MANIFEST as latest"
-          gcloud artifacts docker tags add \
-            "$SOURCE_MANIFEST" \
-            "$LATEST_TAG"
 
-          echo "Successfully tagged $SOURCE_MANIFEST as latest"
+  # tag-latest:
+  #   name: Tag Docker manifest as latest
+  #   runs-on: self-hosted-hoprnet-small
+  #   needs: build-docker
+  #   if: github.event.pull_request.merged == true
+  #   steps:
+  #     - name: Setup GCP
+  #       uses: hoprnet/hopr-workflows/actions/setup-gcp@12c56020e16036982e6cc529848edeedfc705865 # master
+  #       with:
+  #         google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
+  #         login-artifact-registry: 'true'
+  #         install-sdk: 'true'
+  #     - name: Tag manifest as latest
+  #       run: |
+  #         # Get the source manifest URL from build-docker output
+  #         SOURCE_MANIFEST="${{ needs.build-docker.outputs.manifest_url }}"
+  #         LATEST_TAG="${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:latest"
+
+  #         echo "Tagging $SOURCE_MANIFEST as latest"
+  #         gcloud artifacts docker tags add \
+  #           "$SOURCE_MANIFEST" \
+  #           "$LATEST_TAG"
+
+  #         echo "Successfully tagged $SOURCE_MANIFEST as latest"
