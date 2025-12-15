@@ -16,15 +16,3 @@ jobs:
       source_branch: ${{ github.event.pull_request.base.ref }}
       version_type: "pr"
     secrets: inherit
-  deployment:
-    name: Deployment
-    needs: build-docker
-    runs-on: self-hosted-hoprnet-small
-    if: github.event.pull_request.merged == true
-    steps:
-      - name: Deploy to production
-        run: |
-          echo "Deploying bloklid image ${{ needs.build-docker.outputs.manifest_url }} to production..."
-          # Deployment commands go here
-        env:
-          DOCKER_IMAGE: ${{ needs.build-docker.outputs.manifest_url }}
