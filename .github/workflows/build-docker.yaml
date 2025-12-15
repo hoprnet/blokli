@@ -135,13 +135,13 @@ jobs:
           GOOGLE_ACCESS_TOKEN: ${{ steps.gcp.outputs.access_token }}
           IMAGE_TARGET: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ needs.build-docker-images.outputs.docker_tag }}
       - name: Upload multi-arch manifest and images
-        if: inputs.version_type == 'commit'
+        if: inputs.version_type == 'pr'
         run: nix run -L .#bloklid-docker-manifest-upload
         env:
           GOOGLE_ACCESS_TOKEN: ${{ steps.gcp.outputs.access_token }}
           IMAGE_TARGET: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:latest
-      - name: Trigger deploy workflow if needed
-        if: inputs.version_type == 'commit'
+      - name: Trigger deploy workflow
+        if: inputs.version_type == 'pr'
         uses: peter-evans/repository-dispatch@5fc4efd1a4797ddb68ffd0714a238564e4cc0e6f # v4.0.0
         with:
           token: ${{ secrets.GH_RUNNER_TOKEN }}
