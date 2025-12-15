@@ -1779,7 +1779,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-indexer"
-version = "0.5.0"
+version = "0.5.1"
 dependencies = [
  "alloy",
  "anyhow",
@@ -1915,7 +1915,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -2010,7 +2010,7 @@ dependencies = [
 
 [[package]]
 name = "bloklid"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "alloy",
  "anyhow",
