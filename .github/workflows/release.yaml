@@ -36,12 +36,18 @@ jobs:
         with:
           google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
           install-sdk: "true"
+      - name: Generate Release Notes
+        uses: hoprnet/hopr-workflows/actions/generate-release-notes@ausias/setup-version
+        with:
+          branch: ${{ github.ref }}
+          format: github
+          release_notes_file: ./release-notes.txt
       - name: Create release and publish binaries
         id: environment
         run: |
           release_version=$(grep -E '^version\s*=' bloklid/Cargo.toml | awk -F\" '{print $2}')
           echo "release_version=${release_version}" >> "$GITHUB_OUTPUT"
-          gh release create "v${release_version}" --generate-notes
+          gh release create "v${release_version}" --notes-file ./release-notes.txt
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Bump version
