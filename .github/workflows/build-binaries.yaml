@@ -96,70 +96,44 @@ jobs:
         env:
           USER: runner
 
-      - name: Get PR labels
-        id: pr-labels
-        uses: joerick/pr-labels-action@0543b277721e852d821c6738d449f2f4dea03d5f # v1.0.9
-
-      - name: Get version
+      - name: Update to build version
         id: version
-        run: |
-          set -x
-          base_version=$(grep -E '^version\s*=' bloklid/Cargo.toml | awk -F\" '{print $2}')
-          if [[ "${{ inputs.version_type }}" == "commit" ]]; then
-            bump_version=${base_version}+commit.$(git rev-parse --short HEAD)
-            if [ "${GITHUB_PR_LABEL_PUBLISH_COMMITS:-0}" == '1' ]; then
-              publish_type=artifact-registry
-            else
-              publish_type=workflow
-            fi
-          elif [[ "${{ inputs.version_type }}" == "pr" ]]; then
-            bump_version=${base_version}+pr.${{ github.event.pull_request.number }}
-            publish_type=artifact-registry
-          elif [[ "${{ inputs.version_type }}" == "release" ]]; then
-            bump_version=${base_version}
-            publish_type=github
-          else
-            echo "Executed from a manual workflow dispatch"
-            bump_version=${base_version}+commit.$(git rev-parse --short HEAD)
-            publish_type=workflow
-          fi
-          echo "bump_version=${bump_version}" | tee -a "$GITHUB_OUTPUT"
-          echo "publish_type=${publish_type}" | tee -a "$GITHUB_OUTPUT"
-          sed -i.bak -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" bloklid/Cargo.toml
-          # TODO Need to regenerate the lockfile in nix
-          # nix develop --command cargo generate-lockfile
-          rm bloklid/Cargo.toml.bak
+        uses: hoprnet/hopr-workflows/actions/set-build-version@ausias/setup-version
+        with:
+          file: bloklid/Cargo.toml
+          version_type: "${{ inputs.version_type || 'commit' }}"
+
 
       - name: Build binary ${{ steps.vars.outputs.architecture}}
         run: |
           nix develop --command just build-release ${{ steps.vars.outputs.architecture}}
           if [[ "${{ inputs.version_type }}" == "commit" ]]; then
-            mv ./result/bin/bloklid result/bin/bloklid-${{ steps.vars.outputs.architecture}}-${{ steps.version.outputs.bump_version }}
+            mv ./result/bin/bloklid result/bin/bloklid-${{ steps.vars.outputs.architecture}}-${{ steps.version.outputs.build_version }}
           else
             mv ./result/bin/bloklid result/bin/bloklid-${{ steps.vars.outputs.architecture}}
           fi
       - name: Setup GCP
-        if: steps.version.outputs.publish_type == 'artifact-registry' || steps.version.outputs.publish_type == 'github'
+        if: steps.version.outputs.publish_artifact_registry || steps.version.outputs.publish_github_release
         uses: hoprnet/hopr-workflows/actions/setup-gcp@master
         with:
           google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
           install-sdk: "true"
 
       - name: Publish Artifact registry
-        if: steps.version.outputs.publish_type == 'artifact-registry' || steps.version.outputs.publish_type == 'github'
+        if: steps.version.outputs.publish_artifact_registry || steps.version.outputs.publish_github_release
         run: |
           binary=result/bin/bloklid-${{ steps.vars.outputs.architecture}}
-          gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.bump_version }} --package=blokli --source=${binary}
+          gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.build_version }} --package=blokli --source=${binary}
           if [[ "${{ inputs.version_type }}" == "release" ]]; then
             echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
             gpg --armor --output ${binary}.asc --detach-sign ${binary}
             shasum -a 256 ${binary} > ${binary}.sha256
-            gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.bump_version }} --package=blokli --source=${binary}.asc
-            gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.bump_version }} --package=blokli --source=${binary}.sha256
+            gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.build_version }} --package=blokli --source=${binary}.asc
+            gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.build_version }} --package=blokli --source=${binary}.sha256
           fi
 
       - name: Upload ${{ steps.vars.outputs.architecture }} binaries
-        if: steps.version.outputs.publish_type == 'workflow'
+        if: steps.version.outputs.publish_workflow_run
         uses: actions/upload-artifact@v4
         with:
           name: binary-${{ steps.vars.outputs.architecture }}
