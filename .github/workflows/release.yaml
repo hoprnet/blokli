@@ -30,18 +30,19 @@ jobs:
     steps:
       - name: Checkout hoprnet repository
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
-      - name: Setup GCP
-        id: gcp
-        uses: hoprnet/hopr-workflows/actions/setup-gcp@12c56020e16036982e6cc529848edeedfc705865 # master
-        with:
-          google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
-          install-sdk: "true"
       - name: Generate Release Notes
         uses: hoprnet/hopr-workflows/actions/generate-release-notes@ausias/setup-version
         with:
           branch: ${{ github.ref }}
           format: github
           release_notes_file: ./release-notes.txt
+      - name: Setup GCP
+        id: gcp
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@12c56020e16036982e6cc529848edeedfc705865 # master
+        with:
+          google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
+          install-sdk: "true"
+
       - name: Create release and publish binaries
         id: environment
         run: |
