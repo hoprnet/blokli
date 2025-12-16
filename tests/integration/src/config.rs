@@ -65,7 +65,7 @@ pub struct TestConfig {
     pub gas_limit: u64,
 
     #[arg(long, env = "BLOKLI_TEST_CONFIRMATIONS", default_value_t = 1)]
-    pub tx_confirmations: u32,
+    pub tx_confirmations: usize,
 
     #[arg(long, env = "BLOKLI_TEST_REGISTRY_PORT", default_value_t = 5001)]
     pub registry_port: u16,

@@ -152,10 +152,11 @@ impl IntegrationFixture {
 
         let payload_bytes = payload.build(&owner.as_wallet()).await?.encoded_2718();
 
-        self.submit_and_confirm_tx(&payload_bytes, 1).await
+        self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
+            .await
     }
 
-    pub async fn announce_account(&self, account: &AnvilAccount) -> Result<()> {
+    pub async fn announce_account(&self, account: &AnvilAccount) -> Result<[u8; 32]> {
         let nonce = self.rpc().transaction_count(account.address.as_ref()).await?;
 
         let payload_generator = BasicPayloadGenerator::new(account.hopr_address(), *self.contract_addresses());
@@ -171,7 +172,8 @@ impl IntegrationFixture {
 
         let payload_bytes = payload.build(&account.as_wallet()).await?.encoded_2718();
 
-        self.submit_and_confirm_tx(&payload_bytes, 1).await.map(|_| ())
+        self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
+            .await
     }
 
     pub async fn open_channel(&self, from: &AnvilAccount, to: &AnvilAccount, amount: HoprBalance) -> Result<[u8; 32]> {
@@ -189,7 +191,8 @@ impl IntegrationFixture {
 
         let payload_bytes = payload.build(&from.as_wallet()).await?.encoded_2718();
 
-        self.submit_and_confirm_tx(&payload_bytes, 1).await
+        self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
+            .await
     }
 
     pub async fn initiate_outgoing_channel_closure(&self, from: &AnvilAccount, to: &AnvilAccount) -> Result<[u8; 32]> {
@@ -207,7 +210,8 @@ impl IntegrationFixture {
 
         let payload_bytes = payload.build(&from.as_wallet()).await?.encoded_2718();
 
-        self.submit_and_confirm_tx(&payload_bytes, 1).await
+        self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
+            .await
     }
 
     fn teardown(&self) {
@@ -240,7 +244,7 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
         seconds = STACK_STARTUP_WAIT.as_secs(),
         "waiting for integration stack to stabilize"
     );
-    thread::sleep(STACK_STARTUP_WAIT);
+    tokio::time::sleep(STACK_STARTUP_WAIT).await;
     let accounts = docker.fetch_anvil_accounts()?;
 
     let rpc = RpcClient::new(config.rpc_url.as_str(), config.http_timeout)?;
@@ -317,6 +321,8 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
             contract_addrs: contract_addresses,
         }),
     };
+
+    tokio::time::sleep(Duration::from_secs(2)).await;
 
     register_shutdown_hook();
 

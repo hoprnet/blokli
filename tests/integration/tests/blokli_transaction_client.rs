@@ -9,13 +9,11 @@ use rstest::*;
 use serial_test::serial;
 use tokio::time::sleep;
 
-const TX_VALUE: u128 = 1_000_000_000_000; // 0.000001 ETH
+const TX_VALUE: u128 = 1_000_000; // 0.000000000001 ETH
 enum ClientType {
     RPC,
     Blokli,
 }
-
-// TODO: test a withdrawal transaction with too much value
 
 #[rstest]
 #[case(ClientType::RPC)]
@@ -145,6 +143,7 @@ async fn submit_and_confirm_transaction(#[future(awt)] fixture: IntegrationFixtu
     let [sender, recipient] = fixture.sample_accounts::<2>();
     let tx_value = U256::from(TX_VALUE);
     let nonce = fixture.rpc().transaction_count(&sender.address).await?;
+    let confirmations = fixture.config().tx_confirmations;
 
     let raw_tx = fixture.build_raw_tx(tx_value, sender, recipient, nonce).await?;
     let signed_bytes =
@@ -152,9 +151,9 @@ async fn submit_and_confirm_transaction(#[future(awt)] fixture: IntegrationFixtu
     let initial_balance = fixture.rpc().get_balance(&recipient.address).await?;
 
     let block_number = fixture.client().query_chain_info().await?.block_number;
-    fixture.submit_and_confirm_tx(&signed_bytes, 2).await?;
+    fixture.submit_and_confirm_tx(&signed_bytes, confirmations).await?;
 
-    assert!(fixture.client().query_chain_info().await?.block_number >= block_number + 2);
+    assert!(fixture.client().query_chain_info().await?.block_number >= block_number + (confirmations as i32));
 
     let final_balance = fixture.rpc().get_balance(&recipient.address).await?;
     let delta = final_balance
