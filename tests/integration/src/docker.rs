@@ -1,4 +1,9 @@
-use std::{fs, path::PathBuf, process::Command, sync::Arc};
+use std::{
+    fs,
+    path::{Path, PathBuf},
+    process::Command,
+    sync::Arc,
+};
 
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
@@ -21,14 +26,81 @@ impl DockerEnvironment {
     }
 
     pub fn ensure_image_available(&self) -> Result<()> {
-        let remote = &self.config.remote_image;
+        if self.try_load_local_image()? {
+            return Ok(());
+        }
+        if let Some(remote) = &self.config.remote_image {
+            return self.pull_remote_image(remote);
+        }
+        bail!(
+            "No local bloklid Docker image found at {} and BLOKLI_TEST_REMOTE_IMAGE is not set. Please run `nix build \
+             .#bloklid-docker-${{arch}}` before running integration tests.",
+            self.config.project_root.join("result").display()
+        );
+    }
+
+    fn try_load_local_image(&self) -> Result<bool> {
+        let result_path = self.config.project_root.join("result");
+        if !result_path.exists() {
+            return Ok(false);
+        }
+
+        info!(
+            path = %result_path.display(),
+            "loading bloklid Docker image from local nix build result"
+        );
+        match self.load_image_from_path(&result_path) {
+            Ok(source_image) => {
+                self.tag_image(&source_image)?;
+                info!(
+                    image = %source_image,
+                    target = %self.config.bloklid_image,
+                    "loaded bloklid Docker image from local build"
+                );
+                Ok(true)
+            }
+            Err(err) => {
+                warn!(
+                    error = ?err,
+                    path = %result_path.display(),
+                    "failed to load local Docker image, falling back to remote image"
+                );
+                Ok(false)
+            }
+        }
+    }
+
+    fn load_image_from_path(&self, archive_path: &Path) -> Result<String> {
+        let mut cmd = Command::new("docker");
+        cmd.arg("load").arg("--input").arg(archive_path);
+        let output = capture_command(cmd, "docker load bloklid image from local result")?;
+
+        if let Some(image) = output.lines().rev().find_map(|line| {
+            line.trim()
+                .strip_prefix("Loaded image: ")
+                .map(|value| value.to_string())
+        }) {
+            Ok(image)
+        } else {
+            bail!(
+                "Unable to determine loaded Docker image from docker load output: {}",
+                output
+            );
+        }
+    }
+
+    fn pull_remote_image(&self, remote: &str) -> Result<()> {
         info!(remote = %remote, "pulling bloklid Docker image from registry");
 
         let cmd = build_command("docker", &["pull", "--platform", "linux/amd64", remote]);
         run_command(cmd, true, "docker pull bloklid image")?;
+        self.tag_image(remote)
+    }
 
-        let cmd = build_command("docker", &["tag", remote, &self.config.bloklid_image]);
-        run_command(cmd, true, "docker tag bloklid remote image")?;
+    fn tag_image(&self, source_image: &str) -> Result<()> {
+        let mut cmd = Command::new("docker");
+        cmd.arg("tag").arg(source_image).arg(&self.config.bloklid_image);
+        run_command(cmd, true, "docker tag bloklid image")?;
         Ok(())
     }
 

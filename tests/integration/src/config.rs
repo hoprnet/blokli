@@ -6,7 +6,6 @@ use url::Url;
 
 const DEFAULT_INTEGRATION_CONFIG: &str = "config-integration-anvil.toml";
 const DEFAULT_BLOKLID_URL: &str = "http://localhost:8080";
-const DEFAULT_REMOTE_IMAGE: &str = "europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid:latest";
 const DEFAULT_RPC_URL: &str = "http://localhost:8545";
 const DEFAULT_TEST_IMAGE: &str = "bloklid:integration-test";
 
@@ -24,8 +23,8 @@ pub struct TestConfig {
     #[arg(long, env = "BLOKLI_TEST_CONFIG", default_value = DEFAULT_INTEGRATION_CONFIG)]
     pub integration_config: String,
 
-    #[arg(long, env = "BLOKLI_TEST_REMOTE_IMAGE", default_value = DEFAULT_REMOTE_IMAGE)]
-    pub remote_image: String,
+    #[arg(long, env = "BLOKLI_TEST_REMOTE_IMAGE")]
+    pub remote_image: Option<String>,
 
     #[arg(
         long,
