@@ -14,6 +14,10 @@ on:
       version_type:
         required: true
         type: string
+        description: "Type of version to build: commit, pr, release"
+        # commit: Tag docker images for regular commits on open PR
+        # pr: Tag docker images for merged PRs
+        # release: Tag docker images for releases
     outputs:
       image_tag:
         description: "Docker image tag (without architecture suffix)"
