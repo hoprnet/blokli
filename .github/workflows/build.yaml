@@ -6,7 +6,6 @@ on:
       - synchronize
       - reopened
       - ready_for_review
-      - labeled
 concurrency:
   group: ${{ github.ref }}-build
   cancel-in-progress: true
@@ -20,6 +19,28 @@ jobs:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       version_type: "commit"
     secrets: inherit
+  build-client:
+    name: Build blokli-client
+    runs-on: self-hosted-hoprnet-bigger
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+      - name: Generate Release Notes
+        uses: hoprnet/hopr-workflows/actions/generate-release-notes@ausias/setup-version
+        with:
+          branch: ${{ github.event.pull_request.base.ref }}
+          format: github
+          release_notes_file: ./release-notes.txt
+      - name: Use Nix Cache
+        uses: cachix/cachix-action@0fc020193b5a1fa3ac4575aa3a7d3aa6a35435ad # v16
+        with:
+          name: blokli
+          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
+        env:
+          USER: runner
+      - name: Build blokli-client-dev
+        run: nix build -L .#blokli-client-dev --no-link
   smoke-test:
     name: Smoke Test
     needs: build-docker
