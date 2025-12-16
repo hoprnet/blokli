@@ -138,7 +138,7 @@ jobs:
         env:
           GOOGLE_ACCESS_TOKEN: ${{ steps.gcp.outputs.access_token }}
           IMAGE_TARGET: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ needs.build-docker-images.outputs.docker_tag }}
-      - name: Upload multi-arch manifest and images
+      - name: Upload multi-arch manifest and images (latest tag)
         if: inputs.version_type == 'pr'
         run: nix run -L .#bloklid-docker-manifest-upload
         env:
