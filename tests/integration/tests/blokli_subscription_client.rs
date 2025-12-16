@@ -34,19 +34,19 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
 
     let handle = tokio::task::spawn(async move {
         client
-        .subscribe_channels(channel_selector)
-        .expect("failed to create safe deployments subscription")
-        .skip_while(|entry| {
-            let should_skip = entry
-                .as_ref()
-                .expect("failed to get subscription update")
-                .concrete_channel_id
-                != expected_channel_id;
-            futures::future::ready(should_skip)
-        })
-        .next()
-        .timeout(subscription_timeout())
-        .await
+            .subscribe_channels(channel_selector)
+            .expect("failed to create safe deployments subscription")
+            .skip_while(|entry| {
+                let should_skip = entry
+                    .as_ref()
+                    .expect("failed to get subscription update")
+                    .concrete_channel_id
+                    != expected_channel_id;
+                futures::future::ready(should_skip)
+            })
+            .next()
+            .timeout(subscription_timeout())
+            .await
     });
 
     fixture.open_channel(&src, &dst, amount).await?;
@@ -69,20 +69,27 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
     let client = fixture.client().clone();
     let handle = tokio::task::spawn(async move {
         client
-        .subscribe_accounts(selector)
-        .expect("failed to create account subscription")
-        .skip_while(|entry| {
-            let should_skip = entry.as_ref().expect("failed to get subscription update").chain_key != account_address;
-            futures::future::ready(should_skip)
-        })     
-        .next()  
-        .timeout(subscription_timeout())
-        .await
+            .subscribe_accounts(selector)
+            .expect("failed to create account subscription")
+            .skip_while(|entry| {
+                let should_skip =
+                    entry.as_ref().expect("failed to get subscription update").chain_key != account_address;
+                futures::future::ready(should_skip)
+            })
+            .next()
+            .timeout(subscription_timeout())
+            .await
     });
 
     fixture.announce_account(account).await?;
 
-    assert_eq!(handle.await??.ok_or_else(|| anyhow!("no update received from subscription"))??.chain_key, account.address);
+    assert_eq!(
+        handle
+            .await??
+            .ok_or_else(|| anyhow!("no update received from subscription"))??
+            .chain_key,
+        account.address
+    );
 
     Ok(())
 }
@@ -178,17 +185,19 @@ async fn subscribe_safe_deployments(#[future(awt)] fixture: IntegrationFixture) 
 
     let handle = tokio::task::spawn(async move {
         client
-        .subscribe_safe_deployments()
-        .expect("failed to create safe deployments subscription")
-        // .skip_while()
-        .next()
-        .timeout(subscription_timeout())
-        .await
+            .subscribe_safe_deployments()
+            .expect("failed to create safe deployments subscription")
+            // .skip_while()
+            .next()
+            .timeout(subscription_timeout())
+            .await
     });
 
     fixture.deploy_safe(account, 1_000).await?;
 
-    handle.await??.ok_or_else(|| anyhow!("no update received from subscription"))??;
+    handle
+        .await??
+        .ok_or_else(|| anyhow!("no update received from subscription"))??;
 
     Ok(())
 }
