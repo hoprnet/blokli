@@ -61,7 +61,7 @@ async fn submit_transaction_with_incorrect_payload(
     #[case] client_type: ClientType,
 ) -> Result<()> {
     let [sender, recipient] = fixture.sample_accounts::<2>();
-    let tx_value = U256::MAX; // definitely too much value
+    let tx_value = U256::from(TX_VALUE);
     let nonce = fixture.rpc().transaction_count(&sender.address).await?;
 
     let mut raw_tx = fixture.build_raw_tx(tx_value, sender, recipient, nonce).await?;
@@ -86,7 +86,7 @@ async fn submit_transaction_with_too_much_value(
     #[case] client_type: ClientType,
 ) -> Result<()> {
     let [sender, recipient] = fixture.sample_accounts::<2>();
-    let tx_value = U256::from(TX_VALUE);
+    let tx_value = U256::MAX; // definitely too much value
     let nonce = fixture.rpc().transaction_count(&sender.address).await?;
 
     let raw_tx = fixture.build_raw_tx(tx_value, sender, recipient, nonce).await?;

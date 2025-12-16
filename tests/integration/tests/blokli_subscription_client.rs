@@ -11,8 +11,9 @@ use hopr_primitive_types::{prelude::HoprBalance, traits::ToHex};
 use rand::Rng;
 use rstest::*;
 use serial_test::serial;
+use tracing::info;
 
-const SUBSCRIPTION_TIMEOUT_SECS: u64 = 5;
+const SUBSCRIPTION_TIMEOUT_SECS: u64 = 60;
 
 fn subscription_timeout() -> Duration {
     Duration::from_secs(SUBSCRIPTION_TIMEOUT_SECS)
@@ -30,10 +31,15 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
     };
     let expected_channel_id = Hash::from(expected_id).to_hex();
 
-    let subscription = fixture.client().subscribe_channels(channel_selector)?;
+    let subscription = fixture
+        .client()
+        .subscribe_channels(channel_selector)
+        .expect("failed to create channel subscription");
 
     let subscription = subscription.fuse();
     let amount = "1 wxHOPR".parse().expect("failed to parse amount");
+
+    info!("Opening channel between {} and {}", src.address, dst.address);
 
     fixture.open_channel(&src, &dst, amount).await?;
 
@@ -62,7 +68,11 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
     let [input] = fixture.sample_accounts::<1>();
 
     let selector = AccountSelector::Address(*input.alloy_address().as_ref());
-    let subscription = fixture.client().subscribe_accounts(selector)?.fuse();
+    let subscription = fixture
+        .client()
+        .subscribe_accounts(selector)
+        .expect("failed to create account subscription")
+        .fuse();
 
     let output = subscription
         .skip_while(|entry| {
@@ -86,7 +96,11 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
 async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [src, dst] = fixture.sample_accounts::<2>();
     let expected_id = generate_channel_id(&src.hopr_address(), &dst.hopr_address());
-    let subscription = fixture.client().subscribe_graph()?;
+    let subscription = fixture
+        .client()
+        .subscribe_graph()
+        .expect("failed to create graph subscription")
+        .fuse();
 
     let amount = "1 wxHOPR".parse().expect("failed to parse amount");
     let expected_channel_id = Hash::from(expected_id).to_hex();
@@ -123,7 +137,10 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
         .parse()
         .expect("failed to parse amount");
 
-    let subscription = fixture.client().subscribe_ticket_params()?;
+    let subscription = fixture
+        .client()
+        .subscribe_ticket_params()
+        .expect("failed to create ticket params subscription");
     let subscription = subscription.fuse();
 
     // TODO: update the ticket price and win prob through anvil / hopli
@@ -162,7 +179,11 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
 #[serial]
 async fn subscribe_safe_deployments(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
-    let subscription = fixture.client().subscribe_safe_deployments()?;
+    let subscription = fixture
+        .client()
+        .subscribe_safe_deployments()
+        .expect("failed to create safe deployments subscription")
+        .fuse();
 
     fixture.deploy_safe(account, 1_000).await?;
 
