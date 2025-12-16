@@ -37,7 +37,7 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
         .expect("failed to create channel subscription");
 
     let subscription = subscription.fuse();
-    let amount = "1 wxHOPR".parse().expect("failed to parse amount");
+    let amount = "1 wei wxHOPR".parse().expect("failed to parse amount");
 
     info!("Opening channel between {} and {}", src.address, dst.address);
 
@@ -102,7 +102,7 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
         .expect("failed to create graph subscription")
         .fuse();
 
-    let amount = "1 wxHOPR".parse().expect("failed to parse amount");
+    let amount = "1 wei wxHOPR".parse().expect("failed to parse amount");
     let expected_channel_id = Hash::from(expected_id).to_hex();
 
     fixture.open_channel(&src, &dst, amount).await?;
