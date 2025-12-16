@@ -96,7 +96,7 @@ jobs:
         env:
           USER: runner
 
-      - name: Update to build version
+      - name: Updates build version
         id: version
         uses: hoprnet/hopr-workflows/actions/set-build-version@ausias/setup-version
         with:

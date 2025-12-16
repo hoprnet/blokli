@@ -50,8 +50,8 @@ jobs:
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
         env:
           USER: runner
-      - name: Update to build version
-        id: build_version
+      - name: Updates build version
+        id: version
         uses: hoprnet/hopr-workflows/actions/set-build-version@ausias/setup-version
         with:
           file: bloklid/Cargo.toml
@@ -77,11 +77,11 @@ jobs:
     runs-on: self-hosted-hoprnet-bigger
     needs: build-docker-images
     outputs:
-      image_tag: ${{ steps.build_version.outputs.build_version }}
-      docker_tag: ${{ steps.build_version.outputs.docker_version }}
-      manifest_url: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ steps.build_version.outputs.docker_version }}
-      image_url_amd64: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ steps.build_version.outputs.docker_version }}-linux-amd64
-      # image_url_arm64: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ steps.build_version.outputs.docker_version }}-linux-arm64
+      image_tag: ${{ steps.version.outputs.build_version }}
+      docker_tag: ${{ steps.version.outputs.docker_version }}
+      manifest_url: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ steps.version.outputs.docker_version }}
+      image_url_amd64: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ steps.version.outputs.docker_version }}-linux-amd64
+      # image_url_arm64: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ steps.version.outputs.docker_version }}-linux-arm64
       # Re-enable when aarch64 runner is available
     steps:
       - name: Checkout repository
@@ -102,8 +102,8 @@ jobs:
           google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
           login-artifact-registry: 'true'
           install-sdk: 'false'
-      - name: Update to build version
-        id: build_version
+      - name: Updates build version
+        id: version
         uses: hoprnet/hopr-workflows/actions/set-build-version@ausias/setup-version
         with:
           file: bloklid/Cargo.toml
@@ -116,7 +116,7 @@ jobs:
         run: nix run -L .#bloklid-docker-manifest-upload
         env:
           GOOGLE_ACCESS_TOKEN: ${{ steps.gcp.outputs.access_token }}
-          IMAGE_TARGET: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ steps.build_version.outputs.docker_version }}
+          IMAGE_TARGET: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ steps.version.outputs.docker_version }}
   security-scan:
     name: Security Scan (${{ matrix.architecture }})
     needs: upload-manifest
