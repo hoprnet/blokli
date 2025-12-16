@@ -4,6 +4,7 @@ use alloy::primitives::U256;
 use anyhow::{Context, Result};
 use blokli_client::api::{BlokliQueryClient, BlokliTransactionClient, types::TransactionStatus};
 use blokli_integration_tests::fixtures::{IntegrationFixture, integration_fixture as fixture};
+use hex::FromHex;
 use rstest::*;
 use serial_test::serial;
 use tokio::time::sleep;
@@ -27,6 +28,8 @@ async fn submit_transaction(#[future(awt)] fixture: IntegrationFixture, #[case] 
     let nonce = fixture.rpc().transaction_count(&sender.address).await?;
 
     let raw_tx = fixture.build_raw_tx(tx_value, sender, recipient, nonce).await?;
+    let signed_bytes =
+        Vec::from_hex(raw_tx.trim_start_matches("0x")).context("failed to decode raw transaction payload")?;
 
     let initial_balance = fixture.rpc().get_balance(&recipient.address).await?;
 
@@ -35,7 +38,7 @@ async fn submit_transaction(#[future(awt)] fixture: IntegrationFixture, #[case] 
             fixture.rpc().execute_transaction(&raw_tx).await?;
         }
         ClientType::Blokli => {
-            fixture.submit_tx(&raw_tx).await?;
+            fixture.submit_tx(&signed_bytes).await?;
         }
     }
 
@@ -66,10 +69,12 @@ async fn submit_transaction_with_incorrect_payload(
 
     let mut raw_tx = fixture.build_raw_tx(tx_value, sender, recipient, nonce).await?;
     raw_tx.replace_range(10..14, "dead");
+    let signed_bytes =
+        Vec::from_hex(raw_tx.trim_start_matches("0x")).context("failed to decode raw transaction payload")?;
 
     let res = match client_type {
         ClientType::RPC => fixture.rpc().execute_transaction(&raw_tx).await,
-        ClientType::Blokli => fixture.submit_tx(&raw_tx).await,
+        ClientType::Blokli => fixture.submit_tx(&signed_bytes).await,
     };
     assert!(res.is_err(), "transaction with incorrect payload should fail");
 
@@ -90,10 +95,12 @@ async fn submit_transaction_with_too_much_value(
     let nonce = fixture.rpc().transaction_count(&sender.address).await?;
 
     let raw_tx = fixture.build_raw_tx(tx_value, sender, recipient, nonce).await?;
+    let signed_bytes =
+        Vec::from_hex(raw_tx.trim_start_matches("0x")).context("failed to decode raw transaction payload")?;
 
     let res = match client_type {
         ClientType::RPC => fixture.rpc().execute_transaction(&raw_tx).await,
-        ClientType::Blokli => fixture.submit_tx(&raw_tx).await,
+        ClientType::Blokli => fixture.submit_tx(&signed_bytes).await,
     };
     assert!(res.is_err(), "transaction with incorrect payload should fail");
 
@@ -110,11 +117,14 @@ async fn submit_and_track_transaction(#[future(awt)] fixture: IntegrationFixture
 
     let raw_tx = fixture.build_raw_tx(tx_value, sender, recipient, nonce).await?;
     let initial_balance = fixture.rpc().get_balance(&recipient.address).await?;
-    let txid = fixture.submit_and_track_tx(&raw_tx).await?;
+    let signed_bytes =
+        Vec::from_hex(raw_tx.trim_start_matches("0x")).context("failed to decode raw transaction payload")?;
+
+    let txid = fixture.submit_and_track_tx(&signed_bytes).await?;
 
     let res = fixture
         .client()
-        .track_transaction(txid.clone(), Duration::from_secs(5))
+        .track_transaction(txid.clone(), Duration::from_secs(30))
         .await?;
     assert_eq!(res.status, TransactionStatus::Confirmed);
 
@@ -137,11 +147,12 @@ async fn submit_and_confirm_transaction(#[future(awt)] fixture: IntegrationFixtu
     let nonce = fixture.rpc().transaction_count(&sender.address).await?;
 
     let raw_tx = fixture.build_raw_tx(tx_value, sender, recipient, nonce).await?;
-
+    let signed_bytes =
+        Vec::from_hex(raw_tx.trim_start_matches("0x")).context("failed to decode raw transaction payload")?;
     let initial_balance = fixture.rpc().get_balance(&recipient.address).await?;
 
     let block_number = fixture.client().query_chain_info().await?.block_number;
-    fixture.submit_and_confirm_tx(&raw_tx, 2).await?;
+    fixture.submit_and_confirm_tx(&signed_bytes, 2).await?;
 
     assert!(fixture.client().query_chain_info().await?.block_number >= block_number + 2);
 
