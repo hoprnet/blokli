@@ -107,11 +107,7 @@ jobs:
       - name: Build binary ${{ steps.vars.outputs.architecture}}
         run: |
           nix develop --command just build-release ${{ steps.vars.outputs.architecture}}
-          if [[ "${{ inputs.version_type }}" == "commit" ]]; then
-            mv ./result/bin/bloklid result/bin/bloklid-${{ steps.vars.outputs.architecture}}-${{ steps.version.outputs.build_version }}
-          else
-            mv ./result/bin/bloklid result/bin/bloklid-${{ steps.vars.outputs.architecture}}
-          fi
+          mv ./result/bin/bloklid result/bin/bloklid-${{ steps.vars.outputs.architecture}}
       - name: Setup GCP
         if: steps.version.outputs.publish_artifact_registry || steps.version.outputs.publish_github_release
         uses: hoprnet/hopr-workflows/actions/setup-gcp@master
@@ -136,5 +132,5 @@ jobs:
         if: steps.version.outputs.publish_workflow_run
         uses: actions/upload-artifact@v4
         with:
-          name: binary-${{ steps.vars.outputs.architecture }}
-          path: ${{ github.workspace }}/result/bin/*
+          name: bloklid-${{ steps.vars.outputs.architecture}}
+          path: ${{ github.workspace }}/result/bin/bloklid-${{ steps.vars.outputs.architecture}}
