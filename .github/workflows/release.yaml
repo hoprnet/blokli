@@ -15,45 +15,44 @@ concurrency:
   group: release
   cancel-in-progress: false
 jobs:
-  build-docker:
-    name: Build Docker
-    uses: ./.github/workflows/build-docker.yaml
-    with:
-      source_branch: ${{ github.ref }}
-      version_type: "release"
-    secrets: inherit
+  # build-docker:
+  #   name: Build Docker
+  #   uses: ./.github/workflows/build-docker.yaml
+  #   with:
+  #     source_branch: ${{ github.ref }}
+  #     version_type: "release"
+  #   secrets: inherit
   release:
     name: Close release
-    needs:
-      - build-docker
+    # needs:
+    #   - build-docker
     runs-on: self-hosted-hoprnet-small
     steps:
       - name: Checkout hoprnet repository
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+      # - name: Setup GCP
+      #   id: gcp
+      #   uses: hoprnet/hopr-workflows/actions/setup-gcp@12c56020e16036982e6cc529848edeedfc705865 # master
+      #   with:
+      #     google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
+      #     install-sdk: "true"
       - name: Generate Release Notes
         uses: hoprnet/hopr-workflows/actions/generate-release-notes@ausias/setup-version
         with:
           branch: ${{ github.ref }}
           format: github
           release_notes_file: ./release-notes.txt
-      - name: Setup GCP
-        id: gcp
-        uses: hoprnet/hopr-workflows/actions/setup-gcp@12c56020e16036982e6cc529848edeedfc705865 # master
-        with:
-          google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
-          install-sdk: "true"
-
-      - name: Create release and publish binaries
-        id: environment
-        run: |
-          release_version=$(grep -E '^version\s*=' bloklid/Cargo.toml | awk -F\" '{print $2}')
-          echo "release_version=${release_version}" >> "$GITHUB_OUTPUT"
-          gh release create "v${release_version}" --notes-file ./release-notes.txt
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - name: Bump version
-        id: bump_version
-        uses: hoprnet/hopr-workflows/actions/bump-version@ausias/setup-version
-        with:
-          file: bloklid/Cargo.toml
-          release_type: ${{ inputs.release_type }}
+      # - name: Create release and publish binaries
+      #   id: environment
+      #   run: |
+      #     release_version=$(grep -E '^version\s*=' bloklid/Cargo.toml | awk -F\" '{print $2}')
+      #     echo "release_version=${release_version}" >> "$GITHUB_OUTPUT"
+      #     gh release create "v${release_version}" --notes-file ./release-notes.txt
+      #   env:
+      #     GH_TOKEN: ${{ github.token }}
+      # - name: Bump version
+      #   id: bump_version
+      #   uses: hoprnet/hopr-workflows/actions/bump-version@ausias/setup-version
+      #   with:
+      #     file: bloklid/Cargo.toml
+      #     release_type: ${{ inputs.release_type }}
