@@ -39,7 +39,7 @@ jobs:
       - name: Generate Release Notes
         uses: hoprnet/hopr-workflows/actions/generate-release-notes@ausias/setup-version
         with:
-          branch: ${{ github.ref }}
+          branch: main # ${{ github.ref }}
           format: github
           release_notes_file: ./release-notes.txt
       # - name: Create release and publish binaries
