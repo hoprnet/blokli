@@ -61,7 +61,7 @@ pub struct TestConfig {
     )]
     pub max_priority_fee_per_gas: u128,
 
-    #[arg(long, env = "BLOKLI_TEST_GAS_LIMIT", default_value_t = 1_000_000)]
+    #[arg(long, env = "BLOKLI_TEST_GAS_LIMIT", default_value_t = 10_000_000)]
     pub gas_limit: u64,
 
     #[arg(long, env = "BLOKLI_TEST_CONFIRMATIONS", default_value_t = 1)]

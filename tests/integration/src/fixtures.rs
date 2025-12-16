@@ -1,6 +1,5 @@
 use std::{
     sync::{Arc, Mutex, Once},
-    thread,
     time::Duration,
 };
 

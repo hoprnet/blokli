@@ -179,7 +179,7 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
 #[serial]
 async fn subscribe_safe_deployments(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
-    let subscription = fixture
+    let mut subscription = fixture
         .client()
         .subscribe_safe_deployments()
         .expect("failed to create safe deployments subscription")
@@ -188,10 +188,6 @@ async fn subscribe_safe_deployments(#[future(awt)] fixture: IntegrationFixture) 
     fixture.deploy_safe(account, 1_000).await?;
 
     subscription
-        .skip_while(|res| {
-            let should_skip = res.as_ref().expect("failed to get subscription update").chain_key != account.address;
-            futures::future::ready(should_skip)
-        })
         .next()
         .timeout(subscription_timeout())
         .await
