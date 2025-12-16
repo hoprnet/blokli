@@ -262,6 +262,8 @@ pub struct HttpTestContext {
     pub app: Router,
     /// Database connection for test data manipulation
     pub db: DatabaseConnection,
+    /// RPC operations for blockchain queries
+    pub rpc_operations: Arc<RpcOperations<ReqwestClient>>,
 }
 
 /// Setup test environment for HTTP endpoint testing.
@@ -326,6 +328,7 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
         anvil: ctx.anvil,
         app,
         db: db.clone(),
+        rpc_operations: ctx.rpc_operations,
     })
 }
 
