@@ -1,6 +1,6 @@
 use blokli_chain_rpc::HoprIndexerRpcOperations;
 use blokli_chain_types::AlloyAddressExt;
-use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator};
+use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator, errors::DbSqlError};
 use hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::HoprNodeSafeRegistryEvents;
 use hopr_primitive_types::prelude::{Address, ToHex};
 use tracing::{debug, info, warn};
@@ -85,7 +85,11 @@ where
                     }
                     Ok(None) => None,
                     Err(e) => {
-                        debug!(error = %e, "No existing safe entry found");
+                        warn!(
+                            safe_address = %safe_addr.to_hex(),
+                            error = %e,
+                            "DB lookup failed for safe address, will fetch module from RPC"
+                        );
                         None
                     }
                 };
@@ -147,14 +151,23 @@ where
                     "Deleting safe contract entry from DeregisteredNodeSafe event"
                 );
 
-                // Delete the safe contract entry
-                self.db.delete_safe_contract(Some(tx), safe_addr).await?;
-
-                debug!(
-                    node_address = %node_addr.to_hex(),
-                    safe_address = %safe_addr.to_hex(),
-                    "Safe contract entry deleted"
-                );
+                // Delete the safe contract entry (idempotent - ignore if already deleted)
+                match self.db.delete_safe_contract(Some(tx), safe_addr).await {
+                    Ok(()) => {
+                        debug!(
+                            node_address = %node_addr.to_hex(),
+                            safe_address = %safe_addr.to_hex(),
+                            "Safe contract entry deleted"
+                        );
+                    }
+                    Err(DbSqlError::EntityNotFound(_)) => {
+                        debug!(
+                            safe_address = %safe_addr.to_hex(),
+                            "Safe contract entry already deleted, skipping"
+                        );
+                    }
+                    Err(e) => return Err(e.into()),
+                }
             }
             HoprNodeSafeRegistryEvents::DomainSeparatorUpdated(domain_separator_updated) => {
                 self.db
