@@ -18,6 +18,9 @@ pub enum BlokliChainError {
 
     #[error("configuration error: {0}")]
     Configuration(String),
+
+    #[error("contract verification error: {0}")]
+    Verification(String),
 }
 
 /// The default [Result] object translating errors in the [BlokliChainError] type

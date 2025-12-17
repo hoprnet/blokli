@@ -18,7 +18,7 @@ use alloy::{
 };
 use blokli_chain_indexer::{IndexerConfig, IndexerState, block::Indexer, handlers::ContractEventHandlers};
 use blokli_chain_rpc::{
-    HoprIndexerRpcOperations, HoprRpcOperations,
+    ContractVerifier, HoprIndexerRpcOperations, HoprRpcOperations,
     client::DefaultRetryPolicy,
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
@@ -28,11 +28,7 @@ use blokli_db::BlokliDbAllOperations;
 use futures::future::AbortHandle;
 use hopr_async_runtime::spawn_as_abortable;
 pub use hopr_internal_types::channels::ChannelEntry;
-use hopr_internal_types::{
-    account::AccountEntry, // channels::CorruptedChannelEntry,
-    prelude::ChannelDirection,
-    tickets::WinningProbability,
-};
+use hopr_internal_types::{account::AccountEntry, prelude::ChannelDirection, tickets::WinningProbability};
 use hopr_primitive_types::{
     prelude::{Address, Balance, Currency, HoprBalance, U256, WxHOPR, XDai},
     traits::IntoEndian,
@@ -63,7 +59,7 @@ pub enum BlokliChainProcess {
 /// Represents all chain interactions exported to be used in the hopr-lib
 ///
 /// NOTE: instead of creating a unified interface the [BlokliChain] exports
-/// some functionality (e.g. the [ChainActions] as a referentially used)
+/// some functionality (e.g. the [ChainActions]) as a referentially used
 /// object. This behavior will be refactored and hidden behind a trait
 /// in the future implementations.
 #[derive(Debug, Clone)]
@@ -73,13 +69,14 @@ pub struct BlokliChain<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt
     indexer_state: IndexerState,
     db: T,
     rpc_operations: RpcOperations<DefaultHttpRequestor>,
+    contract_verifier: Arc<ContractVerifier<DefaultHttpRequestor>>,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
     transaction_monitor: Arc<TransactionMonitor<RpcAdapter<DefaultHttpRequestor>>>,
 }
 
 impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static> BlokliChain<T> {
-    pub fn new(
+    pub async fn new(
         db: T,
         chain_config: ChainConfig,
         contract_addresses: ContractAddresses,
@@ -119,6 +116,13 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         // Build RPC operations
         let rpc_operations = RpcOperations::new(rpc_client, requestor, rpc_cfg, None)?;
 
+        // Create contract verifier and verify all contracts before proceeding
+        let contract_verifier = Arc::new(ContractVerifier::new(Arc::new(rpc_operations.clone())));
+        contract_verifier
+            .verify_all_contracts(&contract_addresses)
+            .await
+            .map_err(|e| BlokliChainError::Verification(format!("{}", e)))?;
+
         // Create IndexerState for coordinating block processing with subscriptions
         let indexer_state = IndexerState::new(indexer_cfg.event_bus_capacity, indexer_cfg.shutdown_signal_capacity);
 
@@ -146,6 +150,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
             indexer_state,
             db,
             rpc_operations,
+            contract_verifier,
             transaction_executor,
             transaction_store,
             transaction_monitor,
@@ -194,6 +199,10 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
 
     pub fn transaction_store(&self) -> Arc<TransactionStore> {
         self.transaction_store.clone()
+    }
+
+    pub fn verifier(&self) -> Arc<ContractVerifier<DefaultHttpRequestor>> {
+        self.contract_verifier.clone()
     }
 
     pub async fn accounts_announced_on_chain(&self) -> errors::Result<Vec<AccountEntry>> {

@@ -425,7 +425,7 @@ async fn run() -> errors::Result<()> {
         };
 
         // Create BlokliChain instance
-        let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, rpc_url)?;
+        let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, rpc_url).await?;
 
         // Get IndexerState for API subscriptions
         let indexer_state = blokli_chain.indexer_state();

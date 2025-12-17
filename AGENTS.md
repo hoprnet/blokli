@@ -683,6 +683,69 @@ Before committing configuration changes, verify:
   - SeaORM entities in `db/entity`
   - Migrations in `db/migration`
 
+### Contract Verification
+
+Blokli includes automatic contract verification during startup to ensure that the configured contract addresses match the expected bytecode from `hopr-bindings`. This prevents issues with misconfigured addresses, wrong contract deployments, or version mismatches.
+
+**Purpose:**
+
+The contract verifier prevents three critical failure modes:
+
+1. No contract deployed (wrong address completely)
+2. Wrong contract type deployed at the address
+3. Correct contract but wrong version (not matching hopr-bindings)
+
+**When Verification Runs:**
+
+- Automatically during `BlokliChain::new()` initialization
+- Before any blockchain indexing or RPC operations begin
+- Blocks daemon startup on verification failure (fail-fast design)
+
+**How It Works:**
+
+1. **Direct Bytecode Comparison**: Fetches deployed bytecode via RPC and compares directly against `DEPLOYED_BYTECODE` constants exposed by each contract binding in `hopr-bindings`
+2. **Exponential Backoff Retry**: Retries RPC calls up to 5 times with exponential backoff (800ms, 2400ms, 3200ms, 9600ms, 12800ms) to handle transient network issues
+3. **Sequential Verification**: Validates all 9 contracts sequentially, stopping at first failure for fast feedback
+4. **Rich Error Context**: Provides detailed error messages with contract names, addresses, and expected vs actual bytecode lengths
+
+**Contracts Verified:**
+
+The verifier checks all 9 HOPR smart contracts:
+
+- HoprToken
+- HoprChannels
+- HoprAnnouncements
+- HoprNodeManagementModule
+- HoprNodeSafeMigration
+- HoprNodeSafeRegistry
+- HoprTicketPriceOracle
+- HoprWinningProbabilityOracle
+- HoprNodeStakeFactory
+
+**Key Files:**
+
+- `chain/rpc/src/verification.rs` - Core verification logic with `ContractVerifier` struct
+- `chain/api/src/lib.rs` - Integration point in `BlokliChain::new()` (lines 119-124)
+- `chain/rpc/tests/contract_verification_test.rs` - Integration tests using Anvil
+- `bloklid/src/main.rs` - Daemon startup with async BlokliChain initialization
+
+**Error Handling:**
+
+The verifier defines specific error types in `VerificationError`:
+
+- `NoCodeDeployed` - Address has no bytecode (wrong address)
+- `BytecodeMismatch` - Bytecode doesn't match expected (wrong contract or version)
+- `RpcTimeout` - All retry attempts exhausted (network issue)
+- `RpcError` - Underlying RPC call failure
+
+All verification errors are mapped to `BlokliChainError::Verification` and cause daemon startup to fail with a clear error message.
+
+**Testing Approach:**
+
+- **Integration tests**: Use Anvil local testnet with real contract deployments
+- **Unit tests**: Verify retry logic, error formatting, and validation rules
+- **Test coverage**: Happy path, missing contracts, wrong contracts, network failures
+
 ## Testing
 
 - Write unit tests in the same file using `#[cfg(test)]`

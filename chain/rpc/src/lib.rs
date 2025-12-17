@@ -39,6 +39,9 @@ pub mod errors;
 pub mod indexer;
 pub mod rpc;
 pub mod transport;
+pub mod verification;
+
+pub use verification::{ContractVerifier, VerificationError, VerificationResult};
 
 #[cfg(feature = "runtime-tokio")]
 pub use crate::transport::ReqwestClient;

@@ -47,6 +47,15 @@ pub enum RpcError {
     #[error("Safe nonce value {0} exceeds maximum u64 value")]
     SafeNonceOverflow(U256),
 
+    #[error("Contract verification failed: {0}")]
+    VerificationFailed(String),
+
+    #[error("No contract code deployed at {0}")]
+    NoContractCode(hopr_primitive_types::primitives::Address),
+
+    #[error("RPC timeout during verification after {0} attempts")]
+    RpcVerificationTimeout(u32),
+
     #[error("unknown error: {0}")]
     Other(String),
 }
