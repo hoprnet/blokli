@@ -12,7 +12,8 @@ use crate::errors::{DbSqlError, Result};
 /// - 2: Changed to BIGINT id columns (m023, m024)
 /// - 3: Added module_address and chain_key to hopr_safe_contract (m026)
 /// - 4: Change contracts addresses
-pub const CURRENT_SCHEMA_VERSION: i64 = 4;
+/// - 5: NodeSafeRegistered events are now also possible safe creation events
+pub const CURRENT_SCHEMA_VERSION: i64 = 5;
 
 /// The singleton ID used for the schema_version table
 const SCHEMA_VERSION_TABLE_ID: i64 = 1;

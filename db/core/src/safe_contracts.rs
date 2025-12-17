@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use blokli_db_entity::{codegen::prelude::*, hopr_safe_contract};
 use hopr_primitive_types::prelude::*;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, EntityTrait, ModelTrait, QueryFilter, Set};
 use sea_query::OnConflict;
 
 use crate::{BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result};
@@ -50,6 +50,18 @@ pub trait BlokliDbSafeContractOperations: BlokliDbGeneralModelOperations {
         safe_address: Address,
         expected_chain_key: Address,
     ) -> Result<bool>;
+
+    /// Delete a safe contract entry
+    ///
+    /// Used by DeregisteredNodeSafe handler to remove safe when deregistered
+    ///
+    /// # Arguments
+    /// * `safe_address` - Safe contract address from event
+    ///
+    /// # Returns
+    /// * `Ok(())` - Safe was deleted successfully
+    /// * `Err(_)` - Safe does not exist or deletion failed
+    async fn delete_safe_contract<'a>(&'a self, tx: OptTx<'a>, safe_address: Address) -> Result<()>;
 }
 
 #[async_trait]
@@ -174,6 +186,41 @@ impl BlokliDbSafeContractOperations for BlokliDb {
             ))),
         }
     }
+
+    /// Deletes a safe contract entry from the database.
+    ///
+    /// Used when a node is deregistered from a safe via DeregisteredNodeSafe event.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if the safe was successfully deleted, or `DbSqlError::EntityNotFound` if no safe contract is found.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use crate::db::BlokliDb;
+    /// # use crate::types::Address;
+    /// # async fn example(db: &BlokliDb, addr: Address) -> Result<(), crate::db::DbSqlError> {
+    /// db.delete_safe_contract(None, addr).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    async fn delete_safe_contract<'a>(&'a self, tx: OptTx<'a>, safe_address: Address) -> Result<()> {
+        let tx = self.nest_transaction(tx).await?;
+
+        // Find the safe first to ensure it exists
+        let safe = HoprSafeContract::find()
+            .filter(hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
+            .one(tx.as_ref())
+            .await?
+            .ok_or_else(|| DbSqlError::EntityNotFound(format!("Safe contract not found: {}", safe_address)))?;
+
+        // Delete the safe entry
+        safe.delete(tx.as_ref()).await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -274,6 +321,41 @@ mod tests {
         // Case 3: Safe exists but chain_key mismatch
         let result = db.verify_safe_contract(None, safe_address, other_chain_key).await?;
         assert!(!result);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_safe_contract() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let safe_address = random_address();
+        let module_address = random_address();
+        let chain_key = random_address();
+
+        // Case 1: Safe doesn't exist
+        let result = db.delete_safe_contract(None, safe_address).await;
+        assert!(matches!(result, Err(DbSqlError::EntityNotFound(_))));
+
+        // Create safe contract
+        let id = db
+            .create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+            .await?;
+
+        // Verify safe exists
+        let safe = HoprSafeContract::find_by_id(id)
+            .one(db.conn(crate::TargetDb::Index))
+            .await?;
+        assert!(safe.is_some());
+
+        // Delete the safe
+        db.delete_safe_contract(None, safe_address).await?;
+
+        // Verify safe is deleted
+        let safe = HoprSafeContract::find_by_id(id)
+            .one(db.conn(crate::TargetDb::Index))
+            .await?;
+        assert!(safe.is_none());
 
         Ok(())
     }

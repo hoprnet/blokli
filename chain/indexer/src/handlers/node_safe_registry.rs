@@ -2,8 +2,8 @@ use blokli_chain_rpc::HoprIndexerRpcOperations;
 use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator};
 use hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::HoprNodeSafeRegistryEvents;
-use hopr_primitive_types::prelude::ToHex;
-use tracing::{debug, error, info};
+use hopr_primitive_types::prelude::{Address, ToHex};
+use tracing::{debug, info};
 
 use super::ContractEventHandlers;
 use crate::errors::Result;
@@ -23,18 +23,17 @@ where
     T: HoprIndexerRpcOperations + Clone + Send + 'static,
     Db: BlokliDbAllOperations + Clone,
 {
-    /// Handle `HoprNodeSafeRegistryEvents` by verifying or updating safe registry state in the database.
+    /// Handle `HoprNodeSafeRegistryEvents` by creating or deleting safe entries in the database.
     ///
     /// Processes three event variants:
-    /// - `RegisteredNodeSafe`: verifies the safe exists and its stored chain key matches the event's node address; logs
-    ///   the verification outcome.
-    /// - `DeregisteredNodeSafe`: records the deregistration via logging.
+    /// - `RegisteredNodeSafe`: creates a safe contract entry if it doesn't exist. Uses zero address for module_address
+    ///   since it's not provided in the event. Idempotent due to unique constraint on event coordinates.
+    /// - `DeregisteredNodeSafe`: deletes the safe contract entry from the database.
     /// - `DomainSeparatorUpdated`: updates the SafeRegistry domain separator in the database.
     ///
     /// # Returns
     ///
-    /// `Result<()>` indicating success, or an error if a database operation (such as updating the domain separator)
-    /// fails.
+    /// `Result<()>` indicating success, or an error if a database operation fails.
     ///
     /// # Examples
     ///
@@ -43,14 +42,16 @@ where
     /// # use crate::ContractEventHandlers;
     /// # let handlers = todo!();
     /// # let tx = todo!();
+    /// # let log = todo!();
     /// # let event = todo!();
-    /// handlers.on_node_safe_registry_event(&tx, event, true).await?;
+    /// handlers.on_node_safe_registry_event(&tx, &log, event, true).await?;
     /// # Ok(())
     /// # }
     /// ```
     pub(super) async fn on_node_safe_registry_event(
         &self,
         tx: &OpenTransaction,
+        log: &blokli_chain_rpc::Log,
         event: HoprNodeSafeRegistryEvents,
         _is_synced: bool,
     ) -> Result<()> {
@@ -61,49 +62,58 @@ where
             HoprNodeSafeRegistryEvents::RegisteredNodeSafe(registered) => {
                 let safe_addr = registered.safeAddress.to_hopr_address();
                 let node_addr = registered.nodeAddress.to_hopr_address();
+                let block = log.block_number;
+                let tx_index = log.tx_index;
+                let log_index = log.log_index.as_u64();
 
                 info!(
                     node_address = %node_addr.to_hex(),
                     safe_address = %safe_addr.to_hex(),
-                    "Verifying RegisteredNodeSafe event"
+                    block,
+                    tx_index,
+                    log_index,
+                    "Creating safe contract entry from RegisteredNodeSafe event"
                 );
 
-                // Check safe exists and chain_key matches
-                match self.db.verify_safe_contract(Some(tx), safe_addr, node_addr).await {
-                    Ok(true) => {
-                        // Safe exists and chain_key matches
-                        debug!(
-                            node_address = %node_addr.to_hex(),
-                            safe_address = %safe_addr.to_hex(),
-                            "RegisteredNodeSafe verified successfully"
-                        );
-                    }
-                    Ok(false) => {
-                        // Safe exists but chain_key mismatch
-                        error!(
-                            node_address = %node_addr.to_hex(),
-                            safe_address = %safe_addr.to_hex(),
-                            "RegisteredNodeSafe chain_key mismatch. \
-                             Event nodeAddress does not match database chain_key. \
-                             This indicates a protocol violation or data inconsistency."
-                        );
-                    }
-                    Err(e) => {
-                        // Safe doesn't exist or query failed
-                        error!(
-                            node_address = %node_addr.to_hex(),
-                            safe_address = %safe_addr.to_hex(),
-                            error = %e,
-                            "RegisteredNodeSafe verification failed. \
-                             Safe may not exist in database. \
-                             Expected NewHoprNodeStakeModuleForSafe to create safe first. \
-                             This indicates events are out of order."
-                        );
-                    }
-                }
+                // Create safe contract entry using zero address for module_address
+                // since the RegisteredNodeSafe event doesn't provide module information
+                let _safe_id = self
+                    .db
+                    .create_safe_contract(
+                        Some(tx),
+                        safe_addr,
+                        Address::default(), // Use zero address for module since event doesn't provide it
+                        node_addr,
+                        block,
+                        tx_index,
+                        log_index,
+                    )
+                    .await?;
+
+                debug!(
+                    node_address = %node_addr.to_hex(),
+                    safe_address = %safe_addr.to_hex(),
+                    "Safe contract entry created from RegisteredNodeSafe"
+                );
             }
             HoprNodeSafeRegistryEvents::DeregisteredNodeSafe(deregistered) => {
-                info!(node_address = %deregistered.nodeAddress, safe_address = %deregistered.safeAddress, "Node safe deregistered", );
+                let safe_addr = deregistered.safeAddress.to_hopr_address();
+                let node_addr = deregistered.nodeAddress.to_hopr_address();
+
+                info!(
+                    node_address = %node_addr.to_hex(),
+                    safe_address = %safe_addr.to_hex(),
+                    "Deleting safe contract entry from DeregisteredNodeSafe event"
+                );
+
+                // Delete the safe contract entry
+                self.db.delete_safe_contract(Some(tx), safe_addr).await?;
+
+                debug!(
+                    node_address = %node_addr.to_hex(),
+                    safe_address = %safe_addr.to_hex(),
+                    "Safe contract entry deleted"
+                );
             }
             HoprNodeSafeRegistryEvents::DomainSeparatorUpdated(domain_separator_updated) => {
                 self.db
@@ -126,13 +136,15 @@ mod tests {
 
     use alloy::sol_types::{SolEvent, SolValue};
     use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations};
+    use blokli_db_entity::codegen::prelude::HoprSafeContract;
     use hopr_primitive_types::prelude::{Address, SerializableLog};
     use primitive_types::H256;
+    use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
     use crate::handlers::{node_safe_registry::tests::SAFE_INSTANCE_ADDR, test_utils::test_helpers::*};
 
     #[tokio::test]
-    async fn test_on_node_safe_registry_registered_verification_success() -> anyhow::Result<()> {
+    async fn test_on_node_safe_registry_registered_creates_safe() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let rpc_operations = MockIndexerRpcOperations::new();
         let clonable_rpc_operations = ClonableMockOperations {
@@ -143,7 +155,119 @@ mod tests {
         let safe_address = handlers.addresses.node_safe_registry; // Using registry addr as safe for test convenience
         let node_address = *SELF_CHAIN_ADDRESS; // Using self address as node
 
-        // Pre-create the safe in DB to simulate NewHoprNodeStakeModuleForSafe happened before
+        let encoded_data = ().abi_encode();
+
+        let safe_registered_log = SerializableLog {
+            address: handlers.addresses.node_safe_registry,
+            topics: vec![
+                hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::RegisteredNodeSafe::SIGNATURE_HASH.into(),
+                H256::from_slice(&safe_address.to_bytes32()).into(),
+                H256::from_slice(&node_address.to_bytes32()).into(),
+            ],
+            data: encoded_data,
+            block_number: 100,
+            tx_index: 5,
+            log_index: 10,
+            ..test_log()
+        };
+
+        // Process the event
+        db.begin_transaction()
+            .await?
+            .perform(|tx| {
+                Box::pin(async move { handlers.process_log_event(tx, safe_registered_log.clone(), true).await })
+            })
+            .await?;
+
+        // Verify safe was created in database
+        let safe = HoprSafeContract::find()
+            .filter(blokli_db_entity::codegen::hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
+            .one(db.conn(blokli_db::TargetDb::Index))
+            .await?
+            .expect("safe should exist");
+
+        assert_eq!(safe.address, safe_address.as_ref().to_vec());
+        assert_eq!(safe.chain_key, node_address.as_ref().to_vec());
+        assert_eq!(safe.module_address, Address::default().as_ref().to_vec()); // Module should be zero address
+        assert_eq!(safe.deployed_block, 100);
+        assert_eq!(safe.deployed_tx_index, 5);
+        assert_eq!(safe.deployed_log_index, 10);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_on_node_safe_registry_registered_idempotency() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let rpc_operations = MockIndexerRpcOperations::new();
+        let clonable_rpc_operations = ClonableMockOperations {
+            inner: Arc::new(rpc_operations),
+        };
+        let handlers = init_handlers(clonable_rpc_operations, db.clone());
+
+        let safe_address = handlers.addresses.node_safe_registry;
+        let node_address = *SELF_CHAIN_ADDRESS;
+
+        let encoded_data = ().abi_encode();
+
+        let safe_registered_log = SerializableLog {
+            address: handlers.addresses.node_safe_registry,
+            topics: vec![
+                hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::RegisteredNodeSafe::SIGNATURE_HASH.into(),
+                H256::from_slice(&safe_address.to_bytes32()).into(),
+                H256::from_slice(&node_address.to_bytes32()).into(),
+            ],
+            data: encoded_data,
+            block_number: 100,
+            tx_index: 5,
+            log_index: 10,
+            ..test_log()
+        };
+
+        // Process the event first time
+        db.begin_transaction()
+            .await?
+            .perform(|tx| {
+                Box::pin(async move { handlers.process_log_event(tx, safe_registered_log.clone(), true).await })
+            })
+            .await?;
+
+        // Verify safe exists
+        let count_before = HoprSafeContract::find()
+            .count(db.conn(blokli_db::TargetDb::Index))
+            .await?;
+        assert_eq!(count_before, 1);
+
+        // Process the same event again (idempotency test)
+        db.begin_transaction()
+            .await?
+            .perform(|tx| {
+                Box::pin(async move { handlers.process_log_event(tx, safe_registered_log.clone(), true).await })
+            })
+            .await?;
+
+        // Verify still only one safe exists (no duplicate)
+        let count_after = HoprSafeContract::find()
+            .count(db.conn(blokli_db::TargetDb::Index))
+            .await?;
+        assert_eq!(count_after, 1);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_on_node_safe_registry_deregistered() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let rpc_operations = MockIndexerRpcOperations::new();
+        let clonable_rpc_operations = ClonableMockOperations {
+            inner: Arc::new(rpc_operations),
+        };
+        let handlers = init_handlers(clonable_rpc_operations, db.clone());
+
+        let safe_address = *SAFE_INSTANCE_ADDR;
+        let node_address = *SELF_CHAIN_ADDRESS;
+
+        // Pre-create the safe in DB
         db.create_safe_contract(
             None,
             safe_address,
@@ -155,144 +279,40 @@ mod tests {
         )
         .await?;
 
-        let encoded_data = ().abi_encode();
-
-        let safe_registered_log = SerializableLog {
-            address: handlers.addresses.node_safe_registry,
-            topics: vec![
-                hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::RegisteredNodeSafe::SIGNATURE_HASH.into(),
-                H256::from_slice(&safe_address.to_bytes32()).into(),
-                H256::from_slice(&node_address.to_bytes32()).into(),
-            ],
-            data: encoded_data,
-            ..test_log()
-        };
-
-        db.begin_transaction()
-            .await?
-            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, safe_registered_log, true).await }))
+        // Verify safe exists before deregistration
+        let safe_before = HoprSafeContract::find()
+            .filter(blokli_db_entity::codegen::hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
+            .one(db.conn(blokli_db::TargetDb::Index))
             .await?;
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_on_node_safe_registry_registered_verification_failure_mismatch() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory().await?;
-        let rpc_operations = MockIndexerRpcOperations::new();
-        let clonable_rpc_operations = ClonableMockOperations {
-            inner: Arc::new(rpc_operations),
-        };
-        let handlers = init_handlers(clonable_rpc_operations, db.clone());
-
-        let safe_address = handlers.addresses.node_safe_registry;
-        let node_address = *SELF_CHAIN_ADDRESS;
-        let other_address = Address::from(hopr_crypto_random::random_bytes());
-
-        // Create safe contract
-        db.create_safe_contract(
-            None,
-            safe_address,
-            Address::from(hopr_crypto_random::random_bytes()),
-            other_address, // Mismatch
-            10,
-            0,
-            0,
-        )
-        .await?;
+        assert!(safe_before.is_some());
 
         let encoded_data = ().abi_encode();
 
-        let safe_registered_log = SerializableLog {
-            address: handlers.addresses.node_safe_registry,
-            topics: vec![
-                hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::RegisteredNodeSafe::SIGNATURE_HASH.into(),
-                H256::from_slice(&safe_address.to_bytes32()).into(),
-                H256::from_slice(&node_address.to_bytes32()).into(),
-            ],
-            data: encoded_data,
-            ..test_log()
-        };
-
-        // Should succeed processing but log error (verification fail)
-        db.begin_transaction()
-            .await?
-            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, safe_registered_log, true).await }))
-            .await?;
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_on_node_safe_registry_registered_verification_failure_missing() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory().await?;
-        let rpc_operations = MockIndexerRpcOperations::new();
-        let clonable_rpc_operations = ClonableMockOperations {
-            inner: Arc::new(rpc_operations),
-        };
-        let handlers = init_handlers(clonable_rpc_operations, db.clone());
-
-        let safe_address = handlers.addresses.node_safe_registry;
-        let node_address = *SELF_CHAIN_ADDRESS;
-
-        // Don't create safe in DB
-
-        let encoded_data = ().abi_encode();
-
-        let safe_registered_log = SerializableLog {
-            address: handlers.addresses.node_safe_registry,
-            topics: vec![
-                hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::RegisteredNodeSafe::SIGNATURE_HASH.into(),
-                H256::from_slice(&safe_address.to_bytes32()).into(),
-                H256::from_slice(&node_address.to_bytes32()).into(),
-            ],
-            data: encoded_data,
-            ..test_log()
-        };
-
-        // Should succeed processing but log error
-        db.begin_transaction()
-            .await?
-            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, safe_registered_log, true).await }))
-            .await?;
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_on_node_safe_registry_deregistered() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory().await?;
-        let rpc_operations = MockIndexerRpcOperations::new();
-        // ==> set mock expectations here
-        let clonable_rpc_operations = ClonableMockOperations {
-            //
-            inner: Arc::new(rpc_operations),
-        };
-        let handlers = init_handlers(clonable_rpc_operations, db.clone());
-
-        // Nothing to write to the DB here, since we do not track this
-
-        let encoded_data = ().abi_encode();
-
-        let safe_registered_log = SerializableLog {
+        let deregistered_log = SerializableLog {
             address: handlers.addresses.node_safe_registry,
             topics: vec![
                 hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::DeregisteredNodeSafe::SIGNATURE_HASH
                     .into(),
-                // DeregisteredNodeSafeFilter::signature().into(),
-                H256::from_slice(&SAFE_INSTANCE_ADDR.to_bytes32()).into(),
-                H256::from_slice(&SELF_CHAIN_ADDRESS.to_bytes32()).into(),
+                H256::from_slice(&safe_address.to_bytes32()).into(),
+                H256::from_slice(&node_address.to_bytes32()).into(),
             ],
             data: encoded_data,
             ..test_log()
         };
 
+        // Process deregistration event
         db.begin_transaction()
             .await?
-            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, safe_registered_log, true).await }))
+            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, deregistered_log, true).await }))
             .await?;
 
-        // Nothing to check in the DB here, since we do not track this
+        // Verify safe is deleted
+        let safe_after = HoprSafeContract::find()
+            .filter(blokli_db_entity::codegen::hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
+            .one(db.conn(blokli_db::TargetDb::Index))
+            .await?;
+        assert!(safe_after.is_none());
+
         Ok(())
     }
 }
