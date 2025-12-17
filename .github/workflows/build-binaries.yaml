@@ -98,7 +98,7 @@ jobs:
 
       - name: Updates build version
         id: version
-        uses: hoprnet/hopr-workflows/actions/set-build-version@ausias/setup-version
+        uses: hoprnet/hopr-workflows/actions/set-build-version@build-version-v1
         with:
           file: bloklid/Cargo.toml
           version_type: "${{ inputs.version_type || 'commit' }}"
@@ -110,10 +110,10 @@ jobs:
           mv ./result/bin/bloklid result/bin/bloklid-${{ steps.vars.outputs.architecture}}
       - name: Setup GCP
         if: steps.version.outputs.publish_artifact_registry || steps.version.outputs.publish_github_release
-        uses: hoprnet/hopr-workflows/actions/setup-gcp@master
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@gcp-v1
         with:
-          google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
-          install-sdk: "true"
+          google_credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
+          install_sdk: "true"
 
       - name: Publish Artifact registry
         if: steps.version.outputs.publish_artifact_registry || steps.version.outputs.publish_github_release

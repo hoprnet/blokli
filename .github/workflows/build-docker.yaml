@@ -52,7 +52,7 @@ jobs:
           USER: runner
       - name: Updates build version
         id: version
-        uses: hoprnet/hopr-workflows/actions/set-build-version@ausias/setup-version
+        uses: hoprnet/hopr-workflows/actions/set-build-version@build-version-v1
         with:
           file: bloklid/Cargo.toml
           version_type: "${{ inputs.version_type }}"
@@ -97,14 +97,14 @@ jobs:
           USER: runner
       - name: Setup GCP
         id: gcp
-        uses: hoprnet/hopr-workflows/actions/setup-gcp@12c56020e16036982e6cc529848edeedfc705865 # master
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@gcp-v1
         with:
-          google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
-          login-artifact-registry: 'true'
-          install-sdk: 'false'
+          google_credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
+          login_artifact_registry: 'true'
+          install_sdk: 'false'
       - name: Updates build version
         id: version
-        uses: hoprnet/hopr-workflows/actions/set-build-version@ausias/setup-version
+        uses: hoprnet/hopr-workflows/actions/set-build-version@build-version-v1
         with:
           file: bloklid/Cargo.toml
           version_type: "${{ inputs.version_type }}"
