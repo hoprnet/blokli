@@ -62,6 +62,22 @@ pub trait BlokliDbSafeContractOperations: BlokliDbGeneralModelOperations {
     /// * `Ok(())` - Safe was deleted successfully
     /// * `Err(_)` - Safe does not exist or deletion failed
     async fn delete_safe_contract<'a>(&'a self, tx: OptTx<'a>, safe_address: Address) -> Result<()>;
+
+    /// Get safe contract by address
+    ///
+    /// Used to check if a safe entry already exists before querying RPC
+    ///
+    /// # Arguments
+    /// * `safe_address` - Safe contract address
+    ///
+    /// # Returns
+    /// * `Ok(Some(model))` - Safe exists
+    /// * `Ok(None)` - Safe does not exist
+    async fn get_safe_contract_by_address<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        safe_address: Address,
+    ) -> Result<Option<hopr_safe_contract::Model>>;
 }
 
 #[async_trait]
@@ -220,6 +236,44 @@ impl BlokliDbSafeContractOperations for BlokliDb {
 
         tx.commit().await?;
         Ok(())
+    }
+
+    /// Retrieves a safe contract entry by its address.
+    ///
+    /// Used to check if a safe entry already exists (e.g., from NewHoprNodeStakeModuleForSafe)
+    /// before deciding whether to fetch module info from RPC during RegisteredNodeSafe processing.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(Some(model))` if the safe exists, `Ok(None)` if not found.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use crate::db::BlokliDb;
+    /// # use crate::types::Address;
+    /// # async fn example(db: &BlokliDb, addr: Address) -> Result<(), crate::db::DbSqlError> {
+    /// if let Some(safe) = db.get_safe_contract_by_address(None, addr).await? {
+    ///     println!("Found safe with module: {:?}", safe.module_address);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    async fn get_safe_contract_by_address<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        safe_address: Address,
+    ) -> Result<Option<hopr_safe_contract::Model>> {
+        let query =
+            HoprSafeContract::find().filter(hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()));
+
+        let safe = if let Some(t) = tx {
+            query.one(t.as_ref()).await?
+        } else {
+            query.one(self.conn(crate::TargetDb::Index)).await?
+        };
+
+        Ok(safe)
     }
 }
 
