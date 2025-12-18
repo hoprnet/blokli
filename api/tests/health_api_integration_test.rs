@@ -13,7 +13,7 @@ use axum::{
     body::Body,
     http::{Request, StatusCode},
 };
-use blokli_db_entity::codegen::chain_info;
+use blokli_db_entity::chain_info;
 use sea_orm::{DatabaseConnection, EntityTrait, Set, sea_query::OnConflict};
 use tower::ServiceExt;
 

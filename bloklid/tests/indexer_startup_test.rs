@@ -96,6 +96,13 @@ impl HoprIndexerRpcOperations for MockRpcOperations {
     async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<Duration> {
         Ok(self.channel_closure_notice_period)
     }
+
+    async fn get_hopr_module_from_safe(
+        &self,
+        _safe_address: Address,
+    ) -> blokli_chain_rpc::errors::Result<Option<Address>> {
+        Ok(None)
+    }
 }
 
 #[tokio::test]
@@ -328,6 +335,13 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
 
         async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<Duration> {
             self.inner.get_channel_closure_notice_period().await
+        }
+
+        async fn get_hopr_module_from_safe(
+            &self,
+            safe_address: Address,
+        ) -> blokli_chain_rpc::errors::Result<Option<Address>> {
+            self.inner.get_hopr_module_from_safe(safe_address).await
         }
     }
 

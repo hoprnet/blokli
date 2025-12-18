@@ -1205,6 +1205,7 @@ mod tests {
             async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
             async fn get_transaction_count(&self, address: Address) -> blokli_chain_rpc::errors::Result<u64>;
             async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<std::time::Duration>;
+            async fn get_hopr_module_from_safe(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<Option<Address>>;
         }
     }
 

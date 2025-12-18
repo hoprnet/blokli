@@ -1,4 +1,7 @@
-use blokli_db_entity::codegen::prelude::*;
+use blokli_db_entity::prelude::{
+    Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, HoprBalance, HoprSafeContract, Log,
+    LogStatus, LogTopicInfo, NativeBalance,
+};
 use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, Statement};
 use tracing::{info, warn};
 
@@ -12,7 +15,8 @@ use crate::errors::{DbSqlError, Result};
 /// - 2: Changed to BIGINT id columns (m023, m024)
 /// - 3: Added module_address and chain_key to hopr_safe_contract (m026)
 /// - 4: Change contracts addresses
-pub const CURRENT_SCHEMA_VERSION: i64 = 4;
+/// - 5: NodeSafeRegistered events are now also possible safe creation events
+pub const CURRENT_SCHEMA_VERSION: i64 = 5;
 
 /// The singleton ID used for the schema_version table
 const SCHEMA_VERSION_TABLE_ID: i64 = 1;
@@ -188,7 +192,7 @@ async fn clear_logs_data(db: &DatabaseConnection) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use blokli_db_entity::codegen::{chain_info, log, prelude::*};
+    use blokli_db_entity::{chain_info, log};
     use sea_orm::{ActiveModelTrait, EntityTrait, PaginatorTrait, Set};
 
     use super::*;
