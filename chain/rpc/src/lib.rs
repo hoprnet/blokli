@@ -389,15 +389,20 @@ pub trait HoprIndexerRpcOperations {
     /// Retrieves the wxHOPR token allowance for the given owner and spender.
     async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> Result<HoprBalance>;
 
-    /// Retrieves the transaction count (nonce) for a Safe contract.
+    /// Retrieves the transaction count for any Ethereum address with smart detection.
+    ///
+    /// This method supports multiple address types:
+    /// - **EOAs (Externally Owned Accounts)**: Returns the transaction count via `eth_getTransactionCount`
+    /// - **Safe contracts**: Returns the Safe's internal nonce via `nonce()` function
+    /// - **Other contracts**: Attempts `nonce()` call first, falls back to `eth_getTransactionCount` if it fails
     ///
     /// # Arguments
-    /// * `safe_address` - The Safe contract address
+    /// * `address` - The Ethereum address (EOA or contract)
     ///
     /// # Returns
     /// * `Ok(u64)` - The current transaction count/nonce
-    /// * `Err(RpcError)` - If the call fails or address is not a Safe contract
-    async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64>;
+    /// * `Err(RpcError)` - If both the nonce() call and eth_getTransactionCount fail
+    async fn get_transaction_count(&self, address: Address) -> Result<u64>;
 
     /// Retrieves the notice period of channel closure from the Channels contract.
     async fn get_channel_closure_notice_period(&self) -> Result<Duration>;

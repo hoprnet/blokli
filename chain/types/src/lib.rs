@@ -9,6 +9,8 @@ use constants::{ERC_1820_DEPLOYER, ERC_1820_REGISTRY_DEPLOY_CODE, ETH_VALUE_FOR_
 use hopr_bindings::{
     hopr_announcements::HoprAnnouncements::{self, HoprAnnouncementsInstance},
     hopr_channels::HoprChannels::{self, HoprChannelsInstance},
+    hopr_node_management_module::HoprNodeManagementModule::{self, HoprNodeManagementModuleInstance},
+    hopr_node_safe_migration::HoprNodeSafeMigration::HoprNodeSafeMigrationInstance,
     hopr_node_safe_registry::HoprNodeSafeRegistry::{self, HoprNodeSafeRegistryInstance},
     hopr_node_stake_factory::HoprNodeStakeFactory::{self, HoprNodeStakeFactoryInstance},
     hopr_ticket_price_oracle::HoprTicketPriceOracle::{self, HoprTicketPriceOracleInstance},
@@ -91,6 +93,10 @@ pub struct ContractAddresses {
     pub channels: Address,
     /// Announcements contract
     pub announcements: Address,
+    /// Node management module contract
+    pub module_implementation: Address,
+    /// Node safe migration contract
+    pub node_safe_migration: Address,
     /// Safe registry contract
     pub node_safe_registry: Address,
     /// Price oracle contract
@@ -98,7 +104,7 @@ pub struct ContractAddresses {
     /// Minimum ticket winning probability contract
     pub winning_probability_oracle: Address,
     /// Stake factory contract
-    pub node_stake_v2_factory: Address,
+    pub node_stake_factory: Address,
 }
 
 /// Holds instances to contracts.
@@ -107,10 +113,12 @@ pub struct ContractInstances<P> {
     pub token: HoprTokenInstance<P>,
     pub channels: HoprChannelsInstance<P>,
     pub announcements: HoprAnnouncementsInstance<P>,
-    pub safe_registry: HoprNodeSafeRegistryInstance<P>,
-    pub price_oracle: HoprTicketPriceOracleInstance<P>,
-    pub win_prob_oracle: HoprWinningProbabilityOracleInstance<P>,
-    pub stake_factory: HoprNodeStakeFactoryInstance<P>,
+    pub module_implementation: HoprNodeManagementModuleInstance<P>,
+    pub node_safe_migration: HoprNodeSafeMigrationInstance<P>,
+    pub node_safe_registry: HoprNodeSafeRegistryInstance<P>,
+    pub ticket_price_oracle: HoprTicketPriceOracleInstance<P>,
+    pub winning_probability_oracle: HoprWinningProbabilityOracleInstance<P>,
+    pub node_stake_factory: HoprNodeStakeFactoryInstance<P>,
 }
 
 impl<P> ContractInstances<P>
@@ -131,20 +139,28 @@ where
                 AlloyAddress::from_hopr_address(contract_addresses.announcements),
                 provider.clone(),
             ),
-            safe_registry: HoprNodeSafeRegistryInstance::new(
+            module_implementation: HoprNodeManagementModuleInstance::new(
+                AlloyAddress::from_hopr_address(contract_addresses.module_implementation),
+                provider.clone(),
+            ),
+            node_safe_migration: HoprNodeSafeMigrationInstance::new(
+                AlloyAddress::from_hopr_address(contract_addresses.node_safe_migration),
+                provider.clone(),
+            ),
+            node_safe_registry: HoprNodeSafeRegistryInstance::new(
                 AlloyAddress::from_hopr_address(contract_addresses.node_safe_registry),
                 provider.clone(),
             ),
-            price_oracle: HoprTicketPriceOracleInstance::new(
+            ticket_price_oracle: HoprTicketPriceOracleInstance::new(
                 AlloyAddress::from_hopr_address(contract_addresses.ticket_price_oracle),
                 provider.clone(),
             ),
-            win_prob_oracle: HoprWinningProbabilityOracleInstance::new(
+            winning_probability_oracle: HoprWinningProbabilityOracleInstance::new(
                 AlloyAddress::from_hopr_address(contract_addresses.winning_probability_oracle),
                 provider.clone(),
             ),
-            stake_factory: HoprNodeStakeFactoryInstance::new(
-                AlloyAddress::from_hopr_address(contract_addresses.node_stake_v2_factory),
+            node_stake_factory: HoprNodeStakeFactoryInstance::new(
+                AlloyAddress::from_hopr_address(contract_addresses.node_stake_factory),
                 provider.clone(),
             ),
         }
@@ -203,15 +219,22 @@ where
             AlloyAddress::from(safe_registry.address().as_ref()),
         )
         .await?;
+        let module_implementation = HoprNodeManagementModule::deploy(provider.clone()).await?;
+        // Note: HoprNodeSafeMigration requires Safe Singleton to be deployed, which has complex dependencies.
+        // For testing purposes, we create a minimal instance with zero address that won't be used in actual tests.
+        // In production, these addresses are loaded from hopr-bindings network configuration.
+        let node_safe_migration = HoprNodeSafeMigrationInstance::new(AlloyAddress::ZERO, provider.clone());
 
         Ok(Self {
             token,
             channels,
             announcements,
-            safe_registry,
-            price_oracle,
-            win_prob_oracle,
-            stake_factory,
+            module_implementation,
+            node_safe_migration,
+            node_safe_registry: safe_registry,
+            ticket_price_oracle: price_oracle,
+            winning_probability_oracle: win_prob_oracle,
+            node_stake_factory: stake_factory,
         })
     }
 
@@ -239,10 +262,12 @@ where
             token: instances.token.address().to_hopr_address(),
             channels: instances.channels.address().to_hopr_address(),
             announcements: instances.announcements.address().to_hopr_address(),
-            node_safe_registry: instances.safe_registry.address().to_hopr_address(),
-            ticket_price_oracle: instances.price_oracle.address().to_hopr_address(),
-            winning_probability_oracle: instances.win_prob_oracle.address().to_hopr_address(),
-            node_stake_v2_factory: instances.stake_factory.address().to_hopr_address(),
+            module_implementation: instances.module_implementation.address().to_hopr_address(),
+            node_safe_migration: instances.node_safe_migration.address().to_hopr_address(),
+            node_safe_registry: instances.node_safe_registry.address().to_hopr_address(),
+            ticket_price_oracle: instances.ticket_price_oracle.address().to_hopr_address(),
+            winning_probability_oracle: instances.winning_probability_oracle.address().to_hopr_address(),
+            node_stake_factory: instances.node_stake_factory.address().to_hopr_address(),
         }
     }
 }

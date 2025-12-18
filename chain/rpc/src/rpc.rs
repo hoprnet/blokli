@@ -41,6 +41,7 @@ sol!(
     contract SafeSingleton {
         function isModuleEnabled(address module) public view returns (bool);
         function nonce() public view returns (uint256);
+        function getThreshold() public view returns (uint256);
     }
 );
 
@@ -229,23 +230,72 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         ))
     }
 
-    pub(crate) async fn get_safe_transaction_count(&self, safe_address: Address) -> Result<u64> {
-        let safe_address_alloy = AlloyAddress::from_hopr_address(safe_address);
+    pub(crate) async fn get_transaction_count(&self, address: Address) -> Result<u64> {
+        let address_alloy = AlloyAddress::from_hopr_address(address);
 
         // Get provider from any contract instance (they all share the same provider)
         let provider = self.contract_instances.token.provider();
 
-        // Create Safe contract instance
-        let safe_contract = SafeSingleton::new(safe_address_alloy, provider);
+        // First, check if the address has code (is a contract)
+        let code = provider.get_code_at(address_alloy).await?;
 
-        // Call nonce() method on Safe contract
-        let nonce = safe_contract.nonce().call().await?;
+        if code.is_empty() {
+            // Empty code means EOA (Externally Owned Account), use eth_getTransactionCount
+            debug!("Address {} has no code (EOA), using eth_getTransactionCount", address);
+            let tx_count = provider.get_transaction_count(address_alloy).await?;
+            return Ok(tx_count);
+        }
 
-        // Convert U256 to u64 with explicit overflow handling
-        // While practically impossible (requires ~584 billion years at 1 tx/sec to reach u64::MAX),
-        // proper error handling follows Rust best practices and avoids potential panics
-        let nonce_u64 = nonce.try_into().map_err(|_| RpcError::SafeNonceOverflow(nonce))?;
-        Ok(nonce_u64)
+        // Address has code, verify it's a Safe contract by calling getThreshold()
+        // This prevents false positives from non-Safe contracts that have a nonce() method
+        debug!("Address {} has code, verifying if it's a Safe contract", address);
+        let safe_contract = SafeSingleton::new(address_alloy, provider.clone());
+
+        match safe_contract.getThreshold().call().await {
+            Ok(_threshold) => {
+                // Successfully called getThreshold(), this is a Safe contract
+                // Now get the Safe nonce (transaction count)
+                debug!("Address {} is a Safe contract, getting nonce", address);
+                match safe_contract.nonce().call().await {
+                    Ok(nonce) => nonce.try_into().map_err(|_| RpcError::SafeNonceOverflow(nonce)),
+                    Err(e) => {
+                        // This should rarely happen if getThreshold() succeeded
+                        tracing::error!(
+                            "Safe contract {} getThreshold() succeeded but nonce() failed: {}",
+                            address,
+                            e
+                        );
+                        Err(e.into())
+                    }
+                }
+            }
+            Err(e) => {
+                // getThreshold() failed - discriminate errors
+                let error_str = format!("{:?}", e);
+                let error_lower = error_str.to_lowercase();
+
+                // Check if this is a "safe to fallback" error (contract doesn't implement Safe interface)
+                let should_fallback = error_lower.contains("execution reverted")
+                    || error_lower.contains("function selector not found")
+                    || error_lower.contains("abi")
+                    || error_lower.contains("decode");
+
+                if should_fallback {
+                    // Contract exists but doesn't implement Safe interface - fallback to eth_getTransactionCount
+                    debug!(
+                        "Address {} has code but getThreshold() failed (not a Safe contract), falling back to \
+                         eth_getTransactionCount. Error: {:?}",
+                        address, e
+                    );
+                    let tx_count = provider.get_transaction_count(address_alloy).await?;
+                    Ok(tx_count)
+                } else {
+                    // Real error (RPC failure, network issue, etc.) - propagate it
+                    tracing::error!("Failed to verify Safe contract at address {}: {}", address, e);
+                    Err(e.into())
+                }
+            }
+        }
     }
 
     pub(crate) async fn get_channel_closure_notice_period(&self) -> Result<Duration> {
@@ -280,7 +330,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         // Call predictModuleAddress_1 on stake_factory contract
         let predicted_address_fixed = self
             .contract_instances
-            .stake_factory
+            .node_stake_factory
             .predictModuleAddress_1(
                 AlloyAddress::from_hopr_address(owner),
                 U256::from(nonce), // Convert u64 to U256
@@ -308,7 +358,13 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
     }
 
     async fn get_minimum_network_winning_probability(&self) -> Result<WinningProbability> {
-        match self.contract_instances.win_prob_oracle.currentWinProb().call().await {
+        match self
+            .contract_instances
+            .winning_probability_oracle
+            .currentWinProb()
+            .call()
+            .await
+        {
             Ok(encoded_win_prob) => {
                 let mut encoded: EncodedWinProb = Default::default();
                 encoded.copy_from_slice(&encoded_win_prob.to_be_bytes_vec());
@@ -321,7 +377,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
     async fn get_minimum_network_ticket_price(&self) -> Result<HoprBalance> {
         Ok(HoprBalance::from_be_bytes(
             self.contract_instances
-                .price_oracle
+                .ticket_price_oracle
                 .currentTicketPrice()
                 .call()
                 .await?
@@ -332,7 +388,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
     async fn get_safe_from_node_safe_registry(&self, node_address: Address) -> Result<Address> {
         match self
             .contract_instances
-            .safe_registry
+            .node_safe_registry
             .nodeToSafe(AlloyAddress::from_hopr_address(node_address))
             .call()
             .await

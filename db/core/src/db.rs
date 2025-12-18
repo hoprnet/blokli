@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use blokli_db_entity::codegen::{chain_info, node_info, prelude::*};
+use blokli_db_entity::codegen::{chain_info, prelude::*};
 use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait};
 use sea_orm::{ConnectOptions, Database, EntityTrait, Set, SqlxSqliteConnector, sea_query::OnConflict};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -27,7 +27,7 @@ pub struct BlokliDbConfig {
 ///
 /// For PostgreSQL: Uses a single database connection for all tables.
 /// For SQLite: Uses two separate database connections to avoid write lock contention:
-///   - `db`: Index database (accounts, channels, announcements, node_info, chain_info)
+///   - `db`: Index database (accounts, channels, announcements, chain_info)
 ///   - `logs_db`: Logs database (log, log_status, log_topic_info)
 ///
 /// Supports database snapshot imports for fast synchronization via
@@ -299,12 +299,12 @@ impl BlokliDb {
         self.logs_db.as_ref().unwrap_or(&self.db)
     }
 
-    /// Initialize ChainInfo and NodeInfo singleton entries if they don't exist.
+    /// Initialize ChainInfo singleton entry if it doesn't exist.
     ///
-    /// This ensures the required singleton rows exist in chain_info and node_info tables.
-    /// These rows are created during startup after migrations complete.
+    /// This ensures the required singleton row exists in the chain_info table.
+    /// This row is created during startup after migrations complete.
     ///
-    /// This operation is atomic - both singletons are created in a single transaction or neither is.
+    /// This operation uses ON CONFLICT DO NOTHING for idempotency.
     ///
     /// # Errors
     ///
@@ -321,16 +321,6 @@ impl BlokliDb {
                     };
                     ChainInfo::insert(chain_info_model)
                         .on_conflict(OnConflict::column(chain_info::Column::Id).do_nothing().to_owned())
-                        .exec_without_returning(tx.as_ref())
-                        .await?;
-
-                    // Insert NodeInfo singleton with ON CONFLICT DO NOTHING for idempotency
-                    let node_info_model = node_info::ActiveModel {
-                        id: Set(SINGULAR_TABLE_FIXED_ID),
-                        ..Default::default()
-                    };
-                    NodeInfo::insert(node_info_model)
-                        .on_conflict(OnConflict::column(node_info::Column::Id).do_nothing().to_owned())
                         .exec_without_returning(tx.as_ref())
                         .await?;
 
@@ -384,7 +374,7 @@ impl BlokliDbAllOperations for BlokliDb {}
 
 #[cfg(test)]
 mod tests {
-    use blokli_db_entity::codegen::prelude::{ChainInfo, NodeInfo};
+    use blokli_db_entity::codegen::prelude::ChainInfo;
     use migration::{Migrator, MigratorTrait};
     use sea_orm::{EntityTrait, PaginatorTrait};
 
@@ -411,13 +401,6 @@ mod tests {
         assert!(chain_info.is_some(), "ChainInfo singleton should exist");
         assert_eq!(chain_info.unwrap().id, SINGULAR_TABLE_FIXED_ID);
 
-        // Verify NodeInfo singleton exists with correct ID
-        let node_info = NodeInfo::find_by_id(SINGULAR_TABLE_FIXED_ID)
-            .one(db.conn(TargetDb::Index))
-            .await?;
-        assert!(node_info.is_some(), "NodeInfo singleton should exist");
-        assert_eq!(node_info.unwrap().id, SINGULAR_TABLE_FIXED_ID);
-
         Ok(())
     }
 
@@ -426,32 +409,23 @@ mod tests {
         let db = BlokliDb::new_in_memory().await?;
 
         // First call already happened in new_in_memory()
-        // Verify records exist
+        // Verify record exists
         let chain_info_before = ChainInfo::find_by_id(SINGULAR_TABLE_FIXED_ID)
-            .one(db.conn(TargetDb::Index))
-            .await?;
-        let node_info_before = NodeInfo::find_by_id(SINGULAR_TABLE_FIXED_ID)
             .one(db.conn(TargetDb::Index))
             .await?;
 
         assert!(chain_info_before.is_some());
-        assert!(node_info_before.is_some());
 
         // Call ensure_singletons() again - should succeed without error
         db.ensure_singletons().await?;
 
-        // Verify records still exist with same IDs
+        // Verify record still exists with same ID
         let chain_info_after = ChainInfo::find_by_id(SINGULAR_TABLE_FIXED_ID)
-            .one(db.conn(TargetDb::Index))
-            .await?;
-        let node_info_after = NodeInfo::find_by_id(SINGULAR_TABLE_FIXED_ID)
             .one(db.conn(TargetDb::Index))
             .await?;
 
         assert!(chain_info_after.is_some());
-        assert!(node_info_after.is_some());
         assert_eq!(chain_info_after.unwrap().id, SINGULAR_TABLE_FIXED_ID);
-        assert_eq!(node_info_after.unwrap().id, SINGULAR_TABLE_FIXED_ID);
 
         Ok(())
     }
@@ -473,12 +447,10 @@ mod tests {
             handle.await??;
         }
 
-        // Verify only one record of each type exists
+        // Verify only one ChainInfo record exists
         let chain_info_count = ChainInfo::find().count(db.conn(TargetDb::Index)).await?;
-        let node_info_count = NodeInfo::find().count(db.conn(TargetDb::Index)).await?;
 
         assert_eq!(chain_info_count, 1, "Should have exactly one ChainInfo record");
-        assert_eq!(node_info_count, 1, "Should have exactly one NodeInfo record");
 
         Ok(())
     }
@@ -505,16 +477,12 @@ mod tests {
             result.err()
         );
 
-        // Verify singletons still exist
+        // Verify singleton still exists
         let chain_info = ChainInfo::find_by_id(SINGULAR_TABLE_FIXED_ID)
-            .one(db.conn(TargetDb::Index))
-            .await?;
-        let node_info = NodeInfo::find_by_id(SINGULAR_TABLE_FIXED_ID)
             .one(db.conn(TargetDb::Index))
             .await?;
 
         assert!(chain_info.is_some(), "ChainInfo should still exist");
-        assert!(node_info.is_some(), "NodeInfo should still exist");
 
         Ok(())
     }

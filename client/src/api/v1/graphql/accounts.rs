@@ -96,7 +96,7 @@ pub struct TxCountVariables {
 }
 
 #[derive(cynic::QueryFragment, Debug)]
-pub struct SafeTransactionCount {
+pub struct TransactionCount {
     pub __typename: String,
     pub count: Uint64,
 }
@@ -105,27 +105,27 @@ pub struct SafeTransactionCount {
 #[cynic(graphql_type = "QueryRoot", variables = "TxCountVariables")]
 pub struct QueryTxCount {
     #[arguments(address: $address)]
-    pub safe_transaction_count: SafeTransactionCountResult,
+    pub transaction_count: TransactionCountResult,
 }
 
 #[derive(cynic::InlineFragments, Debug)]
-pub enum SafeTransactionCountResult {
-    SafeTransactionCount(SafeTransactionCount),
+pub enum TransactionCountResult {
+    TransactionCount(TransactionCount),
     InvalidAddressError(InvalidAddressError),
     QueryFailedError(QueryFailedError),
     #[cynic(fallback)]
     Unknown,
 }
 
-impl From<SafeTransactionCountResult> for Result<u64, BlokliClientError> {
-    fn from(value: SafeTransactionCountResult) -> Self {
+impl From<TransactionCountResult> for Result<u64, BlokliClientError> {
+    fn from(value: TransactionCountResult) -> Self {
         match value {
-            SafeTransactionCountResult::SafeTransactionCount(count) => {
+            TransactionCountResult::TransactionCount(count) => {
                 Ok(count.count.0.parse().map_err(|_| ErrorKind::ParseError)?)
             }
-            SafeTransactionCountResult::InvalidAddressError(e) => Err(e.into()),
-            SafeTransactionCountResult::QueryFailedError(e) => Err(e.into()),
-            SafeTransactionCountResult::Unknown => Err(ErrorKind::NoData.into()),
+            TransactionCountResult::InvalidAddressError(e) => Err(e.into()),
+            TransactionCountResult::QueryFailedError(e) => Err(e.into()),
+            TransactionCountResult::Unknown => Err(ErrorKind::NoData.into()),
         }
     }
 }

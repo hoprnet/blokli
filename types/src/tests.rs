@@ -45,7 +45,7 @@ mod tests {
     #[test]
     fn test_contract_address_map_parses_from_json_string() {
         // Create a JSON string input
-        let json_input = r#"{"token":"0xaaa","channels":"0xbbb","safe_registry":"0xccc"}"#;
+        let json_input = r#"{"token":"0xaaa","channels":"0xbbb","node_safe_registry":"0xccc"}"#;
         let value = Value::String(json_input.to_string());
 
         // Parse it
@@ -56,7 +56,10 @@ mod tests {
         if let Ok(contract_map) = result {
             assert_eq!(contract_map.0.get("token").map(|s| s.as_str()), Some("0xaaa"));
             assert_eq!(contract_map.0.get("channels").map(|s| s.as_str()), Some("0xbbb"));
-            assert_eq!(contract_map.0.get("safe_registry").map(|s| s.as_str()), Some("0xccc"));
+            assert_eq!(
+                contract_map.0.get("node_safe_registry").map(|s| s.as_str()),
+                Some("0xccc")
+            );
         }
     }
 

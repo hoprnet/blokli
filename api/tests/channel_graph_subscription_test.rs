@@ -93,11 +93,7 @@ async fn create_channel_update_event(
         concrete_channel_id: channel_model.concrete_channel_id.clone(),
         source: channel_model.source,
         destination: channel_model.destination,
-        balance: TokenValueString(
-            PrimitiveBalance::<WxHOPR>::from_be_bytes(&state.balance)
-                .amount()
-                .to_string(),
-        ),
+        balance: TokenValueString(PrimitiveBalance::<WxHOPR>::from_be_bytes(&state.balance).to_string()),
         status: ApiChannelStatus::from(state.status),
         epoch: i32::try_from(state.epoch)?,
         ticket_index: UInt64(u64::try_from(state.ticket_index)?),
@@ -688,8 +684,8 @@ async fn test_opened_channel_graph_subscription_includes_channel_balance() {
     assert!(result.errors.is_empty());
     let data = result.data.into_json().unwrap();
     let entry = &data["openedChannelGraphUpdated"];
-    // Balance is in wei (10^18 per HOPR)
-    assert_eq!(entry["channel"]["balance"].as_str().unwrap(), "1234000000000000000000");
+    // Balance includes token identifier (e.g., "1234 wxHOPR")
+    assert_eq!(entry["channel"]["balance"].as_str().unwrap(), "1234 wxHOPR");
 }
 
 #[tokio::test]
@@ -746,7 +742,7 @@ async fn test_opened_channel_graph_subscription_balance_update() {
     let initial_balance_str = initial_data["openedChannelGraphUpdated"]["channel"]["balance"]
         .as_str()
         .unwrap();
-    assert_eq!(initial_balance_str, "1000000000000000000000");
+    assert_eq!(initial_balance_str, "1000 wxHOPR");
 
     // Update channel balance
     let updated_balance = HoprBalance::from_str("2000 wxHOPR").unwrap();
@@ -768,5 +764,5 @@ async fn test_opened_channel_graph_subscription_balance_update() {
     let updated_balance_str = updated_data["openedChannelGraphUpdated"]["channel"]["balance"]
         .as_str()
         .unwrap();
-    assert_eq!(updated_balance_str, "2000000000000000000000");
+    assert_eq!(updated_balance_str, "2000 wxHOPR");
 }

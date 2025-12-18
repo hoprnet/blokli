@@ -89,7 +89,7 @@ impl HoprIndexerRpcOperations for MockRpcOperations {
         Ok(self.hopr_balance.clone())
     }
 
-    async fn get_safe_transaction_count(&self, _safe_address: Address) -> blokli_chain_rpc::errors::Result<u64> {
+    async fn get_transaction_count(&self, _address: Address) -> blokli_chain_rpc::errors::Result<u64> {
         Ok(0)
     }
 
@@ -115,10 +115,12 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         token: Address::from([1; 20]),
         channels: Address::from([2; 20]),
         announcements: Address::from([3; 20]),
+        module_implementation: Address::from([8; 20]),
+        node_safe_migration: Address::from([9; 20]),
         node_safe_registry: Address::from([4; 20]),
         ticket_price_oracle: Address::from([5; 20]),
         winning_probability_oracle: Address::from([6; 20]),
-        node_stake_v2_factory: Address::from([7; 20]),
+        node_stake_factory: Address::from([7; 20]),
     };
 
     // Create indexer state for subscriptions (must be created before handlers)
@@ -188,10 +190,12 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         token: Address::from([1; 20]),
         channels: Address::from([2; 20]),
         announcements: Address::from([3; 20]),
+        module_implementation: Address::from([8; 20]),
+        node_safe_migration: Address::from([9; 20]),
         node_safe_registry: Address::from([4; 20]),
         ticket_price_oracle: Address::from([5; 20]),
         winning_probability_oracle: Address::from([6; 20]),
-        node_stake_v2_factory: Address::from([7; 20]),
+        node_stake_factory: Address::from([7; 20]),
     };
 
     // Create indexer state for subscriptions (must be created before handlers)
@@ -318,8 +322,8 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
             self.inner.get_hopr_allowance(owner, spender).await
         }
 
-        async fn get_safe_transaction_count(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<u64> {
-            self.inner.get_safe_transaction_count(safe_address).await
+        async fn get_transaction_count(&self, address: Address) -> blokli_chain_rpc::errors::Result<u64> {
+            self.inner.get_transaction_count(address).await
         }
 
         async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<Duration> {
@@ -338,10 +342,12 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         token: Address::from([1; 20]),
         channels: Address::from([2; 20]),
         announcements: Address::from([3; 20]),
+        module_implementation: Address::from([8; 20]),
+        node_safe_migration: Address::from([9; 20]),
         node_safe_registry: Address::from([4; 20]),
         ticket_price_oracle: Address::from([5; 20]),
         winning_probability_oracle: Address::from([6; 20]),
-        node_stake_v2_factory: Address::from([7; 20]),
+        node_stake_factory: Address::from([7; 20]),
     };
 
     // Create indexer state for subscriptions (must be created before handlers)
@@ -438,10 +444,12 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         token: Address::from([1; 20]),
         channels: Address::from([2; 20]),
         announcements: Address::from([3; 20]),
+        module_implementation: Address::from([8; 20]),
+        node_safe_migration: Address::from([9; 20]),
         node_safe_registry: Address::from([4; 20]),
         ticket_price_oracle: Address::from([5; 20]),
         winning_probability_oracle: Address::from([6; 20]),
-        node_stake_v2_factory: Address::from([7; 20]),
+        node_stake_factory: Address::from([7; 20]),
     };
 
     // Create indexer state for subscriptions

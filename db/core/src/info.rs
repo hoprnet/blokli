@@ -3,14 +3,17 @@
 
 use async_trait::async_trait;
 use blokli_db_entity::{
-    chain_info, node_info,
-    prelude::{Account, Announcement, ChainInfo, Channel, NodeInfo},
+    chain_info,
+    prelude::{
+        Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, HoprBalance as HoprBalanceEntity,
+        HoprSafeContract, NativeBalance,
+    },
 };
 use futures::TryFutureExt;
 use hopr_crypto_types::prelude::Hash;
 use hopr_internal_types::prelude::WinningProbability;
 use hopr_primitive_types::prelude::{HoprBalance, IntoEndian};
-use sea_orm::{ActiveModelTrait, EntityOrSelect, EntityTrait, IntoActiveModel, PaginatorTrait, Set};
+use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
 use tracing::trace;
 
 use crate::{
@@ -61,18 +64,6 @@ pub trait BlokliDbInfoOperations {
     /// A `Result` indicating the success or failure of the operation.
     async fn clear_index_db<'a>(&'a self, tx: OptTx<'a>) -> Result<()>;
 
-    /// Gets node's Safe balance of HOPR tokens.
-    async fn get_safe_hopr_balance<'a>(&'a self, tx: OptTx<'a>) -> Result<HoprBalance>;
-
-    /// Sets node's Safe balance of HOPR tokens.
-    async fn set_safe_hopr_balance<'a>(&'a self, tx: OptTx<'a>, new_balance: HoprBalance) -> Result<()>;
-
-    /// Gets node's Safe allowance of HOPR tokens.
-    async fn get_safe_hopr_allowance<'a>(&'a self, tx: OptTx<'a>) -> Result<HoprBalance>;
-
-    /// Sets node's Safe allowance of HOPR tokens.
-    async fn set_safe_hopr_allowance<'a>(&'a self, tx: OptTx<'a>, new_allowance: HoprBalance) -> Result<()>;
-
     /// Gets stored Indexer data.
     ///
     /// To update information stored in [IndexerData], use the individual setter methods,
@@ -116,8 +107,7 @@ impl BlokliDbInfoOperations for BlokliDb {
     async fn index_is_empty(&self) -> Result<bool> {
         let c = self.conn(TargetDb::Index);
 
-        // There is always at least the node's own AccountEntry
-        if Account::find().select().count(c).await? > 1 {
+        if Account::find().one(c).await?.is_some() {
             return Ok(false);
         }
 
@@ -126,6 +116,29 @@ impl BlokliDbInfoOperations for BlokliDb {
         }
 
         if Channel::find().one(c).await?.is_some() {
+            return Ok(false);
+        }
+
+        // State history tables
+        if AccountState::find().one(c).await?.is_some() {
+            return Ok(false);
+        }
+
+        if ChannelState::find().one(c).await?.is_some() {
+            return Ok(false);
+        }
+
+        // Balance tables
+        if HoprBalanceEntity::find().one(c).await?.is_some() {
+            return Ok(false);
+        }
+
+        if NativeBalance::find().one(c).await?.is_some() {
+            return Ok(false);
+        }
+
+        // Safe contract table
+        if HoprSafeContract::find().one(c).await?.is_some() {
             return Ok(false);
         }
 
@@ -141,20 +154,13 @@ impl BlokliDbInfoOperations for BlokliDb {
                     Announcement::delete_many().exec(tx.as_ref()).await?;
                     Channel::delete_many().exec(tx.as_ref()).await?;
                     ChainInfo::delete_many().exec(tx.as_ref()).await?;
-                    NodeInfo::delete_many().exec(tx.as_ref()).await?;
 
-                    // Initial rows are needed in the ChainInfo and NodeInfo tables
+                    // Initial row is needed in the ChainInfo table
                     // See the m005_seed_initial_data.rs migration
                     // We explicitly set the `id` field to SINGULAR_TABLE_FIXED_ID to ensure
                     // the singleton pattern is preserved after clearing the database
 
                     let initial_row = chain_info::ActiveModel {
-                        id: Set(SINGULAR_TABLE_FIXED_ID),
-                        ..Default::default()
-                    };
-                    initial_row.insert(tx.as_ref()).await?;
-
-                    let initial_row = node_info::ActiveModel {
                         id: Set(SINGULAR_TABLE_FIXED_ID),
                         ..Default::default()
                     };
@@ -166,76 +172,6 @@ impl BlokliDbInfoOperations for BlokliDb {
             .await?;
 
         Ok(())
-    }
-
-    async fn get_safe_hopr_balance<'a>(&'a self, tx: OptTx<'a>) -> Result<HoprBalance> {
-        self.nest_transaction(tx)
-            .await?
-            .perform(|tx| {
-                Box::pin(async move {
-                    node_info::Entity::find_by_id(SINGULAR_TABLE_FIXED_ID)
-                        .one(tx.as_ref())
-                        .await?
-                        .ok_or(MissingFixedTableEntry("node_info".into()))
-                        .map(|m| HoprBalance::from_be_bytes(m.safe_balance))
-                })
-            })
-            .await
-    }
-
-    async fn set_safe_hopr_balance<'a>(&'a self, tx: OptTx<'a>, new_balance: HoprBalance) -> Result<()> {
-        self.nest_transaction(tx)
-            .await?
-            .perform(|tx| {
-                Box::pin(async move {
-                    Ok::<_, DbSqlError>(
-                        node_info::ActiveModel {
-                            id: Set(SINGULAR_TABLE_FIXED_ID),
-                            safe_balance: Set(new_balance.to_be_bytes().into()),
-                            ..Default::default()
-                        }
-                        .update(tx.as_ref()) // DB is primed in the migration, so only update is needed
-                        .await?,
-                    )
-                })
-            })
-            .await?;
-
-        Ok(())
-    }
-
-    async fn get_safe_hopr_allowance<'a>(&'a self, tx: OptTx<'a>) -> Result<HoprBalance> {
-        self.nest_transaction(tx)
-            .await?
-            .perform(|tx| {
-                Box::pin(async move {
-                    node_info::Entity::find_by_id(SINGULAR_TABLE_FIXED_ID)
-                        .one(tx.as_ref())
-                        .await?
-                        .ok_or(MissingFixedTableEntry("node_info".into()))
-                        .map(|m| HoprBalance::from_be_bytes(m.safe_allowance))
-                })
-            })
-            .await
-    }
-
-    async fn set_safe_hopr_allowance<'a>(&'a self, tx: OptTx<'a>, new_allowance: HoprBalance) -> Result<()> {
-        self.nest_transaction(tx)
-            .await?
-            .perform(|tx| {
-                Box::pin(async move {
-                    node_info::ActiveModel {
-                        id: Set(SINGULAR_TABLE_FIXED_ID),
-                        safe_allowance: Set(new_allowance.amount().to_be_bytes().to_vec()),
-                        ..Default::default()
-                    }
-                    .update(tx.as_ref()) // DB is primed in the migration, so only update is needed
-                    .await?;
-
-                    Ok::<_, DbSqlError>(())
-                })
-            })
-            .await
     }
 
     async fn get_indexer_data<'a>(&'a self, tx: OptTx<'a>) -> Result<IndexerData> {
@@ -491,49 +427,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_set_get_balance() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory().await?;
-
-        assert_eq!(
-            HoprBalance::zero(),
-            db.get_safe_hopr_balance(None).await?,
-            "balance must be 0"
-        );
-
-        let balance = HoprBalance::from(10_000);
-        db.set_safe_hopr_balance(None, balance).await?;
-
-        assert_eq!(
-            balance,
-            db.get_safe_hopr_balance(None).await?,
-            "balance must be {balance}"
-        );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_set_get_allowance() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory().await?;
-
-        assert_eq!(
-            HoprBalance::zero(),
-            db.get_safe_hopr_allowance(None).await?,
-            "balance must be 0"
-        );
-
-        let balance = HoprBalance::from(10_000);
-        db.set_safe_hopr_allowance(None, balance).await?;
-
-        assert_eq!(
-            balance,
-            db.get_safe_hopr_allowance(None).await?,
-            "balance must be {balance}"
-        );
-
-        Ok(())
-    }
-
-    #[tokio::test]
     async fn test_set_get_indexer_data() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
 
@@ -592,33 +485,31 @@ mod tests {
         db.clear_index_db(None).await?;
 
         // Set some data
-        let balance = HoprBalance::from(50_000);
-        db.set_safe_hopr_balance(None, balance).await?;
+        let price = HoprBalance::from(10);
+        db.update_ticket_price(None, price).await?;
 
-        // Second clear should work and preserve singleton behavior
+        // Second clear should work and preserve singleton behavior for ChainInfo
         db.clear_index_db(None).await?;
 
-        // Should be able to get balance after second clear (singleton row exists)
-        let retrieved_balance = db.get_safe_hopr_balance(None).await?;
+        // Should be able to get indexer data after second clear (singleton row exists)
+        let data = db.get_indexer_data(None).await?;
         assert_eq!(
-            retrieved_balance,
-            HoprBalance::zero(),
-            "balance must be reset to 0 after clear"
+            data.ticket_price, None,
+            "ticket price must be reset to None after clear"
         );
 
         // Set more data
-        let new_balance = HoprBalance::from(100_000);
-        db.set_safe_hopr_balance(None, new_balance).await?;
+        let new_price = HoprBalance::from(20);
+        db.update_ticket_price(None, new_price).await?;
 
         // Third clear should work
         db.clear_index_db(None).await?;
 
-        // Should still be able to operate (singleton pattern preserved)
-        let retrieved_balance = db.get_safe_hopr_balance(None).await?;
+        // Should still be able to operate (singleton pattern preserved for ChainInfo)
+        let data = db.get_indexer_data(None).await?;
         assert_eq!(
-            retrieved_balance,
-            HoprBalance::zero(),
-            "balance must be reset to 0 after third clear"
+            data.ticket_price, None,
+            "ticket price must be reset to None after third clear"
         );
 
         Ok(())

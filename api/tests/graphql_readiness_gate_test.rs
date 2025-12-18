@@ -43,8 +43,17 @@ async fn make_graphql_request(app: Router, query: &str) -> (StatusCode, serde_js
     (status, json)
 }
 
-/// Update chain_info record with specified block number
-async fn update_chain_info(db: &DatabaseConnection, block_number: i64) -> anyhow::Result<()> {
+/// Update chain_info record with current RPC block number
+///
+/// This ensures indexer lag is minimal (0 or 1 block) when transitioning to ready state
+async fn update_chain_info_with_current_block(
+    db: &DatabaseConnection,
+    rpc_operations: &std::sync::Arc<blokli_chain_rpc::rpc::RpcOperations<blokli_chain_rpc::transport::ReqwestClient>>,
+) -> anyhow::Result<()> {
+    // Get current RPC block number to minimize lag
+    let current_block = rpc_operations.get_block_number().await?;
+    let block_number = i64::try_from(current_block)?;
+
     let chain_info = chain_info::ActiveModel {
         id: Set(1),
         last_indexed_block: Set(block_number),
@@ -107,8 +116,8 @@ async fn test_graphql_returns_503_when_not_ready() -> anyhow::Result<()> {
 async fn test_graphql_returns_200_when_ready() -> anyhow::Result<()> {
     let ctx = common::setup_http_test_environment().await?;
 
-    // Set up chain_info to make server ready
-    update_chain_info(&ctx.db, 0).await?;
+    // Set up chain_info with current block to make server ready
+    update_chain_info_with_current_block(&ctx.db, &ctx.rpc_operations).await?;
 
     // Wait for periodic check to update cached state (interval is 100ms in test config)
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
@@ -193,8 +202,8 @@ async fn test_graphql_readiness_transition() -> anyhow::Result<()> {
     let (status1, _) = make_graphql_request(ctx.app.clone(), query).await;
     assert_eq!(status1, StatusCode::SERVICE_UNAVAILABLE);
 
-    // Second request: ready (after updating chain_info)
-    update_chain_info(&ctx.db, 0).await?;
+    // Second request: ready (after updating chain_info with current block)
+    update_chain_info_with_current_block(&ctx.db, &ctx.rpc_operations).await?;
     // Wait for periodic check to update cached state (interval is 100ms in test config)
     tokio::time::sleep(std::time::Duration::from_millis(150)).await;
     let (status2, json2) = make_graphql_request(ctx.app, query).await;
@@ -244,7 +253,7 @@ async fn test_graphql_readiness_synced_with_readyz() -> anyhow::Result<()> {
     );
 
     // Scenario 2: Both should be available when ready
-    update_chain_info(&ctx.db, 0).await?;
+    update_chain_info_with_current_block(&ctx.db, &ctx.rpc_operations).await?;
     // Poll /readyz until ready or timeout (readiness check interval is 100ms in test config)
     let poll_start = std::time::Instant::now();
     let poll_timeout = std::time::Duration::from_secs(5);

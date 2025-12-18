@@ -55,7 +55,7 @@ where
         _is_synced: bool,
     ) -> Result<()> {
         #[cfg(all(feature = "prometheus", not(test)))]
-        METRIC_INDEXER_LOG_COUNTERS.increment(&["safe_registry"]);
+        METRIC_INDEXER_LOG_COUNTERS.increment(&["node_safe_registry"]);
 
         match event {
             HoprNodeSafeRegistryEvents::RegisteredNodeSafe(registered) => {

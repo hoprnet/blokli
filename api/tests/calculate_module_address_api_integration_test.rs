@@ -382,7 +382,7 @@ async fn test_calculate_module_address_matches_direct_contract_call() -> anyhow:
 
     let contract_address = ctx
         .contract_instances
-        .stake_factory
+        .node_stake_factory
         .predictModuleAddress_1(
             AlloyAddress::from_hopr_address(owner_hopr),
             U256::from(nonce),

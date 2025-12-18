@@ -33,7 +33,7 @@ where
         _is_synced: bool,
     ) -> Result<()> {
         #[cfg(all(feature = "prometheus", not(test)))]
-        METRIC_INDEXER_LOG_COUNTERS.increment(&["win_prob_oracle"]);
+        METRIC_INDEXER_LOG_COUNTERS.increment(&["winning_probability_oracle"]);
 
         match event {
             HoprWinningProbabilityOracleEvents::WinProbUpdated(update) => {
@@ -81,7 +81,7 @@ where
         _is_synced: bool,
     ) -> Result<()> {
         #[cfg(all(feature = "prometheus", not(test)))]
-        METRIC_INDEXER_LOG_COUNTERS.increment(&["price_oracle"]);
+        METRIC_INDEXER_LOG_COUNTERS.increment(&["ticket_price_oracle"]);
 
         match event {
             HoprTicketPriceOracleEvents::TicketPriceUpdated(update) => {

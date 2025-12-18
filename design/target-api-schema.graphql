@@ -106,8 +106,8 @@ enum ChannelStatus {
 
 """
 Map of contract identifier to contract address (hexadecimal format).
-Keys: token, channels, announcements, safe_registry, price_oracle, win_prob_oracle, stake_factory
-Example: {"token": "0x123...", "channels": "0x456..."}
+Keys: token, channels, announcements, module_implementation, node_safe_migration, node_safe_registry, ticket_price_oracle, winning_probability_oracle, node_stake_factory
+Example: {"token": "0x123...", "channels": "0x456...", "node_safe_registry": "0x789..."}
 """
 scalar ContractAddressMap
 
@@ -472,20 +472,6 @@ type QueryRoot {
     address: String!
   ): SafeHoprAllowanceResult!
   """
-  Retrieve Safe contract transaction count
-  
-  This query returns the current nonce/transaction count for a HOPR Safe contract
-  directly from the blockchain. The transaction count increments with each transaction
-  executed by the Safe.
-  
-  Returns Error with code INVALID_ADDRESS if address format is invalid.
-  Returns Error with code QUERY_FAILED if blockchain query fails.
-  """
-  safeTransactionCount(
-    "Safe contract address to query (hexadecimal format)"
-    address: String!
-  ): SafeTransactionCountResult!
-  """
   Retrieve all safes
   
   Returns all safe contracts indexed by the system.
@@ -504,6 +490,23 @@ type QueryRoot {
     "Transaction ID to query (UUID)"
     id: ID!
   ): TransactionResult
+  """
+  Retrieve transaction count for any Ethereum address
+  
+  This query returns the transaction count for any address type:
+  - For EOAs (Externally Owned Accounts): Returns the transaction count via eth_getTransactionCount
+  - For Safe contracts: Returns the Safe's internal nonce via nonce() function
+  - For other contracts: Attempts nonce() call, falls back to eth_getTransactionCount
+  
+  The transaction count increments with each transaction sent or executed by the address.
+  
+  Returns Error with code INVALID_ADDRESS if address format is invalid.
+  Returns Error with code QUERY_FAILED if blockchain query fails.
+  """
+  transactionCount(
+    "Address to query (hexadecimal format) - supports EOAs and contracts"
+    address: String!
+  ): TransactionCountResult!
   """
   API version information
   
@@ -554,17 +557,6 @@ type SafesList {
 
 """Result type for safes list query"""
 union SafesResult = SafesList | QueryFailedError
-
-"""Safe contract transaction count information"""
-type SafeTransactionCount {
-  "Safe contract address"
-  address: String!
-  "Current transaction count (nonce) for the Safe contract"
-  count: UInt64!
-}
-
-"""Result type for Safe transaction count queries"""
-union SafeTransactionCountResult = SafeTransactionCount | InvalidAddressError | QueryFailedError
 
 """Result type for asynchronous transaction submission"""
 union SendTransactionAsyncResult = Transaction | ContractNotAllowedError | FunctionNotAllowedError | RpcError
@@ -715,6 +707,17 @@ type Transaction {
   "Transaction hash from successful blockchain submission"
   transactionHash: Hex32!
 }
+
+"""Transaction count information for any Ethereum address"""
+type TransactionCount {
+  "Address queried (hexadecimal format)"
+  address: String!
+  "Current transaction count or nonce for the address"
+  count: UInt64!
+}
+
+"""Result type for transaction count queries"""
+union TransactionCountResult = TransactionCount | InvalidAddressError | QueryFailedError
 
 """Input for transaction submission"""
 input TransactionInput {
