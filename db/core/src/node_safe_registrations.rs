@@ -21,8 +21,7 @@ pub trait BlokliDbNodeSafeRegistrationOperations: BlokliDbGeneralModelOperations
     /// * `log_index` - Registration event log index
     ///
     /// # Idempotency
-    /// Uses ON CONFLICT DO NOTHING with unique constraint on (registered_block, registered_tx_index,
-    /// registered_log_index)
+    /// Uses unique constraint on (registered_block, registered_tx_index, registered_log_index)
     ///
     /// # Errors
     /// Returns error if node_address is already registered to a different safe (unique constraint violation)
@@ -39,7 +38,7 @@ pub trait BlokliDbNodeSafeRegistrationOperations: BlokliDbGeneralModelOperations
 
     /// Deregister a node from a safe
     ///
-    /// Removes the node-safe registration entry. Does NOT delete the safe itself.
+    /// Removes the node-safe registration entry. Does not delete the safe itself.
     ///
     /// # Arguments
     /// * `safe_address` - Safe contract address
@@ -87,7 +86,7 @@ pub trait BlokliDbNodeSafeRegistrationOperations: BlokliDbGeneralModelOperations
 impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
     /// Registers a node to a safe by creating or updating a registration entry.
     ///
-    /// Uses ON CONFLICT DO NOTHING on event coordinates for idempotency. If the same
+    /// Uses event coordinates for idempotency. If the same
     /// event is replayed with identical coordinates, no error occurs and the existing
     /// registration ID is returned.
     ///
@@ -125,8 +124,6 @@ impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
             ..Default::default()
         };
 
-        // Insert with ON CONFLICT DO NOTHING for idempotency
-        // The unique constraint is on (registered_block, registered_tx_index, registered_log_index).
         let _ = HoprNodeSafeRegistration::insert(registration_model)
             .on_conflict(
                 OnConflict::columns([
@@ -161,7 +158,7 @@ impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
     /// Deletes a node-safe registration entry from the database.
     ///
     /// Used when a node is deregistered from a safe via DeregisteredNodeSafe event.
-    /// Does NOT delete the safe itself.
+    /// Does not delete the safe itself.
     ///
     /// # Returns
     ///
@@ -291,7 +288,7 @@ mod tests {
     use super::*;
     use crate::db::BlokliDb;
 
-    /// Generates a new random `Address` from cryptographically secure random bytes.
+    /// Generates a new random `Address`.
     fn random_address() -> Address {
         Address::from(random_bytes())
     }

@@ -35,6 +35,7 @@ use crate::{
     db::BlokliDb,
     errors::{DbSqlError, Result},
     info::BlokliDbInfoOperations,
+    node_safe_registrations::BlokliDbNodeSafeRegistrationOperations,
     safe_contracts::BlokliDbSafeContractOperations,
 };
 
@@ -273,7 +274,7 @@ pub trait BlokliDbAllOperations:
     // + BlokliDbCorruptedChannelOperations
     + BlokliDbInfoOperations
     + BlokliDbLogOperations
-    + node_safe_registrations::BlokliDbNodeSafeRegistrationOperations
+    + BlokliDbNodeSafeRegistrationOperations
     + BlokliDbSafeContractOperations
 {
 }
