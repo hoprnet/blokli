@@ -698,7 +698,14 @@ impl QueryRoot {
                         .filter_map(|reg| Address::try_from(reg.node_address.as_slice()).ok())
                         .map(|addr| addr.to_hex())
                         .collect(),
-                    Err(_) => Vec::new(), // If query fails, return empty list
+                    Err(e) => {
+                        warn!(
+                            safe_address = ?safe.address,
+                            error = %e,
+                            "Failed to fetch registered nodes for safe, returning empty list"
+                        );
+                        Vec::new()
+                    }
                 };
 
                 match safe_from_db_model(safe, registered_nodes) {
@@ -906,7 +913,7 @@ impl QueryRoot {
                 .collect(),
             Err(e) => {
                 warn!(
-                    safe_address = ?registration.safe_address,
+                    safe_address = ?safe.address,
                     error = %e,
                     "Failed to fetch registered nodes for safe, returning empty list"
                 );

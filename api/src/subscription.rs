@@ -25,6 +25,7 @@ use hopr_primitive_types::{
 };
 use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use tokio::time::sleep;
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 use crate::errors;
@@ -346,7 +347,7 @@ impl SubscriptionRoot {
                     }
                 }
                 Err(e) => {
-                    tracing::error!("Failed to query historical channels: {:?}", e);
+                    error!("Failed to query historical channels: {:?}", e);
                     return; // Terminate subscription on error
                 }
             }
@@ -358,15 +359,15 @@ impl SubscriptionRoot {
                     shutdown_result = shutdown_receiver.recv() => {
                         match shutdown_result {
                             Ok(_) => {
-                                tracing::info!("Subscription shutting down due to reorg");
+                                info!("Subscription shutting down due to reorg");
                                 return; // Terminate subscription on reorg
                             }
                             Err(async_broadcast::RecvError::Closed) => {
-                                tracing::warn!("Shutdown channel closed");
+                                warn!("Shutdown channel closed");
                                 return;
                             }
                             Err(async_broadcast::RecvError::Overflowed(n)) => {
-                                tracing::warn!("Shutdown signal overflowed, missed {} signals", n);
+                                warn!("Shutdown signal overflowed, missed {} signals", n);
                                 // Continue - overflow on shutdown signal is not critical
                             }
                         }
@@ -391,11 +392,11 @@ impl SubscriptionRoot {
                                 // Safe deployment doesn't affect this subscription
                             }
                             Err(async_broadcast::RecvError::Closed) => {
-                                tracing::info!("Event bus closed, ending subscription");
+                                info!("Event bus closed, ending subscription");
                                 return;
                             }
                             Err(async_broadcast::RecvError::Overflowed(n)) => {
-                                tracing::warn!("Event bus overflowed, missed {} events - consider increasing buffer", n);
+                                warn!("Event bus overflowed, missed {} events - consider increasing buffer", n);
                                 // Continue but log warning - client may need to reconnect
                             }
                         }
@@ -459,7 +460,7 @@ impl SubscriptionRoot {
             let mut notifications = match crate::notifications::create_ticket_params_notification_stream(&db, sqlite_manager.as_ref()).await {
                 Ok(stream) => stream,
                 Err(e) => {
-                    tracing::error!("Failed to create notification stream: {:?}", e);
+                    error!("Failed to create notification stream: {:?}", e);
                     return;
                 }
             };
@@ -472,7 +473,7 @@ impl SubscriptionRoot {
                 }
                 Ok(None) => {}
                 Err(e) => {
-                    tracing::error!("Failed to fetch ticket parameters: {:?}", e);
+                    error!("Failed to fetch ticket parameters: {:?}", e);
                 }
             }
 
@@ -485,7 +486,7 @@ impl SubscriptionRoot {
                     }
                     Ok(_) => {}
                     Err(e) => {
-                        tracing::error!("Failed to fetch ticket parameters: {:?}", e);
+                        error!("Failed to fetch ticket parameters: {:?}", e);
                     }
                 }
             }
@@ -537,10 +538,10 @@ impl SubscriptionRoot {
                     }
                 }
                 Ok(None) => {
-                    tracing::warn!("chain_info not initialized when subscribing to keyBindingFeeUpdated");
+                    warn!("chain_info not initialized when subscribing to keyBindingFeeUpdated");
                 }
                 Err(e) => {
-                    tracing::error!("Failed to fetch chain_info for keyBindingFeeUpdated: {:?}", e);
+                    error!("Failed to fetch chain_info for keyBindingFeeUpdated: {:?}", e);
                 }
             }
 
@@ -549,15 +550,15 @@ impl SubscriptionRoot {
                     shutdown_result = shutdown_receiver.recv() => {
                         match shutdown_result {
                             Ok(_) => {
-                                tracing::info!("keyBindingFeeUpdated subscription shutting down due to reorg");
+                                info!("keyBindingFeeUpdated subscription shutting down due to reorg");
                                 return;
                             }
                             Err(async_broadcast::RecvError::Closed) => {
-                                tracing::warn!("Shutdown channel closed for keyBindingFeeUpdated");
+                                warn!("Shutdown channel closed for keyBindingFeeUpdated");
                                 return;
                             }
                             Err(async_broadcast::RecvError::Overflowed(n)) => {
-                                tracing::warn!("Shutdown signal overflowed ({}), continuing", n);
+                                warn!("Shutdown signal overflowed ({}), continuing", n);
                             }
                         }
                     }
@@ -579,11 +580,11 @@ impl SubscriptionRoot {
                                 // Irrelevant for this subscription
                             }
                             Err(async_broadcast::RecvError::Closed) => {
-                                tracing::info!("Event bus closed, ending keyBindingFeeUpdated subscription");
+                                info!("Event bus closed, ending keyBindingFeeUpdated subscription");
                                 return;
                             }
                             Err(async_broadcast::RecvError::Overflowed(n)) => {
-                                tracing::warn!("Event bus overflowed ({}); keyBindingFeeUpdated may miss events", n);
+                                warn!("Event bus overflowed ({}); keyBindingFeeUpdated may miss events", n);
                             }
                         }
                     }
@@ -624,15 +625,15 @@ impl SubscriptionRoot {
                     shutdown_result = shutdown_receiver.recv() => {
                         match shutdown_result {
                             Ok(_) => {
-                                tracing::info!("Subscription shutting down due to reorg");
+                                info!("Subscription shutting down due to reorg");
                                 return;
                             }
                             Err(async_broadcast::RecvError::Closed) => {
-                                tracing::warn!("Shutdown channel closed");
+                                warn!("Shutdown channel closed");
                                 return;
                             }
                             Err(async_broadcast::RecvError::Overflowed(n)) => {
-                                tracing::warn!("Shutdown signal overflowed, missed {} signals", n);
+                                warn!("Shutdown signal overflowed, missed {} signals", n);
                                 // Continue - overflow on shutdown signal is not critical
                             }
                         }
@@ -658,7 +659,14 @@ impl SubscriptionRoot {
                                                 .filter_map(|reg| Address::try_from(reg.node_address.as_slice()).ok())
                                                 .map(|addr| addr.to_hex())
                                                 .collect(),
-                                            Err(_) => Vec::new(),
+                                            Err(e) => {
+                                                warn!(
+                                                    safe_address = ?safe.address,
+                                                    error = %e,
+                                                    "Failed to fetch registered nodes for safe, returning empty list"
+                                                );
+                                                Vec::new()
+                                            }
                                         };
 
                                         yield Safe {
@@ -669,20 +677,20 @@ impl SubscriptionRoot {
                                         };
                                     }
                                     Ok(None) => {
-                                        tracing::error!("Safe deployed event received but safe not found in DB: {}", safe_addr);
+                                        error!("Safe deployed event received but safe not found in DB: {}", safe_addr);
                                     }
                                     Err(e) => {
-                                        tracing::error!("Failed to query safe for deployed event: {}", e);
+                                        error!("Failed to query safe for deployed event: {}", e);
                                     }
                                 }
                             }
                             Ok(_) => {}
                             Err(async_broadcast::RecvError::Closed) => {
-                                tracing::info!("Event bus closed, ending subscription");
+                                info!("Event bus closed, ending subscription");
                                 return;
                             }
                             Err(async_broadcast::RecvError::Overflowed(n)) => {
-                                tracing::warn!("Event bus overflowed, missed {} events - consider increasing buffer", n);
+                                warn!("Event bus overflowed, missed {} events - consider increasing buffer", n);
                                 // Continue but log warning - client may need to reconnect
                             }
                         }

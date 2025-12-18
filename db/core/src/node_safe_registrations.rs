@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use blokli_db_entity::{hopr_node_safe_registration, prelude::HoprNodeSafeRegistration};
 use hopr_primitive_types::prelude::Address;
-use sea_orm::{ColumnTrait, EntityTrait, ModelTrait, QueryFilter, Set};
+use sea_orm::{ColumnTrait, DbErr, EntityTrait, ModelTrait, QueryFilter, Set};
 use sea_query::OnConflict;
 
 use crate::{BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result};
@@ -122,7 +122,7 @@ impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
             ..Default::default()
         };
 
-        let _ = HoprNodeSafeRegistration::insert(registration_model)
+        match HoprNodeSafeRegistration::insert(registration_model)
             .on_conflict(
                 OnConflict::columns([
                     hopr_node_safe_registration::Column::RegisteredBlock,
@@ -133,7 +133,13 @@ impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
                 .to_owned(),
             )
             .exec(tx.as_ref())
-            .await;
+            .await
+        {
+            Ok(_) | Err(DbErr::RecordNotInserted) => {
+                // Success or already exists due to ON CONFLICT DO NOTHING
+            }
+            Err(e) => return Err(e.into()),
+        }
 
         // Retrieve the ID (whether newly inserted or existing)
         let registration = HoprNodeSafeRegistration::find()
