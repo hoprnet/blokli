@@ -1,6 +1,6 @@
 //! GraphQL query root and resolver implementations
 
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
 use async_graphql::{Context, ID, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
@@ -11,8 +11,9 @@ use blokli_api_types::{
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
 use blokli_chain_types::ContractAddresses;
-use blokli_db_entity::conversions::{
-    account_aggregation::fetch_accounts_with_filters, channel_aggregation::fetch_channels_with_state,
+use blokli_db_entity::{
+    conversions::{account_aggregation::fetch_accounts_with_filters, channel_aggregation::fetch_channels_with_state},
+    hopr_node_safe_registration, hopr_safe_contract,
 };
 use hopr_crypto_types::prelude::Hash;
 use hopr_primitive_types::{
@@ -99,7 +100,7 @@ pub enum CalculateModuleAddressResult {
 /// let bytes = res.unwrap();
 /// assert_eq!(bytes.len(), 20);
 /// ```
-fn parse_safe_address(address: String) -> std::result::Result<Vec<u8>, SafeResult> {
+fn parse_safe_address(address: String) -> Result<Vec<u8>, SafeResult> {
     // Validate address format
     if let Err(e) = validate_eth_address(&address) {
         return Err(SafeResult::InvalidAddress(errors::invalid_address_from_message(
@@ -121,10 +122,7 @@ fn parse_safe_address(address: String) -> std::result::Result<Vec<u8>, SafeResul
 /// # Arguments
 /// * `safe` - The Safe contract database model
 /// * `registered_nodes` - List of registered node addresses (hex format)
-fn safe_from_db_model(
-    safe: blokli_db_entity::hopr_safe_contract::Model,
-    registered_nodes: Vec<String>,
-) -> std::result::Result<Safe, String> {
+fn safe_from_db_model(safe: hopr_safe_contract::Model, registered_nodes: Vec<String>) -> Result<Safe, String> {
     let address = Address::try_from(&safe.address[..]).map_err(|_| {
         format!(
             "Invalid address length in database: expected 20 bytes, got {}",
@@ -680,15 +678,15 @@ impl QueryRoot {
 
         let safe_address_vec = safe_address.clone();
 
-        match blokli_db_entity::hopr_safe_contract::Entity::find()
-            .filter(blokli_db_entity::hopr_safe_contract::Column::Address.eq(safe_address))
+        match hopr_safe_contract::Entity::find()
+            .filter(hopr_safe_contract::Column::Address.eq(safe_address))
             .one(db)
             .await
         {
             Ok(Some(safe)) => {
                 // Fetch registered nodes for this safe
-                let registered_nodes_result = blokli_db_entity::hopr_node_safe_registration::Entity::find()
-                    .filter(blokli_db_entity::hopr_node_safe_registration::Column::SafeAddress.eq(safe_address_vec))
+                let registered_nodes_result = hopr_node_safe_registration::Entity::find()
+                    .filter(hopr_node_safe_registration::Column::SafeAddress.eq(safe_address_vec))
                     .all(db)
                     .await;
 
@@ -758,16 +756,16 @@ impl QueryRoot {
 
         let db = ctx.data::<DatabaseConnection>()?;
 
-        match blokli_db_entity::hopr_safe_contract::Entity::find()
-            .filter(blokli_db_entity::hopr_safe_contract::Column::ChainKey.eq(chain_key_address))
+        match hopr_safe_contract::Entity::find()
+            .filter(hopr_safe_contract::Column::ChainKey.eq(chain_key_address))
             .one(db)
             .await
         {
             Ok(Some(safe)) => {
                 // Fetch registered nodes for this safe
                 let safe_address_vec = safe.address.clone();
-                let registered_nodes_result = blokli_db_entity::hopr_node_safe_registration::Entity::find()
-                    .filter(blokli_db_entity::hopr_node_safe_registration::Column::SafeAddress.eq(safe_address_vec))
+                let registered_nodes_result = hopr_node_safe_registration::Entity::find()
+                    .filter(hopr_node_safe_registration::Column::SafeAddress.eq(safe_address_vec))
                     .all(db)
                     .await;
 
@@ -853,8 +851,8 @@ impl QueryRoot {
         let node_address_vec = node_address.as_ref().to_vec();
 
         // Look up the registration to find the safe address
-        let registration_result = blokli_db_entity::hopr_node_safe_registration::Entity::find()
-            .filter(blokli_db_entity::hopr_node_safe_registration::Column::NodeAddress.eq(node_address_vec))
+        let registration_result = hopr_node_safe_registration::Entity::find()
+            .filter(hopr_node_safe_registration::Column::NodeAddress.eq(node_address_vec))
             .one(db)
             .await;
 
@@ -870,8 +868,8 @@ impl QueryRoot {
         };
 
         // Fetch the safe contract
-        let safe_result = blokli_db_entity::hopr_safe_contract::Entity::find()
-            .filter(blokli_db_entity::hopr_safe_contract::Column::Address.eq(registration.safe_address.clone()))
+        let safe_result = hopr_safe_contract::Entity::find()
+            .filter(hopr_safe_contract::Column::Address.eq(registration.safe_address.clone()))
             .one(db)
             .await;
 
@@ -893,8 +891,8 @@ impl QueryRoot {
         };
 
         // Fetch registered nodes for this safe
-        let registered_nodes_result = blokli_db_entity::hopr_node_safe_registration::Entity::find()
-            .filter(blokli_db_entity::hopr_node_safe_registration::Column::SafeAddress.eq(registration.safe_address))
+        let registered_nodes_result = hopr_node_safe_registration::Entity::find()
+            .filter(hopr_node_safe_registration::Column::SafeAddress.eq(registration.safe_address))
             .all(db)
             .await;
 
@@ -945,17 +943,16 @@ impl QueryRoot {
     async fn safes(&self, ctx: &Context<'_>) -> Result<SafesResult> {
         let db = ctx.data::<DatabaseConnection>()?;
 
-        match blokli_db_entity::hopr_safe_contract::Entity::find().all(db).await {
+        match hopr_safe_contract::Entity::find().all(db).await {
             Ok(safes) => {
                 // Fetch all registrations in a single query to avoid N+1
-                let all_registrations = blokli_db_entity::hopr_node_safe_registration::Entity::find()
+                let all_registrations = hopr_node_safe_registration::Entity::find()
                     .all(db)
                     .await
                     .unwrap_or_default();
 
                 // Group registrations by safe address
-                let mut registrations_by_safe: std::collections::HashMap<Vec<u8>, Vec<String>> =
-                    std::collections::HashMap::new();
+                let mut registrations_by_safe: HashMap<Vec<u8>, Vec<String>> = HashMap::new();
 
                 for reg in all_registrations {
                     if let Ok(node_addr) = Address::try_from(reg.node_address.as_slice()) {
@@ -966,7 +963,7 @@ impl QueryRoot {
                     }
                 }
 
-                let safe_results: std::result::Result<Vec<Safe>, String> = safes
+                let safe_results: Result<Vec<Safe>, String> = safes
                     .into_iter()
                     .map(|safe| {
                         let registered_nodes = registrations_by_safe

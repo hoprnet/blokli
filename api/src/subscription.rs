@@ -15,6 +15,7 @@ use blokli_db::notifications::SqliteNotificationManager;
 use blokli_db_entity::{
     chain_info, channel, channel_state,
     conversions::{account_aggregation::fetch_accounts_with_filters, channel_aggregation::fetch_channels_with_state},
+    hopr_node_safe_registration, hopr_safe_contract,
 };
 use futures::{Stream, StreamExt};
 use hopr_primitive_types::{
@@ -640,15 +641,15 @@ impl SubscriptionRoot {
                         match event_result {
                             Ok(IndexerEvent::SafeDeployed(safe_addr)) => {
                                 let safe_addr_bytes = safe_addr.as_ref().to_vec();
-                                match blokli_db_entity::hopr_safe_contract::Entity::find()
-                                    .filter(blokli_db_entity::hopr_safe_contract::Column::Address.eq(safe_addr_bytes))
+                                match hopr_safe_contract::Entity::find()
+                                    .filter(hopr_safe_contract::Column::Address.eq(safe_addr_bytes))
                                     .one(&db)
                                     .await
                                 {
                                     Ok(Some(safe)) => {
                                         // Fetch registered nodes for this safe
-                                        let registered_nodes = match blokli_db_entity::hopr_node_safe_registration::Entity::find()
-                                            .filter(blokli_db_entity::hopr_node_safe_registration::Column::SafeAddress.eq(safe.address.clone()))
+                                        let registered_nodes = match hopr_node_safe_registration::Entity::find()
+                                            .filter(hopr_node_safe_registration::Column::SafeAddress.eq(safe.address.clone()))
                                             .all(&db)
                                             .await
                                         {
@@ -1476,7 +1477,7 @@ mod tests {
         let module_address = vec![2; 20];
         let chain_key = vec![3; 20];
 
-        let safe = blokli_db_entity::hopr_safe_contract::ActiveModel {
+        let safe = hopr_safe_contract::ActiveModel {
             id: Default::default(),
             address: Set(safe_address.clone()),
             module_address: Set(module_address.clone()),
@@ -1611,7 +1612,7 @@ mod tests {
         let module_address_1 = vec![2; 20];
         let chain_key_1 = vec![3; 20];
 
-        let safe1 = blokli_db_entity::hopr_safe_contract::ActiveModel {
+        let safe1 = hopr_safe_contract::ActiveModel {
             id: Default::default(),
             address: Set(safe_address_1.clone()),
             module_address: Set(module_address_1.clone()),
@@ -1626,7 +1627,7 @@ mod tests {
         let module_address_2 = vec![5; 20];
         let chain_key_2 = vec![6; 20];
 
-        let safe2 = blokli_db_entity::hopr_safe_contract::ActiveModel {
+        let safe2 = hopr_safe_contract::ActiveModel {
             id: Default::default(),
             address: Set(safe_address_2.clone()),
             module_address: Set(module_address_2.clone()),
