@@ -66,7 +66,7 @@ futures-timer = "3.0.3"
 futures-util = "0.3.31"
 hex = "0.4.3"
 hex-literal = "1.0.0"
-hopli = { git = "https://github.com/hoprnet/hopli", branch = "q/set-win-prob-payload" } # TODO: change back to master once v4 compatibility changes are merged
+hopli = { git = "https://github.com/hoprnet/hopli", branch = "main" }
 hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
 hopr-bindings = { git = "https://github.com/hoprnet/contracts", rev = "107ca1c9d838678424d72471463b0d502150a119" }
 hopr-chain-connector = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
