@@ -7,10 +7,10 @@
 //! historical blockchain data.
 //!
 //! For details on the Indexer see the `chain-indexer` crate.
-use std::pin::Pin;
+use std::{cmp::Ordering, pin::Pin, time::Duration};
 
 use alloy::{
-    primitives::{Address as AlloyAddress, B256},
+    primitives::{Address as AlloyAddress, B256, U256},
     providers::Provider,
     rpc::types::Filter,
 };
@@ -126,10 +126,10 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
                         if let Ok(b) = b {
                             a.block_number.cmp(&b.block_number)
                         } else {
-                            std::cmp::Ordering::Greater
+                            Ordering::Greater
                         }
                     } else {
-                        std::cmp::Ordering::Less
+                        Ordering::Less
                     }
                 });
 
@@ -335,7 +335,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
         self.get_transaction_count(address).await
     }
 
-    async fn get_channel_closure_notice_period(&self) -> Result<std::time::Duration> {
+    async fn get_channel_closure_notice_period(&self) -> Result<Duration> {
         self.get_channel_closure_notice_period().await
     }
 
@@ -354,7 +354,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
         loop {
             // Get modules from the Safe contract (one page at a time)
             let result = safe_contract
-                .getModulesPaginated(cursor, alloy::primitives::U256::from(PAGE_SIZE))
+                .getModulesPaginated(cursor, U256::from(PAGE_SIZE))
                 .call()
                 .await?;
 
