@@ -15,6 +15,7 @@ pub struct Safe {
     pub address: String,
     pub chain_key: String,
     pub module_address: String,
+    pub registered_nodes: Vec<String>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]
