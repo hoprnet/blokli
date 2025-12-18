@@ -14,6 +14,7 @@ pub mod errors;
 pub mod events;
 pub mod info;
 pub mod logs;
+pub mod node_safe_registrations;
 pub mod notifications;
 pub mod safe_contracts;
 pub mod state_queries;
@@ -272,6 +273,7 @@ pub trait BlokliDbAllOperations:
     // + BlokliDbCorruptedChannelOperations
     + BlokliDbInfoOperations
     + BlokliDbLogOperations
+    + node_safe_registrations::BlokliDbNodeSafeRegistrationOperations
     + BlokliDbSafeContractOperations
 {
 }

@@ -134,11 +134,17 @@ where
                     .upsert_safe_contract(Some(tx), safe_addr, module_addr, node_addr, block, tx_index, log_index)
                     .await?;
 
+                // Register node to safe in the registration table
+                let _registration_id = self
+                    .db
+                    .register_node_to_safe(Some(tx), safe_addr, node_addr, block, tx_index, log_index)
+                    .await?;
+
                 debug!(
                     node_address = %node_addr.to_hex(),
                     safe_address = %safe_addr.to_hex(),
                     module_address = %module_addr.to_hex(),
-                    "Safe contract entry created from RegisteredNodeSafe"
+                    "Safe contract entry and node registration created from RegisteredNodeSafe"
                 );
             }
             HoprNodeSafeRegistryEvents::DeregisteredNodeSafe(deregistered) => {
@@ -148,22 +154,24 @@ where
                 info!(
                     node_address = %node_addr.to_hex(),
                     safe_address = %safe_addr.to_hex(),
-                    "Deleting safe contract entry from DeregisteredNodeSafe event"
+                    "Deleting node registration from DeregisteredNodeSafe event"
                 );
 
-                // Delete the safe contract entry (idempotent - ignore if already deleted)
-                match self.db.delete_safe_contract(Some(tx), safe_addr).await {
+                // Deregister node from safe (idempotent - ignore if already deregistered)
+                // Note: This does NOT delete the safe contract itself, only the node registration
+                match self.db.deregister_node_from_safe(Some(tx), safe_addr, node_addr).await {
                     Ok(()) => {
                         debug!(
                             node_address = %node_addr.to_hex(),
                             safe_address = %safe_addr.to_hex(),
-                            "Safe contract entry deleted"
+                            "Node registration deleted"
                         );
                     }
                     Err(DbSqlError::EntityNotFound(_)) => {
                         debug!(
+                            node_address = %node_addr.to_hex(),
                             safe_address = %safe_addr.to_hex(),
-                            "Safe contract entry already deleted, skipping"
+                            "Node registration already deleted, skipping"
                         );
                     }
                     Err(e) => return Err(e.into()),

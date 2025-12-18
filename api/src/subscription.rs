@@ -646,10 +646,25 @@ impl SubscriptionRoot {
                                     .await
                                 {
                                     Ok(Some(safe)) => {
+                                        // Fetch registered nodes for this safe
+                                        let registered_nodes = match blokli_db_entity::hopr_node_safe_registration::Entity::find()
+                                            .filter(blokli_db_entity::hopr_node_safe_registration::Column::SafeAddress.eq(safe.address.clone()))
+                                            .all(&db)
+                                            .await
+                                        {
+                                            Ok(registrations) => registrations
+                                                .into_iter()
+                                                .filter_map(|reg| Address::try_from(reg.node_address.as_slice()).ok())
+                                                .map(|addr| addr.to_hex())
+                                                .collect(),
+                                            Err(_) => Vec::new(),
+                                        };
+
                                         yield Safe {
                                             address: Address::new(&safe.address).to_hex(),
                                             module_address: Address::new(&safe.module_address).to_hex(),
                                             chain_key: Address::new(&safe.chain_key).to_hex(),
+                                            registered_nodes,
                                         };
                                     }
                                     Ok(None) => {

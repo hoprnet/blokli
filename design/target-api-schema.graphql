@@ -448,13 +448,25 @@ type QueryRoot {
   ): SafeResult
   """
   Retrieve safe by chain key (owner address)
-  
+
   Returns Error with code INVALID_ADDRESS if address format is invalid.
   Returns Error with code QUERY_FAILED if query fails.
   Returns None if safe is not found.
   """
   safeByChainKey(
     "Chain key to query (hexadecimal format)"
+    chainKey: String!
+  ): SafeResult
+  """
+  Retrieve safe by registered node address
+
+  Returns the safe that a given node is registered to.
+  Returns Error with code INVALID_ADDRESS if chainKey format is invalid.
+  Returns Error with code QUERY_FAILED if query fails.
+  Returns None if node is not registered to any safe.
+  """
+  safeByRegisteredNode(
+    "Node chain key to query (hexadecimal format)"
     chainKey: String!
   ): SafeResult
   """
@@ -531,6 +543,8 @@ type Safe {
   chainKey: String!
   "HOPR Node Management Module address (hexadecimal format)"
   moduleAddress: String!
+  "List of registered node addresses (hexadecimal format) for this Safe"
+  registeredNodes: [String!]!
 }
 
 """Safe HOPR token allowance information for a specific Safe address"""

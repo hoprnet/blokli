@@ -117,7 +117,14 @@ fn parse_safe_address(address: String) -> std::result::Result<Vec<u8>, SafeResul
 ///
 /// Validates that all address fields in the database are exactly 20 bytes.
 /// Returns an error message if any address field has an invalid length.
-fn safe_from_db_model(safe: blokli_db_entity::hopr_safe_contract::Model) -> std::result::Result<Safe, String> {
+///
+/// # Arguments
+/// * `safe` - The Safe contract database model
+/// * `registered_nodes` - List of registered node addresses (hex format)
+fn safe_from_db_model(
+    safe: blokli_db_entity::hopr_safe_contract::Model,
+    registered_nodes: Vec<String>,
+) -> std::result::Result<Safe, String> {
     let address = Address::try_from(&safe.address[..]).map_err(|_| {
         format!(
             "Invalid address length in database: expected 20 bytes, got {}",
@@ -143,6 +150,7 @@ fn safe_from_db_model(safe: blokli_db_entity::hopr_safe_contract::Model) -> std:
         address: address.to_hex(),
         module_address: module_address.to_hex(),
         chain_key: chain_key.to_hex(),
+        registered_nodes,
     })
 }
 
@@ -670,18 +678,37 @@ impl QueryRoot {
 
         let db = ctx.data::<DatabaseConnection>()?;
 
+        let safe_address_vec = safe_address.clone();
+
         match blokli_db_entity::hopr_safe_contract::Entity::find()
             .filter(blokli_db_entity::hopr_safe_contract::Column::Address.eq(safe_address))
             .one(db)
             .await
         {
-            Ok(Some(safe)) => match safe_from_db_model(safe) {
-                Ok(safe_data) => Ok(Some(SafeResult::Safe(safe_data))),
-                Err(e) => Ok(Some(SafeResult::QueryFailed(errors::invalid_db_data(
-                    "safe addresses",
-                    &e,
-                )))),
-            },
+            Ok(Some(safe)) => {
+                // Fetch registered nodes for this safe
+                let registered_nodes_result = blokli_db_entity::hopr_node_safe_registration::Entity::find()
+                    .filter(blokli_db_entity::hopr_node_safe_registration::Column::SafeAddress.eq(safe_address_vec))
+                    .all(db)
+                    .await;
+
+                let registered_nodes = match registered_nodes_result {
+                    Ok(registrations) => registrations
+                        .into_iter()
+                        .filter_map(|reg| Address::try_from(reg.node_address.as_slice()).ok())
+                        .map(|addr| addr.to_hex())
+                        .collect(),
+                    Err(_) => Vec::new(), // If query fails, return empty list
+                };
+
+                match safe_from_db_model(safe, registered_nodes) {
+                    Ok(safe_data) => Ok(Some(SafeResult::Safe(safe_data))),
+                    Err(e) => Ok(Some(SafeResult::QueryFailed(errors::invalid_db_data(
+                        "safe addresses",
+                        &e,
+                    )))),
+                }
+            }
             Ok(None) => Ok(None),
             Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed("fetch safe", e)))),
         }
@@ -736,17 +763,155 @@ impl QueryRoot {
             .one(db)
             .await
         {
-            Ok(Some(safe)) => match safe_from_db_model(safe) {
-                Ok(safe_data) => Ok(Some(SafeResult::Safe(safe_data))),
-                Err(e) => Ok(Some(SafeResult::QueryFailed(errors::invalid_db_data(
-                    "safe addresses",
-                    &e,
-                )))),
-            },
+            Ok(Some(safe)) => {
+                // Fetch registered nodes for this safe
+                let safe_address_vec = safe.address.clone();
+                let registered_nodes_result = blokli_db_entity::hopr_node_safe_registration::Entity::find()
+                    .filter(blokli_db_entity::hopr_node_safe_registration::Column::SafeAddress.eq(safe_address_vec))
+                    .all(db)
+                    .await;
+
+                let registered_nodes = match registered_nodes_result {
+                    Ok(registrations) => registrations
+                        .into_iter()
+                        .filter_map(|reg| Address::try_from(reg.node_address.as_slice()).ok())
+                        .map(|addr| addr.to_hex())
+                        .collect(),
+                    Err(_) => Vec::new(), // If query fails, return empty list
+                };
+
+                match safe_from_db_model(safe, registered_nodes) {
+                    Ok(safe_data) => Ok(Some(SafeResult::Safe(safe_data))),
+                    Err(e) => Ok(Some(SafeResult::QueryFailed(errors::invalid_db_data(
+                        "safe addresses",
+                        &e,
+                    )))),
+                }
+            }
             Ok(None) => Ok(None),
             Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed(
                 "fetch safe by chain key",
                 e,
+            )))),
+        }
+    }
+
+    /// Fetches a Safe contract by registered node address.
+    ///
+    /// Returns the safe that a given node is registered to. If the node is not
+    /// registered to any safe, returns `None`. On success, the returned `Safe` includes
+    /// all node addresses registered to that safe in the `registered_nodes` field.
+    ///
+    /// # Arguments
+    ///
+    /// * `chain_key` - Hex-encoded Ethereum address of the registered node
+    ///
+    /// # Returns
+    ///
+    /// * `Some(SafeResult::Safe)` - The safe that the node is registered to
+    /// * `None` - Node is not registered to any safe
+    /// * `Some(SafeResult::InvalidAddress)` - Invalid address format
+    /// * `Some(SafeResult::QueryFailed)` - Database error
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use async_graphql::Context;
+    /// # use crate::api::QueryRoot;
+    /// # async fn doc_example(ctx: &Context<'_>) {
+    /// let query = QueryRoot;
+    /// let node_addr = "0x1234567890123456789012345678901234567890";
+    /// match query.safe_by_registered_node(ctx, node_addr.to_string()).await.unwrap() {
+    ///     Some(crate::api::SafeResult::Safe(safe)) => {
+    ///         println!("Node registered to safe: {}", safe.address);
+    ///     }
+    ///     None => {
+    ///         println!("Node not registered to any safe");
+    ///     }
+    ///     _ => {}
+    /// }
+    /// # }
+    /// ```
+    async fn safe_by_registered_node(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(name = "chainKey")] chain_key: String,
+    ) -> Result<Option<SafeResult>> {
+        let db = ctx.data::<DatabaseConnection>()?;
+
+        // Parse the node address from hex
+        let node_address = match Address::from_hex(&chain_key) {
+            Ok(addr) => addr,
+            Err(e) => {
+                return Ok(Some(SafeResult::InvalidAddress(errors::invalid_address_error(
+                    &chain_key,
+                    e.to_string(),
+                ))));
+            }
+        };
+
+        let node_address_vec = node_address.as_ref().to_vec();
+
+        // Look up the registration to find the safe address
+        let registration_result = blokli_db_entity::hopr_node_safe_registration::Entity::find()
+            .filter(blokli_db_entity::hopr_node_safe_registration::Column::NodeAddress.eq(node_address_vec))
+            .one(db)
+            .await;
+
+        let registration = match registration_result {
+            Ok(Some(reg)) => reg,
+            Ok(None) => return Ok(None), // Node not registered to any safe
+            Err(e) => {
+                return Ok(Some(SafeResult::QueryFailed(errors::query_failed(
+                    "fetch safe by registered node",
+                    e,
+                ))));
+            }
+        };
+
+        // Fetch the safe contract
+        let safe_result = blokli_db_entity::hopr_safe_contract::Entity::find()
+            .filter(blokli_db_entity::hopr_safe_contract::Column::Address.eq(registration.safe_address.clone()))
+            .one(db)
+            .await;
+
+        let safe = match safe_result {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                // This shouldn't happen (orphaned registration), but handle gracefully
+                return Ok(Some(SafeResult::QueryFailed(errors::query_failed(
+                    "fetch safe by registered node",
+                    "Safe not found for registered node",
+                ))));
+            }
+            Err(e) => {
+                return Ok(Some(SafeResult::QueryFailed(errors::query_failed(
+                    "fetch safe by registered node",
+                    e,
+                ))));
+            }
+        };
+
+        // Fetch registered nodes for this safe
+        let registered_nodes_result = blokli_db_entity::hopr_node_safe_registration::Entity::find()
+            .filter(blokli_db_entity::hopr_node_safe_registration::Column::SafeAddress.eq(registration.safe_address))
+            .all(db)
+            .await;
+
+        let registered_nodes = match registered_nodes_result {
+            Ok(registrations) => registrations
+                .into_iter()
+                .filter_map(|reg| Address::try_from(reg.node_address.as_slice()).ok())
+                .map(|addr| addr.to_hex())
+                .collect(),
+            Err(_) => Vec::new(), // If query fails, return empty list
+        };
+
+        match safe_from_db_model(safe, registered_nodes) {
+            Ok(safe_obj) => Ok(Some(SafeResult::Safe(safe_obj))),
+            Err(e) => Ok(Some(SafeResult::QueryFailed(errors::invalid_db_data(
+                "safe address",
+                &e,
             )))),
         }
     }
@@ -782,8 +947,35 @@ impl QueryRoot {
 
         match blokli_db_entity::hopr_safe_contract::Entity::find().all(db).await {
             Ok(safes) => {
-                let safe_results: std::result::Result<Vec<Safe>, String> =
-                    safes.into_iter().map(safe_from_db_model).collect();
+                // Fetch all registrations in a single query to avoid N+1
+                let all_registrations = blokli_db_entity::hopr_node_safe_registration::Entity::find()
+                    .all(db)
+                    .await
+                    .unwrap_or_default();
+
+                // Group registrations by safe address
+                let mut registrations_by_safe: std::collections::HashMap<Vec<u8>, Vec<String>> =
+                    std::collections::HashMap::new();
+
+                for reg in all_registrations {
+                    if let Ok(node_addr) = Address::try_from(reg.node_address.as_slice()) {
+                        registrations_by_safe
+                            .entry(reg.safe_address.clone())
+                            .or_default()
+                            .push(node_addr.to_hex());
+                    }
+                }
+
+                let safe_results: std::result::Result<Vec<Safe>, String> = safes
+                    .into_iter()
+                    .map(|safe| {
+                        let registered_nodes = registrations_by_safe
+                            .get(&safe.address)
+                            .cloned()
+                            .unwrap_or_else(Vec::new);
+                        safe_from_db_model(safe, registered_nodes)
+                    })
+                    .collect();
 
                 match safe_results {
                     Ok(safe_list) => Ok(SafesResult::Safes(SafesList { safes: safe_list })),
