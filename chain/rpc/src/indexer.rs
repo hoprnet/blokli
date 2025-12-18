@@ -7,9 +7,13 @@
 //! historical blockchain data.
 //!
 //! For details on the Indexer see the `chain-indexer` crate.
-use std::pin::Pin;
+use std::{cmp::Ordering, pin::Pin, time::Duration};
 
-use alloy::{primitives::B256, providers::Provider, rpc::types::Filter};
+use alloy::{
+    primitives::{Address as AlloyAddress, B256, U256},
+    providers::Provider,
+    rpc::types::Filter,
+};
 use async_stream::stream;
 use async_trait::async_trait;
 use blokli_chain_types::AlloyAddressExt;
@@ -24,7 +28,7 @@ use tracing::{debug, error, trace, warn};
 use crate::{
     BlockWithLogs, FilterSet, HoprIndexerRpcOperations, Log,
     errors::{Result, RpcError, RpcError::FilterIsEmpty},
-    rpc::RpcOperations,
+    rpc::{HoprModule, RpcOperations, SafeSingleton},
     transport::HttpRequestor,
 };
 
@@ -122,10 +126,10 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
                         if let Ok(b) = b {
                             a.block_number.cmp(&b.block_number)
                         } else {
-                            std::cmp::Ordering::Greater
+                            Ordering::Greater
                         }
                     } else {
-                        std::cmp::Ordering::Less
+                        Ordering::Less
                     }
                 });
 
@@ -331,8 +335,98 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
         self.get_transaction_count(address).await
     }
 
-    async fn get_channel_closure_notice_period(&self) -> Result<std::time::Duration> {
+    async fn get_channel_closure_notice_period(&self) -> Result<Duration> {
         self.get_channel_closure_notice_period().await
+    }
+
+    async fn get_hopr_module_from_safe(&self, safe_address: Address) -> Result<Option<Address>> {
+        // Safe linked list start pointer (as per Safe docs)
+        const START_POINTER: AlloyAddress =
+            AlloyAddress::new([0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
+        const PAGE_SIZE: u64 = 10;
+
+        let safe_alloy_addr = AlloyAddress::from_hopr_address(safe_address);
+        let safe_contract = SafeSingleton::new(safe_alloy_addr, self.provider.clone());
+
+        // Pagination cursor - starts at sentinel value
+        let mut cursor = START_POINTER;
+
+        loop {
+            // Get modules from the Safe contract (one page at a time)
+            let result = safe_contract
+                .getModulesPaginated(cursor, U256::from(PAGE_SIZE))
+                .call()
+                .await?;
+
+            let modules = result.array;
+
+            debug!(
+                safe_address = %safe_address,
+                module_count = modules.len(),
+                cursor = %cursor,
+                next = %result.next,
+                "Retrieved modules page from Safe contract"
+            );
+
+            // Check each module to see if it's a HOPR node management module
+            for module_addr in modules {
+                // Skip zero address or start pointer
+                if module_addr == AlloyAddress::ZERO || module_addr == START_POINTER {
+                    continue;
+                }
+
+                let module_contract = HoprModule::new(module_addr, self.provider.clone());
+
+                // Try to call isHoprNodeManagementModule - if it returns true, this is our module
+                match module_contract.isHoprNodeManagementModule().call().await {
+                    Ok(is_hopr_module) if is_hopr_module => {
+                        let hopr_addr = module_addr.to_hopr_address();
+                        debug!(
+                            safe_address = %safe_address,
+                            module_address = %hopr_addr,
+                            "Found HOPR node management module"
+                        );
+                        return Ok(Some(hopr_addr));
+                    }
+                    Ok(_) => {
+                        // Not a HOPR module, continue checking
+                        trace!(
+                            module_address = %module_addr,
+                            "Module is not a HOPR node management module"
+                        );
+                    }
+                    Err(e) => {
+                        // This module doesn't implement the interface, skip it
+                        trace!(
+                            module_address = %module_addr,
+                            error = %e,
+                            "Module does not implement isHoprNodeManagementModule"
+                        );
+                    }
+                }
+            }
+
+            // Check if we've reached the end of the list
+            // Safe returns START_POINTER as next when there are no more pages
+            if result.next == START_POINTER {
+                break;
+            }
+
+            // Guard against infinite loop (cursor unchanged)
+            if result.next == cursor {
+                break;
+            }
+
+            // Move to next page
+            cursor = result.next;
+        }
+
+        // No HOPR module found
+        debug!(
+            safe_address = %safe_address,
+            "No HOPR node management module found in Safe"
+        );
+        Ok(None)
     }
 }
 

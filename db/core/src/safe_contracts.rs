@@ -1,7 +1,7 @@
 use async_trait::async_trait;
-use blokli_db_entity::{codegen::prelude::*, hopr_safe_contract};
-use hopr_primitive_types::prelude::*;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, Set};
+use blokli_db_entity::{hopr_safe_contract, prelude::HoprSafeContract};
+use hopr_primitive_types::prelude::Address;
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, ModelTrait, QueryFilter, Set};
 use sea_query::OnConflict;
 
 use crate::{BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result};
@@ -32,6 +32,37 @@ pub trait BlokliDbSafeContractOperations: BlokliDbGeneralModelOperations {
         log_index: u64,
     ) -> Result<i64>;
 
+    /// Upsert safe contract entry - create new or update existing by address
+    ///
+    /// If a safe with this address exists, updates module_address, chain_key, and deployment coordinates.
+    /// If no safe exists, creates a new entry.
+    ///
+    /// This method is used by RegisteredNodeSafe handler to handle both cases:
+    /// 1. Safe created earlier by NewHoprNodeStakeModuleForSafe event (different coordinates)
+    /// 2. First-time safe registration (no existing entry)
+    ///
+    /// # Arguments
+    /// * `safe_address` - Safe contract address (lookup key)
+    /// * `module_address` - Module contract address (may be updated)
+    /// * `chain_key` - Node address binding (may be updated)
+    /// * `block` - Event block number
+    /// * `tx_index` - Event transaction index
+    /// * `log_index` - Event log index
+    ///
+    /// # Returns
+    /// The database id of the existing or newly created safe contract
+    #[allow(clippy::too_many_arguments)]
+    async fn upsert_safe_contract<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        safe_address: Address,
+        module_address: Address,
+        chain_key: Address,
+        block: u64,
+        tx_index: u64,
+        log_index: u64,
+    ) -> Result<i64>;
+
     /// Verify safe contract exists and chain_key matches expected value
     ///
     /// Used by RegisteredNodeSafe handler for verification only
@@ -50,6 +81,34 @@ pub trait BlokliDbSafeContractOperations: BlokliDbGeneralModelOperations {
         safe_address: Address,
         expected_chain_key: Address,
     ) -> Result<bool>;
+
+    /// Delete a safe contract entry
+    ///
+    /// Used by DeregisteredNodeSafe handler to remove safe when deregistered
+    ///
+    /// # Arguments
+    /// * `safe_address` - Safe contract address from event
+    ///
+    /// # Returns
+    /// * `Ok(())` - Safe was deleted successfully
+    /// * `Err(_)` - Safe does not exist or deletion failed
+    async fn delete_safe_contract<'a>(&'a self, tx: OptTx<'a>, safe_address: Address) -> Result<()>;
+
+    /// Get safe contract by address
+    ///
+    /// Used to check if a safe entry already exists before querying RPC
+    ///
+    /// # Arguments
+    /// * `safe_address` - Safe contract address
+    ///
+    /// # Returns
+    /// * `Ok(Some(model))` - Safe exists
+    /// * `Ok(None)` - Safe does not exist
+    async fn get_safe_contract_by_address<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        safe_address: Address,
+    ) -> Result<Option<hopr_safe_contract::Model>>;
 }
 
 #[async_trait]
@@ -131,6 +190,85 @@ impl BlokliDbSafeContractOperations for BlokliDb {
         Ok(safe.id)
     }
 
+    /// Upserts a safe contract record: creates a new entry if the safe address does not exist, or updates the existing
+    /// entry if it does.
+    ///
+    /// When a safe contract with the given address already exists, this method updates the module address, chain key,
+    /// and deployment coordinates to the provided values. When no existing safe is found, a new record is inserted.
+    ///
+    /// The operation uses the provided optional transaction; a nested transaction will be created and committed on
+    /// success when needed.
+    ///
+    /// # Returns
+    ///
+    /// The database id of the existing or newly inserted safe contract.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # async fn example(db: &BlokliDb, safe_addr: Address, module_addr: Address, chain_key: Address) -> Result<(), Box<dyn std::error::Error>> {
+    /// // First call creates new entry
+    /// let id1 = db.upsert_safe_contract(None, safe_addr, module_addr, chain_key, 100, 0, 0).await?;
+    ///
+    /// // Second call with same address but different coordinates updates existing entry
+    /// let id2 = db.upsert_safe_contract(None, safe_addr, module_addr, chain_key, 200, 1, 0).await?;
+    /// assert_eq!(id1, id2); // Same ID, updated entry
+    /// # Ok(()) }
+    /// ```
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::cast_possible_wrap)]
+    async fn upsert_safe_contract<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        safe_address: Address,
+        module_address: Address,
+        chain_key: Address,
+        block: u64,
+        tx_index: u64,
+        log_index: u64,
+    ) -> Result<i64> {
+        let tx = self.nest_transaction(tx).await?;
+
+        // Check if safe exists by address
+        let existing_safe = HoprSafeContract::find()
+            .filter(hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
+            .one(tx.as_ref())
+            .await?;
+
+        let safe_id = match existing_safe {
+            Some(safe) => {
+                // Safe exists - update the record
+                let mut active_model = safe.into_active_model();
+                active_model.module_address = Set(module_address.as_ref().to_vec());
+                active_model.chain_key = Set(chain_key.as_ref().to_vec());
+                active_model.deployed_block = Set(block as i64);
+                active_model.deployed_tx_index = Set(tx_index as i64);
+                active_model.deployed_log_index = Set(log_index as i64);
+
+                let updated = active_model.update(tx.as_ref()).await?;
+                updated.id
+            }
+            None => {
+                // Safe doesn't exist - create new record
+                let safe_model = hopr_safe_contract::ActiveModel {
+                    address: Set(safe_address.as_ref().to_vec()),
+                    module_address: Set(module_address.as_ref().to_vec()),
+                    chain_key: Set(chain_key.as_ref().to_vec()),
+                    deployed_block: Set(block as i64),
+                    deployed_tx_index: Set(tx_index as i64),
+                    deployed_log_index: Set(log_index as i64),
+                    ..Default::default()
+                };
+
+                let result = HoprSafeContract::insert(safe_model).exec(tx.as_ref()).await?;
+                result.last_insert_id
+            }
+        };
+
+        tx.commit().await?;
+        Ok(safe_id)
+    }
+
     /// Checks that a safe contract exists at `safe_address` and that its stored chain key equals `expected_chain_key`.
     ///
     /// # Returns
@@ -173,6 +311,79 @@ impl BlokliDbSafeContractOperations for BlokliDb {
                 safe_address
             ))),
         }
+    }
+
+    /// Deletes a safe contract entry from the database.
+    ///
+    /// Used when a node is deregistered from a safe via DeregisteredNodeSafe event.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(())` if the safe was successfully deleted, or `DbSqlError::EntityNotFound` if no safe contract is found.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use crate::db::BlokliDb;
+    /// # use crate::types::Address;
+    /// # async fn example(db: &BlokliDb, addr: Address) -> Result<(), crate::db::DbSqlError> {
+    /// db.delete_safe_contract(None, addr).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    async fn delete_safe_contract<'a>(&'a self, tx: OptTx<'a>, safe_address: Address) -> Result<()> {
+        let tx = self.nest_transaction(tx).await?;
+
+        // Find the safe first to ensure it exists
+        let safe = HoprSafeContract::find()
+            .filter(hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
+            .one(tx.as_ref())
+            .await?
+            .ok_or_else(|| DbSqlError::EntityNotFound(format!("Safe contract not found: {}", safe_address)))?;
+
+        // Delete the safe entry
+        safe.delete(tx.as_ref()).await?;
+
+        tx.commit().await?;
+        Ok(())
+    }
+
+    /// Retrieves a safe contract entry by its address.
+    ///
+    /// Used to check if a safe entry already exists (e.g., from NewHoprNodeStakeModuleForSafe)
+    /// before deciding whether to fetch module info from RPC during RegisteredNodeSafe processing.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(Some(model))` if the safe exists, `Ok(None)` if not found.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # use crate::db::BlokliDb;
+    /// # use crate::types::Address;
+    /// # async fn example(db: &BlokliDb, addr: Address) -> Result<(), crate::db::DbSqlError> {
+    /// if let Some(safe) = db.get_safe_contract_by_address(None, addr).await? {
+    ///     println!("Found safe with module: {:?}", safe.module_address);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    async fn get_safe_contract_by_address<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        safe_address: Address,
+    ) -> Result<Option<hopr_safe_contract::Model>> {
+        let query =
+            HoprSafeContract::find().filter(hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()));
+
+        let safe = if let Some(t) = tx {
+            query.one(t.as_ref()).await?
+        } else {
+            query.one(self.conn(crate::TargetDb::Index)).await?
+        };
+
+        Ok(safe)
     }
 }
 
@@ -274,6 +485,41 @@ mod tests {
         // Case 3: Safe exists but chain_key mismatch
         let result = db.verify_safe_contract(None, safe_address, other_chain_key).await?;
         assert!(!result);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_delete_safe_contract() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let safe_address = random_address();
+        let module_address = random_address();
+        let chain_key = random_address();
+
+        // Case 1: Safe doesn't exist
+        let result = db.delete_safe_contract(None, safe_address).await;
+        assert!(matches!(result, Err(DbSqlError::EntityNotFound(_))));
+
+        // Create safe contract
+        let id = db
+            .create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+            .await?;
+
+        // Verify safe exists
+        let safe = HoprSafeContract::find_by_id(id)
+            .one(db.conn(crate::TargetDb::Index))
+            .await?;
+        assert!(safe.is_some());
+
+        // Delete the safe
+        db.delete_safe_contract(None, safe_address).await?;
+
+        // Verify safe is deleted
+        let safe = HoprSafeContract::find_by_id(id)
+            .one(db.conn(crate::TargetDb::Index))
+            .await?;
+        assert!(safe.is_none());
 
         Ok(())
     }

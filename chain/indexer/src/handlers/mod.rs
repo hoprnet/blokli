@@ -203,7 +203,7 @@ where
             self.on_token_event(tx, event.data, is_synced).await
         } else if log.address.eq(&self.addresses.node_safe_registry) {
             let event = HoprNodeSafeRegistryEvents::decode_log(&primitive_log)?;
-            self.on_node_safe_registry_event(tx, event.data, is_synced).await
+            self.on_node_safe_registry_event(tx, &log, event.data, is_synced).await
         } else if log.address.eq(&self.addresses.ticket_price_oracle) {
             let event = HoprTicketPriceOracleEvents::decode_log(&primitive_log)?;
             self.on_ticket_price_oracle_event(tx, event.data, is_synced).await
