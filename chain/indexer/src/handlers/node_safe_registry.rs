@@ -29,7 +29,8 @@ where
     /// - `RegisteredNodeSafe`: creates a safe contract entry if it doesn't exist. Fetches module address from the Safe
     ///   contract via RPC if no existing entry with a module address is found. Idempotent due to unique constraint on
     ///   event coordinates.
-    /// - `DeregisteredNodeSafe`: deletes the safe contract entry from the database.
+    /// - `DeregisteredNodeSafe`: removes the node's registration from the safe. The safe contract record remains in the
+    ///   database.
     /// - `DomainSeparatorUpdated`: updates the SafeRegistry domain separator in the database.
     ///
     /// # Returns

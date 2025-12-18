@@ -23,6 +23,7 @@ use hopr_primitive_types::{
     traits::{IntoEndian, ToHex},
 };
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
+use tracing::warn;
 
 use crate::{errors, mutation::TransactionResult, validation::validate_eth_address};
 
@@ -903,7 +904,14 @@ impl QueryRoot {
                 .filter_map(|reg| Address::try_from(reg.node_address.as_slice()).ok())
                 .map(|addr| addr.to_hex())
                 .collect(),
-            Err(_) => Vec::new(), // If query fails, return empty list
+            Err(e) => {
+                warn!(
+                    safe_address = ?registration.safe_address,
+                    error = %e,
+                    "Failed to fetch registered nodes for safe, returning empty list"
+                );
+                Vec::new()
+            }
         };
 
         match safe_from_db_model(safe, registered_nodes) {

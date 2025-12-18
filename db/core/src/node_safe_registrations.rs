@@ -10,8 +10,9 @@ use crate::{BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result}
 pub trait BlokliDbNodeSafeRegistrationOperations: BlokliDbGeneralModelOperations {
     /// Register a node to a safe
     ///
-    /// Creates or updates a node-safe registration entry. If a registration with the same
-    /// (safe_address, node_address) already exists, updates the registration coordinates.
+    /// Creates a node-safe registration entry. If a registration with the same event coordinates
+    /// (registered_block, registered_tx_index, registered_log_index) already exists, returns the
+    /// existing registration ID without modification.
     ///
     /// # Arguments
     /// * `safe_address` - Safe contract address
@@ -21,10 +22,7 @@ pub trait BlokliDbNodeSafeRegistrationOperations: BlokliDbGeneralModelOperations
     /// * `log_index` - Registration event log index
     ///
     /// # Idempotency
-    /// Uses unique constraint on (registered_block, registered_tx_index, registered_log_index)
-    ///
-    /// # Errors
-    /// Returns error if node_address is already registered to a different safe (unique constraint violation)
+    /// Uses ON CONFLICT DO NOTHING on event coordinates for safe event replay.
     #[allow(clippy::too_many_arguments)]
     async fn register_node_to_safe<'a>(
         &'a self,
