@@ -1,6 +1,6 @@
 use async_trait::async_trait;
-use blokli_db_entity::{codegen::prelude::*, hopr_node_safe_registration};
-use hopr_primitive_types::prelude::*;
+use blokli_db_entity::{hopr_node_safe_registration, prelude::HoprNodeSafeRegistration};
+use hopr_primitive_types::prelude::Address;
 use sea_orm::{ColumnTrait, EntityTrait, ModelTrait, QueryFilter, Set};
 use sea_query::OnConflict;
 

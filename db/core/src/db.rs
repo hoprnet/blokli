@@ -1,6 +1,9 @@
 use std::time::Duration;
 
-use blokli_db_entity::codegen::{chain_info, prelude::*};
+use blokli_db_entity::{
+    chain_info,
+    prelude::{Account, Announcement, ChainInfo},
+};
 use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait};
 use sea_orm::{ConnectOptions, Database, EntityTrait, Set, SqlxSqliteConnector, sea_query::OnConflict};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
@@ -374,7 +377,7 @@ impl BlokliDbAllOperations for BlokliDb {}
 
 #[cfg(test)]
 mod tests {
-    use blokli_db_entity::codegen::prelude::ChainInfo;
+    use blokli_db_entity::prelude::ChainInfo;
     use migration::{Migrator, MigratorTrait};
     use sea_orm::{EntityTrait, PaginatorTrait};
 

@@ -208,7 +208,7 @@ mod tests {
     use hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry;
     use hopr_primitive_types::prelude::{Address, SerializableLog};
     use primitive_types::H256;
-    use sea_orm::{ColumnTrait, PaginatorTrait, QueryFilter};
+    use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
     use crate::handlers::{node_safe_registry::tests::SAFE_INSTANCE_ADDR, test_utils::test_helpers::*};
 

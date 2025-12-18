@@ -1,4 +1,7 @@
-use blokli_db_entity::codegen::prelude::*;
+use blokli_db_entity::prelude::{
+    Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, HoprBalance, HoprSafeContract, Log,
+    LogStatus, LogTopicInfo, NativeBalance,
+};
 use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, Statement};
 use tracing::{info, warn};
 
@@ -189,7 +192,7 @@ async fn clear_logs_data(db: &DatabaseConnection) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use blokli_db_entity::codegen::{chain_info, log, prelude::*};
+    use blokli_db_entity::{chain_info, log};
     use sea_orm::{ActiveModelTrait, EntityTrait, PaginatorTrait, Set};
 
     use super::*;
