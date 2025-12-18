@@ -528,6 +528,8 @@ type Safe {
   chainKey: String!
   "HOPR Node Management Module address (hexadecimal format)"
   moduleAddress: String!
+  "List of registered Node addresses (hexadecimal format)"
+  registeredNodes: [String!]!
 }
 
 """Safe HOPR token allowance information for a specific Safe address"""
