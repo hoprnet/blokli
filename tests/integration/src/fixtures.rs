@@ -130,6 +130,27 @@ impl IntegrationFixture {
         Ok(receipt)
     }
 
+    pub async fn update_winn_prob(
+        &self,
+        owner: &AnvilAccount,
+        contract_address: Address,
+        new_win_prob: f64,
+    ) -> Result<[u8; 32]> {
+        let nonce = self.rpc().transaction_count(owner.address.as_ref()).await?;
+
+        let payload = hopli_lib::payloads::set_winning_probability(contract_address, new_win_prob)?
+            .gas_limit(self.config().gas_limit)
+            .max_fee_per_gas(self.config().max_fee_per_gas)
+            .max_priority_fee_per_gas(self.config().max_priority_fee_per_gas)
+            .with_chain_id(self.rpc().chain_id().await?)
+            .nonce(nonce);
+
+        let payload_bytes = payload.build(&owner.as_wallet()).await?.encoded_2718();
+
+        self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
+            .await
+    }
+
     pub async fn deploy_safe(&self, owner: &AnvilAccount, amount: u64) -> Result<[u8; 32]> {
         let nonce = self.rpc().transaction_count(owner.address.as_ref()).await?;
 

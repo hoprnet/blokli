@@ -7,8 +7,7 @@ use futures::stream::StreamExt;
 use futures_time::{future::FutureExt as FutureTimeoutExt, time::Duration};
 use hopr_crypto_types::types::Hash;
 use hopr_internal_types::channels::generate_channel_id;
-use hopr_primitive_types::{prelude::HoprBalance, traits::ToHex};
-use rand::Rng;
+use hopr_primitive_types::traits::ToHex;
 use rstest::*;
 use serial_test::serial;
 
@@ -132,46 +131,38 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
-#[ignore = "not ready"]
 async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
-    let mut rng = rand::rng();
-    let new_win_prob = 0.0001f64;
-    let new_ticket_value: HoprBalance = format!("{} wxHOPR", rng.random::<f64>())
-        .parse()
-        .expect("failed to parse amount");
+    let [account] = fixture.sample_accounts::<1>();
+    let client = fixture.client().clone();
 
-    let subscription = fixture
-        .client()
-        .subscribe_ticket_params()
-        .expect("failed to create ticket params subscription");
+    let new_win_prob = 0.00005f64;
 
-    // TODO: update the ticket price and win prob through anvil / hopli
+    let handle = tokio::task::spawn(async move {
+        client
+            .subscribe_ticket_params()
+            .expect("failed to create ticket parameters subscription")
+            .next()
+            .timeout(subscription_timeout())
+            .await
+    });
 
-    let output = subscription
-        .skip_while(|entry| {
-            let should_skip = entry
-                .as_ref()
-                .expect("failed to get subscription update")
-                .min_ticket_winning_probability
-                != new_win_prob;
-            futures::future::ready(should_skip)
-        })
-        .next()
-        .timeout(subscription_timeout())
-        .await
-        .map_err(|_| anyhow!("subscription update timed out"))?
+    fixture
+        .update_winn_prob(
+            account,
+            fixture.contract_addresses().winning_probability_oracle,
+            new_win_prob,
+        )
+        .await?;
+
+    let output = handle
+        .await??
         .ok_or_else(|| anyhow!("no update received from subscription"))??;
 
-    // TODO: set the ticket price and win prob back to original values
-
-    let decoded_ticket_value: HoprBalance = output
-        .ticket_price
-        .0
-        .parse()
-        .map_err(|_| anyhow!("failed to parse ticket value from subscription"))?;
+    fixture
+        .update_winn_prob(account, fixture.contract_addresses().winning_probability_oracle, 1.0)
+        .await?;
 
     assert_eq!(output.min_ticket_winning_probability, new_win_prob);
-    assert_eq!(decoded_ticket_value, new_ticket_value);
 
     Ok(())
 }
@@ -187,7 +178,6 @@ async fn subscribe_safe_deployments(#[future(awt)] fixture: IntegrationFixture) 
         client
             .subscribe_safe_deployments()
             .expect("failed to create safe deployments subscription")
-            // .skip_while()
             .next()
             .timeout(subscription_timeout())
             .await
