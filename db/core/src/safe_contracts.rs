@@ -1,7 +1,7 @@
 use async_trait::async_trait;
 use blokli_db_entity::{codegen::prelude::*, hopr_safe_contract};
 use hopr_primitive_types::prelude::*;
-use sea_orm::{ColumnTrait, EntityTrait, ModelTrait, QueryFilter, Set};
+use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, IntoActiveModel, ModelTrait, QueryFilter, Set};
 use sea_query::OnConflict;
 
 use crate::{BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result};
@@ -22,6 +22,37 @@ pub trait BlokliDbSafeContractOperations: BlokliDbGeneralModelOperations {
     /// Uses ON CONFLICT DO NOTHING with unique constraint on (deployed_block, deployed_tx_index, deployed_log_index)
     #[allow(clippy::too_many_arguments)]
     async fn create_safe_contract<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        safe_address: Address,
+        module_address: Address,
+        chain_key: Address,
+        block: u64,
+        tx_index: u64,
+        log_index: u64,
+    ) -> Result<i64>;
+
+    /// Upsert safe contract entry - create new or update existing by address
+    ///
+    /// If a safe with this address exists, updates module_address, chain_key, and deployment coordinates.
+    /// If no safe exists, creates a new entry.
+    ///
+    /// This method is used by RegisteredNodeSafe handler to handle both cases:
+    /// 1. Safe created earlier by NewHoprNodeStakeModuleForSafe event (different coordinates)
+    /// 2. First-time safe registration (no existing entry)
+    ///
+    /// # Arguments
+    /// * `safe_address` - Safe contract address (lookup key)
+    /// * `module_address` - Module contract address (may be updated)
+    /// * `chain_key` - Node address binding (may be updated)
+    /// * `block` - Event block number
+    /// * `tx_index` - Event transaction index
+    /// * `log_index` - Event log index
+    ///
+    /// # Returns
+    /// The database id of the existing or newly created safe contract
+    #[allow(clippy::too_many_arguments)]
+    async fn upsert_safe_contract<'a>(
         &'a self,
         tx: OptTx<'a>,
         safe_address: Address,
@@ -157,6 +188,85 @@ impl BlokliDbSafeContractOperations for BlokliDb {
 
         tx.commit().await?;
         Ok(safe.id)
+    }
+
+    /// Upserts a safe contract record: creates a new entry if the safe address does not exist, or updates the existing
+    /// entry if it does.
+    ///
+    /// When a safe contract with the given address already exists, this method updates the module address, chain key,
+    /// and deployment coordinates to the provided values. When no existing safe is found, a new record is inserted.
+    ///
+    /// The operation uses the provided optional transaction; a nested transaction will be created and committed on
+    /// success when needed.
+    ///
+    /// # Returns
+    ///
+    /// The database id of the existing or newly inserted safe contract.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// # async fn example(db: &BlokliDb, safe_addr: Address, module_addr: Address, chain_key: Address) -> Result<(), Box<dyn std::error::Error>> {
+    /// // First call creates new entry
+    /// let id1 = db.upsert_safe_contract(None, safe_addr, module_addr, chain_key, 100, 0, 0).await?;
+    ///
+    /// // Second call with same address but different coordinates updates existing entry
+    /// let id2 = db.upsert_safe_contract(None, safe_addr, module_addr, chain_key, 200, 1, 0).await?;
+    /// assert_eq!(id1, id2); // Same ID, updated entry
+    /// # Ok(()) }
+    /// ```
+    #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::cast_possible_wrap)]
+    async fn upsert_safe_contract<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        safe_address: Address,
+        module_address: Address,
+        chain_key: Address,
+        block: u64,
+        tx_index: u64,
+        log_index: u64,
+    ) -> Result<i64> {
+        let tx = self.nest_transaction(tx).await?;
+
+        // Check if safe exists by address
+        let existing_safe = HoprSafeContract::find()
+            .filter(hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
+            .one(tx.as_ref())
+            .await?;
+
+        let safe_id = match existing_safe {
+            Some(safe) => {
+                // Safe exists - update the record
+                let mut active_model = safe.into_active_model();
+                active_model.module_address = Set(module_address.as_ref().to_vec());
+                active_model.chain_key = Set(chain_key.as_ref().to_vec());
+                active_model.deployed_block = Set(block as i64);
+                active_model.deployed_tx_index = Set(tx_index as i64);
+                active_model.deployed_log_index = Set(log_index as i64);
+
+                let updated = active_model.update(tx.as_ref()).await?;
+                updated.id
+            }
+            None => {
+                // Safe doesn't exist - create new record
+                let safe_model = hopr_safe_contract::ActiveModel {
+                    address: Set(safe_address.as_ref().to_vec()),
+                    module_address: Set(module_address.as_ref().to_vec()),
+                    chain_key: Set(chain_key.as_ref().to_vec()),
+                    deployed_block: Set(block as i64),
+                    deployed_tx_index: Set(tx_index as i64),
+                    deployed_log_index: Set(log_index as i64),
+                    ..Default::default()
+                };
+
+                let result = HoprSafeContract::insert(safe_model).exec(tx.as_ref()).await?;
+                result.last_insert_id
+            }
+        };
+
+        tx.commit().await?;
+        Ok(safe_id)
     }
 
     /// Checks that a safe contract exists at `safe_address` and that its stored chain key equals `expected_chain_key`.

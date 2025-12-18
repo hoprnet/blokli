@@ -128,10 +128,10 @@ where
                     }
                 };
 
-                // Create safe contract entry with the determined module address
+                // Upsert safe contract entry with the determined module address
                 let _safe_id = self
                     .db
-                    .create_safe_contract(Some(tx), safe_addr, module_addr, node_addr, block, tx_index, log_index)
+                    .upsert_safe_contract(Some(tx), safe_addr, module_addr, node_addr, block, tx_index, log_index)
                     .await?;
 
                 debug!(
@@ -361,29 +361,27 @@ mod tests {
         };
 
         // Process the event
-        let result = db
-            .begin_transaction()
+        db.begin_transaction()
             .await?
             .perform(|tx| {
                 Box::pin(async move { handlers.process_log_event(tx, safe_registered_log.clone(), true).await })
             })
-            .await;
+            .await?;
 
-        // The handler will fail because it tries to insert a new entry with the same address
-        // but different event coordinates, which violates the unique address constraint.
-        // This is expected behavior - the safe entry already exists.
-        assert!(result.is_err());
-
-        // But we can verify that the RPC was called (the test setup would panic if it wasn't)
-        // and the existing entry still has zero module (since insert failed)
+        // The handler should succeed with upsert - it updates the existing entry
+        // Verify the RPC was called and the existing entry was updated with the module address
         let safe = HoprSafeContract::find()
             .filter(blokli_db_entity::codegen::hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
             .one(db.conn(blokli_db::TargetDb::Index))
             .await?
             .expect("safe should exist");
 
-        // The original entry is unchanged (still has zero module)
-        assert_eq!(safe.module_address, Address::default().as_ref().to_vec());
+        // The module address should now be updated to the RPC value (not zero anymore)
+        assert_eq!(safe.module_address, rpc_module_address.as_ref().to_vec());
+        // The deployment coordinates should also be updated to the new event
+        assert_eq!(safe.deployed_block, 100);
+        assert_eq!(safe.deployed_tx_index, 5);
+        assert_eq!(safe.deployed_log_index, 10);
 
         Ok(())
     }
