@@ -12,6 +12,7 @@ use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
 use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::{
+    account, chain_info, channel,
     conversions::{account_aggregation::fetch_accounts_with_filters, channel_aggregation::fetch_channels_with_state},
     hopr_node_safe_registration, hopr_safe_contract,
 };
@@ -241,14 +242,14 @@ impl QueryRoot {
         };
 
         // Build query with filters
-        let mut query = blokli_db_entity::account::Entity::find();
+        let mut query = account::Entity::find();
 
         if let Some(id) = keyid {
-            query = query.filter(blokli_db_entity::account::Column::Id.eq(id));
+            query = query.filter(account::Column::Id.eq(id));
         }
 
         if let Some(pk) = packet_key {
-            query = query.filter(blokli_db_entity::account::Column::PacketKey.eq(pk));
+            query = query.filter(account::Column::PacketKey.eq(pk));
         }
 
         if let Some(ck) = chain_key {
@@ -262,7 +263,7 @@ impl QueryRoot {
                     )));
                 }
             };
-            query = query.filter(blokli_db_entity::account::Column::ChainKey.eq(binary_chain_key));
+            query = query.filter(account::Column::ChainKey.eq(binary_chain_key));
         }
 
         // Get count efficiently using SeaORM's paginator
@@ -306,18 +307,18 @@ impl QueryRoot {
             }
         };
 
-        let mut query = blokli_db_entity::channel::Entity::find();
+        let mut query = channel::Entity::find();
 
         if let Some(src_keyid) = source_key_id {
-            query = query.filter(blokli_db_entity::channel::Column::Source.eq(src_keyid));
+            query = query.filter(channel::Column::Source.eq(src_keyid));
         }
 
         if let Some(dst_keyid) = destination_key_id {
-            query = query.filter(blokli_db_entity::channel::Column::Destination.eq(dst_keyid));
+            query = query.filter(channel::Column::Destination.eq(dst_keyid));
         }
 
         if let Some(channel_id) = concrete_channel_id {
-            query = query.filter(blokli_db_entity::channel::Column::ConcreteChannelId.eq(channel_id));
+            query = query.filter(channel::Column::ConcreteChannelId.eq(channel_id));
         }
 
         // TODO(Phase 2-3): Status filtering requires querying channel_state table
@@ -1027,7 +1028,7 @@ impl QueryRoot {
         };
 
         // Fetch chain_info from database (assuming single row with id=1)
-        let chain_info = match blokli_db_entity::chain_info::Entity::find_by_id(1).one(db).await {
+        let chain_info = match chain_info::Entity::find_by_id(1).one(db).await {
             Ok(Some(info)) => info,
             Ok(None) => {
                 return ChainInfoResult::QueryFailed(errors::not_found("chain info", "database"));
