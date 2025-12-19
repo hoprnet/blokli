@@ -1,11 +1,12 @@
 #################################################################################
-# Pipeline to build binaries
+# Child pipeline to build binaries
 #################################################################################
 name: Build binaries
+
 on:
   workflow_call:
     inputs:
-      branch:
+      source_branch:
         required: true
         type: string
       runner:
@@ -17,120 +18,82 @@ on:
       version_type:
         required: true
         type: string
-  workflow_dispatch:
-    inputs:
-      runner:
-        type: choice
-        options:
-          - self-hosted-hoprnet-bigger
-          - macos-15
-        required: true
-        description: "GH Runner to use"
-      architecture:
-        type: choice
-        options:
-          - x86_64-linux
-          - aarch64-linux
-          - aarch64-darwin
-          - x86_64-darwin
-        required: true
-        description: "Architecture to build for"
 concurrency:
-  group: ${{ github.ref }}-build-binary-${{ inputs.architecture }}
+  group: build-binary-${{ inputs.source_branch || github.ref_name }}-${{ inputs.architecture }}
   cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: write
+
 jobs:
   binary:
-    name: Binary ${{ inputs.architecture || github.event.inputs.architecture }}
-    if: >-
-      github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.action != 'closed' && contains(github.event.pull_request.labels.*.name, format('binary:{0}', inputs.architecture))) || (github.event_name == 'pull_request' && github.event.pull_request.merged)
+    name: ${{ inputs.architecture }}
+    if: inputs.version_type != 'commit' || contains(github.event.pull_request.labels.*.name, format('binary:{0}', inputs.architecture))
     runs-on: ${{ github.event.inputs.runner || inputs.runner }}
     timeout-minutes: 60
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@f4a75cfd619ee5ce8d5b864b0d183aff3c69b55a # v2.13.1
+        uses: step-security/harden-runner@95d9a5deda9de15063e7595e9719c11c38c90ae2 # v2.13.2
         with:
           disable-sudo: true
           egress-policy: audit
-
-      - name: Set environment variables
-        id: vars
-        run: |
-          declare branch architecture
-          requires_nix='false'
-          if [[ "${{ inputs.branch }}" != "" ]]; then
-            echo "The workflow is triggered by other pipeline"
-            # It can be triggered by the build, merge or release pipelines
-            branch=${{ inputs.branch }}
-            architecture=${{ inputs.architecture }}
-            if [[ "${{ inputs.runner }}" =~ "macos-.*" ]]; then
-              requires_nix='true'
-            fi
-          else
-            echo "The workflow is triggered manually"
-            branch=${{ github.ref_name }}
-            architecture=${{ github.event.inputs.architecture }}
-            if [[ "${{ github.event.inputs.runner }}" =~ "macos-.*" ]]; then
-              requires_nix='true'
-            fi
-          fi
-          echo "Invocation parameters:"
-          echo "branch=${branch}" | tee -a "$GITHUB_OUTPUT"
-          echo "architecture=${architecture}" | tee -a "$GITHUB_OUTPUT"
-          echo "requires_nix=${requires_nix}" | tee -a "$GITHUB_OUTPUT"
-
       - name: Checkout hoprnet repository
         uses: actions/checkout@08c6903cd8c0fde910a37f88322edcfb5dd907a8 # v5.0.0
         with:
-          ref: ${{ steps.vars.outputs.branch }}
-
-      - name: Install Nix
-        if: steps.vars.outputs.requires_nix
-        uses: cachix/install-nix-action@7be5dee1421f63d07e71ce6e0a9f8a4b07c2a487 # v31
-
-      - name: Use Nix Cache
-        if: steps.vars.outputs.requires_nix
-        uses: cachix/cachix-action@0fc020193b5a1fa3ac4575aa3a7d3aa6a35435ad # v16
+          persist-credentials: false
+          ref: ${{ inputs.source_branch || github.ref_name }}
+      - name: Setup Nix
+        uses: hoprnet/hopr-workflows/actions/setup-nix@ausias/fix-actions
         with:
-          name: blokli
+          cache: blokli
           authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
-        env:
-          USER: runner
-
       - name: Updates build version
         id: version
         uses: hoprnet/hopr-workflows/actions/set-build-version@build-version-v1
         with:
           file: bloklid/Cargo.toml
-          version_type: "${{ inputs.version_type || 'commit' }}"
+          version_type: "${{ inputs.version_type }}"
 
-
-      - name: Build binary ${{ steps.vars.outputs.architecture}}
+      - name: Build binary ${{ inputs.architecture }}
         run: |
-          nix develop --command just build-release ${{ steps.vars.outputs.architecture}}
-          mv ./result/bin/bloklid result/bin/bloklid-${{ steps.vars.outputs.architecture}}
+          nix develop --command just build-release ${architecture}
+          mv ./result/bin/bloklid result/bin/bloklid-${architecture}
+        env:
+          architecture: ${{ inputs.architecture }}
       - name: Setup GCP
         if: steps.version.outputs.publish_artifact_registry || steps.version.outputs.publish_github_release
         uses: hoprnet/hopr-workflows/actions/setup-gcp@gcp-v1
         with:
           google_credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
           install_sdk: "true"
-
+      - name: Sign binary
+        uses: hoprnet/hopr-workflows/actions/sign-file@ausias/fix-actions
+        with:
+          file: ${{ github.workspace }}/result/bin/bloklid-${{ inputs.architecture }}
+          gpg_private_key: ${{ secrets.GPG_HOPRNET_PRIVATE_KEY }}
       - name: Publish Artifact registry
         if: steps.version.outputs.publish_artifact_registry || steps.version.outputs.publish_github_release
-        run: |
-          binary=result/bin/bloklid-${{ steps.vars.outputs.architecture}}
-          gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.build_version }} --package=blokli --source=${binary}
-          if [[ "${{ inputs.version_type }}" == "release" ]]; then
-            echo "${{ secrets.GPG_PRIVATE_KEY }}" | gpg --batch --import
-            gpg --armor --output ${binary}.asc --detach-sign ${binary}
-            shasum -a 256 ${binary} > ${binary}.sha256
-            gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.build_version }} --package=blokli --source=${binary}.asc
-            gcloud artifacts generic upload --location=europe-west3 --repository="rust-binaries" --version=${{ steps.version.outputs.build_version }} --package=blokli --source=${binary}.sha256
-          fi
-
-      - name: Upload ${{ steps.vars.outputs.architecture }} binaries
+        uses: hoprnet/hopr-workflows/actions/upload-artifact-registry@ausias/fix-actions
+        with:
+          source: ${{ github.workspace }}/result/bin/
+          package: bloklid
+          version: ${{ steps.version.outputs.build_version }}
+      - name: Upload ${{ inputs.architecture }} binary
         if: steps.version.outputs.publish_workflow_run
         uses: actions/upload-artifact@v4
         with:
-          name: bloklid-${{ steps.vars.outputs.architecture}}
-          path: ${{ github.workspace }}/result/bin/bloklid-${{ steps.vars.outputs.architecture}}
+          name: bloklid-${{ inputs.architecture }}
+          path: ${{ github.workspace }}/result/bin/bloklid-${{ inputs.architecture }}
+      - name: Upload ${{ inputs.architecture }} signed binary
+        if: steps.version.outputs.publish_workflow_run
+        uses: actions/upload-artifact@v4
+        with:
+          name: bloklid-${{ inputs.architecture }}.asc
+          path: ${{ github.workspace }}/result/bin/bloklid-${{ inputs.architecture }}.asc
+      - name: Upload ${{ inputs.architecture }} sha256 binary
+        if: steps.version.outputs.publish_workflow_run
+        uses: actions/upload-artifact@v4
+        with:
+          name: bloklid-${{ inputs.architecture }}.sha256
+          path: ${{ github.workspace }}/result/bin/bloklid-${{ inputs.architecture }}.sha256

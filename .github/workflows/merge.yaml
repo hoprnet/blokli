@@ -16,6 +16,21 @@ jobs:
       source_branch: ${{ github.event.pull_request.base.ref }}
       version_type: "pr"
     secrets: inherit
+  build_binaries:
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: x86_64-linux
+            runner: self-hosted-hoprnet-bigger
+    name: Binary
+    uses: ./.github/workflows/build-binaries.yaml
+    with:
+      source_branch: ${{ github.event.pull_request.base.ref }}
+      runner: ${{ matrix.target.runner }}
+      architecture: ${{ matrix.target.name }}
+      version_type: pr
+    secrets: inherit
   tag-latest:
     name: Tag Docker manifest as latest
     runs-on: self-hosted-hoprnet-small

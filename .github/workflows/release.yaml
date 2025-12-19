@@ -22,6 +22,21 @@ jobs:
       source_branch: ${{ github.ref }}
       version_type: "release"
     secrets: inherit
+  build_binaries:
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - name: x86_64-linux
+            runner: self-hosted-hoprnet-bigger
+    name: Binary
+    uses: ./.github/workflows/build-binaries.yaml
+    with:
+      source_branch: ${{ github.ref }}
+      runner: ${{ matrix.target.runner }}
+      architecture: ${{ matrix.target.name }}
+      version_type: release
+    secrets: inherit
   release:
     name: Close release
     needs:
