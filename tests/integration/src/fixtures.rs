@@ -22,7 +22,7 @@ use hopli_lib::{
 use hopr_bindings::hopr_token::HoprToken::HoprTokenInstance;
 use hopr_chain_connector::{BasicPayloadGenerator, PayloadGenerator};
 use hopr_chain_types::ContractAddresses;
-use hopr_crypto_types::keypairs::{ChainKeypair, Keypair}    ;
+use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
 use hopr_internal_types::announcement::{AnnouncementData, KeyBinding};
 use hopr_primitive_types::prelude::HoprBalance;
 use libc::atexit;
