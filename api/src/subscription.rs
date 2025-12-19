@@ -25,7 +25,7 @@ use hopr_primitive_types::{
 };
 use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use tokio::time::sleep;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::errors;
@@ -609,6 +609,7 @@ impl SubscriptionRoot {
     /// ```
     #[graphql(name = "safeDeployed")]
     async fn safe_deployed(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = Safe>> {
+        debug!("safeDeployed subscription");
         let db = ctx.data::<DatabaseConnection>()?.clone();
         let indexer_state = ctx
             .data::<IndexerState>()
@@ -618,6 +619,8 @@ impl SubscriptionRoot {
         // Capture watermark and subscribe to event bus (synchronized)
         let (_watermark, mut event_receiver, mut shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
+
+        debug!("subscribed to event bus for safeDeployed");
 
         Ok(stream! {
             loop {
@@ -639,15 +642,18 @@ impl SubscriptionRoot {
                         }
                     }
                     event_result = event_receiver.recv() => {
+                        debug!(?event_result, "received an event in safe_deployed subscription");
                         match event_result {
                             Ok(IndexerEvent::SafeDeployed(safe_addr)) => {
                                 let safe_addr_bytes = safe_addr.as_ref().to_vec();
+                                debug!(?safe_addr_bytes, "safe address");
                                 match hopr_safe_contract::Entity::find()
                                     .filter(hopr_safe_contract::Column::Address.eq(safe_addr_bytes))
                                     .one(&db)
                                     .await
                                 {
                                     Ok(Some(safe)) => {
+                                        debug!(safe_address = ?safe.address, "processing SafeDeployed event");
                                         // Fetch registered nodes for this safe
                                         let registered_nodes = match hopr_node_safe_registration::Entity::find()
                                             .filter(hopr_node_safe_registration::Column::SafeAddress.eq(safe.address.clone()))
@@ -668,7 +674,7 @@ impl SubscriptionRoot {
                                                 Vec::new()
                                             }
                                         };
-
+                                        debug!(?safe, "yielding Safe from SafeDeployed event");
                                         yield Safe {
                                             address: Address::new(&safe.address).to_hex(),
                                             module_address: Address::new(&safe.module_address).to_hex(),

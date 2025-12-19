@@ -1,5 +1,6 @@
-use std::str::FromStr;
+use std::{str::FromStr, time::Duration};
 
+use alloy::primitives::Address;
 use anyhow::Result;
 use blokli_client::api::{
     AccountSelector, BlokliQueryClient, ChannelFilter, ChannelSelector, SafeSelector, types::ChannelStatus,
@@ -76,14 +77,42 @@ async fn query_native_balance(#[future(awt)] fixture: IntegrationFixture) -> Res
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
-async fn query_token_balance(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+async fn query_token_balance_of_eoa(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
-    fixture.deploy_safe(account, 1_000).await?;
 
     let blokli_balance = fixture
         .client()
         .query_token_balance(account.alloy_address().as_ref())
         .await?;
+
+    let _: HoprBalance = blokli_balance
+        .balance
+        .0
+        .parse()
+        .expect("failed to parse blokli token balance");
+
+    Ok(())
+}
+
+#[rstest]
+#[test_log::test(tokio::test)]
+#[serial]
+async fn query_token_balance_of_safe(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    let [account] = fixture.sample_accounts::<1>();
+    let amount = 5_000;
+
+    fixture.deploy_safe(account, amount).await?;
+
+    tokio::time::sleep(Duration::from_secs(15)).await; // dummy wait for the safe to be indexed
+
+    let safe = fixture
+        .client()
+        .query_safe(SafeSelector::ChainKey(account.alloy_address().into()))
+        .await?
+        .expect("Safe not found");
+    let safe_address = Address::from_str(&safe.address)?;
+
+    let blokli_balance = fixture.client().query_token_balance(safe_address.as_ref()).await?;
 
     let _: HoprBalance = blokli_balance
         .balance

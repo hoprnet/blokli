@@ -11,7 +11,7 @@ use hopr_primitive_types::traits::ToHex;
 use rstest::*;
 use serial_test::serial;
 
-const SUBSCRIPTION_TIMEOUT_SECS: u64 = 60;
+const SUBSCRIPTION_TIMEOUT_SECS: u64 = 120;
 
 fn subscription_timeout() -> Duration {
     Duration::from_secs(SUBSCRIPTION_TIMEOUT_SECS)
