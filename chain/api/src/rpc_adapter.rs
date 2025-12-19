@@ -162,7 +162,6 @@ impl<R: HttpRequestor + 'static + Clone> ReceiptProvider for RpcAdapter<R> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
 
     // Note: Full integration tests would require a running Ethereum node
     // These tests verify the adapter structure compiles correctly

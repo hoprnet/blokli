@@ -14,6 +14,7 @@ pub mod errors;
 pub mod events;
 pub mod info;
 pub mod logs;
+pub mod node_safe_registrations;
 pub mod notifications;
 pub mod safe_contracts;
 pub mod state_queries;
@@ -34,6 +35,7 @@ use crate::{
     db::BlokliDb,
     errors::{DbSqlError, Result},
     info::BlokliDbInfoOperations,
+    node_safe_registrations::BlokliDbNodeSafeRegistrationOperations,
     safe_contracts::BlokliDbSafeContractOperations,
 };
 
@@ -272,6 +274,7 @@ pub trait BlokliDbAllOperations:
     // + BlokliDbCorruptedChannelOperations
     + BlokliDbInfoOperations
     + BlokliDbLogOperations
+    + BlokliDbNodeSafeRegistrationOperations
     + BlokliDbSafeContractOperations
 {
 }
