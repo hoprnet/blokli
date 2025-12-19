@@ -1,10 +1,7 @@
 use std::collections::HashMap;
 
 use blokli_api_types::{Account, Channel, ChannelUpdate, TokenValueString, UInt64};
-use blokli_db_entity::{
-    codegen::{account, channel, channel_state},
-    conversions::account_aggregation,
-};
+use blokli_db_entity::{account, channel, channel_state, conversions::account_aggregation};
 use hopr_crypto_types::prelude::Hash;
 use hopr_primitive_types::prelude::{Address, HoprBalance, IntoEndian, ToHex};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder};

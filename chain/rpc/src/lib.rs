@@ -406,6 +406,21 @@ pub trait HoprIndexerRpcOperations {
 
     /// Retrieves the notice period of channel closure from the Channels contract.
     async fn get_channel_closure_notice_period(&self) -> Result<Duration>;
+
+    /// Retrieves the HOPR node management module address for a given Safe.
+    ///
+    /// Queries the Safe contract's enabled modules and identifies the one
+    /// that implements the HoprNodeManagementModule interface by calling
+    /// `isHoprNodeManagementModule()` on each candidate.
+    ///
+    /// # Arguments
+    /// * `safe_address` - The Safe contract address
+    ///
+    /// # Returns
+    /// * `Ok(Some(Address))` - The HOPR module address if found
+    /// * `Ok(None)` - If no HOPR module is enabled on the Safe
+    /// * `Err(RpcError)` - If the RPC call fails
+    async fn get_hopr_module_from_safe(&self, safe_address: Address) -> Result<Option<Address>>;
 }
 
 #[cfg(test)]

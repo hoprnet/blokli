@@ -490,11 +490,18 @@ mod tests {
     use blokli_db::{
         BlokliDbGeneralModelOperations, accounts::BlokliDbAccountOperations, api::info::DomainSeparator,
         channels::BlokliDbChannelOperations, db::BlokliDb, info::BlokliDbInfoOperations,
+        node_safe_registrations::BlokliDbNodeSafeRegistrationOperations,
+        safe_contracts::BlokliDbSafeContractOperations,
     };
+    use blokli_db_entity::{hopr_node_safe_registration, prelude::HoprNodeSafeRegistration};
     use hex_literal::hex;
-    use hopr_bindings::hopr_channels_events::HoprChannelsEvents::{
-        ChannelBalanceDecreased, ChannelBalanceIncreased, ChannelClosed, ChannelOpened,
-        OutgoingChannelClosureInitiated, TicketRedeemed,
+    use hopr_bindings::{
+        hopr_channels::HoprChannels,
+        hopr_channels_events::HoprChannelsEvents::{
+            ChannelBalanceDecreased, ChannelBalanceIncreased, ChannelClosed, ChannelOpened,
+            OutgoingChannelClosureInitiated, TicketRedeemed,
+        },
+        hopr_node_safe_registry::HoprNodeSafeRegistry,
     };
     use hopr_crypto_types::{
         keypairs::Keypair,
@@ -506,6 +513,7 @@ mod tests {
         traits::{AsUnixTimestamp, IntoEndian},
     };
     use primitive_types::H256;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
     use crate::handlers::test_utils::test_helpers::*;
 
@@ -584,7 +592,7 @@ mod tests {
         let channels_dst_updated = SerializableLog {
             address: handlers.addresses.channels,
             topics: vec![
-                hopr_bindings::hopr_channels::HoprChannels::DomainSeparatorUpdated::SIGNATURE_HASH.into(),
+                HoprChannels::DomainSeparatorUpdated::SIGNATURE_HASH.into(),
                 // DomainSeparatorUpdatedFilter::signature().into(),
                 H256::from_slice(separator.as_ref()).into(),
             ],
@@ -978,7 +986,7 @@ mod tests {
         let balance_increased_log = SerializableLog {
             address: handlers.addresses.channels,
             topics: vec![
-                hopr_bindings::hopr_channels::HoprChannels::ChannelBalanceIncreased::SIGNATURE_HASH.into(),
+                HoprChannels::ChannelBalanceIncreased::SIGNATURE_HASH.into(),
                 // ChannelBalanceIncreasedFilter::signature().into(),
                 H256::from_slice(channel_id.as_ref()).into(),
             ],
@@ -1538,10 +1546,17 @@ mod tests {
     #[tokio::test]
     async fn on_node_safe_registry_registered() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
-        let rpc_operations = MockIndexerRpcOperations::new();
-        // ==> set mock expectations here
+        let mut rpc_operations = MockIndexerRpcOperations::new();
+
+        // Set up mock expectation for get_hopr_module_from_safe
+        let module_address: Address = "abcdef1234567890abcdef1234567890abcdef12"
+            .parse()
+            .expect("valid address");
+        rpc_operations
+            .expect_get_hopr_module_from_safe()
+            .returning(move |_| Ok(Some(module_address)));
+
         let clonable_rpc_operations = ClonableMockOperations {
-            //
             inner: Arc::new(rpc_operations),
         };
         let handlers = init_handlers(clonable_rpc_operations, db.clone());
@@ -1551,8 +1566,7 @@ mod tests {
         let safe_registered_log = SerializableLog {
             address: handlers.addresses.node_safe_registry,
             topics: vec![
-                hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::RegisteredNodeSafe::SIGNATURE_HASH.into(),
-                // RegisteredNodeSafeFilter::signature().into(),
+                HoprNodeSafeRegistry::RegisteredNodeSafe::SIGNATURE_HASH.into(),
                 H256::from_slice(&SAFE_INSTANCE_ADDR.to_bytes32()).into(),
                 H256::from_slice(&SELF_CHAIN_ADDRESS.to_bytes32()).into(),
             ],
@@ -1565,9 +1579,17 @@ mod tests {
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, safe_registered_log, true).await }))
             .await?;
 
-        // TODO: Add event verification - check published IndexerEvent instead of return value
+        // Verify the safe was stored with the module address from RPC
+        let safe = db
+            .get_safe_contract_by_address(None, *SAFE_INSTANCE_ADDR)
+            .await?
+            .expect("safe should exist");
+        assert_eq!(
+            Address::try_from(safe.module_address.as_slice()).unwrap(),
+            module_address,
+            "module address should match RPC response"
+        );
 
-        // Nothing to check in the DB here, since we do not track this
         Ok(())
     }
 
@@ -1575,23 +1597,36 @@ mod tests {
     async fn on_node_safe_registry_deregistered() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let rpc_operations = MockIndexerRpcOperations::new();
-        // ==> set mock expectations here
         let clonable_rpc_operations = ClonableMockOperations {
-            //
             inner: Arc::new(rpc_operations),
         };
         let handlers = init_handlers(clonable_rpc_operations, db.clone());
 
-        // Nothing to write to the DB here, since we do not track this
+        // First create the safe entry that will be deregistered
+        let module_address: Address = "abcdef1234567890abcdef1234567890abcdef12"
+            .parse()
+            .expect("valid address");
+        db.create_safe_contract(
+            None,
+            *SAFE_INSTANCE_ADDR,
+            module_address,
+            *SELF_CHAIN_ADDRESS,
+            1, // block
+            0, // tx_index
+            0, // log_index
+        )
+        .await?;
+
+        // Also register the node to the safe
+        db.register_node_to_safe(None, *SAFE_INSTANCE_ADDR, *SELF_CHAIN_ADDRESS, 1, 0, 0)
+            .await?;
 
         let encoded_data = ().abi_encode();
 
-        let safe_registered_log = SerializableLog {
+        let safe_deregistered_log = SerializableLog {
             address: handlers.addresses.node_safe_registry,
             topics: vec![
-                hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::DeregisteredNodeSafe::SIGNATURE_HASH
-                    .into(),
-                // DeregisteredNodeSafeFilter::signature().into(),
+                HoprNodeSafeRegistry::DeregisteredNodeSafe::SIGNATURE_HASH.into(),
                 H256::from_slice(&SAFE_INSTANCE_ADDR.to_bytes32()).into(),
                 H256::from_slice(&SELF_CHAIN_ADDRESS.to_bytes32()).into(),
             ],
@@ -1601,10 +1636,21 @@ mod tests {
 
         db.begin_transaction()
             .await?
-            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, safe_registered_log, true).await }))
+            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, safe_deregistered_log, true).await }))
             .await?;
 
-        // Nothing to check in the DB here, since we do not track this
+        // Verify the node registration was deleted
+        let registration = HoprNodeSafeRegistration::find()
+            .filter(hopr_node_safe_registration::Column::SafeAddress.eq(SAFE_INSTANCE_ADDR.as_ref().to_vec()))
+            .filter(hopr_node_safe_registration::Column::NodeAddress.eq(SELF_CHAIN_ADDRESS.as_ref().to_vec()))
+            .one(db.conn(blokli_db::TargetDb::Index))
+            .await?;
+        assert!(registration.is_none(), "node registration should be deleted");
+
+        // Verify the safe contract still exists (only node registration was deleted)
+        let safe = db.get_safe_contract_by_address(None, *SAFE_INSTANCE_ADDR).await?;
+        assert!(safe.is_some(), "safe contract should still exist");
+
         Ok(())
     }
 }

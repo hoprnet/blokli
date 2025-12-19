@@ -15,7 +15,7 @@
 use std::sync::Arc;
 
 use blokli_chain_rpc::rpc::RpcOperations;
-use blokli_db_entity::codegen::prelude::ChainInfo;
+use blokli_db_entity::prelude::ChainInfo;
 use sea_orm::{DatabaseConnection, EntityTrait};
 use tokio::sync::RwLock;
 use tracing::{error, info};

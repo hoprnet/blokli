@@ -608,6 +608,9 @@ pub struct Safe {
     /// Chain key (owner address, hexadecimal format)
     #[graphql(name = "chainKey")]
     pub chain_key: String,
+    /// List of node addresses (chain keys) registered to this safe via RegisteredNodeSafe events
+    #[graphql(name = "registeredNodes")]
+    pub registered_nodes: Vec<String>,
 }
 
 /// Calculated module address

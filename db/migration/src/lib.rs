@@ -28,6 +28,7 @@ mod m024_alter_index_tables_id_bigint;
 mod m025_create_schema_version_table;
 mod m026_add_module_and_chain_key_to_safe_contract;
 mod m027_drop_node_info_table;
+mod m028_add_node_safe_registration_table;
 
 #[derive(PartialEq)]
 pub enum BackendType {
@@ -86,6 +87,7 @@ impl MigratorTrait for Migrator {
             Box::new(m025_create_schema_version_table::Migration),
             Box::new(m026_add_module_and_chain_key_to_safe_contract::Migration),
             Box::new(m027_drop_node_info_table::Migration),
+            Box::new(m028_add_node_safe_registration_table::Migration),
         ]
     }
 }
@@ -132,6 +134,7 @@ impl MigratorTrait for MigratorIndex {
             Box::new(m025_create_schema_version_table::Migration),
             Box::new(m026_add_module_and_chain_key_to_safe_contract::Migration),
             Box::new(m027_drop_node_info_table::Migration),
+            Box::new(m028_add_node_safe_registration_table::Migration),
         ]
     }
 }
