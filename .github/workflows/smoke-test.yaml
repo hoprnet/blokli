@@ -14,19 +14,11 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
-      - name: Use Nix Cache
-        uses: cachix/cachix-action@0fc020193b5a1fa3ac4575aa3a7d3aa6a35435ad # v16
+      - name: Setup Nix
+        uses: hoprnet/hopr-workflows/actions/setup-nix@ausias/fix-actions
         with:
-          name: blokli
-          authToken: "${{ secrets.CACHIX_AUTH_TOKEN }}"
-        env:
-          USER: runner
-      - name: Setup GCP
-        uses: hoprnet/hopr-workflows/actions/setup-gcp@12c56020e16036982e6cc529848edeedfc705865 # master
-        with:
-          google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
-          login-artifact-registry: 'true'
-          install-sdk: 'false'
+          cache: blokli
+          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Run smoke tests
         run: |
           set -o pipefail
