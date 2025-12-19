@@ -58,7 +58,8 @@ jobs:
       - name: Build binary ${{ inputs.architecture }}
         run: |
           nix develop --command just build-release ${architecture}
-          mv ./result/bin/bloklid result/bin/bloklid-${architecture}
+          mkdir -p ${{ github.workspace }}/artifacts
+          cp ./result/bin/bloklid ${{ github.workspace }}/artifacts/bloklid-${architecture}
         env:
           architecture: ${{ inputs.architecture }}
       - name: Setup GCP
@@ -70,13 +71,13 @@ jobs:
       - name: Sign binary
         uses: hoprnet/hopr-workflows/actions/sign-file@ausias/fix-actions
         with:
-          file: ${{ github.workspace }}/result/bin/bloklid-${{ inputs.architecture }}
+          file: ${{ github.workspace }}/artifacts/bloklid-${{ inputs.architecture }}
           gpg_private_key: ${{ secrets.GPG_HOPRNET_PRIVATE_KEY }}
       - name: Publish Artifact registry
         if: steps.version.outputs.publish_artifact_registry || steps.version.outputs.publish_github_release
         uses: hoprnet/hopr-workflows/actions/upload-artifact-registry@ausias/fix-actions
         with:
-          source: ${{ github.workspace }}/result/bin/
+          source: ${{ github.workspace }}/artifacts
           package: bloklid
           version: ${{ steps.version.outputs.build_version }}
       - name: Upload ${{ inputs.architecture }} binary
@@ -84,16 +85,16 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: bloklid-${{ inputs.architecture }}
-          path: ${{ github.workspace }}/result/bin/bloklid-${{ inputs.architecture }}
+          path: ${{ github.workspace }}/artifacts/bloklid-${{ inputs.architecture}}
       - name: Upload ${{ inputs.architecture }} signed binary
         if: steps.version.outputs.publish_workflow_run
         uses: actions/upload-artifact@v4
         with:
-          name: bloklid-${{ inputs.architecture }}.asc
-          path: ${{ github.workspace }}/result/bin/bloklid-${{ inputs.architecture }}.asc
+          name: bloklid-${{ inputs.architecture}}.asc
+          path: ${{ github.workspace }}/artifacts/bloklid-${{ inputs.architecture}}.asc
       - name: Upload ${{ inputs.architecture }} sha256 binary
         if: steps.version.outputs.publish_workflow_run
         uses: actions/upload-artifact@v4
         with:
-          name: bloklid-${{ inputs.architecture }}.sha256
-          path: ${{ github.workspace }}/result/bin/bloklid-${{ inputs.architecture }}.sha256
+          name: bloklid-${{ inputs.architecture}}.sha256
+          path: ${{ github.workspace }}/artifacts/bloklid-${{ inputs.architecture}}.sha256
