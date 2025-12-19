@@ -22,7 +22,7 @@ use hopli_lib::{
 use hopr_bindings::hopr_token::HoprToken::HoprTokenInstance;
 use hopr_chain_connector::{BasicPayloadGenerator, PayloadGenerator};
 use hopr_chain_types::ContractAddresses;
-use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
+use hopr_crypto_types::keypairs::{ChainKeypair, Keypair}    ;
 use hopr_internal_types::announcement::{AnnouncementData, KeyBinding};
 use hopr_primitive_types::prelude::HoprBalance;
 use libc::atexit;
@@ -287,20 +287,12 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
     let contract_instances = ContractInstances::deploy_for_testing(provider, &deployer)
         .await
         .expect("failed to deploy hopr contracts for testing");
+
     info!("deployed hopr contracts for testing");
 
-    // TODO: use contract addresses from contract instances
-    let contract_addresses = ContractAddresses {
-        announcements: *contract_instances.announcements.address(),
-        channels: *contract_instances.channels.address(),
-        module_implementation: *contract_instances.module_implementation.address(),
-        node_safe_migration: *contract_instances.node_safe_migration.address(),
-        node_safe_registry: *contract_instances.safe_registry.address(),
-        node_stake_factory: *contract_instances.stake_factory.address(),
-        ticket_price_oracle: *contract_instances.price_oracle.address(),
-        token: *contract_instances.token.address(),
-        winning_probability_oracle: *contract_instances.win_prob_oracle.address(),
-    };
+    let contract_addresses = contract_instances.get_contract_addresses();
+
+    info!("deployed contract addresses: {:?}", contract_addresses);
 
     // Mint HOPR tokens
     let encoded_minter_role = keccak256(b"MINTER_ROLE");
