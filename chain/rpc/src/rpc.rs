@@ -42,6 +42,16 @@ sol!(
         function isModuleEnabled(address module) public view returns (bool);
         function nonce() public view returns (uint256);
         function getThreshold() public view returns (uint256);
+        function getModulesPaginated(address start, uint256 pageSize) public view returns (address[] memory array, address next);
+    }
+);
+
+// minimal interface for verifying HOPR modules
+sol!(
+    #![sol(abi)]
+    #![sol(rpc)]
+    contract HoprModule {
+        function isHoprNodeManagementModule() external view returns (bool);
     }
 );
 

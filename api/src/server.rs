@@ -24,7 +24,7 @@ use blokli_chain_api::{
 use blokli_chain_indexer::IndexerState;
 use blokli_chain_rpc::{rpc::RpcOperations, transport::ReqwestClient};
 use blokli_db::notifications::SqliteNotificationManager;
-use blokli_db_entity::codegen::prelude::ChainInfo;
+use blokli_db_entity::prelude::ChainInfo;
 use futures::stream::{Stream, StreamExt};
 use sea_orm::{DatabaseConnection, EntityTrait};
 use serde::Serialize;

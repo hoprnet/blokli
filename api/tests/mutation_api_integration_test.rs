@@ -15,7 +15,6 @@ use std::{sync::Arc, time::Duration};
 use alloy::{
     consensus::{SignableTransaction, TxLegacy},
     eips::eip2718::Encodable2718,
-    node_bindings::AnvilInstance,
     primitives::{Address as AlloyAddress, TxKind, U256},
     providers::{Provider, ProviderBuilder},
     signers::{SignerSync, local::PrivateKeySigner},
@@ -24,16 +23,12 @@ use anyhow::Result;
 use async_graphql::{EmptySubscription, Schema};
 use blokli_api::{mutation::MutationRoot, query::QueryRoot};
 use blokli_chain_api::{
-    rpc_adapter::RpcAdapter,
-    transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
-    transaction_monitor::TransactionMonitor,
+    transaction_executor::RawTransactionExecutorConfig,
     transaction_store::{TransactionStatus, TransactionStore},
 };
-use blokli_chain_rpc::transport::ReqwestClient;
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
-use tokio::task::AbortHandle;
 
 /// Test context containing all components needed for GraphQL mutation tests
 struct TestContext {
