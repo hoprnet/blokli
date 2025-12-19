@@ -14,6 +14,10 @@ on:
       version_type:
         required: true
         type: string
+        description: "Type of version to build: commit, pr, release"
+        # commit: Tag docker images for regular commits on open PR
+        # pr: Tag docker images for merged PRs
+        # release: Tag docker images for releases
     outputs:
       image_tag:
         description: "Docker image tag (without architecture suffix)"
@@ -56,7 +60,6 @@ jobs:
       - name: Update version
         id: bump
         run: |
-          set -x
           current_version=$(grep -E '^version\s*=' bloklid/Cargo.toml | awk -F\" '{print $2}')
           if [[ "${{ inputs.version_type }}" == "commit" ]]; then
             bump_version=${current_version}+commit.$(git rev-parse --short HEAD)
@@ -122,21 +125,38 @@ jobs:
           install-sdk: 'false'
       - name: Update version (for manifest build)
         run: |
-          set -x
           bump_version="${{ needs.build-docker-images.outputs.image_tag }}"
           sed -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" bloklid/Cargo.toml > bloklid/Cargo.toml.new
           mv bloklid/Cargo.toml.new bloklid/Cargo.toml
           nix develop --command cargo generate-lockfile
+       # Use nix-lib multi-arch upload app to:
+       # 1. Build manifest with both architectures
+       # 2. Upload platform-specific images (linux-amd64, linux-arm64)
+       # 3. Create and push OCI manifest list
       - name: Upload multi-arch manifest and images
-        run: |
-          # Use nix-lib multi-arch upload app to:
-          # 1. Build manifest with both architectures
-          # 2. Upload platform-specific images (linux-amd64, linux-arm64)
-          # 3. Create and push OCI manifest list
-          nix run -L .#bloklid-docker-manifest-upload
+        run: nix run -L .#bloklid-docker-manifest-upload
         env:
           GOOGLE_ACCESS_TOKEN: ${{ steps.gcp.outputs.access_token }}
           IMAGE_TARGET: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ needs.build-docker-images.outputs.docker_tag }}
+      - name: Upload multi-arch manifest and images (latest tag)
+        if: inputs.version_type == 'pr'
+        run: nix run -L .#bloklid-docker-manifest-upload
+        env:
+          GOOGLE_ACCESS_TOKEN: ${{ steps.gcp.outputs.access_token }}
+          IMAGE_TARGET: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:latest
+      - name: Trigger deploy workflow
+        if: inputs.version_type == 'pr'
+        uses: peter-evans/repository-dispatch@5fc4efd1a4797ddb68ffd0714a238564e4cc0e6f # v4.0.0
+        with:
+          token: ${{ secrets.GH_RUNNER_TOKEN }}
+          repository: hoprnet/gitops
+          event-type: restart_deployment
+          client-payload: |-
+            {
+              "environment": "staging",
+              "namespace": "blokli",
+              "label_selector": "app.kubernetes.io/instance=blokli"
+            }
   security-scan:
     name: Security Scan (${{ matrix.architecture }})
     needs: upload-manifest
