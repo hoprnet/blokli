@@ -204,6 +204,11 @@ docker-build:
     nix build .#bloklid-docker
     docker load < result
 
+# Build bloklid + anvil Docker image from Nix
+docker-build-anvil:
+    nix build .#bloklid-anvil-docker-amd64
+    docker load < result
+
 # Rebuild bloklid and restart Docker Compose
 docker-restart: docker-build
     docker-compose -f docker/docker-compose.yml down

@@ -221,7 +221,7 @@ impl Args {
 
         // Store resolved config and contracts
         config.chain_network = Some(chain_config.clone());
-        config.contracts = blokli_chain_types::ContractAddresses {
+        let mut contracts = blokli_chain_types::ContractAddresses {
             token: network_config.addresses.token.to_hopr_address(),
             channels: network_config.addresses.channels.to_hopr_address(),
             announcements: network_config.addresses.announcements.to_hopr_address(),
@@ -232,6 +232,12 @@ impl Args {
             winning_probability_oracle: network_config.addresses.winning_probability_oracle.to_hopr_address(),
             node_stake_factory: network_config.addresses.node_stake_factory.to_hopr_address(),
         };
+
+        if let Some(override_contracts) = config.contracts_override {
+            contracts = override_contracts;
+        }
+
+        config.contracts = contracts;
 
         info!(
             contract_addresses = ?config.contracts,

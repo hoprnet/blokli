@@ -220,6 +220,13 @@
             inherit overlays;
           };
 
+          blokliAnvilEntrypoint = pkgsLinux.writeShellScriptBin "blokli-anvil-entrypoint" (
+            builtins.readFile ./docker/blokli-anvil-entrypoint.sh
+          );
+          blokliAnvilEntrypointAarch64 = pkgsLinuxAarch64.writeShellScriptBin "blokli-anvil-entrypoint" (
+            builtins.readFile ./docker/blokli-anvil-entrypoint.sh
+          );
+
           # Docker images using nix-lib
           bloklidDocker = {
             # x86_64-linux Docker images
@@ -248,6 +255,20 @@
                 "SSL_CERT_FILE=${pkgsLinux.cacert}/etc/ssl/certs/ca-bundle.crt"
               ];
             };
+            bloklid-anvil-docker-amd64 = nixLib.mkDockerImage {
+              name = "bloklid-anvil";
+              Entrypoint = [ "${blokliAnvilEntrypoint}/bin/blokli-anvil-entrypoint" ];
+              pkgsLinux = pkgsLinux;
+              env = [
+                "SSL_CERT_FILE=${pkgsLinux.cacert}/etc/ssl/certs/ca-bundle.crt"
+              ];
+              extraContents = [
+                bloklidPackages.bloklid-x86_64-linux
+                pkgsLinux.curl
+                pkgsLinux.foundry
+                blokliAnvilEntrypoint
+              ];
+            };
 
             # aarch64-linux Docker images
             bloklid-docker-aarch64 = nixLib.mkDockerImage {
@@ -272,6 +293,20 @@
               pkgsLinux = pkgsLinuxAarch64;
               env = [
                 "SSL_CERT_FILE=${pkgsLinuxAarch64.cacert}/etc/ssl/certs/ca-bundle.crt"
+              ];
+            };
+            bloklid-anvil-docker-aarch64 = nixLib.mkDockerImage {
+              name = "bloklid-anvil";
+              Entrypoint = [ "${blokliAnvilEntrypointAarch64}/bin/blokli-anvil-entrypoint" ];
+              pkgsLinux = pkgsLinuxAarch64;
+              env = [
+                "SSL_CERT_FILE=${pkgsLinuxAarch64.cacert}/etc/ssl/certs/ca-bundle.crt"
+              ];
+              extraContents = [
+                bloklidPackages.bloklid-aarch64-linux
+                pkgsLinuxAarch64.curl
+                pkgsLinuxAarch64.foundry
+                blokliAnvilEntrypointAarch64
               ];
             };
           };
@@ -550,6 +585,7 @@
               bloklid-docker-amd64
               bloklid-dev-docker-amd64
               bloklid-profile-docker-amd64
+              bloklid-anvil-docker-amd64
               ;
 
             # Docker images - aarch64-linux
@@ -557,6 +593,7 @@
               bloklid-docker-aarch64
               bloklid-dev-docker-aarch64
               bloklid-profile-docker-aarch64
+              bloklid-anvil-docker-aarch64
               ;
 
             # Multi-arch manifests

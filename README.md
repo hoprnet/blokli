@@ -32,6 +32,28 @@ Format, lint, and check compilation (recommended after changes):
 just quick
 ```
 
+## Docker Images
+
+### Blokli + Anvil (single container)
+
+This image runs `anvil` with a 1s block time, deploys contracts, and starts `bloklid` against the local chain.
+Only the GraphQL API port is exposed.
+
+```bash
+# Build the image
+nix build .#bloklid-anvil-docker-amd64
+docker load < result
+
+# Run the container
+docker run --rm -p 8080:8080 bloklid-anvil:latest
+```
+
+Optional environment overrides:
+
+- `ANVIL_BLOCK_TIME` (default: 1)
+- `ANVIL_DEPLOYER_PRIVATE_KEY` (defaults to the first Anvil account)
+- `BLOKLI_DATA_DIRECTORY` (default: `/data`)
+
 ## Testing
 
 Blokli has comprehensive test coverage for temporal queries, blockchain reorganization handling, subscriptions, and edge cases.
@@ -193,3 +215,21 @@ You can override any configuration setting using environment variables.
 | `api.health.max_indexer_lag`          | `BLOKLI_API_HEALTH_MAX_INDEXER_LAG`          |
 | `api.health.timeout`                  | `BLOKLI_API_HEALTH_TIMEOUT`                  |
 | `api.health.readiness_check_interval` | `BLOKLI_API_HEALTH_READINESS_CHECK_INTERVAL` |
+
+### Contract Address Overrides
+
+You can override contract addresses via the configuration file. By default, addresses are resolved
+from hopr-bindings based on the selected network.
+
+```toml
+[contracts]
+token = "0x0000000000000000000000000000000000000000"
+channels = "0x0000000000000000000000000000000000000000"
+announcements = "0x0000000000000000000000000000000000000000"
+module_implementation = "0x0000000000000000000000000000000000000000"
+node_safe_migration = "0x0000000000000000000000000000000000000000"
+node_safe_registry = "0x0000000000000000000000000000000000000000"
+ticket_price_oracle = "0x0000000000000000000000000000000000000000"
+winning_probability_oracle = "0x0000000000000000000000000000000000000000"
+node_stake_factory = "0x0000000000000000000000000000000000000000"
+```
