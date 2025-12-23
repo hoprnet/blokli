@@ -10,8 +10,9 @@ use hopr_internal_types::channels::generate_channel_id;
 use hopr_primitive_types::traits::ToHex;
 use rstest::*;
 use serial_test::serial;
+use tracing::info;
 
-const SUBSCRIPTION_TIMEOUT_SECS: u64 = 120;
+const SUBSCRIPTION_TIMEOUT_SECS: u64 = 60;
 
 fn subscription_timeout() -> Duration {
     Duration::from_secs(SUBSCRIPTION_TIMEOUT_SECS)
@@ -188,6 +189,7 @@ async fn subscribe_safe_deployments(#[future(awt)] fixture: IntegrationFixture) 
     let account_address = account.address.clone();
     let client = fixture.client().clone();
 
+    info!("subscribing to safe deployments");
     let handle = tokio::task::spawn(async move {
         client
             .subscribe_safe_deployments()
@@ -204,6 +206,7 @@ async fn subscribe_safe_deployments(#[future(awt)] fixture: IntegrationFixture) 
             .await
     });
 
+    info!(owner=account_address, "deploying safe");
     fixture.deploy_safe(account, 1_000).await?;
 
     handle
