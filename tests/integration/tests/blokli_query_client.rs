@@ -6,9 +6,9 @@ use blokli_client::api::{
     AccountSelector, BlokliQueryClient, ChannelFilter, ChannelSelector, SafeSelector, types::ChannelStatus,
 };
 use blokli_integration_tests::fixtures::{IntegrationFixture, integration_fixture as fixture};
+use hex::FromHex;
 use hopr_internal_types::channels::generate_channel_id;
 use hopr_primitive_types::prelude::{HoprBalance, XDaiBalance};
-use hex::FromHex;
 use rstest::*;
 use serial_test::serial;
 use tokio::time::sleep;
@@ -136,7 +136,7 @@ async fn query_transaction_count(#[future(awt)] fixture: IntegrationFixture) -> 
     let nonce = fixture.rpc().transaction_count(&sender.address).await?;
 
     let raw_tx = fixture.build_raw_tx(tx_value, sender, recipient, nonce).await?;
-    
+
     let before_count = fixture
         .client()
         .query_transaction_count(sender.alloy_address().as_ref())

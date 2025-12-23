@@ -41,7 +41,8 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
                 let should_skip = entry
                     .as_ref()
                     .expect("failed to get subscription update")
-                    .concrete_channel_id.to_lowercase()
+                    .concrete_channel_id
+                    .to_lowercase()
                     != expected_channel_id.to_lowercase();
                 futures::future::ready(should_skip)
             })
@@ -100,7 +101,7 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
 #[test_log::test(tokio::test)]
 #[serial]
 async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
-    // FIXME: tx reverts 
+    // FIXME: tx reverts
     let [src, dst] = fixture.sample_accounts::<2>();
     let client = fixture.client().clone();
     let expected_id = generate_channel_id(&src.hopr_address(), &dst.hopr_address());
