@@ -31,7 +31,6 @@ alloy = { workspace = true, default-features = false, features = [
   "node-bindings",
 ] }
 async-broadcast = { workspace = true }
-async-channel = { workspace = true }
 async-compression = { workspace = true, features = [
   "futures-io",
   "xz-parallel",

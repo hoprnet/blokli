@@ -151,7 +151,7 @@ where
     /// ```
     #[tracing::instrument(level = "debug", skip(self, slog), fields(log=%slog))]
     async fn process_log_event(&self, tx: &OpenTransaction, slog: SerializableLog, is_synced: bool) -> Result<()> {
-        trace!(log = %slog, "log content");
+        debug!(log = %slog, "log content");
 
         let log = Log::from(slog.clone());
 
@@ -172,10 +172,18 @@ where
             self.on_announcement_event(tx, event.data, bn, tx_idx, log_idx, is_synced)
                 .await
         } else if log.address.eq(&self.addresses.node_stake_factory) {
+            debug!(tx_hash = %Hash::from(log.tx_hash), "processing stake factory event");
             let event = HoprNodeStakeFactoryEvents::decode_log(&primitive_log)?;
             let block = log.block_number;
             let tx_idx = log.tx_index;
             let log_idx = log.log_index.as_u64();
+            debug!(
+                tx_hash = %Hash::from(log.tx_hash),
+                block_number = block,
+                tx_index = tx_idx,
+                log_index = log_idx,
+                "decoded stake factory event"
+            );
             self.on_stake_factory_event(tx, &slog, event.data, is_synced, block, tx_idx, log_idx)
                 .await
         } else if log.address.eq(&self.addresses.channels) {

@@ -1,13 +1,9 @@
-use std::{sync::Arc, time::Duration};
-
-use blokli_api::query::{QueryRoot, SafeResult};
-use blokli_api_types::Safe;
+use blokli_api::query::QueryRoot;
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations};
 use hopr_primitive_types::{prelude::Address, traits::ToHex};
 use rand::RngCore;
 use sea_orm::{EntityTrait, PaginatorTrait};
-use tokio::time::sleep;
 
 // Helper to generate random address
 fn random_address() -> Address {

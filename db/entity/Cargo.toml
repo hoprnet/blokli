@@ -33,10 +33,8 @@ blokli-db-migration = { workspace = true }
 
 [dependencies]
 chrono    = { workspace = true }
-hex       = { workspace = true }
 sea-orm   = { workspace = true }
 thiserror = { workspace = true }
-tokio     = { workspace = true }
 
 hopr-crypto-types    = { workspace = true }
 hopr-internal-types  = { workspace = true }
