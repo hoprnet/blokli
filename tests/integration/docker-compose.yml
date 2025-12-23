@@ -46,9 +46,8 @@ services:
       - "10"
       - "--balance"
       - "10000"
-      # TODO: Use a fixed mnemonic for deterministic accounts
-      # - "--mnemonic"
-      # - "gentle wisdom move brush express similar canal dune emotion series because parrot"
+      - "--mnemonic"
+      - "gentle wisdom move brush express similar canal dune emotion series because parrot"
     healthcheck:
       test: ["CMD", "cast", "block-number", "--rpc-url", "http://localhost:8545"]
       interval: 2s

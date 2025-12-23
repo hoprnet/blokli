@@ -66,24 +66,24 @@ futures-timer = "3.0.3"
 futures-util = "0.3.31"
 hex = "0.4.3"
 hex-literal = "1.0.0"
-hopli = { git = "https://github.com/hoprnet/hopli", rev = "3231dc7f3bad48750e77b644455fdaefd058b647" }
-hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet", rev = "1c484bee9cce85b194640cc26a8e8ea322d1c43c" }
-hopr-bindings = { git = "https://github.com/hoprnet/contracts", rev = "acb5e5214e185e764dbfbe9499dd5ec84f45a008" }
-hopr-chain-connector = { git = "https://github.com/hoprnet/hoprnet", rev = "1c484bee9cce85b194640cc26a8e8ea322d1c43c" }
-hopr-chain-types = { git = "https://github.com/hoprnet/hoprnet", rev = "1c484bee9cce85b194640cc26a8e8ea322d1c43c" }
-hopr-crypto-packet = { git = "https://github.com/hoprnet/hoprnet", rev = "1c484bee9cce85b194640cc26a8e8ea322d1c43c" }
-hopr-crypto-random = { git = "https://github.com/hoprnet/hoprnet", rev = "1c484bee9cce85b194640cc26a8e8ea322d1c43c" }
-hopr-crypto-types = { git = "https://github.com/hoprnet/hoprnet", rev = "1c484bee9cce85b194640cc26a8e8ea322d1c43c" }
-hopr-internal-types = { git = "https://github.com/hoprnet/hoprnet", rev = "1c484bee9cce85b194640cc26a8e8ea322d1c43c", features = [
+hopli = { git = "https://github.com/hoprnet/hopli", branch = "main" }
+hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-bindings = { git = "https://github.com/hoprnet/contracts", branch = "main" }
+hopr-chain-connector = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-chain-types = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-crypto-packet = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-crypto-random = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-crypto-types = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-internal-types = { git = "https://github.com/hoprnet/hoprnet", branch = "master", features = [
   "serde",
 ] }
-hopr-metrics = { git = "https://github.com/hoprnet/hoprnet", rev = "1c484bee9cce85b194640cc26a8e8ea322d1c43c" }
-hopr-network-types = { git = "https://github.com/hoprnet/hoprnet", rev = "1c484bee9cce85b194640cc26a8e8ea322d1c43c", features = [
+hopr-metrics = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-network-types = { git = "https://github.com/hoprnet/hoprnet", branch = "master", features = [
   "serde",
 ] }
-hopr-parallelize = { git = "https://github.com/hoprnet/hoprnet", rev = "1c484bee9cce85b194640cc26a8e8ea322d1c43c" }
-hopr-platform = { git = "https://github.com/hoprnet/hoprnet", rev = "1c484bee9cce85b194640cc26a8e8ea322d1c43c" }
-hopr-primitive-types = { git = "https://github.com/hoprnet/hoprnet", rev = "1c484bee9cce85b194640cc26a8e8ea322d1c43c", features = [
+hopr-parallelize = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-platform = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-primitive-types = { git = "https://github.com/hoprnet/hoprnet", branch = "master", features = [
   "serde",
 ] }
 http = "1.3.1"
