@@ -22,6 +22,7 @@ fn subscription_timeout() -> Duration {
 #[test_log::test(tokio::test)]
 #[serial]
 async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    // FIXME: tx reverts
     let [src, dst] = fixture.sample_accounts::<2>();
     let expected_id = generate_channel_id(&src.hopr_address(), &dst.hopr_address());
     let channel_selector = ChannelSelector {
@@ -40,8 +41,8 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
                 let should_skip = entry
                     .as_ref()
                     .expect("failed to get subscription update")
-                    .concrete_channel_id
-                    != expected_channel_id;
+                    .concrete_channel_id.to_lowercase()
+                    != expected_channel_id.to_lowercase();
                 futures::future::ready(should_skip)
             })
             .next()
@@ -62,6 +63,7 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
 #[test_log::test(tokio::test)]
 #[serial]
 async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    // FIXME: tx reverts
     let [account] = fixture.sample_accounts::<1>();
     let account_address = account.address.clone();
 
@@ -98,6 +100,7 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
 #[test_log::test(tokio::test)]
 #[serial]
 async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    // FIXME: tx reverts 
     let [src, dst] = fixture.sample_accounts::<2>();
     let client = fixture.client().clone();
     let expected_id = generate_channel_id(&src.hopr_address(), &dst.hopr_address());
@@ -136,6 +139,7 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
 #[test_log::test(tokio::test)]
 #[serial]
 async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    // FIXME: test timeouts
     let account = fixture.accounts().first().expect("no accounts in fixture");
     let client = fixture.client().clone();
 
@@ -194,24 +198,28 @@ async fn subscribe_safe_deployments(#[future(awt)] fixture: IntegrationFixture) 
         client
             .subscribe_safe_deployments()
             .expect("failed to create safe deployments subscription")
-            // .skip_while(|entry| {
-            //     let should_skip = entry
-            //         .as_ref()
-            //         .expect("failed to get subscription update")
-            //         .chain_key != account_address;
-            //     futures::future::ready(should_skip)
-            // })
+            .skip_while(|entry| {
+                let should_skip = entry
+                    .as_ref()
+                    .expect("failed to get subscription update")
+                    .chain_key
+                    .to_lowercase()
+                    != account_address.to_lowercase();
+                futures::future::ready(should_skip)
+            })
             .next()
             .timeout(subscription_timeout())
             .await
     });
 
-    info!(owner=account_address, "deploying safe");
     fixture.deploy_safe(account, 1_000).await?;
 
-    handle
+    let safe = handle
         .await??
         .ok_or_else(|| anyhow!("no update received from subscription"))??;
+
+    // FIX: blokli returns lowercase addresses, not checksummed addresses
+    assert_eq!(safe.chain_key.to_lowercase(), account.address.to_lowercase());
 
     Ok(())
 }

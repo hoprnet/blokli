@@ -1,6 +1,6 @@
 use std::{str::FromStr, time::Duration};
 
-use alloy::primitives::Address;
+use alloy::primitives::{Address, U256};
 use anyhow::Result;
 use blokli_client::api::{
     AccountSelector, BlokliQueryClient, ChannelFilter, ChannelSelector, SafeSelector, types::ChannelStatus,
@@ -8,13 +8,16 @@ use blokli_client::api::{
 use blokli_integration_tests::fixtures::{IntegrationFixture, integration_fixture as fixture};
 use hopr_internal_types::channels::generate_channel_id;
 use hopr_primitive_types::prelude::{HoprBalance, XDaiBalance};
+use hex::FromHex;
 use rstest::*;
 use serial_test::serial;
+use tokio::time::sleep;
 
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
 async fn count_accounts_matches_deployed_accounts(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    // FIXME: tx reverts
     let [account] = fixture.sample_accounts::<1>();
 
     let account_count = fixture
@@ -39,6 +42,7 @@ async fn count_accounts_matches_deployed_accounts(#[future(awt)] fixture: Integr
 #[test_log::test(tokio::test)]
 #[serial]
 async fn query_accounts(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    // FIXME: tx reverts
     let [account] = fixture.sample_accounts::<1>();
     fixture.announce_account(account).await?;
 
@@ -103,7 +107,7 @@ async fn query_token_balance_of_safe(#[future(awt)] fixture: IntegrationFixture)
 
     fixture.deploy_safe(account, amount).await?;
 
-    tokio::time::sleep(Duration::from_secs(15)).await; // dummy wait for the safe to be indexed
+    tokio::time::sleep(Duration::from_secs(8)).await; // dummy wait for the safe to be indexed
 
     let safe = fixture
         .client()
@@ -127,17 +131,24 @@ async fn query_token_balance_of_safe(#[future(awt)] fixture: IntegrationFixture)
 #[test_log::test(tokio::test)]
 #[serial]
 async fn query_transaction_count(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
-    let [account] = fixture.sample_accounts::<1>();
+    let [sender, recipient] = fixture.sample_accounts::<2>();
+    let tx_value = U256::from(1_000_000u64);
+    let nonce = fixture.rpc().transaction_count(&sender.address).await?;
+
+    let raw_tx = fixture.build_raw_tx(tx_value, sender, recipient, nonce).await?;
+    
     let before_count = fixture
         .client()
-        .query_transaction_count(account.alloy_address().as_ref())
+        .query_transaction_count(sender.alloy_address().as_ref())
         .await?;
 
-    fixture.announce_account(account).await?; // doesn't have to be announcendment/safe related
+    fixture.rpc().execute_transaction(&raw_tx).await?;
+
+    sleep(Duration::from_secs(8)).await;
 
     let after_count = fixture
         .client()
-        .query_transaction_count(account.alloy_address().as_ref())
+        .query_transaction_count(sender.alloy_address().as_ref())
         .await?;
 
     assert_eq!(after_count, before_count + 1);
@@ -153,6 +164,8 @@ async fn query_safe_allowance_should_be_returned_after_deployment(
 ) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
     fixture.deploy_safe(account, 1_000).await?;
+
+    sleep(Duration::from_secs(8)).await;
 
     let safe_selector = SafeSelector::ChainKey(*account.alloy_address().as_ref());
     fixture

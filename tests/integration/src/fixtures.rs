@@ -162,7 +162,7 @@ impl IntegrationFixture {
             U256::from(nonce),
             U256::from(amount),
             vec![owner.alloy_address()],
-            true,
+            false,
         )?
         .gas_limit(self.config().gas_limit)
         .max_fee_per_gas(self.config().max_fee_per_gas)
