@@ -7,10 +7,10 @@ use futures::stream::StreamExt;
 use futures_time::{future::FutureExt as FutureTimeoutExt, time::Duration};
 use hopr_crypto_types::types::Hash;
 use hopr_internal_types::channels::generate_channel_id;
-use hopr_primitive_types::traits::ToHex;
+use hopr_primitive_types::{prelude::HoprBalance, traits::ToHex};
 use rstest::*;
 use serial_test::serial;
-use tracing::info;
+use tracing::{debug, info};
 
 const SUBSCRIPTION_TIMEOUT_SECS: u64 = 60;
 
@@ -51,7 +51,19 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
             .await
     });
 
-    fixture.open_channel(&src, &dst, amount).await?;
+    info!(src = %src.hopr_address(), dst = %dst.hopr_address(), "opening channel");
+
+    let src_safe = fixture.deploy_safe_and_announce(&src, 1_000).await?;
+    fixture.deploy_safe_and_announce(&dst, 1_000).await?;
+
+    // Create the channel
+    debug!("setting allowance");
+    fixture.approve(&src, amount, &src_safe.module_address).await?;
+
+    debug!("opening channel");
+    fixture
+        .open_channel(&src, &dst, amount, &src_safe.module_address)
+        .await?;
 
     handle
         .await??
@@ -84,7 +96,7 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
             .await
     });
 
-    fixture.announce_account(account).await?;
+    fixture.deploy_safe_and_announce(account, 1_000).await?;
 
     assert_eq!(
         handle
@@ -106,7 +118,7 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
     let client = fixture.client().clone();
     let expected_id = generate_channel_id(&src.hopr_address(), &dst.hopr_address());
 
-    let amount = "1 wei wxHOPR".parse().expect("failed to parse amount");
+    let amount: HoprBalance = "1 wei wxHOPR".parse().expect("failed to parse amount");
     let expected_channel_id = Hash::from(expected_id).to_hex();
 
     let handle = tokio::task::spawn(async move {
@@ -127,7 +139,16 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
             .await
     });
 
-    fixture.open_channel(&src, &dst, amount).await?;
+    // Deploy safes for both parties
+    let src_safe = fixture.deploy_safe_and_announce(&src, 1_000).await?;
+    fixture.deploy_safe_and_announce(&dst, 1_000).await?;
+
+    // Create the channel
+    fixture.approve(&src, amount, &src_safe.module_address).await?;
+
+    fixture
+        .open_channel(&src, &dst, amount, &src_safe.module_address)
+        .await?;
 
     handle
         .await??
@@ -219,7 +240,6 @@ async fn subscribe_safe_deployments(#[future(awt)] fixture: IntegrationFixture) 
         .await??
         .ok_or_else(|| anyhow!("no update received from subscription"))??;
 
-    // FIX: blokli returns lowercase addresses, not checksummed addresses
     assert_eq!(safe.chain_key.to_lowercase(), account.address.to_lowercase());
 
     Ok(())

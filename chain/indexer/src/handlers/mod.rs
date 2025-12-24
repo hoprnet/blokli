@@ -22,7 +22,7 @@ use hopr_bindings::{
 };
 use hopr_crypto_types::prelude::Hash;
 use hopr_primitive_types::prelude::{Address, SerializableLog};
-use tracing::{debug, error, trace};
+use tracing::{debug, error};
 
 use crate::{
     IndexerState,

@@ -6,12 +6,12 @@ use blokli_client::api::{
     AccountSelector, BlokliQueryClient, ChannelFilter, ChannelSelector, SafeSelector, types::ChannelStatus,
 };
 use blokli_integration_tests::fixtures::{IntegrationFixture, integration_fixture as fixture};
-use hex::FromHex;
 use hopr_internal_types::channels::generate_channel_id;
 use hopr_primitive_types::prelude::{HoprBalance, XDaiBalance};
 use rstest::*;
 use serial_test::serial;
 use tokio::time::sleep;
+use tracing::debug;
 
 #[rstest]
 #[test_log::test(tokio::test)]
@@ -25,7 +25,7 @@ async fn count_accounts_matches_deployed_accounts(#[future(awt)] fixture: Integr
         .count_accounts(AccountSelector::Address(account.hopr_address().into()))
         .await?;
 
-    fixture.announce_account(account).await?;
+    fixture.deploy_safe_and_announce(account, 1_000).await?;
 
     assert_eq!(
         fixture
@@ -44,7 +44,8 @@ async fn count_accounts_matches_deployed_accounts(#[future(awt)] fixture: Integr
 async fn query_accounts(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     // FIXME: tx reverts
     let [account] = fixture.sample_accounts::<1>();
-    fixture.announce_account(account).await?;
+
+    fixture.deploy_safe_and_announce(account, 1_000).await?;
 
     let found_accounts = fixture
         .client()
@@ -189,9 +190,20 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
     let before_count = fixture.client().count_channels(channel_selector.clone()).await?;
 
     let [src, dst] = fixture.sample_accounts::<2>();
-    let amount = "1 wxHOPR".parse().expect("failed to parse amount");
+    let amount: HoprBalance = "1 wxHOPR".parse().expect("failed to parse amount");
 
-    fixture.open_channel(&src, &dst, amount).await?;
+    // Deploy safes for both parties
+    let src_safe = fixture.deploy_safe_and_announce(&src, 1_000).await?;
+    fixture.deploy_safe_and_announce(&dst, 1_000).await?;
+
+    // Set allowance
+    debug!("setting allowance");
+    fixture.approve(&src, amount, &src_safe.module_address).await?;
+
+    // Create the channel
+    fixture
+        .open_channel(&src, &dst, amount, &src_safe.module_address)
+        .await?;
 
     let after_count = fixture.client().count_channels(channel_selector.clone()).await?;
 
