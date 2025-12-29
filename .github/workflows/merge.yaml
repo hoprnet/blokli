@@ -55,7 +55,13 @@ jobs:
         include:
           - architecture: x86_64-linux
             runner: self-hosted-hoprnet-bigger
-            build_command: nix build -L .#bloklid-docker-amd64
+            build_command: nix build -L .#bloklid-x86_64-linux
+          - architecture: x86_64-darwin
+            runner: macos-15
+            build_command: nix build -L .#bloklid-x86_64-darwin
+          - architecture: aarch64-darwin
+            runner: macos-15
+            build_command: nix build -L .#bloklid-aarch64-darwin
     uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@ausias/fix-actions
     with:
       source_branch: ${{ github.event.pull_request.base.ref }}
