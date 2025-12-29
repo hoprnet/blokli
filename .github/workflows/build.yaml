@@ -90,7 +90,9 @@ jobs:
         run: nix build -L .#blokli-client-dev --no-link
   smoke-test:
     name: Smoke Test
-    needs: build-docker
+    needs: 
+      - build-docker
+      - build-docker-manifest
     uses: ./.github/workflows/smoke-test.yaml
     with:
       image: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ needs.build-docker.outputs.docker_version }}
