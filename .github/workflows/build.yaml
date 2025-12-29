@@ -52,7 +52,7 @@ jobs:
       docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
       docker_hub_token: ${{ secrets.DOCKER_HUB_TOKEN }}
   build-binaries:
-    name: Binary
+    name: Binary ${{ matrix.architecture }}
     strategy:
       fail-fast: false
       matrix:
@@ -60,12 +60,12 @@ jobs:
           - architecture: x86_64-linux
             runner: self-hosted-hoprnet-bigger
             build_command: nix build -L .#bloklid-x86_64-linux
-          - architecture: x86_64-darwin
-            runner: macos-15
-            build_command: nix build -L .#bloklid-x86_64-darwin
-          - architecture: aarch64-darwin
-            runner: macos-15
-            build_command: nix build -L .#bloklid-aarch64-darwin
+          # - architecture: x86_64-darwin
+          #   runner: macos-15
+          #   build_command: nix build -L .#bloklid-x86_64-darwin
+          # - architecture: aarch64-darwin
+          #   runner: macos-15
+          #   build_command: nix build -L .#bloklid-aarch64-darwin
     uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@ausias/fix-actions
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
