@@ -16,7 +16,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   build-docker:
-    name: Build Docker ${{ matrix.architecture }}
+    name: Build docker ${{ matrix.architecture }}
     uses: hoprnet/hopr-workflows/.github/workflows/build-docker-image.yaml@ausias/fix-actions
     strategy:
       matrix:
@@ -40,7 +40,7 @@ jobs:
       docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
       docker_hub_token: ${{ secrets.DOCKER_HUB_TOKEN }}
   build-docker-manifest:
-    name: Docker Manifest
+    name: Docker manifest
     needs: build-docker
     uses: hoprnet/hopr-workflows/.github/workflows/create-docker-manifest.yaml@ausias/fix-actions
     with:
@@ -52,7 +52,7 @@ jobs:
       docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
       docker_hub_token: ${{ secrets.DOCKER_HUB_TOKEN }}
   build-binaries:
-    name: Binary ${{ matrix.architecture }}
+    name: Build binary ${{ matrix.architecture }}
     strategy:
       fail-fast: false
       matrix:
