@@ -16,7 +16,7 @@ env:
   CARGO_TERM_COLOR: always
 jobs:
   build-docker:
-    name: Build Docker
+    name: Build Docker ${{ matrix.architecture }}
     uses: hoprnet/hopr-workflows/.github/workflows/build-docker-image.yaml@ausias/fix-actions
     strategy:
       matrix:
