@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
-use blokli_api_types::{Account, Channel, ChannelUpdate, TokenValueString, UInt64};
+use alloy::hex;
+use blokli_api_types::{Account, Channel, ChannelStatus, ChannelUpdate, TokenValueString, UInt64};
 use blokli_db_entity::{account, channel, channel_state, conversions::account_aggregation};
 use hopr_crypto_types::prelude::Hash;
 use hopr_primitive_types::prelude::{Address, HoprBalance, IntoEndian, ToHex};
@@ -29,7 +30,7 @@ where
     C: ConnectionTrait,
 {
     // Convert Hash to hex string for database query
-    let channel_id_hex = channel_id.to_hex();
+    let channel_id_hex = hex::encode(channel_id.as_ref());
 
     // 1. Find the channel by concrete_channel_id
     let channel = channel::Entity::find()
@@ -75,7 +76,7 @@ where
         source: channel.source,
         destination: channel.destination,
         balance: TokenValueString(HoprBalance::from_be_bytes(&state.balance).amount().to_string()),
-        status: state.status.into(),
+        status: ChannelStatus::from(state.status),
         epoch: i32::try_from(state.epoch).map_err(|e| {
             CoreEthereumIndexerError::ValidationError(format!(
                 "Channel epoch {} out of range for i32: {}",

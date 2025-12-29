@@ -116,7 +116,7 @@ fn reconstruct_channel_entry(
         .map_err(|_| DbSqlError::DecodingError)?;
     let balance = HoprBalance::from_be_bytes(balance_bytes);
 
-    // Convert status from i8 to ChannelStatus
+    // Convert status from i16 to ChannelStatus
     let status = match state.status {
         0 => ChannelStatus::Closed,
         1 => ChannelStatus::Open,
@@ -182,7 +182,7 @@ async fn insert_channel_state_and_emit(
     let state_model = channel_state::ActiveModel {
         channel_id: Set(channel_id),
         balance: Set(balance_bytes_12.to_vec()),
-        status: Set(i8::from(channel_entry.status)),
+        status: Set(i8::from(channel_entry.status) as i16),
         epoch: Set(channel_entry.channel_epoch as i64),
         ticket_index: Set(channel_entry.ticket_index as i64),
         closure_time: Set(match &channel_entry.status {
@@ -196,7 +196,7 @@ async fn insert_channel_state_and_emit(
         ..Default::default()
     };
 
-    tracing::debug!("About to insert channel_state");
+    tracing::debug!(?state_model, "About to insert channel_state");
     let inserted = state_model.insert(tx).await?;
     tracing::debug!("Successfully inserted channel_state with id: {}", inserted.id);
 
@@ -335,7 +335,7 @@ pub trait BlokliDbChannelOperations {
 #[async_trait]
 impl BlokliDbChannelOperations for BlokliDb {
     async fn get_channel_by_id<'a>(&'a self, tx: OptTx<'a>, id: &Hash) -> Result<Option<ChannelEntry>> {
-        let id_hex = id.to_hex();
+        let id_hex = hex::encode(id.as_ref());
         self.nest_transaction(tx)
             .await?
             .perform(|tx| {
@@ -570,7 +570,7 @@ impl BlokliDbChannelOperations for BlokliDb {
         tx_index: u32,
         log_index: u32,
     ) -> Result<()> {
-        let channel_id_hex = channel_entry.get_id().to_hex();
+        let channel_id_hex = hex::encode(channel_entry.get_id().as_ref());
         let source_addr = channel_entry.source;
         let dest_addr = channel_entry.destination;
         let db_clone = self.clone();
@@ -635,7 +635,7 @@ impl BlokliDbChannelOperations for BlokliDb {
         id: &Hash,
         block: u32,
     ) -> Result<Option<ChannelEntry>> {
-        let id_hex = id.to_hex();
+        let id_hex = hex::encode(id.as_ref());
         let block_i64 = block as i64;
 
         self.nest_transaction(tx)
@@ -682,7 +682,7 @@ impl BlokliDbChannelOperations for BlokliDb {
     }
 
     async fn get_channel_history<'a>(&'a self, tx: OptTx<'a>, id: &Hash) -> Result<Vec<ChannelEntry>> {
-        let id_hex = id.to_hex();
+        let id_hex = hex::encode(id.as_ref());
 
         self.nest_transaction(tx)
             .await?
@@ -732,7 +732,7 @@ impl BlokliDbChannelOperations for BlokliDb {
         tx_index: u32,
         log_index: u32,
     ) -> Result<()> {
-        let id_hex = id.to_hex();
+        let id_hex = hex::encode(id.as_ref());
         let id_hex_clone = id_hex.clone();
         let id_hex_clone2 = id_hex.clone();
         let block_i64 = block as i64;

@@ -456,7 +456,7 @@ mod tests {
         tx_index: i64,
         log_index: i64,
         balance: Vec<u8>,
-        status: i8,
+        status: i16,
     ) -> anyhow::Result<i64> {
         let state = channel_state::ActiveModel {
             channel_id: ActiveValue::Set(channel_id),

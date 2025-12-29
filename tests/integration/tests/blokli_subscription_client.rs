@@ -33,6 +33,15 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
     let expected_channel_id = Hash::from(expected_id).to_hex();
     let client = fixture.client().clone();
 
+    info!(src = %src.hopr_address(), dst = %dst.hopr_address(), "opening channel");
+
+    let src_safe = fixture.deploy_safe_and_announce(&src, 500_000_000_000_000_000).await?;
+    fixture.deploy_safe_and_announce(&dst, 500_000_000_000_000_000).await?;
+
+    // Create the channel
+    debug!("setting allowance");
+    fixture.approve(&src, amount, &src_safe.module_address).await?;
+
     let handle = tokio::task::spawn(async move {
         client
             .subscribe_channels(channel_selector)
@@ -51,23 +60,18 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
             .await
     });
 
-    info!(src = %src.hopr_address(), dst = %dst.hopr_address(), "opening channel");
-
-    let src_safe = fixture.deploy_safe_and_announce(&src, 1_000).await?;
-    fixture.deploy_safe_and_announce(&dst, 1_000).await?;
-
-    // Create the channel
-    debug!("setting allowance");
-    fixture.approve(&src, amount, &src_safe.module_address).await?;
-
     debug!("opening channel");
     fixture
         .open_channel(&src, &dst, amount, &src_safe.module_address)
         .await?;
 
-    handle
+    let channel = handle
         .await??
         .ok_or_else(|| anyhow!("no update received from subscription"))??;
+
+    info!(?channel, "received channel update");
+
+    assert_eq!(channel.balance.0, amount.to_string());
 
     Ok(())
 }
@@ -76,7 +80,6 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
 #[test_log::test(tokio::test)]
 #[serial]
 async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
-    // FIXME: tx reverts
     let [account] = fixture.sample_accounts::<1>();
     let account_address = account.address.clone();
 
@@ -87,8 +90,12 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
             .subscribe_accounts(selector)
             .expect("failed to create account subscription")
             .skip_while(|entry| {
-                let should_skip =
-                    entry.as_ref().expect("failed to get subscription update").chain_key != account_address;
+                let should_skip = entry
+                    .as_ref()
+                    .expect("failed to get subscription update")
+                    .chain_key
+                    .to_lowercase()
+                    != account_address.to_lowercase();
                 futures::future::ready(should_skip)
             })
             .next()
@@ -96,14 +103,17 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
             .await
     });
 
-    fixture.deploy_safe_and_announce(account, 1_000).await?;
+    fixture
+        .deploy_safe_and_announce(account, 500_000_000_000_000_000)
+        .await?;
 
     assert_eq!(
         handle
             .await??
             .ok_or_else(|| anyhow!("no update received from subscription"))??
-            .chain_key,
-        account.address
+            .chain_key
+            .to_lowercase(),
+        account.address.to_lowercase()
     );
 
     Ok(())

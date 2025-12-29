@@ -4,7 +4,7 @@ use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparat
 use hopr_bindings::hopr_channels::HoprChannels::HoprChannelsEvents;
 use hopr_internal_types::channels::{ChannelEntry, ChannelStatus, generate_channel_id};
 use hopr_primitive_types::prelude::Address;
-use tracing::{error, trace, warn};
+use tracing::{debug, error, trace, warn};
 
 use super::{ContractEventHandlers, channel_utils::decode_channel, helpers::construct_channel_update};
 use crate::errors::{CoreEthereumIndexerError, Result};
@@ -35,6 +35,8 @@ where
     ) -> Result<()> {
         #[cfg(all(feature = "prometheus", not(test)))]
         METRIC_INDEXER_LOG_COUNTERS.increment(&["channels"]);
+
+        debug!(?event, "processing channel event");
 
         match event {
             HoprChannelsEvents::ChannelBalanceDecreased(balance_decreased) => {

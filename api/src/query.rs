@@ -207,7 +207,7 @@ impl QueryRoot {
             .map(|agg| Account {
                 keyid: agg.keyid,
                 chain_key: agg.chain_key,
-                packet_key: agg.packet_key,
+                packet_key: format!("0x{}", agg.packet_key),
                 safe_address: agg.safe_address,
                 multi_addresses: agg.multi_addresses,
             })
@@ -250,7 +250,7 @@ impl QueryRoot {
         }
 
         if let Some(pk) = packet_key {
-            query = query.filter(account::Column::PacketKey.eq(pk));
+            query = query.filter(account::Column::PacketKey.eq(pk.strip_prefix("0x").unwrap_or(&pk).to_string()));
         }
 
         if let Some(ck) = chain_key {
@@ -319,7 +319,9 @@ impl QueryRoot {
         }
 
         if let Some(channel_id) = concrete_channel_id {
-            query = query.filter(channel::Column::ConcreteChannelId.eq(channel_id));
+            query = query.filter(
+                channel::Column::ConcreteChannelId.eq(channel_id.strip_prefix("0x").unwrap_or(&channel_id).to_string()),
+            );
         }
 
         // TODO(Phase 2-3): Status filtering requires querying channel_state table
@@ -381,34 +383,29 @@ impl QueryRoot {
             }
         };
 
-        // Convert GraphQL ChannelStatus to database i8 representation if status filter is provided
-        let status_i8 = status.map(|s| match s {
+        // Convert GraphQL ChannelStatus to database i16 representation if status filter is provided
+        let status_i16 = status.map(|s| match s {
             blokli_api_types::ChannelStatus::Closed => 0,
             blokli_api_types::ChannelStatus::Open => 1,
             blokli_api_types::ChannelStatus::PendingToClose => 2,
         });
 
         // Fetch channels with state using optimized batch loading (2 queries total)
-        let aggregated_channels = match fetch_channels_with_state(
-            db,
-            source_key_id,
-            destination_key_id,
-            concrete_channel_id,
-            status_i8,
-        )
-        .await
-        {
-            Ok(channels) => channels,
-            Err(e) => {
-                return ChannelsResult::QueryFailed(errors::query_failed("fetch channels", e));
-            }
-        };
+        let aggregated_channels =
+            match fetch_channels_with_state(db, source_key_id, destination_key_id, concrete_channel_id, status_i16)
+                .await
+            {
+                Ok(channels) => channels,
+                Err(e) => {
+                    return ChannelsResult::QueryFailed(errors::query_failed("fetch channels", e));
+                }
+            };
 
         // Convert to GraphQL Channel type
         let channels: Vec<Channel> = aggregated_channels
             .into_iter()
             .filter_map(|agg| {
-                // Convert status from i8 to ChannelStatus enum
+                // Convert status from i16 to ChannelStatus enum
                 let status = match agg.status {
                     0 => blokli_api_types::ChannelStatus::Closed,
                     1 => blokli_api_types::ChannelStatus::Open,

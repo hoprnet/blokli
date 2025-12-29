@@ -358,7 +358,7 @@ where
     }
 
     if let Some(pk) = packet_key {
-        query = query.filter(account::Column::PacketKey.eq(pk));
+        query = query.filter(account::Column::PacketKey.eq(pk.strip_prefix("0x").unwrap_or(&pk).to_string()));
     }
 
     if let Some(ck) = chain_key {

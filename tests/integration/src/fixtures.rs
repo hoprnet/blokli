@@ -173,7 +173,6 @@ impl IntegrationFixture {
         debug!("registering the deployed safes");
         self.register_safe(owner, &safe.address).await?;
 
-        // Announce accounts
         debug!("announcing accounts");
         self.announce_account(owner, &safe.module_address).await?;
         sleep(std::time::Duration::from_secs(10)).await;
@@ -411,7 +410,7 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
     let total_transferred_amount = transfer_or_mint_tokens(
         hopr_token,
         all_addresses,
-        vec![U256::from(1_000_000_000_000_000_000u64); accounts.len()],
+        vec![U256::from(100_000_000_000_000_000_000_000u128); accounts.len()],
     )
     .await?;
 

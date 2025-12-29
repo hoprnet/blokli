@@ -271,7 +271,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                         let account_model = account::ActiveModel {
                             id: Set(key_id as i64),
                             chain_key: Set(chain_key.as_ref().to_vec()),
-                            packet_key: Set(packet_key.to_hex()),
+                            packet_key: Set(hex::encode(packet_key.as_ref())),
                             published_block: Set(block_i64),
                             published_tx_index: Set(tx_index_i64),
                             published_log_index: Set(log_index_i64),
@@ -584,7 +584,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                     op.perform(|tx| {
                         Box::pin(async move {
                             let maybe_model = Account::find()
-                                .filter(account::Column::PacketKey.eq(packet_key.to_hex()))
+                                .filter(account::Column::PacketKey.eq(hex::encode(packet_key.as_ref())))
                                 .one(tx.as_ref())
                                 .await?;
                             if let Some(m) = maybe_model {
