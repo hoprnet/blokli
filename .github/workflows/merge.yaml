@@ -17,13 +17,14 @@ jobs:
       version_type: "pr"
     secrets: inherit
   build_binaries:
+    name: Binary
+    if: github.event.pull_request.merged == true
     strategy:
       fail-fast: false
       matrix:
         target:
           - name: x86_64-linux
             runner: self-hosted-hoprnet-bigger
-    name: Binary
     uses: ./.github/workflows/build-binaries.yaml
     with:
       source_branch: ${{ github.event.pull_request.base.ref }}
