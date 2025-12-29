@@ -19,10 +19,10 @@ jobs:
       matrix:
         include:
           - architecture: x86_64-linux
-            command: nix build -L .#bloklid-docker-amd64
+            command: nix run -L .#bloklid-docker-upload-amd64
             # Disabled until GitHub runner supports aarch64
             # - architecture: aarch64-linux
-            #   command: nix build -L .#bloklid-docker-arm64
+            #   command: nix run -L .#bloklid-docker-upload-aarch64
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       version_type: "commit"
@@ -37,7 +37,7 @@ jobs:
       docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
       docker_hub_token: ${{ secrets.DOCKER_HUB_TOKEN }}
   build-docker-manifest:
-    name: Build Docker Manifest
+    name: Docker Manifest
     needs: build-docker
     uses: hoprnet/hopr-workflows/.github/workflows/create-docker-manifest.yaml@ausias/fix-actions
     with:
