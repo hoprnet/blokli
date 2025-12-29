@@ -11,24 +11,62 @@ jobs:
   build-docker:
     name: Build Docker
     if: github.event.pull_request.merged == true
-    uses: ./.github/workflows/build-docker.yaml
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker-image.yaml@ausias/fix-actions
+    strategy:
+      matrix:
+        include:
+          - architecture: x86_64-linux
+            command: nix run -L .#bloklid-docker-upload-amd64
+            # Disabled until GitHub runner supports aarch64
+            # - architecture: aarch64-linux
+            #   command: nix run -L .#bloklid-docker-upload-aarch64
     with:
       source_branch: ${{ github.event.pull_request.base.ref }}
       version_type: "pr"
-    secrets: inherit
-  build_binaries:
+      architecture: ${{ matrix.architecture }}
+      cachix_cache_name: "blokli"
+      build_file: "bloklid/Cargo.toml"
+      build_command: ${{ matrix.command }}
+      docker_image_name: "bloklid"
+    secrets:
+      gcp_service_account: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY}}
+      cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
+      docker_hub_token: ${{ secrets.DOCKER_HUB_TOKEN }}
+  build-docker-manifest:
+    if: github.event.pull_request.merged == true
+    name: Docker Manifest
+    needs: build-docker
+    uses: hoprnet/hopr-workflows/.github/workflows/create-docker-manifest.yaml@ausias/fix-actions
+    with:
+      version_type: "pr"
+      docker_image_name: "bloklid"
+      docker_version: ${{ needs.build-docker.outputs.docker_version }}
+    secrets:
+      gcp_service_account: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY}}
+      docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
+      docker_hub_token: ${{ secrets.DOCKER_HUB_TOKEN }}
+  build-binaries:
     name: Binary
     if: github.event.pull_request.merged == true
     strategy:
       fail-fast: false
       matrix:
-        target:
-          - name: x86_64-linux
+        include:
+          - architecture: x86_64-linux
             runner: self-hosted-hoprnet-bigger
-    uses: ./.github/workflows/build-binaries.yaml
+            build_command: nix build -L .#bloklid-docker-amd64
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@ausias/fix-actions
     with:
       source_branch: ${{ github.event.pull_request.base.ref }}
-      runner: ${{ matrix.target.runner }}
-      architecture: ${{ matrix.target.name }}
-      version_type: pr
-    secrets: inherit
+      version_type: "pr"
+      architecture: ${{ matrix.architecture }}
+      cachix_cache_name: "blokli"
+      build_file: "bloklid/Cargo.toml"
+      build_command: ${{ matrix.build_command }}
+      binary: bloklid
+      runner: ${{ matrix.runner }}
+    secrets:
+      gcp_service_account: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY}}
+      cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      gpg_private_key: ${{ secrets.GPG_HOPRNET_PRIVATE_KEY }}
