@@ -27,6 +27,7 @@ jobs:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       version_type: "commit"
       architecture: ${{ matrix.architecture }}
+      build_file: "bloklid/Cargo.toml"
       build_command: ${{ matrix.command }}
       docker_image_name: "bloklid"
     secrets:
