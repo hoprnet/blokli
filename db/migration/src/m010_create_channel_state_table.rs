@@ -26,7 +26,11 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(ChannelState::Status).small_integer().not_null())
                     .col(ColumnDef::new(ChannelState::Epoch).big_integer().not_null())
                     .col(ColumnDef::new(ChannelState::TicketIndex).big_integer().not_null())
-                    .col(ColumnDef::new(ChannelState::ClosureTime).timestamp().null())
+                    .col(
+                        ColumnDef::new(ChannelState::ClosureTime)
+                            .timestamp_with_time_zone()
+                            .null(),
+                    )
                     .col(
                         ColumnDef::new(ChannelState::CorruptedState)
                             .boolean()

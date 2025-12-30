@@ -311,10 +311,19 @@ impl IntegrationFixture {
             .await
     }
 
-    pub async fn initiate_outgoing_channel_closure(&self, from: &AnvilAccount, to: &AnvilAccount) -> Result<[u8; 32]> {
+    pub async fn initiate_outgoing_channel_closure(
+        &self,
+        from: &AnvilAccount,
+        to: &AnvilAccount,
+        module: &str,
+    ) -> Result<[u8; 32]> {
         let nonce = self.rpc().transaction_count(from.address.as_ref()).await?;
 
-        let payload_generator = BasicPayloadGenerator::new(from.hopr_address(), *self.contract_addresses()); // Could work. Could fail. SafePayloadGenerator maybe
+        let payload_generator = SafePayloadGenerator::new(
+            &from.chain_key_pair(),
+            *self.contract_addresses(),
+            HoprAddress::from_str(module)?,
+        );
 
         let payload = payload_generator
             .initiate_outgoing_channel_closure(to.hopr_address())?

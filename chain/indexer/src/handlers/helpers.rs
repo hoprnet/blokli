@@ -3,6 +3,7 @@ use std::collections::HashMap;
 use alloy::hex;
 use blokli_api_types::{Account, Channel, ChannelStatus, ChannelUpdate, TokenValueString, UInt64};
 use blokli_db_entity::{account, channel, channel_state, conversions::account_aggregation};
+use chrono::Utc;
 use hopr_crypto_types::prelude::Hash;
 use hopr_primitive_types::prelude::{Address, HoprBalance, IntoEndian, ToHex};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder};
@@ -98,7 +99,7 @@ where
                 state.ticket_index, e
             ))
         })?),
-        closure_time: state.closure_time,
+        closure_time: state.closure_time.map(|time| time.with_timezone(&Utc)),
     };
 
     let source_gql = Account {

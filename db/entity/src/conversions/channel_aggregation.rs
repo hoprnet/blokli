@@ -115,7 +115,7 @@ pub async fn fetch_channels_with_state(
                 status: state.status,
                 epoch: state.epoch,
                 ticket_index: state.ticket_index,
-                closure_time: state.closure_time,
+                closure_time: state.closure_time.map(|time| time.with_timezone(&Utc)),
             })
         })
         .collect();

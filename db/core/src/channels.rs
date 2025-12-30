@@ -186,7 +186,7 @@ async fn insert_channel_state_and_emit(
         epoch: Set(channel_entry.channel_epoch as i64),
         ticket_index: Set(channel_entry.ticket_index as i64),
         closure_time: Set(match &channel_entry.status {
-            ChannelStatus::PendingToClose(time) => Some(system_time_to_datetime(time)),
+            ChannelStatus::PendingToClose(time) => Some(system_time_to_datetime(time).into()),
             _ => None,
         }),
         corrupted_state: Set(false), // TODO: Handle corrupted state

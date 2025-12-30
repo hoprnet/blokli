@@ -1808,6 +1808,7 @@ dependencies = [
  "blokli-chain-types",
  "blokli-db",
  "blokli-db-entity",
+ "chrono",
  "futures",
  "futures-util",
  "hex-literal",

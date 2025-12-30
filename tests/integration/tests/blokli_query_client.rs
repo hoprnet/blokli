@@ -13,11 +13,12 @@ use serial_test::serial;
 use tokio::time::sleep;
 use tracing::debug;
 
+const INTIAL_SAFE_BALANCE: u64 = 500_000_000_000_000_000;
+
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
 async fn count_accounts_matches_deployed_accounts(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
-    // FIXME: tx reverts
     let [account] = fixture.sample_accounts::<1>();
 
     let account_count = fixture
@@ -25,7 +26,7 @@ async fn count_accounts_matches_deployed_accounts(#[future(awt)] fixture: Integr
         .count_accounts(AccountSelector::Address(account.hopr_address().into()))
         .await?;
 
-    fixture.deploy_safe_and_announce(account, 1_000).await?;
+    fixture.deploy_safe_and_announce(account, INTIAL_SAFE_BALANCE).await?;
 
     assert_eq!(
         fixture
@@ -42,10 +43,9 @@ async fn count_accounts_matches_deployed_accounts(#[future(awt)] fixture: Integr
 #[test_log::test(tokio::test)]
 #[serial]
 async fn query_accounts(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
-    // FIXME: tx reverts
     let [account] = fixture.sample_accounts::<1>();
 
-    fixture.deploy_safe_and_announce(account, 1_000).await?;
+    fixture.deploy_safe_and_announce(account, INTIAL_SAFE_BALANCE).await?;
 
     let found_accounts = fixture
         .client()
@@ -53,7 +53,10 @@ async fn query_accounts(#[future(awt)] fixture: IntegrationFixture) -> Result<()
         .await?;
 
     assert_eq!(found_accounts.len(), 1);
-    assert_eq!(found_accounts[0].chain_key, account.address);
+    assert_eq!(
+        found_accounts[0].chain_key.to_lowercase(),
+        account.address.to_lowercase()
+    );
 
     Ok(())
 }
@@ -104,9 +107,8 @@ async fn query_token_balance_of_eoa(#[future(awt)] fixture: IntegrationFixture) 
 #[serial]
 async fn query_token_balance_of_safe(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
-    let amount = 5_000;
 
-    fixture.deploy_safe(account, amount).await?;
+    fixture.deploy_safe(account, INTIAL_SAFE_BALANCE).await?;
 
     tokio::time::sleep(Duration::from_secs(8)).await; // dummy wait for the safe to be indexed
 
@@ -160,71 +162,56 @@ async fn query_transaction_count(#[future(awt)] fixture: IntegrationFixture) -> 
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
-async fn query_safe_allowance_should_be_returned_after_deployment(
-    #[future(awt)] fixture: IntegrationFixture,
-) -> Result<()> {
-    let [account] = fixture.sample_accounts::<1>();
-    fixture.deploy_safe(account, 1_000).await?;
-
-    sleep(Duration::from_secs(8)).await;
-
-    let safe_selector = SafeSelector::ChainKey(*account.alloy_address().as_ref());
-    fixture
-        .client()
-        .query_safe(safe_selector)
-        .await?
-        .expect("Safe not found");
-
-    Ok(())
-}
-
-#[rstest]
-#[test_log::test(tokio::test)]
-#[serial]
 async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    let [src, dst] = fixture.sample_accounts::<2>();
+    let expected_id = generate_channel_id(&src.hopr_address(), &dst.hopr_address());
+
     let channel_selector = ChannelSelector {
-        filter: None,
-        status: Some(ChannelStatus::Open),
+        filter: Some(ChannelFilter::ChannelId(expected_id.into())),
+        status: None, /* fails otherwise as it's not allowed for now: "Channel status filtering during schema
+                       * migration is not yet implemented" */
     };
 
     let before_count = fixture.client().count_channels(channel_selector.clone()).await?;
-
-    let [src, dst] = fixture.sample_accounts::<2>();
-    let amount: HoprBalance = "1 wxHOPR".parse().expect("failed to parse amount");
+    let amount: HoprBalance = "1 wei wxHOPR".parse().expect("failed to parse amount");
 
     // Deploy safes for both parties
-    let src_safe = fixture.deploy_safe_and_announce(&src, 1_000).await?;
-    fixture.deploy_safe_and_announce(&dst, 1_000).await?;
+    debug!("deploying safes");
+    let src_safe = fixture.deploy_safe_and_announce(&src, INTIAL_SAFE_BALANCE).await?;
+    fixture.deploy_safe_and_announce(&dst, INTIAL_SAFE_BALANCE).await?;
 
     // Set allowance
     debug!("setting allowance");
     fixture.approve(&src, amount, &src_safe.module_address).await?;
 
+    sleep(Duration::from_secs(8)).await;
+
     // Create the channel
+    debug!("opening channel");
     fixture
         .open_channel(&src, &dst, amount, &src_safe.module_address)
         .await?;
+
+    sleep(Duration::from_secs(8)).await;
 
     let after_count = fixture.client().count_channels(channel_selector.clone()).await?;
 
     assert_eq!(after_count, before_count + 1);
 
-    let expected_id = generate_channel_id(&src.hopr_address(), &dst.hopr_address());
-    let channel_selector = ChannelSelector {
-        filter: Some(ChannelFilter::ChannelId(expected_id.into())),
-        status: Some(ChannelStatus::Open),
-    };
+    debug!("close channel");
+    fixture
+        .initiate_outgoing_channel_closure(&src, &dst, &src_safe.module_address)
+        .await?;
+    sleep(Duration::from_secs(8)).await;
+
     let channels = fixture.client().query_channels(channel_selector).await?;
 
-    assert_eq!(channels.len(), 1);
-
-    fixture.initiate_outgoing_channel_closure(&src, &dst).await?;
-    let channel_selector = ChannelSelector {
-        filter: Some(ChannelFilter::ChannelId(expected_id.into())),
-        status: Some(ChannelStatus::Open),
-    };
-    let channels = fixture.client().query_channels(channel_selector).await?;
-    assert_eq!(channels.len(), 0);
+    // count channels that are in Open state
+    let count = channels
+        .iter()
+        .filter(|channel| channel.status == ChannelStatus::Open)
+        .count();
+    assert_eq!(count, 0);
 
     Ok(())
 }

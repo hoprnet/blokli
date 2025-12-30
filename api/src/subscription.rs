@@ -17,6 +17,7 @@ use blokli_db_entity::{
     conversions::{account_aggregation::fetch_accounts_with_filters, channel_aggregation::fetch_channels_with_state},
     hopr_node_safe_registration, hopr_safe_contract,
 };
+use chrono::Utc;
 use futures::{Stream, StreamExt};
 use hopr_primitive_types::{
     prelude::HoprBalance as PrimitiveHoprBalance,
@@ -226,7 +227,7 @@ async fn query_channels_at_watermark(
                     format!("{} ({})", state.ticket_index, e),
                 ))
             })?),
-            closure_time: state.closure_time,
+            closure_time: state.closure_time.map(|time| time.with_timezone(&Utc)),
         };
 
         let source_gql = Account {
