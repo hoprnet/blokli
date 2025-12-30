@@ -42,7 +42,7 @@ jobs:
   build-docker-manifest:
     name: Docker manifest
     needs: build-docker
-    uses: hoprnet/hopr-workflows/.github/workflows/create-docker-manifest.yaml@ausias/fix-actions
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker-manifest.yaml@ausias/fix-actions
     with:
       version_type: "commit"
       docker_image_name: "bloklid"
