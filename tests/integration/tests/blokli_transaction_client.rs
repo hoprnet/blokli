@@ -20,6 +20,9 @@ enum ClientType {
 #[case(ClientType::Blokli)]
 #[test_log::test(tokio::test)]
 #[serial]
+/// Test that submitting a transaction with a valid payload, via blokli and via direct RPC, goes through.
+/// The payload is a simple token transfer to not test any HOPR-specific logic, but rather only the
+/// transaction submission flow.
 async fn submit_transaction(#[future(awt)] fixture: IntegrationFixture, #[case] client_type: ClientType) -> Result<()> {
     let [sender, recipient] = fixture.sample_accounts::<2>();
     let tx_value = U256::from(TX_VALUE);
@@ -57,6 +60,8 @@ async fn submit_transaction(#[future(awt)] fixture: IntegrationFixture, #[case] 
 #[case(ClientType::Blokli)]
 #[test_log::test(tokio::test)]
 #[serial]
+/// Test that submitting a transaction with an incorrect payload, via blokli and via direct RPC, fails.
+/// The payload is generated as a valid payload but then tampered to make it invalid.
 async fn submit_transaction_with_incorrect_payload(
     #[future(awt)] fixture: IntegrationFixture,
     #[case] client_type: ClientType,
@@ -84,6 +89,8 @@ async fn submit_transaction_with_incorrect_payload(
 #[case(ClientType::Blokli)]
 #[test_log::test(tokio::test)]
 #[serial]
+/// Test that submitting a transaction with too much value, via blokli and via direct RPC, fails.
+/// The payload used is per say valid, except that the value to transfer exceeds the source's balance.
 async fn submit_transaction_with_too_much_value(
     #[future(awt)] fixture: IntegrationFixture,
     #[case] client_type: ClientType,
@@ -108,6 +115,8 @@ async fn submit_transaction_with_too_much_value(
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
+/// Test that submitting a transaction with a valid payload via blokli goes through, and the tracking
+/// id provided by blokli can be used to track the transaction status until confirmation.
 async fn submit_and_track_transaction(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [sender, recipient] = fixture.sample_accounts::<2>();
     let tx_value = U256::from(TX_VALUE);
@@ -139,6 +148,8 @@ async fn submit_and_track_transaction(#[future(awt)] fixture: IntegrationFixture
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
+/// Test that submitting and confirming a transaction (1 block finality by default) with a valid
+/// payload via blokli goes through.
 async fn submit_and_confirm_transaction(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [sender, recipient] = fixture.sample_accounts::<2>();
     let tx_value = U256::from(TX_VALUE);

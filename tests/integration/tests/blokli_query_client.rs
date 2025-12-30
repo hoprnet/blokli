@@ -18,6 +18,8 @@ const INITIAL_SAFE_BALANCE: u64 = 500_000_000_000_000_000;
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
+/// deploy a safe, publish an announcement using the safe module, and verify that the account count
+/// increases by one.
 async fn count_accounts_matches_deployed_accounts(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
 
@@ -42,6 +44,8 @@ async fn count_accounts_matches_deployed_accounts(#[future(awt)] fixture: Integr
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
+/// deploy a safe, publish an announcement using the safe module, and verify that the account is
+/// found upon querying.
 async fn query_accounts(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
 
@@ -64,6 +68,8 @@ async fn query_accounts(#[future(awt)] fixture: IntegrationFixture) -> Result<()
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
+/// query the native balance of an EOA via blokli and via direct RPC, and verify that both match
+/// and that the returned format is correct.
 async fn query_native_balance(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
 
@@ -85,6 +91,7 @@ async fn query_native_balance(#[future(awt)] fixture: IntegrationFixture) -> Res
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
+/// query the token (wxHOPR) balance of an EOA via blokli and verify that the format is correct.
 async fn query_token_balance_of_eoa(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
 
@@ -105,6 +112,8 @@ async fn query_token_balance_of_eoa(#[future(awt)] fixture: IntegrationFixture) 
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
+/// deploy a safe, query the token (wxHOPR) balance of the safe via blokli and verify that
+/// format is correct.
 async fn query_token_balance_of_safe(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
 
@@ -133,6 +142,7 @@ async fn query_token_balance_of_safe(#[future(awt)] fixture: IntegrationFixture)
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
+/// verifies that the transaction count of a given account increases by one after submitting a transaction.
 async fn query_transaction_count(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [sender, recipient] = fixture.sample_accounts::<2>();
     let tx_value = U256::from(1_000_000u64);
@@ -162,6 +172,8 @@ async fn query_transaction_count(#[future(awt)] fixture: IntegrationFixture) -> 
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
+/// deploys two safes from different EOAs, publish announcements using the safe modules, open a channel
+/// between the EOAs, and verifies that the channel count increases by one
 async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [src, dst] = fixture.sample_accounts::<2>();
     let expected_id = generate_channel_id(&src.hopr_address(), &dst.hopr_address());
@@ -219,6 +231,7 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
+/// verifies that the chain ids provided by blokli and the RPC match.
 async fn chain_ids_provided_by_blokli_matches_the_rpc(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let chain = fixture.client().query_chain_info().await?;
     let chain_id = fixture.rpc().chain_id().await?;
@@ -231,6 +244,7 @@ async fn chain_ids_provided_by_blokli_matches_the_rpc(#[future(awt)] fixture: In
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
+/// verifies that the version string returned by blokli can be parsed as a semver.
 async fn query_version_should_be_parsable(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let version = fixture.client().query_version().await?;
     let _parsed_version = semver::Version::parse(&version).expect("failed to parse version as semver");
@@ -240,6 +254,7 @@ async fn query_version_should_be_parsable(#[future(awt)] fixture: IntegrationFix
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
+/// verifies that the health status returned by blokli is "ok".
 async fn query_health_should_be_ok(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     assert_eq!(fixture.client().query_health().await?, "ok");
     Ok(())
