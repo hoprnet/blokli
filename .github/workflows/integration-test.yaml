@@ -32,14 +32,3 @@ jobs:
           BLOKLI_TEST_REMOTE_IMAGE: ${{ inputs.image }}
         run: |
           nix develop -c cargo test --package blokli-integration-tests
-      - name: Upload container logs on failure
-        if: failure()
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
-        with:
-          name: smoke-test-logs
-          path: test.logs
-          retention-days: 7
-      - name: Cleanup
-        if: always()
-        run: |
-          nix develop -c docker compose -f tests/smoke/docker-compose.yml down -v --remove-orphans || true
