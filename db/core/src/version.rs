@@ -16,7 +16,8 @@ use crate::errors::{DbSqlError, Result};
 /// - 3: Added module_address and chain_key to hopr_safe_contract (m026)
 /// - 4: Change contracts addresses
 /// - 5: NodeSafeRegistered events are now also possible safe creation events
-pub const CURRENT_SCHEMA_VERSION: i64 = 5;
+/// - 6: Changed channel status representation to smallint
+pub const CURRENT_SCHEMA_VERSION: i64 = 6;
 
 /// The singleton ID used for the schema_version table
 const SCHEMA_VERSION_TABLE_ID: i64 = 1;

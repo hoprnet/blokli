@@ -99,12 +99,6 @@ pub async fn fetch_channels_with_state(
                 }
             }
 
-            // let balance_bytes_32 = channel_entry.balance.to_be_bytes();
-            // let balance_bytes_12: [u8; 12] = balance_bytes_32[20..32]
-            //     .try_into()
-            //     .expect("slice should be exactly 12 bytes");
-
-            // balance: Set(balance_bytes_12.to_vec()),
             let balance_bytes_32: [u8; 32] = {
                 let mut bytes = [0u8; 32];
                 bytes[20..32].copy_from_slice(state.balance.as_slice());
@@ -127,14 +121,4 @@ pub async fn fetch_channels_with_state(
         .collect();
 
     Ok(result)
-}
-
-#[cfg(test)]
-mod tests {
-    // Note: These tests would require a test database setup
-    // For now, we just ensure the module compiles
-    #[test]
-    fn test_module_compiles() {
-        assert!(true);
-    }
 }

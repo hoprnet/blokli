@@ -7,10 +7,10 @@ use futures::stream::StreamExt;
 use futures_time::{future::FutureExt as FutureTimeoutExt, time::Duration};
 use hopr_crypto_types::types::Hash;
 use hopr_internal_types::channels::generate_channel_id;
-use hopr_primitive_types::{prelude::HoprBalance, traits::ToHex};
+use hopr_primitive_types::traits::ToHex;
 use rstest::*;
 use serial_test::serial;
-use tracing::{debug, info};
+use tracing::info;
 
 const SUBSCRIPTION_TIMEOUT_SECS: u64 = 60;
 
@@ -22,7 +22,6 @@ fn subscription_timeout() -> Duration {
 #[test_log::test(tokio::test)]
 #[serial]
 async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
-    // FIXME: tx reverts
     let [src, dst] = fixture.sample_accounts::<2>();
     let expected_id = generate_channel_id(&src.hopr_address(), &dst.hopr_address());
     let channel_selector = ChannelSelector {
@@ -33,13 +32,10 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
     let expected_channel_id = Hash::from(expected_id).to_hex();
     let client = fixture.client().clone();
 
-    info!(src = %src.hopr_address(), dst = %dst.hopr_address(), "opening channel");
-
     let src_safe = fixture.deploy_safe_and_announce(&src, 500_000_000_000_000_000).await?;
     fixture.deploy_safe_and_announce(&dst, 500_000_000_000_000_000).await?;
 
-    // Create the channel
-    debug!("setting allowance");
+    info!("setting allowance");
     fixture.approve(&src, amount, &src_safe.module_address).await?;
 
     let handle = tokio::task::spawn(async move {
@@ -60,7 +56,7 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
             .await
     });
 
-    debug!("opening channel");
+    info!("opening channel");
     fixture
         .open_channel(&src, &dst, amount, &src_safe.module_address)
         .await?;
@@ -123,25 +119,31 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
 #[test_log::test(tokio::test)]
 #[serial]
 async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
-    // FIXME: tx reverts
     let [src, dst] = fixture.sample_accounts::<2>();
-    let client = fixture.client().clone();
     let expected_id = generate_channel_id(&src.hopr_address(), &dst.hopr_address());
 
-    let amount: HoprBalance = "1 wei wxHOPR".parse().expect("failed to parse amount");
+    let amount = "1 wei wxHOPR".parse().expect("failed to parse amount");
     let expected_channel_id = Hash::from(expected_id).to_hex();
+    let client = fixture.client().clone();
+
+    let src_safe = fixture.deploy_safe_and_announce(&src, 500_000_000_000_000_000).await?;
+    fixture.deploy_safe_and_announce(&dst, 500_000_000_000_000_000).await?;
+
+    info!("setting allowance");
+    fixture.approve(&src, amount, &src_safe.module_address).await?;
 
     let handle = tokio::task::spawn(async move {
         client
             .subscribe_graph()
-            .expect("failed to create ticket parameters subscription")
+            .expect("failed to create safe deployments subscription")
             .skip_while(|entry| {
                 let should_skip = entry
                     .as_ref()
                     .expect("failed to get subscription update")
                     .channel
                     .concrete_channel_id
-                    != expected_channel_id;
+                    .to_lowercase()
+                    != expected_channel_id.to_lowercase();
                 futures::future::ready(should_skip)
             })
             .next()
@@ -149,20 +151,19 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
             .await
     });
 
-    // Deploy safes for both parties
-    let src_safe = fixture.deploy_safe_and_announce(&src, 1_000).await?;
-    fixture.deploy_safe_and_announce(&dst, 1_000).await?;
-
-    // Create the channel
-    fixture.approve(&src, amount, &src_safe.module_address).await?;
-
+    info!("opening channel");
     fixture
         .open_channel(&src, &dst, amount, &src_safe.module_address)
         .await?;
 
-    handle
+    let graph_entry = handle
         .await??
         .ok_or_else(|| anyhow!("no update received from subscription"))??;
+
+    assert_eq!(graph_entry.channel.balance.0, amount.to_string());
+    assert_eq!(graph_entry.source.chain_key, src.address.to_lowercase());
+    assert_eq!(graph_entry.destination.chain_key, dst.address.to_lowercase());
+    assert_eq!(graph_entry.channel.status, ChannelStatus::Open);
 
     Ok(())
 }
@@ -171,7 +172,6 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
 #[test_log::test(tokio::test)]
 #[serial]
 async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
-    // FIXME: test timeouts
     let account = fixture.accounts().first().expect("no accounts in fixture");
     let client = fixture.client().clone();
 

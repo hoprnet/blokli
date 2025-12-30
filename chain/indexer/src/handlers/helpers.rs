@@ -71,11 +71,20 @@ where
     })?;
 
     // 4. Convert to GraphQL types
+
+    let balance_bytes_32: [u8; 32] = {
+        let mut bytes = [0u8; 32];
+        bytes[20..32].copy_from_slice(state.balance.as_slice());
+        bytes
+    };
+
+    let hopr_balance = HoprBalance::from_be_bytes(balance_bytes_32);
+
     let channel_gql = Channel {
-        concrete_channel_id: channel.concrete_channel_id,
+        concrete_channel_id: format!("0x{}", channel.concrete_channel_id),
         source: channel.source,
         destination: channel.destination,
-        balance: TokenValueString(HoprBalance::from_be_bytes(&state.balance).amount().to_string()),
+        balance: TokenValueString(hopr_balance.to_string()),
         status: ChannelStatus::from(state.status),
         epoch: i32::try_from(state.epoch).map_err(|e| {
             CoreEthereumIndexerError::ValidationError(format!(
