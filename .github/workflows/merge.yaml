@@ -11,7 +11,7 @@ jobs:
   build-docker:
     name: Build docker ${{ matrix.architecture }}
     if: github.event.pull_request.merged == true
-    uses: hoprnet/hopr-workflows/workflows/build-docker-image.yaml@ausias/fix-actions
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker-image.yaml@ausias/fix-actions
     strategy:
       matrix:
         include:
@@ -37,7 +37,7 @@ jobs:
     if: github.event.pull_request.merged == true
     name: Docker manifest
     needs: build-docker
-    uses: hoprnet/hopr-workflows/workflows/create-docker-manifest.yaml@ausias/fix-actions
+    uses: hoprnet/hopr-workflows/.github/workflows/create-docker-manifest.yaml@ausias/fix-actions
     with:
       version_type: "pr"
       docker_image_name: "bloklid"
@@ -62,7 +62,7 @@ jobs:
           # - architecture: aarch64-darwin
           #   runner: macos-15
           #   build_command: nix build -L .#bloklid-aarch64-darwin
-    uses: hoprnet/hopr-workflows/workflows/build-binaries.yaml@ausias/fix-actions
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@ausias/fix-actions
     with:
       source_branch: ${{ github.event.pull_request.base.ref }}
       version_type: "pr"
