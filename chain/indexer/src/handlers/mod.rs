@@ -209,8 +209,7 @@ where
             self.on_ticket_price_oracle_event(tx, event.data, is_synced).await
         } else if log.address.eq(&self.addresses.winning_probability_oracle) {
             let event = HoprWinningProbabilityOracleEvents::decode_log(&primitive_log)?;
-            self.on_ticket_winning_probability_oracle_event(tx, event.data, is_synced)
-                .await
+            self.on_ticket_winning_probability_oracle_event(tx, event.data, is_synced).await
         } else {
             #[cfg(all(feature = "prometheus", not(test)))]
             METRIC_INDEXER_LOG_COUNTERS.increment(&["unknown"]);
