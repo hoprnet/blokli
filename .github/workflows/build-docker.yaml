@@ -129,10 +129,10 @@ jobs:
           sed -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" bloklid/Cargo.toml > bloklid/Cargo.toml.new
           mv bloklid/Cargo.toml.new bloklid/Cargo.toml
           nix develop --command cargo generate-lockfile
-       # Use nix-lib multi-arch upload app to:
-       # 1. Build manifest with both architectures
-       # 2. Upload platform-specific images (linux-amd64, linux-arm64)
-       # 3. Create and push OCI manifest list
+        # Use nix-lib multi-arch upload app to:
+        # 1. Build manifest with both architectures
+        # 2. Upload platform-specific images (linux-amd64, linux-arm64)
+        # 3. Create and push OCI manifest list
       - name: Upload multi-arch manifest and images
         run: nix run -L .#bloklid-docker-manifest-upload
         env:
