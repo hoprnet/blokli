@@ -90,8 +90,8 @@ jobs:
       - name: Setup Nix
         uses: hoprnet/hopr-workflows/actions/setup-nix@ausias/fix-actions
         with:
-          cache: blokli
-          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          cachix_cache_name: blokli
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Build blokli-client-dev
         run: nix build -L .#blokli-client-dev --no-link
   smoke-test:
@@ -113,8 +113,8 @@ jobs:
       - name: Setup Nix
         uses: hoprnet/hopr-workflows/actions/setup-nix@ausias/fix-actions
         with:
-          cache: blokli
-          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          cachix_cache_name: blokli
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Check formatting and linting
         run: nix develop --command just quick
   test:
@@ -127,8 +127,8 @@ jobs:
       - name: Setup Nix
         uses: hoprnet/hopr-workflows/actions/setup-nix@ausias/fix-actions
         with:
-          cache: blokli
-          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          cachix_cache_name: blokli
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Run unit tests
         run: nix develop --command just test
   nextest:
@@ -141,8 +141,8 @@ jobs:
       - name: Setup Nix
         uses: hoprnet/hopr-workflows/actions/setup-nix@ausias/fix-actions
         with:
-          cache: blokli
-          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          cachix_cache_name: blokli
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Run unit tests using nextest
         run: nix develop --command bash -c "cargo install cargo-nextest && just nextest"
   schema-validation:
@@ -155,8 +155,8 @@ jobs:
       - name: Setup Nix
         uses: hoprnet/hopr-workflows/actions/setup-nix@ausias/fix-actions
         with:
-          cache: blokli
-          authToken: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          cachix_cache_name: blokli
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Generate GraphQL schema
         run: nix develop --command just export-schema-sqlite
       - name: Validate schema against target
