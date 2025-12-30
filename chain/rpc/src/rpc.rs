@@ -216,7 +216,6 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
     }
 
     pub(crate) async fn get_hopr_balance(&self, address: Address) -> Result<HoprBalance> {
-        debug!(?address, token_contract = ?self.contract_instances.token, "fetching hopr balance");
         Ok(HoprBalance::from_be_bytes(
             self.contract_instances
                 .token

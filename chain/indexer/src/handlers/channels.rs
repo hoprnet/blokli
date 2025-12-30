@@ -36,8 +36,6 @@ where
         #[cfg(all(feature = "prometheus", not(test)))]
         METRIC_INDEXER_LOG_COUNTERS.increment(&["channels"]);
 
-        debug!(?event, "processing channel event");
-
         match event {
             HoprChannelsEvents::ChannelBalanceDecreased(balance_decreased) => {
                 let channel_id = balance_decreased.channelId.0.into();

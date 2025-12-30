@@ -1690,7 +1690,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "alloy",
  "anyhow",
@@ -1793,7 +1793,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-indexer"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "alloy",
  "anyhow",
@@ -1893,6 +1893,7 @@ dependencies = [
  "serde",
  "strum 0.27.2",
  "thiserror 2.0.17",
+ "tracing",
 ]
 
 [[package]]
@@ -1948,7 +1949,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1994,7 +1995,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db-entity"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "blokli-db-migration",
@@ -2013,7 +2014,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db-migration"
-version = "0.5.0"
+version = "0.6.0"
 dependencies = [
  "hopr-internal-types",
  "sea-orm",

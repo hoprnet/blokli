@@ -61,7 +61,7 @@ where
                     error!(
                         tx_hash = %Hash::from(log.tx_hash),
                         error = %e,
-                        "    for NewHoprNodeStakeModuleForSafe"
+                        "Failed to get transaction sender for NewHoprNodeStakeModuleForSafe"
                     );
                     e
                 })?;
