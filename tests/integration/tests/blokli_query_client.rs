@@ -28,16 +28,17 @@ async fn count_accounts_matches_deployed_accounts(#[future(awt)] fixture: Integr
         .count_accounts(AccountSelector::Address(account.hopr_address().into()))
         .await?;
 
-    fixture.deploy_safe_and_announce(account, INITIAL_SAFE_BALANCE).await?;
+    if account_count == 0 {
+        fixture.deploy_safe_and_announce(account, INITIAL_SAFE_BALANCE).await?;
+    }
 
     assert_eq!(
         fixture
             .client()
             .count_accounts(AccountSelector::Address(account.hopr_address().into()))
             .await?,
-        account_count + 1
+        1
     );
-
     Ok(())
 }
 
@@ -49,7 +50,14 @@ async fn count_accounts_matches_deployed_accounts(#[future(awt)] fixture: Integr
 async fn query_accounts(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
 
-    fixture.deploy_safe_and_announce(account, INITIAL_SAFE_BALANCE).await?;
+    let found_accounts = fixture
+        .client()
+        .query_accounts(AccountSelector::Address(account.hopr_address().into()))
+        .await?;
+
+    if found_accounts.is_empty() {
+        fixture.deploy_safe_and_announce(account, INITIAL_SAFE_BALANCE).await?;
+    }
 
     let found_accounts = fixture
         .client()
