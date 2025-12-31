@@ -10,7 +10,7 @@ use hopr_internal_types::channels::generate_channel_id;
 use hopr_primitive_types::traits::ToHex;
 use rstest::*;
 use serial_test::serial;
-use tracing::info;
+use tracing::debug;
 
 const EPSILON: f64 = 1e-10;
 const INITIAL_SAFE_BALANCE: u64 = 500_000_000_000_000_000;
@@ -40,7 +40,7 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
     let src_safe = fixture.deploy_safe_and_announce(&src, INITIAL_SAFE_BALANCE).await?;
     fixture.deploy_safe_and_announce(&dst, INITIAL_SAFE_BALANCE).await?;
 
-    info!("setting allowance");
+    debug!("setting allowance");
     fixture.approve(&src, amount, &src_safe.module_address).await?;
 
     let handle = tokio::task::spawn(async move {
@@ -62,7 +62,7 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
             .await
     });
 
-    info!("opening channel");
+    debug!("opening channel");
     fixture
         .open_channel(&src, &dst, amount, &src_safe.module_address)
         .await?;
@@ -70,8 +70,6 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
     let channel = handle
         .await??
         .ok_or_else(|| anyhow!("no update received from subscription"))??;
-
-    info!(?channel, "received channel update");
 
     assert_eq!(channel.balance.0, amount.to_string());
 
@@ -139,7 +137,7 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
     let src_safe = fixture.deploy_safe_and_announce(&src, INITIAL_SAFE_BALANCE).await?;
     fixture.deploy_safe_and_announce(&dst, INITIAL_SAFE_BALANCE).await?;
 
-    info!("setting allowance");
+    debug!("setting allowance");
     fixture.approve(&src, amount, &src_safe.module_address).await?;
 
     let handle = tokio::task::spawn(async move {
@@ -162,7 +160,7 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
             .await
     });
 
-    info!("opening channel");
+    debug!("opening channel");
     fixture
         .open_channel(&src, &dst, amount, &src_safe.module_address)
         .await?;
@@ -227,7 +225,7 @@ async fn subscribe_safe_deployments(#[future(awt)] fixture: IntegrationFixture) 
     let account_address = account.address.clone();
     let client = fixture.client().clone();
 
-    info!("subscribing to safe deployments");
+    debug!("subscribing to safe deployments");
     let handle = tokio::task::spawn(async move {
         client
             .subscribe_safe_deployments()

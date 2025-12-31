@@ -23,14 +23,7 @@ const INITIAL_SAFE_BALANCE: u64 = 500_000_000_000_000_000;
 async fn count_accounts_matches_deployed_accounts(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
 
-    let account_count = fixture
-        .client()
-        .count_accounts(AccountSelector::Address(account.hopr_address().into()))
-        .await?;
-
-    if account_count == 0 {
-        fixture.deploy_safe_and_announce(account, INITIAL_SAFE_BALANCE).await?;
-    }
+    fixture.deploy_safe_and_announce(account, INITIAL_SAFE_BALANCE).await?;
 
     assert_eq!(
         fixture
@@ -50,14 +43,7 @@ async fn count_accounts_matches_deployed_accounts(#[future(awt)] fixture: Integr
 async fn query_accounts(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
 
-    let found_accounts = fixture
-        .client()
-        .query_accounts(AccountSelector::Address(account.hopr_address().into()))
-        .await?;
-
-    if found_accounts.is_empty() {
-        fixture.deploy_safe_and_announce(account, INITIAL_SAFE_BALANCE).await?;
-    }
+    fixture.deploy_safe_and_announce(account, INITIAL_SAFE_BALANCE).await?;
 
     let found_accounts = fixture
         .client()
@@ -98,7 +84,6 @@ async fn query_native_balance(#[future(awt)] fixture: IntegrationFixture) -> Res
 
 #[rstest]
 #[test_log::test(tokio::test)]
-#[serial]
 /// query the token (wxHOPR) balance of an EOA via blokli and verify that the format is correct.
 async fn query_token_balance_of_eoa(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
@@ -125,15 +110,24 @@ async fn query_token_balance_of_eoa(#[future(awt)] fixture: IntegrationFixture) 
 async fn query_token_balance_of_safe(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
 
-    fixture.deploy_safe(account, INITIAL_SAFE_BALANCE).await?;
-
-    tokio::time::sleep(Duration::from_secs(8)).await; // dummy wait for the safe to be indexed
-
-    let safe = fixture
+    let maybe_safe = fixture
         .client()
         .query_safe(SafeSelector::ChainKey(account.alloy_address().into()))
-        .await?
-        .expect("Safe not found");
+        .await?;
+
+    let safe = match maybe_safe {
+        Some(safe) => safe,
+        None => {
+            fixture.deploy_safe(account, INITIAL_SAFE_BALANCE).await?;
+            tokio::time::sleep(Duration::from_secs(8)).await; // dummy wait for the safe to be indexed
+            fixture
+                .client()
+                .query_safe(SafeSelector::ChainKey(account.alloy_address().into()))
+                .await?
+                .expect("Safe not found")
+        }
+    };
+
     let safe_address = Address::from_str(&safe.address)?;
 
     let blokli_balance = fixture.client().query_token_balance(safe_address.as_ref()).await?;
@@ -238,7 +232,6 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
 
 #[rstest]
 #[test_log::test(tokio::test)]
-#[serial]
 /// verifies that the chain ids provided by blokli and the RPC match.
 async fn chain_ids_provided_by_blokli_matches_the_rpc(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let chain = fixture.client().query_chain_info().await?;
@@ -251,7 +244,6 @@ async fn chain_ids_provided_by_blokli_matches_the_rpc(#[future(awt)] fixture: In
 
 #[rstest]
 #[test_log::test(tokio::test)]
-#[serial]
 /// verifies that the version string returned by blokli can be parsed as a semver.
 async fn query_version_should_be_parsable(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let version = fixture.client().query_version().await?;
@@ -261,7 +253,6 @@ async fn query_version_should_be_parsable(#[future(awt)] fixture: IntegrationFix
 
 #[rstest]
 #[test_log::test(tokio::test)]
-#[serial]
 /// verifies that the health status returned by blokli is "ok".
 async fn query_health_should_be_ok(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     assert_eq!(fixture.client().query_health().await?, "ok");

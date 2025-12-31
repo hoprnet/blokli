@@ -159,31 +159,50 @@ impl IntegrationFixture {
     }
 
     pub async fn deploy_safe_and_announce(&self, owner: &AnvilAccount, amount: u64) -> Result<Safe> {
-        self.deploy_safe(owner, amount).await?;
-
-        sleep(std::time::Duration::from_secs(5)).await;
-
-        debug!("getting the deployed safes");
-        let safe = self
+        let maybe_safe = self
             .client()
             .query_safe(SafeSelector::ChainKey(owner.alloy_address().into()))
-            .await?
-            .expect("deployed safe for src not found");
+            .await?;
 
-        debug!("registering the deployed safes");
-        self.register_safe(owner, &safe.address).await?;
+        let safe = match maybe_safe.clone() {
+            Some(s) => s,
+            None => {
+                self.deploy_safe(owner, amount).await?;
 
-        debug!("announcing accounts");
-        self.announce_account(owner, &safe.module_address).await?;
-        sleep(std::time::Duration::from_secs(10)).await;
+                sleep(std::time::Duration::from_secs(5)).await;
+                let safe = self
+                    .client()
+                    .query_safe(SafeSelector::ChainKey(owner.alloy_address().into()))
+                    .await?
+                    .expect("deployed safe for src not found");
 
-        debug!("checking announced accounts");
-        let src_account = self
+                debug!("registering the deployed safes");
+                self.register_safe(owner, &safe.address).await?;
+                safe
+            }
+        };
+
+        let maybe_account = self
             .client()
             .query_accounts(AccountSelector::Address(owner.alloy_address().into()))
             .await?;
 
-        assert!(!src_account.is_empty(), "account not found after announcement");
+        match maybe_account.first() {
+            Some(_) => {}
+            None => {
+                debug!("account not found, proceeding to announce");
+                self.announce_account(owner, &safe.module_address).await?;
+                sleep(std::time::Duration::from_secs(10)).await;
+
+                let src_account = self
+                    .client()
+                    .query_accounts(AccountSelector::Address(owner.alloy_address().into()))
+                    .await?;
+
+                assert!(!src_account.is_empty(), "account not found after announcement");
+            }
+        };
+
         Ok(safe)
     }
 
@@ -240,8 +259,8 @@ impl IntegrationFixture {
             HoprAddress::from_str(module)?,
         );
         let keybinding = KeyBinding::new(account.hopr_address(), &account.offchain_key_pair());
-        let binding_fee = "0.01 wxHOPR".parse().expect("failed parsing the binding fee");
         let multiaddress: Multiaddr = "/ip4/127.0.0.1/udp/3001".parse().expect("multiaddress parsing failed");
+        let binding_fee = "0.01 wxHOPR".parse().expect("failed parsing the binding fee");
 
         let payload = payload_generator
             .announce(AnnouncementData::new(keybinding, Some(multiaddress))?, binding_fee)?
