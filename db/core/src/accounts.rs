@@ -16,7 +16,7 @@ use sea_orm::{
     sea_query::Expr,
 };
 use sea_query::{Condition, OnConflict};
-use tracing::{info, instrument};
+use tracing::instrument;
 
 use crate::{
     BlokliDbGeneralModelOperations, OptTx,
