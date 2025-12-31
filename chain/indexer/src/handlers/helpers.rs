@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use alloy::hex;
-use blokli_api_types::{Account, Channel, ChannelStatus, ChannelUpdate, TokenValueString, UInt64};
+use blokli_api_types::{Account, Channel, ChannelUpdate, TokenValueString, UInt64};
 use blokli_db_entity::{account, channel, channel_state, conversions::account_aggregation};
 use chrono::Utc;
 use hopr_crypto_types::prelude::Hash;
