@@ -9,7 +9,7 @@ data_directory = "/data"
 network = "anvil-localhost"
 
 # RPC endpoint URL - connects to Anvil service
-rpc_url = "http://anvil:8545"
+rpc_url = "http://anvil:8546"
 
 # Maximum number of RPC requests per second (0 for unlimited)
 max_rpc_requests_per_sec = 0
@@ -35,7 +35,7 @@ shutdown_signal_capacity = 10
 
 # API server configuration
 [api]
-bind_address       = "0.0.0.0:8080"
+bind_address       = "0.0.0.0:8081"
 enabled            = true
 playground_enabled = true
 

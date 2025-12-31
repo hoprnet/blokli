@@ -5,8 +5,8 @@ use clap::{Parser, builder::TypedValueParser};
 use url::Url;
 
 const DEFAULT_INTEGRATION_CONFIG: &str = "config-integration-anvil.toml";
-const DEFAULT_BLOKLID_URL: &str = "http://localhost:8080";
-const DEFAULT_RPC_URL: &str = "http://localhost:8545";
+const DEFAULT_BLOKLID_URL: &str = "http://localhost:8081";
+const DEFAULT_RPC_URL: &str = "http://localhost:8546";
 const DEFAULT_TEST_IMAGE: &str = "bloklid:integration-test";
 
 #[derive(Parser, Debug, Clone)]

@@ -40,6 +40,8 @@ services:
     command:
       - "--host"
       - "0.0.0.0"
+      - "--port"
+      - "8546"
       - "--block-time"
       - "1"
       - "--accounts"
@@ -49,12 +51,12 @@ services:
       - "--mnemonic"
       - "gentle wisdom move brush express similar canal dune emotion series because parrot"
     healthcheck:
-      test: ["CMD", "cast", "block-number", "--rpc-url", "http://localhost:8545"]
+      test: ["CMD", "cast", "block-number", "--rpc-url", "http://localhost:8546"]
       interval: 2s
       timeout: 5s
       retries: 10
     ports:
-      - "8545:8545"
+      - "8546:8546"
     networks:
       - integration-test
   bloklid:
@@ -72,10 +74,10 @@ services:
     volumes:
       - ./${INTEGRATION_CONFIG:-config-integration-anvil.toml}:/config.toml:ro
     ports:
-      - "8080:8080"
+      - "8081:8081"
     command: ["-c", "/config.toml"]
     healthcheck:
-      test: ["CMD", "sh", "-c", "curl -sf http://localhost:8080/healthz && curl -sf http://localhost:8080/readyz | grep -q '\"status\":\"ready\"'"]
+      test: ["CMD", "sh", "-c", "curl -sf http://localhost:8081/healthz && curl -sf http://localhost:8081/readyz | grep -q '\"status\":\"ready\"'"]
       interval: 5s
       timeout: 10s
       retries: 30

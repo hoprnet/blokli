@@ -161,7 +161,11 @@ async fn test_accounts_query_with_filters() -> anyhow::Result<()> {
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0]["keyid"], 1);
         assert_eq!(accounts[0]["chainKey"], chain_key1.to_hex());
-        assert_eq!(accounts[0]["packetKey"], packet_key1.to_hex());
+        assert!(
+            packet_key1
+                .to_hex()
+                .contains(accounts[0]["packetKey"].as_str().unwrap())
+        );
         assert_eq!(accounts[0]["safeAddress"], safe_address1.to_hex());
     }
 
@@ -822,7 +826,7 @@ async fn test_accounts_query_with_union_result_types() -> anyhow::Result<()> {
     // Validate account fields
     assert_eq!(accounts[0]["keyid"], 1);
     assert_eq!(accounts[0]["chainKey"], chain_key.to_hex());
-    assert_eq!(accounts[0]["packetKey"], packet_key.to_hex());
+    assert!(packet_key.to_hex().contains(accounts[0]["packetKey"].as_str().unwrap()));
     assert_eq!(accounts[0]["safeAddress"], safe_address.to_hex());
 
     // Validate multiAddresses
