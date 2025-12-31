@@ -23,9 +23,6 @@ jobs:
         include:
           - architecture: x86_64-linux
             command: nix run -L .#bloklid-docker-upload-amd64
-            # Disabled until GitHub runner supports aarch64
-            # - architecture: aarch64-linux
-            #   command: nix run -L .#bloklid-docker-upload-aarch64
     with:
       source_branch: ${{ github.ref }}
       version_type: "release"
@@ -42,11 +39,12 @@ jobs:
   build-docker-manifest:
     name: Docker manifest
     needs: build-docker
-    uses: hoprnet/hopr-workflows/.github/workflows/create-docker-manifest.yaml@ausias/fix-actions
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker-manifest.yaml@ausias/fix-actions
     with:
       version_type: "release"
       docker_image_name: "bloklid"
-      docker_version: ${{ needs.build-docker.outputs.docker_version }}
+      docker_build_version: ${{ needs.build-docker.outputs.docker_build_version }}
+      docker_debug_version: ${{ needs.build-docker.outputs.docker_debug_version }}
     secrets:
       gcp_service_account: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY}}
       docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
@@ -60,12 +58,6 @@ jobs:
           - architecture: x86_64-linux
             runner: self-hosted-hoprnet-bigger
             build_command: nix build -L .#bloklid-x86_64-linux
-          # - architecture: x86_64-darwin
-          #   runner: macos-15
-          #   build_command: nix build -L .#bloklid-x86_64-darwin
-          # - architecture: aarch64-darwin
-          #   runner: macos-15
-          #   build_command: nix build -L .#bloklid-aarch64-darwin
     uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@ausias/fix-actions
     with:
       source_branch: ${{ github.ref }}
@@ -80,10 +72,6 @@ jobs:
       gcp_service_account: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY}}
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       gpg_private_key: ${{ secrets.GPG_HOPRNET_PRIVATE_KEY }}
-
-
-
-
   release:
     name: Close release
     needs:

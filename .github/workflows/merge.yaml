@@ -37,11 +37,12 @@ jobs:
     if: github.event.pull_request.merged == true
     name: Docker manifest
     needs: build-docker
-    uses: hoprnet/hopr-workflows/.github/workflows/create-docker-manifest.yaml@ausias/fix-actions
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker-manifest.yaml@ausias/fix-actions
     with:
       version_type: "pr"
       docker_image_name: "bloklid"
-      docker_version: ${{ needs.build-docker.outputs.docker_version }}
+      docker_build_version: ${{ needs.build-docker.outputs.docker_build_version }}
+      docker_debug_version: ${{ needs.build-docker.outputs.docker_debug_version }}
     secrets:
       gcp_service_account: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY}}
       docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
