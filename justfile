@@ -58,7 +58,7 @@ test-debug:
 
 # Run all tests in workspace using nextest
 nextest:
-    cargo nextest run --exclude blokli-integration-tests
+    cargo nextest run --workspace --exclude blokli-integration-tests
 
 # Run tests for a specific package using nextest
 nextest-package package:
