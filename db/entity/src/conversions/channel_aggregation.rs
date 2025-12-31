@@ -15,7 +15,7 @@ pub struct AggregatedChannel {
     pub source: i64,
     pub destination: i64,
     pub balance: String,
-    pub status: i8,
+    pub status: i16,
     pub epoch: i64,
     pub ticket_index: i64,
     pub closure_time: Option<DateTime<Utc>>,
@@ -42,7 +42,7 @@ pub async fn fetch_channels_with_state(
     source_key_id: Option<i64>,
     destination_key_id: Option<i64>,
     concrete_channel_id: Option<String>,
-    status: Option<i8>,
+    status: Option<i16>,
 ) -> Result<Vec<AggregatedChannel>, sea_orm::DbErr> {
     // 1. Build query with filters for channels
     let mut query = channel::Entity::find();
@@ -56,7 +56,8 @@ pub async fn fetch_channels_with_state(
     }
 
     if let Some(ch_id) = concrete_channel_id {
-        query = query.filter(channel::Column::ConcreteChannelId.eq(ch_id));
+        query =
+            query.filter(channel::Column::ConcreteChannelId.eq(ch_id.strip_prefix("0x").unwrap_or(&ch_id).to_string()));
     }
 
     let channels = query.all(db).await?;
@@ -98,28 +99,26 @@ pub async fn fetch_channels_with_state(
                 }
             }
 
+            let balance_bytes_32: [u8; 32] = {
+                let mut bytes = [0u8; 32];
+                bytes[20..32].copy_from_slice(state.balance.as_slice());
+                bytes
+            };
+
+            let hopr_balance = HoprBalance::from_be_bytes(balance_bytes_32);
+
             Some(AggregatedChannel {
                 concrete_channel_id: channel.concrete_channel_id,
                 source: channel.source,
                 destination: channel.destination,
-                balance: HoprBalance::from_be_bytes(&state.balance).amount().to_string(),
+                balance: hopr_balance.to_string(),
                 status: state.status,
                 epoch: state.epoch,
                 ticket_index: state.ticket_index,
-                closure_time: state.closure_time,
+                closure_time: state.closure_time.map(|time| time.with_timezone(&Utc)),
             })
         })
         .collect();
 
     Ok(result)
-}
-
-#[cfg(test)]
-mod tests {
-    // Note: These tests would require a test database setup
-    // For now, we just ensure the module compiles
-    #[test]
-    fn test_module_compiles() {
-        assert!(true);
-    }
 }

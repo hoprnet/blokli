@@ -34,6 +34,7 @@ use hopr_primitive_types::primitives::Address;
 use tokio::task::AbortHandle;
 
 /// Test context containing all components needed for integration tests
+#[allow(unused)]
 struct TestContext {
     anvil: AnvilInstance,
     chain_key: ChainKeypair,

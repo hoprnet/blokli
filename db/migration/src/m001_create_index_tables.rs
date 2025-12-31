@@ -66,7 +66,7 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(Channel::Source).integer().not_null())
                     .col(ColumnDef::new(Channel::Destination).integer().not_null())
                     .col(ColumnDef::new(Channel::Balance).binary_len(12).not_null())
-                    .col(ColumnDef::new(Channel::Status).tiny_unsigned().not_null())
+                    .col(ColumnDef::new(Channel::Status).small_integer().not_null())
                     .col(ColumnDef::new(Channel::Epoch).big_integer().not_null().default(1))
                     .col(ColumnDef::new(Channel::TicketIndex).big_integer().not_null().default(0))
                     .col(ColumnDef::new(Channel::ClosureTime).timestamp().null())

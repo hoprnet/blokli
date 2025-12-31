@@ -10,13 +10,14 @@ use tracing::error;
 
 /// Represents the decoded state of a channel from the packed bytes32 format emitted by contract events.
 ///
-/// The channel state is packed into 256 bits (32 bytes) with the following layout (right-to-left):
+/// The channel state is packed into 256 bits (32 bytes) with the following layout (left-to-right):
 /// - Bytes 0-5: Padding (48 bits)
-/// - Bytes 6-17: balance (96 bits)
-/// - Bytes 18-23: ticketIndex (48 bits)
-/// - Bytes 24-27: closureTime (32 bits)
-/// - Bytes 28-30: epoch (24 bits)
-/// - Byte 31: status (8 bits)
+/// - Bytes 6: status (8 bits)
+/// - Bytes 7-9: epoch (24 bits)
+/// - Bytes 10-13: closureTime (32 bits)
+/// - Bytes 14-19: ticketIndex (48 bits)
+/// - Bytes 20-31: balance (96 bits)
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub(super) struct DecodedChannel {
@@ -43,28 +44,30 @@ pub(super) struct DecodedChannel {
 pub(super) fn decode_channel(channel: B256) -> DecodedChannel {
     let bytes = channel.as_slice();
 
-    // Extract balance (bytes 6-17, 96 bits = 12 bytes)
+    // Extract balance (bytes 20-31, 96 bits = 12 bytes)
     let mut balance_bytes = [0u8; 32];
-    balance_bytes[20..32].copy_from_slice(&bytes[6..18]);
+    balance_bytes[20..32].copy_from_slice(&bytes[20..32]);
     let balance = HoprBalance::from_be_bytes(balance_bytes);
 
-    // Extract ticketIndex (bytes 18-23, 48 bits = 6 bytes)
+    tracing::debug!(?balance, ?balance_bytes, ?bytes, "Decoded channel balance");
+
+    // Extract ticketIndex (bytes 14-19, 48 bits = 6 bytes)
     let mut ticket_index_bytes = [0u8; 8];
-    ticket_index_bytes[2..8].copy_from_slice(&bytes[18..24]);
+    ticket_index_bytes[2..8].copy_from_slice(&bytes[14..20]);
     let ticket_index = u64::from_be_bytes(ticket_index_bytes);
 
-    // Extract closureTime (bytes 24-27, 32 bits = 4 bytes)
+    // Extract closureTime (bytes 10-13, 32 bits = 4 bytes)
     let mut closure_time_bytes = [0u8; 4];
-    closure_time_bytes.copy_from_slice(&bytes[24..28]);
+    closure_time_bytes.copy_from_slice(&bytes[10..14]);
     let closure_time = u32::from_be_bytes(closure_time_bytes);
 
-    // Extract epoch (bytes 28-30, 24 bits = 3 bytes)
+    // Extract epoch (bytes 7-9, 24 bits = 3 bytes)
     let mut epoch_bytes = [0u8; 4];
-    epoch_bytes[1..4].copy_from_slice(&bytes[28..31]);
+    epoch_bytes[1..4].copy_from_slice(&bytes[7..10]);
     let epoch = u32::from_be_bytes(epoch_bytes);
 
-    // Extract status (byte 31, 8 bits = 1 byte)
-    let status_byte = bytes[31];
+    // Extract status (byte 6, 8 bits = 1 byte)
+    let status_byte = bytes[6];
     let status = match status_byte {
         0 => ChannelStatus::Closed,
         1 => ChannelStatus::Open,
@@ -93,25 +96,25 @@ mod tests {
 
         // Bytes 0-5: Padding (leave as zeros)
 
-        // Bytes 6-17: balance (96 bits = 12 bytes)
+        // Bytes 20-31: balance (96 bits = 12 bytes)
         // Take the lower 96 bits (12 bytes) of the balance
         let balance_bytes = balance.to_be_bytes(); // 16 bytes for u128
-        bytes[6..18].copy_from_slice(&balance_bytes[4..16]); // Skip the first 4 bytes, take the last 12
+        bytes[20..32].copy_from_slice(&balance_bytes[4..16]); // Skip the first 4 bytes, take the last 12
 
-        // Bytes 18-23: ticketIndex (48 bits = 6 bytes)
+        // Bytes 14-19: ticketIndex (48 bits = 6 bytes)
         let ticket_index_bytes = ticket_index.to_be_bytes(); // 8 bytes for u64
-        bytes[18..24].copy_from_slice(&ticket_index_bytes[2..8]); // Skip the first 2 bytes, take the last 6
+        bytes[14..20].copy_from_slice(&ticket_index_bytes[2..8]); // Skip the first 2 bytes, take the last 6
 
-        // Bytes 24-27: closureTime (32 bits = 4 bytes)
+        // Bytes 10-13: closureTime (32 bits = 4 bytes)
         let closure_time_bytes = closure_time.to_be_bytes();
-        bytes[24..28].copy_from_slice(&closure_time_bytes);
+        bytes[10..14].copy_from_slice(&closure_time_bytes);
 
-        // Bytes 28-30: epoch (24 bits = 3 bytes)
+        // Bytes 7-9: epoch (24 bits = 3 bytes)
         let epoch_bytes = epoch.to_be_bytes(); // 4 bytes for u32
-        bytes[28..31].copy_from_slice(&epoch_bytes[1..4]); // Skip the first byte, take the last 3
+        bytes[7..10].copy_from_slice(&epoch_bytes[1..4]); // Skip the first byte, take the last 3
 
-        // Byte 31: status (8 bits = 1 byte)
-        bytes[31] = status;
+        // Byte 6: status (8 bits = 1 byte)
+        bytes[6] = status;
 
         B256::from(bytes)
     }
@@ -280,10 +283,10 @@ mod tests {
         let bytes = packed.as_slice();
         // Verify padding (bytes 0-5 should be 0)
         assert_eq!(&bytes[0..6], &[0u8; 6]);
-        // Verify balance starts at byte 6
+        // Verify balance starts at bytes 20-31
         let balance_bytes = balance.to_be_bytes();
-        assert_eq!(&bytes[6..18], &balance_bytes[4..16]);
-        // Verify status at byte 31
-        assert_eq!(bytes[31], status);
+        assert_eq!(&bytes[20..32], &balance_bytes[4..16]);
+        // Verify status at byte 6
+        assert_eq!(bytes[6], status);
     }
 }

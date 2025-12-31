@@ -35,23 +35,23 @@ mod tests {
     use blokli_api_types::ChannelStatus;
 
     #[test]
-    fn test_channel_status_to_i8_mapping() {
+    fn test_channel_status_to_i16_mapping() {
         // Verify database encoding matches: 0=Closed, 1=Open, 2=PendingToClose
-        assert_eq!(i8::from(ChannelStatus::Closed), 0);
-        assert_eq!(i8::from(ChannelStatus::Open), 1);
-        assert_eq!(i8::from(ChannelStatus::PendingToClose), 2);
+        assert_eq!(i16::from(ChannelStatus::Closed), 0);
+        assert_eq!(i16::from(ChannelStatus::Open), 1);
+        assert_eq!(i16::from(ChannelStatus::PendingToClose), 2);
     }
 
     #[test]
     fn test_channel_status_round_trip() {
         // Verify bidirectional conversion consistency
         assert_eq!(
-            ChannelStatus::from(i8::from(ChannelStatus::Closed)),
+            ChannelStatus::from(i16::from(ChannelStatus::Closed)),
             ChannelStatus::Closed
         );
-        assert_eq!(ChannelStatus::from(i8::from(ChannelStatus::Open)), ChannelStatus::Open);
+        assert_eq!(ChannelStatus::from(i16::from(ChannelStatus::Open)), ChannelStatus::Open);
         assert_eq!(
-            ChannelStatus::from(i8::from(ChannelStatus::PendingToClose)),
+            ChannelStatus::from(i16::from(ChannelStatus::PendingToClose)),
             ChannelStatus::PendingToClose
         );
     }

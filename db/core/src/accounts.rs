@@ -72,7 +72,7 @@ impl From<ChainOrPacketKey> for Condition {
     fn from(key: ChainOrPacketKey) -> Condition {
         match key {
             ChainOrPacketKey::ChainKey(chain_key) => account::Column::ChainKey.eq(chain_key.as_ref().to_vec()).into(),
-            ChainOrPacketKey::PacketKey(packet_key) => account::Column::PacketKey.eq(packet_key.to_hex()).into(),
+            ChainOrPacketKey::PacketKey(packet_key) => account::Column::PacketKey.eq(hex::encode(packet_key)).into(),
         }
     }
 }
@@ -271,7 +271,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                         let account_model = account::ActiveModel {
                             id: Set(key_id as i64),
                             chain_key: Set(chain_key.as_ref().to_vec()),
-                            packet_key: Set(packet_key.to_hex()),
+                            packet_key: Set(hex::encode(packet_key.as_ref())),
                             published_block: Set(block_i64),
                             published_tx_index: Set(tx_index_i64),
                             published_log_index: Set(log_index_i64),
@@ -383,7 +383,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                 Box::pin(async move {
                     match account::Entity::insert(account::ActiveModel {
                         chain_key: Set(account.chain_addr.as_ref().to_vec()),
-                        packet_key: Set(account.public_key.to_hex()),
+                        packet_key: Set(hex::encode(account.public_key)),
                         published_block: Set(0), // Default since AccountEntry no longer tracks this
                         ..Default::default()
                     })
@@ -584,7 +584,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                     op.perform(|tx| {
                         Box::pin(async move {
                             let maybe_model = Account::find()
-                                .filter(account::Column::PacketKey.eq(packet_key.to_hex()))
+                                .filter(account::Column::PacketKey.eq(hex::encode(packet_key.as_ref())))
                                 .one(tx.as_ref())
                                 .await?;
                             if let Some(m) = maybe_model {
@@ -1047,13 +1047,13 @@ mod tests {
         let a: Address = db
             .translate_key(None, packet_1)
             .await?
-            .context("must contain key")?
+            .context("must contain first key")?
             .try_into()?;
 
         let b: OffchainPublicKey = db
             .translate_key(None, chain_2)
             .await?
-            .context("must contain key")?
+            .context("must contain second key")?
             .try_into()?;
 
         assert_eq!(chain_1, a, "chain keys must match");

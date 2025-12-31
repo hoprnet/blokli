@@ -105,6 +105,7 @@ async fn query_native_balance(
 }
 
 /// Helper to query Safe HOPR allowance via GraphQL
+#[allow(unused)] // TODO: not yet used in the tests
 async fn query_safe_hopr_allowance(
     schema: &Schema<QueryRoot, MutationRoot, SubscriptionRoot>,
     address: &str,

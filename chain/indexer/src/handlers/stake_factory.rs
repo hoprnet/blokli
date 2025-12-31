@@ -91,6 +91,11 @@ where
                 self.indexer_state
                     .publish_event(crate::state::IndexerEvent::SafeDeployed(safe_addr));
             }
+        } else {
+            error!(
+                tx_hash = %Hash::from(log.tx_hash),
+                "Unhandled HoprNodeStakeFactory event variant"
+            );
         }
 
         Ok(())

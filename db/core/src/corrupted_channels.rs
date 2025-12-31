@@ -38,7 +38,7 @@ impl BlokliDbCorruptedChannelOperations for BlokliDb {
         tx: OptTx<'a>,
         id: &Hash,
     ) -> Result<Option<CorruptedChannelEntry>> {
-        let id_hex = id.to_hex();
+        let id_hex = hex::encode(id);
         self.nest_transaction(tx)
             .await?
             .perform(|tx| {
@@ -84,7 +84,9 @@ impl BlokliDbCorruptedChannelOperations for BlokliDb {
                     let channel_entry = CorruptedChannelEntry::from(channel_id);
                     let mut model = corrupted_channel::ActiveModel::from(channel_entry);
                     if let Some(channel) = corrupted_channel::Entity::find()
-                        .filter(corrupted_channel::Column::ConcreteChannelId.eq(channel_entry.channel_id().to_hex()))
+                        .filter(
+                            corrupted_channel::Column::ConcreteChannelId.eq(hex::encode(channel_entry.channel_id())),
+                        )
                         .one(tx.as_ref())
                         .await?
                     {

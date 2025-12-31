@@ -17,6 +17,7 @@ use blokli_db_entity::{
     conversions::{account_aggregation::fetch_accounts_with_filters, channel_aggregation::fetch_channels_with_state},
     hopr_node_safe_registration, hopr_safe_contract,
 };
+use chrono::Utc;
 use futures::{Stream, StreamExt};
 use hopr_primitive_types::{
     prelude::HoprBalance as PrimitiveHoprBalance,
@@ -25,7 +26,7 @@ use hopr_primitive_types::{
 };
 use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use tokio::time::sleep;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::errors;
@@ -226,7 +227,7 @@ async fn query_channels_at_watermark(
                     format!("{} ({})", state.ticket_index, e),
                 ))
             })?),
-            closure_time: state.closure_time,
+            closure_time: state.closure_time.map(|time| time.with_timezone(&Utc)),
         };
 
         let source_gql = Account {
@@ -609,6 +610,7 @@ impl SubscriptionRoot {
     /// ```
     #[graphql(name = "safeDeployed")]
     async fn safe_deployed(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = Safe>> {
+        debug!("safeDeployed subscription");
         let db = ctx.data::<DatabaseConnection>()?.clone();
         let indexer_state = ctx
             .data::<IndexerState>()
@@ -618,6 +620,8 @@ impl SubscriptionRoot {
         // Capture watermark and subscribe to event bus (synchronized)
         let (_watermark, mut event_receiver, mut shutdown_receiver) =
             capture_watermark_synchronized(&indexer_state, &db).await?;
+
+        debug!("subscribed to event bus for safeDeployed");
 
         Ok(stream! {
             loop {
@@ -639,15 +643,18 @@ impl SubscriptionRoot {
                         }
                     }
                     event_result = event_receiver.recv() => {
+                        debug!(?event_result, "received an event in safe_deployed subscription");
                         match event_result {
                             Ok(IndexerEvent::SafeDeployed(safe_addr)) => {
                                 let safe_addr_bytes = safe_addr.as_ref().to_vec();
+                                debug!(?safe_addr_bytes, "safe address");
                                 match hopr_safe_contract::Entity::find()
                                     .filter(hopr_safe_contract::Column::Address.eq(safe_addr_bytes))
                                     .one(&db)
                                     .await
                                 {
                                     Ok(Some(safe)) => {
+                                        debug!(safe_address = ?safe.address, "processing SafeDeployed event");
                                         // Fetch registered nodes for this safe
                                         let registered_nodes = match hopr_node_safe_registration::Entity::find()
                                             .filter(hopr_node_safe_registration::Column::SafeAddress.eq(safe.address.clone()))
@@ -668,7 +675,7 @@ impl SubscriptionRoot {
                                                 Vec::new()
                                             }
                                         };
-
+                                        debug!(?safe, "yielding Safe from SafeDeployed event");
                                         yield Safe {
                                             address: Address::new(&safe.address).to_hex(),
                                             module_address: Address::new(&safe.module_address).to_hex(),
@@ -798,11 +805,11 @@ impl SubscriptionRoot {
         let source_i64 = source_key_id.map(|k| k as i64);
         let dest_i64 = destination_key_id.map(|k| k as i64);
 
-        // Convert GraphQL ChannelStatus to internal status code (i8)
+        // Convert GraphQL ChannelStatus to internal status code (i16)
         let status_code = status.map(|s| match s {
-            blokli_api_types::ChannelStatus::Closed => 0i8,
-            blokli_api_types::ChannelStatus::Open => 1i8,
-            blokli_api_types::ChannelStatus::PendingToClose => 2i8,
+            blokli_api_types::ChannelStatus::Closed => 0i16,
+            blokli_api_types::ChannelStatus::Open => 1i16,
+            blokli_api_types::ChannelStatus::PendingToClose => 2i16,
         });
 
         // Use optimized channel aggregation function
@@ -927,7 +934,7 @@ mod tests {
         tx_index: i64,
         log_index: i64,
         balance: Vec<u8>,
-        status: i8,
+        status: i16,
     ) -> anyhow::Result<i64> {
         let state = blokli_db_entity::channel_state::ActiveModel {
             id: Default::default(),

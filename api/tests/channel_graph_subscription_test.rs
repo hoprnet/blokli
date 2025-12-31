@@ -31,6 +31,7 @@ use blokli_db::{
     db::BlokliDb,
 };
 use blokli_db_entity::{chain_info, channel, channel_state};
+use chrono::Utc;
 use futures::StreamExt;
 use hopr_crypto_types::prelude::{ChainKeypair, Keypair, OffchainKeypair};
 use hopr_internal_types::channels::{ChannelEntry, ChannelStatus};
@@ -57,7 +58,7 @@ async fn create_channel_update_event(
 ) -> Result<blokli_api_types::ChannelUpdate, Box<dyn std::error::Error>> {
     // Find the channel
     let channel_model = channel::Entity::find()
-        .filter(channel::Column::ConcreteChannelId.eq(channel_id))
+        .filter(channel::Column::ConcreteChannelId.eq(channel_id.strip_prefix("0x").unwrap_or(channel_id)))
         .one(db.conn(TargetDb::Index))
         .await?
         .ok_or("Channel not found")?;
@@ -97,7 +98,7 @@ async fn create_channel_update_event(
         status: ApiChannelStatus::from(state.status),
         epoch: i32::try_from(state.epoch)?,
         ticket_index: UInt64(u64::try_from(state.ticket_index)?),
-        closure_time: state.closure_time,
+        closure_time: state.closure_time.map(|time| time.with_timezone(&Utc)),
     };
 
     let source_gql = Account {

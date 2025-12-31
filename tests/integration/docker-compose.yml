@@ -1,0 +1,89 @@
+# Docker Compose configuration for integration testing blokli
+#
+# Environment variables:
+#   REGISTRY_PORT       - Local registry port (default: 1)
+#   BLOKLID_IMAGE       - Docker image to test (default: localhost:5001/bloklid:integration-test)
+#   INTEGRATION_CONFIG  - Path to blokli config file (default: config-integration-anvil.toml)
+services:
+  registry:
+    build:
+      context: .
+      dockerfile: Dockerfile.registry
+    container_name: blokli-integration-registry
+    ports:
+      - "${REGISTRY_PORT:-5001}:5001"
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost:5000/v2/"]
+      interval: 2s
+      timeout: 5s
+      retries: 5
+    networks:
+      - integration-test
+  postgres:
+    image: postgres:18-alpine
+    container_name: blokli-integration-postgres
+    environment:
+      POSTGRES_USER: bloklid
+      POSTGRES_PASSWORD: bloklid_integration_test
+      POSTGRES_DB: bloklid
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bloklid"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    networks:
+      - integration-test
+  anvil:
+    image: ghcr.io/foundry-rs/foundry:latest
+    container_name: blokli-integration-anvil
+    entrypoint: ["anvil"]
+    command:
+      - "--host"
+      - "0.0.0.0"
+      - "--port"
+      - "8546"
+      - "--block-time"
+      - "1"
+      - "--accounts"
+      - "10"
+      - "--balance"
+      - "10000"
+      - "--mnemonic"
+      - "gentle wisdom move brush express similar canal dune emotion series because parrot"
+    healthcheck:
+      test: ["CMD", "cast", "block-number", "--rpc-url", "http://localhost:8546"]
+      interval: 2s
+      timeout: 5s
+      retries: 10
+    ports:
+      - "8546:8546"
+    networks:
+      - integration-test
+  bloklid:
+    image: ${BLOKLID_IMAGE:-localhost:5000/bloklid:integration-test}
+    container_name: blokli-integration-bloklid
+    depends_on:
+      registry:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      anvil:
+        condition: service_healthy
+    environment:
+      RUST_LOG: trace
+    volumes:
+      - ./${INTEGRATION_CONFIG:-config-integration-anvil.toml}:/config.toml:ro
+    ports:
+      - "8081:8081"
+    command: ["-c", "/config.toml"]
+    healthcheck:
+      test: ["CMD", "sh", "-c", "curl -sf http://localhost:8081/healthz && curl -sf http://localhost:8081/readyz | grep -q '\"status\":\"ready\"'"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+      start_period: 30s
+    networks:
+      - integration-test
+networks:
+  integration-test:
+    driver: bridge

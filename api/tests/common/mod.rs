@@ -72,6 +72,7 @@ impl Default for TestEnvironmentConfig {
 }
 
 /// Test context containing all components needed for API testing
+#[allow(unused)]
 pub struct TestContext {
     /// Anvil instance (must be kept alive)
     pub anvil: AnvilInstance,
@@ -255,6 +256,7 @@ pub async fn setup_simple_test_environment() -> anyhow::Result<TestContext> {
 }
 
 /// Test context for HTTP endpoint tests (health checks, readiness gates)
+#[allow(unused)]
 pub struct HttpTestContext {
     /// Anvil instance (must be kept alive)
     pub anvil: AnvilInstance,
@@ -333,6 +335,7 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
 }
 
 /// Test context for transaction-related tests (mutations, queries, subscriptions)
+#[allow(unused)]
 pub struct TransactionTestContext {
     /// Anvil instance (must be kept alive)
     pub anvil: AnvilInstance,

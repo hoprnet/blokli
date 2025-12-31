@@ -14,6 +14,7 @@ members = [
   "db/entity",
   "db/migration",
   "inspector",
+  "tests/integration",
   "types",
 ]
 
@@ -65,8 +66,11 @@ futures-timer = "3.0.3"
 futures-util = "0.3.31"
 hex = "0.4.3"
 hex-literal = "1.0.0"
+hopli = { git = "https://github.com/hoprnet/hopli", branch = "main" }
 hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
 hopr-bindings = { git = "https://github.com/hoprnet/contracts", branch = "main" }
+hopr-chain-connector = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-chain-types = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
 hopr-crypto-packet = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
 hopr-crypto-random = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
 hopr-crypto-types = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
@@ -87,6 +91,7 @@ humantime-serde = "1.1"
 indexmap = "2.12.1"
 insta = "1.43.2"
 lazy_static = "1.5.0"
+libc = "0.2.178"
 libp2p-identity = { version = "0.2.12", features = [
   "ed25519",
   "peerid",
@@ -103,6 +108,7 @@ rand = "0.9.2" # ignored in renovate, cannot be updated, dependencies reference 
 reqwest = { version = "0.12.23", features = ["json"] }
 ringbuffer = "0.16.0"
 rstest = "0.26.1"
+rstest-log = "0.2.0"
 rust-stream-ext-concurrent = "1.0.0"
 rustls = { version = "0.23", default-features = false, features = ["std"] }
 rustls-pemfile = "2.1"
@@ -131,6 +137,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.143"
 serde_with = { version = "3.14.0" }
 serde_yaml = "0.9"
+serial_test = "3.2.0"
 smart-default = "0.7.1"
 sqlx = { version = "0.8.6", default-features = false, features = [
   "postgres",

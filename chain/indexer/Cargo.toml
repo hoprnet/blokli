@@ -6,7 +6,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0"
 name        = "blokli-chain-indexer"
 repository  = "https://github.com/hoprnet/hoprnet"
-version     = "0.7.0"
+version     = "0.8.0"
 
 [lib]
 crate-type = ["rlib"]
@@ -31,7 +31,6 @@ alloy = { workspace = true, default-features = false, features = [
   "node-bindings",
 ] }
 async-broadcast = { workspace = true }
-async-channel = { workspace = true }
 async-compression = { workspace = true, features = [
   "futures-io",
   "xz-parallel",
@@ -40,6 +39,7 @@ async-lock = { workspace = true }
 async-tar = { workspace = true }
 async-trait = { workspace = true }
 backon = { workspace = true, features = ["futures-timer-sleep"] }
+chrono = { workspace = true }
 futures = { workspace = true }
 futures-util = { workspace = true }
 lazy_static = { workspace = true }
