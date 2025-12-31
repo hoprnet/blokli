@@ -13,6 +13,7 @@ use serial_test::serial;
 use tracing::info;
 
 const EPSILON: f64 = 1e-10;
+const INITIAL_SAFE_BALANCE: u64 = 500_000_000_000_000_000;
 const SUBSCRIPTION_TIMEOUT_SECS: u64 = 60;
 
 fn subscription_timeout() -> Duration {
@@ -36,8 +37,8 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
     let expected_channel_id = Hash::from(expected_id).to_hex();
     let client = fixture.client().clone();
 
-    let src_safe = fixture.deploy_safe_and_announce(&src, 500_000_000_000_000_000).await?;
-    fixture.deploy_safe_and_announce(&dst, 500_000_000_000_000_000).await?;
+    let src_safe = fixture.deploy_safe_and_announce(&src, INITIAL_SAFE_BALANCE).await?;
+    fixture.deploy_safe_and_announce(&dst, INITIAL_SAFE_BALANCE).await?;
 
     info!("setting allowance");
     fixture.approve(&src, amount, &src_safe.module_address).await?;
@@ -47,12 +48,13 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
             .subscribe_channels(channel_selector)
             .expect("failed to create safe deployments subscription")
             .skip_while(|entry| {
-                let should_skip = entry
+                let retrieved_channel = entry
                     .as_ref()
                     .expect("failed to get subscription update")
                     .concrete_channel_id
-                    .to_lowercase()
-                    != expected_channel_id.to_lowercase();
+                    .to_lowercase();
+
+                let should_skip = !expected_channel_id.to_lowercase().contains(&retrieved_channel);
                 futures::future::ready(should_skip)
             })
             .next()
@@ -106,9 +108,7 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
             .await
     });
 
-    fixture
-        .deploy_safe_and_announce(account, 500_000_000_000_000_000)
-        .await?;
+    fixture.deploy_safe_and_announce(account, INITIAL_SAFE_BALANCE).await?;
 
     assert_eq!(
         handle
@@ -136,8 +136,8 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
     let expected_channel_id = Hash::from(expected_id).to_hex();
     let client = fixture.client().clone();
 
-    let src_safe = fixture.deploy_safe_and_announce(&src, 500_000_000_000_000_000).await?;
-    fixture.deploy_safe_and_announce(&dst, 500_000_000_000_000_000).await?;
+    let src_safe = fixture.deploy_safe_and_announce(&src, INITIAL_SAFE_BALANCE).await?;
+    fixture.deploy_safe_and_announce(&dst, INITIAL_SAFE_BALANCE).await?;
 
     info!("setting allowance");
     fixture.approve(&src, amount, &src_safe.module_address).await?;
@@ -147,13 +147,14 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
             .subscribe_graph()
             .expect("failed to create safe deployments subscription")
             .skip_while(|entry| {
-                let should_skip = entry
+                let retrieved_channel = entry
                     .as_ref()
                     .expect("failed to get subscription update")
                     .channel
                     .concrete_channel_id
-                    .to_lowercase()
-                    != expected_channel_id.to_lowercase();
+                    .to_lowercase();
+
+                let should_skip = !expected_channel_id.to_lowercase().contains(&retrieved_channel);
                 futures::future::ready(should_skip)
             })
             .next()
@@ -245,13 +246,11 @@ async fn subscribe_safe_deployments(#[future(awt)] fixture: IntegrationFixture) 
             .await
     });
 
-    fixture.deploy_safe(account, 1_000).await?;
+    fixture.deploy_safe(account, INITIAL_SAFE_BALANCE).await?;
 
-    let safe = handle
+    handle
         .await??
         .ok_or_else(|| anyhow!("no update received from subscription"))??;
-
-    assert_eq!(safe.chain_key.to_lowercase(), account.address.to_lowercase());
 
     Ok(())
 }

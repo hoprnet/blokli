@@ -207,7 +207,7 @@ impl QueryRoot {
             .map(|agg| Account {
                 keyid: agg.keyid,
                 chain_key: agg.chain_key,
-                packet_key: format!("0x{}", agg.packet_key),
+                packet_key: agg.packet_key,
                 safe_address: agg.safe_address,
                 multi_addresses: agg.multi_addresses,
             })

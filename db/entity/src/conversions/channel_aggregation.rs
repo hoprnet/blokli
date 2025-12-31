@@ -108,7 +108,7 @@ pub async fn fetch_channels_with_state(
             let hopr_balance = HoprBalance::from_be_bytes(balance_bytes_32);
 
             Some(AggregatedChannel {
-                concrete_channel_id: format!("0x{}", channel.concrete_channel_id),
+                concrete_channel_id: channel.concrete_channel_id,
                 source: channel.source,
                 destination: channel.destination,
                 balance: hopr_balance.to_string(),

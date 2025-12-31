@@ -82,11 +82,11 @@ where
     let hopr_balance = HoprBalance::from_be_bytes(balance_bytes_32);
 
     let channel_gql = Channel {
-        concrete_channel_id: format!("0x{}", channel.concrete_channel_id),
+        concrete_channel_id: channel.concrete_channel_id,
         source: channel.source,
         destination: channel.destination,
         balance: TokenValueString(hopr_balance.to_string()),
-        status: ChannelStatus::from(state.status),
+        status: state.status.into(),
         epoch: i32::try_from(state.epoch).map_err(|e| {
             CoreEthereumIndexerError::ValidationError(format!(
                 "Channel epoch {} out of range for i32: {}",

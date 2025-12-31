@@ -97,7 +97,7 @@ async fn create_channel_update_event(
         status: ApiChannelStatus::from(state.status),
         epoch: i32::try_from(state.epoch)?,
         ticket_index: UInt64(u64::try_from(state.ticket_index)?),
-        closure_time: state.closure_time,
+        closure_time: state.closure_time.map(|time| time.with_timezone(&Utc)),
     };
 
     let source_gql = Account {
