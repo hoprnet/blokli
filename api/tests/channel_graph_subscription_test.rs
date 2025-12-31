@@ -31,6 +31,7 @@ use blokli_db::{
     db::BlokliDb,
 };
 use blokli_db_entity::{chain_info, channel, channel_state};
+use chrono::Utc;
 use futures::StreamExt;
 use hopr_crypto_types::prelude::{ChainKeypair, Keypair, OffchainKeypair};
 use hopr_internal_types::channels::{ChannelEntry, ChannelStatus};
