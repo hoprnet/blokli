@@ -305,7 +305,7 @@ mod integration_tests {
         // =========================================================================
 
         /// Encode channel state into bytes32 format
-        /// Layout (right-to-left):
+        /// Layout (left-to-right):
         /// - Bytes 0-5: Padding (48 bits)
         /// - Bytes 6: status (8 bits)
         /// - Bytes 7-9: epoch (24 bits)

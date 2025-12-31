@@ -568,7 +568,6 @@ impl BlokliDbAccountOperations for BlokliDb {
                                 .filter(account::Column::ChainKey.eq(chain_key.as_ref().to_vec()))
                                 .one(tx.as_ref())
                                 .await?;
-                            info!(?maybe_model, "found model for chain key");
                             if let Some(m) = maybe_model {
                                 Ok(Some(OffchainPublicKey::from_hex(&m.packet_key)?))
                             } else {
