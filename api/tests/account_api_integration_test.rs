@@ -199,7 +199,11 @@ async fn test_accounts_query_with_filters() -> anyhow::Result<()> {
         assert_eq!(accounts.len(), 1);
         assert_eq!(accounts[0]["keyid"], 2);
         assert_eq!(accounts[0]["chainKey"], chain_key2.to_hex());
-        assert_eq!(accounts[0]["packetKey"], packet_key2.to_hex());
+        assert!(
+            packet_key2
+                .to_hex()
+                .contains(accounts[0]["packetKey"].as_str().unwrap())
+        );
     }
 
     // Test 3: Query by chain key

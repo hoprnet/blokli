@@ -16,7 +16,7 @@ use sea_orm::{
     sea_query::Expr,
 };
 use sea_query::{Condition, OnConflict};
-use tracing::instrument;
+use tracing::{info, instrument};
 
 use crate::{
     BlokliDbGeneralModelOperations, OptTx,
@@ -72,7 +72,7 @@ impl From<ChainOrPacketKey> for Condition {
     fn from(key: ChainOrPacketKey) -> Condition {
         match key {
             ChainOrPacketKey::ChainKey(chain_key) => account::Column::ChainKey.eq(chain_key.as_ref().to_vec()).into(),
-            ChainOrPacketKey::PacketKey(packet_key) => account::Column::PacketKey.eq(packet_key.to_hex()).into(),
+            ChainOrPacketKey::PacketKey(packet_key) => account::Column::PacketKey.eq(hex::encode(packet_key)).into(),
         }
     }
 }
@@ -383,7 +383,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                 Box::pin(async move {
                     match account::Entity::insert(account::ActiveModel {
                         chain_key: Set(account.chain_addr.as_ref().to_vec()),
-                        packet_key: Set(account.public_key.to_hex()),
+                        packet_key: Set(hex::encode(account.public_key)),
                         published_block: Set(0), // Default since AccountEntry no longer tracks this
                         ..Default::default()
                     })
@@ -568,6 +568,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                                 .filter(account::Column::ChainKey.eq(chain_key.as_ref().to_vec()))
                                 .one(tx.as_ref())
                                 .await?;
+                            info!(?maybe_model, "found model for chain key");
                             if let Some(m) = maybe_model {
                                 Ok(Some(OffchainPublicKey::from_hex(&m.packet_key)?))
                             } else {
@@ -1047,13 +1048,13 @@ mod tests {
         let a: Address = db
             .translate_key(None, packet_1)
             .await?
-            .context("must contain key")?
+            .context("must contain first key")?
             .try_into()?;
 
         let b: OffchainPublicKey = db
             .translate_key(None, chain_2)
             .await?
-            .context("must contain key")?
+            .context("must contain second key")?
             .try_into()?;
 
         assert_eq!(chain_1, a, "chain keys must match");

@@ -182,7 +182,7 @@ async fn insert_channel_state_and_emit(
     let state_model = channel_state::ActiveModel {
         channel_id: Set(channel_id),
         balance: Set(balance_bytes_12.to_vec()),
-        status: Set(i8::from(channel_entry.status) as i16),
+        status: Set(i16::from(channel_entry.status)),
         epoch: Set(channel_entry.channel_epoch as i64),
         ticket_index: Set(channel_entry.ticket_index as i64),
         closure_time: Set(match &channel_entry.status {

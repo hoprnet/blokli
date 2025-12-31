@@ -2003,6 +2003,7 @@ dependencies = [
  "chrono",
  "clap",
  "futures",
+ "hex",
  "hopr-crypto-types",
  "hopr-internal-types",
  "hopr-primitive-types",

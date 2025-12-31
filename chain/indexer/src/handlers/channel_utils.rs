@@ -283,10 +283,10 @@ mod tests {
         let bytes = packed.as_slice();
         // Verify padding (bytes 0-5 should be 0)
         assert_eq!(&bytes[0..6], &[0u8; 6]);
-        // Verify balance starts at byte 6
+        // Verify balance starts at bytes 20-31
         let balance_bytes = balance.to_be_bytes();
-        assert_eq!(&bytes[6..18], &balance_bytes[4..16]);
-        // Verify status at byte 31
-        assert_eq!(bytes[31], status);
+        assert_eq!(&bytes[20..32], &balance_bytes[4..16]);
+        // Verify status at byte 6
+        assert_eq!(bytes[6], status);
     }
 }

@@ -58,7 +58,7 @@ async fn create_channel_update_event(
 ) -> Result<blokli_api_types::ChannelUpdate, Box<dyn std::error::Error>> {
     // Find the channel
     let channel_model = channel::Entity::find()
-        .filter(channel::Column::ConcreteChannelId.eq(channel_id))
+        .filter(channel::Column::ConcreteChannelId.eq(channel_id.strip_prefix("0x").unwrap_or(channel_id)))
         .one(db.conn(TargetDb::Index))
         .await?
         .ok_or("Channel not found")?;

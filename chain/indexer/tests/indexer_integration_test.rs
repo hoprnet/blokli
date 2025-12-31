@@ -307,11 +307,11 @@ mod integration_tests {
         /// Encode channel state into bytes32 format
         /// Layout (right-to-left):
         /// - Bytes 0-5: Padding (48 bits)
-        /// - Bytes 6-17: balance (96 bits)
-        /// - Bytes 18-23: ticketIndex (48 bits)
-        /// - Bytes 24-27: closureTime (32 bits)
-        /// - Bytes 28-30: epoch (24 bits)
-        /// - Byte 31: status (8 bits)
+        /// - Bytes 6: status (8 bits)
+        /// - Bytes 7-9: epoch (24 bits)
+        /// - Bytes 10-13: closureTime (32 bits)
+        /// - Bytes 14-19: ticketIndex (48 bits)
+        /// - Bytes 20-31: balance (96 bits)
         fn encode_channel_state(
             &self,
             balance: HoprBalance,
@@ -322,23 +322,23 @@ mod integration_tests {
         ) -> B256 {
             let mut bytes = [0u8; 32];
 
-            // Balance (bytes 6-17)
+            // Balance (bytes 20-31)
             let balance_bytes = balance.to_be_bytes();
-            bytes[6..18].copy_from_slice(&balance_bytes[20..32]);
+            bytes[20..32].copy_from_slice(&balance_bytes[20..32]);
 
-            // Ticket index (bytes 18-23)
+            // Ticket index (bytes 14-19)
             let ticket_index_bytes = (ticket_index as u64).to_be_bytes();
-            bytes[18..24].copy_from_slice(&ticket_index_bytes[2..8]);
+            bytes[14..20].copy_from_slice(&ticket_index_bytes[2..8]);
 
-            // Closure time (bytes 24-27)
-            bytes[24..28].copy_from_slice(&closure_time.to_be_bytes());
+            // Closure time (bytes 10-13)
+            bytes[10..14].copy_from_slice(&closure_time.to_be_bytes());
 
-            // Epoch (bytes 28-30)
+            // Epoch (bytes 7-9)
             let epoch_bytes = epoch.to_be_bytes();
-            bytes[28..31].copy_from_slice(&epoch_bytes[1..4]);
+            bytes[7..10].copy_from_slice(&epoch_bytes[1..4]);
 
-            // Status (byte 31)
-            bytes[31] = match status {
+            // Status (byte 6)
+            bytes[6] = match status {
                 ChannelStatus::Closed => 0,
                 ChannelStatus::Open => 1,
                 ChannelStatus::PendingToClose(_) => 2,

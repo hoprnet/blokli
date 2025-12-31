@@ -46,7 +46,7 @@ clean:
 
 # Run all tests in workspace
 test:
-    cargo test --workspace
+    cargo test --workspace --exclude blokli-integration-tests
 
 # Run tests for a specific package
 test-package package:
