@@ -9,7 +9,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   build-docker:
-    name: Build docker ${{ matrix.architecture }}
+    name: Docker ${{ matrix.architecture }}
     if: github.event.pull_request.merged == true
     uses: hoprnet/hopr-workflows/.github/workflows/build-docker-image.yaml@ausias/fix-actions
     strategy:
@@ -17,9 +17,6 @@ jobs:
         include:
           - architecture: x86_64-linux
             command: nix run -L .#bloklid-docker-upload-amd64
-            # Disabled until GitHub runner supports aarch64
-            # - architecture: aarch64-linux
-            #   command: nix run -L .#bloklid-docker-upload-aarch64
     with:
       source_branch: ${{ github.event.pull_request.base.ref }}
       version_type: "pr"
@@ -48,7 +45,7 @@ jobs:
       docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
       docker_hub_token: ${{ secrets.DOCKER_HUB_TOKEN }}
   build-binaries:
-    name: Build binary ${{ matrix.architecture }}
+    name: Binary ${{ matrix.architecture }}
     if: github.event.pull_request.merged == true
     strategy:
       fail-fast: false
@@ -57,12 +54,6 @@ jobs:
           - architecture: x86_64-linux
             runner: self-hosted-hoprnet-bigger
             build_command: nix build -L .#bloklid-x86_64-linux
-          # - architecture: x86_64-darwin
-          #   runner: macos-15
-          #   build_command: nix build -L .#bloklid-x86_64-darwin
-          # - architecture: aarch64-darwin
-          #   runner: macos-15
-          #   build_command: nix build -L .#bloklid-aarch64-darwin
     uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@ausias/fix-actions
     with:
       source_branch: ${{ github.event.pull_request.base.ref }}
