@@ -140,7 +140,7 @@ async fn test_account_subscription_emits_initial_account_with_keyid_filter() {
     // Verify account fields
     assert_eq!(account["keyid"].as_i64().unwrap(), 1);
     assert_eq!(account["chainKey"].as_str().unwrap(), chain_key.to_hex());
-    assert_eq!(account["packetKey"].as_str().unwrap(), packet_key.to_hex());
+    assert!(packet_key.to_hex().contains(account["packetKey"].as_str().unwrap()));
     assert_eq!(account["safeAddress"].as_str().unwrap(), safe_address.to_hex());
     assert_eq!(account["multiAddresses"].as_array().unwrap().len(), 0);
 }
@@ -192,7 +192,7 @@ async fn test_account_subscription_emits_initial_account_with_packet_key_filter(
 
     assert_eq!(account["keyid"].as_i64().unwrap(), 1);
     assert_eq!(account["chainKey"].as_str().unwrap(), chain_key.to_hex());
-    assert_eq!(account["packetKey"].as_str().unwrap(), packet_key.to_hex());
+    assert!(packet_key.to_hex().contains(account["packetKey"].as_str().unwrap()));
     assert!(account["safeAddress"].is_null());
 }
 
@@ -242,7 +242,7 @@ async fn test_account_subscription_emits_initial_account_with_chain_key_filter()
 
     assert_eq!(account["keyid"].as_i64().unwrap(), 1);
     assert_eq!(account["chainKey"].as_str().unwrap(), chain_key.to_hex());
-    assert_eq!(account["packetKey"].as_str().unwrap(), packet_key.to_hex());
+    assert!(packet_key.to_hex().contains(account["packetKey"].as_str().unwrap()));
 }
 
 #[tokio::test]

@@ -95,7 +95,7 @@ impl MigrationTrait for Migration {
             .alter_table(
                 Table::alter()
                     .table(Channel::Table)
-                    .add_column(ColumnDef::new(Channel::Status).tiny_unsigned().not_null())
+                    .add_column(ColumnDef::new(Channel::Status).small_integer().not_null())
                     .to_owned(),
             )
             .await?;

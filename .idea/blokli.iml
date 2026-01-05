@@ -24,6 +24,8 @@
       <sourceFolder url="file://$MODULE_DIR$/db/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/db/core/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/inspector/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/tests/integration/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/tests/integration/tests" isTestSource="true" />
       <excludeFolder url="file://$MODULE_DIR$/target" />
     </content>
     <orderEntry type="inheritedJdk" />

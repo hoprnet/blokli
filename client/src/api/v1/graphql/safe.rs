@@ -27,6 +27,13 @@ pub struct QuerySafeByChainKey {
 
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "QueryRoot", variables = "SafeVariables")]
+pub struct QuerySafeByRegisteredNode {
+    #[arguments(chainKey: $address)]
+    pub safe_by_registered_node: Option<SafeResult>,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "QueryRoot", variables = "SafeVariables")]
 pub struct QuerySafeByAddress {
     #[arguments(address: $address)]
     pub safe: Option<SafeResult>,

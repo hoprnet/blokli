@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 
+use alloy::hex;
 use blokli_api_types::{Account, Channel, ChannelUpdate, TokenValueString, UInt64};
 use blokli_db_entity::{account, channel, channel_state, conversions::account_aggregation};
+use chrono::Utc;
 use hopr_crypto_types::prelude::Hash;
 use hopr_primitive_types::prelude::{Address, HoprBalance, IntoEndian, ToHex};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder};
@@ -29,7 +31,7 @@ where
     C: ConnectionTrait,
 {
     // Convert Hash to hex string for database query
-    let channel_id_hex = channel_id.to_hex();
+    let channel_id_hex = hex::encode(channel_id.as_ref());
 
     // 1. Find the channel by concrete_channel_id
     let channel = channel::Entity::find()
@@ -70,11 +72,20 @@ where
     })?;
 
     // 4. Convert to GraphQL types
+
+    let balance_bytes_32: [u8; 32] = {
+        let mut bytes = [0u8; 32];
+        bytes[20..32].copy_from_slice(state.balance.as_slice());
+        bytes
+    };
+
+    let hopr_balance = HoprBalance::from_be_bytes(balance_bytes_32);
+
     let channel_gql = Channel {
         concrete_channel_id: channel.concrete_channel_id,
         source: channel.source,
         destination: channel.destination,
-        balance: TokenValueString(HoprBalance::from_be_bytes(&state.balance).amount().to_string()),
+        balance: TokenValueString(hopr_balance.to_string()),
         status: state.status.into(),
         epoch: i32::try_from(state.epoch).map_err(|e| {
             CoreEthereumIndexerError::ValidationError(format!(
@@ -88,7 +99,7 @@ where
                 state.ticket_index, e
             ))
         })?),
-        closure_time: state.closure_time,
+        closure_time: state.closure_time.map(|time| time.with_timezone(&Utc)),
     };
 
     let source_gql = Account {

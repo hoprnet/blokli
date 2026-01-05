@@ -4,7 +4,6 @@
 #![allow(clippy::cast_possible_wrap)]
 
 use hopr_internal_types::{channels::ChannelStatus, prelude::ChannelEntry};
-use hopr_primitive_types::prelude::ToHex;
 use sea_orm::Set;
 
 use crate::{channel, errors::DbEntityError};
@@ -67,7 +66,7 @@ impl From<ChannelEntry> for channel::ActiveModel {
         // 2. Create initial channel_state record
         // For now, only create the identity part
         channel::ActiveModel {
-            concrete_channel_id: Set(value.get_id().to_hex()),
+            concrete_channel_id: Set(hex::encode(value.get_id())),
             source: Set(0),      // TODO: Need to lookup/create account for value.source address
             destination: Set(0), // TODO: Need to lookup/create account for value.destination address
             ..Default::default()

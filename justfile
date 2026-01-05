@@ -46,7 +46,7 @@ clean:
 
 # Run all tests in workspace
 test:
-    cargo test --workspace
+    cargo test --workspace --exclude blokli-integration-tests
 
 # Run tests for a specific package
 test-package package:
@@ -58,7 +58,7 @@ test-debug:
 
 # Run all tests in workspace using nextest
 nextest:
-    cargo nextest run
+    cargo nextest run --workspace --exclude blokli-integration-tests
 
 # Run tests for a specific package using nextest
 nextest-package package:

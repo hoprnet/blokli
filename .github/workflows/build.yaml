@@ -95,6 +95,13 @@ jobs:
     with:
       image: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ needs.build-docker.outputs.docker_version }}
     secrets: inherit
+  integration-test:
+    name: Integration Test
+    needs: build-docker
+    uses: ./.github/workflows/integration-test.yaml
+    with:
+      image: ${{ needs.build-docker.outputs.manifest_url }}
+    secrets: inherit
   checks:
     name: Checks
     runs-on: self-hosted-hoprnet-bigger

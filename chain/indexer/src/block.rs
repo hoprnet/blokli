@@ -2050,7 +2050,7 @@ mod tests {
         tx_index: u64,
         log_index: u64,
         balance: [u8; 12],
-        status: i8,
+        status: i16,
         reorg_correction: bool,
     ) -> anyhow::Result<()> {
         let conn = db.conn(TargetDb::Index);

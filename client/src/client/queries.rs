@@ -60,6 +60,15 @@ impl GraphQlQueries {
         })
     }
 
+    /// `Safe` GraphQL query.
+    pub fn query_safe_by_registered_node(
+        address: &ChainAddress,
+    ) -> cynic::Operation<QuerySafeByRegisteredNode, SafeVariables> {
+        QuerySafeByRegisteredNode::build(SafeVariables {
+            address: address.encode_hex(),
+        })
+    }
+
     /// `ModuleAddressPrediction` GraphQL query.
     pub fn query_module_address_prediction(
         input: ModulePredictionInput,
@@ -171,6 +180,16 @@ impl BlokliQueryClient for BlokliClient {
                     .await?;
 
                 match response_to_data(res)?.safe_by_chain_key {
+                    Some(result) => result.into(),
+                    None => Ok(None),
+                }
+            }
+            SafeSelector::RegisteredNode(node_addr) => {
+                let res = self
+                    .build_query(GraphQlQueries::query_safe_by_registered_node(&node_addr))?
+                    .await?;
+
+                match response_to_data(res)?.safe_by_registered_node {
                     Some(result) => result.into(),
                     None => Ok(None),
                 }

@@ -169,7 +169,9 @@ mod tests {
     #[test]
     fn test_rpc_adapter_is_send_sync() {
         // This test ensures the RpcAdapter implements Send + Sync
+        #[allow(unused)]
         fn assert_send<T: Send>() {}
+        #[allow(unused)]
         fn assert_sync<T: Sync>() {}
 
         // This would fail to compile if RpcAdapter doesn't implement Send + Sync

@@ -166,8 +166,8 @@ pub enum ChannelStatus {
     Closed,
 }
 
-impl From<i8> for ChannelStatus {
-    fn from(status: i8) -> Self {
+impl From<i16> for ChannelStatus {
+    fn from(status: i16) -> Self {
         match status {
             0 => ChannelStatus::Closed,
             1 => ChannelStatus::Open,
@@ -177,7 +177,7 @@ impl From<i8> for ChannelStatus {
     }
 }
 
-impl From<ChannelStatus> for i8 {
+impl From<ChannelStatus> for i16 {
     fn from(status: ChannelStatus) -> Self {
         match status {
             ChannelStatus::Closed => 0,

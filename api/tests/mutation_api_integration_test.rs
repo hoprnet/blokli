@@ -120,7 +120,7 @@ async fn get_current_nonce(ctx: &TestContext) -> u64 {
     let address = ctx.chain_key().public().to_address();
     let alloy_address = AlloyAddress::from_slice(address.as_ref());
 
-    let provider = ProviderBuilder::new().on_http(ctx._tx_ctx.anvil.endpoint_url());
+    let provider = ProviderBuilder::new().connect_http(ctx._tx_ctx.anvil.endpoint_url());
 
     provider
         .get_transaction_count(alloy_address)

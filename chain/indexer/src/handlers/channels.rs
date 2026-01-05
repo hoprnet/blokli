@@ -1008,9 +1008,8 @@ mod tests {
         Ok(())
     }
 
-    const PRICE_PER_PACKET: u32 = 20_u32;
-
     // TODO: Re-enable once ticket operations and types are implemented
+    // const PRICE_PER_PACKET: u32 = 20_u32;
     // fn mock_acknowledged_ticket(
     //     signer: &ChainKeypair,
     //     destination: &ChainKeypair,
