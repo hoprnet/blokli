@@ -1,5 +1,5 @@
 #################################################################################
-# Pipeline to build on pull requests ###
+# Pipeline to build on pull requests                                            #
 #################################################################################
 name: Build
 on:
@@ -12,17 +12,21 @@ on:
 concurrency:
   group: ${{ github.ref }}-build
   cancel-in-progress: true
+permissions:
+  contents: read
 env:
   CARGO_TERM_COLOR: always
 jobs:
   build-docker:
     name: Docker ${{ matrix.architecture }}
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker-image.yaml@ausias/fix-actions
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker-image.yaml@build-docker-image-v1
     strategy:
       matrix:
         include:
           - architecture: x86_64-linux
             command: nix run -L .#bloklid-docker-upload-amd64
+    permissions:
+      contents: read
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       version_type: "commit"
@@ -39,7 +43,9 @@ jobs:
   build-docker-manifest:
     name: Docker manifest
     needs: build-docker
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker-manifest.yaml@ausias/fix-actions
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker-manifest.yaml@build-docker-manifest-v1
+    permissions:
+      contents: read
     with:
       version_type: "commit"
       docker_image_name: "bloklid"
@@ -58,7 +64,9 @@ jobs:
           - architecture: x86_64-linux
             runner: self-hosted-hoprnet-bigger
             build_command: nix build -L .#bloklid-x86_64-linux
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@ausias/fix-actions
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v1
+    permissions:
+      contents: read
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       version_type: "commit"
@@ -80,7 +88,7 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
       - name: Setup Nix
-        uses: hoprnet/hopr-workflows/actions/setup-nix@ausias/fix-actions
+        uses: hoprnet/hopr-workflows/actions/setup-nix@15db9fb5571957317b77567abef997b1554f2fbb # setup-nix-v1
         with:
           cachix_cache_name: blokli
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
@@ -110,7 +118,7 @@ jobs:
       - name: Checkout hoprnet repository
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
       - name: Setup Nix
-        uses: hoprnet/hopr-workflows/actions/setup-nix@ausias/fix-actions
+        uses: hoprnet/hopr-workflows/actions/setup-nix@15db9fb5571957317b77567abef997b1554f2fbb # setup-nix-v1
         with:
           cachix_cache_name: blokli
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
@@ -124,7 +132,7 @@ jobs:
       - name: Checkout hoprnet repository
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
       - name: Setup Nix
-        uses: hoprnet/hopr-workflows/actions/setup-nix@ausias/fix-actions
+        uses: hoprnet/hopr-workflows/actions/setup-nix@15db9fb5571957317b77567abef997b1554f2fbb # setup-nix-v1
         with:
           cachix_cache_name: blokli
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
@@ -138,7 +146,7 @@ jobs:
       - name: Checkout hoprnet repository
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
       - name: Setup Nix
-        uses: hoprnet/hopr-workflows/actions/setup-nix@ausias/fix-actions
+        uses: hoprnet/hopr-workflows/actions/setup-nix@15db9fb5571957317b77567abef997b1554f2fbb # setup-nix-v1
         with:
           cachix_cache_name: blokli
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
@@ -152,7 +160,7 @@ jobs:
       - name: Checkout hoprnet repository
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
       - name: Setup Nix
-        uses: hoprnet/hopr-workflows/actions/setup-nix@ausias/fix-actions
+        uses: hoprnet/hopr-workflows/actions/setup-nix@15db9fb5571957317b77567abef997b1554f2fbb # setup-nix-v1
         with:
           cachix_cache_name: blokli
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}

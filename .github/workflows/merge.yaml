@@ -11,12 +11,14 @@ jobs:
   build-docker:
     name: Docker ${{ matrix.architecture }}
     if: github.event.pull_request.merged == true
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker-image.yaml@ausias/fix-actions
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker-image.yaml@build-docker-image-v1
     strategy:
       matrix:
         include:
           - architecture: x86_64-linux
             command: nix run -L .#bloklid-docker-upload-amd64
+    permissions:
+      contents: read
     with:
       source_branch: ${{ github.event.pull_request.base.ref }}
       version_type: "pr"
@@ -34,7 +36,9 @@ jobs:
     if: github.event.pull_request.merged == true
     name: Docker manifest
     needs: build-docker
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker-manifest.yaml@ausias/fix-actions
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker-manifest.yaml@build-docker-manifest-v1
+    permissions:
+      contents: read
     with:
       version_type: "pr"
       docker_image_name: "bloklid"
@@ -54,7 +58,9 @@ jobs:
           - architecture: x86_64-linux
             runner: self-hosted-hoprnet-bigger
             build_command: nix build -L .#bloklid-x86_64-linux
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@ausias/fix-actions
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v1
+    permissions:
+      contents: read
     with:
       source_branch: ${{ github.event.pull_request.base.ref }}
       version_type: "pr"
