@@ -38,6 +38,9 @@ pub(crate) enum QueryTarget {
         /// Safe owner address.
         #[arg(short, long, value_parser = clap::value_parser!(Address), group = "selector")]
         owner: Option<Address>,
+        /// Registered node address.
+        #[arg(short, long, value_parser = clap::value_parser!(Address), group = "selector")]
+        registered_node: Option<Address>,
     },
     /// Gets the module address prediction.
     ModuleAddress {
@@ -73,12 +76,21 @@ impl QueryTarget {
                 format.serialize(client.query_token_balance(&address.into()).await?)
             }
             QueryTarget::ChainInfo => format.serialize(client.query_chain_info().await?),
-            QueryTarget::Safe { address, owner } => format.serialize(
+            QueryTarget::Safe {
+                address,
+                owner,
+                registered_node,
+            } => format.serialize(
                 client
-                    .query_safe(match (address, owner) {
-                        (Some(address), None) => SafeSelector::SafeAddress(address.into()),
-                        (None, Some(owner)) => SafeSelector::ChainKey(owner.into()),
-                        _ => return Err(anyhow::anyhow!("Either --address or --owner must be specified.")),
+                    .query_safe(match (address, owner, registered_node) {
+                        (Some(address), None, None) => SafeSelector::SafeAddress(address.into()),
+                        (None, Some(owner), None) => SafeSelector::ChainKey(owner.into()),
+                        (None, None, Some(registered_node)) => SafeSelector::RegisteredNode(registered_node.into()),
+                        _ => {
+                            return Err(anyhow::anyhow!(
+                                "Exactly one of --address, --owner or --registered-node must be specified."
+                            ));
+                        }
                     })
                     .await?,
             ),
