@@ -477,6 +477,11 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
                 .values()
                 .find(|s| s.chain_key == hex::encode(chain_key))
                 .cloned()),
+            SafeSelector::RegisteredNode(node_address) => Ok(state
+                .deployed_safes
+                .values()
+                .find(|s| s.registered_nodes.contains(&hex::encode(node_address)))
+                .cloned()),
         }
     }
 
