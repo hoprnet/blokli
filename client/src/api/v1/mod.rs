@@ -24,8 +24,8 @@ pub(crate) mod internal {
         graph::SubscribeGraph,
         info::{QueryChainInfo, QueryHealth, QueryVersion, SubscribeTicketParams},
         safe::{
-            ModuleAddressVariables, QueryModuleAddress, QuerySafeByAddress, QuerySafeByChainKey, SafeVariables,
-            SubscribeSafeDeployment,
+            ModuleAddressVariables, QueryModuleAddress, QuerySafeByAddress, QuerySafeByChainKey,
+            QuerySafeByRegisteredNode, SafeVariables, SubscribeSafeDeployment,
         },
         txs::{
             ConfirmTransactionVariables, MutateConfirmTransaction, MutateSendTransaction, MutateTrackTransaction,
@@ -116,6 +116,8 @@ pub enum SafeSelector {
     SafeAddress(ChainAddress),
     /// Select a safe by the owner's chain key.
     ChainKey(ChainAddress),
+    /// Select a safe by any of the registered nodes.
+    RegisteredNode(ChainAddress),
 }
 
 impl std::fmt::Debug for SafeSelector {
@@ -123,6 +125,7 @@ impl std::fmt::Debug for SafeSelector {
         match self {
             Self::SafeAddress(address) => write!(f, "SafeAddress({})", hex::encode(address)),
             Self::ChainKey(address) => write!(f, "ChainKey({})", hex::encode(address)),
+            Self::RegisteredNode(address) => write!(f, "RegisteredNode({})", hex::encode(address)),
         }
     }
 }
