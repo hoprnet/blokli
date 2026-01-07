@@ -3,7 +3,7 @@ on:
   workflow_call:
     inputs:
       image:
-        description: 'Docker image to test'
+        description: Docker image to test
         required: true
         type: string
 jobs:
