@@ -14,10 +14,8 @@ pub struct TransactionBuilder {
 }
 
 impl TransactionBuilder {
-    pub fn new(private_key_hex: &str) -> Result<Self> {
-        let cleaned = private_key_hex.trim_start_matches("0x");
-        let bytes = hex::decode(cleaned).context("Failed to decode sender private key")?;
-        let signer = PrivateKeySigner::from_slice(&bytes).context("Failed to construct signer")?;
+    pub fn new(private_key_hex: &[u8]) -> Result<Self> {
+        let signer = PrivateKeySigner::from_slice(private_key_hex).context("Failed to construct signer")?;
         let address = format!("{:#x}", signer.address());
 
         Ok(Self {
