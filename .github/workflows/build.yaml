@@ -97,7 +97,7 @@ jobs:
       - name: Build blokli-client-dev
         run: nix build -L .#blokli-client-dev --no-link
   integration-test:
-    name: Integration Test
+    name: Integration Tests
     needs: build-docker
     uses: ./.github/workflows/integration-test.yaml
     with:

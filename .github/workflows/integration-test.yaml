@@ -8,7 +8,7 @@ on:
         type: string
 jobs:
   integration-test:
-    name: Run Integration Tests
+    name: Integration Tests
     runs-on: self-hosted-hoprnet-bigger
     timeout-minutes: 20
     steps:
