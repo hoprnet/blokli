@@ -1,7 +1,7 @@
 #################################################################################
 # Pipeline to tests on pull requests                                            #
 #################################################################################
-name: Test
+name: Tests
 on:
   pull_request:
     types:
@@ -10,7 +10,7 @@ on:
       - reopened
       - ready_for_review
 concurrency:
-  group: ${{ github.ref }}-test
+  group: ${{ github.ref }}-tests
   cancel-in-progress: true
 permissions:
   contents: read
