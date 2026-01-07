@@ -1913,7 +1913,7 @@ dependencies = [
  "chrono",
  "cynic",
  "cynic-codegen",
- "eventsource-client",
+ "eventsource-client 0.16.0",
  "futures",
  "futures-time",
  "hex",
@@ -1942,7 +1942,7 @@ dependencies = [
  "async-trait",
  "cynic",
  "cynic-codegen",
- "eventsource-client",
+ "eventsource-client 0.15.1",
  "futures",
  "futures-time",
  "hex",
@@ -3312,6 +3312,23 @@ name = "eventsource-client"
 version = "0.15.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2eac4ff1772eb6093353479bf347409299d2dfb3251168a70fb5638724196dd2"
+dependencies = [
+ "base64 0.22.1",
+ "futures",
+ "hyper 0.14.32",
+ "hyper-rustls 0.24.2",
+ "hyper-timeout",
+ "log",
+ "pin-project",
+ "rand 0.8.5",
+ "tokio",
+]
+
+[[package]]
+name = "eventsource-client"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c26451361cde19fe2322835b6e684f4825902edf3139ce9d6a70e6542566a0b2"
 dependencies = [
  "base64 0.22.1",
  "futures",

@@ -7,7 +7,9 @@ pub const LOGS_SNAPSHOT_DOWNLOADER_MAX_RETRIES: u32 = 3;
 pub mod topics {
     use alloy::{primitives::B256, sol_types::SolEvent};
     use hopr_bindings::{
-        hopr_announcements_events::HoprAnnouncementsEvents::{AddressAnnouncement, KeyBinding, RevokeAnnouncement},
+        hopr_announcements_events::HoprAnnouncementsEvents::{
+            AddressAnnouncement, KeyBinding, KeyBindingFeeUpdate, RevokeAnnouncement,
+        },
         hopr_channels::HoprChannels::LedgerDomainSeparatorUpdated,
         hopr_channels_events::HoprChannelsEvents::{
             ChannelBalanceDecreased, ChannelBalanceIncreased, ChannelClosed, ChannelOpened, DomainSeparatorUpdated,
@@ -40,7 +42,9 @@ pub mod topics {
         vec![
             AddressAnnouncement::SIGNATURE_HASH,
             KeyBinding::SIGNATURE_HASH,
+            KeyBindingFeeUpdate::SIGNATURE_HASH,
             RevokeAnnouncement::SIGNATURE_HASH,
+            LedgerDomainSeparatorUpdated::SIGNATURE_HASH,
         ]
     }
 
