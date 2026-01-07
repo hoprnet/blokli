@@ -19,7 +19,7 @@ env:
 jobs:
   build-docker:
     name: Docker ${{ matrix.architecture }}
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker-image.yaml@build-docker-image-v1
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker-image.yaml@ausias/add-docker-security # build-docker-image-v1
     strategy:
       matrix:
         include:
@@ -34,6 +34,7 @@ jobs:
       cachix_cache_name: "blokli"
       build_file: "bloklid/Cargo.toml"
       build_command: ${{ matrix.command }}
+      smoke_test_command: nix develop -c ./tests/smoke/run-smoke-test.sh
       docker_image_name: "bloklid"
     secrets:
       gcp_service_account: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY}}
@@ -94,77 +95,10 @@ jobs:
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Build blokli-client-dev
         run: nix build -L .#blokli-client-dev --no-link
-  smoke-test:
-    name: Smoke Test
-    needs: 
-      - build-docker
-      - build-docker-manifest
-    uses: ./.github/workflows/smoke-test.yaml
-    with:
-      image: ${{ vars.DOCKER_IMAGE_REGISTRY }}/bloklid:${{ needs.build-docker.outputs.docker_version }}
-    secrets: inherit
   integration-test:
     name: Integration Test
     needs: build-docker
     uses: ./.github/workflows/integration-test.yaml
     with:
-      image: ${{ needs.build-docker.outputs.manifest_url }}
+      image: ${{ needs.build-docker.outputs.docker_build_version }}
     secrets: inherit
-  checks:
-    name: Checks
-    runs-on: self-hosted-hoprnet-bigger
-    # Runs in parallel with build-docker - no dependency
-    steps:
-      - name: Checkout hoprnet repository
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
-      - name: Setup Nix
-        uses: hoprnet/hopr-workflows/actions/setup-nix@15db9fb5571957317b77567abef997b1554f2fbb # setup-nix-v1
-        with:
-          cachix_cache_name: blokli
-          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      - name: Check formatting and linting
-        run: nix develop --command just quick
-  test:
-    name: Test
-    runs-on: self-hosted-hoprnet-bigger
-    needs: checks
-    steps:
-      - name: Checkout hoprnet repository
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
-      - name: Setup Nix
-        uses: hoprnet/hopr-workflows/actions/setup-nix@15db9fb5571957317b77567abef997b1554f2fbb # setup-nix-v1
-        with:
-          cachix_cache_name: blokli
-          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      - name: Run unit tests
-        run: nix develop --command just test
-  nextest:
-    name: Nextest
-    runs-on: self-hosted-hoprnet-bigger
-    needs: checks
-    steps:
-      - name: Checkout hoprnet repository
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
-      - name: Setup Nix
-        uses: hoprnet/hopr-workflows/actions/setup-nix@15db9fb5571957317b77567abef997b1554f2fbb # setup-nix-v1
-        with:
-          cachix_cache_name: blokli
-          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      - name: Run unit tests using nextest
-        run: nix develop --command bash -c "cargo install cargo-nextest && just nextest"
-  schema-validation:
-    name: Schema Validation
-    runs-on: self-hosted-hoprnet-bigger
-    needs: checks
-    steps:
-      - name: Checkout hoprnet repository
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
-      - name: Setup Nix
-        uses: hoprnet/hopr-workflows/actions/setup-nix@15db9fb5571957317b77567abef997b1554f2fbb # setup-nix-v1
-        with:
-          cachix_cache_name: blokli
-          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      - name: Generate GraphQL schema
-        run: nix develop --command just export-schema-sqlite
-      - name: Validate schema against target
-        run: nix develop --command uv run scripts/check_schema.py

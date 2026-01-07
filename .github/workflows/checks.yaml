@@ -1,0 +1,48 @@
+#################################################################################
+# Pipeline to check code quality on pull requests                                            #
+#################################################################################
+name: Checks
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+concurrency:
+  group: ${{ github.ref }}-checks
+  cancel-in-progress: true
+permissions:
+  contents: read
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  checks:
+    name: Lint
+    runs-on: self-hosted-hoprnet-bigger
+    steps:
+      - name: Checkout hoprnet repository
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+      - name: Setup Nix
+        uses: hoprnet/hopr-workflows/actions/setup-nix@15db9fb5571957317b77567abef997b1554f2fbb # setup-nix-v1
+        with:
+          cachix_cache_name: blokli
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Check formatting and linting
+        run: nix develop --command just quick
+  schema-validation:
+    name: Schema Validation
+    runs-on: self-hosted-hoprnet-bigger
+    needs: checks
+    steps:
+      - name: Checkout hoprnet repository
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+      - name: Setup Nix
+        uses: hoprnet/hopr-workflows/actions/setup-nix@15db9fb5571957317b77567abef997b1554f2fbb # setup-nix-v1
+        with:
+          cachix_cache_name: blokli
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Generate GraphQL schema
+        run: nix develop --command just export-schema-sqlite
+      - name: Validate schema against target
+        run: nix develop --command uv run scripts/check_schema.py
