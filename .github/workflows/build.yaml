@@ -27,6 +27,7 @@ jobs:
             command: nix run -L .#bloklid-docker-upload-amd64
     permissions:
       contents: read
+      security-events: write
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       version_type: "commit"
