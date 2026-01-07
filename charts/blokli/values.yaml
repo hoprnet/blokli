@@ -337,3 +337,6 @@ config:
     ## @param config.logging.backtrace Rust backtrace configuration (e.g., "full", "short", "0")
     ##
     backtrace: full
+    ## @param config.logging.format Log output format ("json" or empty for plain text)
+    ##
+    format: json
