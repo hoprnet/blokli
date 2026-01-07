@@ -1,5 +1,5 @@
 #################################################################################
-# Pipeline to check code quality on pull requests                                            #
+# Pipeline to check code quality on pull requests                               #
 #################################################################################
 name: Checks
 on:
