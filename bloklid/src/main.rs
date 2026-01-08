@@ -19,7 +19,7 @@ use clap::{Parser, Subcommand};
 use futures::TryStreamExt;
 use sea_orm::Database;
 use tracing::{error, info, warn};
-use tracing_subscriber::{EnvFilter, fmt};
+use tracing_subscriber::{EnvFilter, prelude::*};
 use validator::Validate;
 
 use crate::{
@@ -265,13 +265,26 @@ async fn run() -> errors::Result<()> {
         }
     };
 
-    fmt()
-        .with_env_filter(env_filter)
+    let registry = tracing_subscriber::Registry::default().with(env_filter);
+
+    let format = tracing_subscriber::fmt::layer()
+        .with_level(true)
         .with_target(true)
         .with_thread_ids(true)
-        .with_thread_names(true)
-        .compact()
-        .init();
+        .with_thread_names(false);
+
+    let format = if std::env::var("BLOKLI_LOG_FORMAT")
+        .map(|v| v.to_lowercase() == "json")
+        .unwrap_or(false)
+    {
+        format.json().boxed()
+    } else {
+        format.boxed()
+    };
+
+    let registry = registry.with(format);
+
+    tracing::subscriber::set_global_default(registry).map_err(|e| BloklidError::NonSpecific(e.to_string()))?;
 
     // Handle subcommands
     if let Some(command) = args.command {

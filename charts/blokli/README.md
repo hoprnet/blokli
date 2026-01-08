@@ -147,6 +147,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.api.health.readinessCheckInterval`           | Interval for periodic readiness checks                                                                        | `60s`               |
 | `config.logging.level`                               | Rust log level configuration. Examples: "info", "debug", "info,blokli_chain_indexer=debug"                    | `info`              |
 | `config.logging.backtrace`                           | Rust backtrace configuration (e.g., "full", "short", "0")                                                     | `full`              |
+| `config.logging.format`                              | Log output format ("json" or empty for plain text)                                                            | `json`              |
 
 ## Configuration Examples
 
