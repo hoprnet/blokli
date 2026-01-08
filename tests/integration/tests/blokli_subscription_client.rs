@@ -185,7 +185,7 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
         .expect("failed to create ticket parameters subscription");
 
     fixture
-        .update_winn_prob(
+        .update_winning_probability(
             account,
             fixture.contract_addresses().winning_probability_oracle,
             new_win_prob,
@@ -201,7 +201,7 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
     assert!((output.min_ticket_winning_probability - new_win_prob).abs() < EPSILON);
 
     fixture
-        .update_winn_prob(account, fixture.contract_addresses().winning_probability_oracle, 1.0)
+        .update_winning_probability(account, fixture.contract_addresses().winning_probability_oracle, 1.0)
         .await?;
 
     Ok(())

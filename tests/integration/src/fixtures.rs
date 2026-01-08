@@ -240,7 +240,7 @@ impl IntegrationFixture {
             .await
     }
 
-    /// Announces the account if not annonced yet. If already announced, does nothing.
+    /// Announces the account if not announced yet. If already announced, does nothing.
     pub async fn announce_or_get_account(&self, account: &AnvilAccount, module: &str) -> Result<()> {
         let maybe_account = self
             .client()
@@ -269,7 +269,7 @@ impl IntegrationFixture {
 // Ticket related helpers
 impl IntegrationFixture {
     /// Updates the ticket's winning probability to `new_win_prob`.
-    pub async fn update_winn_prob(
+    pub async fn update_winning_probability(
         &self,
         owner: &AnvilAccount,
         contract_address: Address,
@@ -349,7 +349,7 @@ impl IntegrationFixture {
             .await
     }
 
-    /// Start cliosing an outgoing channel from `from` to `to`.
+    /// Starts closing an outgoing channel from `from` to `to`.
     pub async fn initiate_outgoing_channel_closure(
         &self,
         from: &AnvilAccount,
