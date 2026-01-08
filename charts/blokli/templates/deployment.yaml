@@ -45,6 +45,8 @@ spec:
           value: {{ .Values.config.logging.level | quote }}
         - name: RUST_BACKTRACE
           value: {{ .Values.config.logging.backtrace | quote }}
+        - name: BLOKLI_LOG_FORMAT
+          value: {{ .Values.config.logging.format | quote }}
         envFrom:
         - secretRef:
             name: {{ include "blokli.fullname" . }}

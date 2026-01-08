@@ -27,7 +27,7 @@ alloy = { version = "1.0.42", default-features = false, features = [
   "node-bindings",
   "std",
 ] }
-anyhow = "1.0.99"
+anyhow = "1.0.100"
 async-broadcast = "0.7.2"
 async-channel = "2.5.0"
 async-compression = "0.4.30"
@@ -59,13 +59,13 @@ cynic = "3.12.0"
 cynic-codegen = "3.12.0"
 dashmap = "6.1.0"
 env_logger = "0.11.8"
-eventsource-client = "0.15.1"
+eventsource-client = "0.16.0"
 futures = "0.3.31"
-futures-time = "3.0.0"
+futures-time = "3.0.1"
 futures-timer = "3.0.3"
 futures-util = "0.3.31"
 hex = "0.4.3"
-hex-literal = "1.0.0"
+hex-literal = "1.1.0"
 hopli = { git = "https://github.com/hoprnet/hopli", branch = "main" }
 hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
 hopr-bindings = { git = "https://github.com/hoprnet/contracts", branch = "main" }
