@@ -233,11 +233,14 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
 #[rstest]
 #[test_log::test(tokio::test)]
 /// verifies that the chain ids provided by blokli and the RPC match.
-async fn chain_ids_provided_by_blokli_matches_the_rpc(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+async fn chain_info_contains_correct_chain_id_and_key_binding_fee(
+    #[future(awt)] fixture: IntegrationFixture,
+) -> Result<()> {
     let chain = fixture.client().query_chain_info().await?;
     let chain_id = fixture.rpc().chain_id().await?;
 
     assert_eq!(chain.chain_id as u64, chain_id);
+    assert_eq!(chain.key_binding_fee.0, "0.01 wxHOPR");
 
     Ok(())
 }
