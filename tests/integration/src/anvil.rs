@@ -24,12 +24,8 @@ impl AnvilAccount {
         }
     }
 
-    pub fn to_string_address(&self) -> String {
-        format!("0x{}", hex::encode(self.address)).to_lowercase()
-    }
-
     pub fn alloy_address(&self) -> AlloyAddress {
-        AlloyAddress::from_str(&self.to_string_address()).expect("Invalid address hex")
+        AlloyAddress::from_str(&self.address.to_string()).expect("Invalid address hex")
     }
 
     pub fn chain_key_pair(&self) -> ChainKeypair {

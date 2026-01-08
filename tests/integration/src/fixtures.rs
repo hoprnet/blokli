@@ -102,7 +102,7 @@ impl IntegrationFixture {
             .build_eip1559_transaction_hex(
                 self.rpc().chain_id().await?,
                 nonce,
-                &recipient.to_string_address(),
+                &recipient.address.to_string(),
                 value,
                 self.config().max_fee_per_gas,
                 self.config().max_priority_fee_per_gas,
@@ -146,7 +146,7 @@ impl IntegrationFixture {
 impl IntegrationFixture {
     /// Deploys a safe for the specified owner.
     async fn deploy_safe(&self, owner: &AnvilAccount, amount: HoprBalance) -> Result<[u8; 32]> {
-        let nonce = self.rpc().transaction_count(owner.to_string_address().as_str()).await?;
+        let nonce = self.rpc().transaction_count(&owner.address).await?;
 
         let contract_addresses = self.contract_addresses();
         let payload = hopli_lib::payloads::edge_node_deploy_safe_module_and_maybe_include_node(
@@ -195,7 +195,7 @@ impl IntegrationFixture {
     }
 
     pub async fn register_safe(&self, owner: &AnvilAccount, safe_address: &str) -> Result<[u8; 32]> {
-        let nonce = self.rpc().transaction_count(owner.to_string_address().as_str()).await?;
+        let nonce = self.rpc().transaction_count(&owner.address).await?;
 
         let payload_generator = BasicPayloadGenerator::new(owner.address, *self.contract_addresses());
 
@@ -214,10 +214,7 @@ impl IntegrationFixture {
 impl IntegrationFixture {
     /// Announces the account using the specified safe module.
     pub async fn announce_account(&self, account: &AnvilAccount, module: &str) -> Result<[u8; 32]> {
-        let nonce = self
-            .rpc()
-            .transaction_count(account.to_string_address().as_str())
-            .await?;
+        let nonce = self.rpc().transaction_count(&account.address).await?;
 
         let payload_generator = SafePayloadGenerator::new(
             &account.chain_key_pair(),
@@ -275,7 +272,7 @@ impl IntegrationFixture {
         contract_address: Address,
         new_win_prob: f64,
     ) -> Result<[u8; 32]> {
-        let nonce = self.rpc().transaction_count(owner.to_string_address().as_str()).await?;
+        let nonce = self.rpc().transaction_count(&owner.address).await?;
 
         let payload = hopli_lib::payloads::set_winning_probability(contract_address, new_win_prob)?;
 
@@ -292,7 +289,7 @@ impl IntegrationFixture {
 impl IntegrationFixture {
     /// Approves the safe module to spend `amount` of wxHOPR on behalf of `owner`.
     pub async fn approve(&self, owner: &AnvilAccount, amount: HoprBalance, module: &str) -> Result<[u8; 32]> {
-        let nonce = self.rpc().transaction_count(owner.to_string_address().as_str()).await?;
+        let nonce = self.rpc().transaction_count(&owner.address).await?;
         let spender = HoprAddress::from_str(&self.contract_addresses().channels.to_string())
             .expect("Invalid spender address hex");
 
@@ -331,7 +328,7 @@ impl IntegrationFixture {
         amount: HoprBalance,
         module: &str,
     ) -> Result<[u8; 32]> {
-        let nonce = self.rpc().transaction_count(from.to_string_address().as_str()).await?;
+        let nonce = self.rpc().transaction_count(&from.address).await?;
 
         let payload_generator = SafePayloadGenerator::new(
             &from.chain_key_pair(),
@@ -356,7 +353,7 @@ impl IntegrationFixture {
         to: &AnvilAccount,
         module: &str,
     ) -> Result<[u8; 32]> {
-        let nonce = self.rpc().transaction_count(from.to_string_address().as_str()).await?;
+        let nonce = self.rpc().transaction_count(&from.address).await?;
 
         let payload_generator = SafePayloadGenerator::new(
             &from.chain_key_pair(),

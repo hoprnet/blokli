@@ -76,7 +76,7 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
 /// the subscription.
 async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
-    let account_address = account.to_string_address();
+    let account_address = account.address.to_string();
 
     let selector = AccountSelector::Address(*account.alloy_address().as_ref());
     let client = fixture.client().clone();
@@ -106,7 +106,7 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
             .ok_or_else(|| anyhow!("no update received from subscription"))??
             .chain_key
             .to_lowercase(),
-        account.to_string_address()
+        account.address.to_string()
     );
 
     Ok(())
@@ -162,8 +162,8 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
         .ok_or_else(|| anyhow!("no update received from subscription"))??;
 
     assert_eq!(graph_entry.channel.balance.0, amount.to_string());
-    assert_eq!(graph_entry.source.chain_key, src.to_string_address());
-    assert_eq!(graph_entry.destination.chain_key, dst.to_string_address());
+    assert_eq!(graph_entry.source.chain_key, src.address.to_string());
+    assert_eq!(graph_entry.destination.chain_key, dst.address.to_string());
     assert_eq!(graph_entry.channel.status, ChannelStatus::Open);
 
     Ok(())
@@ -215,7 +215,7 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
 /// Also verifies that re-registering the same safe fails.
 async fn subscribe_safe_deployments(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
-    let account_address = account.to_string_address();
+    let account_address = account.address.to_string();
     let client = fixture.client().clone();
 
     let handle = tokio::task::spawn(async move {

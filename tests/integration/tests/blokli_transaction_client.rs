@@ -26,16 +26,13 @@ enum ClientType {
 async fn submit_transaction(#[future(awt)] fixture: IntegrationFixture, #[case] client_type: ClientType) -> Result<()> {
     let [sender, recipient] = fixture.sample_accounts::<2>();
     let tx_value = U256::from(TX_VALUE);
-    let nonce = fixture.rpc().transaction_count(&sender.to_string_address()).await?;
+    let nonce = fixture.rpc().transaction_count(&sender.address).await?;
 
     let raw_tx = fixture.build_raw_tx(tx_value, sender, recipient, nonce).await?;
     let signed_bytes =
         Vec::from_hex(raw_tx.trim_start_matches("0x")).context("failed to decode raw transaction payload")?;
 
-    let initial_balance = fixture
-        .rpc()
-        .get_balance(&recipient.to_string_address().as_str())
-        .await?;
+    let initial_balance = fixture.rpc().get_balance(&recipient.address).await?;
 
     match client_type {
         ClientType::RPC => {
@@ -48,10 +45,7 @@ async fn submit_transaction(#[future(awt)] fixture: IntegrationFixture, #[case] 
 
     sleep(Duration::from_secs(8)).await; // TODO: replace with actual block time
 
-    let final_balance = fixture
-        .rpc()
-        .get_balance(&recipient.to_string_address().as_str())
-        .await?;
+    let final_balance = fixture.rpc().get_balance(&recipient.address).await?;
     let delta = final_balance
         .checked_sub(initial_balance)
         .context("recipient balance decreased unexpectedly")?;
@@ -74,10 +68,7 @@ async fn submit_transaction_with_incorrect_payload(
 ) -> Result<()> {
     let [sender, recipient] = fixture.sample_accounts::<2>();
     let tx_value = U256::from(TX_VALUE);
-    let nonce = fixture
-        .rpc()
-        .transaction_count(&sender.to_string_address().as_str())
-        .await?;
+    let nonce = fixture.rpc().transaction_count(&sender.address).await?;
 
     let mut raw_tx = fixture.build_raw_tx(tx_value, sender, recipient, nonce).await?;
     raw_tx.replace_range(10..14, "dead");
@@ -106,10 +97,7 @@ async fn submit_transaction_with_too_much_value(
 ) -> Result<()> {
     let [sender, recipient] = fixture.sample_accounts::<2>();
     let tx_value = U256::MAX; // definitely too much value
-    let nonce = fixture
-        .rpc()
-        .transaction_count(&sender.to_string_address().as_str())
-        .await?;
+    let nonce = fixture.rpc().transaction_count(&sender.address).await?;
 
     let raw_tx = fixture.build_raw_tx(tx_value, sender, recipient, nonce).await?;
     let signed_bytes =
@@ -132,16 +120,10 @@ async fn submit_transaction_with_too_much_value(
 async fn submit_and_track_transaction(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [sender, recipient] = fixture.sample_accounts::<2>();
     let tx_value = U256::from(TX_VALUE);
-    let nonce = fixture
-        .rpc()
-        .transaction_count(&sender.to_string_address().as_str())
-        .await?;
+    let nonce = fixture.rpc().transaction_count(&sender.address).await?;
 
     let raw_tx = fixture.build_raw_tx(tx_value, sender, recipient, nonce).await?;
-    let initial_balance = fixture
-        .rpc()
-        .get_balance(&recipient.to_string_address().as_str())
-        .await?;
+    let initial_balance = fixture.rpc().get_balance(&recipient.address).await?;
     let signed_bytes =
         Vec::from_hex(raw_tx.trim_start_matches("0x")).context("failed to decode raw transaction payload")?;
 
@@ -153,10 +135,7 @@ async fn submit_and_track_transaction(#[future(awt)] fixture: IntegrationFixture
         .await?;
     assert_eq!(res.status, TransactionStatus::Confirmed);
 
-    let final_balance = fixture
-        .rpc()
-        .get_balance(&recipient.to_string_address().as_str())
-        .await?;
+    let final_balance = fixture.rpc().get_balance(&recipient.address).await?;
     let delta = final_balance
         .checked_sub(initial_balance)
         .context("recipient balance decreased unexpectedly")?;
@@ -174,29 +153,20 @@ async fn submit_and_track_transaction(#[future(awt)] fixture: IntegrationFixture
 async fn submit_and_confirm_transaction(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [sender, recipient] = fixture.sample_accounts::<2>();
     let tx_value = U256::from(TX_VALUE);
-    let nonce = fixture
-        .rpc()
-        .transaction_count(&sender.to_string_address().as_str())
-        .await?;
+    let nonce = fixture.rpc().transaction_count(&sender.address).await?;
     let confirmations = fixture.config().tx_confirmations;
 
     let raw_tx = fixture.build_raw_tx(tx_value, sender, recipient, nonce).await?;
     let signed_bytes =
         Vec::from_hex(raw_tx.trim_start_matches("0x")).context("failed to decode raw transaction payload")?;
-    let initial_balance = fixture
-        .rpc()
-        .get_balance(&recipient.to_string_address().as_str())
-        .await?;
+    let initial_balance = fixture.rpc().get_balance(&recipient.address).await?;
 
     let block_number = fixture.client().query_chain_info().await?.block_number;
     fixture.submit_and_confirm_tx(&signed_bytes, confirmations).await?;
 
     assert!(fixture.client().query_chain_info().await?.block_number >= block_number + (confirmations as i32));
 
-    let final_balance = fixture
-        .rpc()
-        .get_balance(&recipient.to_string_address().as_str())
-        .await?;
+    let final_balance = fixture.rpc().get_balance(&recipient.address).await?;
     let delta = final_balance
         .checked_sub(initial_balance)
         .context("recipient balance decreased unexpectedly")?;

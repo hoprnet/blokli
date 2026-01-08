@@ -53,7 +53,7 @@ async fn query_accounts(#[future(awt)] fixture: IntegrationFixture) -> Result<()
         .await?;
 
     assert_eq!(found_accounts.len(), 1);
-    assert_eq!(found_accounts[0].chain_key.to_lowercase(), account.to_string_address());
+    assert_eq!(found_accounts[0].chain_key.to_lowercase(), account.address.to_string());
 
     Ok(())
 }
@@ -70,7 +70,7 @@ async fn query_native_balance(#[future(awt)] fixture: IntegrationFixture) -> Res
         .client()
         .query_native_balance(account.alloy_address().as_ref())
         .await?;
-    let rpc_balance = fixture.rpc().get_balance(account.to_string_address().as_str()).await?;
+    let rpc_balance = fixture.rpc().get_balance(&account.address).await?;
 
     let parsed_blokli_balance =
         XDaiBalance::from_str(blokli_balance.balance.0.as_ref()).expect("failed to parse blokli balance");
@@ -156,10 +156,7 @@ async fn query_token_balance_and_allowance_of_safe(#[future(awt)] fixture: Integ
 async fn query_transaction_count(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [sender, recipient] = fixture.sample_accounts::<2>();
     let tx_value = U256::from(1_000_000u64);
-    let nonce = fixture
-        .rpc()
-        .transaction_count(sender.to_string_address().as_str())
-        .await?;
+    let nonce = fixture.rpc().transaction_count(&sender.address).await?;
 
     let signed_bytes = Vec::from_hex(
         fixture
