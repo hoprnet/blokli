@@ -3,18 +3,19 @@ use std::{str::FromStr, time::Duration};
 use alloy::primitives::{Address, U256};
 use anyhow::Result;
 use blokli_client::api::{
-    AccountSelector, BlokliQueryClient, ChannelFilter, ChannelSelector, SafeSelector, types::ChannelStatus,
+    AccountSelector, BlokliQueryClient, ChannelFilter, ChannelSelector, SafeSelector,
+    types::{ChannelStatus, TransactionStatus},
 };
 use blokli_integration_tests::{
     constants::parsed_safe_balance,
     fixtures::{IntegrationFixture, integration_fixture as fixture},
 };
+use hex::FromHex;
 use hopr_internal_types::channels::generate_channel_id;
 use hopr_primitive_types::prelude::{HoprBalance, XDaiBalance};
 use rstest::*;
 use serial_test::serial;
 use tokio::time::sleep;
-use tracing::debug;
 
 #[rstest]
 #[test_log::test(tokio::test)]
@@ -105,7 +106,7 @@ async fn query_token_balance_of_eoa(#[future(awt)] fixture: IntegrationFixture) 
 #[serial]
 /// deploy a safe, query the token (wxHOPR) balance of the safe via blokli and verify that
 /// format is correct.
-async fn query_token_balance_of_safe(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+async fn query_token_balance_and_allowance_of_safe(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
 
     let maybe_safe = fixture
@@ -136,6 +137,15 @@ async fn query_token_balance_of_safe(#[future(awt)] fixture: IntegrationFixture)
         .parse()
         .expect("failed to parse blokli token balance");
 
+    let _: HoprBalance = fixture
+        .client()
+        .query_safe_allowance(&safe_address)
+        .await?
+        .allowance
+        .0
+        .parse()
+        .expect("failed to parse retrieved allowance amount");
+
     Ok(())
 }
 
@@ -151,16 +161,27 @@ async fn query_transaction_count(#[future(awt)] fixture: IntegrationFixture) -> 
         .transaction_count(sender.to_string_address().as_str())
         .await?;
 
-    let raw_tx = fixture.build_raw_tx(tx_value, sender, recipient, nonce).await?;
+    let signed_bytes = Vec::from_hex(
+        fixture
+            .build_raw_tx(tx_value, sender, recipient, nonce)
+            .await?
+            .trim_start_matches("0x"),
+    )
+    .expect("failed to decode raw tx");
 
     let before_count = fixture
         .client()
         .query_transaction_count(sender.alloy_address().as_ref())
         .await?;
 
-    fixture.rpc().execute_transaction(&raw_tx).await?;
-
-    sleep(Duration::from_secs(8)).await;
+    let tx_id = fixture.submit_and_track_tx(&signed_bytes).await?;
+    loop {
+        let tx = fixture.client().query_transaction_status(tx_id.clone()).await?;
+        if tx.status == TransactionStatus::Confirmed {
+            break;
+        }
+        sleep(Duration::from_secs(2)).await;
+    }
 
     let after_count = fixture
         .client()
@@ -191,18 +212,15 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
     let amount: HoprBalance = "1 wei wxHOPR".parse().expect("failed to parse amount");
 
     // Deploy safes for both parties
-    debug!("deploying safes");
     let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
     fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
 
     // Set allowance
-    debug!("setting allowance");
     fixture.approve(&src, amount, &src_safe.module_address).await?;
 
     sleep(Duration::from_secs(8)).await;
 
     // Create the channel
-    debug!("opening channel");
     fixture
         .open_channel(&src, &dst, amount, &src_safe.module_address)
         .await?;
@@ -213,7 +231,6 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
 
     assert_eq!(after_count, before_count + 1);
 
-    debug!("close channel");
     fixture
         .initiate_outgoing_channel_closure(&src, &dst, &src_safe.module_address)
         .await?;
@@ -239,7 +256,14 @@ async fn query_chain_info_should_match_rpc(#[future(awt)] fixture: IntegrationFi
     let chain_id = fixture.rpc().chain_id().await?;
 
     assert_eq!(chain.chain_id as u64, chain_id);
-    assert_ne!(chain.key_binding_fee.0.parse::<HoprBalance>().expect("failed to parse key binding fee"), HoprBalance::zero());
+    assert_ne!(
+        chain
+            .key_binding_fee
+            .0
+            .parse::<HoprBalance>()
+            .expect("failed to parse key binding fee"),
+        HoprBalance::zero()
+    );
 
     Ok(())
 }

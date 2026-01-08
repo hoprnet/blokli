@@ -13,7 +13,6 @@ use hopr_internal_types::channels::generate_channel_id;
 use hopr_primitive_types::traits::ToHex;
 use rstest::*;
 use serial_test::serial;
-use tracing::debug;
 
 #[rstest]
 #[test_log::test(tokio::test)]
@@ -35,7 +34,6 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
     let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
     fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
 
-    debug!("setting allowance");
     fixture.approve(&src, amount, &src_safe.module_address).await?;
 
     let handle = tokio::task::spawn(async move {
@@ -57,7 +55,6 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
             .await
     });
 
-    debug!("opening channel");
     fixture
         .open_channel(&src, &dst, amount, &src_safe.module_address)
         .await?;
@@ -134,7 +131,6 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
     let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
     fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
 
-    debug!("setting allowance");
     fixture.approve(&src, amount, &src_safe.module_address).await?;
 
     let handle = tokio::task::spawn(async move {
@@ -157,7 +153,6 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
             .await
     });
 
-    debug!("opening channel");
     fixture
         .open_channel(&src, &dst, amount, &src_safe.module_address)
         .await?;
@@ -223,7 +218,6 @@ async fn subscribe_safe_deployments(#[future(awt)] fixture: IntegrationFixture) 
     let account_address = account.to_string_address();
     let client = fixture.client().clone();
 
-    debug!("subscribing to safe deployments");
     let handle = tokio::task::spawn(async move {
         client
             .subscribe_safe_deployments()

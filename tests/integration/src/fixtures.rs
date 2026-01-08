@@ -89,6 +89,7 @@ impl IntegrationFixture {
 
 // Transaction related helpers
 impl IntegrationFixture {
+    /// Builds a raw EIP-1559 transaction hex string.
     pub async fn build_raw_tx(
         &self,
         value: U256,
@@ -110,6 +111,7 @@ impl IntegrationFixture {
             .await
     }
 
+    /// Submits the signed transaction blindly.
     pub async fn submit_tx(&self, signed_bytes: &[u8]) -> Result<[u8; 32]> {
         let receipt = self
             .client()
@@ -119,6 +121,7 @@ impl IntegrationFixture {
         Ok(receipt)
     }
 
+    /// Submits the signed transaction and returns the tracking id.
     pub async fn submit_and_track_tx(&self, signed_bytes: &[u8]) -> Result<String> {
         let tx_id = self
             .client()
@@ -128,6 +131,7 @@ impl IntegrationFixture {
         Ok(tx_id)
     }
 
+    /// Submits the signed transaction and waits for the specified number of confirmations.
     pub async fn submit_and_confirm_tx(&self, signed_bytes: &[u8], confirmations: usize) -> Result<[u8; 32]> {
         let receipt = self
             .client()
@@ -140,6 +144,7 @@ impl IntegrationFixture {
 
 // Safe related helpers
 impl IntegrationFixture {
+    /// Deploys a safe for the specified owner.
     async fn deploy_safe(&self, owner: &AnvilAccount, amount: HoprBalance) -> Result<[u8; 32]> {
         let nonce = self.rpc().transaction_count(owner.to_string_address().as_str()).await?;
 
@@ -162,6 +167,8 @@ impl IntegrationFixture {
             .await
     }
 
+    /// Deploys and returns a safe for the specified owner if not already deployed, otherwise retrieves the existing
+    /// safe.
     pub async fn deploy_or_get_safe(&self, owner: &AnvilAccount, amount: HoprBalance) -> Result<Safe> {
         let maybe_safe = self
             .client()
@@ -205,6 +212,7 @@ impl IntegrationFixture {
 
 // Account related helpers
 impl IntegrationFixture {
+    /// Announces the account using the specified safe module.
     pub async fn announce_account(&self, account: &AnvilAccount, module: &str) -> Result<[u8; 32]> {
         let nonce = self
             .rpc()
@@ -232,6 +240,7 @@ impl IntegrationFixture {
             .await
     }
 
+    /// Announces the account if not annonced yet. If already announced, does nothing.
     pub async fn announce_or_get_account(&self, account: &AnvilAccount, module: &str) -> Result<()> {
         let maybe_account = self
             .client()
@@ -259,6 +268,7 @@ impl IntegrationFixture {
 
 // Ticket related helpers
 impl IntegrationFixture {
+    /// Updates the ticket's winning probability to `new_win_prob`.
     pub async fn update_winn_prob(
         &self,
         owner: &AnvilAccount,
@@ -280,6 +290,7 @@ impl IntegrationFixture {
 
 // Token related helpers
 impl IntegrationFixture {
+    /// Approves the safe module to spend `amount` of wxHOPR on behalf of `owner`.
     pub async fn approve(&self, owner: &AnvilAccount, amount: HoprBalance, module: &str) -> Result<[u8; 32]> {
         let nonce = self.rpc().transaction_count(owner.to_string_address().as_str()).await?;
         let spender = HoprAddress::from_str(&self.contract_addresses().channels.to_string())
@@ -312,6 +323,7 @@ impl IntegrationFixture {
 
 // Channel related helpers
 impl IntegrationFixture {
+    /// Opens a channel from `from` to `to` with the specified `amount`.
     pub async fn open_channel(
         &self,
         from: &AnvilAccount,
@@ -337,6 +349,7 @@ impl IntegrationFixture {
             .await
     }
 
+    /// Start cliosing an outgoing channel from `from` to `to`.
     pub async fn initiate_outgoing_channel_closure(
         &self,
         from: &AnvilAccount,
