@@ -28,6 +28,7 @@ jobs:
     permissions:
       contents: read
       security-events: write
+      id-token: write
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       version_type: "commit"
@@ -48,7 +49,6 @@ jobs:
     uses: hoprnet/hopr-workflows/.github/workflows/build-docker-manifest.yaml@build-docker-manifest-v1
     permissions:
       contents: read
-      id-token: write
     with:
       version_type: "commit"
       docker_image_name: "bloklid"
