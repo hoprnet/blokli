@@ -48,6 +48,7 @@ jobs:
     uses: hoprnet/hopr-workflows/.github/workflows/build-docker-manifest.yaml@build-docker-manifest-v1
     permissions:
       contents: read
+      id-token: write
     with:
       version_type: "commit"
       docker_image_name: "bloklid"
