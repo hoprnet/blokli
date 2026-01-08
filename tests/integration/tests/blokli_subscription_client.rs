@@ -5,6 +5,7 @@ use blokli_client::api::{
 use blokli_integration_tests::fixtures::{IntegrationFixture, integration_fixture as fixture};
 use futures::stream::StreamExt;
 use futures_time::{future::FutureExt as FutureTimeoutExt, time::Duration};
+use hex::ToHex as HexToHex;
 use hopr_crypto_types::prelude::Keypair;
 use hopr_crypto_types::types::Hash;
 use hopr_internal_types::channels::generate_channel_id;
@@ -119,10 +120,10 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
         account.address.to_lowercase()
     );
 
-    // The retrieved account must have a offchain key
+    // The retrieved account must have an offchain key
     assert_eq!(
         retrieved_account.packet_key.to_lowercase(),
-        account.offchain_key_pair().public().to_hex().to_lowercase()
+        account.offchain_key_pair().public().encode_hex::<String>()
     );
 
     // The retrieved account must have a matching Safe address (due to registration)
