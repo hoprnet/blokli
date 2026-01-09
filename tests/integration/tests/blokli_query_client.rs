@@ -68,7 +68,7 @@ async fn query_native_balance(#[future(awt)] fixture: IntegrationFixture) -> Res
 
     let blokli_balance = fixture
         .client()
-        .query_native_balance(account.alloy_address().as_ref())
+        .query_native_balance(account.to_alloy_address().as_ref())
         .await?;
     let rpc_balance = fixture.rpc().get_balance(&account.address).await?;
 
@@ -89,7 +89,7 @@ async fn query_token_balance_of_eoa(#[future(awt)] fixture: IntegrationFixture) 
 
     let blokli_balance = fixture
         .client()
-        .query_token_balance(account.alloy_address().as_ref())
+        .query_token_balance(account.to_alloy_address().as_ref())
         .await?;
 
     let _: HoprBalance = blokli_balance
@@ -111,7 +111,7 @@ async fn query_token_balance_and_allowance_of_safe(#[future(awt)] fixture: Integ
 
     let maybe_safe = fixture
         .client()
-        .query_safe(SafeSelector::ChainKey(account.alloy_address().into()))
+        .query_safe(SafeSelector::ChainKey(account.to_alloy_address().into()))
         .await?;
 
     let safe = match maybe_safe {
@@ -121,7 +121,7 @@ async fn query_token_balance_and_allowance_of_safe(#[future(awt)] fixture: Integ
             tokio::time::sleep(Duration::from_secs(8)).await; // dummy wait for the safe to be indexed
             fixture
                 .client()
-                .query_safe(SafeSelector::ChainKey(account.alloy_address().into()))
+                .query_safe(SafeSelector::ChainKey(account.to_alloy_address().into()))
                 .await?
                 .expect("Safe not found")
         }
@@ -168,7 +168,7 @@ async fn query_transaction_count(#[future(awt)] fixture: IntegrationFixture) -> 
 
     let before_count = fixture
         .client()
-        .query_transaction_count(sender.alloy_address().as_ref())
+        .query_transaction_count(sender.to_alloy_address().as_ref())
         .await?;
 
     let tx_id = fixture.submit_and_track_tx(&signed_bytes).await?;
@@ -182,7 +182,7 @@ async fn query_transaction_count(#[future(awt)] fixture: IntegrationFixture) -> 
 
     let after_count = fixture
         .client()
-        .query_transaction_count(sender.alloy_address().as_ref())
+        .query_transaction_count(sender.to_alloy_address().as_ref())
         .await?;
 
     assert_eq!(after_count, before_count + 1);

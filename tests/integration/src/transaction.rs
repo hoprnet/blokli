@@ -7,6 +7,7 @@ use alloy::{
     signers::{Signer, local::PrivateKeySigner},
 };
 use anyhow::{Context, Result};
+use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
 
 pub struct TransactionBuilder {
     signer: PrivateKeySigner,
@@ -14,8 +15,8 @@ pub struct TransactionBuilder {
 }
 
 impl TransactionBuilder {
-    pub fn new(private_key_hex: &[u8]) -> Result<Self> {
-        let signer = PrivateKeySigner::from_slice(private_key_hex).context("Failed to construct signer")?;
+    pub fn new(keypair: &ChainKeypair) -> Result<Self> {
+        let signer: PrivateKeySigner = hex::encode(keypair.secret().as_ref()).parse()?;
         let address = format!("{:#x}", signer.address());
 
         Ok(Self {

@@ -78,7 +78,7 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
     let [account] = fixture.sample_accounts::<1>();
     let account_address = account.address.to_string();
 
-    let selector = AccountSelector::Address(*account.alloy_address().as_ref());
+    let selector = AccountSelector::Address(*account.to_alloy_address().as_ref());
     let client = fixture.client().clone();
     let handle = tokio::task::spawn(async move {
         client
