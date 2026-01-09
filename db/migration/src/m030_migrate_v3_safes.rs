@@ -98,7 +98,11 @@ impl MigrationTrait for Migration {
 
                         let delete_query = Query::delete()
                             .from_table(HoprSafeContract::Table)
-                            .cond_where(Expr::col(HoprSafeContract::Address).eq(entry.address.to_vec()))
+                            .cond_where(
+                                Expr::col(HoprSafeContract::Address)
+                                    .eq(entry.address.to_vec())
+                                    .and(Expr::col(HoprSafeContract::ModuleAddress).eq(entry.module_address.to_vec())),
+                            )
                             .to_owned();
 
                         tx.execute(&delete_query).await?;
