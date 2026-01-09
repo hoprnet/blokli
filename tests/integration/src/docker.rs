@@ -197,7 +197,7 @@ fn parse_anvil_accounts(logs: &str) -> Result<Vec<AnvilAccount>> {
     let accounts: Vec<AnvilAccount> = addresses
         .into_iter()
         .zip(keys)
-        .map(|(address, private_key)| AnvilAccount { private_key, address })
+        .map(|(address, private_key)| AnvilAccount::new(private_key, address))
         .collect();
 
     if accounts.is_empty() {

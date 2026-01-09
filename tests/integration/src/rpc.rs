@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use alloy::primitives::U256;
 use anyhow::{Context, Result, anyhow};
+use hopr_primitive_types::prelude::Address;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -31,9 +32,12 @@ impl RpcClient {
         parse_hex_quantity(value.as_str().context("eth_chainId returned non-string result")?)
     }
 
-    pub async fn transaction_count(&self, address: &str) -> Result<u64> {
+    pub async fn transaction_count(&self, address: &Address) -> Result<u64> {
         let value = self
-            .call_raw("eth_getTransactionCount", vec![json!(address), json!("latest")])
+            .call_raw(
+                "eth_getTransactionCount",
+                vec![json!(address.to_string()), json!("latest")],
+            )
             .await?
             .context("eth_getTransactionCount returned no result")?;
         parse_hex_quantity(
@@ -43,9 +47,9 @@ impl RpcClient {
         )
     }
 
-    pub async fn get_balance(&self, address: &str) -> Result<U256> {
+    pub async fn get_balance(&self, address: &Address) -> Result<U256> {
         let value = self
-            .call_raw("eth_getBalance", vec![json!(address), json!("latest")])
+            .call_raw("eth_getBalance", vec![json!(address.to_string()), json!("latest")])
             .await?
             .context("eth_getBalance returned no result")?;
         parse_u256(value.as_str().context("eth_getBalance returned non-string result")?)

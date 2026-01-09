@@ -1,25 +1,19 @@
 use anyhow::{Result, anyhow};
 use blokli_client::api::{
-    AccountSelector, BlokliSubscriptionClient, ChannelFilter, ChannelSelector, types::ChannelStatus,
+    AccountSelector, BlokliQueryClient, BlokliSubscriptionClient, ChannelFilter, ChannelSelector, SafeSelector,
+    types::ChannelStatus,
 };
-use blokli_integration_tests::fixtures::{IntegrationFixture, integration_fixture as fixture};
+use blokli_integration_tests::{
+    constants::{EPSILON, parsed_safe_balance, subscription_timeout},
+    fixtures::{IntegrationFixture, integration_fixture as fixture},
+};
 use futures::stream::StreamExt;
-use futures_time::{future::FutureExt as FutureTimeoutExt, time::Duration};
-use hex::ToHex as HexToHex;
-use hopr_crypto_types::{prelude::Keypair, types::Hash};
+use futures_time::future::FutureExt as FutureTimeoutExt;
+use hex::ToHex;
+use hopr_crypto_types::{keypairs::Keypair, types::Hash};
 use hopr_internal_types::channels::generate_channel_id;
-use hopr_primitive_types::traits::ToHex;
 use rstest::*;
 use serial_test::serial;
-use tracing::debug;
-
-const EPSILON: f64 = 1e-10;
-const INITIAL_SAFE_BALANCE: u64 = 500_000_000_000_000_000;
-const SUBSCRIPTION_TIMEOUT_SECS: u64 = 60;
-
-fn subscription_timeout() -> Duration {
-    Duration::from_secs(SUBSCRIPTION_TIMEOUT_SECS)
-}
 
 #[rstest]
 #[test_log::test(tokio::test)]
@@ -29,19 +23,18 @@ fn subscription_timeout() -> Duration {
 /// is received through the subscription.
 async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [src, dst] = fixture.sample_accounts::<2>();
-    let expected_id = generate_channel_id(&src.hopr_address(), &dst.hopr_address());
+    let expected_id = generate_channel_id(&src.address, &dst.address);
     let channel_selector = ChannelSelector {
         filter: Some(ChannelFilter::ChannelId(expected_id.into())),
         status: Some(ChannelStatus::Open),
     };
     let amount = "1 wei wxHOPR".parse().expect("failed to parse amount");
-    let expected_channel_id = Hash::from(expected_id).to_hex();
+    let expected_channel_id = Hash::from(expected_id).encode_hex::<String>();
     let client = fixture.client().clone();
 
-    let src_safe = fixture.deploy_safe_and_announce(&src, INITIAL_SAFE_BALANCE).await?;
-    fixture.deploy_safe_and_announce(&dst, INITIAL_SAFE_BALANCE).await?;
+    let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
+    fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
 
-    debug!("setting allowance");
     fixture.approve(&src, amount, &src_safe.module_address).await?;
 
     let handle = tokio::task::spawn(async move {
@@ -55,7 +48,7 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
                     .concrete_channel_id
                     .to_lowercase();
 
-                let should_skip = !expected_channel_id.to_lowercase().contains(&retrieved_channel);
+                let should_skip = !(expected_channel_id.to_lowercase() == retrieved_channel);
                 futures::future::ready(should_skip)
             })
             .next()
@@ -63,7 +56,6 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
             .await
     });
 
-    debug!("opening channel");
     fixture
         .open_channel(&src, &dst, amount, &src_safe.module_address)
         .await?;
@@ -85,9 +77,9 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
 /// the subscription.
 async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
-    let account_address = account.address.clone();
+    let account_address = account.address.to_string();
 
-    let selector = AccountSelector::Address(*account.alloy_address().as_ref());
+    let selector = AccountSelector::Address(*account.to_alloy_address().as_ref());
     let client = fixture.client().clone();
     let handle = tokio::task::spawn(async move {
         client
@@ -99,7 +91,7 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
                     .expect("failed to get subscription update")
                     .chain_key
                     .to_lowercase()
-                    != account_address.to_lowercase();
+                    != account_address;
                 futures::future::ready(should_skip)
             })
             .next()
@@ -107,22 +99,19 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
             .await
     });
 
-    let deployed_safe = fixture.deploy_safe_and_announce(account, INITIAL_SAFE_BALANCE).await?;
+    let deployed_safe = fixture.deploy_safe_and_announce(account, parsed_safe_balance()).await?;
 
     let retrieved_account = handle
         .await??
         .ok_or_else(|| anyhow!("no update received from subscription"))??;
 
     // The retrieved account must have a matching address
-    assert_eq!(
-        retrieved_account.chain_key.to_lowercase(),
-        account.address.to_lowercase()
-    );
+    assert_eq!(retrieved_account.chain_key.to_lowercase(), account.address.to_string());
 
     // The retrieved account must have an offchain key
     assert_eq!(
         retrieved_account.packet_key.to_lowercase(),
-        account.offchain_key_pair().public().encode_hex::<String>()
+        account.offchain_keypair().public().encode_hex::<String>()
     );
 
     // The retrieved account must have a matching Safe address (due to registration)
@@ -132,7 +121,7 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
     );
 
     // Deployed safe must have a matching owner address
-    assert_eq!(deployed_safe.chain_key.to_lowercase(), account.address.to_lowercase());
+    assert_eq!(deployed_safe.chain_key.to_lowercase(), account.address.to_string());
 
     Ok(())
 }
@@ -145,16 +134,17 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
 /// and the source/destination are received through the subscription
 async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [src, dst] = fixture.sample_accounts::<2>();
-    let expected_id = generate_channel_id(&src.hopr_address(), &dst.hopr_address());
+    let expected_id = generate_channel_id(&src.address, &dst.address);
 
-    let amount = "1 wei wxHOPR".parse().expect("failed to parse amount");
-    let expected_channel_id = Hash::from(expected_id).to_hex();
+    let random_amount: u8 = rand::random::<u8>() % 100 + 1;
+    let amount = format!("{random_amount} wei wxHOPR")
+        .parse()
+        .expect("failed to parse amount");
     let client = fixture.client().clone();
 
-    let src_safe = fixture.deploy_safe_and_announce(&src, INITIAL_SAFE_BALANCE).await?;
-    fixture.deploy_safe_and_announce(&dst, INITIAL_SAFE_BALANCE).await?;
+    let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
+    fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
 
-    debug!("setting allowance");
     fixture.approve(&src, amount, &src_safe.module_address).await?;
 
     let handle = tokio::task::spawn(async move {
@@ -169,7 +159,7 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
                     .concrete_channel_id
                     .to_lowercase();
 
-                let should_skip = !expected_channel_id.to_lowercase().contains(&retrieved_channel);
+                let should_skip = !(expected_id.encode_hex::<String>() == retrieved_channel);
                 futures::future::ready(should_skip)
             })
             .next()
@@ -177,7 +167,6 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
             .await
     });
 
-    debug!("opening channel");
     fixture
         .open_channel(&src, &dst, amount, &src_safe.module_address)
         .await?;
@@ -187,8 +176,8 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
         .ok_or_else(|| anyhow!("no update received from subscription"))??;
 
     assert_eq!(graph_entry.channel.balance.0, amount.to_string());
-    assert_eq!(graph_entry.source.chain_key, src.address.to_lowercase());
-    assert_eq!(graph_entry.destination.chain_key, dst.address.to_lowercase());
+    assert_eq!(graph_entry.source.chain_key, src.address.to_string());
+    assert_eq!(graph_entry.destination.chain_key, dst.address.to_string());
     assert_eq!(graph_entry.channel.status, ChannelStatus::Open);
 
     Ok(())
@@ -210,7 +199,7 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
         .expect("failed to create ticket parameters subscription");
 
     fixture
-        .update_winn_prob(
+        .update_winning_probability(
             account,
             fixture.contract_addresses().winning_probability_oracle,
             new_win_prob,
@@ -226,7 +215,7 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
     assert!((output.min_ticket_winning_probability - new_win_prob).abs() < EPSILON);
 
     fixture
-        .update_winn_prob(account, fixture.contract_addresses().winning_probability_oracle, 1.0)
+        .update_winning_probability(account, fixture.contract_addresses().winning_probability_oracle, 1.0)
         .await?;
 
     Ok(())
@@ -235,14 +224,24 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
-/// subscribes to safe deployments, deploys a safe from an account, and verifies that the
+/// subscribes to safe deployments, deploys a safe from an account that does not have a safe yet, and verifies that the
 /// deployment is received through the subscription.
+/// Also verifies that re-registering the same safe fails.
 async fn subscribe_safe_deployments(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
-    let [account] = fixture.sample_accounts::<1>();
-    let account_address = account.address.clone();
+    let account = loop {
+        let [maybe_account] = fixture.sample_accounts::<1>();
+        let safe = fixture
+            .client()
+            .query_safe(SafeSelector::ChainKey(maybe_account.to_alloy_address().into()))
+            .await?;
+        if safe.is_none() {
+            break maybe_account;
+        }
+    };
+
+    let account_address = account.address.to_string();
     let client = fixture.client().clone();
 
-    debug!("subscribing to safe deployments");
     let handle = tokio::task::spawn(async move {
         client
             .subscribe_safe_deployments()
@@ -253,7 +252,7 @@ async fn subscribe_safe_deployments(#[future(awt)] fixture: IntegrationFixture) 
                     .expect("failed to get subscription update")
                     .chain_key
                     .to_lowercase()
-                    != account_address.to_lowercase();
+                    != account_address;
                 futures::future::ready(should_skip)
             })
             .next()
@@ -261,11 +260,14 @@ async fn subscribe_safe_deployments(#[future(awt)] fixture: IntegrationFixture) 
             .await
     });
 
-    fixture.deploy_safe(account, INITIAL_SAFE_BALANCE).await?;
+    fixture.deploy_or_get_safe(account, parsed_safe_balance()).await?;
 
-    handle
+    let safe = handle
         .await??
         .ok_or_else(|| anyhow!("no update received from subscription"))??;
+
+    // re-registering the same safe should fail
+    assert!(fixture.register_safe(account, &safe.address).await.is_err());
 
     Ok(())
 }
