@@ -8,6 +8,7 @@ on:
         type: choice
         default: "patch"
         options:
+          - rc
           - patch
           - minor
           - major
@@ -16,81 +17,86 @@ concurrency:
   cancel-in-progress: false
 jobs:
   build-docker:
-    name: Build Docker
-    uses: ./.github/workflows/build-docker.yaml
+    name: Docker ${{ matrix.architecture }}
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker-image.yaml@build-docker-image-v1
+    strategy:
+      matrix:
+        include:
+          - architecture: x86_64-linux
+            command: nix run -L .#bloklid-docker-upload-amd64
+    permissions:
+      contents: read
     with:
       source_branch: ${{ github.ref }}
       version_type: "release"
-    secrets: inherit
+      architecture: ${{ matrix.architecture }}
+      cachix_cache_name: "blokli"
+      build_file: "bloklid/Cargo.toml"
+      build_command: ${{ matrix.command }}
+      docker_image_name: "bloklid"
+    secrets:
+      gcp_service_account: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY}}
+      cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
+      docker_hub_token: ${{ secrets.DOCKER_HUB_TOKEN }}
+  build-docker-manifest:
+    name: Docker manifest
+    needs: build-docker
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker-manifest.yaml@build-docker-manifest-v1
+    permissions:
+      contents: read
+    with:
+      version_type: "release"
+      docker_image_name: "bloklid"
+      docker_build_version: ${{ needs.build-docker.outputs.docker_build_version }}
+      docker_debug_version: ${{ needs.build-docker.outputs.docker_debug_version }}
+    secrets:
+      gcp_service_account: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY}}
+      docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
+      docker_hub_token: ${{ secrets.DOCKER_HUB_TOKEN }}
+  build-binaries:
+    name: Binary ${{ matrix.architecture }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - architecture: x86_64-linux
+            runner: self-hosted-hoprnet-bigger
+            build_command: nix build -L .#bloklid-x86_64-linux
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v1
+    permissions:
+      contents: read
+    with:
+      source_branch: ${{ github.ref }}
+      version_type: "release"
+      architecture: ${{ matrix.architecture }}
+      cachix_cache_name: "blokli"
+      build_file: "bloklid/Cargo.toml"
+      build_command: ${{ matrix.build_command }}
+      binary: bloklid
+      runner: ${{ matrix.runner }}
+    secrets:
+      gcp_service_account: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY}}
+      cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      gpg_private_key: ${{ secrets.GPG_HOPRNET_PRIVATE_KEY }}
   release:
     name: Close release
     needs:
-      - build-docker
+      - build-docker-manifest
+      - build-binaries
     runs-on: self-hosted-hoprnet-small
+    permissions:
+      contents: write
     steps:
       - name: Checkout hoprnet repository
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
-      - name: Setup GCP
-        id: gcp
-        uses: hoprnet/hopr-workflows/actions/setup-gcp@12c56020e16036982e6cc529848edeedfc705865 # master
+      - name: Release version
+        uses: hoprnet/hopr-workflows/actions/release-version@18bf0070b97ef2e46488c946d2706a08272d1dd6 # release-version-v1
         with:
-          google-credentials: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
-          install-sdk: "true"
-      - name: Create release and publish binaries
-        id: environment
-        run: |
-          release_version=$(grep -E '^version\s*=' bloklid/Cargo.toml | awk -F\" '{print $2}')
-          echo "release_version=${release_version}" >> "$GITHUB_OUTPUT"
-          gh release create "v${release_version}" --generate-notes
-        env:
-          GH_TOKEN: ${{ github.token }}
-      - name: Update Version
-        id: bump
-        shell: bash
-        run: |
-          current_version=$(grep -E '^version\s*=' bloklid/Cargo.toml | awk -F\" '{print $2}')
-          # Extract parts without IFS or read
-          IFS='.' read -r major_version minor_version patch_version <<< "${current_version}"
-          echo "Current version $major_version $minor_version $patch_version"
-
-          # Bump the appropriate part
-          echo "Bumping ${{ inputs.release_type }} version"
-          case "${{ inputs.release_type }}" in
-              major)
-                  major_version=$((major_version+1))
-                  minor_version=0
-                  patch_version=0
-                  ;;
-              minor)
-                  minor_version=$((minor_version+1))
-                  patch_version=0
-                  ;;
-              patch)
-                  patch_version=$((patch_version+1))
-                  ;;
-              *)
-                  echo "Invalid release type"
-                  exit 1
-                  ;;
-          esac
-          echo "New version: ${major_version}.${minor_version}.${patch_version}"
-
-          bump_version="${major_version}.${minor_version}.${patch_version}"
-          echo "Updating version from $current_version to $bump_version"
-
-          # Update the version in bloklid/Cargo.toml
-          # capture group 1: version = "
-          # capture group 2: the version number
-          # capture group 3: "
-          sed -i.bak -E "s/(^version = \")([0-9]+\.[0-9]+\.[0-9]+)(\")/\1${bump_version}\3/" bloklid/Cargo.toml
-          rm bloklid/Cargo.toml.bak
-          nix develop --command cargo generate-lockfile
-          echo "bump_version=${bump_version}" >> "$GITHUB_OUTPUT"
-          echo "v${current_version}" > LATEST
-          echo "LATEST updated to v${current_version}"
-      - uses: EndBug/add-and-commit@a94899bca583c204427a224a7af87c02f9b325d5 # v9.1.4
-        with:
-          add: '["Cargo.*", "LATEST" ]'
-          new_branch: main
-          message: "Bump to version ${{ steps.bump.outputs.bump_version }}"
-          pathspec_error_handling: exitImmediately
+          file: bloklid/Cargo.toml
+          release_type: "${{ inputs.release_type }}"
+          zulip_api_key: ${{ secrets.ZULIP_API_KEY }}
+          zulip_email: ${{ secrets.ZULIP_EMAIL }}
+          zulip_channel: "Blokli"
+          zulip_topic: "Releases"
+          gcp_service_account: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY}}
