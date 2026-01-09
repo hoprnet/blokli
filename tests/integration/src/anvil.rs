@@ -1,41 +1,41 @@
 use std::str::FromStr;
 
-use alloy::{network::EthereumWallet, primitives::Address as AlloyAddress, signers::local::PrivateKeySigner};
+use alloy::primitives::Address as AlloyAddress;
 use hopr_chain_connector::ChainKeypair;
 use hopr_crypto_types::keypairs::{Keypair, OffchainKeypair};
+use hopr_internal_types::announcement::KeyBinding;
 use hopr_primitive_types::prelude::Address;
 
 #[derive(Clone, Debug)]
 pub struct AnvilAccount {
-    pub private_key: String,
-    pub address: String,
+    pub keypair: ChainKeypair,
+    pub address: Address,
 }
 
 impl AnvilAccount {
-    pub fn alloy_address(&self) -> AlloyAddress {
-        AlloyAddress::from_str(&self.address).expect("Invalid address hex")
+    pub fn new(private_key: String, address: String) -> Self {
+        let parsed_private_key =
+            hex::decode(private_key.strip_prefix("0x").unwrap_or(&private_key)).expect("Invalid private key hex");
+
+        let keypair = ChainKeypair::from_secret(&parsed_private_key).expect("Invalid private key hex");
+
+        let parsed_address = Address::from_str(&address).expect("Invalid address hex");
+
+        Self {
+            keypair,
+            address: parsed_address,
+        }
     }
 
-    pub fn hopr_address(&self) -> Address {
-        Address::from_str(&self.address).expect("Invalid address hex")
+    pub fn to_alloy_address(&self) -> AlloyAddress {
+        AlloyAddress::from_str(&self.address.to_string()).expect("Invalid address hex")
     }
 
-    pub fn offchain_key_pair(&self) -> OffchainKeypair {
-        let key_bytes = hex::decode(self.private_key.strip_prefix("0x").unwrap_or(&self.private_key))
-            .expect("Invalid hex in private key");
-        OffchainKeypair::from_secret(&key_bytes).expect("Invalid private key hex")
+    pub fn keybinding(&self) -> KeyBinding {
+        KeyBinding::new(self.address, &self.offchain_keypair())
     }
 
-    pub fn chain_key_pair(&self) -> ChainKeypair {
-        let key_bytes = hex::decode(self.private_key.strip_prefix("0x").unwrap_or(&self.private_key))
-            .expect("Invalid hex in private key");
-
-        ChainKeypair::from_secret(&key_bytes).expect("Invalid private key hex")
-    }
-
-    pub fn as_wallet(&self) -> EthereumWallet {
-        PrivateKeySigner::from_slice(self.chain_key_pair().secret().as_ref())
-            .expect("failed to create wallet from owner's private key")
-            .into()
+    pub fn offchain_keypair(&self) -> OffchainKeypair {
+        OffchainKeypair::from_secret(self.keypair.secret().as_ref()).expect("Invalid private key hex")
     }
 }

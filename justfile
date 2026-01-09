@@ -46,11 +46,11 @@ clean:
 
 # Run all tests in workspace
 test:
-    cargo test --workspace --exclude blokli-integration-tests
+    cargo test --workspace --exclude blokli-integration-tests --no-fail-fast
 
 # Run tests for a specific package
 test-package package:
-    cargo test -p {{ package }}
+    cargo test -p {{ package }} --no-fail-fast
 
 # Run tests in single thread mode with output (useful for debugging)
 test-debug:
