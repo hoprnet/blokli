@@ -1,6 +1,7 @@
 use anyhow::{Result, anyhow};
 use blokli_client::api::{
-    AccountSelector, BlokliSubscriptionClient, ChannelFilter, ChannelSelector, types::ChannelStatus,
+    AccountSelector, BlokliQueryClient, BlokliSubscriptionClient, ChannelFilter, ChannelSelector, SafeSelector,
+    types::ChannelStatus,
 };
 use blokli_integration_tests::{
     constants::{EPSILON, parsed_safe_balance, subscription_timeout},
@@ -223,11 +224,21 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
-/// subscribes to safe deployments, deploys a safe from an account, and verifies that the
+/// subscribes to safe deployments, deploys a safe from an account that does not have a safe yet, and verifies that the
 /// deployment is received through the subscription.
 /// Also verifies that re-registering the same safe fails.
 async fn subscribe_safe_deployments(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
-    let [account] = fixture.sample_accounts::<1>();
+    let account = loop {
+        let [maybe_account] = fixture.sample_accounts::<1>();
+        let safe = fixture
+            .client()
+            .query_safe(SafeSelector::ChainKey(maybe_account.to_alloy_address().into()))
+            .await?;
+        if safe.is_none() {
+            break maybe_account;
+        }
+    };
+
     let account_address = account.address.to_string();
     let client = fixture.client().clone();
 
