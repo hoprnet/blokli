@@ -98,16 +98,32 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
             .await
     });
 
-    fixture.deploy_safe_and_announce(account, parsed_safe_balance()).await?;
+    let deployed_safe = fixture.deploy_safe_and_announce(account, parsed_safe_balance()).await?;
 
+    let retrieved_account = handle
+        .await??
+        .ok_or_else(|| anyhow!("no update received from subscription"))??;
+
+    // The retrieved account must have a matching address
     assert_eq!(
-        handle
-            .await??
-            .ok_or_else(|| anyhow!("no update received from subscription"))??
-            .chain_key
-            .to_lowercase(),
+        retrieved_account.chain_key.to_lowercase(),
         account.address.to_string()
     );
+
+    // The retrieved account must have an offchain key
+    assert_eq!(
+        retrieved_account.packet_key.to_lowercase(),
+        account.offchain_key_pair().public().encode_hex::<String>()
+    );
+
+    // The retrieved account must have a matching Safe address (due to registration)
+    assert_eq!(
+        retrieved_account.safe_address.map(|a| a.to_lowercase()),
+        Some(deployed_safe.address.to_lowercase())
+    );
+
+    // Deployed safe must have a matching owner address
+    assert_eq!(deployed_safe.chain_key.to_lowercase(), account.address.to_lowercase());
 
     Ok(())
 }

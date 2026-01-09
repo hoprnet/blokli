@@ -45,7 +45,7 @@ async fn count_accounts_matches_deployed_accounts(#[future(awt)] fixture: Integr
 async fn query_accounts(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
 
-    fixture.deploy_safe_and_announce(account, parsed_safe_balance()).await?;
+    let deployed_safe = fixture.deploy_safe_and_announce(account, parsed_safe_balance()).await?;
 
     let found_accounts = fixture
         .client()
@@ -53,7 +53,22 @@ async fn query_accounts(#[future(awt)] fixture: IntegrationFixture) -> Result<()
         .await?;
 
     assert_eq!(found_accounts.len(), 1);
-    assert_eq!(found_accounts[0].chain_key.to_lowercase(), account.address.to_string());
+    assert_eq!(
+        found_accounts[0].chain_key.to_lowercase(),
+        account.address.to_string()
+    );
+    assert_eq!(
+        found_accounts[0].packet_key.to_lowercase(),
+        account.offchain_key_pair().public().encode_hex::<String>()
+    );
+    assert_eq!(
+        found_accounts[0].safe_address.clone().map(|a| a.to_lowercase()),
+        Some(deployed_safe.address.to_string())
+    );
+    assert_eq!(
+        found_accounts[0].chain_key.to_lowercase(),
+        deployed_safe.chain_key.to_string(),
+    );
 
     Ok(())
 }
