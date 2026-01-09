@@ -5,7 +5,8 @@ use blokli_client::api::{
 use blokli_integration_tests::fixtures::{IntegrationFixture, integration_fixture as fixture};
 use futures::stream::StreamExt;
 use futures_time::{future::FutureExt as FutureTimeoutExt, time::Duration};
-use hopr_crypto_types::types::Hash;
+use hex::ToHex as HexToHex;
+use hopr_crypto_types::{prelude::Keypair, types::Hash};
 use hopr_internal_types::channels::generate_channel_id;
 use hopr_primitive_types::traits::ToHex;
 use rstest::*;
@@ -106,16 +107,32 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
             .await
     });
 
-    fixture.deploy_safe_and_announce(account, INITIAL_SAFE_BALANCE).await?;
+    let deployed_safe = fixture.deploy_safe_and_announce(account, INITIAL_SAFE_BALANCE).await?;
 
+    let retrieved_account = handle
+        .await??
+        .ok_or_else(|| anyhow!("no update received from subscription"))??;
+
+    // The retrieved account must have a matching address
     assert_eq!(
-        handle
-            .await??
-            .ok_or_else(|| anyhow!("no update received from subscription"))??
-            .chain_key
-            .to_lowercase(),
+        retrieved_account.chain_key.to_lowercase(),
         account.address.to_lowercase()
     );
+
+    // The retrieved account must have an offchain key
+    assert_eq!(
+        retrieved_account.packet_key.to_lowercase(),
+        account.offchain_key_pair().public().encode_hex::<String>()
+    );
+
+    // The retrieved account must have a matching Safe address (due to registration)
+    assert_eq!(
+        retrieved_account.safe_address.map(|a| a.to_lowercase()),
+        Some(deployed_safe.address.to_lowercase())
+    );
+
+    // Deployed safe must have a matching owner address
+    assert_eq!(deployed_safe.chain_key.to_lowercase(), account.address.to_lowercase());
 
     Ok(())
 }
