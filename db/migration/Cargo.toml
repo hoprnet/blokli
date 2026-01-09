@@ -6,7 +6,7 @@ license     = "GPL-3.0-only"
 name        = "blokli-db-migration"
 publish     = false
 repository  = "https://github.com/hoprnet/blokli"
-version     = "0.6.0"
+version     = "0.7.0"
 
 [features]
 default = ["sqlite"]
@@ -21,10 +21,14 @@ name = "migration"
 path = "src/main.rs"
 
 [dependencies]
+csv               = { workspace = true }
 sea-orm-migration = { workspace = true }
+serde             = { workspace = true }
+serde-hex         = { workspace = true }
 tokio             = { workspace = true }
 
 hopr-internal-types = { workspace = true }
 
 [dev-dependencies]
+anyhow  = { workspace = true }
 sea-orm = { workspace = true }

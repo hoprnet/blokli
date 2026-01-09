@@ -381,21 +381,26 @@ async fn run() -> errors::Result<()> {
         }
 
         // Initialize database
-        let db_config = BlokliDbConfig {
-            max_connections: {
-                let cfg = config
-                    .read()
-                    .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
-                cfg.database
-                    .as_ref()
-                    .ok_or_else(|| {
-                        BloklidError::DatabaseNotConfigured(
-                            "Failed to read database configuration during connection pool initialization".to_string(),
-                        )
-                    })?
-                    .max_connections()
-            },
-            log_slow_queries: Duration::from_secs(1),
+        let db_config = {
+            let cfg = config
+                .read()
+                .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
+
+            BlokliDbConfig {
+                max_connections: {
+                    cfg.database
+                        .as_ref()
+                        .ok_or_else(|| {
+                            BloklidError::DatabaseNotConfigured(
+                                "Failed to read database configuration during connection pool initialization"
+                                    .to_string(),
+                            )
+                        })?
+                        .max_connections()
+                },
+                log_slow_queries: Duration::from_secs(1),
+                network_name: cfg.network.to_string(),
+            }
         };
 
         let is_in_memory = {
