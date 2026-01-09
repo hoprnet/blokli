@@ -4,7 +4,7 @@ use blokli_db_entity::{
     chain_info,
     prelude::{Account, Announcement, ChainInfo},
 };
-use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait};
+use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait, SafeDataOrigin};
 use sea_orm::{ConnectOptions, Database, EntityTrait, Set, SqlxSqliteConnector, sea_query::OnConflict};
 use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
 use tracing::log::LevelFilter;
@@ -24,6 +24,8 @@ pub struct BlokliDbConfig {
     pub max_connections: u32,
     #[default(Duration::from_secs(5))]
     pub log_slow_queries: Duration,
+    #[default("rotsee")]
+    pub network_name: String,
 }
 
 /// Main database handle for HOPR node operations.
@@ -217,9 +219,20 @@ impl BlokliDb {
         // Apply migrations based on database backend
         if is_sqlite && logs_db.is_some() {
             // For SQLite with dual databases: run separate migrations on each database
-            MigratorIndex::up(&db, None)
-                .await
-                .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
+            if cfg.network_name.eq_ignore_ascii_case("rotsee") {
+                MigratorIndex::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+                    .await
+                    .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
+            } else if cfg.network_name.eq_ignore_ascii_case("dufour") {
+                MigratorIndex::<{ SafeDataOrigin::Dufour as u8 }>::up(&db, None)
+                    .await
+                    .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
+            } else {
+                return Err(DbSqlError::Construction(format!(
+                    "cannot apply index migrations for unknown network {}",
+                    cfg.network_name
+                )));
+            }
 
             MigratorChainLogs::up(logs_db.as_ref().unwrap(), None)
                 .await
@@ -228,9 +241,20 @@ impl BlokliDb {
             // For PostgreSQL (or legacy single-file SQLite): run all migrations on single database
             // Use unified Migrator to avoid SeaORM validation errors when migrations from one
             // migrator are recorded but not present in another migrator's list
-            Migrator::up(&db, None)
-                .await
-                .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
+            if cfg.network_name.eq_ignore_ascii_case("rotsee") {
+                Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+                    .await
+                    .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
+            } else if cfg.network_name.eq_ignore_ascii_case("dufour") {
+                Migrator::<{ SafeDataOrigin::Dufour as u8 }>::up(&db, None)
+                    .await
+                    .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
+            } else {
+                return Err(DbSqlError::Construction(format!(
+                    "cannot apply migrations for unknown network {}",
+                    cfg.network_name
+                )));
+            }
         }
 
         // Check schema version and clear data if needed
