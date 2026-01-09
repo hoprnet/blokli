@@ -9,8 +9,9 @@ use blokli_integration_tests::{
 use futures::stream::StreamExt;
 use futures_time::future::FutureExt as FutureTimeoutExt;
 use hopr_crypto_types::types::Hash;
+use hopr_crypto_types::keypairs::Keypair;
 use hopr_internal_types::channels::generate_channel_id;
-use hopr_primitive_types::traits::ToHex;
+use hex::ToHex;
 use rstest::*;
 use serial_test::serial;
 
@@ -28,7 +29,7 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
         status: Some(ChannelStatus::Open),
     };
     let amount = "1 wei wxHOPR".parse().expect("failed to parse amount");
-    let expected_channel_id = Hash::from(expected_id).to_hex();
+    let expected_channel_id = Hash::from(expected_id).encode_hex::<String>();
     let client = fixture.client().clone();
 
     let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
@@ -47,7 +48,7 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
                     .concrete_channel_id
                     .to_lowercase();
 
-                let should_skip = !expected_channel_id.to_lowercase().contains(&retrieved_channel);
+                let should_skip = !(expected_channel_id.to_lowercase() == retrieved_channel);
                 futures::future::ready(should_skip)
             })
             .next()
@@ -113,7 +114,7 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
     // The retrieved account must have an offchain key
     assert_eq!(
         retrieved_account.packet_key.to_lowercase(),
-        account.offchain_key_pair().public().encode_hex::<String>()
+        account.offchain_keypair().public().encode_hex::<String>()
     );
 
     // The retrieved account must have a matching Safe address (due to registration)
@@ -123,7 +124,7 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
     );
 
     // Deployed safe must have a matching owner address
-    assert_eq!(deployed_safe.chain_key.to_lowercase(), account.address.to_lowercase());
+    assert_eq!(deployed_safe.chain_key.to_lowercase(), account.address.to_string());
 
     Ok(())
 }
@@ -161,7 +162,7 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
                     .concrete_channel_id
                     .to_lowercase();
 
-                let should_skip = !expected_id.to_hex().to_lowercase().contains(&retrieved_channel);
+                let should_skip = !(expected_id.encode_hex::<String>() == retrieved_channel);
                 futures::future::ready(should_skip)
             })
             .next()

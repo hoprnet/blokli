@@ -97,7 +97,7 @@ impl IntegrationFixture {
         recipient: &AnvilAccount,
         nonce: u64,
     ) -> Result<String> {
-        let tx_builder = TestTransactionBuilder::new(&sender.private_key)?;
+        let tx_builder = TestTransactionBuilder::new(&sender.keypair)?;
         tx_builder
             .build_eip1559_transaction_hex(
                 self.rpc().chain_id().await?,
@@ -160,7 +160,7 @@ impl IntegrationFixture {
         )?;
 
         let payload_bytes = payload
-            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &owner.private_key)
+            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &owner.keypair)
             .await?;
 
         self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
@@ -202,7 +202,7 @@ impl IntegrationFixture {
         let payload = payload_generator.register_safe_by_node(HoprAddress::from_str(safe_address)?)?;
 
         let payload_bytes = payload
-            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &owner.private_key)
+            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &owner.keypair)
             .await?;
 
         self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
@@ -217,7 +217,7 @@ impl IntegrationFixture {
         let nonce = self.rpc().transaction_count(&account.address).await?;
 
         let payload_generator = SafePayloadGenerator::new(
-            &account.private_key,
+            &account.keypair,
             *self.contract_addresses(),
             HoprAddress::from_str(module)?,
         );
@@ -230,7 +230,7 @@ impl IntegrationFixture {
         )?;
 
         let payload_bytes = payload
-            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &account.private_key)
+            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &account.keypair)
             .await?;
 
         self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
@@ -277,7 +277,7 @@ impl IntegrationFixture {
         let payload = hopli_lib::payloads::set_winning_probability(contract_address, new_win_prob)?;
 
         let payload_bytes = payload
-            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &owner.private_key)
+            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &owner.keypair)
             .await?;
 
         self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
@@ -294,7 +294,7 @@ impl IntegrationFixture {
             .expect("Invalid spender address hex");
 
         let payload_generator = SafePayloadGenerator::new(
-            &owner.private_key,
+            &owner.keypair,
             *self.contract_addresses(),
             HoprAddress::from_str(module)?,
         );
@@ -302,7 +302,7 @@ impl IntegrationFixture {
         let payload = payload_generator.approve(spender, amount)?;
 
         let payload_bytes = payload
-            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &owner.private_key)
+            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &owner.keypair)
             .await?;
 
         self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
@@ -331,7 +331,7 @@ impl IntegrationFixture {
         let nonce = self.rpc().transaction_count(&from.address).await?;
 
         let payload_generator = SafePayloadGenerator::new(
-            &from.private_key,
+            &from.keypair,
             *self.contract_addresses(),
             HoprAddress::from_str(module)?,
         );
@@ -339,7 +339,7 @@ impl IntegrationFixture {
         let payload = payload_generator.fund_channel(to.address, amount)?;
 
         let payload_bytes = payload
-            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &from.private_key)
+            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &from.keypair)
             .await?;
 
         self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
@@ -356,7 +356,7 @@ impl IntegrationFixture {
         let nonce = self.rpc().transaction_count(&from.address).await?;
 
         let payload_generator = SafePayloadGenerator::new(
-            &from.private_key,
+            &from.keypair,
             *self.contract_addresses(),
             HoprAddress::from_str(module)?,
         );
@@ -364,7 +364,7 @@ impl IntegrationFixture {
         let payload = payload_generator.initiate_outgoing_channel_closure(to.address)?;
 
         let payload_bytes = payload
-            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &from.private_key)
+            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &from.keypair)
             .await?;
 
         self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
@@ -408,7 +408,7 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
 
     let client = BlokliClient::new(config.bloklid_url.clone(), BlokliClientConfig::default());
 
-    let deployer: ChainKeypair = accounts[0].private_key.clone();
+    let deployer: ChainKeypair = accounts[0].keypair.clone();
     let wallet = PrivateKeySigner::from_slice(deployer.secret().as_ref()).expect("failed to construct wallet");
 
     // Build default JSON RPC provider

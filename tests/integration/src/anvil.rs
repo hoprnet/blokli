@@ -8,7 +8,7 @@ use hopr_primitive_types::prelude::Address;
 
 #[derive(Clone, Debug)]
 pub struct AnvilAccount {
-    pub private_key: ChainKeypair,
+    pub keypair: ChainKeypair,
     pub address: Address,
 }
 
@@ -17,12 +17,12 @@ impl AnvilAccount {
         let parsed_private_key =
             hex::decode(private_key.strip_prefix("0x").unwrap_or(&private_key)).expect("Invalid private key hex");
 
-        let key_pair = ChainKeypair::from_secret(&parsed_private_key).expect("Invalid private key hex");
+        let keypair = ChainKeypair::from_secret(&parsed_private_key).expect("Invalid private key hex");
 
         let parsed_address = Address::from_str(&address).expect("Invalid address hex");
 
         Self {
-            private_key: key_pair,
+            keypair,
             address: parsed_address,
         }
     }
@@ -32,9 +32,10 @@ impl AnvilAccount {
     }
 
     pub fn keybinding(&self) -> KeyBinding {
-        let offchain_key_pair =
-            OffchainKeypair::from_secret(self.private_key.secret().as_ref()).expect("Invalid private key hex");
+        KeyBinding::new(self.address, &self.offchain_keypair())
+    }
 
-        KeyBinding::new(self.address, &offchain_key_pair)
+    pub fn offchain_keypair(&self) -> OffchainKeypair {
+        OffchainKeypair::from_secret(self.keypair.secret().as_ref()).expect("Invalid private key hex")
     }
 }
