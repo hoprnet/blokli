@@ -6,8 +6,7 @@ use blokli_integration_tests::fixtures::{IntegrationFixture, integration_fixture
 use futures::stream::StreamExt;
 use futures_time::{future::FutureExt as FutureTimeoutExt, time::Duration};
 use hex::ToHex as HexToHex;
-use hopr_crypto_types::prelude::Keypair;
-use hopr_crypto_types::types::Hash;
+use hopr_crypto_types::{prelude::Keypair, types::Hash};
 use hopr_internal_types::channels::generate_channel_id;
 use hopr_primitive_types::traits::ToHex;
 use rstest::*;
