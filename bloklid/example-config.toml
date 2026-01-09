@@ -19,6 +19,20 @@ rpc_url = "http://localhost:8545"
 # If not specified, uses the network's default rate limit
 max_rpc_requests_per_sec = 0
 
+# Optional contract address overrides
+# Defaults are resolved from hopr-bindings for the selected network
+# Use this when running against a local chain with freshly deployed contracts
+# [contracts]
+# token = "0x0000000000000000000000000000000000000000"
+# channels = "0x0000000000000000000000000000000000000000"
+# announcements = "0x0000000000000000000000000000000000000000"
+# module_implementation = "0x0000000000000000000000000000000000000000"
+# node_safe_migration = "0x0000000000000000000000000000000000000000"
+# node_safe_registry = "0x0000000000000000000000000000000000000000"
+# ticket_price_oracle = "0x0000000000000000000000000000000000000000"
+# winning_probability_oracle = "0x0000000000000000000000000000000000000000"
+# node_stake_factory = "0x0000000000000000000000000000000000000000"
+
 # Database configuration - supports PostgreSQL or SQLite
 # IMPORTANT: This section is OPTIONAL if using environment variables.
 # For environment-only configuration, comment out this entire [database] section and set:
