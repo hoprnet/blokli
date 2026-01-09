@@ -146,12 +146,18 @@
             main = nixLib.mkSrc {
               inherit fs;
               root = ./.;
-              extraExtensions = [ "graphql" ];
+              extraExtensions = [
+                "csv"
+                "graphql"
+              ];
             };
             test = nixLib.mkTestSrc {
               inherit fs;
               root = ./.;
-              extraExtensions = [ "graphql" ];
+              extraExtensions = [
+                "csv"
+                "graphql"
+              ];
             };
             deps = nixLib.mkDepsSrc {
               inherit fs;

@@ -46,7 +46,7 @@ use blokli_chain_rpc::{
 };
 use blokli_chain_types::{ContractAddresses, ContractInstances, utils::create_anvil};
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
-use migration::{Migrator, MigratorTrait};
+use migration::{Migrator, MigratorTrait, SafeDataOrigin};
 use sea_orm::DatabaseConnection;
 use tokio::task::AbortHandle;
 
@@ -187,7 +187,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
 
     // Run migrations if configured
     if config.run_migrations {
-        Migrator::up(&db, None)
+        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
             .await
             .expect("Failed to run database migrations");
     }
