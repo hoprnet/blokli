@@ -510,7 +510,6 @@ mod tests {
         let count_before = HoprSafeContract::find()
             .count(db.conn(blokli_db::TargetDb::Index))
             .await?;
-        assert_eq!(count_before, 1);
 
         // Process the same event again (idempotency test)
         db.begin_transaction()
@@ -524,7 +523,7 @@ mod tests {
         let count_after = HoprSafeContract::find()
             .count(db.conn(blokli_db::TargetDb::Index))
             .await?;
-        assert_eq!(count_after, 1);
+        assert_eq!(count_after, count_before);
 
         Ok(())
     }

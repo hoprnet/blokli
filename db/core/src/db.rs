@@ -402,7 +402,7 @@ impl BlokliDbAllOperations for BlokliDb {}
 #[cfg(test)]
 mod tests {
     use blokli_db_entity::prelude::ChainInfo;
-    use migration::{Migrator, MigratorTrait};
+    use migration::{Migrator, MigratorTrait, SafeDataOrigin};
     use sea_orm::{EntityTrait, PaginatorTrait};
 
     use crate::{BlokliDbGeneralModelOperations, SINGULAR_TABLE_FIXED_ID, TargetDb, db::BlokliDb};
@@ -412,7 +412,7 @@ mod tests {
         let db = BlokliDb::new_in_memory().await?;
 
         // For SQLite, check the unified Migrator status
-        Migrator::<0>::status(db.conn(TargetDb::Index)).await?;
+        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::status(db.conn(TargetDb::Index)).await?;
 
         Ok(())
     }
