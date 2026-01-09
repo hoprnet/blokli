@@ -6,6 +6,8 @@ use blokli_client::api::{
     AccountSelector, BlokliQueryClient, ChannelFilter, ChannelSelector, SafeSelector, types::ChannelStatus,
 };
 use blokli_integration_tests::fixtures::{IntegrationFixture, integration_fixture as fixture};
+use hex::ToHex;
+use hopr_crypto_types::prelude::Keypair;
 use hopr_internal_types::channels::generate_channel_id;
 use hopr_primitive_types::prelude::{HoprBalance, XDaiBalance};
 use rstest::*;
@@ -43,7 +45,7 @@ async fn count_accounts_matches_deployed_accounts(#[future(awt)] fixture: Integr
 async fn query_accounts(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
 
-    fixture.deploy_safe_and_announce(account, INITIAL_SAFE_BALANCE).await?;
+    let deployed_safe = fixture.deploy_safe_and_announce(account, INITIAL_SAFE_BALANCE).await?;
 
     let found_accounts = fixture
         .client()
@@ -54,6 +56,18 @@ async fn query_accounts(#[future(awt)] fixture: IntegrationFixture) -> Result<()
     assert_eq!(
         found_accounts[0].chain_key.to_lowercase(),
         account.address.to_lowercase()
+    );
+    assert_eq!(
+        found_accounts[0].packet_key.to_lowercase(),
+        account.offchain_key_pair().public().encode_hex::<String>()
+    );
+    assert_eq!(
+        found_accounts[0].safe_address.clone().map(|a| a.to_lowercase()),
+        Some(deployed_safe.address.to_lowercase())
+    );
+    assert_eq!(
+        found_accounts[0].chain_key.to_lowercase(),
+        deployed_safe.chain_key.to_lowercase(),
     );
 
     Ok(())
