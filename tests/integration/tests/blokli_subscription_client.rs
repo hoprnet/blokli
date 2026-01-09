@@ -8,10 +8,9 @@ use blokli_integration_tests::{
 };
 use futures::stream::StreamExt;
 use futures_time::future::FutureExt as FutureTimeoutExt;
-use hopr_crypto_types::types::Hash;
-use hopr_crypto_types::keypairs::Keypair;
-use hopr_internal_types::channels::generate_channel_id;
 use hex::ToHex;
+use hopr_crypto_types::{keypairs::Keypair, types::Hash};
+use hopr_internal_types::channels::generate_channel_id;
 use rstest::*;
 use serial_test::serial;
 
@@ -106,10 +105,7 @@ async fn subscribe_account_by_private_key(#[future(awt)] fixture: IntegrationFix
         .ok_or_else(|| anyhow!("no update received from subscription"))??;
 
     // The retrieved account must have a matching address
-    assert_eq!(
-        retrieved_account.chain_key.to_lowercase(),
-        account.address.to_string()
-    );
+    assert_eq!(retrieved_account.chain_key.to_lowercase(), account.address.to_string());
 
     // The retrieved account must have an offchain key
     assert_eq!(

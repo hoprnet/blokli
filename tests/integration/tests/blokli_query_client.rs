@@ -11,10 +11,12 @@ use blokli_integration_tests::{
     fixtures::{IntegrationFixture, integration_fixture as fixture},
 };
 use hex::FromHex;
-use hopr_primitive_types::traits::ToHex;
-use hopr_internal_types::channels::generate_channel_id;
 use hopr_crypto_types::keypairs::Keypair;
-use hopr_primitive_types::prelude::{HoprBalance, XDaiBalance};
+use hopr_internal_types::channels::generate_channel_id;
+use hopr_primitive_types::{
+    prelude::{HoprBalance, XDaiBalance},
+    traits::ToHex,
+};
 use rstest::*;
 use serial_test::serial;
 use tokio::time::sleep;
@@ -55,13 +57,10 @@ async fn query_accounts(#[future(awt)] fixture: IntegrationFixture) -> Result<()
         .await?;
 
     assert_eq!(found_accounts.len(), 1);
-    assert_eq!(
-        found_accounts[0].chain_key.to_lowercase(),
-        account.address.to_string()
-    );
+    assert_eq!(found_accounts[0].chain_key.to_lowercase(), account.address.to_string());
     assert_eq!(
         found_accounts[0].packet_key.to_lowercase(),
-        account.keypair.public().to_hex().to_lowercase()
+        account.offchain_keypair().public().encode_hex::<String>()
     );
     assert_eq!(
         found_accounts[0].safe_address.clone().map(|a| a.to_lowercase()),
