@@ -10,13 +10,10 @@ use blokli_integration_tests::{
     constants::parsed_safe_balance,
     fixtures::{IntegrationFixture, integration_fixture as fixture},
 };
-use hex::FromHex;
+use hex::{FromHex, ToHex};
 use hopr_crypto_types::keypairs::Keypair;
 use hopr_internal_types::channels::generate_channel_id;
-use hopr_primitive_types::{
-    prelude::{HoprBalance, XDaiBalance},
-    traits::ToHex,
-};
+use hopr_primitive_types::prelude::{HoprBalance, XDaiBalance};
 use rstest::*;
 use serial_test::serial;
 use tokio::time::sleep;
