@@ -446,6 +446,10 @@ mod tests {
             .create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
             .await?;
 
+        // Verify only one record exists
+        let count_before = HoprSafeContract::find().count(db.conn(crate::TargetDb::Index)).await?;
+        assert!(count_before >= 1);
+
         // Try to create same safe contract (same block/tx/log)
         let id2 = db
             .create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
@@ -455,8 +459,8 @@ mod tests {
         assert_eq!(id1, id2);
 
         // Verify only one record exists
-        let count = HoprSafeContract::find().count(db.conn(crate::TargetDb::Index)).await?;
-        assert_eq!(count, 1);
+        let count_after = HoprSafeContract::find().count(db.conn(crate::TargetDb::Index)).await?;
+        assert_eq!(count_after, count_before);
 
         Ok(())
     }

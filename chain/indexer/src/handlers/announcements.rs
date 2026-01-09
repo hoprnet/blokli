@@ -101,6 +101,19 @@ where
                         // This should be safe as long as we don't have more than 2^32 accounts
                         let key_id: u32 = key_binding.key_id.try_into().unwrap_or_default();
 
+                        // Check if a safe is already registered for this node
+                        let safe_address = match self.db.get_safe_for_registered_node(Some(tx), chain_key).await {
+                            Ok(safe) => safe,
+                            Err(e) => {
+                                warn!(
+                                    chain_key = %chain_key,
+                                    error = %e,
+                                    "Failed to lookup safe registration for node, proceeding without safe address"
+                                );
+                                None
+                            }
+                        };
+
                         match self
                             .db
                             .upsert_account(
@@ -108,7 +121,7 @@ where
                                 key_id,
                                 chain_key,
                                 binding.packet_key,
-                                None, // safe_address is None for key bindings
+                                safe_address,
                                 block_number,
                                 tx_index,
                                 log_index,
