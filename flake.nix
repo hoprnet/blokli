@@ -220,10 +220,7 @@
             inherit overlays;
           };
 
-          blokliAnvilEntrypoint = pkgsLinux.writeShellScriptBin "blokli-anvil-entrypoint" (
-            builtins.readFile ./docker/blokli-anvil-entrypoint.sh
-          );
-          blokliAnvilEntrypointAarch64 = pkgsLinuxAarch64.writeShellScriptBin "blokli-anvil-entrypoint" (
+          blokliAnvilEntrypoint = pkgs.writeShellScriptBin "blokli-anvil-entrypoint" (
             builtins.readFile ./docker/blokli-anvil-entrypoint.sh
           );
 
@@ -297,7 +294,7 @@
             };
             bloklid-anvil-docker-aarch64 = nixLib.mkDockerImage {
               name = "bloklid-anvil";
-              Entrypoint = [ "${blokliAnvilEntrypointAarch64}/bin/blokli-anvil-entrypoint" ];
+              Entrypoint = [ "${blokliAnvilEntrypoint}/bin/blokli-anvil-entrypoint" ];
               pkgsLinux = pkgsLinuxAarch64;
               env = [
                 "SSL_CERT_FILE=${pkgsLinuxAarch64.cacert}/etc/ssl/certs/ca-bundle.crt"
@@ -306,7 +303,7 @@
                 bloklidPackages.bloklid-aarch64-linux
                 pkgsLinuxAarch64.curl
                 pkgsLinuxAarch64.foundry
-                blokliAnvilEntrypointAarch64
+                blokliAnvilEntrypoint
               ];
             };
           };
