@@ -4,7 +4,7 @@ use sea_orm::{ConnectionTrait, TransactionTrait};
 use sea_orm_migration::prelude::*;
 use serde_hex::{SerHex, StrictPfx};
 
-use crate::SafeDataOrigin;
+use crate::{MIGRATION_MARKER_BLOCK_ID, SafeDataOrigin};
 
 #[derive(Debug, serde::Deserialize)]
 struct SafeCsvEntry {
@@ -14,6 +14,7 @@ struct SafeCsvEntry {
     module_address: [u8; 20],
     #[serde(with = "SerHex::<StrictPfx>")]
     chain_key: [u8; 20],
+    #[allow(unused)] // Replaced with MIGRATION_MARKER_BLOCK_ID
     deployed_block: u32,
     deployed_tx_index: u32,
     deployed_log_index: u32,
@@ -58,7 +59,7 @@ impl MigrationTrait for Migration {
                                 entry.address.to_vec().into(),
                                 entry.module_address.to_vec().into(),
                                 entry.chain_key.to_vec().into(),
-                                entry.deployed_block.into(),
+                                MIGRATION_MARKER_BLOCK_ID.into(),
                                 entry.deployed_tx_index.into(),
                                 entry.deployed_log_index.into(),
                             ])

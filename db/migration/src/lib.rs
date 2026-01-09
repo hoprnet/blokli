@@ -32,6 +32,13 @@ mod m028_add_node_safe_registration_table;
 mod m029_update_safe_contract_indices;
 mod m030_migrate_v3_safes;
 
+/// This is a special block ID that even pre-dates the v3 contract deployment on Gnosis chain,
+/// and therefore could be safely used to mark data added via the migration.
+///
+/// This allows distinguishing between data added via the migration and data added via other means.
+/// The data added via migration are e.g.: not cleared.
+pub const MIGRATION_MARKER_BLOCK_ID: u32 = 1000;
+
 #[derive(PartialEq)]
 pub enum BackendType {
     SQLite,
