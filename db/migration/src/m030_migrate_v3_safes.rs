@@ -62,6 +62,7 @@ impl MigrationTrait for Migration {
                                 entry.deployed_tx_index.into(),
                                 entry.deployed_log_index.into(),
                             ])
+                            .on_conflict(OnConflict::new().do_nothing().to_owned())
                             .to_owned();
 
                         tx.execute(&insert_query).await?;
