@@ -41,18 +41,30 @@ Only the GraphQL API port is exposed.
 
 ```bash
 # Build the image
-nix build .#bloklid-anvil-docker-amd64
-docker load < result
+just docker-build-anvil
 
-# Run the container
-docker run --rm -p 8080:8080 bloklid-anvil:latest
+# Run the container (default: RUST_LOG=info)
+just docker-run-anvil
+
+# Run with debug logging
+just docker-run-anvil debug
+
+# Run with trace logging
+just docker-run-anvil trace
 ```
 
-Optional environment overrides:
+**Environment Variables:**
 
-- `ANVIL_BLOCK_TIME` (default: 1)
-- `ANVIL_DEPLOYER_PRIVATE_KEY` (defaults to the first Anvil account)
-- `BLOKLI_DATA_DIRECTORY` (default: `/data`)
+| Variable                     | Default         | Description                                     |
+| ---------------------------- | --------------- | ----------------------------------------------- |
+| `RUST_LOG`                   | `info`          | Logging level (error, warn, info, debug, trace) |
+| `ANVIL_BLOCK_TIME`           | `1`             | Block time in seconds                           |
+| `ANVIL_ACCOUNTS`             | `10`            | Number of accounts to create                    |
+| `ANVIL_BALANCE`              | `10000`         | Initial balance per account (ETH)               |
+| `ANVIL_DEPLOYER_PRIVATE_KEY` | (first account) | Private key for contract deployment             |
+| `BLOKLI_DATA_DIRECTORY`      | `/data`         | Data directory for SQLite databases             |
+
+Once running, access the GraphQL playground at: <http://localhost:8080/graphql>
 
 ## Testing
 

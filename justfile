@@ -209,6 +209,10 @@ docker-build-anvil:
     nix build .#bloklid-anvil-docker-amd64
     docker load < result
 
+# Run bloklid + anvil container (GraphQL API on port 8080)
+docker-run-anvil log_level="info":
+    docker run --rm -p 8080:8080 -e RUST_LOG={{ log_level }} bloklid-anvil:latest
+
 # Rebuild bloklid and restart Docker Compose
 docker-restart: docker-build
     docker-compose -f docker/docker-compose.yml down
@@ -267,15 +271,16 @@ helm-package:
     helm package ./charts/blokli
 
 helm-login:
-  #!/usr/bin/env bash
-  token=$(gcloud auth print-access-token)
-  helm registry login -u oauth2accesstoken --password "$token" https://europe-west3-docker.pkg.dev
+    #!/usr/bin/env bash
+    token=$(gcloud auth print-access-token)
+    helm registry login -u oauth2accesstoken --password "$token" https://europe-west3-docker.pkg.dev
 
 helm-push:
-  #!/usr/bin/env bash
-  set -euo pipefail
-  version=$(yq -r '.version' ./charts/blokli/Chart.yaml)
-  helm push "blokli-${version}.tgz" oci://europe-west3-docker.pkg.dev/hoprassociation/helm-charts
+    #!/usr/bin/env bash
+    set -euo pipefail
+    version=$(yq -r '.version' ./charts/blokli/Chart.yaml)
+    helm push "blokli-${version}.tgz" oci://europe-west3-docker.pkg.dev/hoprassociation/helm-charts
+
 # ============================================================================
 # Smoke Tests
 # ============================================================================
