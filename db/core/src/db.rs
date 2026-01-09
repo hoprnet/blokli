@@ -216,6 +216,12 @@ impl BlokliDb {
             (db, logs_db, None)
         };
 
+        // Check schema version and clear data if needed
+        let data_was_reset = crate::version::check_and_reset_if_needed(&db, logs_db.as_ref()).await?;
+        if data_was_reset {
+            tracing::warn!("Database data was reset due to schema version change");
+        }
+
         // Apply migrations based on database backend
         if is_sqlite && logs_db.is_some() {
             // For SQLite with dual databases: run separate migrations on each database
@@ -255,12 +261,6 @@ impl BlokliDb {
                     cfg.network_name
                 )));
             }
-        }
-
-        // Check schema version and clear data if needed
-        let data_was_reset = crate::version::check_and_reset_if_needed(&db, logs_db.as_ref()).await?;
-        if data_was_reset {
-            tracing::warn!("Database data was reset due to schema version change");
         }
 
         // Initialize KeyId mapping for accounts
