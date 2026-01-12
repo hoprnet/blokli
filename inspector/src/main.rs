@@ -1,6 +1,8 @@
 mod queries;
 mod subscriptions;
 
+use std::time::Duration;
+
 use blokli_client::{
     BlokliClient, BlokliClientConfig,
     api::{AccountSelector, BlokliTransactionClient, ChannelFilter, ChannelSelector, types::ChannelStatus},
@@ -232,7 +234,7 @@ async fn main() -> anyhow::Result<()> {
                 }
             } else if track {
                 let track_tx_fut = tokio::time::timeout(
-                    std::time::Duration::from_secs(10),
+                    Duration::from_secs(10),
                     blokli_client.submit_and_track_transaction(&payload),
                 )
                 .map_err(anyhow::Error::from)
@@ -240,7 +242,7 @@ async fn main() -> anyhow::Result<()> {
                 .inspect_ok(|tx_id| eprintln!("{tx_id}"))
                 .and_then(|tracking_id| {
                     blokli_client
-                        .track_transaction(tracking_id, std::time::Duration::from_secs(60))
+                        .track_transaction(tracking_id, Duration::from_secs(60))
                         .map_err(anyhow::Error::from)
                 });
                 pin_mut!(track_tx_fut);

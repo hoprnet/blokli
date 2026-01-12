@@ -13,8 +13,13 @@ use blokli_chain_api::transaction_store::{TransactionStatus as StoreTransactionS
 use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
 use blokli_db::notifications::SqliteNotificationManager;
 use blokli_db_entity::{
-    chain_info, channel, channel_state,
-    conversions::{account_aggregation::fetch_accounts_with_filters, channel_aggregation::fetch_channels_with_state},
+    chain_info,
+    chain_info::Entity as ChainInfoEntity,
+    channel, channel_state,
+    conversions::{
+        account_aggregation::{fetch_accounts_by_keyids, fetch_accounts_with_filters},
+        channel_aggregation::fetch_channels_with_state,
+    },
     hopr_node_safe_registration, hopr_safe_contract,
 };
 use chrono::Utc;
@@ -76,7 +81,7 @@ async fn capture_watermark_synchronized(
     let _lock = indexer_state.acquire_watermark_lock().await;
 
     // Query the current watermark from chain_info table
-    let chain_info = blokli_db_entity::chain_info::Entity::find()
+    let chain_info = ChainInfoEntity::find()
         .one(db)
         .await
         .map_err(|e| async_graphql::Error::new(errors::messages::query_error("chain_info query", e)))?
@@ -184,10 +189,9 @@ async fn query_channels_at_watermark(
     account_ids.dedup();
 
     // Fetch accounts using the existing aggregation function
-    let accounts_result =
-        blokli_db_entity::conversions::account_aggregation::fetch_accounts_by_keyids(db, account_ids.clone())
-            .await
-            .map_err(|e| async_graphql::Error::new(errors::messages::query_error("accounts fetch", e)))?;
+    let accounts_result = fetch_accounts_by_keyids(db, account_ids.clone())
+        .await
+        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("accounts fetch", e)))?;
 
     // Build account map for quick lookup
     let account_map: HashMap<i64, blokli_db_entity::conversions::account_aggregation::AggregatedAccount> =

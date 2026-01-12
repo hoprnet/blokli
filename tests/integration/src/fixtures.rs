@@ -182,7 +182,7 @@ impl IntegrationFixture {
             None => {
                 self.deploy_safe(owner, amount).await?;
 
-                sleep(std::time::Duration::from_secs(5)).await;
+                sleep(Duration::from_secs(5)).await;
                 let safe = self
                     .client()
                     .query_safe(SafeSelector::ChainKey(owner.to_alloy_address().into()))
@@ -251,7 +251,7 @@ impl IntegrationFixture {
             None => {
                 debug!("account not found, proceeding to announce");
                 self.announce_account(account, module).await?;
-                sleep(std::time::Duration::from_secs(10)).await;
+                sleep(Duration::from_secs(10)).await;
 
                 let src_account = self
                     .client()

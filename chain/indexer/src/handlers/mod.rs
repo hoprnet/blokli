@@ -9,7 +9,7 @@ use blokli_chain_types::{AlloyAddressExt, ContractAddresses};
 use blokli_db::{BlokliDbAllOperations, OpenTransaction};
 use hopr_bindings::{
     exports::alloy::{
-        primitives::{Address as AlloyAddress, B256},
+        primitives::{Address as AlloyAddress, B256, Log as AlloyLog},
         sol_types::SolEventInterface,
     },
     hopr_announcements::HoprAnnouncements::HoprAnnouncementsEvents,
@@ -42,9 +42,12 @@ mod test_utils;
 mod tokens;
 
 #[cfg(all(feature = "prometheus", not(test)))]
+use hopr_metrics::MultiCounter;
+
+#[cfg(all(feature = "prometheus", not(test)))]
 lazy_static::lazy_static! {
-    static ref METRIC_INDEXER_LOG_COUNTERS: hopr_metrics::MultiCounter =
-        hopr_metrics::MultiCounter::new(
+    static ref METRIC_INDEXER_LOG_COUNTERS: MultiCounter =
+        MultiCounter::new(
             "hopr_indexer_contract_log_count",
             "Counts of different HOPR contract logs processed by the Indexer",
             &["contract"]
@@ -135,8 +138,8 @@ where
     /// # Examples
     ///
     /// ```ignore
-    /// # use std::sync::Arc;
-    /// # use tokio::runtime::Runtime;
+    /// # use Arc;
+    /// # use Runtime;
     /// # // setup placeholders for the example — real types come from the library
     /// # let rt = Runtime::new().unwrap();
     /// # rt.block_on(async {
@@ -156,7 +159,7 @@ where
 
         let log = Log::from(slog.clone());
 
-        let primitive_log = hopr_bindings::exports::alloy::primitives::Log::new(
+        let primitive_log = AlloyLog::new(
             AlloyAddress::from_hopr_address(slog.address),
             slog.topics.iter().map(|h| B256::from_slice(h.as_ref())).collect(),
             slog.data.clone().into(),

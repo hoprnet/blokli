@@ -12,6 +12,7 @@ use blokli_chain_rpc::client::{DefaultRetryPolicy, SnapshotRequestor, SnapshotRe
 use blokli_chain_types::{ContractAddresses, ContractInstances, utils::create_anvil};
 use hopr_async_runtime::prelude::sleep;
 use hopr_bindings::exports::alloy::{
+    primitives::U64,
     providers::{Provider, ProviderBuilder},
     rpc::client::ClientBuilder,
     signers::local::PrivateKeySigner,
@@ -58,7 +59,7 @@ async fn test_client_should_fail_on_malformed_request() -> anyhow::Result<()> {
     let provider = ProviderBuilder::new().wallet(signer).connect_client(rpc_client);
 
     let err = provider
-        .raw_request::<(), hopr_bindings::exports::alloy::primitives::U64>("eth_blockNumber_bla".into(), ())
+        .raw_request::<(), U64>("eth_blockNumber_bla".into(), ())
         .await
         .expect_err("expected error");
 

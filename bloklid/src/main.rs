@@ -18,6 +18,7 @@ use blokli_db::db::{BlokliDb, BlokliDbConfig};
 use clap::{Parser, Subcommand};
 use futures::TryStreamExt;
 use sea_orm::Database;
+use tokio::net::TcpListener;
 use tracing::{error, info, warn};
 use tracing_subscriber::{EnvFilter, prelude::*};
 use validator::Validate;
@@ -507,7 +508,7 @@ async fn run() -> errors::Result<()> {
             .map_err(|e| BloklidError::NonSpecific(format!("Failed to build API app: {}", e)))?;
 
             // Bind the listener first to ensure the port is available before spawning the server
-            let listener = tokio::net::TcpListener::bind(api_config.bind_address)
+            let listener = TcpListener::bind(api_config.bind_address)
                 .await
                 .map_err(|e| BloklidError::NonSpecific(format!("Failed to bind API server: {}", e)))?;
 

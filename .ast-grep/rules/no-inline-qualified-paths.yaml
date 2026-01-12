@@ -19,7 +19,6 @@ note: |
     // Bad:  hopr_bindings::exports::alloy::providers::Provider
     // Good: use hopr_bindings::exports::alloy::providers::Provider;
     //       Provider
-
 rule:
   all:
     - kind: scoped_identifier

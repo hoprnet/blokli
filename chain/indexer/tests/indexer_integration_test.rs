@@ -551,7 +551,7 @@ mod integration_tests {
     where
         F: FnMut() -> bool,
     {
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let poll_interval = Duration::from_millis(50);
 
         loop {

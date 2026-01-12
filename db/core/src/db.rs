@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::{path::Path, time::Duration};
 
 use blokli_db_entity::{
     chain_info,
@@ -112,7 +112,7 @@ impl BlokliDb {
                     .and_then(|s| s.split('?').next())
                     .ok_or_else(|| DbSqlError::Construction("invalid SQLite URL format".to_string()))?;
 
-                if let Some(parent) = std::path::Path::new(path_part).parent() {
+                if let Some(parent) = Path::new(path_part).parent() {
                     std::fs::create_dir_all(parent)
                         .map_err(|e| DbSqlError::Construction(format!("failed to create database directory: {e}")))?;
                 }

@@ -4,7 +4,11 @@ mod common;
 
 use std::time::Duration;
 
-use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations, client::MetricsLayer, rpc::RpcOperationsConfig};
+use blokli_chain_rpc::{
+    HoprIndexerRpcOperations, HoprRpcOperations,
+    client::MetricsLayer,
+    rpc::{RpcOperations, RpcOperationsConfig},
+};
 use common::{TEST_BLOCK_TIME, TEST_FINALITY, create_test_rpc_operations, wait_for_finality};
 use hopr_async_runtime::prelude::sleep;
 use hopr_bindings::exports::alloy::{
@@ -130,7 +134,7 @@ async fn test_should_get_block_number() -> anyhow::Result<()> {
     // Wait until contracts deployments are final
     wait_for_finality(finality, expected_block_time).await;
 
-    let rpc = blokli_chain_rpc::rpc::RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
+    let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
 
     let b1 = rpc.block_number().await?;
 

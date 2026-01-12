@@ -10,7 +10,10 @@
 
 mod common;
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use anyhow::Result;
 use async_graphql::{EmptySubscription, Schema};
@@ -296,7 +299,7 @@ async fn test_send_transaction_sync_waits_for_confirmations() -> Result<()> {
         raw_tx_hex
     );
 
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     let result = execute_mutation(&ctx.schema, &query).await;
     let elapsed = start.elapsed();
 
@@ -341,7 +344,7 @@ async fn test_send_transaction_sync_with_custom_confirmations() -> Result<()> {
         raw_tx_hex
     );
 
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     let result = execute_mutation(&ctx.schema, &query).await;
     let elapsed = start.elapsed();
 

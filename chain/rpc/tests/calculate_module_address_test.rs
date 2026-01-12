@@ -7,7 +7,10 @@ mod common;
 
 use std::time::Duration;
 
-use blokli_chain_rpc::{HoprRpcOperations, rpc::RpcOperationsConfig};
+use blokli_chain_rpc::{
+    HoprRpcOperations,
+    rpc::{RpcOperations, RpcOperationsConfig},
+};
 use blokli_chain_types::{AlloyAddressExt, ContractAddresses, ContractInstances};
 use common::{TEST_BLOCK_TIME, TEST_FINALITY, create_rpc_client_to_anvil, wait_for_finality};
 use hopr_bindings::exports::alloy::{
@@ -51,7 +54,7 @@ async fn test_calculate_module_address_basic() -> anyhow::Result<()> {
     // Wait until contracts deployments are final
     wait_for_finality(TEST_FINALITY, TEST_BLOCK_TIME).await;
 
-    let rpc = blokli_chain_rpc::rpc::RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
+    let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
 
     // Use test addresses
     let owner: Address = (&chain_key_0).into();
@@ -103,7 +106,7 @@ async fn test_calculate_module_address_with_different_nonces() -> anyhow::Result
 
     wait_for_finality(TEST_FINALITY, TEST_BLOCK_TIME).await;
 
-    let rpc = blokli_chain_rpc::rpc::RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
+    let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
 
     let owner: Address = (&chain_key_0).into();
     let safe_address: Address = (&ChainKeypair::from_secret(anvil.keys()[1].to_bytes().as_ref())?).into();
@@ -160,7 +163,7 @@ async fn test_calculate_module_address_with_different_owners() -> anyhow::Result
 
     wait_for_finality(TEST_FINALITY, TEST_BLOCK_TIME).await;
 
-    let rpc = blokli_chain_rpc::rpc::RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
+    let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
 
     // Use different owner addresses
     let owner_0: Address = (&ChainKeypair::from_secret(anvil.keys()[0].to_bytes().as_ref())?).into();
@@ -222,7 +225,7 @@ async fn test_calculate_module_address_with_different_safes() -> anyhow::Result<
 
     wait_for_finality(TEST_FINALITY, TEST_BLOCK_TIME).await;
 
-    let rpc = blokli_chain_rpc::rpc::RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
+    let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
 
     let owner: Address = (&chain_key_0).into();
     let nonce = 0u64;
@@ -284,7 +287,7 @@ async fn test_calculate_module_address_deterministic() -> anyhow::Result<()> {
 
     wait_for_finality(TEST_FINALITY, TEST_BLOCK_TIME).await;
 
-    let rpc = blokli_chain_rpc::rpc::RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
+    let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
 
     let owner: Address = (&chain_key_0).into();
     let safe_address: Address = (&ChainKeypair::from_secret(anvil.keys()[1].to_bytes().as_ref())?).into();
@@ -345,7 +348,7 @@ async fn test_calculate_module_address_matches_contract_expectation() -> anyhow:
     // Store channels address before moving cfg
     let channels_address = cfg.contract_addrs.channels;
 
-    let rpc = blokli_chain_rpc::rpc::RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
+    let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
 
     let owner: Address = (&chain_key_0).into();
     let safe_address: Address = (&ChainKeypair::from_secret(anvil.keys()[1].to_bytes().as_ref())?).into();

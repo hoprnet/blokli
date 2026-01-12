@@ -4,12 +4,16 @@
 
 #![allow(clippy::too_many_arguments)]
 
+use std::time::Duration;
+
 use SafeContract::SafeContractInstance;
 use hopr_bindings::{
     exports::alloy::{
-        contract::Result as ContractResult,
+        contract::{Result as ContractResult, private::Provider},
         network::{ReceiptResponse, TransactionBuilder},
+        node_bindings::{Anvil, AnvilInstance},
         primitives::{self, Address as AlloyAddress, Bytes, U256, aliases, keccak256},
+        providers::Network,
         signers::{Signer, local::PrivateKeySigner},
         sol,
         sol_types::SolCall,
@@ -44,11 +48,9 @@ lazy_static::lazy_static! {
 /// Otherwise, a new block is mined per transaction.
 ///
 /// Uses a fixed mnemonic to make generated accounts deterministic.
-pub fn create_anvil(
-    block_time: Option<std::time::Duration>,
-) -> hopr_bindings::exports::alloy::node_bindings::AnvilInstance {
-    let mut anvil = hopr_bindings::exports::alloy::node_bindings::Anvil::new()
-        .mnemonic("gentle wisdom move brush express similar canal dune emotion series because parrot");
+pub fn create_anvil(block_time: Option<Duration>) -> AnvilInstance {
+    let mut anvil =
+        Anvil::new().mnemonic("gentle wisdom move brush express similar canal dune emotion series because parrot");
 
     if let Some(bt) = block_time {
         anvil = anvil.block_time(bt.as_secs());
@@ -62,8 +64,8 @@ pub fn create_anvil(
 /// Returns the block number at which the minting transaction was confirmed.
 pub async fn mint_tokens<P, N>(hopr_token: HoprTokenInstance<P, N>, amount: U256) -> ContractResult<Option<u64>>
 where
-    P: hopr_bindings::exports::alloy::contract::private::Provider<N>,
-    N: hopr_bindings::exports::alloy::providers::Network,
+    P: Provider<N>,
+    N: Network,
 {
     let deployer = hopr_token
         .provider()
@@ -92,7 +94,7 @@ where
 /// given destination.
 pub fn create_native_transfer<N>(to: Address, amount: U256) -> N::TransactionRequest
 where
-    N: hopr_bindings::exports::alloy::providers::Network,
+    N: Network,
 {
     N::TransactionRequest::default()
         .with_to(AlloyAddress::from_hopr_address(to))
@@ -108,8 +110,8 @@ pub async fn fund_node<P, N>(
     hopr_token_contract: HoprTokenInstance<P, N>,
 ) -> ContractResult<()>
 where
-    P: hopr_bindings::exports::alloy::contract::private::Provider<N>,
-    N: hopr_bindings::exports::alloy::providers::Network,
+    P: Provider<N>,
+    N: Network,
 {
     if native_token > 0 {
         let native_transfer_tx = N::TransactionRequest::default()
@@ -144,8 +146,8 @@ pub async fn fund_channel<P, N>(
     amount: U256,
 ) -> ContractResult<()>
 where
-    P: hopr_bindings::exports::alloy::contract::private::Provider<N>,
-    N: hopr_bindings::exports::alloy::providers::Network,
+    P: Provider<N>,
+    N: Network,
 {
     hopr_token
         .approve(*hopr_channels.address(), amount)
@@ -177,8 +179,8 @@ pub async fn fund_channel_from_different_client<P, N>(
     new_client: P,
 ) -> ContractResult<()>
 where
-    P: hopr_bindings::exports::alloy::contract::private::Provider<N> + Clone,
-    N: hopr_bindings::exports::alloy::providers::Network,
+    P: Provider<N> + Clone,
+    N: Network,
 {
     let hopr_token_with_new_client: HoprTokenInstance<P, N> =
         HoprTokenInstance::new(AlloyAddress::from_hopr_address(hopr_token_address), new_client.clone());
@@ -214,8 +216,8 @@ pub async fn get_safe_tx<P, N>(
     wallet: PrivateKeySigner,
 ) -> ChainTypesResult<N::TransactionRequest>
 where
-    P: hopr_bindings::exports::alloy::contract::private::Provider<N>,
-    N: hopr_bindings::exports::alloy::providers::Network,
+    P: Provider<N>,
+    N: Network,
 {
     let nonce = safe_contract.nonce().call().await?;
 
@@ -268,8 +270,8 @@ pub async fn approve_channel_transfer_from_safe<P, N>(
     deployer: &ChainKeypair, // also node address
 ) -> ContractResult<()>
 where
-    P: hopr_bindings::exports::alloy::contract::private::Provider<N> + Clone,
-    N: hopr_bindings::exports::alloy::providers::Network,
+    P: Provider<N> + Clone,
+    N: Network,
 {
     // Inner tx payload: include node to the module
     let inner_tx_data = HoprToken::approveCall {

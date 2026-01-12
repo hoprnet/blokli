@@ -1,4 +1,4 @@
-use std::{fs, io::Cursor, path::Path};
+use std::{fs, io::Cursor, path::{Path, PathBuf}};
 
 use async_compression::futures::bufread::XzEncoder;
 use async_tar::Builder;
@@ -140,7 +140,7 @@ COPY log_topic_info (id, topic_hash) FROM stdin;
 pub(crate) async fn create_test_archive(
     temp_dir: &TempDir,
     sql_target_path: Option<String>,
-) -> Result<std::path::PathBuf, Box<dyn std::error::Error>> {
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
     // Create the SQL dump
     let sql_target_path_final = sql_target_path.unwrap_or_else(|| "hopr_logs.sql".to_string());
     let sql_path = temp_dir.path().join("hopr_logs.sql");

@@ -106,6 +106,7 @@ where
 mod tests {
     use std::sync::Arc;
 
+    use blokli_chain_rpc::errors::RpcError;
     use blokli_chain_types::AlloyAddressExt;
     use blokli_db::{
         BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations,
@@ -219,7 +220,7 @@ mod tests {
         // Mock get_transaction_sender failure
         rpc_operations
             .expect_get_transaction_sender()
-            .returning(|_| Err(blokli_chain_rpc::errors::RpcError::Other("RPC failed".into())));
+            .returning(|_| Err(RpcError::Other("RPC failed".into())));
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),

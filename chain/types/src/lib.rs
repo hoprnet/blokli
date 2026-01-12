@@ -4,7 +4,8 @@ use hopr_bindings::{
     exports::alloy::{
         contract::Result as ContractResult,
         network::TransactionBuilder,
-        primitives::{self, Address as AlloyAddress},
+        primitives::{self, Address as AlloyAddress, aliases::U56},
+        providers::Provider,
         rpc::types::TransactionRequest,
     },
     hopr_announcements::HoprAnnouncements::{self, HoprAnnouncementsInstance},
@@ -123,7 +124,7 @@ pub struct ContractInstances<P> {
 
 impl<P> ContractInstances<P>
 where
-    P: hopr_bindings::exports::alloy::providers::Provider + Clone,
+    P: Provider + Clone,
 {
     pub fn new(contract_addresses: &ContractAddresses, provider: P, _use_dummy_nr: bool) -> Self {
         Self {
@@ -207,8 +208,8 @@ where
         let win_prob_oracle = HoprWinningProbabilityOracle::deploy(
             provider.clone(),
             self_address,
-            primitives::aliases::U56::from(0xFFFFFFFFFFFFFF_u64), /* 0xFFFFFFFFFFFFFF in hex or 72057594037927935 in
-                                                                   * decimal values */
+            U56::from(0xFFFFFFFFFFFFFF_u64), /* 0xFFFFFFFFFFFFFF in hex or 72057594037927935 in
+                                              * decimal values */
         )
         .await?;
         let token = HoprToken::deploy(provider.clone()).await?;
@@ -255,7 +256,7 @@ where
 
 impl<P> From<&ContractInstances<P>> for ContractAddresses
 where
-    P: hopr_bindings::exports::alloy::providers::Provider + Clone,
+    P: Provider + Clone,
 {
     fn from(instances: &ContractInstances<P>) -> Self {
         Self {

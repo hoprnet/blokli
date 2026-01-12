@@ -7,7 +7,10 @@
 
 mod common;
 
-use std::{str::FromStr, time::Duration};
+use std::{
+    str::FromStr,
+    time::{Duration, Instant},
+};
 
 use async_graphql::Schema;
 use blokli_api::{mutation::MutationRoot, query::QueryRoot, subscription::SubscriptionRoot};
@@ -298,7 +301,7 @@ async fn test_allowance_api_integration() -> anyhow::Result<()> {
     {
         let safe_addr = ctx.test_accounts[0].public().to_address().to_hex();
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let allowance = query_safe_hopr_allowance(&ctx.schema, &safe_addr).await?;
         let duration = start.elapsed();
 

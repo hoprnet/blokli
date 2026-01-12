@@ -2,7 +2,7 @@
 //!
 //! This module provides TLS 1.3 support using rustls.
 
-use std::{io::BufReader, sync::Arc};
+use std::{fs::File, io::BufReader, sync::Arc, time::Duration};
 
 use rustls::{ServerConfig, pki_types::CertificateDer};
 use tokio::net::{TcpListener, TcpStream};
@@ -16,7 +16,7 @@ use crate::{
 /// Create a TLS acceptor configured for TLS 1.3 only
 pub fn create_tls_acceptor(config: &TlsConfig) -> ApiResult<TlsAcceptor> {
     // Load certificates
-    let cert_file = std::fs::File::open(&config.cert_path)
+    let cert_file = File::open(&config.cert_path)
         .map_err(|e| ApiError::ConfigError(format!("Failed to open certificate file: {}", e)))?;
     let mut cert_reader = BufReader::new(cert_file);
     let certs: Vec<CertificateDer> = rustls_pemfile::certs(&mut cert_reader)
@@ -28,7 +28,7 @@ pub fn create_tls_acceptor(config: &TlsConfig) -> ApiResult<TlsAcceptor> {
     }
 
     // Load private key
-    let key_file = std::fs::File::open(&config.key_path)
+    let key_file = File::open(&config.key_path)
         .map_err(|e| ApiError::ConfigError(format!("Failed to open private key file: {}", e)))?;
     let mut key_reader = BufReader::new(key_file);
     let key = rustls_pemfile::private_key(&mut key_reader)
@@ -76,7 +76,7 @@ impl axum::serve::Listener for TlsListener {
                 },
                 Err(e) => {
                     tracing::error!("TCP accept failed: {}", e);
-                    tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                    tokio::time::sleep(Duration::from_millis(100)).await;
                     continue;
                 }
             }

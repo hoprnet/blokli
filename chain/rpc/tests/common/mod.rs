@@ -9,7 +9,7 @@ use blokli_chain_rpc::{
 use hopr_bindings::exports::alloy::{
     node_bindings::AnvilInstance,
     providers::PendingTransaction,
-    rpc::client::ClientBuilder,
+    rpc::client::{ClientBuilder, RpcClient},
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
 use tokio::time::sleep;
@@ -70,7 +70,7 @@ pub async fn wait_for_finality(finality: u32, block_time: Duration) {
 /// # Returns
 ///
 /// Returns an RPC client configured with retry layer
-pub fn create_test_rpc_client(anvil: &AnvilInstance) -> hopr_bindings::exports::alloy::rpc::client::RpcClient {
+pub fn create_test_rpc_client(anvil: &AnvilInstance) -> RpcClient {
     let transport_client = ReqwestTransport::new(anvil.endpoint_url());
 
     ClientBuilder::default()
@@ -96,7 +96,7 @@ pub fn create_test_rpc_client(anvil: &AnvilInstance) -> hopr_bindings::exports::
 ///
 /// Returns `Result<RpcOperations<R>>` with the configured RPC operations instance
 pub fn create_test_rpc_operations<R: HttpRequestor + 'static + Clone>(
-    rpc_client: hopr_bindings::exports::alloy::rpc::client::RpcClient,
+    rpc_client: RpcClient,
     requestor: R,
     chain_id: u64,
     gas_oracle_url: Option<url::Url>,

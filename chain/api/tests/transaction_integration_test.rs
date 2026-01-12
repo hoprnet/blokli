@@ -3,7 +3,10 @@
 //! These tests use an in-process Anvil instance to test the complete
 //! transaction flow from submission through confirmation tracking.
 
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use blokli_chain_api::{
     DefaultHttpRequestor,
@@ -24,7 +27,9 @@ use hopr_bindings::exports::alloy::{
     eips::eip2718::Encodable2718,
     node_bindings::AnvilInstance,
     primitives::{Address as AlloyAddress, TxKind, U256},
+    rpc::client::ClientBuilder,
     signers::{Signer, local::PrivateKeySigner},
+    transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
 use hopr_crypto_types::{
     keypairs::{ChainKeypair, Keypair},
@@ -79,16 +84,14 @@ async fn setup_test_environment(
     };
 
     // Set up RPC client with retry policy
-    let transport_client = hopr_bindings::exports::alloy::transports::http::ReqwestTransport::new(anvil.endpoint_url());
-    let rpc_client = hopr_bindings::exports::alloy::rpc::client::ClientBuilder::default()
-        .layer(
-            hopr_bindings::exports::alloy::transports::layers::RetryBackoffLayer::new_with_policy(
-                2,
-                100,
-                100,
-                DefaultRetryPolicy::default(),
-            ),
-        )
+    let transport_client = ReqwestTransport::new(anvil.endpoint_url());
+    let rpc_client = ClientBuilder::default()
+        .layer(RetryBackoffLayer::new_with_policy(
+            2,
+            100,
+            100,
+            DefaultRetryPolicy::default(),
+        ))
         .transport(transport_client.clone(), transport_client.guess_local());
 
     let rpc_operations = RpcOperations::new(rpc_client, ReqwestClient::new(), cfg, None)?;
@@ -150,7 +153,7 @@ async fn wait_for_condition<F>(timeout: Duration, condition_desc: &str, mut cond
 where
     F: FnMut() -> bool,
 {
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     let poll_interval = Duration::from_millis(50);
 
     loop {
@@ -377,7 +380,7 @@ async fn test_sync_mode_waits_for_confirmations() -> anyhow::Result<()> {
     let recipient = random_address();
     let raw_tx = create_eth_transfer_tx(&ctx, recipient, 1000, 0).await?;
 
-    let start = std::time::Instant::now();
+    let start = Instant::now();
 
     // Send transaction in sync mode with 2 confirmations
     let record = ctx.executor.send_raw_transaction_sync(raw_tx, Some(2)).await?;
@@ -402,7 +405,7 @@ async fn test_sync_mode_with_custom_confirmations() -> anyhow::Result<()> {
     let recipient = random_address();
     let raw_tx = create_eth_transfer_tx(&ctx, recipient, 1000, 0).await?;
 
-    let start = std::time::Instant::now();
+    let start = Instant::now();
 
     // Wait for 1 confirmation only
     let record = ctx.executor.send_raw_transaction_sync(raw_tx, Some(1)).await?;

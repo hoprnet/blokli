@@ -1,6 +1,7 @@
 use blokli_api::query::QueryRoot;
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations};
+use blokli_db_entity::hopr_safe_contract::{Column as SafeColumn, Entity as SafeEntity};
 use hopr_primitive_types::{prelude::Address, traits::ToHex};
 use rand::RngCore;
 use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
@@ -26,13 +27,13 @@ async fn test_safe_queries() -> anyhow::Result<()> {
         .await?;
 
     // Verify DB has the record
-    let count = blokli_db_entity::hopr_safe_contract::Entity::find()
-        .filter(blokli_db_entity::hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
+    let count = SafeEntity::find()
+        .filter(SafeColumn::Address.eq(safe_address.as_ref().to_vec()))
         .count(db.conn(blokli_db::TargetDb::Index))
         .await?;
     assert_eq!(count, 1, "DB should have 1 safe contract");
 
-    let stored_safe = blokli_db_entity::hopr_safe_contract::Entity::find()
+    let stored_safe = SafeEntity::find()
         .one(db.conn(blokli_db::TargetDb::Index))
         .await?
         .unwrap();

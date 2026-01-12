@@ -11,14 +11,15 @@
 //! This module contains defalut gas estimation constants for EIP-1559 for Gnosis chain,
 use std::{
     fmt::Debug,
+    fs::File,
     future::IntoFuture,
-    io::{BufWriter, Write},
+    io::{BufWriter, Error, Write},
     sync::{
         Arc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     task::{Context, Poll},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use futures::{FutureExt, StreamExt};
@@ -26,6 +27,7 @@ use futures::{FutureExt, StreamExt};
 use hopr_bindings::exports::alloy::eips::eip1559::Eip1559Estimation;
 use hopr_bindings::exports::alloy::{
     network::{EthereumWallet, Network, TransactionBuilder},
+    node_bindings::AnvilInstance,
     primitives::utils::parse_units,
     providers::{
         Identity, Provider, ProviderBuilder, RootProvider, SendableTx,
@@ -45,6 +47,7 @@ use hopr_bindings::exports::alloy::{
     },
 };
 use hopr_crypto_types::keypairs::Keypair;
+use moka::future::Cache;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use tower::{Layer, Service};
@@ -244,10 +247,7 @@ impl RetryPolicy for DefaultRetryPolicy {
 
     // TODO(#7140): original implementation requires input param of `num_retries`
     // next_backoff = initial_backoff * (1 + backoff_coefficient)^(num_retries - 1)
-    fn backoff_hint(
-        &self,
-        _error: &hopr_bindings::exports::alloy::transports::TransportError,
-    ) -> Option<std::time::Duration> {
+    fn backoff_hint(&self, _error: &TransportError) -> Option<Duration> {
         None
     }
 }
@@ -255,14 +255,11 @@ impl RetryPolicy for DefaultRetryPolicy {
 #[derive(Debug, Clone)]
 pub struct ZeroRetryPolicy;
 impl RetryPolicy for ZeroRetryPolicy {
-    fn should_retry(&self, _err: &hopr_bindings::exports::alloy::transports::TransportError) -> bool {
+    fn should_retry(&self, _err: &TransportError) -> bool {
         false
     }
 
-    fn backoff_hint(
-        &self,
-        _error: &hopr_bindings::exports::alloy::transports::TransportError,
-    ) -> Option<std::time::Duration> {
+    fn backoff_hint(&self, _error: &TransportError) -> Option<Duration> {
         None
     }
 }
@@ -537,7 +534,7 @@ where
 
     fn call(&mut self, request: RequestPacket) -> Self::Future {
         // metrics before calling
-        let start = std::time::Instant::now();
+        let start = Instant::now();
 
         let method_names = match request.clone() {
             RequestPacket::Single(single_req) => vec![single_req.method().to_owned()],
@@ -614,7 +611,7 @@ pub struct RequestorResponseSnapshot {
 #[derive(Debug, Clone)]
 pub struct SnapshotRequestor {
     next_id: Arc<AtomicUsize>,
-    entries: moka::future::Cache<String, RequestorResponseSnapshot>,
+    entries: Cache<String, RequestorResponseSnapshot>,
     file: String,
     aggressive_save: bool,
     fail_on_miss: bool,
@@ -631,7 +628,7 @@ impl SnapshotRequestor {
     pub fn new(snapshot_file: &str) -> Self {
         Self {
             next_id: Arc::new(AtomicUsize::new(1)),
-            entries: moka::future::Cache::builder().build(),
+            entries: Cache::builder().build(),
             file: snapshot_file.to_owned(),
             aggressive_save: false,
             fail_on_miss: false,
@@ -654,13 +651,13 @@ impl SnapshotRequestor {
     /// Clears all entries and loads them from the snapshot file.
     /// If `fail_on_miss` is set and the data is successfully loaded, all later
     /// requests that miss the loaded snapshot will result in HTTP error 404.
-    pub async fn try_load(&mut self, fail_on_miss: bool) -> Result<(), std::io::Error> {
+    pub async fn try_load(&mut self, fail_on_miss: bool) -> Result<(), Error> {
         if self.ignore_snapshot {
             return Ok(());
         }
 
-        let loaded = serde_yaml::from_reader::<_, Vec<RequestorResponseSnapshot>>(std::fs::File::open(&self.file)?)
-            .map_err(std::io::Error::other)?;
+        let loaded = serde_yaml::from_reader::<_, Vec<RequestorResponseSnapshot>>(File::open(&self.file)?)
+            .map_err(Error::other)?;
 
         self.clear();
 
@@ -711,7 +708,7 @@ impl SnapshotRequestor {
     ///
     /// Note that this method is automatically called on Drop, so usually it is unnecessary
     /// to call it explicitly.
-    pub fn save(&self) -> Result<(), std::io::Error> {
+    pub fn save(&self) -> Result<(), Error> {
         if self.ignore_snapshot {
             return Ok(());
         }
@@ -719,9 +716,9 @@ impl SnapshotRequestor {
         let mut values: Vec<RequestorResponseSnapshot> = self.entries.iter().map(|(_, r)| r).collect();
         values.sort_unstable_by_key(|a| a.id);
 
-        let mut writer = BufWriter::new(std::fs::File::create(&self.file)?);
+        let mut writer = BufWriter::new(File::create(&self.file)?);
 
-        serde_yaml::to_writer(&mut writer, &values).map_err(std::io::Error::other)?;
+        serde_yaml::to_writer(&mut writer, &values).map_err(Error::other)?;
 
         writer.flush()?;
 
@@ -885,7 +882,7 @@ pub type AnvilRpcClient = FillProvider<
 /// Used for testing. Creates RPC client to the local Anvil instance.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn create_rpc_client_to_anvil(
-    anvil: &hopr_bindings::exports::alloy::node_bindings::AnvilInstance,
+    anvil: &AnvilInstance,
     signer: &hopr_crypto_types::keypairs::ChainKeypair,
 ) -> Arc<AnvilRpcClient> {
     let wallet = PrivateKeySigner::from_slice(signer.secret().as_ref()).expect("failed to construct wallet");
@@ -904,6 +901,7 @@ mod tests {
     use std::time::Duration;
 
     use hopr_bindings::exports::alloy::{
+        primitives::U64,
         providers::{Provider, ProviderBuilder},
         rpc::client::ClientBuilder,
         transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
@@ -933,7 +931,7 @@ mod tests {
         let provider = ProviderBuilder::new().connect_client(rpc_client);
 
         let err = provider
-            .raw_request::<(), hopr_bindings::exports::alloy::primitives::U64>("eth_blockNumber".into(), ())
+            .raw_request::<(), U64>("eth_blockNumber".into(), ())
             .await
             .expect_err("expected error");
 
@@ -979,7 +977,7 @@ mod tests {
         let provider = ProviderBuilder::new().connect_client(rpc_client);
 
         let err = provider
-            .raw_request::<(), hopr_bindings::exports::alloy::primitives::U64>("eth_blockNumber".into(), ())
+            .raw_request::<(), U64>("eth_blockNumber".into(), ())
             .await
             .expect_err("expected error");
 
@@ -1018,7 +1016,7 @@ mod tests {
         let provider = ProviderBuilder::new().connect_client(rpc_client);
 
         let err = provider
-            .raw_request::<(), hopr_bindings::exports::alloy::primitives::U64>("eth_blockNumber".into(), ())
+            .raw_request::<(), U64>("eth_blockNumber".into(), ())
             .await
             .expect_err("expected error");
 
@@ -1075,7 +1073,7 @@ mod tests {
         let provider = ProviderBuilder::new().connect_client(rpc_client);
 
         let err = provider
-            .raw_request::<(), hopr_bindings::exports::alloy::primitives::U64>("eth_blockNumber".into(), ())
+            .raw_request::<(), U64>("eth_blockNumber".into(), ())
             .await
             .expect_err("expected error");
 
@@ -1132,7 +1130,7 @@ mod tests {
         let provider = ProviderBuilder::new().connect_client(rpc_client);
 
         let err = provider
-            .raw_request::<(), hopr_bindings::exports::alloy::primitives::U64>("eth_blockNumber".into(), ())
+            .raw_request::<(), U64>("eth_blockNumber".into(), ())
             .await
             .expect_err("expected error");
 
@@ -1191,7 +1189,7 @@ mod tests {
         let provider = ProviderBuilder::new().connect_client(rpc_client);
 
         let err = provider
-            .raw_request::<(), hopr_bindings::exports::alloy::primitives::U64>("eth_blockNumber".into(), ())
+            .raw_request::<(), U64>("eth_blockNumber".into(), ())
             .await
             .expect_err("expected error");
 
@@ -1250,7 +1248,7 @@ mod tests {
         let provider = ProviderBuilder::new().connect_client(rpc_client);
 
         let err = provider
-            .raw_request::<(), hopr_bindings::exports::alloy::primitives::U64>("eth_blockNumber".into(), ())
+            .raw_request::<(), U64>("eth_blockNumber".into(), ())
             .await
             .expect_err("expected error");
 

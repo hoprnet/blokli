@@ -1,6 +1,6 @@
 #[cfg(test)]
 pub(super) mod test_helpers {
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
     use blokli_chain_rpc::HoprIndexerRpcOperations;
     use blokli_chain_types::ContractAddresses;
@@ -55,7 +55,7 @@ pub(super) mod test_helpers {
             async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
             async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
             async fn get_transaction_count(&self, address: Address) -> blokli_chain_rpc::errors::Result<u64>;
-            async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<std::time::Duration>;
+            async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<Duration>;
             async fn get_hopr_module_from_safe(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<Option<Address>>;
         }
     }
@@ -109,7 +109,7 @@ pub(super) mod test_helpers {
             self.inner.get_transaction_count(address).await
         }
 
-        async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<std::time::Duration> {
+        async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<Duration> {
             self.inner.get_channel_closure_notice_period().await
         }
 

@@ -4,7 +4,10 @@ mod common;
 
 use std::time::Duration;
 
-use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperationsConfig};
+use blokli_chain_rpc::{
+    HoprIndexerRpcOperations, HoprRpcOperations,
+    rpc::{RpcOperations, RpcOperationsConfig},
+};
 use blokli_chain_types::{ContractAddresses, ContractInstances};
 use common::{TEST_BLOCK_TIME, TEST_FINALITY, create_rpc_client_to_anvil, wait_for_finality};
 use hopr_bindings::exports::alloy::{
@@ -46,7 +49,7 @@ async fn test_get_minimum_network_winning_probability() -> anyhow::Result<()> {
     // Wait until contracts deployments are final
     wait_for_finality(TEST_FINALITY, TEST_BLOCK_TIME).await;
 
-    let rpc = blokli_chain_rpc::rpc::RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
+    let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
 
     // Get the minimum network winning probability
     let winning_prob = rpc.get_minimum_network_winning_probability().await?;
@@ -91,7 +94,7 @@ async fn test_get_minimum_network_ticket_price() -> anyhow::Result<()> {
     // Wait until contracts deployments are final
     wait_for_finality(TEST_FINALITY, TEST_BLOCK_TIME).await;
 
-    let rpc = blokli_chain_rpc::rpc::RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
+    let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
 
     // Get the minimum network ticket price
     let ticket_price = rpc.get_minimum_network_ticket_price().await?;
@@ -137,7 +140,7 @@ async fn test_get_safe_from_node_safe_registry() -> anyhow::Result<()> {
     // Wait until contracts deployments are final
     wait_for_finality(TEST_FINALITY, TEST_BLOCK_TIME).await;
 
-    let rpc = blokli_chain_rpc::rpc::RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
+    let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
 
     let node_address: Address = (&chain_key_0).into();
 
@@ -185,7 +188,7 @@ async fn test_get_channel_closure_notice_period() -> anyhow::Result<()> {
     // Wait until contracts deployments are final
     wait_for_finality(TEST_FINALITY, TEST_BLOCK_TIME).await;
 
-    let rpc = blokli_chain_rpc::rpc::RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
+    let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
 
     // Get the channel closure notice period
     let notice_period = rpc.get_channel_closure_notice_period().await?;

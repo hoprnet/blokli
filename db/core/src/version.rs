@@ -1,6 +1,9 @@
-use blokli_db_entity::prelude::{
-    Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, HoprBalance, HoprSafeContract, Log,
-    LogStatus, LogTopicInfo, NativeBalance,
+use blokli_db_entity::{
+    hopr_safe_contract::Column as SafeContractColumn,
+    prelude::{
+        Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, HoprBalance, HoprSafeContract, Log,
+        LogStatus, LogTopicInfo, NativeBalance,
+    },
 };
 use migration::MIGRATION_MARKER_BLOCK_ID;
 use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, Statement};
@@ -169,7 +172,7 @@ async fn clear_index_data(db: &DatabaseConnection) -> Result<()> {
     // Do not delete those rows marked with `MIGRATION_MARKER_BLOCK_ID` so that v3 Safe data
     // created during the migration are kept.
     HoprSafeContract::delete_many()
-        .filter(blokli_db_entity::hopr_safe_contract::Column::DeployedBlock.ne(MIGRATION_MARKER_BLOCK_ID))
+        .filter(SafeContractColumn::DeployedBlock.ne(MIGRATION_MARKER_BLOCK_ID))
         .exec(db)
         .await?;
 

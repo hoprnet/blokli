@@ -8,6 +8,7 @@
 use blokli_api::query::QueryRoot;
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, accounts::BlokliDbAccountOperations, db::BlokliDb};
+use blokli_db_entity::prelude::Account as AccountEntity;
 use hopr_crypto_types::prelude::{ChainKeypair, Keypair, OffchainKeypair};
 use hopr_primitive_types::{prelude::Address, traits::ToHex};
 use multiaddr::Multiaddr;
@@ -110,9 +111,7 @@ async fn test_accounts_query_with_filters() -> anyhow::Result<()> {
         .await?;
 
     // Verify DB has the records
-    let count = blokli_db_entity::account::Entity::find()
-        .count(db.conn(TargetDb::Index))
-        .await?;
+    let count = AccountEntity::find().count(db.conn(TargetDb::Index)).await?;
     assert_eq!(count, 2, "DB should have 2 accounts");
 
     let schema = async_graphql::Schema::build(

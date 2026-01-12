@@ -1,4 +1,4 @@
-use std::fmt::Formatter;
+use std::{fmt::Formatter, time::Duration};
 
 mod graphql;
 pub mod types {
@@ -224,5 +224,5 @@ pub trait BlokliTransactionClient {
     /// Tracks the transaction given the `tx_id` previously returned
     /// by [`submit_and_track_transaction`](BlokliTransactionClient::submit_and_track_transaction) until it is confirmed
     /// or [fails](crate::errors::TrackingErrorKind).
-    async fn track_transaction(&self, tx_id: TxId, client_timeout: std::time::Duration) -> Result<types::Transaction>;
+    async fn track_transaction(&self, tx_id: TxId, client_timeout: Duration) -> Result<types::Transaction>;
 }

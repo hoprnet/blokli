@@ -1,5 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
+use tokio::sync::Mutex;
+
 use async_trait::async_trait;
 use blokli_chain_indexer::{IndexerConfig, block::Indexer, handlers::ContractEventHandlers, traits::ChainLogHandler};
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
@@ -262,7 +264,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
     #[derive(Clone)]
     struct TrackingMockRpc {
         inner: MockRpcOperations,
-        requested_start_block: Arc<tokio::sync::Mutex<Option<u64>>>,
+        requested_start_block: Arc<Mutex<Option<u64>>>,
     }
 
     #[async_trait]
@@ -345,7 +347,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         }
     }
 
-    let requested_start_block = Arc::new(tokio::sync::Mutex::new(None));
+    let requested_start_block = Arc::new(Mutex::new(None));
     let tracking_rpc = TrackingMockRpc {
         inner: MockRpcOperations::new(),
         requested_start_block: requested_start_block.clone(),
