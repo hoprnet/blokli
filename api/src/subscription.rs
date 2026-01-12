@@ -946,16 +946,25 @@ fn matches_account_filters(
         return false;
     }
     if let Some(pk) = packet_key {
-        // Strip 0x prefix if present (same as database filter in fetch_accounts_with_filters)
+        // Strip 0x prefix if present
         let pk_normalized = pk.strip_prefix("0x").unwrap_or(pk);
         if account.packet_key != pk_normalized {
             return false;
         }
     }
-    if let Some(ck) = chain_key
-        && account.chain_key != ck
-    {
-        return false;
+    if let Some(ck) = chain_key {
+        // Normalize to canonical hex format
+        match Address::from_hex(ck) {
+            Ok(addr) => {
+                if account.chain_key != addr.to_hex() {
+                    return false;
+                }
+            }
+            Err(_) => {
+                // Invalid address format cannot match
+                return false;
+            }
+        }
     }
     true
 }
