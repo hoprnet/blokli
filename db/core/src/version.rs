@@ -2,7 +2,8 @@ use blokli_db_entity::prelude::{
     Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, HoprBalance, HoprSafeContract, Log,
     LogStatus, LogTopicInfo, NativeBalance,
 };
-use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, Statement};
+use migration::MIGRATION_MARKER_BLOCK_ID;
+use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, Statement};
 use tracing::{info, warn};
 
 use crate::errors::{DbSqlError, Result};
@@ -17,7 +18,9 @@ use crate::errors::{DbSqlError, Result};
 /// - 4: Change contracts addresses
 /// - 5: NodeSafeRegistered events are now also possible safe creation events
 /// - 6: Changed channel status representation to smallint
-pub const CURRENT_SCHEMA_VERSION: i64 = 6;
+/// - 7: Update account indexing to include safe address once deployed
+/// - 8: Add v3 Safe deployment data
+pub const CURRENT_SCHEMA_VERSION: i64 = 8;
 
 /// The singleton ID used for the schema_version table
 const SCHEMA_VERSION_TABLE_ID: i64 = 1;
@@ -163,7 +166,12 @@ async fn clear_index_data(db: &DatabaseConnection) -> Result<()> {
     NativeBalance::delete_many().exec(db).await?;
 
     // Safe contract table
-    HoprSafeContract::delete_many().exec(db).await?;
+    // Do not delete those rows marked with `MIGRATION_MARKER_BLOCK_ID` so that v3 Safe data
+    // created during the migration are kept.
+    HoprSafeContract::delete_many()
+        .filter(blokli_db_entity::hopr_safe_contract::Column::DeployedBlock.ne(MIGRATION_MARKER_BLOCK_ID))
+        .exec(db)
+        .await?;
 
     // Info tables
     ChainInfo::delete_many().exec(db).await?;
@@ -411,6 +419,12 @@ mod tests {
         // Verify logs data was cleared
         let log_count = Log::find().count(db.conn(crate::TargetDb::Logs)).await?;
         assert_eq!(log_count, 0, "Logs should be cleared");
+
+        // v3 Safe data should be kept
+        assert_ne!(
+            0,
+            HoprSafeContract::find().count(db.conn(crate::TargetDb::Index)).await?
+        );
 
         Ok(())
     }

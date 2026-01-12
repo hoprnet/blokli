@@ -3,7 +3,7 @@ use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations};
 use hopr_primitive_types::{prelude::Address, traits::ToHex};
 use rand::RngCore;
-use sea_orm::{EntityTrait, PaginatorTrait};
+use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
 // Helper to generate random address
 fn random_address() -> Address {
@@ -27,6 +27,7 @@ async fn test_safe_queries() -> anyhow::Result<()> {
 
     // Verify DB has the record
     let count = blokli_db_entity::hopr_safe_contract::Entity::find()
+        .filter(blokli_db_entity::hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
         .count(db.conn(blokli_db::TargetDb::Index))
         .await?;
     assert_eq!(count, 1, "DB should have 1 safe contract");
@@ -124,8 +125,8 @@ async fn test_safe_queries() -> anyhow::Result<()> {
 
     let data = response.data.into_json().unwrap();
     let safes_list = data["safes"]["safes"].as_array().unwrap();
-    assert_eq!(safes_list.len(), 1);
-    assert_eq!(safes_list[0]["address"], safe_address.to_hex());
+    assert!(!safes_list.is_empty());
+    assert!(safes_list.iter().any(|s| s["address"] == safe_address.to_hex()));
 
     Ok(())
 }

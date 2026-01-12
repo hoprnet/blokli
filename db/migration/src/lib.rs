@@ -29,6 +29,15 @@ mod m025_create_schema_version_table;
 mod m026_add_module_and_chain_key_to_safe_contract;
 mod m027_drop_node_info_table;
 mod m028_add_node_safe_registration_table;
+mod m029_update_safe_contract_indices;
+mod m030_migrate_v3_safes;
+
+/// This is a special block ID that even pre-dates the v3 contract deployment on Gnosis chain,
+/// and therefore could be safely used to mark data added via the migration.
+///
+/// This allows distinguishing between data added via the migration and data added via other means.
+/// The data added via migration are e.g.: not cleared.
+pub const MIGRATION_MARKER_BLOCK_ID: u32 = 1000;
 
 #[derive(PartialEq)]
 pub enum BackendType {
@@ -36,29 +45,22 @@ pub enum BackendType {
     Postgres,
 }
 
-pub struct Migrator;
+/// Indicates from which network the v3 Safe data should be imported.
+#[repr(u8)]
+pub enum SafeDataOrigin {
+    /// Do not import any v3 Safe data.
+    NoData = 0,
+    /// Import v3 Rotsee Safe data.
+    Rotsee = 1,
+    /// Import v3 Dufour Safe data.
+    Dufour = 2,
+}
 
-/// Used to instantiate all tables to generate the corresponding entities in
-/// a non-SQLite database (such as Postgres).
-#[async_trait::async_trait]
-impl MigratorTrait for Migrator {
-    /// Returns the ordered set of migrations that comprise the full database migrator.
-    ///
-    /// This returns the complete sequence of migration instances in the order they should be applied.
-    ///
-    /// # Returns
-    ///
-    /// A `Vec<Box<dyn MigrationTrait>>` containing each migration boxed as a `MigrationTrait` object, ordered from
-    /// earliest to latest.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let migrations = Migrator::migrations();
-    /// // full migrator should contain multiple migrations (at least 1)
-    /// assert!(!migrations.is_empty());
-    /// ```
-    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+/// Contains all migration for non-Sqlite databases, such as Postgres.
+pub struct Migrator<const NETWORK: u8>;
+
+impl<const NETWORK: u8> Migrator<NETWORK> {
+    fn base_migrations() -> Vec<Box<dyn MigrationTrait>> {
         vec![
             Box::new(m001_create_index_tables::Migration),
             Box::new(m002_create_index_indices::Migration),
@@ -88,7 +90,33 @@ impl MigratorTrait for Migrator {
             Box::new(m026_add_module_and_chain_key_to_safe_contract::Migration),
             Box::new(m027_drop_node_info_table::Migration),
             Box::new(m028_add_node_safe_registration_table::Migration),
+            Box::new(m029_update_safe_contract_indices::Migration),
         ]
+    }
+}
+
+#[async_trait::async_trait]
+impl MigratorTrait for Migrator<{ SafeDataOrigin::NoData as u8 }> {
+    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+        Self::base_migrations()
+    }
+}
+
+#[async_trait::async_trait]
+impl MigratorTrait for Migrator<{ SafeDataOrigin::Rotsee as u8 }> {
+    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+        let mut migrations = Self::base_migrations();
+        migrations.push(Box::new(m030_migrate_v3_safes::Migration(SafeDataOrigin::Rotsee)));
+        migrations
+    }
+}
+
+#[async_trait::async_trait]
+impl MigratorTrait for Migrator<{ SafeDataOrigin::Dufour as u8 }> {
+    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+        let mut migrations = Self::base_migrations();
+        migrations.push(Box::new(m030_migrate_v3_safes::Migration(SafeDataOrigin::Dufour)));
+        migrations
     }
 }
 
@@ -97,20 +125,10 @@ impl MigratorTrait for Migrator {
 /// to separate the exclusive concurrently accessing components into
 /// separate database files to benefit from multiple write locks over
 /// different parts of the database.
-pub struct MigratorIndex;
+pub struct MigratorIndex<const NETWORK: u8>;
 
-#[async_trait::async_trait]
-impl MigratorTrait for MigratorIndex {
-    /// List of migrations to apply for the index-only migrator, in execution order.
-    ///
-    /// # Examples
-    ///
-    /// ```ignore
-    /// let list = migrations();
-    /// assert!(!list.is_empty());
-    /// // each element is a boxed `MigrationTrait` implementation
-    /// ```
-    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+impl<const NETWORK: u8> MigratorIndex<NETWORK> {
+    fn base_migrations() -> Vec<Box<dyn MigrationTrait>> {
         vec![
             Box::new(m001_create_index_tables::Migration),
             Box::new(m002_create_index_indices::Migration),
@@ -135,7 +153,33 @@ impl MigratorTrait for MigratorIndex {
             Box::new(m026_add_module_and_chain_key_to_safe_contract::Migration),
             Box::new(m027_drop_node_info_table::Migration),
             Box::new(m028_add_node_safe_registration_table::Migration),
+            Box::new(m029_update_safe_contract_indices::Migration),
         ]
+    }
+}
+
+#[async_trait::async_trait]
+impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::NoData as u8 }> {
+    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+        Self::base_migrations()
+    }
+}
+
+#[async_trait::async_trait]
+impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::Rotsee as u8 }> {
+    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+        let mut migrations = Self::base_migrations();
+        migrations.push(Box::new(m030_migrate_v3_safes::Migration(SafeDataOrigin::Rotsee)));
+        migrations
+    }
+}
+
+#[async_trait::async_trait]
+impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::Dufour as u8 }> {
+    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
+        let mut migrations = Self::base_migrations();
+        migrations.push(Box::new(m030_migrate_v3_safes::Migration(SafeDataOrigin::Dufour)));
+        migrations
     }
 }
 
@@ -214,7 +258,7 @@ mod tests {
         let db = setup_test_db().await;
 
         // Run all migrations
-        let result = Migrator::up(&db, None).await;
+        let result = Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None).await;
 
         assert!(result.is_ok(), "Migrations should run without errors");
     }
@@ -222,7 +266,9 @@ mod tests {
     #[tokio::test]
     async fn test_account_state_table_created() {
         let db = setup_test_db().await;
-        Migrator::up(&db, None).await.unwrap();
+        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+            .await
+            .unwrap();
 
         // Verify account_state table exists
         assert!(
@@ -258,7 +304,9 @@ mod tests {
     #[tokio::test]
     async fn test_channel_state_table_created() {
         let db = setup_test_db().await;
-        Migrator::up(&db, None).await.unwrap();
+        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+            .await
+            .unwrap();
 
         // Verify channel_state table exists
         assert!(
@@ -309,7 +357,9 @@ mod tests {
     #[tokio::test]
     async fn test_account_state_unique_position_index_created() {
         let db = setup_test_db().await;
-        Migrator::up(&db, None).await.unwrap();
+        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+            .await
+            .unwrap();
 
         // Verify unique index exists
         assert!(
@@ -354,7 +404,9 @@ mod tests {
     #[tokio::test]
     async fn test_channel_state_unique_position_index_created() {
         let db = setup_test_db().await;
-        Migrator::up(&db, None).await.unwrap();
+        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+            .await
+            .unwrap();
 
         // Verify unique index exists
         assert!(
@@ -416,7 +468,9 @@ mod tests {
     #[tokio::test]
     async fn test_channel_state_performance_indices_created() {
         let db = setup_test_db().await;
-        Migrator::up(&db, None).await.unwrap();
+        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+            .await
+            .unwrap();
 
         // Verify performance indices exist
         assert!(
@@ -438,7 +492,9 @@ mod tests {
     #[tokio::test]
     async fn test_account_state_performance_index_created() {
         let db = setup_test_db().await;
-        Migrator::up(&db, None).await.unwrap();
+        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+            .await
+            .unwrap();
 
         // Verify performance index exists
         assert!(
@@ -450,7 +506,9 @@ mod tests {
     #[tokio::test]
     async fn test_current_state_views_created() {
         let db = setup_test_db().await;
-        Migrator::up(&db, None).await.unwrap();
+        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+            .await
+            .unwrap();
 
         // Verify views exist
         assert!(
@@ -467,7 +525,9 @@ mod tests {
     #[tokio::test]
     async fn test_channel_current_view_returns_latest_state() {
         let db = setup_test_db().await;
-        Migrator::up(&db, None).await.unwrap();
+        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+            .await
+            .unwrap();
 
         // Insert test data
         db.execute_raw(Statement::from_string(
@@ -532,7 +592,9 @@ mod tests {
     #[tokio::test]
     async fn test_account_current_view_returns_latest_state() {
         let db = setup_test_db().await;
-        Migrator::up(&db, None).await.unwrap();
+        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+            .await
+            .unwrap();
 
         // Insert test data
         db.execute_raw(Statement::from_string(
@@ -580,7 +642,9 @@ mod tests {
     #[tokio::test]
     async fn test_foreign_key_cascade_on_account_state() {
         let db = setup_test_db().await;
-        Migrator::up(&db, None).await.unwrap();
+        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+            .await
+            .unwrap();
 
         // Insert account and state
         db.execute_raw(Statement::from_string(
@@ -636,7 +700,9 @@ mod tests {
     #[tokio::test]
     async fn test_foreign_key_cascade_on_channel_state() {
         let db = setup_test_db().await;
-        Migrator::up(&db, None).await.unwrap();
+        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+            .await
+            .unwrap();
 
         // Insert accounts and channel
         db.execute_raw(Statement::from_string(
@@ -708,7 +774,9 @@ mod tests {
     #[tokio::test]
     async fn test_chain_info_watermark_indices_exist() {
         let db = setup_test_db().await;
-        Migrator::up(&db, None).await.unwrap();
+        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+            .await
+            .unwrap();
 
         // Verify chain_info table exists with watermark fields
         let insert_result = db
@@ -724,5 +792,41 @@ mod tests {
             insert_result.is_ok(),
             "Should be able to insert into chain_info with watermark fields"
         );
+    }
+
+    #[tokio::test]
+    async fn test_v3_safe_data_migration_rotsee() -> anyhow::Result<()> {
+        let db = setup_test_db().await;
+        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None).await?;
+
+        let result = db
+            .query_one_raw(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT COUNT(*) as row_count FROM hopr_safe_contract".to_string(),
+            ))
+            .await?
+            .unwrap();
+
+        let count: i32 = result.try_get("", "row_count")?;
+        assert_eq!(count, 80);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_v3_safe_data_migration_dufour() -> anyhow::Result<()> {
+        let db = setup_test_db().await;
+        Migrator::<{ SafeDataOrigin::Dufour as u8 }>::up(&db, None).await?;
+
+        let result = db
+            .query_one_raw(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT COUNT(*) as row_count FROM hopr_safe_contract".to_string(),
+            ))
+            .await?
+            .unwrap();
+
+        let count: i32 = result.try_get("", "row_count")?;
+        assert_eq!(count, 884);
+        Ok(())
     }
 }
