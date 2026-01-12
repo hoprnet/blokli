@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use cynic::{MutationBuilder, SubscriptionBuilder};
 use futures::TryStreamExt;
-use futures_time::future::FutureExt;
+use futures_time::{future::FutureExt, time::Duration as FuturesTimeDuration};
 use hex::ToHex;
 
 use super::{BlokliClient, GraphQlQueries, response_to_data};
@@ -109,7 +109,7 @@ impl BlokliTransactionClient for BlokliClient {
                 })
             })
             .try_next()
-            .timeout(futures_time::time::Duration::from(client_timeout))
+            .timeout(FuturesTimeDuration::from(client_timeout))
             .await
             .map_err(|_| ErrorKind::Timeout)??
             .ok_or(ErrorKind::NoData.into())

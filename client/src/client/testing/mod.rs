@@ -1,7 +1,12 @@
-use std::{ops::Div, sync::Arc, time::Duration};
+use std::{
+    ops::Div,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
 
 use async_broadcast::TrySendError;
 use futures::{Stream, StreamExt};
+use hopr_crypto_types::types::Hash;
 use indexmap::IndexMap;
 
 use crate::{
@@ -486,7 +491,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
     }
 
     async fn query_module_address_prediction(&self, input: ModulePredictionInput) -> Result<ChainAddress> {
-        let hash = hopr_crypto_types::types::Hash::create(&[
+        let hash = Hash::create(&[
             input.nonce.to_be_bytes().as_ref(),
             input.owner.as_ref(),
             input.safe_address.as_ref(),
@@ -824,9 +829,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
             Transaction {
                 id: tx_id.clone().into(),
                 status,
-                submitted_at: DateTime(
-                    chrono::DateTime::<chrono::Utc>::from(std::time::SystemTime::now()).to_rfc3339(),
-                ),
+                submitted_at: DateTime(chrono::DateTime::<chrono::Utc>::from(SystemTime::now()).to_rfc3339()),
                 transaction_hash: Hex32(tx_hash),
             },
         );

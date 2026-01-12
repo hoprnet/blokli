@@ -1,7 +1,7 @@
 use std::time::Duration;
 
-use alloy::primitives::U256;
 use anyhow::{Context, Result, anyhow};
+use hopr_bindings::exports::alloy::primitives::U256;
 use hopr_primitive_types::prelude::Address;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};

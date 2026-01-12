@@ -20,7 +20,7 @@ pub mod safe_contracts;
 pub mod state_queries;
 pub mod version;
 
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Instant};
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
@@ -62,7 +62,7 @@ impl OpenTransaction {
         T: Send,
         E: std::error::Error + From<DbSqlError>,
     {
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let res = callback(&self).await;
 
         if res.is_ok() {

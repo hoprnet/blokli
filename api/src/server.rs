@@ -10,7 +10,7 @@ use async_stream::stream;
 use axum::{
     Json, Router,
     extract::State,
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, Method, StatusCode, header},
     response::{
         Html, IntoResponse, Response,
         sse::{Event, Sse},
@@ -188,11 +188,7 @@ pub async fn build_app(
 
         CorsLayer::new()
             .allow_origin(allowed_origins)
-            .allow_methods([
-                axum::http::Method::GET,
-                axum::http::Method::POST,
-                axum::http::Method::OPTIONS,
-            ])
+            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
             .allow_headers([header::CONTENT_TYPE, header::ACCEPT, header::AUTHORIZATION])
             .allow_credentials(true)
     };

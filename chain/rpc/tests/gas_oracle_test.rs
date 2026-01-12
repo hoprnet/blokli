@@ -5,7 +5,11 @@
 
 mod common;
 
-use alloy::{
+use blokli_chain_rpc::client::{
+    EIP1559_FEE_ESTIMATION_DEFAULT_MAX_FEE_GNOSIS, EIP1559_FEE_ESTIMATION_DEFAULT_PRIORITY_FEE_GNOSIS, GasOracleFiller,
+};
+use blokli_chain_types::utils::create_anvil;
+use hopr_bindings::exports::alloy::{
     network::TransactionBuilder,
     primitives::{U256, address},
     providers::{
@@ -16,10 +20,6 @@ use alloy::{
     signers::local::PrivateKeySigner,
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
-use blokli_chain_rpc::client::{
-    EIP1559_FEE_ESTIMATION_DEFAULT_MAX_FEE_GNOSIS, EIP1559_FEE_ESTIMATION_DEFAULT_PRIORITY_FEE_GNOSIS, GasOracleFiller,
-};
-use blokli_chain_types::utils::create_anvil;
 
 /// Tests that GasOracleFiller handles EIP-1559 transactions using fallback fees.
 ///
@@ -111,7 +111,7 @@ async fn test_client_should_call_on_gas_oracle_for_legacy_tx() -> anyhow::Result
             EIP1559_FEE_ESTIMATION_DEFAULT_PRIORITY_FEE_GNOSIS,
         ))
         .filler(GasFiller)
-        .filler(BlobGasFiller)
+        .filler(BlobGasFiller::default())
         .connect_client(rpc_client);
 
     // ChainIdFiller is required for proper legacy transaction handling with gas_price

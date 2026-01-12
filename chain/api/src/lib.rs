@@ -9,13 +9,6 @@ pub mod transaction_validator;
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
-use alloy::{
-    rpc::client::ClientBuilder,
-    transports::{
-        http::{Http, ReqwestTransport},
-        layers::RetryBackoffLayer,
-    },
-};
 use blokli_chain_indexer::{IndexerConfig, IndexerState, block::Indexer, handlers::ContractEventHandlers};
 use blokli_chain_rpc::{
     HoprIndexerRpcOperations, HoprRpcOperations,
@@ -27,6 +20,13 @@ use blokli_chain_types::{ChainConfig, ContractAddresses};
 use blokli_db::BlokliDbAllOperations;
 use futures::future::AbortHandle;
 use hopr_async_runtime::spawn_as_abortable;
+use hopr_bindings::exports::alloy::{
+    rpc::client::ClientBuilder,
+    transports::{
+        http::{Http, ReqwestTransport},
+        layers::RetryBackoffLayer,
+    },
+};
 pub use hopr_internal_types::channels::ChannelEntry;
 use hopr_internal_types::{
     account::AccountEntry, // channels::CorruptedChannelEntry,

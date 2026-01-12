@@ -106,13 +106,16 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use alloy::{primitives::Address as AlloyAddress, sol_types::SolEvent};
+    use blokli_chain_rpc::errors::RpcError;
     use blokli_chain_types::AlloyAddressExt;
     use blokli_db::{
         BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations,
     };
     use blokli_db_entity::{hopr_safe_contract, prelude::HoprSafeContract};
-    use hopr_bindings::hopr_node_stake_factory::HoprNodeStakeFactory;
+    use hopr_bindings::{
+        exports::alloy::{primitives::Address as AlloyAddress, sol_types::SolEvent},
+        hopr_node_stake_factory::HoprNodeStakeFactory,
+    };
     use hopr_crypto_types::types::Hash;
     use hopr_primitive_types::prelude::{Address, SerializableLog};
     use mockall::predicate::*;
@@ -217,7 +220,7 @@ mod tests {
         // Mock get_transaction_sender failure
         rpc_operations
             .expect_get_transaction_sender()
-            .returning(|_| Err(blokli_chain_rpc::errors::RpcError::Other("RPC failed".into())));
+            .returning(|_| Err(RpcError::Other("RPC failed".into())));
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),

@@ -9,16 +9,16 @@
 
 use std::{sync::Arc, time::Duration};
 
-use alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
 use async_graphql::Schema;
 use blokli_api::{mutation::MutationRoot, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot};
+use blokli_api_types::Account;
 use blokli_chain_api::{
     rpc_adapter::RpcAdapter,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
     transaction_store::TransactionStore,
     transaction_validator::TransactionValidator,
 };
-use blokli_chain_indexer::IndexerState;
+use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
 use blokli_chain_rpc::{
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
@@ -26,6 +26,7 @@ use blokli_chain_rpc::{
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, accounts::BlokliDbAccountOperations, db::BlokliDb};
 use futures::StreamExt;
+use hopr_bindings::exports::alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
 use hopr_crypto_types::prelude::{ChainKeypair, Keypair, OffchainKeypair};
 use hopr_primitive_types::{prelude::Address, traits::ToHex};
 use multiaddr::Multiaddr;
@@ -41,7 +42,8 @@ fn random_offchain_keypair() -> OffchainKeypair {
 }
 
 /// Create a minimal GraphQL schema for testing subscriptions
-fn create_test_schema(db: &BlokliDb) -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
+/// Returns both the schema and the IndexerState for publishing events
+fn create_test_schema(db: &BlokliDb) -> (Schema<QueryRoot, MutationRoot, SubscriptionRoot>, IndexerState) {
     let indexer_state = IndexerState::new(10, 100);
     let transaction_store = Arc::new(TransactionStore::new());
     let transaction_validator = Arc::new(TransactionValidator::new());
@@ -74,17 +76,19 @@ fn create_test_schema(db: &BlokliDb) -> Schema<QueryRoot, MutationRoot, Subscrip
         RawTransactionExecutorConfig::default(),
     ));
 
-    build_schema(
+    let schema = build_schema(
         db.conn(TargetDb::Index).clone(),
         1,
         "test-network".to_string(),
         ContractAddresses::default(),
-        indexer_state,
+        indexer_state.clone(),
         transaction_executor,
         transaction_store,
         rpc_ops,
         db.sqlite_notification_manager().cloned(),
-    )
+    );
+
+    (schema, indexer_state)
 }
 
 #[tokio::test]
@@ -103,7 +107,7 @@ async fn test_account_subscription_emits_initial_account_with_keyid_filter() {
         .unwrap();
 
     // Create GraphQL schema
-    let schema = create_test_schema(&db);
+    let (schema, _indexer_state) = create_test_schema(&db);
 
     // Execute subscription query with keyid filter
     let query = r#"
@@ -160,7 +164,7 @@ async fn test_account_subscription_emits_initial_account_with_packet_key_filter(
         .unwrap();
 
     // Create GraphQL schema
-    let schema = create_test_schema(&db);
+    let (schema, _indexer_state) = create_test_schema(&db);
 
     // Execute subscription query with packetKey filter
     let query = format!(
@@ -211,7 +215,7 @@ async fn test_account_subscription_emits_initial_account_with_chain_key_filter()
         .unwrap();
 
     // Create GraphQL schema
-    let schema = create_test_schema(&db);
+    let (schema, _indexer_state) = create_test_schema(&db);
 
     // Execute subscription query with chainKey filter
     let query = format!(
@@ -281,7 +285,7 @@ async fn test_account_subscription_without_filters_emits_all_accounts() {
     .unwrap();
 
     // Create GraphQL schema
-    let schema = create_test_schema(&db);
+    let (schema, _indexer_state) = create_test_schema(&db);
 
     // Execute subscription query without filters
     let query = r#"
@@ -330,7 +334,7 @@ async fn test_account_subscription_receives_safe_address_update() {
         .await
         .unwrap();
 
-    let schema = create_test_schema(&db);
+    let (schema, indexer_state) = create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -359,8 +363,17 @@ async fn test_account_subscription_receives_safe_address_update() {
         .await
         .unwrap();
 
-    // Should receive update with safe address (polling will pick it up within 2 seconds)
-    let updated = tokio::time::timeout(Duration::from_secs(3), stream.next())
+    // Publish AccountUpdated event (this is what the indexer would do)
+    indexer_state.publish_event(IndexerEvent::AccountUpdated(Account {
+        keyid: 1,
+        chain_key: chain_key.to_hex(),
+        packet_key: packet_key.to_hex(),
+        safe_address: Some(safe_address.to_hex()),
+        multi_addresses: vec![],
+    }));
+
+    // Should receive update with safe address
+    let updated = tokio::time::timeout(Duration::from_millis(500), stream.next())
         .await
         .unwrap()
         .unwrap();
@@ -387,7 +400,7 @@ async fn test_account_subscription_receives_announcement_update() {
         .await
         .unwrap();
 
-    let schema = create_test_schema(&db);
+    let (schema, indexer_state) = create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -418,10 +431,21 @@ async fn test_account_subscription_receives_announcement_update() {
 
     // Add announcement
     let multiaddr: Multiaddr = "/ip4/127.0.0.1/tcp/9091".parse().unwrap();
-    db.insert_announcement(None, chain_key, multiaddr, 110).await.unwrap();
+    db.insert_announcement(None, chain_key, multiaddr.clone(), 110)
+        .await
+        .unwrap();
 
-    // Should receive update with announcement (polling will pick it up within 2 seconds)
-    let updated = tokio::time::timeout(Duration::from_secs(3), stream.next())
+    // Publish AccountUpdated event (this is what the indexer would do)
+    indexer_state.publish_event(IndexerEvent::AccountUpdated(Account {
+        keyid: 1,
+        chain_key: chain_key.to_hex(),
+        packet_key: packet_key.to_hex(),
+        safe_address: None,
+        multi_addresses: vec![multiaddr.to_string()],
+    }));
+
+    // Should receive update with announcement
+    let updated = tokio::time::timeout(Duration::from_millis(500), stream.next())
         .await
         .unwrap()
         .unwrap();
@@ -447,7 +471,7 @@ async fn test_account_subscription_receives_multiple_updates() {
         .await
         .unwrap();
 
-    let schema = create_test_schema(&db);
+    let (schema, indexer_state) = create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -473,7 +497,16 @@ async fn test_account_subscription_receives_multiple_updates() {
         .await
         .unwrap();
 
-    let update1 = tokio::time::timeout(Duration::from_secs(3), stream.next())
+    // Publish event
+    indexer_state.publish_event(IndexerEvent::AccountUpdated(Account {
+        keyid: 1,
+        chain_key: chain_key.to_hex(),
+        packet_key: packet_key.to_hex(),
+        safe_address: Some(safe_address1.to_hex()),
+        multi_addresses: vec![],
+    }));
+
+    let update1 = tokio::time::timeout(Duration::from_millis(500), stream.next())
         .await
         .unwrap()
         .unwrap();
@@ -490,7 +523,16 @@ async fn test_account_subscription_receives_multiple_updates() {
         .await
         .unwrap();
 
-    let update2 = tokio::time::timeout(Duration::from_secs(3), stream.next())
+    // Publish event
+    indexer_state.publish_event(IndexerEvent::AccountUpdated(Account {
+        keyid: 1,
+        chain_key: chain_key.to_hex(),
+        packet_key: packet_key.to_hex(),
+        safe_address: Some(safe_address2.to_hex()),
+        multi_addresses: vec![],
+    }));
+
+    let update2 = tokio::time::timeout(Duration::from_millis(500), stream.next())
         .await
         .unwrap()
         .unwrap();
@@ -537,7 +579,7 @@ async fn test_account_subscription_with_combined_filters() {
     .await
     .unwrap();
 
-    let schema = create_test_schema(&db);
+    let (schema, _indexer_state) = create_test_schema(&db);
 
     // Subscribe with keyid and chainKey filters (both should match account 1)
     let query = format!(
@@ -604,7 +646,7 @@ async fn test_account_subscription_filter_excludes_non_matching_accounts() {
     .await
     .unwrap();
 
-    let schema = create_test_schema(&db);
+    let (schema, indexer_state) = create_test_schema(&db);
 
     // Subscribe with keyid filter for account 1 only
     let query = r#"
@@ -617,7 +659,7 @@ async fn test_account_subscription_filter_excludes_non_matching_accounts() {
 
     let mut stream = schema.execute_stream(query).boxed();
 
-    // Should only receive account 1 (polling every 1 second)
+    // Should only receive account 1
     let result1 = tokio::time::timeout(Duration::from_secs(2), stream.next())
         .await
         .unwrap()
@@ -626,24 +668,28 @@ async fn test_account_subscription_filter_excludes_non_matching_accounts() {
     let data1 = result1.data.into_json().unwrap();
     assert_eq!(data1["accountUpdated"]["keyid"].as_i64().unwrap(), 1);
 
-    // Update account 2 - should NOT appear in subscription since filter is keyid: 1
+    // Publish update for account 2 - should NOT appear in subscription since filter is keyid: 1
     let safe_address2 = Address::from([0x02; 20]);
-    db.upsert_account(
-        None,
-        2,
-        keypair2.public().to_address(),
-        *offchain2.public(),
-        Some(safe_address2),
-        110,
-        0,
-        0,
-    )
-    .await
-    .unwrap();
+    indexer_state.publish_event(IndexerEvent::AccountUpdated(Account {
+        keyid: 2,
+        chain_key: keypair2.public().to_address().to_hex(),
+        packet_key: offchain2.public().to_hex(),
+        safe_address: Some(safe_address2.to_hex()),
+        multi_addresses: vec![],
+    }));
 
-    // Should continue to receive account 1 (due to polling), never account 2
-    // Verify next emission is still account 1, not account 2
-    let result2 = tokio::time::timeout(Duration::from_secs(3), stream.next())
+    // Then publish update for account 1 to verify it still comes through
+    let safe_address1 = Address::from([0x01; 20]);
+    indexer_state.publish_event(IndexerEvent::AccountUpdated(Account {
+        keyid: 1,
+        chain_key: keypair1.public().to_address().to_hex(),
+        packet_key: offchain1.public().to_hex(),
+        safe_address: Some(safe_address1.to_hex()),
+        multi_addresses: vec![],
+    }));
+
+    // Should receive account 1 update, not account 2
+    let result2 = tokio::time::timeout(Duration::from_millis(500), stream.next())
         .await
         .unwrap()
         .unwrap();
@@ -660,7 +706,7 @@ async fn test_account_subscription_filter_excludes_non_matching_accounts() {
 async fn test_account_subscription_handles_empty_database() {
     let db = BlokliDb::new_in_memory().await.unwrap();
 
-    let schema = create_test_schema(&db);
+    let (schema, _indexer_state) = create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -697,7 +743,7 @@ async fn test_account_subscription_handles_account_with_multiple_announcements()
     db.insert_announcement(None, chain_key, multiaddr1, 101).await.unwrap();
     db.insert_announcement(None, chain_key, multiaddr2, 102).await.unwrap();
 
-    let schema = create_test_schema(&db);
+    let (schema, _indexer_state) = create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -736,7 +782,7 @@ async fn test_account_subscription_multiple_concurrent_subscribers() {
         .await
         .unwrap();
 
-    let schema = create_test_schema(&db);
+    let (schema, indexer_state) = create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -764,14 +810,23 @@ async fn test_account_subscription_multiple_concurrent_subscribers() {
         .unwrap();
     assert!(result2.errors.is_empty());
 
-    // Update account
+    // Update account in database
     let safe_address = Address::from([0x01; 20]);
     db.upsert_account(None, 1, chain_key, *packet_key, Some(safe_address), 110, 0, 0)
         .await
         .unwrap();
 
+    // Publish AccountUpdated event (this is what the indexer would do)
+    indexer_state.publish_event(IndexerEvent::AccountUpdated(Account {
+        keyid: 1,
+        chain_key: chain_key.to_hex(),
+        packet_key: packet_key.to_hex(),
+        safe_address: Some(safe_address.to_hex()),
+        multi_addresses: vec![],
+    }));
+
     // Both should receive the update
-    let update1 = tokio::time::timeout(Duration::from_secs(3), stream1.next())
+    let update1 = tokio::time::timeout(Duration::from_millis(500), stream1.next())
         .await
         .unwrap()
         .unwrap();
@@ -781,7 +836,7 @@ async fn test_account_subscription_multiple_concurrent_subscribers() {
         safe_address.to_hex()
     );
 
-    let update2 = tokio::time::timeout(Duration::from_secs(3), stream2.next())
+    let update2 = tokio::time::timeout(Duration::from_millis(500), stream2.next())
         .await
         .unwrap()
         .unwrap();

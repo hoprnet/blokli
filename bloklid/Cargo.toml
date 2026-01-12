@@ -18,7 +18,6 @@ runtime-tokio = [
 ]
 
 [dependencies]
-alloy              = { workspace = true }
 async-channel      = { workspace = true }
 async-signal       = { workspace = true }
 axum               = { workspace = true }

@@ -77,7 +77,7 @@ impl SnapshotExtractor {
 
     /// Extracts a tar.xz archive using async operations
     async fn extract_tar_xz(&self, archive_path: &Path, target_dir: &Path) -> SnapshotResult<Vec<String>> {
-        // Open file using AllowStdIo to make std::fs::File work with futures-io
+        // Open file using AllowStdIo to make File work with futures-io
         let file = File::open(archive_path).map_err(SnapshotError::Io)?;
         let file_reader = AllowStdIo::new(file);
 
@@ -136,7 +136,7 @@ impl SnapshotExtractor {
 
     /// Lists the contents of a tar.xz archive
     async fn list_archive_contents(&self, archive_path: &Path) -> SnapshotResult<Vec<String>> {
-        // Open file using AllowStdIo to make std::fs::File work with futures-io
+        // Open file using AllowStdIo to make File work with futures-io
         let file = File::open(archive_path).map_err(SnapshotError::Io)?;
         let file_reader = AllowStdIo::new(file);
 

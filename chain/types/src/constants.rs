@@ -1,8 +1,8 @@
-use alloy::{
+use hex_literal::hex;
+use hopr_bindings::exports::alloy::{
     primitives::{Address, U256, address},
     uint,
 };
-use hex_literal::hex;
 
 /// Deployed code of the Safe Diamond Proxy Singleton
 pub const SAFE_DIAMOND_PROXY_SINGLETON_DEPLOY_CODE: [u8; 169] = hex!(
@@ -45,8 +45,7 @@ pub static SAFE_SINGLETON_DEPLOY_CODE: [u8; 23652] = hex!(
 
 #[cfg(test)]
 pub mod tests {
-    use alloy::sol_types::SolCall;
-    use hopr_bindings::hopr_channels::HoprChannels::redeemTicketCall;
+    use hopr_bindings::{exports::alloy::sol_types::SolCall, hopr_channels::HoprChannels::redeemTicketCall};
     use hopr_internal_types::tickets::REDEEM_CALL_SELECTOR;
 
     #[test]

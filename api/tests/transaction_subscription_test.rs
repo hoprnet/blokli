@@ -12,12 +12,6 @@ mod common;
 
 use std::{sync::Arc, time::Duration};
 
-use alloy::{
-    consensus::{SignableTransaction, TxLegacy},
-    eips::eip2718::Encodable2718,
-    primitives::{Address as AlloyAddress, TxKind, U256},
-    signers::{SignerSync, local::PrivateKeySigner},
-};
 use anyhow::Result;
 use async_graphql::{EmptyMutation, Schema};
 use blokli_api::{query::QueryRoot, subscription::SubscriptionRoot};
@@ -25,6 +19,12 @@ use blokli_chain_api::transaction_store::{TransactionRecord, TransactionStatus, 
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 use futures::StreamExt;
+use hopr_bindings::exports::alloy::{
+    consensus::{SignableTransaction, TxLegacy},
+    eips::eip2718::Encodable2718,
+    primitives::{Address as AlloyAddress, TxKind, U256},
+    signers::{SignerSync, local::PrivateKeySigner},
+};
 use hopr_crypto_types::{
     keypairs::{ChainKeypair, Keypair},
     types::Hash,

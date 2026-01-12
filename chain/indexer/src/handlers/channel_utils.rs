@@ -3,7 +3,7 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use alloy::primitives::B256;
+use hopr_bindings::exports::alloy::primitives::B256;
 use hopr_internal_types::channels::ChannelStatus;
 use hopr_primitive_types::{prelude::HoprBalance, traits::IntoEndian};
 use tracing::error;

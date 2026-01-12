@@ -6,7 +6,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0"
 name        = "blokli-chain-indexer"
 repository  = "https://github.com/hoprnet/hoprnet"
-version     = "0.9.0"
+version     = "0.10.0"
 
 [lib]
 crate-type = ["rlib"]
@@ -25,11 +25,6 @@ runtime-tokio = [
 ]
 
 [dependencies]
-alloy = { workspace = true, default-features = false, features = [
-  "essentials",
-  "json-rpc",
-  "node-bindings",
-] }
 async-broadcast = { workspace = true }
 async-compression = { workspace = true, features = [
   "futures-io",

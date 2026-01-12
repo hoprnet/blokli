@@ -5,8 +5,8 @@ use hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::HoprNodeSafeRe
 use hopr_primitive_types::prelude::{Address, ToHex};
 use tracing::{debug, info, warn};
 
-use super::ContractEventHandlers;
-use crate::errors::Result;
+use super::{ContractEventHandlers, helpers::construct_account_update};
+use crate::{errors::Result, state::IndexerEvent};
 
 #[cfg(all(feature = "prometheus", not(test)))]
 lazy_static::lazy_static! {
@@ -55,7 +55,7 @@ where
         tx: &OpenTransaction,
         log: &blokli_chain_rpc::Log,
         event: HoprNodeSafeRegistryEvents,
-        _is_synced: bool,
+        is_synced: bool,
     ) -> Result<()> {
         #[cfg(all(feature = "prometheus", not(test)))]
         METRIC_INDEXER_LOG_COUNTERS.increment(&["node_safe_registry"]);
@@ -147,6 +147,18 @@ where
                     module_address = %module_addr.to_hex(),
                     "Safe contract entry and node registration created from RegisteredNodeSafe"
                 );
+
+                // Publish AccountUpdated event if synced
+                if is_synced {
+                    match construct_account_update(tx.as_ref(), &node_addr).await {
+                        Ok(account) => {
+                            self.indexer_state.publish_event(IndexerEvent::AccountUpdated(account));
+                        }
+                        Err(e) => {
+                            warn!("Failed to construct account update for RegisteredNodeSafe: {}", e);
+                        }
+                    }
+                }
             }
             HoprNodeSafeRegistryEvents::DeregisteredNodeSafe(deregistered) => {
                 let safe_addr = deregistered.safeAddress.to_hopr_address();
@@ -160,13 +172,15 @@ where
 
                 // Deregister node from safe (idempotent - ignore if already deregistered)
                 // Note: This does NOT delete the safe contract itself, only the node registration
-                match self.db.deregister_node_from_safe(Some(tx), safe_addr, node_addr).await {
+                let should_publish_event = match self.db.deregister_node_from_safe(Some(tx), safe_addr, node_addr).await
+                {
                     Ok(()) => {
                         debug!(
                             node_address = %node_addr.to_hex(),
                             safe_address = %safe_addr.to_hex(),
                             "Node registration deleted"
                         );
+                        true
                     }
                     Err(DbSqlError::EntityNotFound(_)) => {
                         debug!(
@@ -174,8 +188,21 @@ where
                             safe_address = %safe_addr.to_hex(),
                             "Node registration already deleted, skipping"
                         );
+                        false
                     }
                     Err(e) => return Err(e.into()),
+                };
+
+                // Publish AccountUpdated event if synced and deregistration was successful
+                if is_synced && should_publish_event {
+                    match construct_account_update(tx.as_ref(), &node_addr).await {
+                        Ok(account) => {
+                            self.indexer_state.publish_event(IndexerEvent::AccountUpdated(account));
+                        }
+                        Err(e) => {
+                            warn!("Failed to construct account update for DeregisteredNodeSafe: {}", e);
+                        }
+                    }
                 }
             }
             HoprNodeSafeRegistryEvents::DomainSeparatorUpdated(domain_separator_updated) => {
@@ -197,7 +224,6 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use alloy::sol_types::{SolEvent, SolValue};
     use blokli_db::{
         BlokliDbGeneralModelOperations, db::BlokliDb, node_safe_registrations::BlokliDbNodeSafeRegistrationOperations,
         safe_contracts::BlokliDbSafeContractOperations,
@@ -206,7 +232,10 @@ mod tests {
         hopr_node_safe_registration, hopr_safe_contract,
         prelude::{HoprNodeSafeRegistration, HoprSafeContract},
     };
-    use hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry;
+    use hopr_bindings::{
+        exports::alloy::sol_types::{SolEvent, SolValue},
+        hopr_node_safe_registry::HoprNodeSafeRegistry,
+    };
     use hopr_primitive_types::prelude::{Address, SerializableLog};
     use primitive_types::H256;
     use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};

@@ -7,11 +7,14 @@
 
 mod common;
 
-use std::{str::FromStr, time::Duration};
+use std::{
+    str::FromStr,
+    time::{Duration, Instant},
+};
 
-use alloy::primitives::U256;
 use async_graphql::Schema;
 use blokli_api::{mutation::MutationRoot, query::QueryRoot, subscription::SubscriptionRoot};
+use hopr_bindings::exports::alloy::primitives::U256;
 use hopr_crypto_types::keypairs::Keypair;
 use hopr_primitive_types::{
     prelude::{HoprBalance, XDaiBalance},
@@ -411,7 +414,7 @@ async fn test_balance_api_integration() -> anyhow::Result<()> {
     {
         let test_addr = ctx.test_accounts[0].public().to_address().to_hex();
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let balance = query_hopr_balance(&ctx.schema, &test_addr).await?;
         let duration = start.elapsed();
 

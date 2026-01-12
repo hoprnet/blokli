@@ -4,11 +4,14 @@
 //! for `RpcOperations`, allowing the transaction executor to submit raw transactions
 //! and monitor their confirmation status.
 
-use std::sync::Arc;
+use std::{sync::Arc, time::Duration};
 
-use alloy::{primitives::Bytes, providers::Provider};
 use async_trait::async_trait;
 use blokli_chain_rpc::{rpc::RpcOperations, transport::HttpRequestor};
+use hopr_bindings::exports::alloy::{
+    primitives::{B256, Bytes},
+    providers::Provider,
+};
 use hopr_crypto_types::types::Hash;
 use tracing::{debug, error};
 
@@ -67,7 +70,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
         &self,
         raw_tx: Vec<u8>,
         confirmations: u64,
-        timeout: Option<std::time::Duration>,
+        timeout: Option<Duration>,
     ) -> Result<Hash, String> {
         debug!(
             "Sending raw transaction ({} bytes) and waiting for {} confirmations",
@@ -85,7 +88,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
                 debug!("Transaction submitted with hash: {:?}", tx_hash);
 
                 // Use configured timeout or default to 60 seconds
-                let timeout_duration = timeout.unwrap_or(std::time::Duration::from_secs(60));
+                let timeout_duration = timeout.unwrap_or(Duration::from_secs(60));
 
                 // Wait for confirmations with timeout
                 let receipt_future = pending_tx.with_required_confirmations(confirmations).get_receipt();
@@ -133,7 +136,7 @@ impl<R: HttpRequestor + 'static + Clone> ReceiptProvider for RpcAdapter<R> {
         debug!("Checking transaction status for hash: {:?}", tx_hash);
 
         // Convert Hash to alloy B256
-        let b256_hash = alloy::primitives::B256::from_slice(tx_hash.as_ref());
+        let b256_hash = B256::from_slice(tx_hash.as_ref());
 
         // Try to get the transaction receipt
         match self.rpc.provider.get_transaction_receipt(b256_hash).await {

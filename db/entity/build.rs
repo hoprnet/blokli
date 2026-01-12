@@ -7,6 +7,7 @@ use clap::Parser;
 use migration::SafeDataOrigin;
 use sea_orm::{ConnectOptions, Database};
 use sea_orm_cli::{Cli, Commands, run_generate_command};
+use tokio::runtime::Runtime;
 
 async fn execute_sea_orm_cli_command<I, T>(itr: I) -> anyhow::Result<()>
 where
@@ -100,7 +101,7 @@ fn main() -> anyhow::Result<()> {
     let database_url = format!("sqlite://{}?mode=rwc", tmp_db_str);
 
     // Run migrations on temporary SQLite database
-    tokio::runtime::Runtime::new()?.block_on(execute_sea_orm_cli_command([
+    Runtime::new()?.block_on(execute_sea_orm_cli_command([
         "sea-orm-cli",
         "migrate",
         "refresh",
@@ -116,7 +117,7 @@ fn main() -> anyhow::Result<()> {
     ]))?;
 
     // Generate entities from SQLite schema
-    tokio::runtime::Runtime::new()?.block_on(execute_sea_orm_cli_command([
+    Runtime::new()?.block_on(execute_sea_orm_cli_command([
         "sea-orm-cli",
         "generate",
         "entity",

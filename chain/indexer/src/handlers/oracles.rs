@@ -109,11 +109,11 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use alloy::{
+    use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb, info::BlokliDbInfoOperations};
+    use hopr_bindings::exports::alloy::{
         primitives::U256,
         sol_types::{SolEvent, SolValue},
     };
-    use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb, info::BlokliDbInfoOperations};
     use hopr_internal_types::tickets::WinningProbability;
     use hopr_primitive_types::prelude::SerializableLog;
 

@@ -9,6 +9,7 @@
 use std::{
     fs,
     fs::File,
+    io::{Error, ErrorKind},
     path::Path,
     sync::{
         Arc,
@@ -298,8 +299,8 @@ impl SnapshotDownloader {
 
         // Check if source file exists
         if !canonical_path.exists() {
-            return Err(SnapshotError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
+            return Err(SnapshotError::Io(Error::new(
+                ErrorKind::NotFound,
                 format!("Local file not found: {file_path}"),
             )));
         }
@@ -350,8 +351,8 @@ impl SnapshotDownloader {
         // Check if directory exists and is accessible
         let metadata = fs::metadata(dir)?;
         if !metadata.is_dir() {
-            return Err(SnapshotError::Io(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
+            return Err(SnapshotError::Io(Error::new(
+                ErrorKind::NotFound,
                 "Target directory does not exist",
             )));
         }

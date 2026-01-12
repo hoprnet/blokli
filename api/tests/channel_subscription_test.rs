@@ -13,7 +13,6 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
 use async_graphql::Schema;
 use blokli_api::{mutation::MutationRoot, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot};
 use blokli_chain_api::{
@@ -33,6 +32,7 @@ use blokli_db::{
     db::BlokliDb,
 };
 use futures::StreamExt;
+use hopr_bindings::exports::alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
 use hopr_crypto_types::prelude::{ChainKeypair, Keypair, OffchainKeypair};
 use hopr_internal_types::channels::{ChannelEntry, ChannelStatus};
 use hopr_primitive_types::{prelude::HoprBalance, traits::ToHex};

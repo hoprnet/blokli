@@ -4,20 +4,23 @@ mod common;
 
 use std::time::Duration;
 
-use alloy::{
-    network::Ethereum,
-    primitives::U256,
-    providers::Provider,
-    rpc::client::ClientBuilder,
-    transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
+use blokli_chain_rpc::{
+    HoprIndexerRpcOperations,
+    rpc::{RpcOperations, RpcOperationsConfig},
 };
-use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperationsConfig};
 use blokli_chain_types::{ContractAddresses, ContractInstances, utils::create_native_transfer};
 use common::{
     TEST_BLOCK_TIME, TEST_FINALITY, create_rpc_client_to_anvil, create_test_rpc_operations, wait_for_finality,
     wait_until_tx,
 };
 use hex_literal::hex;
+use hopr_bindings::exports::alloy::{
+    network::Ethereum,
+    primitives::U256,
+    providers::Provider,
+    rpc::client::ClientBuilder,
+    transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
+};
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
 use hopr_primitive_types::prelude::{Address, HoprBalance, XDaiBalance};
 use lazy_static::lazy_static;
@@ -104,7 +107,7 @@ async fn test_get_balance_token() -> anyhow::Result<()> {
     // Wait until contracts deployments are final
     wait_for_finality(TEST_FINALITY, TEST_BLOCK_TIME).await;
 
-    let rpc = blokli_chain_rpc::rpc::RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
+    let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
 
     let balance: HoprBalance = rpc.get_hopr_balance((&chain_key_0).into()).await?;
     assert_eq!(amount, balance.amount().as_u64(), "invalid balance");
@@ -144,7 +147,7 @@ async fn test_get_hopr_allowance() -> anyhow::Result<()> {
     // Wait until contracts deployments are final
     wait_for_finality(TEST_FINALITY, TEST_BLOCK_TIME).await;
 
-    let rpc = blokli_chain_rpc::rpc::RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
+    let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
 
     let owner: Address = (&chain_key_0).into();
     let spender = *RANDY;

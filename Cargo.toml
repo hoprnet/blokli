@@ -19,14 +19,6 @@ members = [
 ]
 
 [workspace.dependencies]
-alloy = { version = "1.0.42", default-features = false, features = [
-  "contract",
-  "essentials",
-  "json-rpc",
-  "k256",
-  "node-bindings",
-  "std",
-] }
 anyhow = "1.0.100"
 async-broadcast = "0.7.2"
 async-channel = "2.5.0"
@@ -67,7 +59,7 @@ futures-timer = "3.0.3"
 futures-util = "0.3.31"
 hex = "0.4.3"
 hex-literal = "1.1.0"
-hopli = { git = "https://github.com/hoprnet/hopli", branch = "main" }
+hopli = { git = "https://github.com/hoprnet/hopli", branch = "main", version = "0.14.1" }
 hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
 hopr-bindings = { git = "https://github.com/hoprnet/contracts", branch = "main" }
 hopr-chain-connector = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }

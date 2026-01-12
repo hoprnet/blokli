@@ -17,6 +17,10 @@ use blokli_chain_rpc::{
 };
 use blokli_chain_types::ContractAddresses;
 use clap::{Parser, Subcommand};
+use hopr_bindings::exports::alloy::{
+    rpc::client::ClientBuilder,
+    transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
+};
 use hopr_primitive_types::primitives::Address;
 use sea_orm::Database;
 
@@ -68,11 +72,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let transaction_validator = Arc::new(TransactionValidator::new());
 
                 // Create a minimal RPC connection for stub purposes
-                let transport_client = alloy::transports::http::ReqwestTransport::new(
+                let transport_client = ReqwestTransport::new(
                     url::Url::parse("http://localhost:8545").expect("Failed to parse stub RPC URL"),
                 );
-                let rpc_client = alloy::rpc::client::ClientBuilder::default()
-                    .layer(alloy::transports::layers::RetryBackoffLayer::new_with_policy(
+                let rpc_client = ClientBuilder::default()
+                    .layer(RetryBackoffLayer::new_with_policy(
                         2,
                         100,
                         100,

@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 #[derive(Clone, PartialEq, Eq, Debug, serde::Deserialize, serde::Serialize)]
 pub enum Body {
     Json(serde_json::Value),
@@ -27,7 +29,7 @@ impl From<&mockito::Request> for RecordedRequestBody {
 }
 
 pub struct RequestRecorder {
-    requests: std::sync::Arc<parking_lot::Mutex<Vec<RecordedRequestBody>>>,
+    requests: Arc<parking_lot::Mutex<Vec<RecordedRequestBody>>>,
 }
 
 impl std::fmt::Debug for RequestRecorder {
@@ -50,7 +52,7 @@ impl PartialEq for RequestRecorder {
 impl Default for RequestRecorder {
     fn default() -> Self {
         Self {
-            requests: std::sync::Arc::new(parking_lot::Mutex::new(Vec::with_capacity(2))),
+            requests: Arc::new(parking_lot::Mutex::new(Vec::with_capacity(2))),
         }
     }
 }

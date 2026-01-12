@@ -7,12 +7,15 @@
 
 mod common;
 
-use std::{str::FromStr, time::Duration};
+use std::{
+    str::FromStr,
+    time::{Duration, Instant},
+};
 
-use alloy::primitives::{Address as AlloyAddress, U256};
 use async_graphql::Schema;
 use blokli_api::{mutation::MutationRoot, query::QueryRoot, subscription::SubscriptionRoot};
 use blokli_chain_types::AlloyAddressExt;
+use hopr_bindings::exports::alloy::primitives::{Address as AlloyAddress, U256};
 use hopr_crypto_types::keypairs::Keypair;
 use hopr_primitive_types::{prelude::HoprBalance, traits::ToHex};
 
@@ -298,7 +301,7 @@ async fn test_allowance_api_integration() -> anyhow::Result<()> {
     {
         let safe_addr = ctx.test_accounts[0].public().to_address().to_hex();
 
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let allowance = query_safe_hopr_allowance(&ctx.schema, &safe_addr).await?;
         let duration = start.elapsed();
 
