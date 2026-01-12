@@ -1705,7 +1705,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "alloy",
  "anyhow",
@@ -1757,7 +1757,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api-types"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "async-graphql",
  "blokli-chain-types",
@@ -1808,7 +1808,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-indexer"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "alloy",
  "anyhow",

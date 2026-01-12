@@ -412,6 +412,11 @@ impl SubscriptionRoot {
     /// Provides updates whenever there is a change in account information, including
     /// balance changes, Safe address linking, and multiaddress announcements.
     /// Optional filters can be applied to only receive updates for specific accounts.
+    ///
+    /// Uses the IndexerState event bus for real-time notifications:
+    /// - Emits matching accounts on subscription start
+    /// - Streams updates when `IndexerEvent::AccountUpdated` events are received
+    /// - Automatically shuts down on blockchain reorganization
     #[graphql(name = "accountUpdated")]
     async fn account_updated(
         &self,
@@ -421,17 +426,65 @@ impl SubscriptionRoot {
         #[graphql(desc = "Filter by chain key (hexadecimal format)")] chain_key: Option<String>,
     ) -> Result<impl Stream<Item = Account>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
+        let indexer_state = ctx
+            .data::<IndexerState>()
+            .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
+            .clone();
 
         Ok(stream! {
-            loop {
-                // TODO: Replace with actual database change notifications
-                // For now, poll the database periodically
-                sleep(Duration::from_secs(1)).await;
+            // Subscribe to events and shutdown first to avoid missing events
+            let mut event_receiver = indexer_state.subscribe_to_events();
+            let mut shutdown_receiver = indexer_state.subscribe_to_shutdown();
 
-                // Query the latest accounts with filters
-                if let Ok(accounts) = Self::fetch_filtered_accounts(&db, keyid, packet_key.clone(), chain_key.clone()).await {
+            // Emit initial matching accounts
+            match Self::fetch_filtered_accounts(&db, keyid, packet_key.clone(), chain_key.clone()).await {
+                Ok(accounts) => {
                     for account in accounts {
                         yield account;
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to fetch initial accounts: {:?}", e);
+                }
+            }
+
+            // Stream updates from event bus
+            loop {
+                tokio::select! {
+                    shutdown_result = shutdown_receiver.recv() => {
+                        match shutdown_result {
+                            Ok(_) => {
+                                info!("accountUpdated subscription shutting down due to reorg");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                warn!("Shutdown channel closed for accountUpdated");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Shutdown signal overflowed ({}), continuing", n);
+                            }
+                        }
+                    }
+                    event_result = event_receiver.recv() => {
+                        match event_result {
+                            Ok(IndexerEvent::AccountUpdated(account)) => {
+                                // Apply filters
+                                if matches_account_filters(&account, keyid, packet_key.as_deref(), chain_key.as_deref()) {
+                                    yield account;
+                                }
+                            }
+                            Ok(_) => {
+                                // Other events (ChannelUpdated, etc.) - ignore
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                info!("Event bus closed, ending accountUpdated subscription");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Event bus overflowed ({}); accountUpdated may miss events", n);
+                            }
+                        }
                     }
                 }
             }
@@ -871,6 +924,36 @@ impl SubscriptionRoot {
 
         Ok(result)
     }
+}
+
+/// Helper to check if an account matches the subscription filters
+///
+/// This is used to filter events from the broadcast channel to only emit
+/// accounts that match the subscription's filter criteria.
+fn matches_account_filters(
+    account: &Account,
+    keyid: Option<i64>,
+    packet_key: Option<&str>,
+    chain_key: Option<&str>,
+) -> bool {
+    if let Some(k) = keyid
+        && account.keyid != k
+    {
+        return false;
+    }
+    if let Some(pk) = packet_key {
+        // Strip 0x prefix if present (same as database filter in fetch_accounts_with_filters)
+        let pk_normalized = pk.strip_prefix("0x").unwrap_or(pk);
+        if account.packet_key != pk_normalized {
+            return false;
+        }
+    }
+    if let Some(ck) = chain_key
+        && account.chain_key != ck
+    {
+        return false;
+    }
+    true
 }
 
 #[cfg(test)]
