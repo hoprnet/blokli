@@ -5,8 +5,6 @@ use std::{
 };
 
 use alloy::{
-    eips::Encodable2718,
-    network::TransactionBuilder,
     primitives::{Address, U256, keccak256},
     providers::{
         ProviderBuilder,
@@ -25,13 +23,13 @@ use hopli_lib::{
 };
 use hopr_bindings::hopr_token::HoprToken::HoprTokenInstance;
 use hopr_chain_connector::{BasicPayloadGenerator, PayloadGenerator, SafePayloadGenerator};
-use hopr_chain_types::ContractAddresses;
+use hopr_chain_types::{ContractAddresses, prelude::SignableTransaction};
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
-use hopr_internal_types::{
-    Multiaddr,
-    announcement::{AnnouncementData, KeyBinding},
+use hopr_internal_types::{Multiaddr, announcement::AnnouncementData};
+use hopr_primitive_types::{
+    prelude::{Address as HoprAddress, HoprBalance},
+    traits::IntoEndian,
 };
-use hopr_primitive_types::prelude::{Address as HoprAddress, HoprBalance};
 use libc::atexit;
 use rand::seq::IndexedRandom;
 use rstest::fixture;
@@ -39,11 +37,9 @@ use tokio::{sync::OnceCell, time::sleep};
 use tracing::{debug, info};
 
 use crate::{
-    anvil::AnvilAccount, config::TestConfig, docker::DockerEnvironment, rpc::RpcClient,
+    anvil::AnvilAccount, config::TestConfig, constants::STACK_STARTUP_WAIT, docker::DockerEnvironment, rpc::RpcClient,
     transaction::TransactionBuilder as TestTransactionBuilder,
 };
-
-const STACK_STARTUP_WAIT: Duration = Duration::from_secs(8);
 
 #[derive(Clone)]
 pub struct IntegrationFixture {
@@ -59,6 +55,7 @@ struct IntegrationFixtureInner {
     contract_addrs: ContractAddresses,
 }
 
+// Accessor methods
 impl IntegrationFixture {
     pub fn config(&self) -> &TestConfig {
         &self.inner.config
@@ -88,7 +85,11 @@ impl IntegrationFixture {
     pub fn contract_addresses(&self) -> &ContractAddresses {
         &self.inner.contract_addrs
     }
+}
 
+// Transaction related helpers
+impl IntegrationFixture {
+    /// Builds a raw EIP-1559 transaction hex string.
     pub async fn build_raw_tx(
         &self,
         value: U256,
@@ -96,12 +97,12 @@ impl IntegrationFixture {
         recipient: &AnvilAccount,
         nonce: u64,
     ) -> Result<String> {
-        let tx_builder = TestTransactionBuilder::new(&sender.private_key)?;
+        let tx_builder = TestTransactionBuilder::new(&sender.keypair)?;
         tx_builder
             .build_eip1559_transaction_hex(
                 self.rpc().chain_id().await?,
                 nonce,
-                &recipient.address,
+                &recipient.address.to_string(),
                 value,
                 self.config().max_fee_per_gas,
                 self.config().max_priority_fee_per_gas,
@@ -110,6 +111,7 @@ impl IntegrationFixture {
             .await
     }
 
+    /// Submits the signed transaction blindly.
     pub async fn submit_tx(&self, signed_bytes: &[u8]) -> Result<[u8; 32]> {
         let receipt = self
             .client()
@@ -119,6 +121,7 @@ impl IntegrationFixture {
         Ok(receipt)
     }
 
+    /// Submits the signed transaction and returns the tracking id.
     pub async fn submit_and_track_tx(&self, signed_bytes: &[u8]) -> Result<String> {
         let tx_id = self
             .client()
@@ -128,6 +131,7 @@ impl IntegrationFixture {
         Ok(tx_id)
     }
 
+    /// Submits the signed transaction and waits for the specified number of confirmations.
     pub async fn submit_and_confirm_tx(&self, signed_bytes: &[u8], confirmations: usize) -> Result<[u8; 32]> {
         let receipt = self
             .client()
@@ -136,78 +140,13 @@ impl IntegrationFixture {
             .context("blokli client failed to submit transaction")?;
         Ok(receipt)
     }
+}
 
-    pub async fn update_winn_prob(
-        &self,
-        owner: &AnvilAccount,
-        contract_address: Address,
-        new_win_prob: f64,
-    ) -> Result<[u8; 32]> {
-        let nonce = self.rpc().transaction_count(owner.address.as_ref()).await?;
-
-        let payload = hopli_lib::payloads::set_winning_probability(contract_address, new_win_prob)?
-            .gas_limit(self.config().gas_limit)
-            .max_fee_per_gas(self.config().max_fee_per_gas)
-            .max_priority_fee_per_gas(self.config().max_priority_fee_per_gas)
-            .with_chain_id(self.rpc().chain_id().await?)
-            .nonce(nonce);
-
-        let payload_bytes = payload.build(&owner.as_wallet()).await?.encoded_2718();
-
-        self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
-            .await
-    }
-
-    pub async fn deploy_safe_and_announce(&self, owner: &AnvilAccount, amount: u64) -> Result<Safe> {
-        let maybe_safe = self
-            .client()
-            .query_safe(SafeSelector::ChainKey(owner.alloy_address().into()))
-            .await?;
-
-        let safe = match maybe_safe.clone() {
-            Some(s) => s,
-            None => {
-                self.deploy_safe(owner, amount).await?;
-
-                sleep(std::time::Duration::from_secs(5)).await;
-                let safe = self
-                    .client()
-                    .query_safe(SafeSelector::ChainKey(owner.alloy_address().into()))
-                    .await?
-                    .expect("deployed safe for src not found");
-
-                debug!("registering the deployed safes");
-                self.register_safe(owner, &safe.address).await?;
-                safe
-            }
-        };
-
-        let maybe_account = self
-            .client()
-            .query_accounts(AccountSelector::Address(owner.alloy_address().into()))
-            .await?;
-
-        match maybe_account.first() {
-            Some(_) => {}
-            None => {
-                debug!("account not found, proceeding to announce");
-                self.announce_account(owner, &safe.module_address).await?;
-                sleep(std::time::Duration::from_secs(10)).await;
-
-                let src_account = self
-                    .client()
-                    .query_accounts(AccountSelector::Address(owner.alloy_address().into()))
-                    .await?;
-
-                assert!(!src_account.is_empty(), "account not found after announcement");
-            }
-        };
-
-        Ok(safe)
-    }
-
-    pub async fn deploy_safe(&self, owner: &AnvilAccount, amount: u64) -> Result<[u8; 32]> {
-        let nonce = self.rpc().transaction_count(owner.address.as_ref()).await?;
+// Safe related helpers
+impl IntegrationFixture {
+    /// Deploys a safe for the specified owner.
+    async fn deploy_safe(&self, owner: &AnvilAccount, amount: HoprBalance) -> Result<[u8; 32]> {
+        let nonce = self.rpc().transaction_count(&owner.address).await?;
 
         let contract_addresses = self.contract_addresses();
         let payload = hopli_lib::payloads::edge_node_deploy_safe_module_and_maybe_include_node(
@@ -215,92 +154,173 @@ impl IntegrationFixture {
             contract_addresses.token,
             contract_addresses.channels,
             U256::from(nonce),
-            U256::from(amount),
-            vec![owner.alloy_address()],
+            U256::from_be_bytes(amount.to_be_bytes()),
+            vec![owner.to_alloy_address()],
             true,
-        )?
-        .gas_limit(self.config().gas_limit)
-        .max_fee_per_gas(self.config().max_fee_per_gas)
-        .max_priority_fee_per_gas(self.config().max_priority_fee_per_gas)
-        .with_chain_id(self.rpc().chain_id().await?)
-        .nonce(nonce);
+        )?;
 
-        let payload_bytes = payload.build(&owner.as_wallet()).await?.encoded_2718();
+        let payload_bytes = payload
+            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &owner.keypair)
+            .await?;
 
         self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
             .await
+    }
+
+    /// Deploys and returns a safe for the specified owner if not already deployed, otherwise retrieves the existing
+    /// safe.
+    pub async fn deploy_or_get_safe(&self, owner: &AnvilAccount, amount: HoprBalance) -> Result<Safe> {
+        let maybe_safe = self
+            .client()
+            .query_safe(SafeSelector::ChainKey(owner.to_alloy_address().into()))
+            .await?;
+
+        match maybe_safe {
+            Some(s) => Ok(s),
+            None => {
+                self.deploy_safe(owner, amount).await?;
+
+                sleep(std::time::Duration::from_secs(5)).await;
+                let safe = self
+                    .client()
+                    .query_safe(SafeSelector::ChainKey(owner.to_alloy_address().into()))
+                    .await?
+                    .expect("deployed safe for src not found");
+
+                self.register_safe(owner, &safe.address).await?;
+
+                Ok(safe)
+            }
+        }
     }
 
     pub async fn register_safe(&self, owner: &AnvilAccount, safe_address: &str) -> Result<[u8; 32]> {
-        let nonce = self.rpc().transaction_count(owner.address.as_ref()).await?;
+        let nonce = self.rpc().transaction_count(&owner.address).await?;
 
-        let payload_generator = BasicPayloadGenerator::new(owner.hopr_address(), *self.contract_addresses());
+        let payload_generator = BasicPayloadGenerator::new(owner.address, *self.contract_addresses());
 
-        let payload = payload_generator
-            .register_safe_by_node(HoprAddress::from_str(safe_address)?)?
-            .gas_limit(self.config().gas_limit)
-            .max_fee_per_gas(self.config().max_fee_per_gas)
-            .max_priority_fee_per_gas(self.config().max_priority_fee_per_gas)
-            .with_chain_id(self.rpc().chain_id().await?)
-            .nonce(nonce);
+        let payload = payload_generator.register_safe_by_node(HoprAddress::from_str(safe_address)?)?;
 
-        let payload_bytes = payload.build(&owner.as_wallet()).await?.encoded_2718();
+        let payload_bytes = payload
+            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &owner.keypair)
+            .await?;
 
         self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
             .await
     }
+}
 
+// Account related helpers
+impl IntegrationFixture {
+    /// Announces the account using the specified safe module.
     pub async fn announce_account(&self, account: &AnvilAccount, module: &str) -> Result<[u8; 32]> {
-        let nonce = self.rpc().transaction_count(account.address.as_ref()).await?;
+        let nonce = self.rpc().transaction_count(&account.address).await?;
 
         let payload_generator = SafePayloadGenerator::new(
-            &account.chain_key_pair(),
+            &account.keypair,
             *self.contract_addresses(),
             HoprAddress::from_str(module)?,
         );
-        let keybinding = KeyBinding::new(account.hopr_address(), &account.offchain_key_pair());
         let multiaddress: Multiaddr = "/ip4/127.0.0.1/udp/3001".parse().expect("multiaddress parsing failed");
         let binding_fee = "0.01 wxHOPR".parse().expect("failed parsing the binding fee");
 
-        let payload = payload_generator
-            .announce(AnnouncementData::new(keybinding, Some(multiaddress))?, binding_fee)?
-            .gas_limit(self.config().gas_limit)
-            .max_fee_per_gas(self.config().max_fee_per_gas)
-            .max_priority_fee_per_gas(self.config().max_priority_fee_per_gas)
-            .with_chain_id(self.rpc().chain_id().await?)
-            .nonce(nonce);
+        let payload = payload_generator.announce(
+            AnnouncementData::new(account.keybinding(), Some(multiaddress))?,
+            binding_fee,
+        )?;
 
-        let payload_bytes = payload.build(&account.as_wallet()).await?.encoded_2718();
+        let payload_bytes = payload
+            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &account.keypair)
+            .await?;
 
         self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
             .await
     }
 
+    /// Announces the account if not announced yet. If already announced, does nothing.
+    pub async fn announce_or_get_account(&self, account: &AnvilAccount, module: &str) -> Result<()> {
+        let maybe_account = self
+            .client()
+            .query_accounts(AccountSelector::Address(account.to_alloy_address().into()))
+            .await?;
+
+        match maybe_account.first() {
+            Some(_) => Ok(()),
+            None => {
+                debug!("account not found, proceeding to announce");
+                self.announce_account(account, module).await?;
+                sleep(std::time::Duration::from_secs(10)).await;
+
+                let src_account = self
+                    .client()
+                    .query_accounts(AccountSelector::Address(account.to_alloy_address().into()))
+                    .await?;
+
+                assert!(!src_account.is_empty(), "account not found after announcement");
+                Ok(())
+            }
+        }
+    }
+}
+
+// Ticket related helpers
+impl IntegrationFixture {
+    /// Updates the ticket's winning probability to `new_win_prob`.
+    pub async fn update_winning_probability(
+        &self,
+        owner: &AnvilAccount,
+        contract_address: Address,
+        new_win_prob: f64,
+    ) -> Result<[u8; 32]> {
+        let nonce = self.rpc().transaction_count(&owner.address).await?;
+
+        let payload = hopli_lib::payloads::set_winning_probability(contract_address, new_win_prob)?;
+
+        let payload_bytes = payload
+            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &owner.keypair)
+            .await?;
+
+        self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
+            .await
+    }
+}
+
+// Token related helpers
+impl IntegrationFixture {
+    /// Approves the safe module to spend `amount` of wxHOPR on behalf of `owner`.
     pub async fn approve(&self, owner: &AnvilAccount, amount: HoprBalance, module: &str) -> Result<[u8; 32]> {
-        let nonce = self.rpc().transaction_count(owner.address.as_ref()).await?;
+        let nonce = self.rpc().transaction_count(&owner.address).await?;
         let spender = HoprAddress::from_str(&self.contract_addresses().channels.to_string())
             .expect("Invalid spender address hex");
 
         let payload_generator = SafePayloadGenerator::new(
-            &owner.chain_key_pair(),
+            &owner.keypair,
             *self.contract_addresses(),
             HoprAddress::from_str(module)?,
         );
 
-        let payload = payload_generator
-            .approve(spender, amount)?
-            .gas_limit(self.config().gas_limit)
-            .max_fee_per_gas(self.config().max_fee_per_gas)
-            .max_priority_fee_per_gas(self.config().max_priority_fee_per_gas)
-            .with_chain_id(self.rpc().chain_id().await?)
-            .nonce(nonce);
+        let payload = payload_generator.approve(spender, amount)?;
 
-        let payload_bytes = payload.build(&owner.as_wallet()).await?.encoded_2718();
+        let payload_bytes = payload
+            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &owner.keypair)
+            .await?;
 
         self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
             .await
     }
+}
 
+impl IntegrationFixture {
+    pub async fn deploy_safe_and_announce(&self, owner: &AnvilAccount, amount: HoprBalance) -> Result<Safe> {
+        let safe = self.deploy_or_get_safe(owner, amount).await?;
+        self.announce_or_get_account(owner, &safe.module_address).await?;
+        Ok(safe)
+    }
+}
+
+// Channel related helpers
+impl IntegrationFixture {
+    /// Opens a channel from `from` to `to` with the specified `amount`.
     pub async fn open_channel(
         &self,
         from: &AnvilAccount,
@@ -308,51 +328,44 @@ impl IntegrationFixture {
         amount: HoprBalance,
         module: &str,
     ) -> Result<[u8; 32]> {
-        let nonce = self.rpc().transaction_count(from.address.as_ref()).await?;
+        let nonce = self.rpc().transaction_count(&from.address).await?;
 
         let payload_generator = SafePayloadGenerator::new(
-            &from.chain_key_pair(),
+            &from.keypair,
             *self.contract_addresses(),
             HoprAddress::from_str(module)?,
         );
 
-        let payload = payload_generator
-            .fund_channel(to.hopr_address(), amount)?
-            .gas_limit(self.config().gas_limit)
-            .max_fee_per_gas(self.config().max_fee_per_gas)
-            .max_priority_fee_per_gas(self.config().max_priority_fee_per_gas)
-            .with_chain_id(self.rpc().chain_id().await?)
-            .nonce(nonce);
+        let payload = payload_generator.fund_channel(to.address, amount)?;
 
-        let payload_bytes = payload.build(&from.as_wallet()).await?.encoded_2718();
+        let payload_bytes = payload
+            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &from.keypair)
+            .await?;
 
         self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
             .await
     }
 
+    /// Starts closing an outgoing channel from `from` to `to`.
     pub async fn initiate_outgoing_channel_closure(
         &self,
         from: &AnvilAccount,
         to: &AnvilAccount,
         module: &str,
     ) -> Result<[u8; 32]> {
-        let nonce = self.rpc().transaction_count(from.address.as_ref()).await?;
+        let nonce = self.rpc().transaction_count(&from.address).await?;
 
         let payload_generator = SafePayloadGenerator::new(
-            &from.chain_key_pair(),
+            &from.keypair,
             *self.contract_addresses(),
             HoprAddress::from_str(module)?,
         );
 
-        let payload = payload_generator
-            .initiate_outgoing_channel_closure(to.hopr_address())?
-            .gas_limit(self.config().gas_limit)
-            .max_fee_per_gas(self.config().max_fee_per_gas)
-            .max_priority_fee_per_gas(self.config().max_priority_fee_per_gas)
-            .with_chain_id(self.rpc().chain_id().await?)
-            .nonce(nonce);
+        let payload = payload_generator.initiate_outgoing_channel_closure(to.address)?;
 
-        let payload_bytes = payload.build(&from.as_wallet()).await?.encoded_2718();
+        let payload_bytes = payload
+            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &from.keypair)
+            .await?;
 
         self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
             .await
@@ -395,7 +408,7 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
 
     let client = BlokliClient::new(config.bloklid_url.clone(), BlokliClientConfig::default());
 
-    let deployer: ChainKeypair = accounts[0].chain_key_pair();
+    let deployer: ChainKeypair = accounts[0].keypair.clone();
     let wallet = PrivateKeySigner::from_slice(deployer.secret().as_ref()).expect("failed to construct wallet");
 
     // Build default JSON RPC provider
@@ -428,7 +441,7 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
         .watch()
         .await?;
 
-    let all_addresses: Vec<Address> = accounts.iter().map(|acc| acc.alloy_address()).collect();
+    let all_addresses: Vec<Address> = accounts.iter().map(|acc| acc.to_alloy_address()).collect();
 
     let hopr_token = HoprTokenInstance::new(
         *contract_instances.token.address(),

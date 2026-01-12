@@ -20,7 +20,7 @@ let
     { src, depsSrc }:
     {
       inherit src depsSrc rev;
-      cargoExtraArgs = "";
+      cargoExtraArgs = "--bins"; # Build all binary targets
       cargoToml = ./../../bloklid/Cargo.toml;
     };
 in

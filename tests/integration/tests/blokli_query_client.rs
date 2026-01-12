@@ -3,19 +3,20 @@ use std::{str::FromStr, time::Duration};
 use alloy::primitives::{Address, U256};
 use anyhow::Result;
 use blokli_client::api::{
-    AccountSelector, BlokliQueryClient, ChannelFilter, ChannelSelector, SafeSelector, types::ChannelStatus,
+    AccountSelector, BlokliQueryClient, ChannelFilter, ChannelSelector, SafeSelector,
+    types::{ChannelStatus, TransactionStatus},
 };
-use blokli_integration_tests::fixtures::{IntegrationFixture, integration_fixture as fixture};
-use hex::ToHex;
-use hopr_crypto_types::prelude::Keypair;
+use blokli_integration_tests::{
+    constants::parsed_safe_balance,
+    fixtures::{IntegrationFixture, integration_fixture as fixture},
+};
+use hex::{FromHex, ToHex};
+use hopr_crypto_types::keypairs::Keypair;
 use hopr_internal_types::channels::generate_channel_id;
 use hopr_primitive_types::prelude::{HoprBalance, XDaiBalance};
 use rstest::*;
 use serial_test::serial;
 use tokio::time::sleep;
-use tracing::debug;
-
-const INITIAL_SAFE_BALANCE: u64 = 500_000_000_000_000_000;
 
 #[rstest]
 #[test_log::test(tokio::test)]
@@ -25,12 +26,12 @@ const INITIAL_SAFE_BALANCE: u64 = 500_000_000_000_000_000;
 async fn count_accounts_matches_deployed_accounts(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
 
-    fixture.deploy_safe_and_announce(account, INITIAL_SAFE_BALANCE).await?;
+    fixture.deploy_safe_and_announce(account, parsed_safe_balance()).await?;
 
     assert_eq!(
         fixture
             .client()
-            .count_accounts(AccountSelector::Address(account.hopr_address().into()))
+            .count_accounts(AccountSelector::Address(account.address.into()))
             .await?,
         1
     );
@@ -45,21 +46,18 @@ async fn count_accounts_matches_deployed_accounts(#[future(awt)] fixture: Integr
 async fn query_accounts(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
 
-    let deployed_safe = fixture.deploy_safe_and_announce(account, INITIAL_SAFE_BALANCE).await?;
+    let deployed_safe = fixture.deploy_safe_and_announce(account, parsed_safe_balance()).await?;
 
     let found_accounts = fixture
         .client()
-        .query_accounts(AccountSelector::Address(account.hopr_address().into()))
+        .query_accounts(AccountSelector::Address(account.address.into()))
         .await?;
 
     assert_eq!(found_accounts.len(), 1);
-    assert_eq!(
-        found_accounts[0].chain_key.to_lowercase(),
-        account.address.to_lowercase()
-    );
+    assert_eq!(found_accounts[0].chain_key.to_lowercase(), account.address.to_string());
     assert_eq!(
         found_accounts[0].packet_key.to_lowercase(),
-        account.offchain_key_pair().public().encode_hex::<String>()
+        account.offchain_keypair().public().encode_hex::<String>()
     );
     assert_eq!(
         found_accounts[0].safe_address.clone().map(|a| a.to_lowercase()),
@@ -83,9 +81,9 @@ async fn query_native_balance(#[future(awt)] fixture: IntegrationFixture) -> Res
 
     let blokli_balance = fixture
         .client()
-        .query_native_balance(account.alloy_address().as_ref())
+        .query_native_balance(account.to_alloy_address().as_ref())
         .await?;
-    let rpc_balance = fixture.rpc().get_balance(account.address.as_ref()).await?;
+    let rpc_balance = fixture.rpc().get_balance(&account.address).await?;
 
     let parsed_blokli_balance =
         XDaiBalance::from_str(blokli_balance.balance.0.as_ref()).expect("failed to parse blokli balance");
@@ -104,7 +102,7 @@ async fn query_token_balance_of_eoa(#[future(awt)] fixture: IntegrationFixture) 
 
     let blokli_balance = fixture
         .client()
-        .query_token_balance(account.alloy_address().as_ref())
+        .query_token_balance(account.to_alloy_address().as_ref())
         .await?;
 
     let _: HoprBalance = blokli_balance
@@ -121,22 +119,22 @@ async fn query_token_balance_of_eoa(#[future(awt)] fixture: IntegrationFixture) 
 #[serial]
 /// deploy a safe, query the token (wxHOPR) balance of the safe via blokli and verify that
 /// format is correct.
-async fn query_token_balance_of_safe(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+async fn query_token_balance_and_allowance_of_safe(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [account] = fixture.sample_accounts::<1>();
 
     let maybe_safe = fixture
         .client()
-        .query_safe(SafeSelector::ChainKey(account.alloy_address().into()))
+        .query_safe(SafeSelector::ChainKey(account.to_alloy_address().into()))
         .await?;
 
     let safe = match maybe_safe {
         Some(safe) => safe,
         None => {
-            fixture.deploy_safe(account, INITIAL_SAFE_BALANCE).await?;
+            fixture.deploy_or_get_safe(account, parsed_safe_balance()).await?;
             tokio::time::sleep(Duration::from_secs(8)).await; // dummy wait for the safe to be indexed
             fixture
                 .client()
-                .query_safe(SafeSelector::ChainKey(account.alloy_address().into()))
+                .query_safe(SafeSelector::ChainKey(account.to_alloy_address().into()))
                 .await?
                 .expect("Safe not found")
         }
@@ -152,6 +150,15 @@ async fn query_token_balance_of_safe(#[future(awt)] fixture: IntegrationFixture)
         .parse()
         .expect("failed to parse blokli token balance");
 
+    let _: HoprBalance = fixture
+        .client()
+        .query_safe_allowance(&safe_address)
+        .await?
+        .allowance
+        .0
+        .parse()
+        .expect("failed to parse retrieved allowance amount");
+
     Ok(())
 }
 
@@ -164,20 +171,31 @@ async fn query_transaction_count(#[future(awt)] fixture: IntegrationFixture) -> 
     let tx_value = U256::from(1_000_000u64);
     let nonce = fixture.rpc().transaction_count(&sender.address).await?;
 
-    let raw_tx = fixture.build_raw_tx(tx_value, sender, recipient, nonce).await?;
+    let signed_bytes = Vec::from_hex(
+        fixture
+            .build_raw_tx(tx_value, sender, recipient, nonce)
+            .await?
+            .trim_start_matches("0x"),
+    )
+    .expect("failed to decode raw tx");
 
     let before_count = fixture
         .client()
-        .query_transaction_count(sender.alloy_address().as_ref())
+        .query_transaction_count(sender.to_alloy_address().as_ref())
         .await?;
 
-    fixture.rpc().execute_transaction(&raw_tx).await?;
-
-    sleep(Duration::from_secs(8)).await;
+    let tx_id = fixture.submit_and_track_tx(&signed_bytes).await?;
+    loop {
+        let tx = fixture.client().query_transaction_status(tx_id.clone()).await?;
+        if tx.status == TransactionStatus::Confirmed {
+            break;
+        }
+        sleep(Duration::from_secs(2)).await;
+    }
 
     let after_count = fixture
         .client()
-        .query_transaction_count(sender.alloy_address().as_ref())
+        .query_transaction_count(sender.to_alloy_address().as_ref())
         .await?;
 
     assert_eq!(after_count, before_count + 1);
@@ -192,7 +210,7 @@ async fn query_transaction_count(#[future(awt)] fixture: IntegrationFixture) -> 
 /// between the EOAs, and verifies that the channel count increases by one
 async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [src, dst] = fixture.sample_accounts::<2>();
-    let expected_id = generate_channel_id(&src.hopr_address(), &dst.hopr_address());
+    let expected_id = generate_channel_id(&src.address, &dst.address);
 
     let channel_selector = ChannelSelector {
         filter: Some(ChannelFilter::ChannelId(expected_id.into())),
@@ -204,18 +222,15 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
     let amount: HoprBalance = "1 wei wxHOPR".parse().expect("failed to parse amount");
 
     // Deploy safes for both parties
-    debug!("deploying safes");
-    let src_safe = fixture.deploy_safe_and_announce(&src, INITIAL_SAFE_BALANCE).await?;
-    fixture.deploy_safe_and_announce(&dst, INITIAL_SAFE_BALANCE).await?;
+    let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
+    fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
 
     // Set allowance
-    debug!("setting allowance");
     fixture.approve(&src, amount, &src_safe.module_address).await?;
 
     sleep(Duration::from_secs(8)).await;
 
     // Create the channel
-    debug!("opening channel");
     fixture
         .open_channel(&src, &dst, amount, &src_safe.module_address)
         .await?;
@@ -226,7 +241,6 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
 
     assert_eq!(after_count, before_count + 1);
 
-    debug!("close channel");
     fixture
         .initiate_outgoing_channel_closure(&src, &dst, &src_safe.module_address)
         .await?;
@@ -246,7 +260,7 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
 
 #[rstest]
 #[test_log::test(tokio::test)]
-/// verifies that the chain ids provided by blokli and the RPC match.
+/// verifies that the chain infos provided by blokli and the RPC match.
 async fn chain_info_contains_correct_chain_id_and_key_binding_fee(
     #[future(awt)] fixture: IntegrationFixture,
 ) -> Result<()> {

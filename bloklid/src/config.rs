@@ -327,6 +327,9 @@ pub struct Config {
     #[serde(default)]
     pub api: ApiConfig,
 
+    #[serde(default, rename = "contracts")]
+    pub contracts_override: Option<ContractAddresses>,
+
     #[serde(skip)]
     #[default(None)]
     pub chain_network: Option<ChainConfig>,

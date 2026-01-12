@@ -228,10 +228,9 @@ impl BlokliDb {
                     .await
                     .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
             } else {
-                return Err(DbSqlError::Construction(format!(
-                    "cannot apply index migrations for unknown network {}",
-                    cfg.network_name
-                )));
+                MigratorIndex::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+                    .await
+                    .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
             }
 
             MigratorChainLogs::up(logs_db.as_ref().unwrap(), None)
@@ -250,10 +249,9 @@ impl BlokliDb {
                     .await
                     .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
             } else {
-                return Err(DbSqlError::Construction(format!(
-                    "cannot apply migrations for unknown network {}",
-                    cfg.network_name
-                )));
+                Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+                    .await
+                    .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
             }
         }
 
