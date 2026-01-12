@@ -4,7 +4,9 @@
 //! [RpcOperations] type, which is the main API exposed by this crate.
 use std::{sync::Arc, time::Duration};
 
-use alloy::{
+use async_trait::async_trait;
+use blokli_chain_types::{AlloyAddressExt, ContractAddresses, ContractInstances};
+use hopr_bindings::exports::alloy::{
     primitives::{Address as AlloyAddress, FixedBytes, U256},
     providers::{
         Identity, PendingTransaction, Provider, ProviderBuilder, RootProvider,
@@ -16,8 +18,6 @@ use alloy::{
     },
     sol,
 };
-use async_trait::async_trait;
-use blokli_chain_types::{AlloyAddressExt, ContractAddresses, ContractInstances};
 use hopr_crypto_types::prelude::Hash;
 use hopr_internal_types::prelude::{EncodedWinProb, WinningProbability};
 use hopr_primitive_types::prelude::*;

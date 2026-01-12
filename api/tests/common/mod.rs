@@ -16,11 +16,6 @@ mod test_common;
 
 use std::{sync::Arc, time::Duration};
 
-use alloy::{
-    node_bindings::AnvilInstance,
-    rpc::client::ClientBuilder,
-    transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
-};
 use async_graphql::Schema;
 use axum::Router;
 use blokli_api::{
@@ -45,6 +40,11 @@ use blokli_chain_rpc::{
     transport::ReqwestClient,
 };
 use blokli_chain_types::{ContractAddresses, ContractInstances, utils::create_anvil};
+use hopr_bindings::exports::alloy::{
+    node_bindings::AnvilInstance,
+    rpc::client::ClientBuilder,
+    transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
+};
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
 use migration::{Migrator, MigratorTrait, SafeDataOrigin};
 use sea_orm::DatabaseConnection;

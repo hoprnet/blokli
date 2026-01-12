@@ -19,14 +19,6 @@ members = [
 ]
 
 [workspace.dependencies]
-alloy = { version = "1.0.42", default-features = false, features = [
-  "contract",
-  "essentials",
-  "json-rpc",
-  "k256",
-  "node-bindings",
-  "std",
-] }
 anyhow = "1.0.100"
 async-broadcast = "0.7.2"
 async-channel = "2.5.0"

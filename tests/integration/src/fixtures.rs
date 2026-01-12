@@ -4,14 +4,6 @@ use std::{
     time::Duration,
 };
 
-use alloy::{
-    primitives::{Address, U256, keccak256},
-    providers::{
-        ProviderBuilder,
-        fillers::{BlobGasFiller, CachedNonceManager, ChainIdFiller, GasFiller, NonceFiller},
-    },
-    signers::local::PrivateKeySigner,
-};
 use anyhow::{Context, Result};
 use blokli_client::{
     BlokliClient, BlokliClientConfig,
@@ -21,7 +13,17 @@ use hopli_lib::{
     methods::transfer_or_mint_tokens,
     utils::{ContractInstances, a2h},
 };
-use hopr_bindings::hopr_token::HoprToken::HoprTokenInstance;
+use hopr_bindings::{
+    exports::alloy::{
+        primitives::{Address, U256, keccak256},
+        providers::{
+            ProviderBuilder,
+            fillers::{BlobGasFiller, CachedNonceManager, ChainIdFiller, GasFiller, NonceFiller},
+        },
+        signers::local::PrivateKeySigner,
+    },
+    hopr_token::HoprToken::HoprTokenInstance,
+};
 use hopr_chain_connector::{BasicPayloadGenerator, PayloadGenerator, SafePayloadGenerator};
 use hopr_chain_types::{ContractAddresses, prelude::SignableTransaction};
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};

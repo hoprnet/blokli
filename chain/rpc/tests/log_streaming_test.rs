@@ -7,12 +7,6 @@ mod common;
 
 use std::time::Duration;
 
-use alloy::{
-    primitives::{Address as AlloyAddress, U256},
-    rpc::{client::ClientBuilder, types::Filter},
-    sol_types::SolEvent,
-    transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
-};
 use anyhow::Context;
 use blokli_chain_rpc::{
     FilterSet, HoprIndexerRpcOperations,
@@ -25,6 +19,12 @@ use common::{TEST_BLOCK_TIME, TEST_TX_POLLING_INTERVAL, wait_for_finality};
 use futures::StreamExt;
 use hopr_async_runtime::prelude::spawn;
 use hopr_bindings::{
+    exports::alloy::{
+        primitives::{Address as AlloyAddress, U256},
+        rpc::{client::ClientBuilder, types::Filter},
+        sol_types::SolEvent,
+        transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
+    },
     hopr_channels_events::HoprChannelsEvents::{ChannelBalanceIncreased, ChannelOpened},
     hopr_token::HoprToken::{Approval, Transfer},
 };

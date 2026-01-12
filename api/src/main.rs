@@ -68,16 +68,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let transaction_validator = Arc::new(TransactionValidator::new());
 
                 // Create a minimal RPC connection for stub purposes
-                let transport_client = alloy::transports::http::ReqwestTransport::new(
+                let transport_client = hopr_bindings::exports::alloy::transports::http::ReqwestTransport::new(
                     url::Url::parse("http://localhost:8545").expect("Failed to parse stub RPC URL"),
                 );
-                let rpc_client = alloy::rpc::client::ClientBuilder::default()
-                    .layer(alloy::transports::layers::RetryBackoffLayer::new_with_policy(
-                        2,
-                        100,
-                        100,
-                        DefaultRetryPolicy::default(),
-                    ))
+                let rpc_client = hopr_bindings::exports::alloy::rpc::client::ClientBuilder::default()
+                    .layer(
+                        hopr_bindings::exports::alloy::transports::layers::RetryBackoffLayer::new_with_policy(
+                            2,
+                            100,
+                            100,
+                            DefaultRetryPolicy::default(),
+                        ),
+                    )
                     .transport(transport_client.clone(), transport_client.guess_local());
 
                 // Use default chain ID for schema export (Gnosis Chain)

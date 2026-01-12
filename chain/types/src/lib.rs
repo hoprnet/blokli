@@ -1,12 +1,12 @@
 //! This crate contains various on-chain related modules and types.
-use alloy::{
-    contract::Result as ContractResult,
-    network::TransactionBuilder,
-    primitives::{self, Address as AlloyAddress},
-    rpc::types::TransactionRequest,
-};
 use constants::{ERC_1820_DEPLOYER, ERC_1820_REGISTRY_DEPLOY_CODE, ETH_VALUE_FOR_ERC1820_DEPLOYER};
 use hopr_bindings::{
+    exports::alloy::{
+        contract::Result as ContractResult,
+        network::TransactionBuilder,
+        primitives::{self, Address as AlloyAddress},
+        rpc::types::TransactionRequest,
+    },
     hopr_announcements::HoprAnnouncements::{self, HoprAnnouncementsInstance},
     hopr_channels::HoprChannels::{self, HoprChannelsInstance},
     hopr_node_management_module::HoprNodeManagementModule::{self, HoprNodeManagementModuleInstance},
@@ -30,7 +30,7 @@ pub mod utils;
 
 /// Extension trait for converting between alloy and HOPR address types.
 ///
-/// This trait provides convenient methods for converting between `alloy::primitives::Address`
+/// This trait provides convenient methods for converting between `hopr_bindings::exports::alloy::primitives::Address`
 /// and `hopr_primitive_types::primitives::Address` types, eliminating verbose conversion boilerplate.
 ///
 /// # Examples
@@ -39,12 +39,12 @@ pub mod utils;
 /// use blokli_chain_types::AlloyAddressExt;
 ///
 /// // Convert alloy Address to HOPR Address
-/// let alloy_addr: alloy::primitives::Address = /* ... */;
+/// let alloy_addr: hopr_bindings::exports::alloy::primitives::Address = /* ... */;
 /// let hopr_addr = alloy_addr.to_hopr_address();
 ///
 /// // Convert HOPR Address to alloy Address
 /// let hopr_addr: hopr_primitive_types::primitives::Address = /* ... */;
-/// let alloy_addr = alloy::primitives::Address::from_hopr_address(hopr_addr);
+/// let alloy_addr = hopr_bindings::exports::alloy::primitives::Address::from_hopr_address(hopr_addr);
 /// ```
 pub trait AlloyAddressExt {
     /// Converts an alloy Address to a HOPR Address.
@@ -123,7 +123,7 @@ pub struct ContractInstances<P> {
 
 impl<P> ContractInstances<P>
 where
-    P: alloy::providers::Provider + Clone,
+    P: hopr_bindings::exports::alloy::providers::Provider + Clone,
 {
     pub fn new(contract_addresses: &ContractAddresses, provider: P, _use_dummy_nr: bool) -> Self {
         Self {
@@ -255,7 +255,7 @@ where
 
 impl<P> From<&ContractInstances<P>> for ContractAddresses
 where
-    P: alloy::providers::Provider + Clone,
+    P: hopr_bindings::exports::alloy::providers::Provider + Clone,
 {
     fn from(instances: &ContractInstances<P>) -> Self {
         Self {

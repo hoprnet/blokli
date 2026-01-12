@@ -1,4 +1,4 @@
-use alloy::{
+use hopr_bindings::exports::alloy::{
     contract::Error as AlloyContractError,
     primitives::U256,
     providers::{MulticallError, PendingTransactionError},
@@ -24,7 +24,7 @@ pub enum RpcError {
     LogConversionError(#[from] LogConversionError),
 
     #[error(transparent)]
-    SignerError(#[from] alloy::signers::Error),
+    SignerError(#[from] hopr_bindings::exports::alloy::signers::Error),
 
     #[error("multicall inner failure at {0}: {1}")]
     MulticallFailure(usize, String),

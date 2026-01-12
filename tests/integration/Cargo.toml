@@ -5,7 +5,6 @@ publish = false
 version = "0.1.0"
 
 [dependencies]
-alloy                = { workspace = true }
 anyhow               = { workspace = true }
 blokli-client        = { path = "../../client" }
 chrono               = { workspace = true }

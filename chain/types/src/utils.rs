@@ -5,15 +5,15 @@
 #![allow(clippy::too_many_arguments)]
 
 use SafeContract::SafeContractInstance;
-use alloy::{
-    contract::Result as ContractResult,
-    network::{ReceiptResponse, TransactionBuilder},
-    primitives::{self, Address as AlloyAddress, Bytes, U256, aliases, keccak256},
-    signers::{Signer, local::PrivateKeySigner},
-    sol,
-    sol_types::SolCall,
-};
 use hopr_bindings::{
+    exports::alloy::{
+        contract::Result as ContractResult,
+        network::{ReceiptResponse, TransactionBuilder},
+        primitives::{self, Address as AlloyAddress, Bytes, U256, aliases, keccak256},
+        signers::{Signer, local::PrivateKeySigner},
+        sol,
+        sol_types::SolCall,
+    },
     hopr_channels::HoprChannels::HoprChannelsInstance,
     hopr_token::HoprToken::{self, HoprTokenInstance},
 };
@@ -44,8 +44,10 @@ lazy_static::lazy_static! {
 /// Otherwise, a new block is mined per transaction.
 ///
 /// Uses a fixed mnemonic to make generated accounts deterministic.
-pub fn create_anvil(block_time: Option<std::time::Duration>) -> alloy::node_bindings::AnvilInstance {
-    let mut anvil = alloy::node_bindings::Anvil::new()
+pub fn create_anvil(
+    block_time: Option<std::time::Duration>,
+) -> hopr_bindings::exports::alloy::node_bindings::AnvilInstance {
+    let mut anvil = hopr_bindings::exports::alloy::node_bindings::Anvil::new()
         .mnemonic("gentle wisdom move brush express similar canal dune emotion series because parrot");
 
     if let Some(bt) = block_time {
@@ -60,8 +62,8 @@ pub fn create_anvil(block_time: Option<std::time::Duration>) -> alloy::node_bind
 /// Returns the block number at which the minting transaction was confirmed.
 pub async fn mint_tokens<P, N>(hopr_token: HoprTokenInstance<P, N>, amount: U256) -> ContractResult<Option<u64>>
 where
-    P: alloy::contract::private::Provider<N>,
-    N: alloy::providers::Network,
+    P: hopr_bindings::exports::alloy::contract::private::Provider<N>,
+    N: hopr_bindings::exports::alloy::providers::Network,
 {
     let deployer = hopr_token
         .provider()
@@ -90,7 +92,7 @@ where
 /// given destination.
 pub fn create_native_transfer<N>(to: Address, amount: U256) -> N::TransactionRequest
 where
-    N: alloy::providers::Network,
+    N: hopr_bindings::exports::alloy::providers::Network,
 {
     N::TransactionRequest::default()
         .with_to(AlloyAddress::from_hopr_address(to))
@@ -106,8 +108,8 @@ pub async fn fund_node<P, N>(
     hopr_token_contract: HoprTokenInstance<P, N>,
 ) -> ContractResult<()>
 where
-    P: alloy::contract::private::Provider<N>,
-    N: alloy::providers::Network,
+    P: hopr_bindings::exports::alloy::contract::private::Provider<N>,
+    N: hopr_bindings::exports::alloy::providers::Network,
 {
     if native_token > 0 {
         let native_transfer_tx = N::TransactionRequest::default()
@@ -142,8 +144,8 @@ pub async fn fund_channel<P, N>(
     amount: U256,
 ) -> ContractResult<()>
 where
-    P: alloy::contract::private::Provider<N>,
-    N: alloy::providers::Network,
+    P: hopr_bindings::exports::alloy::contract::private::Provider<N>,
+    N: hopr_bindings::exports::alloy::providers::Network,
 {
     hopr_token
         .approve(*hopr_channels.address(), amount)
@@ -175,8 +177,8 @@ pub async fn fund_channel_from_different_client<P, N>(
     new_client: P,
 ) -> ContractResult<()>
 where
-    P: alloy::contract::private::Provider<N> + Clone,
-    N: alloy::providers::Network,
+    P: hopr_bindings::exports::alloy::contract::private::Provider<N> + Clone,
+    N: hopr_bindings::exports::alloy::providers::Network,
 {
     let hopr_token_with_new_client: HoprTokenInstance<P, N> =
         HoprTokenInstance::new(AlloyAddress::from_hopr_address(hopr_token_address), new_client.clone());
@@ -212,8 +214,8 @@ pub async fn get_safe_tx<P, N>(
     wallet: PrivateKeySigner,
 ) -> ChainTypesResult<N::TransactionRequest>
 where
-    P: alloy::contract::private::Provider<N>,
-    N: alloy::providers::Network,
+    P: hopr_bindings::exports::alloy::contract::private::Provider<N>,
+    N: hopr_bindings::exports::alloy::providers::Network,
 {
     let nonce = safe_contract.nonce().call().await?;
 
@@ -266,8 +268,8 @@ pub async fn approve_channel_transfer_from_safe<P, N>(
     deployer: &ChainKeypair, // also node address
 ) -> ContractResult<()>
 where
-    P: alloy::contract::private::Provider<N> + Clone,
-    N: alloy::providers::Network,
+    P: hopr_bindings::exports::alloy::contract::private::Provider<N> + Clone,
+    N: hopr_bindings::exports::alloy::providers::Network,
 {
     // Inner tx payload: include node to the module
     let inner_tx_data = HoprToken::approveCall {

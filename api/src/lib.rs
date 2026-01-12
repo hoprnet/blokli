@@ -104,14 +104,16 @@ pub async fn start_server(network: String, config: ApiConfig) -> ApiResult<()> {
             e
         ))
     })?;
-    let transport_client = alloy::transports::http::ReqwestTransport::new(rpc_url);
-    let rpc_client = alloy::rpc::client::ClientBuilder::default()
-        .layer(alloy::transports::layers::RetryBackoffLayer::new_with_policy(
-            2,
-            100,
-            100,
-            DefaultRetryPolicy::default(),
-        ))
+    let transport_client = hopr_bindings::exports::alloy::transports::http::ReqwestTransport::new(rpc_url);
+    let rpc_client = hopr_bindings::exports::alloy::rpc::client::ClientBuilder::default()
+        .layer(
+            hopr_bindings::exports::alloy::transports::layers::RetryBackoffLayer::new_with_policy(
+                2,
+                100,
+                100,
+                DefaultRetryPolicy::default(),
+            ),
+        )
         .transport(transport_client.clone(), transport_client.guess_local());
 
     let rpc_operations = RpcOperations::new(

@@ -9,15 +9,15 @@
 //! For details on the Indexer see the `chain-indexer` crate.
 use std::{cmp::Ordering, pin::Pin, time::Duration};
 
-use alloy::{
-    primitives::{Address as AlloyAddress, B256, U256},
-    providers::Provider,
-    rpc::types::Filter,
-};
 use async_stream::stream;
 use async_trait::async_trait;
 use blokli_chain_types::AlloyAddressExt;
 use futures::{Stream, StreamExt, stream::BoxStream};
+use hopr_bindings::exports::alloy::{
+    primitives::{Address as AlloyAddress, B256, U256},
+    providers::Provider,
+    rpc::types::Filter,
+};
 use hopr_crypto_types::types::Hash;
 #[cfg(all(feature = "prometheus", not(test)))]
 use hopr_metrics::SimpleGauge;
@@ -432,9 +432,9 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
 
 #[cfg(test)]
 mod tests {
-    use alloy::rpc::types::Filter;
     use anyhow::Context;
     use futures::StreamExt;
+    use hopr_bindings::exports::alloy::rpc::types::Filter;
 
     use crate::indexer::split_range;
 

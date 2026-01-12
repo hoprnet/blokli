@@ -10,7 +10,6 @@
 
 use std::{collections::HashSet, str::FromStr, sync::Arc, time::Duration};
 
-use alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
 use async_graphql::Schema;
 use blokli_api::{mutation::MutationRoot, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot};
 use blokli_api_types::{Account, Channel, ChannelStatus as ApiChannelStatus, TokenValueString, UInt64};
@@ -33,6 +32,7 @@ use blokli_db::{
 use blokli_db_entity::{chain_info, channel, channel_state};
 use chrono::Utc;
 use futures::StreamExt;
+use hopr_bindings::exports::alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
 use hopr_crypto_types::prelude::{ChainKeypair, Keypair, OffchainKeypair};
 use hopr_internal_types::channels::{ChannelEntry, ChannelStatus};
 use hopr_primitive_types::{

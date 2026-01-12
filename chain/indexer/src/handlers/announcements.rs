@@ -237,11 +237,6 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use alloy::{
-        dyn_abi::DynSolValue,
-        primitives::{Address as AlloyAddress, FixedBytes},
-        sol_types::{SolEvent, SolValue},
-    };
     use anyhow::Context;
     use blokli_db::{
         BlokliDbGeneralModelOperations,
@@ -249,8 +244,15 @@ mod tests {
         db::BlokliDb,
         info::BlokliDbInfoOperations,
     };
-    use hopr_bindings::hopr_announcements_events::HoprAnnouncementsEvents::{
-        KeyBinding as KeyBindingEvent, KeyBindingFeeUpdate as KeyBindingFeeUpdateEvent,
+    use hopr_bindings::{
+        exports::alloy::{
+            dyn_abi::DynSolValue,
+            primitives::{Address as AlloyAddress, FixedBytes},
+            sol_types::{SolEvent, SolValue},
+        },
+        hopr_announcements_events::HoprAnnouncementsEvents::{
+            KeyBinding as KeyBindingEvent, KeyBindingFeeUpdate as KeyBindingFeeUpdateEvent,
+        },
     };
     use hopr_crypto_types::keypairs::Keypair;
     use hopr_internal_types::{
@@ -284,7 +286,7 @@ mod tests {
 
         // Create KeyBinding event using bindings
         let event = KeyBindingEvent {
-            key_id: alloy::primitives::U256::ZERO,
+            key_id: hopr_bindings::exports::alloy::primitives::U256::ZERO,
             chain_key: AlloyAddress::from_hopr_address(*SELF_CHAIN_ADDRESS),
             ed25519_pub_key: FixedBytes::<32>::from_slice(packet_key_bytes),
             ed25519_sig_0: FixedBytes::<32>::from_slice(&sig_bytes[..32]),
@@ -610,8 +612,8 @@ mod tests {
         let new_fee_value: u128 = 123456;
 
         let event = KeyBindingFeeUpdateEvent {
-            newFee: alloy::primitives::U256::from(new_fee_value),
-            oldFee: alloy::primitives::U256::ZERO,
+            newFee: hopr_bindings::exports::alloy::primitives::U256::from(new_fee_value),
+            oldFee: hopr_bindings::exports::alloy::primitives::U256::ZERO,
         };
 
         let log = event_to_log(event, handlers.addresses.announcements);

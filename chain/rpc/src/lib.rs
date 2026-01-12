@@ -18,15 +18,15 @@ use std::{
     time::Duration,
 };
 
-use alloy::{
-    primitives::{Address as AlloyAddress, B256},
-    providers::PendingTransaction,
-    rpc::types::TransactionRequest,
-};
 use async_trait::async_trait;
 use blokli_chain_types::AlloyAddressExt;
 use errors::LogConversionError;
 use futures::Stream;
+use hopr_bindings::exports::alloy::{
+    primitives::{Address as AlloyAddress, B256},
+    providers::PendingTransaction,
+    rpc::types::TransactionRequest,
+};
 use hopr_crypto_types::types::Hash;
 use hopr_internal_types::prelude::WinningProbability;
 use hopr_primitive_types::prelude::*;
@@ -68,10 +68,10 @@ pub struct Log {
     pub removed: bool,
 }
 
-impl TryFrom<alloy::rpc::types::Log> for Log {
+impl TryFrom<hopr_bindings::exports::alloy::rpc::types::Log> for Log {
     type Error = LogConversionError;
 
-    fn try_from(value: alloy::rpc::types::Log) -> std::result::Result<Self, Self::Error> {
+    fn try_from(value: hopr_bindings::exports::alloy::rpc::types::Log) -> std::result::Result<Self, Self::Error> {
         Ok(Self {
             address: value.address().to_hopr_address(),
             topics: value.topics().iter().map(|t| Hash::from(t.0)).collect(),
@@ -92,9 +92,9 @@ impl TryFrom<alloy::rpc::types::Log> for Log {
     }
 }
 
-impl From<Log> for alloy::rpc::types::RawLog {
+impl From<Log> for hopr_bindings::exports::alloy::rpc::types::RawLog {
     fn from(value: Log) -> Self {
-        alloy::rpc::types::RawLog {
+        hopr_bindings::exports::alloy::rpc::types::RawLog {
             address: AlloyAddress::from_hopr_address(value.address),
             topics: value.topics.into_iter().map(|h| B256::from_slice(h.as_ref())).collect(),
             data: value.data.into(),
@@ -193,11 +193,11 @@ impl PartialOrd<Self> for Log {
 #[derive(Debug, Clone, Default)]
 pub struct FilterSet {
     /// holds all filters for the indexer
-    pub all: Vec<alloy::rpc::types::Filter>,
+    pub all: Vec<hopr_bindings::exports::alloy::rpc::types::Filter>,
     /// holds only the token contract related filters
-    pub token: Vec<alloy::rpc::types::Filter>,
+    pub token: Vec<hopr_bindings::exports::alloy::rpc::types::Filter>,
     /// holds only filters not related to the token contract
-    pub no_token: Vec<alloy::rpc::types::Filter>,
+    pub no_token: Vec<hopr_bindings::exports::alloy::rpc::types::Filter>,
 }
 
 /// Indicates what retry action should be taken, as result of a `RetryPolicy` implementation.
@@ -445,7 +445,7 @@ mod tests {
     fn test_log_conversion_to_raw_log() {
         let log = create_test_log(100, 5, 10);
 
-        let raw_log: alloy::rpc::types::RawLog = log.clone().into();
+        let raw_log: hopr_bindings::exports::alloy::rpc::types::RawLog = log.clone().into();
 
         // Verify the raw log has the expected topics and data
         assert_eq!(raw_log.topics.len(), 1);
@@ -454,18 +454,18 @@ mod tests {
 
     #[test]
     fn test_log_conversion_from_alloy_success() {
-        let alloy_log = alloy::rpc::types::Log {
-            inner: alloy::primitives::Log {
+        let alloy_log = hopr_bindings::exports::alloy::rpc::types::Log {
+            inner: hopr_bindings::exports::alloy::primitives::Log {
                 address: AlloyAddress::ZERO,
-                data: alloy::primitives::LogData::new_unchecked(
-                    vec![alloy::primitives::B256::ZERO],
+                data: hopr_bindings::exports::alloy::primitives::LogData::new_unchecked(
+                    vec![hopr_bindings::exports::alloy::primitives::B256::ZERO],
                     vec![1, 2, 3].into(),
                 ),
             },
-            block_hash: Some(alloy::primitives::B256::ZERO),
+            block_hash: Some(hopr_bindings::exports::alloy::primitives::B256::ZERO),
             block_number: Some(200),
             block_timestamp: None,
-            transaction_hash: Some(alloy::primitives::B256::ZERO),
+            transaction_hash: Some(hopr_bindings::exports::alloy::primitives::B256::ZERO),
             transaction_index: Some(3),
             log_index: Some(7),
             removed: false,
@@ -483,18 +483,18 @@ mod tests {
 
     #[test]
     fn test_log_conversion_missing_block_number_fails() {
-        let alloy_log = alloy::rpc::types::Log {
-            inner: alloy::primitives::Log {
+        let alloy_log = hopr_bindings::exports::alloy::rpc::types::Log {
+            inner: hopr_bindings::exports::alloy::primitives::Log {
                 address: AlloyAddress::ZERO,
-                data: alloy::primitives::LogData::new_unchecked(
-                    vec![alloy::primitives::B256::ZERO],
+                data: hopr_bindings::exports::alloy::primitives::LogData::new_unchecked(
+                    vec![hopr_bindings::exports::alloy::primitives::B256::ZERO],
                     vec![1, 2, 3].into(),
                 ),
             },
-            block_hash: Some(alloy::primitives::B256::ZERO),
+            block_hash: Some(hopr_bindings::exports::alloy::primitives::B256::ZERO),
             block_number: None, // Missing block number
             block_timestamp: None,
-            transaction_hash: Some(alloy::primitives::B256::ZERO),
+            transaction_hash: Some(hopr_bindings::exports::alloy::primitives::B256::ZERO),
             transaction_index: Some(3),
             log_index: Some(7),
             removed: false,
@@ -510,18 +510,18 @@ mod tests {
 
     #[test]
     fn test_log_conversion_missing_tx_index_fails() {
-        let alloy_log = alloy::rpc::types::Log {
-            inner: alloy::primitives::Log {
+        let alloy_log = hopr_bindings::exports::alloy::rpc::types::Log {
+            inner: hopr_bindings::exports::alloy::primitives::Log {
                 address: AlloyAddress::ZERO,
-                data: alloy::primitives::LogData::new_unchecked(
-                    vec![alloy::primitives::B256::ZERO],
+                data: hopr_bindings::exports::alloy::primitives::LogData::new_unchecked(
+                    vec![hopr_bindings::exports::alloy::primitives::B256::ZERO],
                     vec![1, 2, 3].into(),
                 ),
             },
-            block_hash: Some(alloy::primitives::B256::ZERO),
+            block_hash: Some(hopr_bindings::exports::alloy::primitives::B256::ZERO),
             block_number: Some(200),
             block_timestamp: None,
-            transaction_hash: Some(alloy::primitives::B256::ZERO),
+            transaction_hash: Some(hopr_bindings::exports::alloy::primitives::B256::ZERO),
             transaction_index: None, // Missing tx index
             log_index: Some(7),
             removed: false,
@@ -537,18 +537,18 @@ mod tests {
 
     #[test]
     fn test_log_conversion_missing_log_index_fails() {
-        let alloy_log = alloy::rpc::types::Log {
-            inner: alloy::primitives::Log {
+        let alloy_log = hopr_bindings::exports::alloy::rpc::types::Log {
+            inner: hopr_bindings::exports::alloy::primitives::Log {
                 address: AlloyAddress::ZERO,
-                data: alloy::primitives::LogData::new_unchecked(
-                    vec![alloy::primitives::B256::ZERO],
+                data: hopr_bindings::exports::alloy::primitives::LogData::new_unchecked(
+                    vec![hopr_bindings::exports::alloy::primitives::B256::ZERO],
                     vec![1, 2, 3].into(),
                 ),
             },
-            block_hash: Some(alloy::primitives::B256::ZERO),
+            block_hash: Some(hopr_bindings::exports::alloy::primitives::B256::ZERO),
             block_number: Some(200),
             block_timestamp: None,
-            transaction_hash: Some(alloy::primitives::B256::ZERO),
+            transaction_hash: Some(hopr_bindings::exports::alloy::primitives::B256::ZERO),
             transaction_index: Some(3),
             log_index: None, // Missing log index
             removed: false,

@@ -7,14 +7,14 @@ mod common;
 
 use std::time::Duration;
 
-use alloy::{
+use blokli_chain_rpc::{HoprRpcOperations, rpc::RpcOperationsConfig};
+use blokli_chain_types::{AlloyAddressExt, ContractAddresses, ContractInstances};
+use common::{TEST_BLOCK_TIME, TEST_FINALITY, create_rpc_client_to_anvil, wait_for_finality};
+use hopr_bindings::exports::alloy::{
     primitives::{Address as AlloyAddress, FixedBytes, U256},
     rpc::client::ClientBuilder,
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
-use blokli_chain_rpc::{HoprRpcOperations, rpc::RpcOperationsConfig};
-use blokli_chain_types::{AlloyAddressExt, ContractAddresses, ContractInstances};
-use common::{TEST_BLOCK_TIME, TEST_FINALITY, create_rpc_client_to_anvil, wait_for_finality};
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
 use hopr_primitive_types::prelude::Address;
 

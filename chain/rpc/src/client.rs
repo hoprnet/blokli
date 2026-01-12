@@ -21,9 +21,10 @@ use std::{
     time::Duration,
 };
 
+use futures::{FutureExt, StreamExt};
 /// as GasOracleMiddleware middleware is migrated to GasFiller
-use alloy::eips::eip1559::Eip1559Estimation;
-use alloy::{
+use hopr_bindings::exports::alloy::eips::eip1559::Eip1559Estimation;
+use hopr_bindings::exports::alloy::{
     network::{EthereumWallet, Network, TransactionBuilder},
     primitives::utils::parse_units,
     providers::{
@@ -43,7 +44,6 @@ use alloy::{
         layers::RetryPolicy,
     },
 };
-use futures::{FutureExt, StreamExt};
 use hopr_crypto_types::keypairs::Keypair;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
@@ -244,7 +244,10 @@ impl RetryPolicy for DefaultRetryPolicy {
 
     // TODO(#7140): original implementation requires input param of `num_retries`
     // next_backoff = initial_backoff * (1 + backoff_coefficient)^(num_retries - 1)
-    fn backoff_hint(&self, _error: &alloy::transports::TransportError) -> Option<std::time::Duration> {
+    fn backoff_hint(
+        &self,
+        _error: &hopr_bindings::exports::alloy::transports::TransportError,
+    ) -> Option<std::time::Duration> {
         None
     }
 }
@@ -252,11 +255,14 @@ impl RetryPolicy for DefaultRetryPolicy {
 #[derive(Debug, Clone)]
 pub struct ZeroRetryPolicy;
 impl RetryPolicy for ZeroRetryPolicy {
-    fn should_retry(&self, _err: &alloy::transports::TransportError) -> bool {
+    fn should_retry(&self, _err: &hopr_bindings::exports::alloy::transports::TransportError) -> bool {
         false
     }
 
-    fn backoff_hint(&self, _error: &alloy::transports::TransportError) -> Option<std::time::Duration> {
+    fn backoff_hint(
+        &self,
+        _error: &hopr_bindings::exports::alloy::transports::TransportError,
+    ) -> Option<std::time::Duration> {
         None
     }
 }
@@ -879,7 +885,7 @@ pub type AnvilRpcClient = FillProvider<
 /// Used for testing. Creates RPC client to the local Anvil instance.
 #[cfg(not(target_arch = "wasm32"))]
 pub fn create_rpc_client_to_anvil(
-    anvil: &alloy::node_bindings::AnvilInstance,
+    anvil: &hopr_bindings::exports::alloy::node_bindings::AnvilInstance,
     signer: &hopr_crypto_types::keypairs::ChainKeypair,
 ) -> Arc<AnvilRpcClient> {
     let wallet = PrivateKeySigner::from_slice(signer.secret().as_ref()).expect("failed to construct wallet");
@@ -897,7 +903,7 @@ pub fn create_rpc_client_to_anvil(
 mod tests {
     use std::time::Duration;
 
-    use alloy::{
+    use hopr_bindings::exports::alloy::{
         providers::{Provider, ProviderBuilder},
         rpc::client::ClientBuilder,
         transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
@@ -927,14 +933,14 @@ mod tests {
         let provider = ProviderBuilder::new().connect_client(rpc_client);
 
         let err = provider
-            .raw_request::<(), alloy::primitives::U64>("eth_blockNumber".into(), ())
+            .raw_request::<(), hopr_bindings::exports::alloy::primitives::U64>("eth_blockNumber".into(), ())
             .await
             .expect_err("expected error");
 
         m.assert();
         assert!(matches!(
             err,
-            alloy::transports::RpcError::DeserError { err: _, text: _ }
+            hopr_bindings::exports::alloy::transports::RpcError::DeserError { err: _, text: _ }
         ));
     }
 
@@ -973,12 +979,15 @@ mod tests {
         let provider = ProviderBuilder::new().connect_client(rpc_client);
 
         let err = provider
-            .raw_request::<(), alloy::primitives::U64>("eth_blockNumber".into(), ())
+            .raw_request::<(), hopr_bindings::exports::alloy::primitives::U64>("eth_blockNumber".into(), ())
             .await
             .expect_err("expected error");
 
         m.assert();
-        assert!(matches!(err, alloy::transports::RpcError::Transport(..)));
+        assert!(matches!(
+            err,
+            hopr_bindings::exports::alloy::transports::RpcError::Transport(..)
+        ));
 
         // TODO: Create a customize RetryBackoffService that exposes `requests_enqueued`
         // assert_eq!(
@@ -1009,12 +1018,15 @@ mod tests {
         let provider = ProviderBuilder::new().connect_client(rpc_client);
 
         let err = provider
-            .raw_request::<(), alloy::primitives::U64>("eth_blockNumber".into(), ())
+            .raw_request::<(), hopr_bindings::exports::alloy::primitives::U64>("eth_blockNumber".into(), ())
             .await
             .expect_err("expected error");
 
         m.assert();
-        assert!(matches!(err, alloy::transports::RpcError::Transport(..)));
+        assert!(matches!(
+            err,
+            hopr_bindings::exports::alloy::transports::RpcError::Transport(..)
+        ));
         // TODO: Create a customize RetryBackoffService that exposes `requests_enqueued`
         // assert_eq!(
         //     0,
@@ -1063,12 +1075,15 @@ mod tests {
         let provider = ProviderBuilder::new().connect_client(rpc_client);
 
         let err = provider
-            .raw_request::<(), alloy::primitives::U64>("eth_blockNumber".into(), ())
+            .raw_request::<(), hopr_bindings::exports::alloy::primitives::U64>("eth_blockNumber".into(), ())
             .await
             .expect_err("expected error");
 
         m.assert();
-        assert!(matches!(err, alloy::transports::RpcError::Transport(..)));
+        assert!(matches!(
+            err,
+            hopr_bindings::exports::alloy::transports::RpcError::Transport(..)
+        ));
         // TODO: Create a customize RetryBackoffService that exposes `requests_enqueued`
         // assert_eq!(
         //     0,
@@ -1117,12 +1132,15 @@ mod tests {
         let provider = ProviderBuilder::new().connect_client(rpc_client);
 
         let err = provider
-            .raw_request::<(), alloy::primitives::U64>("eth_blockNumber".into(), ())
+            .raw_request::<(), hopr_bindings::exports::alloy::primitives::U64>("eth_blockNumber".into(), ())
             .await
             .expect_err("expected error");
 
         m.assert();
-        assert!(matches!(err, alloy::transports::RpcError::ErrorResp(..)));
+        assert!(matches!(
+            err,
+            hopr_bindings::exports::alloy::transports::RpcError::ErrorResp(..)
+        ));
 
         // TODO: Create a customize RetryBackoffService that exposes `requests_enqueued`
         // assert_eq!(
@@ -1173,13 +1191,16 @@ mod tests {
         let provider = ProviderBuilder::new().connect_client(rpc_client);
 
         let err = provider
-            .raw_request::<(), alloy::primitives::U64>("eth_blockNumber".into(), ())
+            .raw_request::<(), hopr_bindings::exports::alloy::primitives::U64>("eth_blockNumber".into(), ())
             .await
             .expect_err("expected error");
 
         // FIXME: implement minimum retry, and enable the assert
         // m.assert();
-        assert!(matches!(err, alloy::transports::RpcError::ErrorResp(..)));
+        assert!(matches!(
+            err,
+            hopr_bindings::exports::alloy::transports::RpcError::ErrorResp(..)
+        ));
 
         // TODO: Create a customize RetryBackoffService that exposes `requests_enqueued`
         // assert_eq!(
@@ -1229,12 +1250,15 @@ mod tests {
         let provider = ProviderBuilder::new().connect_client(rpc_client);
 
         let err = provider
-            .raw_request::<(), alloy::primitives::U64>("eth_blockNumber".into(), ())
+            .raw_request::<(), hopr_bindings::exports::alloy::primitives::U64>("eth_blockNumber".into(), ())
             .await
             .expect_err("expected error");
 
         m.assert();
-        assert!(matches!(err, alloy::transports::RpcError::Transport(..)));
+        assert!(matches!(
+            err,
+            hopr_bindings::exports::alloy::transports::RpcError::Transport(..)
+        ));
 
         // TODO: Create a customize RetryBackoffService that exposes `requests_enqueued`
         // assert_eq!(

@@ -12,18 +12,14 @@ version     = "0.2.0"
 crate-type = ["rlib"]
 
 [dependencies]
-alloy = { workspace = true, default-features = false, features = [
-  "contract",
-  "node-bindings",
-] }
-hex-literal = { workspace = true }
-lazy_static = { workspace = true }
+hex-literal     = { workspace = true }
+lazy_static     = { workspace = true }
 libp2p-identity = { workspace = true }
-multiaddr = { workspace = true }
-serde = { workspace = true }
-strum = { workspace = true }
-thiserror = { workspace = true }
-tracing = { workspace = true }
+multiaddr       = { workspace = true }
+serde           = { workspace = true }
+strum           = { workspace = true }
+thiserror       = { workspace = true }
+tracing         = { workspace = true }
 
 hopr-bindings        = { workspace = true }
 hopr-crypto-types    = { workspace = true }

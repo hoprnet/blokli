@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use alloy::primitives::U256;
 use anyhow::{Context, Result};
 use blokli_client::api::{BlokliQueryClient, BlokliTransactionClient, types::TransactionStatus};
 use blokli_integration_tests::fixtures::{IntegrationFixture, integration_fixture as fixture};
 use hex::FromHex;
+use hopr_bindings::exports::alloy::primitives::U256;
 use rstest::*;
 use serial_test::serial;
 use tokio::time::sleep;

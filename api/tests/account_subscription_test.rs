@@ -9,7 +9,6 @@
 
 use std::{sync::Arc, time::Duration};
 
-use alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
 use async_graphql::Schema;
 use blokli_api::{mutation::MutationRoot, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot};
 use blokli_api_types::Account;
@@ -27,6 +26,7 @@ use blokli_chain_rpc::{
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, accounts::BlokliDbAccountOperations, db::BlokliDb};
 use futures::StreamExt;
+use hopr_bindings::exports::alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
 use hopr_crypto_types::prelude::{ChainKeypair, Keypair, OffchainKeypair};
 use hopr_primitive_types::{prelude::Address, traits::ToHex};
 use multiaddr::Multiaddr;

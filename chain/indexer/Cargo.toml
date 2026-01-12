@@ -25,11 +25,6 @@ runtime-tokio = [
 ]
 
 [dependencies]
-alloy = { workspace = true, default-features = false, features = [
-  "essentials",
-  "json-rpc",
-  "node-bindings",
-] }
 async-broadcast = { workspace = true }
 async-compression = { workspace = true, features = [
   "futures-io",

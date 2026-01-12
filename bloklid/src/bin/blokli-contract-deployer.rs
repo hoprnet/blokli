@@ -1,8 +1,10 @@
 use std::{error::Error, fs, path::PathBuf, str::FromStr};
 
-use alloy::{providers::ProviderBuilder, rpc::client::ClientBuilder, signers::local::PrivateKeySigner};
 use blokli_chain_types::{ContractAddresses, ContractInstances};
 use clap::Parser;
+use hopr_bindings::exports::alloy::{
+    providers::ProviderBuilder, rpc::client::ClientBuilder, signers::local::PrivateKeySigner,
+};
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
 use serde::Serialize;
 use url::Url;

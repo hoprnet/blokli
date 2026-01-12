@@ -4,13 +4,13 @@ mod common;
 
 use std::time::Duration;
 
-use alloy::{
-    rpc::client::ClientBuilder,
-    transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
-};
 use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperationsConfig};
 use blokli_chain_types::{ContractAddresses, ContractInstances};
 use common::{TEST_BLOCK_TIME, TEST_FINALITY, create_rpc_client_to_anvil, wait_for_finality};
+use hopr_bindings::exports::alloy::{
+    rpc::client::ClientBuilder,
+    transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
+};
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
 use hopr_primitive_types::prelude::{Address, HoprBalance};
 

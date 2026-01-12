@@ -4,13 +4,6 @@ mod common;
 
 use std::time::Duration;
 
-use alloy::{
-    network::Ethereum,
-    primitives::U256,
-    providers::Provider,
-    rpc::client::ClientBuilder,
-    transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
-};
 use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperationsConfig};
 use blokli_chain_types::{ContractAddresses, ContractInstances, utils::create_native_transfer};
 use common::{
@@ -18,6 +11,13 @@ use common::{
     wait_until_tx,
 };
 use hex_literal::hex;
+use hopr_bindings::exports::alloy::{
+    network::Ethereum,
+    primitives::U256,
+    providers::Provider,
+    rpc::client::ClientBuilder,
+    transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
+};
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
 use hopr_primitive_types::prelude::{Address, HoprBalance, XDaiBalance};
 use lazy_static::lazy_static;

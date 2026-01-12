@@ -4,15 +4,15 @@ mod common;
 
 use std::time::Duration;
 
-use alloy::{
+use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations, client::MetricsLayer, rpc::RpcOperationsConfig};
+use common::{TEST_BLOCK_TIME, TEST_FINALITY, create_test_rpc_operations, wait_for_finality};
+use hopr_async_runtime::prelude::sleep;
+use hopr_bindings::exports::alloy::{
     providers::{Provider, ProviderBuilder},
     rpc::client::ClientBuilder,
     signers::local::PrivateKeySigner,
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
-use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations, client::MetricsLayer, rpc::RpcOperationsConfig};
-use common::{TEST_BLOCK_TIME, TEST_FINALITY, create_test_rpc_operations, wait_for_finality};
-use hopr_async_runtime::prelude::sleep;
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
 
 #[tokio::test]

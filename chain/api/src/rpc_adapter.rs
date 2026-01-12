@@ -6,9 +6,9 @@
 
 use std::sync::Arc;
 
-use alloy::{primitives::Bytes, providers::Provider};
 use async_trait::async_trait;
 use blokli_chain_rpc::{rpc::RpcOperations, transport::HttpRequestor};
+use hopr_bindings::exports::alloy::{primitives::Bytes, providers::Provider};
 use hopr_crypto_types::types::Hash;
 use tracing::{debug, error};
 
@@ -133,7 +133,7 @@ impl<R: HttpRequestor + 'static + Clone> ReceiptProvider for RpcAdapter<R> {
         debug!("Checking transaction status for hash: {:?}", tx_hash);
 
         // Convert Hash to alloy B256
-        let b256_hash = alloy::primitives::B256::from_slice(tx_hash.as_ref());
+        let b256_hash = hopr_bindings::exports::alloy::primitives::B256::from_slice(tx_hash.as_ref());
 
         // Try to get the transaction receipt
         match self.rpc.provider.get_transaction_receipt(b256_hash).await {

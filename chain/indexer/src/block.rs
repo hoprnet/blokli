@@ -7,7 +7,6 @@ use std::{
     },
 };
 
-use alloy::{primitives::Address as AlloyAddress, sol_types::SolEvent};
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{
@@ -15,7 +14,10 @@ use blokli_db::{
 };
 use blokli_db_entity::{channel_state, prelude::ChannelState};
 use futures::{StreamExt, future::AbortHandle};
-use hopr_bindings::hopr_token::HoprToken::{Approval, Transfer};
+use hopr_bindings::{
+    exports::alloy::{primitives::Address as AlloyAddress, sol_types::SolEvent},
+    hopr_token::HoprToken::{Approval, Transfer},
+};
 use hopr_crypto_types::types::Hash;
 use hopr_primitive_types::prelude::{Address, SerializableLog};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder};
@@ -497,12 +499,12 @@ where
             }
         });
 
-        let filter_base = alloy::rpc::types::Filter::new()
+        let filter_base = hopr_bindings::exports::alloy::rpc::types::Filter::new()
             .address(filter_base_addresses)
             .event_signature(filter_base_topics);
-        let filter_token = alloy::rpc::types::Filter::new().address(AlloyAddress::from_hopr_address(
-            logs_handler.contract_addresses_map().token,
-        ));
+        let filter_token = hopr_bindings::exports::alloy::rpc::types::Filter::new().address(
+            AlloyAddress::from_hopr_address(logs_handler.contract_addresses_map().token),
+        );
 
         let filter_token_transfer = filter_token.clone().event_signature(Transfer::SIGNATURE_HASH);
 
@@ -1107,10 +1109,6 @@ where
 mod tests {
     use std::{collections::BTreeSet, pin::Pin};
 
-    use alloy::{
-        dyn_abi::DynSolValue,
-        primitives::{Address as AlloyAddress, B256},
-    };
     use async_trait::async_trait;
     use blokli_chain_rpc::BlockWithLogs;
     use blokli_chain_types::{ContractAddresses, chain_events::ChainEventType};
@@ -1124,6 +1122,10 @@ mod tests {
     };
     use futures::{Stream, join};
     use hex_literal::hex;
+    use hopr_bindings::exports::alloy::{
+        dyn_abi::DynSolValue,
+        primitives::{Address as AlloyAddress, B256},
+    };
     use hopr_crypto_types::{
         keypairs::{Keypair, OffchainKeypair},
         prelude::ChainKeypair,

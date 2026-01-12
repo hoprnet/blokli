@@ -8,15 +8,15 @@ mod common;
 
 use std::time::Duration;
 
-use alloy::{
+use blokli_chain_rpc::client::{DefaultRetryPolicy, SnapshotRequestor, SnapshotRequestorLayer};
+use blokli_chain_types::{ContractAddresses, ContractInstances, utils::create_anvil};
+use hopr_async_runtime::prelude::sleep;
+use hopr_bindings::exports::alloy::{
     providers::{Provider, ProviderBuilder},
     rpc::client::ClientBuilder,
     signers::local::PrivateKeySigner,
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
-use blokli_chain_rpc::client::{DefaultRetryPolicy, SnapshotRequestor, SnapshotRequestorLayer};
-use blokli_chain_types::{ContractAddresses, ContractInstances, utils::create_anvil};
-use hopr_async_runtime::prelude::sleep;
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
 use hopr_primitive_types::prelude::Address;
 use tempfile::NamedTempFile;
@@ -58,11 +58,14 @@ async fn test_client_should_fail_on_malformed_request() -> anyhow::Result<()> {
     let provider = ProviderBuilder::new().wallet(signer).connect_client(rpc_client);
 
     let err = provider
-        .raw_request::<(), alloy::primitives::U64>("eth_blockNumber_bla".into(), ())
+        .raw_request::<(), hopr_bindings::exports::alloy::primitives::U64>("eth_blockNumber_bla".into(), ())
         .await
         .expect_err("expected error");
 
-    assert!(matches!(err, alloy::transports::RpcError::ErrorResp(..)));
+    assert!(matches!(
+        err,
+        hopr_bindings::exports::alloy::transports::RpcError::ErrorResp(..)
+    ));
 
     Ok(())
 }

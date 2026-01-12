@@ -481,10 +481,6 @@ where
 mod tests {
     use std::{sync::Arc, time::SystemTime};
 
-    use alloy::{
-        primitives::{Address as AlloyAddress, FixedBytes},
-        sol_types::{SolEvent, SolValue},
-    };
     use anyhow::Context;
     use blokli_chain_types::AlloyAddressExt;
     use blokli_db::{
@@ -496,6 +492,10 @@ mod tests {
     use blokli_db_entity::{hopr_node_safe_registration, prelude::HoprNodeSafeRegistration};
     use hex_literal::hex;
     use hopr_bindings::{
+        exports::alloy::{
+            primitives::{Address as AlloyAddress, FixedBytes},
+            sol_types::{SolEvent, SolValue},
+        },
         hopr_channels::HoprChannels,
         hopr_channels_events::HoprChannelsEvents::{
             ChannelBalanceDecreased, ChannelBalanceIncreased, ChannelClosed, ChannelOpened,

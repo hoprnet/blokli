@@ -224,7 +224,6 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use alloy::sol_types::{SolEvent, SolValue};
     use blokli_db::{
         BlokliDbGeneralModelOperations, db::BlokliDb, node_safe_registrations::BlokliDbNodeSafeRegistrationOperations,
         safe_contracts::BlokliDbSafeContractOperations,
@@ -233,7 +232,10 @@ mod tests {
         hopr_node_safe_registration, hopr_safe_contract,
         prelude::{HoprNodeSafeRegistration, HoprSafeContract},
     };
-    use hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry;
+    use hopr_bindings::{
+        exports::alloy::sol_types::{SolEvent, SolValue},
+        hopr_node_safe_registry::HoprNodeSafeRegistry,
+    };
     use hopr_primitive_types::prelude::{Address, SerializableLog};
     use primitive_types::H256;
     use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};

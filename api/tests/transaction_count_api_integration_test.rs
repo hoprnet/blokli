@@ -33,9 +33,9 @@ mod common;
 
 use std::{sync::Arc, time::Duration};
 
-use alloy::{primitives::U256, sol};
 use async_graphql::Schema;
 use blokli_api::{mutation::MutationRoot, query::QueryRoot, subscription::SubscriptionRoot};
+use hopr_bindings::exports::alloy::{primitives::U256, sol};
 use hopr_crypto_types::keypairs::Keypair;
 use hopr_primitive_types::traits::ToHex;
 

@@ -5,13 +5,6 @@
 
 use std::{sync::Arc, time::Duration};
 
-use alloy::{
-    consensus::{SignableTransaction, TxLegacy},
-    eips::eip2718::Encodable2718,
-    node_bindings::AnvilInstance,
-    primitives::{Address as AlloyAddress, TxKind, U256},
-    signers::{Signer, local::PrivateKeySigner},
-};
 use blokli_chain_api::{
     DefaultHttpRequestor,
     rpc_adapter::RpcAdapter,
@@ -26,6 +19,13 @@ use blokli_chain_rpc::{
     transport::ReqwestClient,
 };
 use blokli_chain_types::{AlloyAddressExt, ContractAddresses, utils::create_anvil};
+use hopr_bindings::exports::alloy::{
+    consensus::{SignableTransaction, TxLegacy},
+    eips::eip2718::Encodable2718,
+    node_bindings::AnvilInstance,
+    primitives::{Address as AlloyAddress, TxKind, U256},
+    signers::{Signer, local::PrivateKeySigner},
+};
 use hopr_crypto_types::{
     keypairs::{ChainKeypair, Keypair},
     types::Hash,
@@ -79,14 +79,16 @@ async fn setup_test_environment(
     };
 
     // Set up RPC client with retry policy
-    let transport_client = alloy::transports::http::ReqwestTransport::new(anvil.endpoint_url());
-    let rpc_client = alloy::rpc::client::ClientBuilder::default()
-        .layer(alloy::transports::layers::RetryBackoffLayer::new_with_policy(
-            2,
-            100,
-            100,
-            DefaultRetryPolicy::default(),
-        ))
+    let transport_client = hopr_bindings::exports::alloy::transports::http::ReqwestTransport::new(anvil.endpoint_url());
+    let rpc_client = hopr_bindings::exports::alloy::rpc::client::ClientBuilder::default()
+        .layer(
+            hopr_bindings::exports::alloy::transports::layers::RetryBackoffLayer::new_with_policy(
+                2,
+                100,
+                100,
+                DefaultRetryPolicy::default(),
+            ),
+        )
         .transport(transport_client.clone(), transport_client.guess_local());
 
     let rpc_operations = RpcOperations::new(rpc_client, ReqwestClient::new(), cfg, None)?;

@@ -3,16 +3,17 @@ use std::{
     sync::Arc,
 };
 
-use alloy::{
-    primitives::{Address as AlloyAddress, B256},
-    sol_types::SolEventInterface,
-};
 use async_trait::async_trait;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, Log};
 use blokli_chain_types::{AlloyAddressExt, ContractAddresses};
 use blokli_db::{BlokliDbAllOperations, OpenTransaction};
 use hopr_bindings::{
-    hopr_announcements::HoprAnnouncements::HoprAnnouncementsEvents, hopr_channels::HoprChannels::HoprChannelsEvents,
+    exports::alloy::{
+        primitives::{Address as AlloyAddress, B256},
+        sol_types::SolEventInterface,
+    },
+    hopr_announcements::HoprAnnouncements::HoprAnnouncementsEvents,
+    hopr_channels::HoprChannels::HoprChannelsEvents,
     hopr_node_management_module::HoprNodeManagementModule::HoprNodeManagementModuleEvents,
     hopr_node_safe_registry::HoprNodeSafeRegistry::HoprNodeSafeRegistryEvents,
     hopr_node_stake_factory::HoprNodeStakeFactory::HoprNodeStakeFactoryEvents,
@@ -155,7 +156,7 @@ where
 
         let log = Log::from(slog.clone());
 
-        let primitive_log = alloy::primitives::Log::new(
+        let primitive_log = hopr_bindings::exports::alloy::primitives::Log::new(
             AlloyAddress::from_hopr_address(slog.address),
             slog.topics.iter().map(|h| B256::from_slice(h.as_ref())).collect(),
             slog.data.clone().into(),
