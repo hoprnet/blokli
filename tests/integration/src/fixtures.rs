@@ -419,7 +419,7 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
         .filler(ChainIdFiller::default())
         .filler(NonceFiller::new(CachedNonceManager::default()))
         .filler(GasFiller)
-        .filler(BlobGasFiller)
+        .filler(BlobGasFiller::default())
         .wallet(wallet)
         .connect_http(config.rpc_url.clone());
 

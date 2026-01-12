@@ -175,7 +175,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
                 cfg.gas_oracle_fallback_max_fee,
                 cfg.gas_oracle_fallback_priority_fee,
             ))
-            .filler(BlobGasFiller)
+            .filler(BlobGasFiller::default())
             .connect_client(rpc_client);
 
         debug!("{:?}", cfg.contract_addrs);

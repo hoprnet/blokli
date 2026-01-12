@@ -111,7 +111,7 @@ async fn test_client_should_call_on_gas_oracle_for_legacy_tx() -> anyhow::Result
             EIP1559_FEE_ESTIMATION_DEFAULT_PRIORITY_FEE_GNOSIS,
         ))
         .filler(GasFiller)
-        .filler(BlobGasFiller)
+        .filler(BlobGasFiller::default())
         .connect_client(rpc_client);
 
     // ChainIdFiller is required for proper legacy transaction handling with gas_price
