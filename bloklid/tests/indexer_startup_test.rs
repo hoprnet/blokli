@@ -1,7 +1,5 @@
 use std::{sync::Arc, time::Duration};
 
-use tokio::sync::Mutex;
-
 use async_trait::async_trait;
 use blokli_chain_indexer::{IndexerConfig, block::Indexer, handlers::ContractEventHandlers, traits::ChainLogHandler};
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
@@ -11,6 +9,7 @@ use futures::stream::{self, StreamExt};
 use hopr_crypto_types::types::Hash;
 use hopr_primitive_types::prelude::*;
 use tempfile::TempDir;
+use tokio::sync::Mutex;
 
 /// Mock RPC operations for testing
 #[derive(Clone)]

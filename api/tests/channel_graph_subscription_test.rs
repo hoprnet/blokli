@@ -29,7 +29,9 @@ use blokli_db::{
     BlokliDbGeneralModelOperations, TargetDb, accounts::BlokliDbAccountOperations, channels::BlokliDbChannelOperations,
     db::BlokliDb,
 };
-use blokli_db_entity::{chain_info, channel, channel_state, conversions::account_aggregation::fetch_accounts_by_keyids};
+use blokli_db_entity::{
+    chain_info, channel, channel_state, conversions::account_aggregation::fetch_accounts_by_keyids,
+};
 use chrono::Utc;
 use futures::StreamExt;
 use hopr_bindings::exports::alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};

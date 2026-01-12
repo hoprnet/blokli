@@ -1,4 +1,8 @@
-use std::{fs, io::Cursor, path::{Path, PathBuf}};
+use std::{
+    fs,
+    io::Cursor,
+    path::{Path, PathBuf},
+};
 
 use async_compression::futures::bufread::XzEncoder;
 use async_tar::Builder;

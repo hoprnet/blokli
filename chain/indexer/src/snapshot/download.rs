@@ -66,6 +66,7 @@ pub struct DownloadConfig {
 ///
 /// ```no_run
 /// use std::path::Path;
+///
 /// use blokli_chain_indexer::snapshot::download::SnapshotDownloader;
 ///
 /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {

@@ -433,8 +433,8 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
 #[cfg(test)]
 mod tests {
     use anyhow::Context;
-    use hopr_bindings::exports::alloy::rpc::types::Filter;
     use futures::StreamExt;
+    use hopr_bindings::exports::alloy::rpc::types::Filter;
 
     use crate::indexer::split_range;
 
