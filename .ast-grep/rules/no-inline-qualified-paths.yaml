@@ -1,0 +1,32 @@
+id: no-inline-qualified-paths
+language: rust
+severity: error
+message: Avoid inline fully-qualified paths (4+ segments) - use imports at module level instead
+note: |
+  Inline fully-qualified paths with 4 or more segments should be
+  replaced with imports at the top of the module.
+
+  Move the type to an import statement organized according to AGENTS.md:
+  1. Standard library (std::)
+  2. External crates (alphabetically)
+  3. Local crates and modules (alphabetically)
+
+  Example:
+    // Bad:  std::process::Stdio::null()
+    // Good: use std::process::Stdio;
+    //       Stdio::null()
+
+    // Bad:  hopr_bindings::exports::alloy::providers::Provider
+    // Good: use hopr_bindings::exports::alloy::providers::Provider;
+    //       Provider
+
+rule:
+  all:
+    - kind: scoped_identifier
+    - pattern: $A::$B::$C::$D
+    - not:
+        inside:
+          kind: use_declaration
+          stopBy: end
+    - not:
+        regex: '^crate::'
