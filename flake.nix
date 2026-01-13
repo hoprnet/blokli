@@ -330,7 +330,16 @@
               type = "app";
               program = toString (
                 pkgs.writeShellScript "test" ''
-                  exec ${pkgs.just}/bin/just test
+                  ${pkgs.just}/bin/just test
+                ''
+              );
+            };
+            nextest = {
+              type = "app";
+              program = toString (
+                pkgs.writeShellScript "nextest" ''
+                  cargo install cargo-nextest --locked
+                  ${pkgs.just}/bin/just nextest
                 ''
               );
             };
