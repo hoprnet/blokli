@@ -1,4 +1,4 @@
-use blokli_api::query::QueryRoot;
+use blokli_api::{query::QueryRoot, schema::ExpectedBlockTime};
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, info::BlokliDbInfoOperations};
 
@@ -24,6 +24,7 @@ async fn test_channel_closure_grace_period_always_non_null() {
     .data(ContractAddresses::default())
     .data(100u64)
     .data("test-network".to_string())
+    .data(ExpectedBlockTime(1))
     .finish();
 
     let query = r#"
@@ -95,6 +96,7 @@ async fn test_channel_closure_grace_period_with_custom_value() {
     .data(ContractAddresses::default())
     .data(100u64)
     .data("test-network".to_string())
+    .data(ExpectedBlockTime(1))
     .finish();
 
     let query = r#"
@@ -138,6 +140,7 @@ async fn test_channel_closure_grace_period_schema_non_nullable() {
     .data(ContractAddresses::default())
     .data(100u64)
     .data("test-network".to_string())
+    .data(ExpectedBlockTime(1))
     .finish();
 
     let sdl = schema.sdl();

@@ -13,7 +13,7 @@ use std::{
 };
 
 use anyhow::Result;
-use blokli_api::query::QueryRoot;
+use blokli_api::{query::QueryRoot, schema::ExpectedBlockTime};
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{
     BlokliDbGeneralModelOperations, TargetDb, accounts::BlokliDbAccountOperations, channels::BlokliDbChannelOperations,
@@ -593,7 +593,9 @@ async fn test_chain_info_query() -> Result<()> {
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
     .data(100u64)
+    .data(100u64)
     .data("anvil-localhost".to_string())
+    .data(ExpectedBlockTime(1))
     .finish();
 
     let query = r#"
@@ -611,6 +613,7 @@ async fn test_chain_info_query() -> Result<()> {
                     ledgerDst
                     safeRegistryDst
                     channelClosureGracePeriod
+                    expectedBlockTime
                     contractAddresses
                 }
                 ... on QueryFailedError {
@@ -634,6 +637,8 @@ async fn test_chain_info_query() -> Result<()> {
     assert_eq!(chain_info["minTicketWinningProbability"], 0.5);
     // channelClosureGracePeriod is now UInt64, which is represented as a string
     assert_eq!(chain_info["channelClosureGracePeriod"].as_str().unwrap(), "300");
+    // expectedBlockTime is UInt64, represented as a string
+    assert_eq!(chain_info["expectedBlockTime"].as_str().unwrap(), "1");
 
     // Verify token values (0 balance represented as "0 wxHOPR")
     assert_eq!(chain_info["ticketPrice"].as_str().unwrap(), "0 wxHOPR");
@@ -721,7 +726,9 @@ async fn test_chain_info_query_missing_data_returns_error() -> Result<()> {
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
     .data(100u64)
+    .data(100u64)
     .data("anvil-localhost".to_string())
+    .data(ExpectedBlockTime(1))
     .finish();
 
     let query = r#"
@@ -787,7 +794,9 @@ async fn test_chain_info_query_with_null_optional_fields() -> Result<()> {
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
     .data(200u64)
+    .data(200u64)
     .data("test-network".to_string())
+    .data(ExpectedBlockTime(5))
     .finish();
 
     let query = r#"

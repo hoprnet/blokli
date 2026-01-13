@@ -244,6 +244,9 @@ pub struct ChainInfo {
     /// Channel closure grace period in seconds
     #[graphql(name = "channelClosureGracePeriod")]
     pub channel_closure_grace_period: UInt64,
+    /// Expected block time in seconds
+    #[graphql(name = "expectedBlockTime")]
+    pub expected_block_time: UInt64,
 }
 
 /// Result type for chain info queries

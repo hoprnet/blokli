@@ -42,6 +42,10 @@ pub struct ApiConfig {
     #[serde(default = "default_contract_addresses")]
     pub contract_addresses: ContractAddresses,
 
+    /// Expected block time in seconds
+    #[serde(default = "default_expected_block_time")]
+    pub expected_block_time: u64,
+
     /// Health check configuration
     #[serde(default)]
     pub health: HealthConfig,
@@ -108,6 +112,7 @@ impl Default for ApiConfig {
             chain_id: default_chain_id(),
             rpc_url: default_rpc_url(),
             contract_addresses: default_contract_addresses(),
+            expected_block_time: default_expected_block_time(),
             health: HealthConfig::default(),
         }
     }
@@ -151,6 +156,10 @@ fn default_rpc_url() -> String {
 
 fn default_contract_addresses() -> ContractAddresses {
     ContractAddresses::default()
+}
+
+fn default_expected_block_time() -> u64 {
+    5
 }
 
 #[cfg(test)]
