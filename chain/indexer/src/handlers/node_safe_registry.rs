@@ -56,9 +56,11 @@ where
         log: &blokli_chain_rpc::Log,
         event: HoprNodeSafeRegistryEvents,
         is_synced: bool,
-    ) -> Result<()> {
+    ) -> Result<Vec<IndexerEvent>> {
         #[cfg(all(feature = "prometheus", not(test)))]
         METRIC_INDEXER_LOG_COUNTERS.increment(&["node_safe_registry"]);
+
+        let mut events = Vec::new();
 
         match event {
             HoprNodeSafeRegistryEvents::RegisteredNodeSafe(registered) => {
@@ -152,7 +154,7 @@ where
                 if is_synced {
                     match construct_account_update(tx.as_ref(), &node_addr).await {
                         Ok(account) => {
-                            self.indexer_state.publish_event(IndexerEvent::AccountUpdated(account));
+                            events.push(IndexerEvent::AccountUpdated(account));
                         }
                         Err(e) => {
                             warn!("Failed to construct account update for RegisteredNodeSafe: {}", e);
@@ -197,7 +199,7 @@ where
                 if is_synced && should_publish_event {
                     match construct_account_update(tx.as_ref(), &node_addr).await {
                         Ok(account) => {
-                            self.indexer_state.publish_event(IndexerEvent::AccountUpdated(account));
+                            events.push(IndexerEvent::AccountUpdated(account));
                         }
                         Err(e) => {
                             warn!("Failed to construct account update for DeregisteredNodeSafe: {}", e);
@@ -216,7 +218,7 @@ where
             }
         }
 
-        Ok(())
+        Ok(events)
     }
 }
 
@@ -225,7 +227,8 @@ mod tests {
     use std::sync::Arc;
 
     use blokli_db::{
-        BlokliDbGeneralModelOperations, db::BlokliDb, node_safe_registrations::BlokliDbNodeSafeRegistrationOperations,
+        BlokliDbGeneralModelOperations, accounts::BlokliDbAccountOperations, db::BlokliDb,
+        node_safe_registrations::BlokliDbNodeSafeRegistrationOperations,
         safe_contracts::BlokliDbSafeContractOperations,
     };
     use blokli_db_entity::{
@@ -236,11 +239,15 @@ mod tests {
         exports::alloy::sol_types::{SolEvent, SolValue},
         hopr_node_safe_registry::HoprNodeSafeRegistry,
     };
+    use hopr_crypto_types::keypairs::Keypair;
     use hopr_primitive_types::prelude::{Address, SerializableLog};
     use primitive_types::H256;
     use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
-    use crate::handlers::{node_safe_registry::tests::SAFE_INSTANCE_ADDR, test_utils::test_helpers::*};
+    use crate::{
+        handlers::{node_safe_registry::tests::SAFE_INSTANCE_ADDR, test_utils::test_helpers::*},
+        state::IndexerEvent,
+    };
 
     #[tokio::test]
     async fn test_on_node_safe_registry_registered_creates_safe_with_module_from_rpc() -> anyhow::Result<()> {
@@ -279,7 +286,8 @@ mod tests {
         };
 
         // Process the event
-        db.begin_transaction()
+        let _events = db
+            .begin_transaction()
             .await?
             .perform(|tx| {
                 Box::pin(async move { handlers.process_log_event(tx, safe_registered_log.clone(), true).await })
@@ -344,7 +352,8 @@ mod tests {
         };
 
         // Process the event - should use existing module address and not create a new entry
-        db.begin_transaction()
+        let _events = db
+            .begin_transaction()
             .await?
             .perform(|tx| {
                 Box::pin(async move { handlers.process_log_event(tx, safe_registered_log.clone(), true).await })
@@ -406,7 +415,8 @@ mod tests {
         };
 
         // Process the event
-        db.begin_transaction()
+        let _events = db
+            .begin_transaction()
             .await?
             .perform(|tx| {
                 Box::pin(async move { handlers.process_log_event(tx, safe_registered_log.clone(), true).await })
@@ -466,7 +476,8 @@ mod tests {
         };
 
         // Process the event
-        db.begin_transaction()
+        let _events = db
+            .begin_transaction()
             .await?
             .perform(|tx| {
                 Box::pin(async move { handlers.process_log_event(tx, safe_registered_log.clone(), true).await })
@@ -524,7 +535,8 @@ mod tests {
         // Process the event first time
         let handlers_clone = handlers.clone();
         let safe_registered_log_clone = safe_registered_log.clone();
-        db.begin_transaction()
+        let _events = db
+            .begin_transaction()
             .await?
             .perform(|tx| {
                 Box::pin(async move {
@@ -568,6 +580,10 @@ mod tests {
 
         let safe_address = *SAFE_INSTANCE_ADDR;
         let node_address = *SELF_CHAIN_ADDRESS;
+
+        // Ensure the account exists so construct_account_update succeeds
+        db.upsert_account(None, 1, node_address, *SELF_PRIV_KEY.public(), None, 1, 0, 0)
+            .await?;
 
         // Pre-create the safe in DB
         db.create_safe_contract(
@@ -614,10 +630,15 @@ mod tests {
         };
 
         // Process deregistration event
-        db.begin_transaction()
+        let events = db
+            .begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, deregistered_log, true).await }))
             .await?;
+
+        // Verify AccountUpdated event was emitted
+        let account_updated = events.iter().any(|e| matches!(e, IndexerEvent::AccountUpdated(_)));
+        assert!(account_updated, "AccountUpdated event should be emitted");
 
         // Verify node registration is deleted
         let registration_after = HoprNodeSafeRegistration::find()

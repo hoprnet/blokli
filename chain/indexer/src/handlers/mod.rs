@@ -28,6 +28,7 @@ use tracing::{debug, error, trace};
 use crate::{
     IndexerState,
     errors::{CoreEthereumIndexerError, Result},
+    state::IndexerEvent,
 };
 
 mod announcements;
@@ -154,7 +155,12 @@ where
     /// # });
     /// ```
     #[tracing::instrument(level = "debug", skip(self, slog), fields(log=%slog))]
-    async fn process_log_event(&self, tx: &OpenTransaction, slog: SerializableLog, is_synced: bool) -> Result<()> {
+    async fn process_log_event(
+        &self,
+        tx: &OpenTransaction,
+        slog: SerializableLog,
+        is_synced: bool,
+    ) -> Result<Vec<IndexerEvent>> {
         trace!(log = %slog, "log content");
 
         let log = Log::from(slog.clone());
@@ -198,7 +204,7 @@ where
                         ?log,
                         "channel didn't exist in the db. Created a corrupted channel entry and ignored event"
                     );
-                    Ok(())
+                    Ok(vec![])
                 }
                 Err(e) => Err(e),
             }
@@ -304,7 +310,8 @@ where
 
     async fn collect_log_event(&self, slog: SerializableLog, is_synced: bool) -> Result<()> {
         let myself = self.clone();
-        self.db
+        let events = self
+            .db
             .begin_transaction()
             .await?
             .perform(move |tx| {
@@ -315,9 +322,9 @@ where
 
                 Box::pin(async move {
                     match myself.process_log_event(tx, log, is_synced).await {
-                        Ok(()) => {
+                        Ok(events) => {
                             debug!(block_id, %tx_hash, log_id, "processed log successfully");
-                            Ok(())
+                            Ok(events)
                         }
                         Err(error) => {
                             error!(block_id, %tx_hash, log_id, %error, "error processing log in tx");
@@ -326,6 +333,124 @@ where
                     }
                 })
             })
-            .await
+            .await?;
+
+        // Publish events after transaction commit
+        if is_synced {
+            for event in events {
+                self.indexer_state.publish_event(event);
+            }
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::Arc, time::Duration};
+
+    use blokli_db::{
+        BlokliDbGeneralModelOperations, accounts::BlokliDbAccountOperations, db::BlokliDb,
+        safe_contracts::BlokliDbSafeContractOperations,
+    };
+    use blokli_db_entity::{hopr_safe_contract, prelude::HoprSafeContract};
+    use hopr_bindings::{
+        exports::alloy::sol_types::{SolEvent, SolValue},
+        hopr_node_safe_registry::HoprNodeSafeRegistry,
+    };
+    use hopr_crypto_types::keypairs::Keypair;
+    use hopr_primitive_types::{
+        prelude::{Address, SerializableLog},
+        traits::ToHex,
+    };
+    use primitive_types::H256;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+    use super::*;
+    use crate::{
+        handlers::test_utils::test_helpers::{
+            ClonableMockOperations, MockIndexerRpcOperations, SAFE_INSTANCE_ADDR, SELF_CHAIN_ADDRESS, SELF_PRIV_KEY,
+            init_handlers_with_events, test_log,
+        },
+        state::IndexerEvent,
+        traits::ChainLogHandler,
+    };
+
+    #[tokio::test]
+    async fn test_collect_log_event_publishes_after_transaction_commit() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let mut rpc_operations = MockIndexerRpcOperations::new();
+
+        // Setup RPC mock for RegisteredNodeSafe
+        let module_addr: Address = "aabbccddee00112233445566778899aabbccddee".parse()?;
+        rpc_operations
+            .expect_get_hopr_module_from_safe()
+            .returning(move |_| Ok(Some(module_addr)));
+
+        let clonable_rpc = ClonableMockOperations {
+            inner: Arc::new(rpc_operations),
+        };
+        let (handlers, _, mut event_receiver) = init_handlers_with_events(clonable_rpc, db.clone());
+
+        let safe_addr = *SAFE_INSTANCE_ADDR;
+        let node_addr = *SELF_CHAIN_ADDRESS;
+
+        // Ensure the account exists so construct_account_update succeeds
+        db.upsert_account(None, 1, node_addr, *SELF_PRIV_KEY.public(), None, 1, 0, 0)
+            .await?;
+
+        // Create log
+        let encoded_data = ().abi_encode();
+        let log = SerializableLog {
+            address: handlers.addresses.node_safe_registry,
+            topics: vec![
+                HoprNodeSafeRegistry::RegisteredNodeSafe::SIGNATURE_HASH.into(),
+                H256::from_slice(&safe_addr.to_bytes32()).into(),
+                H256::from_slice(&node_addr.to_bytes32()).into(),
+            ],
+            data: encoded_data,
+            block_number: 100,
+            ..test_log()
+        };
+
+        // Spawn a listener that verifies data availability upon event receipt
+        let db_check = db.clone();
+        let listener = tokio::spawn(async move {
+            // Wait for event
+            let event = tokio::time::timeout(Duration::from_secs(5), event_receiver.recv())
+                .await
+                .expect("Should receive event")
+                .expect("Channel shouldn't be closed");
+
+            // Look for AccountUpdated event (since we removed SafeDeployed)
+            match event {
+                IndexerEvent::AccountUpdated(account) => {
+                    assert_eq!(account.chain_key, node_addr.to_hex());
+                }
+                _ => panic!("Expected AccountUpdated event, got {:?}", event),
+            };
+
+            // Crucial check: Data must be visible in DB immediately when event is received
+            // This proves that the transaction committed before the event was published.
+            let safe = HoprSafeContract::find()
+                .filter(hopr_safe_contract::Column::Address.eq(safe_addr.as_ref().to_vec()))
+                .one(db_check.conn(blokli_db::TargetDb::Index))
+                .await
+                .expect("DB query failed");
+
+            assert!(
+                safe.is_some(),
+                "Safe contract must be visible in DB when AccountUpdated event is received"
+            );
+        });
+
+        // Execute handler via collect_log_event (which handles the transaction)
+        handlers.collect_log_event(log, true).await?;
+
+        // Await listener verification
+        listener.await?;
+
+        Ok(())
     }
 }

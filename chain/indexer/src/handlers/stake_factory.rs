@@ -7,7 +7,7 @@ use hopr_primitive_types::prelude::{SerializableLog, ToHex};
 use tracing::{error, info};
 
 use super::ContractEventHandlers;
-use crate::errors::Result;
+use crate::{errors::Result, state::IndexerEvent};
 
 impl<T, Db> ContractEventHandlers<T, Db>
 where
@@ -47,7 +47,8 @@ where
         block: u64,
         tx_index: u64,
         log_index: u64,
-    ) -> Result<()> {
+    ) -> Result<Vec<IndexerEvent>> {
+        let mut events = Vec::new();
         if let HoprNodeStakeFactoryEvents::NewHoprNodeStakeModuleForSafe(deployed) = event {
             let module_addr = deployed.module.to_hopr_address();
             let safe_addr = deployed.safe.to_hopr_address();
@@ -88,8 +89,7 @@ where
 
             // Emit SafeDeployed event if synced
             if is_synced {
-                self.indexer_state
-                    .publish_event(crate::state::IndexerEvent::SafeDeployed(safe_addr));
+                events.push(crate::state::IndexerEvent::SafeDeployed(safe_addr));
             }
         } else {
             error!(
@@ -98,7 +98,7 @@ where
             );
         }
 
-        Ok(())
+        Ok(events)
     }
 }
 
