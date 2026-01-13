@@ -6,7 +6,7 @@ use hopr_primitive_types::prelude::Address;
 use tracing::{debug, trace};
 
 use super::ContractEventHandlers;
-use crate::errors::Result;
+use crate::{errors::Result, state::IndexerEvent};
 
 #[cfg(all(feature = "prometheus", not(test)))]
 lazy_static::lazy_static! {
@@ -28,7 +28,7 @@ where
         _tx: &OpenTransaction,
         event: HoprTokenEvents,
         _is_synced: bool,
-    ) -> Result<()> {
+    ) -> Result<Vec<IndexerEvent>> {
         #[cfg(all(feature = "prometheus", not(test)))]
         METRIC_INDEXER_LOG_COUNTERS.increment(&["token"]);
 
@@ -117,6 +117,6 @@ where
             }
         }
 
-        Ok(())
+        Ok(vec![])
     }
 }
