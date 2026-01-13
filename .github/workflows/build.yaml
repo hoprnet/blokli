@@ -99,7 +99,7 @@ jobs:
         run: nix build -L .#blokli-client-dev --no-link
   integration-test:
     name: Integration Tests
-    needs: build-docker
+    needs: [build-docker, build-docker-manifest]
     uses: ./.github/workflows/integration-test.yaml
     with:
       image: ${{ needs.build-docker.outputs.docker_build_version }}

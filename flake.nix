@@ -338,7 +338,8 @@
               type = "app";
               program = toString (
                 pkgs.writeShellScript "nextest" ''
-                  nix develop --command bash -c "cargo install cargo-nextest --locked 2>/dev/null || true && just nextest"
+                  export PATH="${pkgs.cargo-nextest}/bin:$PATH"
+                  nix develop --command ${pkgs.just}/bin/just nextest
                 ''
               );
             };
