@@ -106,6 +106,7 @@ impl Default for BlokliTestState {
                 }"#
                     .into(),
                 ),
+                expected_block_time: Uint64("5".into()),
             },
             version: "1".to_string(),
             health: "OK".to_string(),

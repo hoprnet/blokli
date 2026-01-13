@@ -146,6 +146,7 @@ pub async fn start_server(network: String, config: ApiConfig) -> ApiResult<()> {
         db,
         network,
         config.clone(),
+        config.expected_block_time,
         indexer_state,
         transaction_executor,
         transaction_store,

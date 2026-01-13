@@ -20,6 +20,7 @@ pub struct ChainInfo {
     pub ticket_price: TokenValueString,
     pub network: String,
     pub contract_addresses: ContractAddressMap,
+    pub expected_block_time: Uint64,
 }
 
 #[derive(cynic::Scalar, Debug, Clone, PartialEq, Eq)]

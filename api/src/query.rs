@@ -1038,6 +1038,12 @@ impl QueryRoot {
                 return ChainInfoResult::QueryFailed(errors::context_error("contract addresses", format!("{:?}", e)));
             }
         };
+        let expected_block_time = match ctx.data::<crate::schema::ExpectedBlockTime>() {
+            Ok(time) => time,
+            Err(e) => {
+                return ChainInfoResult::QueryFailed(errors::context_error("expected block time", format!("{:?}", e)));
+            }
+        };
 
         // Fetch chain_info from database (assuming single row with id=1)
         let chain_info = match chain_info::Entity::find_by_id(1).one(db).await {
@@ -1159,6 +1165,7 @@ impl QueryRoot {
             ledger_dst,
             safe_registry_dst,
             channel_closure_grace_period,
+            expected_block_time: UInt64(expected_block_time.0),
         })
     }
 

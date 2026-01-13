@@ -95,6 +95,14 @@ impl Network {
             Network::Rotsee => 10000,
         }
     }
+
+    /// Returns the expected block time in seconds.
+    pub fn expected_block_time(&self) -> u64 {
+        match self {
+            Network::AnvilLocalhost => 1,
+            Network::Rotsee => 5,
+        }
+    }
 }
 
 impl fmt::Display for Network {
