@@ -796,9 +796,9 @@ impl Query {
 
 Local builds for all architectures remain fully functional:
 
-- `nix build .#bloklid-docker-amd64` - Build `linux-amd64` docker image
-- `nix build .#bloklid-docker-aarch64` - Build `linux-arm64` docker image
-- `nix run .#bloklid-docker-upload-amd64` - Build and publishes `linux-amd64` docker image
+- `nix build .#docker-blokli-x86_64-linux` - Build `linux-amd64` docker image
+- `nix build .#docker-blokli-aarch64-linux` - Build `linux-arm64` docker image
+- `nix run .#docker-blokli-upload-x86_64-linux` - Build and publishes `linux-amd64` docker image
 
 ### Overview
 
@@ -813,9 +813,9 @@ The project uses Nix with nix-lib helpers to build reproducible Docker images fo
 
 Three image variants are available for each architecture:
 
-1. **bloklid-docker** - Production build (release profile, optimized)
-2. **bloklid-dev-docker** - Development build (dev profile, faster compilation)
-3. **bloklid-profile-docker** - Profiling build (with debug symbols)
+1. **docker-blokli** - Production build (release profile, optimized)
+2. **docker-blokli-dev** - Development build (dev profile, faster compilation)
+3. **docker-blokli-profile** - Profiling build (with debug symbols)
 
 ### CI/CD Workflows
 

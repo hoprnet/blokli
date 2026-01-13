@@ -43,19 +43,21 @@ in
 
   # Production builds - optimized for deployment
   # x86_64 Linux builds with static linking for maximum portability
-  bloklid-x86_64-linux = builders.x86_64-linux.callPackage nixLib.mkRustPackage (mkbloklidBuildArgs {
-    src = sources.main;
-    depsSrc = sources.deps;
-  });
+  binary-blokli-x86_64-linux =
+    builders.x86_64-linux.callPackage nixLib.mkRustPackage
+      (mkbloklidBuildArgs {
+        src = sources.main;
+        depsSrc = sources.deps;
+      });
 
-  bloklid-x86_64-linux-profile = builders.x86_64-linux.callPackage nixLib.mkRustPackage (
+  binary-blokli-x86_64-linux-profile = builders.x86_64-linux.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
     })
   );
 
-  bloklid-x86_64-linux-dev = builders.x86_64-linux.callPackage nixLib.mkRustPackage (
+  binary-blokli-x86_64-linux-dev = builders.x86_64-linux.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
@@ -66,21 +68,21 @@ in
   );
 
   # ARM64 Linux builds for ARM servers and devices
-  bloklid-aarch64-linux =
+  binary-blokli-aarch64-linux =
     builders.aarch64-linux.callPackage nixLib.mkRustPackage
       (mkbloklidBuildArgs {
         src = sources.main;
         depsSrc = sources.deps;
       });
 
-  bloklid-aarch64-linux-profile = builders.aarch64-linux.callPackage nixLib.mkRustPackage (
+  binary-blokli-aarch64-linux-profile = builders.aarch64-linux.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
     })
   );
 
-  bloklid-aarch64-linux-dev = builders.aarch64-linux.callPackage nixLib.mkRustPackage (
+  binary-blokli-aarch64-linux-dev = builders.aarch64-linux.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
@@ -92,14 +94,14 @@ in
 
   # macOS builds - require building from Darwin systems
   # x86_64 macOS (Intel Macs)
-  bloklid-x86_64-darwin =
+  binary-blokli-x86_64-darwin =
     builders.x86_64-darwin.callPackage nixLib.mkRustPackage
       (mkbloklidBuildArgs {
         src = sources.main;
         depsSrc = sources.deps;
       });
 
-  bloklid-x86_64-darwin-profile = builders.x86_64-darwin.callPackage nixLib.mkRustPackage (
+  binary-blokli-x86_64-darwin-profile = builders.x86_64-darwin.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;
@@ -107,14 +109,14 @@ in
   );
 
   # ARM64 macOS (Apple Silicon)
-  bloklid-aarch64-darwin =
+  binary-blokli-aarch64-darwin =
     builders.aarch64-darwin.callPackage nixLib.mkRustPackage
       (mkbloklidBuildArgs {
         src = sources.main;
         depsSrc = sources.deps;
       });
 
-  bloklid-aarch64-darwin-profile = builders.aarch64-darwin.callPackage nixLib.mkRustPackage (
+  binary-blokli-aarch64-darwin-profile = builders.aarch64-darwin.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.main;
       depsSrc = sources.deps;

@@ -16,7 +16,7 @@ jobs:
       matrix:
         include:
           - architecture: x86_64-linux
-            command: nix run -L .#bloklid-docker-upload-amd64
+            command: nix run -L .#docker-blokli-upload-x86_64-linux
     permissions:
       contents: read
     with:
@@ -59,7 +59,7 @@ jobs:
         include:
           - architecture: x86_64-linux
             runner: self-hosted-hoprnet-bigger
-            build_command: nix build -L .#bloklid-x86_64-linux
+            build_command: nix build -L .#binary-blokli-x86_64-linux
     uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v1
     permissions:
       contents: read
