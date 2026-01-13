@@ -330,6 +330,7 @@
               type = "app";
               program = toString (
                 pkgs.writeShellScript "test" ''
+                  export PATH="${stableToolchain}/bin:$PATH"
                   ${pkgs.just}/bin/just test
                 ''
               );
@@ -338,7 +339,8 @@
               type = "app";
               program = toString (
                 pkgs.writeShellScript "nextest" ''
-                  cargo install cargo-nextest --locked
+                  export PATH="${stableToolchain}/bin:$PATH"
+                  cargo install cargo-nextest --locked 2>/dev/null || true
                   ${pkgs.just}/bin/just nextest
                 ''
               );
