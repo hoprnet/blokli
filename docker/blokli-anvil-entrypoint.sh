@@ -92,7 +92,7 @@ enabled = true
 playground_enabled = true
 
 [api.health]
-max_indexer_lag = 2
+max_indexer_lag = 10
 timeout = "5s"
 readiness_check_interval = "5s"
 EOF
