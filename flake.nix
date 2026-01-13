@@ -314,67 +314,13 @@
             };
           };
 
-          # Multi-architecture Docker manifests using nix-lib
-          # Note: aarch64 temporarily disabled until GitHub runner supports it
-          bloklidDockerMultiArch = {
-            # Production multi-arch manifest (amd64 only until runner supports aarch64)
-            bloklid-docker-manifest = nixLib.mkMultiArchManifest {
-              name = "bloklid";
-              tag = bloklidCrateInfo.version;
-              images = [
-                {
-                  image = bloklidDocker.bloklid-docker-amd64;
-                  platform = "linux/amd64";
-                }
-                # Disabled until GitHub runner supports aarch64
-                # {
-                #   image = bloklidDocker.bloklid-docker-aarch64;
-                #   platform = "linux/arm64";
-                # }
-              ];
-            };
-
-            # Development multi-arch manifest (amd64 only until runner supports aarch64)
-            bloklid-dev-docker-manifest = nixLib.mkMultiArchManifest {
-              name = "bloklid-dev";
-              tag = bloklidCrateInfo.version;
-              images = [
-                {
-                  image = bloklidDocker.bloklid-dev-docker-amd64;
-                  platform = "linux/amd64";
-                }
-                # Disabled until GitHub runner supports aarch64
-                # {
-                #   image = bloklidDocker.bloklid-dev-docker-aarch64;
-                #   platform = "linux/arm64";
-                # }
-              ];
-            };
-
-            # Profile multi-arch manifest (amd64 only until runner supports aarch64)
-            bloklid-profile-docker-manifest = nixLib.mkMultiArchManifest {
-              name = "bloklid-profile";
-              tag = bloklidCrateInfo.version;
-              images = [
-                {
-                  image = bloklidDocker.bloklid-profile-docker-amd64;
-                  platform = "linux/amd64";
-                }
-                # Disabled until GitHub runner supports aarch64
-                # {
-                #   image = bloklidDocker.bloklid-profile-docker-aarch64;
-                #   platform = "linux/arm64";
-                # }
-              ];
-            };
-          };
-
-          # Application definitions using nix-lib
-          # Multi-arch manifest upload apps - always use these to ensure both architectures are available
           dockerUploadApps = {
-            bloklid-docker-manifest-upload = nixLib.mkMultiArchUploadApp bloklidDockerMultiArch.bloklid-docker-manifest;
-            bloklid-dev-docker-manifest-upload = nixLib.mkMultiArchUploadApp bloklidDockerMultiArch.bloklid-dev-docker-manifest;
-            bloklid-profile-docker-manifest-upload = nixLib.mkMultiArchUploadApp bloklidDockerMultiArch.bloklid-profile-docker-manifest;
+            bloklid-docker-upload-amd64 = nixLib.mkDockerUploadApp bloklidDocker.bloklid-docker-amd64;
+            bloklid-dev-docker-upload-amd64 = nixLib.mkDockerUploadApp bloklidDocker.bloklid-dev-docker-amd64;
+            bloklid-profile-docker-upload-amd64 = nixLib.mkDockerUploadApp bloklidDocker.bloklid-profile-docker-amd64;
+            bloklid-docker-upload-aarch64 = nixLib.mkDockerUploadApp bloklidDocker.bloklid-docker-aarch64;
+            bloklid-dev-docker-upload-aarch64 = nixLib.mkDockerUploadApp bloklidDocker.bloklid-dev-docker-aarch64;
+            bloklid-profile-docker-upload-aarch64 = nixLib.mkDockerUploadApp bloklidDocker.bloklid-profile-docker-aarch64;
           };
 
           utilityApps = {
@@ -597,13 +543,6 @@
               bloklid-dev-docker-aarch64
               bloklid-profile-docker-aarch64
               bloklid-anvil-docker-aarch64
-              ;
-
-            # Multi-arch manifests
-            inherit (bloklidDockerMultiArch)
-              bloklid-docker-manifest
-              bloklid-dev-docker-manifest
-              bloklid-profile-docker-manifest
               ;
 
             # Set default package
