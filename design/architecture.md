@@ -742,13 +742,13 @@ Filter and emit to matching clients via SSE
 
 Indexer handlers publish structured events containing complete data to avoid N+1 database queries:
 
-| Event Type                  | Published When                        | Payload                       | Subscribers                     |
-| --------------------------- | ------------------------------------- | ----------------------------- | ------------------------------- |
-| `AccountUpdated`            | Account state changes                 | Full Account object           | `accountUpdated`                |
-| `ChannelUpdated`            | Channel opened/closed/balance changes | Full Channel object           | `openedChannelGraphUpdated`     |
-| `KeyBindingFeeUpdated`      | Protocol fee parameter changes        | Fee amount (TokenValueString) | `keyBindingFeeUpdated`          |
-| `SafeDeployed`              | New safe contract deployed            | Safe address                  | `safeDeployed`                  |
-| `TicketParametersUpdated`   | Ticket price/probability changes      | Full TicketParameters object  | `ticketParametersUpdated`       |
+| Event Type                | Published When                        | Payload                       | Subscribers                 |
+| ------------------------- | ------------------------------------- | ----------------------------- | --------------------------- |
+| `AccountUpdated`          | Account state changes                 | Full Account object           | `accountUpdated`            |
+| `ChannelUpdated`          | Channel opened/closed/balance changes | Full Channel object           | `openedChannelGraphUpdated` |
+| `KeyBindingFeeUpdated`    | Protocol fee parameter changes        | Fee amount (TokenValueString) | `keyBindingFeeUpdated`      |
+| `SafeDeployed`            | New safe contract deployed            | Safe address                  | `safeDeployed`              |
+| `TicketParametersUpdated` | Ticket price/probability changes      | Full TicketParameters object  | `ticketParametersUpdated`   |
 
 **Two-Phase Subscription Pattern**:
 
