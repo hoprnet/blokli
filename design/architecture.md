@@ -716,77 +716,100 @@ Clients can query Safe contracts through three methods:
 
 The unique constraint on `(deployed_block, deployed_tx_index, deployed_log_index)` ensures that processing the same event multiple times (due to retries or reorgs) will not create duplicate Safe entries.
 
-### Database Change Notifications
+### Subscription Event Bus
 
-Blokli uses database-native notification mechanisms to provide real-time updates for GraphQL subscriptions without polling overhead.
+Blokli provides real-time GraphQL subscriptions using an in-memory event bus architecture. All subscriptions use the same unified mechanism for consistency and simplicity.
 
-**PostgreSQL LISTEN/NOTIFY (Production)**:
-
-When running on PostgreSQL, database triggers automatically send notifications when critical data changes:
+**Event Bus Architecture**:
 
 ```
-Chain Info Update (ticket price or winning probability changes)
+Indexer Handler
     ↓
-PostgreSQL Trigger: trigger_notify_ticket_params
+Process blockchain log
     ↓
-Function: notify_ticket_params_changed()
-    - Checks if ticket_price changed
-    - Checks if min_incoming_ticket_win_prob changed
+Update database (transaction committed)
     ↓
-If changed: pg_notify('ticket_params_updated', '')
+Publish IndexerEvent to event bus
     ↓
-All LISTEN connections receive notification
+IndexerState broadcasts to all subscribers
     ↓
-API subscription queries latest values from database
+GraphQL subscriptions receive event
     ↓
-Streams update to GraphQL clients via SSE
+Filter and emit to matching clients via SSE
 ```
 
-**SQLite Update Hooks (Tests/Development)**:
+**Event Types**:
 
-SQLite environments use native update hooks via `SqliteNotificationManager` for event-driven notifications:
+Indexer handlers publish structured events containing complete data to avoid N+1 database queries:
+
+| Event Type                  | Published When                        | Payload                       | Subscribers                     |
+| --------------------------- | ------------------------------------- | ----------------------------- | ------------------------------- |
+| `AccountUpdated`            | Account state changes                 | Full Account object           | `accountUpdated`                |
+| `ChannelUpdated`            | Channel opened/closed/balance changes | Full Channel object           | `openedChannelGraphUpdated`     |
+| `KeyBindingFeeUpdated`      | Protocol fee parameter changes        | Fee amount (TokenValueString) | `keyBindingFeeUpdated`          |
+| `SafeDeployed`              | New safe contract deployed            | Safe address                  | `safeDeployed`                  |
+| `TicketParametersUpdated`   | Ticket price/probability changes      | Full TicketParameters object  | `ticketParametersUpdated`       |
+
+**Two-Phase Subscription Pattern**:
+
+All event bus subscriptions follow a consistent pattern to prevent data loss:
 
 ```
-Chain Info Update (ticket price or winning probability changes)
+Client subscribes
     ↓
-SQLite update hook fires on chain_info table modification
+Phase 1: Capture watermark and subscribe to event bus
+    - Read current IndexerState position (watermark)
+    - Subscribe to event channel (buffered)
+    - Subscribe to shutdown channel (reorg detection)
     ↓
-SqliteHookSender sends to sync channel
+Phase 2: Emit historical snapshot
+    - Query database for current state at watermark
+    - Emit initial values to client
     ↓
-Bridge thread forwards to async broadcast channel
-    ↓
-Subscribed streams receive notification
-    ↓
-API subscription queries latest values from database
-    ↓
-Streams update to GraphQL clients via SSE
+Phase 3: Stream real-time updates
+    - Receive events from event bus
+    - Filter for relevant events
+    - Deduplicate (compare to last emitted value)
+    - Emit updates to client via SSE
 ```
 
-- Event-driven via SQLite's `set_update_hook()` callback
-- Sync-to-async bridge using mpsc → broadcast channels
-- Zero polling overhead (same as PostgreSQL)
+**Synchronization Guarantee**:
 
-**Notification Channels**:
+The IndexerState uses an RwLock to ensure no events are missed between the snapshot and subscription:
 
-| Channel Name            | Trigger Condition                                                              | Payload | Subscribers                                    |
-| ----------------------- | ------------------------------------------------------------------------------ | ------- | ---------------------------------------------- |
-| `ticket_params_updated` | `chain_info.ticket_price` OR `chain_info.min_incoming_ticket_win_prob` changed | Empty   | `ticketParametersUpdated` GraphQL subscription |
+1. Acquire read lock
+2. Capture watermark (last indexed block/tx/log)
+3. Subscribe to event channels
+4. Release read lock
+5. Events published during this time are buffered in the channel
+
+**Overflow Handling**:
+
+Event channels use `async-broadcast` with bounded capacity. Slow subscribers that can't keep up will receive `RecvError::Lagged(n)` and skip old messages. This prevents fast producers from being blocked by slow consumers.
+
+**Reorg Safety**:
+
+When a blockchain reorganization is detected:
+
+1. IndexerState publishes shutdown signal
+2. All active subscriptions receive the signal
+3. Subscriptions terminate gracefully
+4. Clients must reconnect after reorg completes
 
 **Scalability Benefits**:
 
-- **Zero polling overhead** (event-driven for both PostgreSQL and SQLite)
-- **Multiple API instances** can all LISTEN to same channel
-- **Database-level fan-out** handles notification distribution
-- **Atomic with writes** - notifications only sent on successful commit
-- **No application code** required to maintain notification logic
+- **In-memory pub/sub**: No database overhead for notifications
+- **Complete event data**: No N+1 queries in subscriptions
+- **Consistent pattern**: Same two-phase approach across all subscriptions
+- **Testable**: Easy to mock events for testing
+- **Database agnostic**: Works identically with PostgreSQL and SQLite
 
 **Implementation Details**:
 
-- Migration: `m017_add_ticket_params_notify_trigger.rs` (PostgreSQL trigger)
-- Trigger Function: `notify_ticket_params_changed()` (PostgreSQL only)
-- SQLite Manager: `db/src/notifications.rs::SqliteNotificationManager`
-- Notification Module: `api/src/notifications.rs` (unified abstraction)
-- Subscription: `api/src/subscription.rs::ticket_parameters_updated`
+- Event Bus: `chain/indexer/src/state.rs::IndexerState`
+- Event Types: `chain/indexer/src/state.rs::IndexerEvent`
+- Subscriptions: `api/src/subscription.rs`
+- Watermark Helper: `api/src/subscription.rs::capture_watermark_synchronized`
 
 ## Deployment Architectures
 

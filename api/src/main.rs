@@ -127,7 +127,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     transaction_executor,
                     transaction_store,
                     Arc::new(rpc_operations),
-                    None, // No SQLite notification manager for schema export
                 );
 
                 // Write to file or stdout

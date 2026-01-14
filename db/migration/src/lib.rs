@@ -31,6 +31,7 @@ mod m027_drop_node_info_table;
 mod m028_add_node_safe_registration_table;
 mod m029_update_safe_contract_indices;
 mod m030_migrate_v3_safes;
+mod m031_remove_ticket_params_notify_trigger;
 
 /// This is a special block ID that even pre-dates the v3 contract deployment on Gnosis chain,
 /// and therefore could be safely used to mark data added via the migration.
@@ -91,6 +92,7 @@ impl<const NETWORK: u8> Migrator<NETWORK> {
             Box::new(m027_drop_node_info_table::Migration),
             Box::new(m028_add_node_safe_registration_table::Migration),
             Box::new(m029_update_safe_contract_indices::Migration),
+            Box::new(m031_remove_ticket_params_notify_trigger::Migration),
         ]
     }
 }
@@ -154,6 +156,7 @@ impl<const NETWORK: u8> MigratorIndex<NETWORK> {
             Box::new(m027_drop_node_info_table::Migration),
             Box::new(m028_add_node_safe_registration_table::Migration),
             Box::new(m029_update_safe_contract_indices::Migration),
+            Box::new(m031_remove_ticket_params_notify_trigger::Migration),
         ]
     }
 }
