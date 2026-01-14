@@ -9,7 +9,7 @@ use hopr_primitive_types::{prelude::HoprBalance, traits::IntoEndian};
 use tracing::{debug, info, trace};
 
 use super::ContractEventHandlers;
-use crate::errors::Result;
+use crate::{errors::Result, state::IndexerEvent};
 
 #[cfg(all(feature = "prometheus", not(test)))]
 lazy_static::lazy_static! {
@@ -31,7 +31,7 @@ where
         tx: &OpenTransaction,
         event: HoprWinningProbabilityOracleEvents,
         _is_synced: bool,
-    ) -> Result<()> {
+    ) -> Result<Vec<IndexerEvent>> {
         #[cfg(all(feature = "prometheus", not(test)))]
         METRIC_INDEXER_LOG_COUNTERS.increment(&["winning_probability_oracle"]);
 
@@ -71,7 +71,7 @@ where
                 );
             }
         }
-        Ok(())
+        Ok(vec![])
     }
 
     pub(super) async fn on_ticket_price_oracle_event(
@@ -79,7 +79,7 @@ where
         tx: &OpenTransaction,
         event: HoprTicketPriceOracleEvents,
         _is_synced: bool,
-    ) -> Result<()> {
+    ) -> Result<Vec<IndexerEvent>> {
         #[cfg(all(feature = "prometheus", not(test)))]
         METRIC_INDEXER_LOG_COUNTERS.increment(&["ticket_price_oracle"]);
 
@@ -101,7 +101,7 @@ where
                 // ignore ownership transfer event
             }
         }
-        Ok(())
+        Ok(vec![])
     }
 }
 
@@ -109,11 +109,11 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use alloy::{
+    use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb, info::BlokliDbInfoOperations};
+    use hopr_bindings::exports::alloy::{
         primitives::U256,
         sol_types::{SolEvent, SolValue},
     };
-    use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb, info::BlokliDbInfoOperations};
     use hopr_internal_types::tickets::WinningProbability;
     use hopr_primitive_types::prelude::SerializableLog;
 

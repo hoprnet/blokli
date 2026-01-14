@@ -4,14 +4,6 @@ use std::{
     time::Duration,
 };
 
-use alloy::{
-    primitives::{Address, U256, keccak256},
-    providers::{
-        ProviderBuilder,
-        fillers::{BlobGasFiller, CachedNonceManager, ChainIdFiller, GasFiller, NonceFiller},
-    },
-    signers::local::PrivateKeySigner,
-};
 use anyhow::{Context, Result};
 use blokli_client::{
     BlokliClient, BlokliClientConfig,
@@ -21,7 +13,17 @@ use hopli_lib::{
     methods::transfer_or_mint_tokens,
     utils::{ContractInstances, a2h},
 };
-use hopr_bindings::hopr_token::HoprToken::HoprTokenInstance;
+use hopr_bindings::{
+    exports::alloy::{
+        primitives::{Address, U256, keccak256},
+        providers::{
+            ProviderBuilder,
+            fillers::{BlobGasFiller, CachedNonceManager, ChainIdFiller, GasFiller, NonceFiller},
+        },
+        signers::local::PrivateKeySigner,
+    },
+    hopr_token::HoprToken::HoprTokenInstance,
+};
 use hopr_chain_connector::{BasicPayloadGenerator, PayloadGenerator, SafePayloadGenerator};
 use hopr_chain_types::{ContractAddresses, prelude::SignableTransaction};
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
@@ -180,7 +182,7 @@ impl IntegrationFixture {
             None => {
                 self.deploy_safe(owner, amount).await?;
 
-                sleep(std::time::Duration::from_secs(5)).await;
+                sleep(Duration::from_secs(5)).await;
                 let safe = self
                     .client()
                     .query_safe(SafeSelector::ChainKey(owner.to_alloy_address().into()))
@@ -249,7 +251,7 @@ impl IntegrationFixture {
             None => {
                 debug!("account not found, proceeding to announce");
                 self.announce_account(account, module).await?;
-                sleep(std::time::Duration::from_secs(10)).await;
+                sleep(Duration::from_secs(10)).await;
 
                 let src_account = self
                     .client()
@@ -417,7 +419,7 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
         .filler(ChainIdFiller::default())
         .filler(NonceFiller::new(CachedNonceManager::default()))
         .filler(GasFiller)
-        .filler(BlobGasFiller)
+        .filler(BlobGasFiller::default())
         .wallet(wallet)
         .connect_http(config.rpc_url.clone());
 

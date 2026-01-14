@@ -3,6 +3,8 @@
 //! This module defines comprehensive error types for all snapshot operations,
 //! providing clear error messages and actionable suggestions for users.
 
+use std::io::Error;
+
 use thiserror::Error;
 
 /// Comprehensive error type for snapshot operations with actionable guidance.
@@ -27,7 +29,7 @@ pub enum SnapshotError {
     Network(#[from] reqwest::Error),
 
     #[error("IO error: {0}.")]
-    Io(#[from] std::io::Error),
+    Io(#[from] Error),
 
     #[error("Archive extraction error: {0}.")]
     Archive(String),

@@ -244,6 +244,9 @@ pub struct ChainInfo {
     /// Channel closure grace period in seconds
     #[graphql(name = "channelClosureGracePeriod")]
     pub channel_closure_grace_period: UInt64,
+    /// Expected block time in seconds
+    #[graphql(name = "expectedBlockTime")]
+    pub expected_block_time: UInt64,
 }
 
 /// Result type for chain info queries
@@ -260,7 +263,7 @@ pub enum ChainInfoResult {
 /// The Account type contains identity information for HOPR nodes including keys,
 /// addresses, and network announcements. To query balances and allowances, use the
 /// dedicated balance and allowance queries (hoprBalance, nativeBalance, safeHoprAllowance).
-#[derive(SimpleObject, Clone, Debug)]
+#[derive(SimpleObject, Clone, Debug, PartialEq)]
 pub struct Account {
     /// Unique identifier for the account
     pub keyid: i64,

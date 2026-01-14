@@ -1,12 +1,10 @@
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
 
 pub fn run_command(mut command: Command, silenced: bool, description: &str) -> Result<()> {
     if silenced {
-        command
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
+        command.stdout(Stdio::null()).stderr(Stdio::null());
     }
 
     let status = command

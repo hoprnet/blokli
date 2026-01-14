@@ -17,29 +17,24 @@ prometheus    = ["dep:hopr-metrics"]
 runtime-tokio = ["dep:reqwest", "hopr-async-runtime/runtime-tokio"]
 
 [dependencies]
-alloy = { workspace = true, default-features = false, features = [
-  "essentials",
-  "json-rpc",
-  "node-bindings",
-] }
-async-stream = { workspace = true }
-async-trait = { workspace = true }
-futures = { workspace = true }
-futures-timer = { workspace = true }
-http = { workspace = true }
-lazy_static = { workspace = true }
-moka = { workspace = true }
-primitive-types = { workspace = true }
-reqwest = { workspace = true, optional = true, features = ["brotli", "zstd"] }
+async-stream               = { workspace = true }
+async-trait                = { workspace = true }
+futures                    = { workspace = true }
+futures-timer              = { workspace = true }
+http                       = { workspace = true }
+lazy_static                = { workspace = true }
+moka                       = { workspace = true }
+primitive-types            = { workspace = true }
+reqwest                    = { workspace = true, optional = true, features = ["brotli", "zstd"] }
 rust-stream-ext-concurrent = { workspace = true }
-serde = { workspace = true }
-serde_json = { workspace = true }
-serde_with = { workspace = true }
-serde_yaml = { workspace = true }
-smart-default = { workspace = true }
-thiserror = { workspace = true }
-url = { workspace = true }
-validator = { workspace = true }
+serde                      = { workspace = true }
+serde_json                 = { workspace = true }
+serde_with                 = { workspace = true }
+serde_yaml                 = { workspace = true }
+smart-default              = { workspace = true }
+thiserror                  = { workspace = true }
+url                        = { workspace = true }
+validator                  = { workspace = true }
 
 blokli-chain-types   = { workspace = true }
 hopr-async-runtime   = { workspace = true }

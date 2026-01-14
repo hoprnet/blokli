@@ -10,15 +10,11 @@
 
 mod common;
 
-use std::{sync::Arc, time::Duration};
-
-use alloy::{
-    consensus::{SignableTransaction, TxLegacy},
-    eips::eip2718::Encodable2718,
-    primitives::{Address as AlloyAddress, TxKind, U256},
-    providers::{Provider, ProviderBuilder},
-    signers::{SignerSync, local::PrivateKeySigner},
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
 };
+
 use anyhow::Result;
 use async_graphql::{EmptySubscription, Schema};
 use blokli_api::{mutation::MutationRoot, query::QueryRoot};
@@ -28,6 +24,13 @@ use blokli_chain_api::{
 };
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
+use hopr_bindings::exports::alloy::{
+    consensus::{SignableTransaction, TxLegacy},
+    eips::eip2718::Encodable2718,
+    primitives::{Address as AlloyAddress, TxKind, U256},
+    providers::{Provider, ProviderBuilder},
+    signers::{SignerSync, local::PrivateKeySigner},
+};
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
 
 /// Test context containing all components needed for GraphQL mutation tests
@@ -296,7 +299,7 @@ async fn test_send_transaction_sync_waits_for_confirmations() -> Result<()> {
         raw_tx_hex
     );
 
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     let result = execute_mutation(&ctx.schema, &query).await;
     let elapsed = start.elapsed();
 
@@ -341,7 +344,7 @@ async fn test_send_transaction_sync_with_custom_confirmations() -> Result<()> {
         raw_tx_hex
     );
 
-    let start = std::time::Instant::now();
+    let start = Instant::now();
     let result = execute_mutation(&ctx.schema, &query).await;
     let elapsed = start.elapsed();
 

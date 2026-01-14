@@ -1,6 +1,5 @@
 use std::{str::FromStr, time::Duration};
 
-use alloy::primitives::{Address, U256};
 use anyhow::Result;
 use blokli_client::api::{
     AccountSelector, BlokliQueryClient, ChannelFilter, ChannelSelector, SafeSelector,
@@ -11,6 +10,7 @@ use blokli_integration_tests::{
     fixtures::{IntegrationFixture, integration_fixture as fixture},
 };
 use hex::{FromHex, ToHex};
+use hopr_bindings::exports::alloy::primitives::{Address, U256};
 use hopr_crypto_types::keypairs::Keypair;
 use hopr_internal_types::channels::generate_channel_id;
 use hopr_primitive_types::prelude::{HoprBalance, XDaiBalance};

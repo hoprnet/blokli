@@ -10,7 +10,7 @@ use async_stream::stream;
 use axum::{
     Json, Router,
     extract::State,
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, Method, StatusCode, header},
     response::{
         Html, IntoResponse, Response,
         sse::{Event, Sse},
@@ -142,6 +142,7 @@ pub async fn build_app(
     db: DatabaseConnection,
     network: String,
     config: ApiConfig,
+    expected_block_time: u64,
     indexer_state: IndexerState,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
@@ -153,6 +154,7 @@ pub async fn build_app(
         config.chain_id,
         network,
         config.contract_addresses,
+        expected_block_time,
         indexer_state,
         transaction_executor,
         transaction_store,
@@ -188,11 +190,7 @@ pub async fn build_app(
 
         CorsLayer::new()
             .allow_origin(allowed_origins)
-            .allow_methods([
-                axum::http::Method::GET,
-                axum::http::Method::POST,
-                axum::http::Method::OPTIONS,
-            ])
+            .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
             .allow_headers([header::CONTENT_TYPE, header::ACCEPT, header::AUTHORIZATION])
             .allow_credentials(true)
     };

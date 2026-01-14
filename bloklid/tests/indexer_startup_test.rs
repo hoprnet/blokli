@@ -9,6 +9,7 @@ use futures::stream::{self, StreamExt};
 use hopr_crypto_types::types::Hash;
 use hopr_primitive_types::prelude::*;
 use tempfile::TempDir;
+use tokio::sync::Mutex;
 
 /// Mock RPC operations for testing
 #[derive(Clone)]
@@ -262,7 +263,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
     #[derive(Clone)]
     struct TrackingMockRpc {
         inner: MockRpcOperations,
-        requested_start_block: Arc<tokio::sync::Mutex<Option<u64>>>,
+        requested_start_block: Arc<Mutex<Option<u64>>>,
     }
 
     #[async_trait]
@@ -345,7 +346,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         }
     }
 
-    let requested_start_block = Arc::new(tokio::sync::Mutex::new(None));
+    let requested_start_block = Arc::new(Mutex::new(None));
     let tracking_rpc = TrackingMockRpc {
         inner: MockRpcOperations::new(),
         requested_start_block: requested_start_block.clone(),

@@ -16,11 +16,6 @@ mod test_common;
 
 use std::{sync::Arc, time::Duration};
 
-use alloy::{
-    node_bindings::AnvilInstance,
-    rpc::client::ClientBuilder,
-    transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
-};
 use async_graphql::Schema;
 use axum::Router;
 use blokli_api::{
@@ -45,6 +40,11 @@ use blokli_chain_rpc::{
     transport::ReqwestClient,
 };
 use blokli_chain_types::{ContractAddresses, ContractInstances, utils::create_anvil};
+use hopr_bindings::exports::alloy::{
+    node_bindings::AnvilInstance,
+    rpc::client::ClientBuilder,
+    transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
+};
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
 use migration::{Migrator, MigratorTrait, SafeDataOrigin};
 use sea_orm::DatabaseConnection;
@@ -226,6 +226,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
         chain_id,
         "test-network".to_string(),
         contract_addrs.clone(),
+        config.expected_block_time.as_secs(),
         indexer_state,
         transaction_executor.clone(),
         transaction_store.clone(),
@@ -290,6 +291,7 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
     let mut config = TestEnvironmentConfig::default();
     config.run_migrations = true;
     config.num_test_accounts = 1;
+    let expected_block_time = config.expected_block_time.as_secs();
 
     let ctx = setup_test_environment(config).await?;
 
@@ -317,6 +319,7 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
         db.clone(),
         "test-network".to_string(),
         api_config,
+        expected_block_time,
         indexer_state,
         ctx.transaction_executor.clone(),
         ctx.transaction_store.clone(),

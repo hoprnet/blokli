@@ -130,6 +130,8 @@ impl SqliteHookSender {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use super::*;
 
     #[test]
@@ -156,7 +158,7 @@ mod tests {
         sender.send(SqliteNotification::ChainInfoUpdated).unwrap();
 
         // Small delay to allow bridge thread to process
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
 
         // Should receive notification
         let result = rx.try_recv();
@@ -174,7 +176,7 @@ mod tests {
         sender.send(SqliteNotification::ChainInfoUpdated).unwrap();
 
         // Small delay
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
 
         // Both should receive
         assert!(rx1.try_recv().is_ok());

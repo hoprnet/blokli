@@ -32,9 +32,11 @@ where
         tx_index: u32,
         log_index: u32,
         is_synced: bool,
-    ) -> Result<()> {
+    ) -> Result<Vec<crate::state::IndexerEvent>> {
         #[cfg(all(feature = "prometheus", not(test)))]
         METRIC_INDEXER_LOG_COUNTERS.increment(&["channels"]);
+
+        let mut events = Vec::new();
 
         match event {
             HoprChannelsEvents::ChannelBalanceDecreased(balance_decreased) => {
@@ -95,8 +97,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            self.indexer_state
-                                .publish_event(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for ChannelBalanceDecreased");
@@ -104,7 +105,7 @@ where
                     }
                 }
 
-                Ok(())
+                Ok(events)
             }
             HoprChannelsEvents::ChannelBalanceIncreased(balance_increased) => {
                 let channel_id = balance_increased.channelId.0.into();
@@ -164,8 +165,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            self.indexer_state
-                                .publish_event(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for ChannelBalanceIncreased");
@@ -173,7 +173,7 @@ where
                     }
                 }
 
-                Ok(())
+                Ok(events)
             }
             HoprChannelsEvents::ChannelClosed(channel_closed) => {
                 let channel_id = channel_closed.channelId.0.into();
@@ -231,8 +231,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            self.indexer_state
-                                .publish_event(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for ChannelClosed");
@@ -240,7 +239,7 @@ where
                     }
                 }
 
-                Ok(())
+                Ok(events)
             }
             HoprChannelsEvents::ChannelOpened(channel_opened) => {
                 let source: Address = channel_opened.source.to_hopr_address();
@@ -278,7 +277,7 @@ where
                             .await
                             .ok();
 
-                        return Ok(());
+                        return Ok(events);
                     }
 
                     trace!(%source, %destination, %channel_id, "on_channel_reopened_event");
@@ -318,8 +317,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            self.indexer_state
-                                .publish_event(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for ChannelOpened");
@@ -327,7 +325,7 @@ where
                     }
                 }
 
-                Ok(())
+                Ok(events)
             }
             HoprChannelsEvents::TicketRedeemed(ticket_redeemed) => {
                 let channel_id = ticket_redeemed.channelId.0.into();
@@ -379,8 +377,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            self.indexer_state
-                                .publish_event(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for TicketRedeemed");
@@ -388,7 +385,7 @@ where
                     }
                 }
 
-                Ok(())
+                Ok(events)
             }
             HoprChannelsEvents::OutgoingChannelClosureInitiated(closure_initiated) => {
                 let channel_id = closure_initiated.channelId.0.into();
@@ -440,8 +437,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            self.indexer_state
-                                .publish_event(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for OutgoingChannelClosureInitiated");
@@ -449,7 +445,7 @@ where
                     }
                 }
 
-                Ok(())
+                Ok(events)
             }
             HoprChannelsEvents::DomainSeparatorUpdated(domain_separator_updated) => {
                 self.db
@@ -460,7 +456,7 @@ where
                     )
                     .await?;
 
-                Ok(())
+                Ok(events)
             }
             HoprChannelsEvents::LedgerDomainSeparatorUpdated(ledger_domain_separator_updated) => {
                 self.db
@@ -471,7 +467,7 @@ where
                     )
                     .await?;
 
-                Ok(())
+                Ok(events)
             }
         }
     }
@@ -481,10 +477,6 @@ where
 mod tests {
     use std::{sync::Arc, time::SystemTime};
 
-    use alloy::{
-        primitives::{Address as AlloyAddress, FixedBytes},
-        sol_types::{SolEvent, SolValue},
-    };
     use anyhow::Context;
     use blokli_chain_types::AlloyAddressExt;
     use blokli_db::{
@@ -496,6 +488,10 @@ mod tests {
     use blokli_db_entity::{hopr_node_safe_registration, prelude::HoprNodeSafeRegistration};
     use hex_literal::hex;
     use hopr_bindings::{
+        exports::alloy::{
+            primitives::{Address as AlloyAddress, FixedBytes},
+            sol_types::{SolEvent, SolValue},
+        },
         hopr_channels::HoprChannels,
         hopr_channels_events::HoprChannelsEvents::{
             ChannelBalanceDecreased, ChannelBalanceIncreased, ChannelClosed, ChannelOpened,

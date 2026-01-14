@@ -10,7 +10,6 @@
 
 use std::{collections::HashSet, str::FromStr, sync::Arc, time::Duration};
 
-use alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
 use async_graphql::Schema;
 use blokli_api::{mutation::MutationRoot, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot};
 use blokli_api_types::{Account, Channel, ChannelStatus as ApiChannelStatus, TokenValueString, UInt64};
@@ -30,16 +29,19 @@ use blokli_db::{
     BlokliDbGeneralModelOperations, TargetDb, accounts::BlokliDbAccountOperations, channels::BlokliDbChannelOperations,
     db::BlokliDb,
 };
-use blokli_db_entity::{chain_info, channel, channel_state};
+use blokli_db_entity::{
+    chain_info, channel, channel_state, conversions::account_aggregation::fetch_accounts_by_keyids,
+};
 use chrono::Utc;
 use futures::StreamExt;
+use hopr_bindings::exports::alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
 use hopr_crypto_types::prelude::{ChainKeypair, Keypair, OffchainKeypair};
 use hopr_internal_types::channels::{ChannelEntry, ChannelStatus};
 use hopr_primitive_types::{
     prelude::{Balance as PrimitiveBalance, HoprBalance, ToHex, WxHOPR},
     traits::IntoEndian,
 };
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set, sea_query::OnConflict};
 
 /// Helper to generate random keypair for testing
 fn random_keypair() -> ChainKeypair {
@@ -74,7 +76,7 @@ async fn create_channel_update_event(
         .ok_or("Channel state not found")?;
 
     // Fetch accounts
-    let accounts = blokli_db_entity::conversions::account_aggregation::fetch_accounts_by_keyids(
+    let accounts = fetch_accounts_by_keyids(
         db.conn(TargetDb::Index),
         vec![channel_model.source, channel_model.destination],
     )
@@ -142,7 +144,7 @@ async fn update_watermark(db: &BlokliDb, block: i64, tx_index: i64, log_index: i
 
     chain_info::Entity::insert(chain_info_model)
         .on_conflict(
-            sea_orm::sea_query::OnConflict::column(chain_info::Column::Id)
+            OnConflict::column(chain_info::Column::Id)
                 .update_columns([
                     chain_info::Column::LastIndexedBlock,
                     chain_info::Column::LastIndexedTxIndex,
@@ -201,6 +203,7 @@ fn create_test_schema_with_state(
         1,
         "test-network".to_string(),
         ContractAddresses::default(),
+        1,
         indexer_state,
         transaction_executor,
         transaction_store,

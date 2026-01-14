@@ -779,7 +779,7 @@ impl BlokliDbChannelOperations for BlokliDb {
 
 #[cfg(test)]
 mod tests {
-    use std::time::SystemTime;
+    use std::time::{Duration, SystemTime};
 
     use anyhow::Context;
     use hopr_crypto_random::random_bytes;
@@ -1101,7 +1101,7 @@ mod tests {
         db.upsert_channel(None, ce_open, 100, 0, 0).await?;
 
         // State 2: PendingToClose at block 200
-        let closure_time = SystemTime::now() + std::time::Duration::from_secs(3600);
+        let closure_time = SystemTime::now() + Duration::from_secs(3600);
         let ce_pending = ChannelEntry::new(
             addr_1,
             addr_2,

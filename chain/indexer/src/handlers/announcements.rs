@@ -12,7 +12,10 @@ use hopr_primitive_types::{
 use tracing::{debug, error, warn};
 
 use super::{ContractEventHandlers, helpers::construct_account_update};
-use crate::errors::{CoreEthereumIndexerError, Result};
+use crate::{
+    errors::{CoreEthereumIndexerError, Result},
+    state::IndexerEvent,
+};
 
 #[cfg(all(feature = "prometheus", not(test)))]
 lazy_static::lazy_static! {
@@ -37,9 +40,11 @@ where
         tx_index: u32,
         log_index: u32,
         is_synced: bool,
-    ) -> Result<()> {
+    ) -> Result<Vec<IndexerEvent>> {
         #[cfg(all(feature = "prometheus", not(test)))]
         METRIC_INDEXER_LOG_COUNTERS.increment(&["announcements"]);
+
+        let mut events = Vec::new();
 
         match event {
             HoprAnnouncementsEvents::AddressAnnouncement(address_announcement) => {
@@ -54,7 +59,7 @@ where
                         address = %address_announcement.node,
                         "encountered empty multiaddress announcement",
                     );
-                    return Ok(());
+                    return Ok(events);
                 }
                 let node_address: Address = address_announcement.node.to_hopr_address();
 
@@ -75,8 +80,7 @@ where
                 if is_synced {
                     match construct_account_update(tx.as_ref(), &node_address).await {
                         Ok(account) => {
-                            self.indexer_state
-                                .publish_event(crate::state::IndexerEvent::AccountUpdated(account));
+                            events.push(crate::state::IndexerEvent::AccountUpdated(account));
                         }
                         Err(e) => {
                             warn!("Failed to construct account update for AddressAnnouncement: {}", e);
@@ -133,8 +137,7 @@ where
                                 if is_synced {
                                     match construct_account_update(tx.as_ref(), &chain_key).await {
                                         Ok(account) => {
-                                            self.indexer_state
-                                                .publish_event(crate::state::IndexerEvent::AccountUpdated(account));
+                                            events.push(crate::state::IndexerEvent::AccountUpdated(account));
                                         }
                                         Err(e) => {
                                             warn!("Failed to construct account update for KeyBinding: {}", e);
@@ -167,8 +170,7 @@ where
                         if is_synced {
                             match construct_account_update(tx.as_ref(), &node_address).await {
                                 Ok(account) => {
-                                    self.indexer_state
-                                        .publish_event(crate::state::IndexerEvent::AccountUpdated(account));
+                                    events.push(crate::state::IndexerEvent::AccountUpdated(account));
                                 }
                                 Err(e) => {
                                     warn!("Failed to construct account update for RevokeAnnouncement: {}", e);
@@ -198,10 +200,9 @@ where
                 // Publish subscription event only when indexer is in synced mode
                 if is_synced {
                     let fee_str = fee.amount().to_string();
-                    self.indexer_state
-                        .publish_event(crate::state::IndexerEvent::KeyBindingFeeUpdated(TokenValueString(
-                            fee_str,
-                        )));
+                    events.push(crate::state::IndexerEvent::KeyBindingFeeUpdated(TokenValueString(
+                        fee_str,
+                    )));
                 }
             }
             HoprAnnouncementsEvents::LedgerDomainSeparatorUpdated(ledger_domain_separator) => {
@@ -229,19 +230,14 @@ where
             }
         }
 
-        Ok(())
+        Ok(events)
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
+    use std::{sync::Arc, time::Duration};
 
-    use alloy::{
-        dyn_abi::DynSolValue,
-        primitives::{Address as AlloyAddress, FixedBytes},
-        sol_types::{SolEvent, SolValue},
-    };
     use anyhow::Context;
     use blokli_db::{
         BlokliDbGeneralModelOperations,
@@ -249,8 +245,15 @@ mod tests {
         db::BlokliDb,
         info::BlokliDbInfoOperations,
     };
-    use hopr_bindings::hopr_announcements_events::HoprAnnouncementsEvents::{
-        KeyBinding as KeyBindingEvent, KeyBindingFeeUpdate as KeyBindingFeeUpdateEvent,
+    use hopr_bindings::{
+        exports::alloy::{
+            dyn_abi::DynSolValue,
+            primitives::{Address as AlloyAddress, FixedBytes, U256 as AlloyU256},
+            sol_types::{SolEvent, SolValue},
+        },
+        hopr_announcements_events::HoprAnnouncementsEvents::{
+            KeyBinding as KeyBindingEvent, KeyBindingFeeUpdate as KeyBindingFeeUpdateEvent,
+        },
     };
     use hopr_crypto_types::keypairs::Keypair;
     use hopr_internal_types::{
@@ -273,7 +276,8 @@ mod tests {
             inner: Arc::new(rpc_operations),
         };
 
-        let (handlers, _state, mut event_receiver) = init_handlers_with_events(clonable_rpc_operations, db.clone());
+        let (handlers, indexer_state, mut event_receiver) =
+            init_handlers_with_events(clonable_rpc_operations, db.clone());
 
         let keybinding = KeyBinding::new(*SELF_CHAIN_ADDRESS, &SELF_PRIV_KEY);
 
@@ -284,7 +288,7 @@ mod tests {
 
         // Create KeyBinding event using bindings
         let event = KeyBindingEvent {
-            key_id: alloy::primitives::U256::ZERO,
+            key_id: AlloyU256::ZERO,
             chain_key: AlloyAddress::from_hopr_address(*SELF_CHAIN_ADDRESS),
             ed25519_pub_key: FixedBytes::<32>::from_slice(packet_key_bytes),
             ed25519_sig_0: FixedBytes::<32>::from_slice(&sig_bytes[..32]),
@@ -301,13 +305,18 @@ mod tests {
             key_id: 0.into(),
         };
 
-        db.begin_transaction()
+        let events = db
+            .begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, keybinding_log, true).await }))
             .await?;
 
+        for event in events {
+            indexer_state.publish_event(event);
+        }
+
         // Verify AccountUpdated event was published
-        let _event = tokio::time::timeout(std::time::Duration::from_millis(100), event_receiver.recv())
+        let _event = tokio::time::timeout(Duration::from_millis(100), event_receiver.recv())
             .await
             .expect("Timeout waiting for AccountUpdated event")
             .expect("Expected AccountUpdated event to be published");
@@ -330,7 +339,7 @@ mod tests {
             //
             inner: Arc::new(rpc_operations),
         };
-        let (handlers, _indexer_state, mut event_receiver) =
+        let (handlers, indexer_state, mut event_receiver) =
             init_handlers_with_events(clonable_rpc_operations, db.clone());
 
         // Assume that there is a keybinding
@@ -374,7 +383,8 @@ mod tests {
         };
 
         let handlers_clone = handlers.clone();
-        db.begin_transaction()
+        let events = db
+            .begin_transaction()
             .await?
             .perform(|tx| {
                 Box::pin(async move {
@@ -384,6 +394,10 @@ mod tests {
                 })
             })
             .await?;
+
+        for event in events {
+            indexer_state.publish_event(event);
+        }
 
         // Empty multiaddress announcement should not publish an event
 
@@ -422,7 +436,8 @@ mod tests {
         };
 
         let handlers_clone = handlers.clone();
-        db.begin_transaction()
+        let events = db
+            .begin_transaction()
             .await?
             .perform(|tx| {
                 Box::pin(async move {
@@ -432,6 +447,10 @@ mod tests {
                 })
             })
             .await?;
+
+        for event in events {
+            indexer_state.publish_event(event);
+        }
 
         // Verify AccountUpdated event was published with the multiaddress
         let event = try_recv_event(&mut event_receiver).expect("Expected AccountUpdated event to be published");
@@ -534,7 +553,8 @@ mod tests {
             //
             inner: Arc::new(rpc_operations),
         };
-        let (handlers, _state, mut event_receiver) = init_handlers_with_events(clonable_rpc_operations, db.clone());
+        let (handlers, indexer_state, mut event_receiver) =
+            init_handlers_with_events(clonable_rpc_operations, db.clone());
 
         let test_multiaddr: Multiaddr = "/ip4/1.2.3.4/tcp/56".parse()?;
 
@@ -576,10 +596,15 @@ mod tests {
             key_id: 1.into(),
         };
 
-        db.begin_transaction()
+        let events = db
+            .begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, revoke_announcement_log, true).await }))
             .await?;
+
+        for event in events {
+            indexer_state.publish_event(event);
+        }
 
         // Verify AccountUpdated event was published
         let _event = try_recv_event(&mut event_receiver).expect("Expected AccountUpdated event to be published");
@@ -600,7 +625,8 @@ mod tests {
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
         };
-        let (handlers, _state, mut event_receiver) = init_handlers_with_events(clonable_rpc_operations, db.clone());
+        let (handlers, indexer_state, mut event_receiver) =
+            init_handlers_with_events(clonable_rpc_operations, db.clone());
 
         // Initial fee should be empty/none
         let data = db.get_indexer_data(None).await?;
@@ -610,16 +636,21 @@ mod tests {
         let new_fee_value: u128 = 123456;
 
         let event = KeyBindingFeeUpdateEvent {
-            newFee: alloy::primitives::U256::from(new_fee_value),
-            oldFee: alloy::primitives::U256::ZERO,
+            newFee: AlloyU256::from(new_fee_value),
+            oldFee: AlloyU256::ZERO,
         };
 
         let log = event_to_log(event, handlers.addresses.announcements);
 
-        db.begin_transaction()
+        let events = db
+            .begin_transaction()
             .await?
             .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, log, true).await }))
             .await?;
+
+        for event in events {
+            indexer_state.publish_event(event);
+        }
 
         // Verify KeyBindingFeeUpdated event was published
         let event = try_recv_event(&mut event_receiver).expect("Expected KeyBindingFeeUpdated event to be published");

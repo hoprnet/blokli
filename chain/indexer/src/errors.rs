@@ -1,4 +1,4 @@
-use alloy::{dyn_abi::Error as AbiError, sol_types::Error as SolTypeError};
+use hopr_bindings::exports::alloy::{dyn_abi::Error as AbiError, sol_types::Error as SolTypeError};
 use hopr_primitive_types::{errors::GeneralError, primitives::Address};
 use thiserror::Error;
 

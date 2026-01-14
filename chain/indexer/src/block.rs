@@ -7,16 +7,20 @@ use std::{
     },
 };
 
-use alloy::{primitives::Address as AlloyAddress, sol_types::SolEvent};
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{
     BlokliDbGeneralModelOperations, TargetDb, api::logs::BlokliDbLogOperations, info::BlokliDbInfoOperations,
 };
 use blokli_db_entity::{channel_state, prelude::ChannelState};
-use futures::{StreamExt, future::AbortHandle};
-use hopr_bindings::hopr_token::HoprToken::{Approval, Transfer};
+use futures::{StreamExt, channel::mpsc::channel, future::AbortHandle};
+use hopr_bindings::{
+    exports::alloy::{primitives::Address as AlloyAddress, rpc::types::Filter, sol_types::SolEvent},
+    hopr_token::HoprToken::{Approval, Transfer},
+};
 use hopr_crypto_types::types::Hash;
+#[cfg(all(feature = "prometheus", not(test)))]
+use hopr_primitive_types::prelude::U256;
 use hopr_primitive_types::prelude::{Address, SerializableLog};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder};
 use tracing::{debug, error, info, trace, warn};
@@ -217,7 +221,7 @@ where
             }
         };
 
-        let (tx, mut rx) = futures::channel::mpsc::channel::<()>(1);
+        let (tx, mut rx) = channel::<()>(1);
 
         // Perform the fast-sync if requested
         if FastSyncMode::None != will_perform_fast_sync {
@@ -497,10 +501,10 @@ where
             }
         });
 
-        let filter_base = alloy::rpc::types::Filter::new()
+        let filter_base = Filter::new()
             .address(filter_base_addresses)
             .event_signature(filter_base_topics);
-        let filter_token = alloy::rpc::types::Filter::new().address(AlloyAddress::from_hopr_address(
+        let filter_token = Filter::new().address(AlloyAddress::from_hopr_address(
             logs_handler.contract_addresses_map().token,
         ));
 
@@ -673,8 +677,7 @@ where
                     #[cfg(all(feature = "prometheus", not(test)))]
                     {
                         if let Ok(checksum_hash) = Hash::from_hex(checksum.as_str()) {
-                            let low_4_bytes =
-                                hopr_primitive_types::prelude::U256::from_big_endian(checksum_hash.as_ref()).low_u32();
+                            let low_4_bytes = U256::from_big_endian(checksum_hash.as_ref()).low_u32();
                             METRIC_INDEXER_CHECKSUM.set(low_4_bytes.into());
                         } else {
                             error!("Invalid checksum generated from logs");
@@ -1107,10 +1110,6 @@ where
 mod tests {
     use std::{collections::BTreeSet, pin::Pin};
 
-    use alloy::{
-        dyn_abi::DynSolValue,
-        primitives::{Address as AlloyAddress, B256},
-    };
     use async_trait::async_trait;
     use blokli_chain_rpc::BlockWithLogs;
     use blokli_chain_types::{ContractAddresses, chain_events::ChainEventType};
@@ -1122,8 +1121,12 @@ mod tests {
         account, channel,
         prelude::{Account, Channel},
     };
-    use futures::{Stream, join};
+    use futures::{Stream, channel::mpsc::unbounded, join};
     use hex_literal::hex;
+    use hopr_bindings::exports::alloy::{
+        dyn_abi::DynSolValue,
+        primitives::{Address as AlloyAddress, B256},
+    };
     use hopr_crypto_types::{
         keypairs::{Keypair, OffchainKeypair},
         prelude::ChainKeypair,
@@ -1236,7 +1239,7 @@ mod tests {
         let head_block = 1000;
         rpc.expect_block_number().times(2).returning(move || Ok(head_block));
 
-        let (tx, rx) = futures::channel::mpsc::unbounded::<BlockWithLogs>();
+        let (tx, rx) = unbounded::<BlockWithLogs>();
         rpc.expect_try_stream_logs()
             .withf(move |x: &u64, _y: &FilterSet, _: &bool| *x == 0)
             .return_once(move |_, _, _| Ok(Box::pin(rx)));
@@ -1288,7 +1291,7 @@ mod tests {
 
         rpc.expect_block_number().times(2).returning(move || Ok(head_block));
 
-        let (tx, rx) = futures::channel::mpsc::unbounded::<BlockWithLogs>();
+        let (tx, rx) = unbounded::<BlockWithLogs>();
         rpc.expect_try_stream_logs()
             .once()
             .withf(move |x: &u64, _y: &FilterSet, _: &bool| *x == latest_block + 1)
@@ -1351,7 +1354,7 @@ mod tests {
             .expect_contract_addresses_map()
             .return_const(ContractAddresses::default());
 
-        let (mut tx, rx) = futures::channel::mpsc::unbounded::<BlockWithLogs>();
+        let (mut tx, rx) = unbounded::<BlockWithLogs>();
         rpc.expect_try_stream_logs()
             .times(1)
             .withf(move |x: &u64, _y: &FilterSet, _: &bool| *x == 0)
@@ -1423,7 +1426,7 @@ mod tests {
             assert_eq!(db.get_logs_block_numbers(None, None, Some(true)).await?.len(), 0);
             assert_eq!(db.get_logs_block_numbers(None, None, Some(false)).await?.len(), 2);
 
-            let (tx, rx) = futures::channel::mpsc::unbounded::<BlockWithLogs>();
+            let (tx, rx) = unbounded::<BlockWithLogs>();
 
             let head_block = 5;
             let mut rpc = MockHoprIndexerOps::new();
@@ -1509,7 +1512,7 @@ mod tests {
             assert_eq!(db.get_logs_block_numbers(None, None, Some(true)).await?.len(), 2);
             assert_eq!(db.get_logs_block_numbers(None, None, Some(false)).await?.len(), 2);
 
-            let (tx, rx) = futures::channel::mpsc::unbounded::<BlockWithLogs>();
+            let (tx, rx) = unbounded::<BlockWithLogs>();
 
             let head_block = 5;
             let mut rpc = MockHoprIndexerOps::new();
@@ -1578,7 +1581,7 @@ mod tests {
             .expect_contract_addresses_map()
             .return_const(ContractAddresses::default());
 
-        let (mut tx, rx) = futures::channel::mpsc::unbounded::<BlockWithLogs>();
+        let (mut tx, rx) = unbounded::<BlockWithLogs>();
         // Expected to be called once starting at 0 and yield the respective blocks
         rpc.expect_try_stream_logs()
             .times(1)
@@ -1655,7 +1658,7 @@ mod tests {
         assert!(db.set_logs_processed(Some(last_processed_block), Some(0)).await.is_ok());
         assert!(db.update_logs_checksums().await.is_ok());
 
-        let (mut tx, rx) = futures::channel::mpsc::unbounded::<BlockWithLogs>();
+        let (mut tx, rx) = unbounded::<BlockWithLogs>();
 
         let mut rpc = MockHoprIndexerOps::new();
         rpc.expect_try_stream_logs()

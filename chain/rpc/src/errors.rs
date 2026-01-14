@@ -1,7 +1,8 @@
-use alloy::{
+use hopr_bindings::exports::alloy::{
     contract::Error as AlloyContractError,
     primitives::U256,
     providers::{MulticallError, PendingTransactionError},
+    signers::Error as AlloySignerError,
     transports::{RpcError as AlloyRpcError, TransportErrorKind},
 };
 use hopr_crypto_types::prelude::Hash;
@@ -24,7 +25,7 @@ pub enum RpcError {
     LogConversionError(#[from] LogConversionError),
 
     #[error(transparent)]
-    SignerError(#[from] alloy::signers::Error),
+    SignerError(#[from] AlloySignerError),
 
     #[error("multicall inner failure at {0}: {1}")]
     MulticallFailure(usize, String),

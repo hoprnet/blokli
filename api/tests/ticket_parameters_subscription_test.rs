@@ -2,7 +2,6 @@
 
 use std::{sync::Arc, time::Duration};
 
-use alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
 use async_graphql::Schema;
 use blokli_api::{mutation::MutationRoot, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot};
 use blokli_chain_api::{
@@ -18,7 +17,9 @@ use blokli_chain_rpc::{
 };
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
+use blokli_db_entity::chain_info::{ActiveModel as ChainInfoActiveModel, Entity as ChainInfoEntity};
 use futures::StreamExt;
+use hopr_bindings::exports::alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
 use hopr_primitive_types::{prelude::HoprBalance, traits::IntoEndian};
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 
@@ -30,13 +31,13 @@ async fn init_chain_info_with_params(
     min_win_prob: f32,
 ) -> Result<(), sea_orm::DbErr> {
     // Delete any existing entry first
-    blokli_db_entity::chain_info::Entity::delete_many().exec(db).await?;
+    ChainInfoEntity::delete_many().exec(db).await?;
 
     // Convert HoprBalance to 12-byte big-endian format (taking last 12 bytes of 32-byte representation)
     let price_bytes_32 = ticket_price.to_be_bytes();
     let ticket_price_bytes = price_bytes_32[20..].to_vec(); // Last 12 bytes
 
-    let chain_info = blokli_db_entity::chain_info::ActiveModel {
+    let chain_info = ChainInfoActiveModel {
         id: Set(1),
         last_indexed_block: Set(block),
         ticket_price: Set(Some(ticket_price_bytes)),
@@ -92,6 +93,7 @@ fn create_test_schema(db: &BlokliDb) -> Schema<QueryRoot, MutationRoot, Subscrip
         1,
         "test-network".to_string(),
         ContractAddresses::default(),
+        1,
         indexer_state,
         transaction_executor,
         transaction_store,
@@ -157,13 +159,13 @@ async fn test_ticket_parameters_subscription_handles_missing_ticket_price() {
     let db = BlokliDb::new_in_memory().await.unwrap();
 
     // Delete any existing entry first
-    blokli_db_entity::chain_info::Entity::delete_many()
+    ChainInfoEntity::delete_many()
         .exec(db.conn(TargetDb::Index))
         .await
         .unwrap();
 
     // Initialize chain_info without ticket_price (None)
-    let chain_info = blokli_db_entity::chain_info::ActiveModel {
+    let chain_info = ChainInfoActiveModel {
         id: Set(1),
         last_indexed_block: Set(100),
         ticket_price: Set(None), // Missing ticket price

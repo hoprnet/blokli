@@ -1,5 +1,5 @@
-use alloy::transports::{http::Http, utils::guess_local_url};
 use async_trait::async_trait;
+use hopr_bindings::exports::alloy::transports::{http::Http, utils::guess_local_url};
 #[cfg(feature = "runtime-tokio")]
 pub use reqwest::Client as ReqwestClient;
 use url::Url;

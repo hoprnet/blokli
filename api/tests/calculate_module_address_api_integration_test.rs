@@ -31,10 +31,10 @@
 
 mod common;
 
-use alloy::primitives::{Address as AlloyAddress, FixedBytes, U256};
 use async_graphql::Schema;
 use blokli_api::{mutation::MutationRoot, query::QueryRoot, subscription::SubscriptionRoot};
 use blokli_chain_types::AlloyAddressExt;
+use hopr_bindings::exports::alloy::primitives::{Address as AlloyAddress, FixedBytes, U256};
 use hopr_crypto_types::keypairs::Keypair;
 use hopr_primitive_types::traits::ToHex;
 

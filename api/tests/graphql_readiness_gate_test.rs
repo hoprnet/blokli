@@ -6,6 +6,11 @@
 
 mod common;
 
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
+
 use axum::{
     Router,
     body::Body,
@@ -48,7 +53,7 @@ async fn make_graphql_request(app: Router, query: &str) -> (StatusCode, serde_js
 /// This ensures indexer lag is minimal (0 or 1 block) when transitioning to ready state
 async fn update_chain_info_with_current_block(
     db: &DatabaseConnection,
-    rpc_operations: &std::sync::Arc<blokli_chain_rpc::rpc::RpcOperations<blokli_chain_rpc::transport::ReqwestClient>>,
+    rpc_operations: &Arc<blokli_chain_rpc::rpc::RpcOperations<blokli_chain_rpc::transport::ReqwestClient>>,
 ) -> anyhow::Result<()> {
     // Get current RPC block number to minimize lag
     let current_block = rpc_operations.get_block_number().await?;
@@ -120,7 +125,7 @@ async fn test_graphql_returns_200_when_ready() -> anyhow::Result<()> {
     update_chain_info_with_current_block(&ctx.db, &ctx.rpc_operations).await?;
 
     // Wait for periodic check to update cached state (interval is 100ms in test config)
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
 
     // Try to make a simple GraphQL query
     let query = r#"query { __typename }"#;
@@ -205,7 +210,7 @@ async fn test_graphql_readiness_transition() -> anyhow::Result<()> {
     // Second request: ready (after updating chain_info with current block)
     update_chain_info_with_current_block(&ctx.db, &ctx.rpc_operations).await?;
     // Wait for periodic check to update cached state (interval is 100ms in test config)
-    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+    tokio::time::sleep(Duration::from_millis(150)).await;
     let (status2, json2) = make_graphql_request(ctx.app, query).await;
     assert_ne!(status2, StatusCode::SERVICE_UNAVAILABLE);
 
@@ -255,8 +260,8 @@ async fn test_graphql_readiness_synced_with_readyz() -> anyhow::Result<()> {
     // Scenario 2: Both should be available when ready
     update_chain_info_with_current_block(&ctx.db, &ctx.rpc_operations).await?;
     // Poll /readyz until ready or timeout (readiness check interval is 100ms in test config)
-    let poll_start = std::time::Instant::now();
-    let poll_timeout = std::time::Duration::from_secs(5);
+    let poll_start = Instant::now();
+    let poll_timeout = Duration::from_secs(5);
     loop {
         let readyz_status = check_readyz(&ctx.app).await;
         if readyz_status == StatusCode::OK {
@@ -265,7 +270,7 @@ async fn test_graphql_readiness_synced_with_readyz() -> anyhow::Result<()> {
         if poll_start.elapsed() > poll_timeout {
             panic!("Timeout waiting for /readyz to return 200 OK");
         }
-        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        tokio::time::sleep(Duration::from_millis(10)).await;
     }
 
     let readyz_status = check_readyz(&ctx.app).await;

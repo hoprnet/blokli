@@ -1,6 +1,6 @@
 use std::str::FromStr;
 
-use alloy::primitives::Address as AlloyAddress;
+use hopr_bindings::exports::alloy::primitives::Address as AlloyAddress;
 use hopr_chain_connector::ChainKeypair;
 use hopr_crypto_types::keypairs::{Keypair, OffchainKeypair};
 use hopr_internal_types::announcement::KeyBinding;

@@ -69,11 +69,6 @@ mod integration_tests {
 
     use std::{sync::Arc, time::Duration};
 
-    use alloy::{
-        dyn_abi::DynSolValue,
-        primitives::{Address as AlloyAddress, B256},
-        sol_types::SolEvent,
-    };
     use anyhow::anyhow;
     use async_trait::async_trait;
     use blokli_chain_indexer::handlers::ContractEventHandlers;
@@ -90,6 +85,11 @@ mod integration_tests {
     };
     use hex_literal::hex;
     use hopr_bindings::{
+        exports::alloy::{
+            dyn_abi::DynSolValue,
+            primitives::{Address as AlloyAddress, B256},
+            sol_types::SolEvent,
+        },
         hopr_announcements_events::HoprAnnouncementsEvents::{
             AddressAnnouncement, KeyBinding as HoprKeyBindingEvent, RevokeAnnouncement,
         },
@@ -551,7 +551,7 @@ mod integration_tests {
     where
         F: FnMut() -> bool,
     {
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let poll_interval = Duration::from_millis(50);
 
         loop {

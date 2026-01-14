@@ -1,12 +1,12 @@
 use std::str::FromStr;
 
-use alloy::{
+use anyhow::{Context, Result};
+use hopr_bindings::exports::alloy::{
     consensus::{SignableTransaction, TxEip1559},
     eips::eip2718::Encodable2718,
     primitives::{Address as AlloyAddress, TxKind, U256},
     signers::{Signer, local::PrivateKeySigner},
 };
-use anyhow::{Context, Result};
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
 
 pub struct TransactionBuilder {

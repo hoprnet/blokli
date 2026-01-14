@@ -4,11 +4,12 @@ mod subscriptions;
 mod testing;
 mod transactions;
 
-use std::fmt::Debug;
+use std::{fmt::Debug, future::Future, time::Duration};
 
 use cynic::GraphQlResponse;
 use eventsource_client::{Client, ReconnectOptionsBuilder};
 use futures::{StreamExt, TryFutureExt, TryStreamExt};
+use reqwest::redirect::Policy as RedirectPolicy;
 #[cfg(feature = "testing")]
 pub use testing::{
     BlokliTestClient, BlokliTestState, BlokliTestStateMutator, BlokliTestStateSnapshot, NopStateMutator,
@@ -23,11 +24,11 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq, smart_default::SmartDefault)]
 pub struct BlokliClientConfig {
     /// General timeout for all requests.
-    #[default(std::time::Duration::from_secs(10))]
-    pub timeout: std::time::Duration,
+    #[default(Duration::from_secs(10))]
+    pub timeout: Duration,
     /// Reconnection timeout for SSE streams.
-    #[default(std::time::Duration::from_secs(30))]
-    pub stream_reconnect_timeout: std::time::Duration,
+    #[default(Duration::from_secs(30))]
+    pub stream_reconnect_timeout: Duration,
 }
 
 /// Client implementation of the Blokli API.
@@ -68,7 +69,7 @@ impl BlokliClient {
             .zstd(true)
             .deflate(true)
             .user_agent(format!("blokli-client/{}-{}", env!("CARGO_PKG_VERSION"), VERSION))
-            .redirect(reqwest::redirect::Policy::limited(REDIRECT_LIMIT))
+            .redirect(RedirectPolicy::limited(REDIRECT_LIMIT))
             .build()
             .map_err(ErrorKind::from)?)
     }
@@ -97,7 +98,7 @@ impl BlokliClient {
             .reconnect(
                 ReconnectOptionsBuilder::new(true)
                     .retry_initial(false)
-                    .delay(std::time::Duration::from_secs(2))
+                    .delay(Duration::from_secs(2))
                     .backoff_factor(2)
                     .delay_max(self.cfg.stream_reconnect_timeout)
                     .build(),
