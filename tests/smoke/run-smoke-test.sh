@@ -48,7 +48,7 @@ REGISTRY_TIMEOUT=30
 REGISTRY_POLL_INTERVAL=1
 CHAIN_SYNC_TIMEOUT=30      # Default timeout, overridden for full sync test
 CHAIN_SYNC_POLL_INTERVAL=2 # Default poll interval, overridden for full sync test
-MAX_INDEXER_LAG=10
+MAX_INDEXER_LAG=2
 
 # Logging functions
 log_info() {

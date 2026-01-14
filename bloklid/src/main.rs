@@ -218,6 +218,7 @@ impl Args {
             max_block_range: config.network.max_block_range(),
             channel_contract_deploy_block: network_config.indexer_start_block_number,
             max_requests_per_sec: max_rpc_req,
+            expected_block_time: config.network.expected_block_time(),
         };
 
         // Store resolved config and contracts

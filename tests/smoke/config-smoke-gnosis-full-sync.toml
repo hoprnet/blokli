@@ -43,7 +43,7 @@ playground_enabled = true
 
 # Health check configuration
 [api.health]
-# Require indexer to be within 10 blocks of chain head
+# Require indexer to be within 2 blocks of chain head
 # This ensures the indexer has fully caught up for the smoke test duration
-max_indexer_lag = 10
+max_indexer_lag = 2
 timeout         = "10s"

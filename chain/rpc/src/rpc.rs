@@ -192,6 +192,27 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
     }
 
     /// Get the current block number from the RPC endpoint, adjusted for finality
+    ///
+    /// This method returns the block number minus the configured finality window
+    /// to ensure operations only consider confirmed (non-reorgable) blocks.
+    ///
+    /// # Finality Adjustment
+    ///
+    /// The returned block number is calculated as:
+    /// ```text
+    /// confirmed_block = provider.get_block_number() - finality
+    /// ```
+    ///
+    /// For example, with `finality=8`:
+    /// - If RPC reports block 1000, this returns 992
+    /// - Ensures all operations work with blocks that have 8 confirmations
+    ///
+    /// # Impact on Readiness Checks
+    ///
+    /// The API readiness check uses this method, meaning `max_indexer_lag`
+    /// is compared against confirmed blocks, not the latest RPC chain head.
+    /// This prevents premature "ready" state when the indexer is caught up
+    /// to unconfirmed blocks that might be reorganized.
     pub async fn get_block_number(&self) -> Result<u64> {
         Ok(self
             .provider

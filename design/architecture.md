@@ -1227,6 +1227,55 @@ Health check configuration:
 - `max_indexer_lag` - Maximum allowed lag before readiness fails
 - `timeout_ms` - Timeout for health check operations
 
+### Finality Handling in Readiness Checks
+
+The readiness check automatically accounts for blockchain finality to prevent false-positive "ready" states:
+
+**Block Number Finality Adjustment**:
+All RPC block number queries use `RpcOperations::get_block_number()`, which subtracts the configured finality window:
+
+```
+confirmed_block = rpc_provider.get_block_number() - finality
+```
+
+For Rotsee (Gnosis Chain) with `finality=8`:
+
+- If RPC reports block height 1000, `get_block_number()` returns 992
+- Only blocks with 8+ confirmations are considered "confirmed"
+
+**Readiness Calculation**:
+
+```
+lag = confirmed_block - indexed_block
+ready = (lag <= max_indexer_lag)
+```
+
+**Effective Threshold**:
+Because the RPC block is finality-adjusted, the effective lag threshold is:
+
+```
+effective_threshold = max_indexer_lag + finality
+```
+
+**Example (Gnosis Chain)**:
+
+- Configuration: `max_indexer_lag=10`, `finality=8`
+- Latest RPC block: 1000
+- Confirmed RPC block: 992 (1000 - 8)
+- Indexed block: 982
+- Calculated lag: 10 blocks (992 - 982)
+- Result: READY (10 <= 10)
+
+The indexer is actually 18 blocks behind the RPC chain head (1000 - 982), but only 10 blocks behind confirmed blocks—within the acceptable threshold.
+
+**Configuration Flow**:
+
+1. Network defines `confirmations()` → `bloklid/src/network.rs:84-89`
+2. Copied to `ChainConfig.confirmations` → `bloklid/src/main.rs:217`
+3. Used as `RpcOperationsConfig.finality` → `chain/rpc/src/rpc.rs:100`
+4. Applied in `get_block_number()` → `chain/rpc/src/rpc.rs:195-201`
+5. Used by readiness check → `api/src/readiness.rs:118-133`
+
 ## Design Principles and Patterns
 
 ### Event Sourcing

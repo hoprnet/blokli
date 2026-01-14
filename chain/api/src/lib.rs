@@ -100,6 +100,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         let rpc_cfg = RpcOperationsConfig {
             chain_id: chain_config.chain_id,
             contract_addrs: contract_addresses,
+            expected_block_time: Duration::from_secs(chain_config.expected_block_time),
             tx_polling_interval: Duration::from_millis(chain_config.tx_polling_interval),
             finality: chain_config.confirmations as u32,
             max_block_range_fetch_size: chain_config.max_block_range as u64,
