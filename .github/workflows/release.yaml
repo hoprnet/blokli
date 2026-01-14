@@ -3,7 +3,7 @@ on:
   workflow_dispatch:
     inputs:
       release_type:
-        description: "Next version type"
+        description: Version type after release
         required: true
         type: choice
         default: "patch"
