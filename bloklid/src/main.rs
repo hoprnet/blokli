@@ -218,6 +218,7 @@ impl Args {
             max_block_range: config.network.max_block_range(),
             channel_contract_deploy_block: network_config.indexer_start_block_number,
             max_requests_per_sec: max_rpc_req,
+            expected_block_time: config.network.expected_block_time(),
         };
 
         // Store resolved config and contracts
@@ -435,9 +436,6 @@ async fn run() -> errors::Result<()> {
             .await
             .map_err(|e| BloklidError::NonSpecific(format!("Failed to initialize database singletons: {e}")))?;
 
-        // Clone notification manager for API before db is moved to BlokliChain
-        let sqlite_notification_manager = db.sqlite_notification_manager().cloned();
-
         info!("Connecting to RPC endpoint: {}", redact_rpc_url(&rpc_url));
 
         // Extract chain_id and network name for configuration
@@ -504,7 +502,6 @@ async fn run() -> errors::Result<()> {
                 blokli_chain.transaction_executor(),
                 blokli_chain.transaction_store(),
                 rpc_operations,
-                sqlite_notification_manager,
             )
             .await
             .map_err(|e| BloklidError::NonSpecific(format!("Failed to build API app: {}", e)))?;

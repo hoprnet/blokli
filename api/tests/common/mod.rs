@@ -231,7 +231,6 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
         transaction_executor.clone(),
         transaction_store.clone(),
         rpc_operations.clone(),
-        None, // No SQLite notification manager for tests
     );
 
     Ok(TestContext {
@@ -324,7 +323,6 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
         ctx.transaction_executor.clone(),
         ctx.transaction_store.clone(),
         ctx.rpc_operations.clone(),
-        None, // SQLite notification manager not needed for tests
     )
     .await
     .expect("Failed to build app");

@@ -23,7 +23,6 @@ use blokli_chain_api::{
 };
 use blokli_chain_indexer::IndexerState;
 use blokli_chain_rpc::{rpc::RpcOperations, transport::ReqwestClient};
-use blokli_db::notifications::SqliteNotificationManager;
 use blokli_db_entity::prelude::ChainInfo;
 use futures::stream::{Stream, StreamExt};
 use sea_orm::{DatabaseConnection, EntityTrait};
@@ -147,7 +146,6 @@ pub async fn build_app(
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
     rpc_operations: Arc<RpcOperations<ReqwestClient>>,
-    sqlite_notification_manager: Option<SqliteNotificationManager>,
 ) -> ApiResult<Router> {
     let schema = build_schema(
         db.clone(),
@@ -159,7 +157,6 @@ pub async fn build_app(
         transaction_executor,
         transaction_store,
         rpc_operations.clone(),
-        sqlite_notification_manager,
     );
 
     let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), config.health.clone());

@@ -6,7 +6,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "bloklid"
 repository  = "https://github.com/hoprnet/hoprnet"
-version     = "0.5.0"
+version     = "0.6.0"
 
 [features]
 default = ["runtime-tokio"]
