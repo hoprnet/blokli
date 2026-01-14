@@ -41,6 +41,6 @@ playground_enabled = true
 
 # Health check configuration
 [api.health]
-# Allow higher lag for smoke tests since we're starting from scratch
+# Require indexer to be within 2 blocks for smoke test readiness
 max_indexer_lag = 2
 timeout         = "5s"

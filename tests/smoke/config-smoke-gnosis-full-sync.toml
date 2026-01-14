@@ -1,7 +1,7 @@
 # Smoke test configuration for bloklid - Gnosis Chain full sync variant
-# This configuration tests against the real Gnosis Chain RPC with a 10-block lag limit
+# This configuration tests against the real Gnosis Chain RPC with a 2-block lag limit
 # It connects to PostgreSQL (local) and Gnosis Chain RPC (external)
-# The test ensures the indexer fully catches up to within 10 blocks of the chain head
+# The test ensures the indexer fully catches up to within 2 blocks of the chain head
 
 # Directory for storing data files
 data_directory = "/data"
