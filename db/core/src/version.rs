@@ -23,8 +23,7 @@ use crate::errors::{DbSqlError, Result};
 /// - 6: Changed channel status representation to smallint
 /// - 7: Update account indexing to include safe address once deployed
 /// - 8: Add v3 Safe deployment data
-/// - 9: Fix handling of node safe deregister events
-pub const CURRENT_SCHEMA_VERSION: i64 = 9;
+pub const CURRENT_SCHEMA_VERSION: i64 = 8;
 
 /// The singleton ID used for the schema_version table
 const SCHEMA_VERSION_TABLE_ID: i64 = 1;
