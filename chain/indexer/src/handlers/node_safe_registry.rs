@@ -1,12 +1,17 @@
 use blokli_chain_rpc::HoprIndexerRpcOperations;
 use blokli_chain_types::AlloyAddressExt;
-use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator, errors::DbSqlError};
+use blokli_db::{
+    BlokliDbAllOperations, OpenTransaction, accounts::ChainOrPacketKey, api::info::DomainSeparator, errors::DbSqlError,
+};
 use hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::HoprNodeSafeRegistryEvents;
 use hopr_primitive_types::prelude::{Address, ToHex};
 use tracing::{debug, info, warn};
 
 use super::{ContractEventHandlers, helpers::construct_account_update};
-use crate::{errors::Result, state::IndexerEvent};
+use crate::{
+    errors::{CoreEthereumIndexerError, Result},
+    state::IndexerEvent,
+};
 
 #[cfg(all(feature = "prometheus", not(test)))]
 lazy_static::lazy_static! {
@@ -50,6 +55,57 @@ where
     /// # Ok(())
     /// # }
     /// ```
+    async fn update_account_safe_address(
+        &self,
+        tx: &OpenTransaction,
+        node_addr: Address,
+        safe_address: Option<Address>,
+        block: u64,
+        tx_index: u64,
+        log_index: u64,
+    ) -> Result<()> {
+        let account = self
+            .db
+            .get_account(Some(tx), ChainOrPacketKey::ChainKey(node_addr))
+            .await?;
+
+        let Some(account) = account else {
+            warn!(
+                node_address = %node_addr.to_hex(),
+                "Account missing for node-safe update; skipping account_state update"
+            );
+            return Ok(());
+        };
+
+        let block_u32 = u32::try_from(block).map_err(|_| {
+            CoreEthereumIndexerError::ProcessError(format!("Block number {} out of range for account update", block))
+        })?;
+        let tx_index_u32 = u32::try_from(tx_index).map_err(|_| {
+            CoreEthereumIndexerError::ProcessError(format!(
+                "Transaction index {} out of range for account update",
+                tx_index
+            ))
+        })?;
+        let log_index_u32 = u32::try_from(log_index).map_err(|_| {
+            CoreEthereumIndexerError::ProcessError(format!("Log index {} out of range for account update", log_index))
+        })?;
+
+        self.db
+            .upsert_account(
+                Some(tx),
+                account.key_id.into(),
+                node_addr,
+                account.public_key,
+                safe_address,
+                block_u32,
+                tx_index_u32,
+                log_index_u32,
+            )
+            .await?;
+
+        Ok(())
+    }
+
     pub(super) async fn on_node_safe_registry_event(
         &self,
         tx: &OpenTransaction,
@@ -143,6 +199,9 @@ where
                     .register_node_to_safe(Some(tx), safe_addr, node_addr, block, tx_index, log_index)
                     .await?;
 
+                self.update_account_safe_address(tx, node_addr, Some(safe_addr), block, tx_index, log_index)
+                    .await?;
+
                 debug!(
                     node_address = %node_addr.to_hex(),
                     safe_address = %safe_addr.to_hex(),
@@ -165,6 +224,9 @@ where
             HoprNodeSafeRegistryEvents::DeregisteredNodeSafe(deregistered) => {
                 let safe_addr = deregistered.safeAddress.to_hopr_address();
                 let node_addr = deregistered.nodeAddress.to_hopr_address();
+                let block = log.block_number;
+                let tx_index = log.tx_index;
+                let log_index = log.log_index.as_u64();
 
                 info!(
                     node_address = %node_addr.to_hex(),
@@ -173,7 +235,7 @@ where
                 );
 
                 // Deregister node from safe (idempotent - ignore if already deregistered)
-                // Note: This does NOT delete the safe contract itself, only the node registration
+                // Note: This does not delete the safe contract itself, only the node registration
                 let should_publish_event = match self.db.deregister_node_from_safe(Some(tx), safe_addr, node_addr).await
                 {
                     Ok(()) => {
@@ -194,6 +256,11 @@ where
                     }
                     Err(e) => return Err(e.into()),
                 };
+
+                if should_publish_event {
+                    self.update_account_safe_address(tx, node_addr, None, block, tx_index, log_index)
+                        .await?;
+                }
 
                 // Publish AccountUpdated event if synced and deregistration was successful
                 if is_synced && should_publish_event {
@@ -227,7 +294,9 @@ mod tests {
     use std::sync::Arc;
 
     use blokli_db::{
-        BlokliDbGeneralModelOperations, accounts::BlokliDbAccountOperations, db::BlokliDb,
+        BlokliDbGeneralModelOperations,
+        accounts::{BlokliDbAccountOperations, ChainOrPacketKey},
+        db::BlokliDb,
         node_safe_registrations::BlokliDbNodeSafeRegistrationOperations,
         safe_contracts::BlokliDbSafeContractOperations,
     };
@@ -654,6 +723,117 @@ mod tests {
             .one(db.conn(blokli_db::TargetDb::Index))
             .await?;
         assert!(safe_after.is_some());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_node_safe_registry_updates_account_safe_address() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let mut rpc_operations = MockIndexerRpcOperations::new();
+        rpc_operations
+            .expect_get_hopr_module_from_safe()
+            .returning(|_| Ok(None));
+
+        let clonable_rpc_operations = ClonableMockOperations {
+            inner: Arc::new(rpc_operations),
+        };
+        let handlers = init_handlers(clonable_rpc_operations, db.clone());
+
+        let node_address = *SELF_CHAIN_ADDRESS;
+        let old_safe_address: Address = "7a2a74b26f24f39b35d02773102585203cce2567".parse()?;
+        let new_safe_address: Address = "dc0dea7a62b02ce24cc8ce8dead861614d15c3c1".parse()?;
+
+        db.upsert_account(
+            None,
+            1,
+            node_address,
+            *SELF_PRIV_KEY.public(),
+            Some(old_safe_address),
+            5,
+            0,
+            0,
+        )
+        .await?;
+
+        let encoded_data = ().abi_encode();
+
+        let registered_log_old = SerializableLog {
+            address: handlers.addresses.node_safe_registry,
+            topics: vec![
+                HoprNodeSafeRegistry::RegisteredNodeSafe::SIGNATURE_HASH.into(),
+                H256::from_slice(&old_safe_address.to_bytes32()).into(),
+                H256::from_slice(&node_address.to_bytes32()).into(),
+            ],
+            data: encoded_data.clone(),
+            block_number: 6,
+            tx_index: 0,
+            log_index: 0,
+            ..test_log()
+        };
+
+        let deregistered_log = SerializableLog {
+            address: handlers.addresses.node_safe_registry,
+            topics: vec![
+                HoprNodeSafeRegistry::DeregisteredNodeSafe::SIGNATURE_HASH.into(),
+                H256::from_slice(&old_safe_address.to_bytes32()).into(),
+                H256::from_slice(&node_address.to_bytes32()).into(),
+            ],
+            data: encoded_data.clone(),
+            block_number: 7,
+            tx_index: 0,
+            log_index: 0,
+            ..test_log()
+        };
+
+        let registered_log_new = SerializableLog {
+            address: handlers.addresses.node_safe_registry,
+            topics: vec![
+                HoprNodeSafeRegistry::RegisteredNodeSafe::SIGNATURE_HASH.into(),
+                H256::from_slice(&new_safe_address.to_bytes32()).into(),
+                H256::from_slice(&node_address.to_bytes32()).into(),
+            ],
+            data: encoded_data,
+            block_number: 8,
+            tx_index: 0,
+            log_index: 0,
+            ..test_log()
+        };
+
+        let handlers_clone = handlers.clone();
+        db.begin_transaction()
+            .await?
+            .perform(|tx| Box::pin(async move { handlers_clone.process_log_event(tx, registered_log_old, true).await }))
+            .await?;
+
+        let account = db
+            .get_account(None, ChainOrPacketKey::ChainKey(node_address))
+            .await?
+            .expect("account should exist");
+        assert_eq!(account.safe_address, Some(old_safe_address));
+
+        let handlers_clone = handlers.clone();
+        db.begin_transaction()
+            .await?
+            .perform(|tx| Box::pin(async move { handlers_clone.process_log_event(tx, deregistered_log, true).await }))
+            .await?;
+
+        let account = db
+            .get_account(None, ChainOrPacketKey::ChainKey(node_address))
+            .await?
+            .expect("account should exist");
+        assert_eq!(account.safe_address, None);
+
+        db.begin_transaction()
+            .await?
+            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, registered_log_new, true).await }))
+            .await?;
+
+        let account = db
+            .get_account(None, ChainOrPacketKey::ChainKey(node_address))
+            .await?
+            .expect("account should exist");
+        assert_eq!(account.safe_address, Some(new_safe_address));
 
         Ok(())
     }
