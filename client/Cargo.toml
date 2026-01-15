@@ -31,7 +31,7 @@ serde = { workspace = true, optional = true }
 serde_json = { workspace = true }
 smart-default = { workspace = true }
 thiserror = { workspace = true }
-tracing = { workspace = true, features = ["release_max_level_trace"] }
+tracing = { workspace = true, features = ["release_max_level_debug"] }
 url = { workspace = true }
 
 hopr-crypto-types = { workspace = true, optional = true }
