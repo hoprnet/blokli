@@ -5,6 +5,7 @@ use clap::Parser;
 use hopr_bindings::exports::alloy::{
     providers::ProviderBuilder, rpc::client::ClientBuilder, signers::local::PrivateKeySigner,
 };
+use hopr_bindings::hopr_node_stake_factory::HoprNodeStakeFactory::HoprNetwork;
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
 use serde::Serialize;
 use url::Url;
@@ -61,14 +62,14 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?
         .watch()
         .await?;
-    println!("Minter role granted to Anvil account {signer_address}");
+    eprintln!("Minter role granted to Anvil account {signer_address}");
 
-    // Mint 1M tokens to Anvil account 0
+    // Mint 10M tokens to Anvil account 0
     instances
         .token
         .mint(
             signer_address,
-            "1000000000000000000000000".parse()?,
+            "10000000000000000000000000".parse()?,
             Default::default(),
             Default::default(),
         )
@@ -76,7 +77,21 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?
         .watch()
         .await?;
-    println!("10M tokens minted to Anvil account {signer_address}");
+    eprintln!("10M tokens minted to Anvil account {signer_address}");
+
+    let network = instances.node_stake_factory.defaultHoprNetwork().call().await?;
+    instances
+        .node_stake_factory
+        .updateHoprNetwork(HoprNetwork {
+            tokenAddress: *instances.token.address(),
+            defaultTokenAllowance: network.defaultTokenAllowance,
+            defaultAnnouncementTarget: network.defaultAnnouncementTarget,
+        })
+        .send()
+        .await?
+        .watch()
+        .await?;
+    eprintln!("updated stake factory contract");
 
     if let Some(path) = args.output {
         fs::write(path, toml_output)?;
