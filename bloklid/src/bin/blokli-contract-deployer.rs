@@ -41,6 +41,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let signer = PrivateKeySigner::from_str(&args.private_key)?;
     let signer_chain_key = ChainKeypair::from_secret(signer.to_bytes().as_ref())?;
+    let signer_address = signer.address();
 
     let rpc_url = Url::parse(&args.rpc_url)?;
     let rpc_client = ClientBuilder::default().http(rpc_url);
@@ -50,6 +51,32 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let contracts = ContractAddresses::from(&instances);
     let output = ContractsOutput { contracts };
     let toml_output = toml::to_string(&output)?;
+
+    // Assign minter role to Anvil account 0
+    let minter_role = instances.token.MINTER_ROLE().call().await?;
+    instances
+        .token
+        .grantRole(minter_role, signer_address)
+        .send()
+        .await?
+        .watch()
+        .await?;
+    println!("Minter role granted to Anvil account {signer_address}");
+
+    // Mint 10M tokens to Anvil account 0
+    instances
+        .token
+        .mint(
+            signer_address,
+            "10000000".parse()?,
+            Default::default(),
+            Default::default(),
+        )
+        .send()
+        .await?
+        .watch()
+        .await?;
+    println!("10M tokens minted to Anvil account {signer_address}");
 
     if let Some(path) = args.output {
         fs::write(path, toml_output)?;
