@@ -63,12 +63,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?;
     println!("Minter role granted to Anvil account {signer_address}");
 
-    // Mint 10M tokens to Anvil account 0
+    // Mint 1M tokens to Anvil account 0
     instances
         .token
         .mint(
             signer_address,
-            "10000000".parse()?,
+            "1000000000000000000000000".parse()?,
             Default::default(),
             Default::default(),
         )
