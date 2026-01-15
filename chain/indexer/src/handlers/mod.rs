@@ -350,7 +350,10 @@ where
 mod tests {
     use std::{sync::Arc, time::Duration};
 
-    use blokli_db::{BlokliDbGeneralModelOperations, accounts::BlokliDbAccountOperations, db::BlokliDb};
+    use blokli_db::{
+        BlokliDbGeneralModelOperations, accounts::BlokliDbAccountOperations, db::BlokliDb,
+        safe_contracts::BlokliDbSafeContractOperations,
+    };
     use blokli_db_entity::{hopr_safe_contract, prelude::HoprSafeContract};
     use hopr_bindings::{
         exports::alloy::sol_types::{SolEvent, SolValue},
@@ -364,6 +367,7 @@ mod tests {
     use primitive_types::H256;
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
+    use super::*;
     use crate::{
         handlers::test_utils::test_helpers::{
             ClonableMockOperations, MockIndexerRpcOperations, SAFE_INSTANCE_ADDR, SELF_CHAIN_ADDRESS, SELF_PRIV_KEY,
