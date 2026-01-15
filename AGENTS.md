@@ -26,6 +26,14 @@ Blokli is a Rust workspace project with two main components:
 - No clippy warnings
 - Code compiles successfully
 
+## Documentation Map
+
+- `README.md`: High-level overview and quickstart; keep concise and link to deeper docs
+- `TESTING.md`: Test strategy and commands
+- `design/architecture.md`: Conceptual system architecture (no code, CLI commands, or config snippets)
+- `design/target-api-schema.graphql`: Target GraphQL schema reference
+- `design/target-db-schema.mmd`: Target database schema reference
+
 ## Build Commands
 
 - `just build` - Build all workspace packages
