@@ -1,11 +1,13 @@
 use std::{error::Error, fs, path::PathBuf, str::FromStr};
 
-use blokli_chain_types::{ContractAddresses, ContractInstances};
+use blokli_chain_types::ContractAddresses as BlokliContractAddresses;
 use clap::Parser;
-use hopr_bindings::exports::alloy::{
-    providers::ProviderBuilder, rpc::client::ClientBuilder, signers::local::PrivateKeySigner,
+use hopli_lib::utils::{ContractInstances, h2a};
+use hopr_bindings::{
+    exports::alloy::{providers::ProviderBuilder, rpc::client::ClientBuilder, signers::local::PrivateKeySigner},
+    hopr_node_stake_factory::HoprNodeStakeFactory::HoprNetwork,
 };
-use hopr_bindings::hopr_node_stake_factory::HoprNodeStakeFactory::HoprNetwork;
+use hopr_chain_types::ContractAddresses;
 use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
 use serde::Serialize;
 use url::Url;
@@ -33,7 +35,7 @@ struct Args {
 
 #[derive(Debug, Serialize)]
 struct ContractsOutput {
-    contracts: ContractAddresses,
+    contracts: BlokliContractAddresses,
 }
 
 #[tokio::main]
@@ -50,7 +52,19 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     let instances = ContractInstances::deploy_for_testing(provider, &signer_chain_key).await?;
     let contracts = ContractAddresses::from(&instances);
-    let output = ContractsOutput { contracts };
+    let output = ContractsOutput {
+        contracts: BlokliContractAddresses {
+            token: h2a(contracts.token),
+            channels: h2a(contracts.channels),
+            announcements: h2a(contracts.announcements),
+            module_implementation: h2a(contracts.module_implementation),
+            node_safe_migration: h2a(contracts.node_safe_migration),
+            node_safe_registry: h2a(contracts.node_safe_registry),
+            ticket_price_oracle: h2a(contracts.ticket_price_oracle),
+            winning_probability_oracle: h2a(contracts.winning_probability_oracle),
+            node_stake_factory: h2a(contracts.node_stake_factory),
+        },
+    };
     let toml_output = toml::to_string(&output)?;
 
     // Assign minter role to Anvil account 0
@@ -79,9 +93,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?;
     eprintln!("10M tokens minted to Anvil account {signer_address}");
 
-    let network = instances.node_stake_factory.defaultHoprNetwork().call().await?;
+    // Update the stake factory to use correct addresses
+    let network = instances.stake_factory.defaultHoprNetwork().call().await?;
     instances
-        .node_stake_factory
+        .stake_factory
         .updateHoprNetwork(HoprNetwork {
             tokenAddress: *instances.token.address(),
             defaultTokenAllowance: network.defaultTokenAllowance,
