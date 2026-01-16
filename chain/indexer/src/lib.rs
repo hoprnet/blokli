@@ -25,6 +25,7 @@ pub mod handlers;
 pub mod snapshot;
 pub mod state;
 pub mod traits;
+pub mod utils;
 
 /// Configuration for the chain indexer functionality.
 ///

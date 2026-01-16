@@ -13,6 +13,7 @@ use std::{
 use ::config as config_rs;
 use async_signal::{Signal, Signals};
 use blokli_chain_api::BlokliChain;
+use blokli_chain_indexer::utils::redact_url;
 use blokli_chain_types::{AlloyAddressExt, ChainConfig};
 use blokli_db::db::{BlokliDb, BlokliDbConfig};
 use clap::{Parser, Subcommand};
@@ -24,7 +25,7 @@ use tracing_subscriber::{EnvFilter, prelude::*};
 use validator::Validate;
 
 use crate::{
-    config::{Config, redact_database_url, redact_rpc_url},
+    config::{Config, redact_database_url},
     errors::{BloklidError, ConfigError},
     network::Network,
 };
@@ -436,7 +437,7 @@ async fn run() -> errors::Result<()> {
             .await
             .map_err(|e| BloklidError::NonSpecific(format!("Failed to initialize database singletons: {e}")))?;
 
-        info!("Connecting to RPC endpoint: {}", redact_rpc_url(&rpc_url));
+        info!("Connecting to RPC endpoint: {}", redact_url(&rpc_url));
 
         // Extract chain_id and network name for configuration
         let chain_id = chain_network.chain_id;

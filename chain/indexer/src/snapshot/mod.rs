@@ -53,7 +53,10 @@ pub use error::{SnapshotError, SnapshotResult};
 use tracing::{debug, error, info};
 pub use validate::SnapshotInfo;
 
-use crate::snapshot::{download::SnapshotDownloader, extract::SnapshotExtractor, validate::SnapshotValidator};
+use crate::{
+    snapshot::{download::SnapshotDownloader, extract::SnapshotExtractor, validate::SnapshotValidator},
+    utils::redact_url,
+};
 
 /// Trait for implementing the snapshot installation step.
 ///
@@ -109,7 +112,7 @@ impl SnapshotWorkflow {
         data_dir: &Path,
         use_temp_subdir: bool,
     ) -> SnapshotResult<SnapshotInfo> {
-        info!("Starting snapshot download and setup from: {}", url);
+        info!("Starting snapshot download and setup from: {}", redact_url(url));
 
         // Create temporary directory - either as subdirectory or using tempfile
         let (temp_dir, _temp_guard) = if use_temp_subdir {
