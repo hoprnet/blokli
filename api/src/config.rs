@@ -46,6 +46,9 @@ pub struct ApiConfig {
     #[serde(default = "default_expected_block_time")]
     pub expected_block_time: u64,
 
+    #[serde(default)]
+    pub sse_keepalive: SseKeepAliveConfig,
+
     /// Health check configuration
     #[serde(default)]
     pub health: HealthConfig,
@@ -60,6 +63,19 @@ pub struct TlsConfig {
 
     /// Path to TLS private key file
     pub key_path: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SseKeepAliveConfig {
+    #[serde(default = "default_sse_keepalive_enabled")]
+    pub enabled: bool,
+
+    #[serde(default = "default_sse_keepalive_interval", with = "humantime_serde")]
+    pub interval: Duration,
+
+    #[serde(default = "default_sse_keepalive_text")]
+    pub text: String,
 }
 
 /// Health check configuration
@@ -79,6 +95,16 @@ pub struct HealthConfig {
     pub readiness_check_interval: Duration,
 }
 
+impl Default for SseKeepAliveConfig {
+    fn default() -> Self {
+        Self {
+            enabled: default_sse_keepalive_enabled(),
+            interval: default_sse_keepalive_interval(),
+            text: default_sse_keepalive_text(),
+        }
+    }
+}
+
 impl Default for HealthConfig {
     fn default() -> Self {
         Self {
@@ -87,6 +113,18 @@ impl Default for HealthConfig {
             readiness_check_interval: default_readiness_check_interval(),
         }
     }
+}
+
+fn default_sse_keepalive_enabled() -> bool {
+    true
+}
+
+fn default_sse_keepalive_interval() -> Duration {
+    Duration::from_secs(15)
+}
+
+fn default_sse_keepalive_text() -> String {
+    "keep-alive".to_string()
 }
 
 fn default_max_indexer_lag() -> u64 {
@@ -113,6 +151,7 @@ impl Default for ApiConfig {
             rpc_url: default_rpc_url(),
             contract_addresses: default_contract_addresses(),
             expected_block_time: default_expected_block_time(),
+            sse_keepalive: SseKeepAliveConfig::default(),
             health: HealthConfig::default(),
         }
     }
@@ -160,6 +199,19 @@ fn default_contract_addresses() -> ContractAddresses {
 
 fn default_expected_block_time() -> u64 {
     5
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_sse_keepalive_defaults() {
+        let config = ApiConfig::default();
+        assert!(config.sse_keepalive.enabled);
+        assert_eq!(config.sse_keepalive.interval, Duration::from_secs(15));
+        assert_eq!(config.sse_keepalive.text, "keep-alive");
+    }
 }
 
 #[cfg(test)]
