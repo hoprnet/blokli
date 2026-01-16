@@ -53,6 +53,11 @@ hopr-crypto-types    = { workspace = true }
 hopr-internal-types  = { workspace = true }
 hopr-primitive-types = { workspace = true }
 
+# Needed for test deployment, because deploy_for_testing from blokli_chain_types is outdated
+# TODO: remove blokli-chain-types completely and only use hopr-chain-types
+hopli            = { workspace = true }
+hopr-chain-types = { workspace = true }
+
 [dev-dependencies]
 anyhow      = { workspace = true }
 async-trait = { workspace = true }
