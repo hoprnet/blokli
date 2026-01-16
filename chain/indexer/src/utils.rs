@@ -1,5 +1,7 @@
 //! Utility functions for the indexer module.
 
+use url::Url;
+
 /// Redacts username, password, and path/query parameters from URLs while keeping protocol, host, and port visible
 ///
 /// This function is used to sanitize URLs before logging them, preventing exposure of
@@ -29,35 +31,32 @@
 /// assert_eq!(redact_url("http://localhost:8545"), "http://localhost:8545");
 /// ```
 pub fn redact_url(url: &str) -> String {
-    // Parse the URL to extract components
-    if let Some(scheme_end) = url.find("://") {
-        let scheme = &url[..scheme_end + 3];
-        let rest = &url[scheme_end + 3..];
+    let parsed = match Url::parse(url) {
+        Ok(parsed) => parsed,
+        Err(_) => return url.to_string(),
+    };
 
-        // Check if there's an @ sign indicating credentials
-        let (host_part, has_credentials) = if let Some(at_pos) = rest.find('@') {
-            (&rest[at_pos + 1..], true)
-        } else {
-            (rest, false)
-        };
+    let host = match parsed.host_str() {
+        Some(host) => host,
+        None => return url.to_string(),
+    };
 
-        // Extract host and port (everything before the first / or ?)
-        let host_end = host_part
-            .find('/')
-            .or_else(|| host_part.find('?'))
-            .unwrap_or(host_part.len());
-        let host = &host_part[..host_end];
-        let has_path = host_end < host_part.len();
+    let host = match parsed.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_string(),
+    };
 
-        // Reconstruct URL
-        if has_credentials || has_path {
-            format!("{}{}/REDACTED", scheme, host)
-        } else {
-            // No credentials or path, return as-is
-            url.to_string()
-        }
+    let has_userinfo = !parsed.username().is_empty() || parsed.password().is_some();
+    let has_path = {
+        let path = parsed.path();
+        !path.is_empty() && path != "/"
+    };
+    let has_query = parsed.query().is_some();
+    let has_fragment = parsed.fragment().is_some();
+
+    if has_userinfo || has_path || has_query || has_fragment {
+        format!("{}://{}/REDACTED", parsed.scheme(), host)
     } else {
-        // Not a URL format, return as-is
         url.to_string()
     }
 }
@@ -105,6 +104,14 @@ mod tests {
         assert_eq!(
             redact_url("https://snapshots.hoprnet.org/logs.tar.xz?token=SECRET"),
             "https://snapshots.hoprnet.org/REDACTED"
+        );
+    }
+
+    #[test]
+    fn test_redact_url_with_at_in_path() {
+        assert_eq!(
+            redact_url("https://example.com/user@domain.com/file"),
+            "https://example.com/REDACTED"
         );
     }
 

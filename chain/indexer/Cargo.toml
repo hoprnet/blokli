@@ -47,6 +47,7 @@ tempfile = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+url = { workspace = true }
 
 blokli-api-types     = { workspace = true }
 blokli-chain-rpc     = { workspace = true }
