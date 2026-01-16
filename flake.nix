@@ -233,32 +233,31 @@
           # Docker images using nix-lib
           bloklidDocker = {
             # x86_64-linux Docker images
-            bloklid-docker-amd64 = nixLib.mkDockerImage {
+            docker-blokli-x86_64-linux = nixLib.mkDockerImage {
               name = "bloklid";
-              Entrypoint = [ "${bloklidPackages.bloklid-x86_64-linux}/bin/bloklid" ];
+              Entrypoint = [ "${bloklidPackages.binary-blokli-x86_64-linux}/bin/bloklid" ];
               pkgsLinux = pkgsLinux;
               env = [
                 "SSL_CERT_FILE=${pkgsLinux.cacert}/etc/ssl/certs/ca-bundle.crt"
               ];
             };
-            bloklid-dev-docker-amd64 = nixLib.mkDockerImage {
+            docker-blokli-x86_64-linux-dev = nixLib.mkDockerImage {
               name = "bloklid-dev";
-              Entrypoint = [ "${bloklidPackages.bloklid-x86_64-linux-dev}/bin/bloklid" ];
+              Entrypoint = [ "${bloklidPackages.binary-blokli-x86_64-linux-dev}/bin/bloklid" ];
               pkgsLinux = pkgsLinux;
               env = [
                 "SSL_CERT_FILE=${pkgsLinux.cacert}/etc/ssl/certs/ca-bundle.crt"
-
               ];
             };
-            bloklid-profile-docker-amd64 = nixLib.mkDockerImage {
+            docker-blokli-x86_64-linux-profile = nixLib.mkDockerImage {
               name = "bloklid-profile";
-              Entrypoint = [ "${bloklidPackages.bloklid-x86_64-linux-profile}/bin/bloklid" ];
+              Entrypoint = [ "${bloklidPackages.binary-blokli-x86_64-linux-profile}/bin/bloklid" ];
               pkgsLinux = pkgsLinux;
               env = [
                 "SSL_CERT_FILE=${pkgsLinux.cacert}/etc/ssl/certs/ca-bundle.crt"
               ];
             };
-            bloklid-anvil-docker-amd64 = nixLib.mkDockerImage {
+            docker-blokli-anvil-x86_64-linux = nixLib.mkDockerImage {
               name = "bloklid-anvil";
               Entrypoint = [ "${blokliAnvilEntrypoint}/bin/blokli-anvil-entrypoint" ];
               pkgsLinux = pkgsLinux;
@@ -266,7 +265,7 @@
                 "SSL_CERT_FILE=${pkgsLinux.cacert}/etc/ssl/certs/ca-bundle.crt"
               ];
               extraContents = [
-                bloklidPackages.bloklid-x86_64-linux
+                bloklidPackages.binary-blokli-x86_64-linux
                 pkgsLinux.curl
                 pkgsLinux.foundry
                 blokliAnvilEntrypoint
@@ -274,31 +273,31 @@
             };
 
             # aarch64-linux Docker images
-            bloklid-docker-aarch64 = nixLib.mkDockerImage {
+            docker-blokli-aarch64-linux = nixLib.mkDockerImage {
               name = "bloklid";
-              Entrypoint = [ "${bloklidPackages.bloklid-aarch64-linux}/bin/bloklid" ];
+              Entrypoint = [ "${bloklidPackages.binary-blokli-aarch64-linux}/bin/bloklid" ];
               pkgsLinux = pkgsLinuxAarch64;
               env = [
                 "SSL_CERT_FILE=${pkgsLinuxAarch64.cacert}/etc/ssl/certs/ca-bundle.crt"
               ];
             };
-            bloklid-dev-docker-aarch64 = nixLib.mkDockerImage {
+            docker-blokli-aarch64-linux-dev = nixLib.mkDockerImage {
               name = "bloklid-dev";
-              Entrypoint = [ "${bloklidPackages.bloklid-aarch64-linux-dev}/bin/bloklid" ];
+              Entrypoint = [ "${bloklidPackages.binary-blokli-aarch64-linux-dev}/bin/bloklid" ];
               pkgsLinux = pkgsLinuxAarch64;
               env = [
                 "SSL_CERT_FILE=${pkgsLinuxAarch64.cacert}/etc/ssl/certs/ca-bundle.crt"
               ];
             };
-            bloklid-profile-docker-aarch64 = nixLib.mkDockerImage {
+            docker-blokli-aarch64-linux-profile = nixLib.mkDockerImage {
               name = "bloklid-profile";
-              Entrypoint = [ "${bloklidPackages.bloklid-aarch64-linux-profile}/bin/bloklid" ];
+              Entrypoint = [ "${bloklidPackages.binary-blokli-aarch64-linux-profile}/bin/bloklid" ];
               pkgsLinux = pkgsLinuxAarch64;
               env = [
                 "SSL_CERT_FILE=${pkgsLinuxAarch64.cacert}/etc/ssl/certs/ca-bundle.crt"
               ];
             };
-            bloklid-anvil-docker-aarch64 = nixLib.mkDockerImage {
+            docker-blokli-anvil-aarch64-linux = nixLib.mkDockerImage {
               name = "bloklid-anvil";
               Entrypoint = [ "${blokliAnvilEntrypoint}/bin/blokli-anvil-entrypoint" ];
               pkgsLinux = pkgsLinuxAarch64;
@@ -306,7 +305,7 @@
                 "SSL_CERT_FILE=${pkgsLinuxAarch64.cacert}/etc/ssl/certs/ca-bundle.crt"
               ];
               extraContents = [
-                bloklidPackages.bloklid-aarch64-linux
+                bloklidPackages.binary-blokli-aarch64-linux
                 pkgsLinuxAarch64.curl
                 pkgsLinuxAarch64.foundry
                 blokliAnvilEntrypoint
@@ -314,73 +313,36 @@
             };
           };
 
-          # Multi-architecture Docker manifests using nix-lib
-          # Note: aarch64 temporarily disabled until GitHub runner supports it
-          bloklidDockerMultiArch = {
-            # Production multi-arch manifest (amd64 only until runner supports aarch64)
-            bloklid-docker-manifest = nixLib.mkMultiArchManifest {
-              name = "bloklid";
-              tag = bloklidCrateInfo.version;
-              images = [
-                {
-                  image = bloklidDocker.bloklid-docker-amd64;
-                  platform = "linux/amd64";
-                }
-                # Disabled until GitHub runner supports aarch64
-                # {
-                #   image = bloklidDocker.bloklid-docker-aarch64;
-                #   platform = "linux/arm64";
-                # }
-              ];
-            };
-
-            # Development multi-arch manifest (amd64 only until runner supports aarch64)
-            bloklid-dev-docker-manifest = nixLib.mkMultiArchManifest {
-              name = "bloklid-dev";
-              tag = bloklidCrateInfo.version;
-              images = [
-                {
-                  image = bloklidDocker.bloklid-dev-docker-amd64;
-                  platform = "linux/amd64";
-                }
-                # Disabled until GitHub runner supports aarch64
-                # {
-                #   image = bloklidDocker.bloklid-dev-docker-aarch64;
-                #   platform = "linux/arm64";
-                # }
-              ];
-            };
-
-            # Profile multi-arch manifest (amd64 only until runner supports aarch64)
-            bloklid-profile-docker-manifest = nixLib.mkMultiArchManifest {
-              name = "bloklid-profile";
-              tag = bloklidCrateInfo.version;
-              images = [
-                {
-                  image = bloklidDocker.bloklid-profile-docker-amd64;
-                  platform = "linux/amd64";
-                }
-                # Disabled until GitHub runner supports aarch64
-                # {
-                #   image = bloklidDocker.bloklid-profile-docker-aarch64;
-                #   platform = "linux/arm64";
-                # }
-              ];
-            };
-          };
-
-          # Application definitions using nix-lib
-          # Multi-arch manifest upload apps - always use these to ensure both architectures are available
           dockerUploadApps = {
-            bloklid-docker-manifest-upload = nixLib.mkMultiArchUploadApp bloklidDockerMultiArch.bloklid-docker-manifest;
-            bloklid-dev-docker-manifest-upload = nixLib.mkMultiArchUploadApp bloklidDockerMultiArch.bloklid-dev-docker-manifest;
-            bloklid-profile-docker-manifest-upload = nixLib.mkMultiArchUploadApp bloklidDockerMultiArch.bloklid-profile-docker-manifest;
+            docker-blokli-upload-x86_64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-x86_64-linux;
+            docker-blokli-dev-upload-x86_64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-x86_64-linux-dev;
+            docker-blokli-profile-upload-x86_64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-x86_64-linux-profile;
+            docker-blokli-upload-aarch64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-aarch64-linux;
+            docker-blokli-dev-upload-aarch64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-aarch64-linux-dev;
+            docker-blokli-profile-upload-aarch64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-aarch64-linux-profile;
           };
 
           utilityApps = {
             update-github-labels = nixLib.mkUpdateGithubLabelsApp;
             audit = nixLib.mkAuditApp;
             check = nixLib.mkCheckApp { inherit system; };
+            test = {
+              type = "app";
+              program = toString (
+                pkgs.writeShellScript "test" ''
+                  nix develop --command ${pkgs.just}/bin/just test
+                ''
+              );
+            };
+            nextest = {
+              type = "app";
+              program = toString (
+                pkgs.writeShellScript "nextest" ''
+                  export PATH="${pkgs.cargo-nextest}/bin:$PATH"
+                  nix develop --command ${pkgs.just}/bin/just nextest
+                ''
+              );
+            };
           };
 
           # Rust toolchains
@@ -585,25 +547,18 @@
           packages = packages // {
             # Docker images - x86_64-linux
             inherit (bloklidDocker)
-              bloklid-docker-amd64
-              bloklid-dev-docker-amd64
-              bloklid-profile-docker-amd64
-              bloklid-anvil-docker-amd64
+              docker-blokli-x86_64-linux
+              docker-blokli-x86_64-linux-dev
+              docker-blokli-x86_64-linux-profile
+              docker-blokli-anvil-x86_64-linux
               ;
 
             # Docker images - aarch64-linux
             inherit (bloklidDocker)
-              bloklid-docker-aarch64
-              bloklid-dev-docker-aarch64
-              bloklid-profile-docker-aarch64
-              bloklid-anvil-docker-aarch64
-              ;
-
-            # Multi-arch manifests
-            inherit (bloklidDockerMultiArch)
-              bloklid-docker-manifest
-              bloklid-dev-docker-manifest
-              bloklid-profile-docker-manifest
+              docker-blokli-aarch64-linux
+              docker-blokli-aarch64-linux-dev
+              docker-blokli-aarch64-linux-profile
+              docker-blokli-anvil-aarch64-linux
               ;
 
             # Set default package

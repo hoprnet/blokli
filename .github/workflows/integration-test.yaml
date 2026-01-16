@@ -3,12 +3,12 @@ on:
   workflow_call:
     inputs:
       image:
-        description: 'Docker image to test'
+        description: Docker image to test
         required: true
         type: string
 jobs:
   integration-test:
-    name: Run Integration Tests
+    name: Integration Tests
     runs-on: self-hosted-hoprnet-bigger
     timeout-minutes: 20
     steps:

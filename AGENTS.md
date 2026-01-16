@@ -798,15 +798,15 @@ impl Query {
 3. Run `just test` or specific tests as needed
 4. If all checks pass, commit your changes
 
-## Docker Images and Multi-Architecture Support
+## Docker Images
 
 **Current Limitation:** ARM64 (aarch64) builds are temporarily disabled in CI due to GitHub runner limitations. Only AMD64 images are currently built and deployed via CI. The multi-arch manifest structure is maintained for easy re-enablement.
 
 Local builds for all architectures remain fully functional:
 
-- `nix build .#bloklid-docker-amd64` - AMD64 Docker image
-- `nix build .#bloklid-docker-aarch64` - ARM64 Docker image (local build only)
-- `nix run .#bloklid-docker-manifest-upload` - Multi-arch manifest (amd64 only in CI)
+- `nix build .#docker-blokli-x86_64-linux` - Build `linux-amd64` docker image
+- `nix build .#docker-blokli-aarch64-linux` - Build `linux-arm64` docker image
+- `nix run .#docker-blokli-upload-x86_64-linux` - Build and publishes `linux-amd64` docker image
 
 ### Overview
 
@@ -821,33 +821,9 @@ The project uses Nix with nix-lib helpers to build reproducible Docker images fo
 
 Three image variants are available for each architecture:
 
-1. **bloklid-docker** - Production build (release profile, optimized)
-2. **bloklid-dev-docker** - Development build (dev profile, faster compilation)
-3. **bloklid-profile-docker** - Profiling build (with debug symbols)
-
-### Building and Uploading Docker Images
-
-Using nix-lib multi-arch helpers to build and upload all architectures with automatic manifest creation:
-
-```bash
-# Build, upload all architectures, and create multi-arch manifest
-IMAGE_TARGET=gcr.io/project/bloklid:1.0.0 \
-GOOGLE_ACCESS_TOKEN=$TOKEN \
-nix run .#bloklid-docker-manifest-upload
-
-# Development variant
-nix run .#bloklid-dev-docker-manifest-upload
-
-# Profile variant
-nix run .#bloklid-profile-docker-manifest-upload
-```
-
-This approach:
-
-1. Builds Docker image for amd64 (arm64 disabled until runner supports it)
-2. Uploads platform-specific image with suffix (`-linux-amd64`)
-3. Creates and pushes an OCI manifest list
-4. Ready to support multiple architectures when aarch64 runner is available
+1. **docker-blokli** - Production build (release profile, optimized)
+2. **docker-blokli-dev** - Development build (dev profile, faster compilation)
+3. **docker-blokli-profile** - Profiling build (with debug symbols)
 
 ### CI/CD Workflows
 

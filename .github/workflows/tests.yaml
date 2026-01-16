@@ -1,0 +1,45 @@
+#################################################################################
+# Pipeline to test on pull requests                                             #
+#################################################################################
+name: Tests
+on:
+  pull_request:
+    types:
+      - opened
+      - synchronize
+      - reopened
+      - ready_for_review
+concurrency:
+  group: ${{ github.ref }}-tests
+  cancel-in-progress: true
+permissions:
+  contents: read
+env:
+  CARGO_TERM_COLOR: always
+jobs:
+  test:
+    name: Unit Tests
+    runs-on: self-hosted-hoprnet-bigger
+    steps:
+      - name: Checkout hoprnet repository
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+      - name: Setup Nix
+        uses: hoprnet/hopr-workflows/actions/setup-nix@c8d45034bb33307dfda3b4dfcd1fc4000cadc05a # setup-nix-v1
+        with:
+          cachix_cache_name: blokli
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Run unit tests
+        run: nix run -L .#test
+  nextest:
+    name: Nextest
+    runs-on: self-hosted-hoprnet-bigger
+    steps:
+      - name: Checkout hoprnet repository
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+      - name: Setup Nix
+        uses: hoprnet/hopr-workflows/actions/setup-nix@c8d45034bb33307dfda3b4dfcd1fc4000cadc05a # setup-nix-v1
+        with:
+          cachix_cache_name: blokli
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      - name: Run unit tests using nextest
+        run: nix run -L .#nextest

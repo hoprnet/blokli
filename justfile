@@ -64,6 +64,13 @@ nextest:
 nextest-package package:
     cargo nextest run -p {{ package }}
 
+# Run integration tests (requires Docker image with BLOKLI_TEST_REMOTE_IMAGE env var)
+integration-test:
+    cargo test --package blokli-integration-tests
+
+# Run system tests (full smoke test suite)
+system-test: smoke-test-full
+
 # ============================================================================
 # Code Quality
 # ============================================================================
@@ -201,12 +208,12 @@ docker-logs service="":
 
 # Build bloklid Docker image from Nix
 docker-build:
-    nix build .#bloklid-docker
+    nix build .#docker-blokli-x86_64-linux
     docker load < result
 
 # Build bloklid + anvil Docker image from Nix
 docker-build-anvil:
-    nix build .#bloklid-anvil-docker-amd64
+    nix build .#docker-blokli-anvil-x86_64-linux
     docker load < result
 
 # Run bloklid + anvil container (GraphQL API on port 8080)
