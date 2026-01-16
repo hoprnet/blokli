@@ -1,8 +1,8 @@
 use blokli_db_entity::{
     hopr_safe_contract::Column as SafeContractColumn,
     prelude::{
-        Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, HoprBalance, HoprSafeContract, Log,
-        LogStatus, LogTopicInfo, NativeBalance,
+        Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, HoprBalance, HoprNodeSafeRegistration,
+        HoprSafeContract, Log, LogStatus, LogTopicInfo, NativeBalance,
     },
 };
 use migration::MIGRATION_MARKER_BLOCK_ID;
@@ -176,6 +176,9 @@ async fn clear_index_data(db: &DatabaseConnection) -> Result<()> {
         .filter(SafeContractColumn::DeployedBlock.ne(MIGRATION_MARKER_BLOCK_ID))
         .exec(db)
         .await?;
+
+    // NodeSafeRegistrations table
+    HoprNodeSafeRegistration::delete_many().exec(db).await?;
 
     // Info tables
     ChainInfo::delete_many().exec(db).await?;
