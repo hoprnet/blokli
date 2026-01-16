@@ -1809,7 +1809,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-indexer"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1851,7 +1851,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-rpc"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2093,7 +2093,7 @@ dependencies = [
 
 [[package]]
 name = "bloklid"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",
