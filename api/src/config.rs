@@ -212,11 +212,6 @@ mod tests {
         assert_eq!(config.sse_keepalive.interval, Duration::from_secs(15));
         assert_eq!(config.sse_keepalive.text, "keep-alive");
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 
     #[test]
     fn test_chain_id_from_valid_env_var() {
