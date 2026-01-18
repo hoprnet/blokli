@@ -102,6 +102,15 @@ bind_address = "0.0.0.0:8080"
 # Enable GraphQL Playground for development and testing (default: true)
 playground_enabled = true
 
+# SSE keepalive configuration
+[api.sse_keepalive]
+# Enable keepalive comments to prevent idle timeouts (default: true)
+enabled = true
+# Interval between keepalive comments (default: 15s)
+interval = "15s"
+# Comment text sent for keepalive messages (default: "keep-alive")
+text = "keep-alive"
+
 # Health check configuration for Kubernetes probes
 [api.health]
 # Maximum allowed indexer lag before the server reports "not ready"

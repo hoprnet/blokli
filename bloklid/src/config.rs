@@ -324,6 +324,15 @@ impl Config {
         output.push_str(&format!("  api.bind_address: {}\n", self.api.bind_address));
         output.push_str(&format!("  api.playground_enabled: {}\n", self.api.playground_enabled));
         output.push_str(&format!(
+            "  api.sse_keepalive.enabled: {}\n",
+            self.api.sse_keepalive.enabled
+        ));
+        output.push_str(&format!(
+            "  api.sse_keepalive.interval: {:?}\n",
+            self.api.sse_keepalive.interval
+        ));
+        output.push_str(&format!("  api.sse_keepalive.text: {}\n", self.api.sse_keepalive.text));
+        output.push_str(&format!(
             "  api.health.max_indexer_lag: {}\n",
             self.api.health.max_indexer_lag
         ));
@@ -396,7 +405,26 @@ pub struct ApiConfig {
     pub playground_enabled: bool,
 
     #[serde(default)]
+    pub sse_keepalive: SseKeepAliveConfig,
+
+    #[serde(default)]
     pub health: HealthConfig,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
+#[serde(deny_unknown_fields)]
+pub struct SseKeepAliveConfig {
+    #[default(true)]
+    #[serde(default = "default_sse_keepalive_enabled")]
+    pub enabled: bool,
+
+    #[default(_code = "Duration::from_secs(15)")]
+    #[serde(default = "default_sse_keepalive_interval", with = "humantime_serde")]
+    pub interval: Duration,
+
+    #[default(_code = "default_sse_keepalive_text()")]
+    #[serde(default = "default_sse_keepalive_text")]
+    pub text: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
@@ -441,6 +469,18 @@ fn default_shutdown_signal_capacity() -> usize {
 
 fn default_batch_size() -> usize {
     100
+}
+
+fn default_sse_keepalive_enabled() -> bool {
+    true
+}
+
+fn default_sse_keepalive_interval() -> Duration {
+    Duration::from_secs(15)
+}
+
+fn default_sse_keepalive_text() -> String {
+    "keep-alive".to_string()
 }
 
 fn default_max_indexer_lag() -> u64 {
@@ -576,6 +616,38 @@ mod tests {
      "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_ok(), "Should pass on valid config: {:?}", res.err());
+    }
+
+    #[test]
+    fn test_api_sse_keepalive_defaults() {
+        let config = r#"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let cfg: Config = toml::from_str(config).expect("Failed to parse config");
+        assert!(cfg.api.sse_keepalive.enabled);
+        assert_eq!(cfg.api.sse_keepalive.interval, Duration::from_secs(15));
+        assert_eq!(cfg.api.sse_keepalive.text, "keep-alive");
+    }
+
+    #[test]
+    fn test_api_sse_keepalive_override() {
+        let config = r#"
+         [api.sse_keepalive]
+         enabled = false
+         interval = "5s"
+         text = "ping"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let cfg: Config = toml::from_str(config).expect("Failed to parse config");
+        assert!(!cfg.api.sse_keepalive.enabled);
+        assert_eq!(cfg.api.sse_keepalive.interval, Duration::from_secs(5));
+        assert_eq!(cfg.api.sse_keepalive.text, "ping");
     }
 
     #[test]
