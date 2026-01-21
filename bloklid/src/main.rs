@@ -14,6 +14,7 @@ use std::{
 use ::config as config_rs;
 use async_signal::{Signal, Signals};
 use blokli_chain_api::BlokliChain;
+use blokli_chain_indexer::utils::redact_url;
 use blokli_chain_types::{AlloyAddressExt, ChainConfig};
 use blokli_db::db::{BlokliDb, BlokliDbConfig};
 use clap::{Parser, Subcommand};
@@ -25,7 +26,7 @@ use tracing_subscriber::{EnvFilter, prelude::*};
 use validator::Validate;
 
 use crate::{
-    config::{Config, redact_database_url, redact_rpc_url},
+    config::{Config, redact_database_url},
     errors::{BloklidError, ConfigError},
     network::Network,
 };
@@ -135,6 +136,9 @@ impl Args {
             ("BLOKLI_API_ENABLED", "api.enabled"),
             ("BLOKLI_API_BIND_ADDRESS", "api.bind_address"),
             ("BLOKLI_API_PLAYGROUND_ENABLED", "api.playground_enabled"),
+            ("BLOKLI_API_SSE_KEEPALIVE_ENABLED", "api.sse_keepalive.enabled"),
+            ("BLOKLI_API_SSE_KEEPALIVE_INTERVAL", "api.sse_keepalive.interval"),
+            ("BLOKLI_API_SSE_KEEPALIVE_TEXT", "api.sse_keepalive.text"),
             // API Health
             ("BLOKLI_API_HEALTH_MAX_INDEXER_LAG", "api.health.max_indexer_lag"),
             ("BLOKLI_API_HEALTH_TIMEOUT", "api.health.timeout"),
@@ -150,6 +154,7 @@ impl Args {
             "indexer.enable_logs_snapshot",
             "api.enabled",
             "api.playground_enabled",
+            "api.sse_keepalive.enabled",
         ];
 
         for (env_var, config_key) in env_mappings {
@@ -456,7 +461,7 @@ async fn run(args: Args) -> errors::Result<()> {
             .await
             .map_err(|e| BloklidError::NonSpecific(format!("Failed to initialize database singletons: {e}")))?;
 
-        info!("Connecting to RPC endpoint: {}", redact_rpc_url(&rpc_url));
+        info!("Connecting to RPC endpoint: {}", redact_url(&rpc_url));
 
         // Extract chain_id and network name for configuration
         let chain_id = chain_network.chain_id;
@@ -502,6 +507,11 @@ async fn run(args: Args) -> errors::Result<()> {
                 rpc_url: rpc_url_for_api,
                 contract_addresses: contracts,
                 expected_block_time,
+                sse_keepalive: blokli_api::config::SseKeepAliveConfig {
+                    enabled: api_config.sse_keepalive.enabled,
+                    interval: api_config.sse_keepalive.interval,
+                    text: api_config.sse_keepalive.text.clone(),
+                },
                 health: blokli_api::config::HealthConfig {
                     max_indexer_lag: api_config.health.max_indexer_lag,
                     timeout: api_config.health.timeout,

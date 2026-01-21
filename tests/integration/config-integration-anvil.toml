@@ -39,6 +39,11 @@ bind_address       = "0.0.0.0:8081"
 enabled            = true
 playground_enabled = true
 
+[api.sse_keepalive]
+enabled  = true
+interval = "1s"
+text     = "keep-alive"
+
 # Health check configuration
 [api.health]
 # Allow higher lag for integration tests since we're starting from scratch

@@ -31,6 +31,7 @@ use crate::{
         LOGS_SNAPSHOT_DOWNLOADER_MAX_RETRIES, LOGS_SNAPSHOT_DOWNLOADER_MAX_SIZE, LOGS_SNAPSHOT_DOWNLOADER_TIMEOUT,
     },
     snapshot::error::{SnapshotError, SnapshotResult},
+    utils::redact_url,
 };
 
 /// Configuration for snapshot downloads with safety limits.
@@ -173,7 +174,8 @@ impl SnapshotDownloader {
 
     /// Performs a single download attempt
     async fn download_snapshot_once(&self, url: &str, target_path: &Path) -> SnapshotResult<()> {
-        info!(%url, "Downloading logs snapshot file");
+        let redacted_url = redact_url(url);
+        info!(%redacted_url, "Downloading logs snapshot file");
 
         // Check available disk space
         let parent_dir = target_path

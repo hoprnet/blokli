@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use blokli_chain_indexer::utils::redact_url;
 use blokli_chain_types::{ChainConfig, ContractAddresses};
 
 use crate::network::Network;
@@ -31,55 +32,6 @@ pub fn redact_database_url(url: &str) -> String {
             format!("{}REDACTED:REDACTED{}", scheme, after_at)
         } else {
             // No credentials, return as-is
-            url.to_string()
-        }
-    } else {
-        // Not a URL format, return as-is
-        url.to_string()
-    }
-}
-
-/// Redacts username, password, and path/query from RPC URLs while keeping protocol, host, and port visible
-///
-/// # Examples
-/// ```
-/// # use bloklid::config::redact_rpc_url;
-/// assert_eq!(
-///     redact_rpc_url("https://user:pass@api.infura.io/v3/key123"),
-///     "https://api.infura.io/REDACTED"
-/// );
-/// assert_eq!(
-///     redact_rpc_url("https://api.infura.io/v3/key123"),
-///     "https://api.infura.io/REDACTED"
-/// );
-/// assert_eq!(redact_rpc_url("http://localhost:8545"), "http://localhost:8545");
-/// ```
-pub fn redact_rpc_url(url: &str) -> String {
-    // Parse the URL to extract components
-    if let Some(scheme_end) = url.find("://") {
-        let scheme = &url[..scheme_end + 3];
-        let rest = &url[scheme_end + 3..];
-
-        // Check if there's an @ sign indicating credentials
-        let (host_part, has_credentials) = if let Some(at_pos) = rest.find('@') {
-            (&rest[at_pos + 1..], true)
-        } else {
-            (rest, false)
-        };
-
-        // Extract host and port (everything before the first / or ?)
-        let host_end = host_part
-            .find('/')
-            .or_else(|| host_part.find('?'))
-            .unwrap_or(host_part.len());
-        let host = &host_part[..host_end];
-        let has_path = host_end < host_part.len();
-
-        // Reconstruct URL
-        if has_credentials || has_path {
-            format!("{}{}/REDACTED", scheme, host)
-        } else {
-            // No credentials or path, return as-is
             url.to_string()
         }
     } else {
@@ -345,7 +297,7 @@ impl Config {
         let mut output = String::new();
         output.push_str("Configuration:\n");
         output.push_str(&format!("  network: {}\n", self.network));
-        output.push_str(&format!("  rpc_url: {}\n", redact_rpc_url(&self.rpc_url)));
+        output.push_str(&format!("  rpc_url: {}\n", redact_url(&self.rpc_url)));
         output.push_str(&format!("  data_directory: {}\n", self.data_directory));
         output.push_str(&format!(
             "  max_rpc_requests_per_sec: {}\n",
@@ -365,15 +317,21 @@ impl Config {
         ));
 
         if let Some(snapshot_url) = &self.indexer.logs_snapshot_url {
-            output.push_str(&format!(
-                "  indexer.logs_snapshot_url: {}\n",
-                redact_rpc_url(snapshot_url)
-            ));
+            output.push_str(&format!("  indexer.logs_snapshot_url: {}\n", redact_url(snapshot_url)));
         }
 
         output.push_str(&format!("  api.enabled: {}\n", self.api.enabled));
         output.push_str(&format!("  api.bind_address: {}\n", self.api.bind_address));
         output.push_str(&format!("  api.playground_enabled: {}\n", self.api.playground_enabled));
+        output.push_str(&format!(
+            "  api.sse_keepalive.enabled: {}\n",
+            self.api.sse_keepalive.enabled
+        ));
+        output.push_str(&format!(
+            "  api.sse_keepalive.interval: {:?}\n",
+            self.api.sse_keepalive.interval
+        ));
+        output.push_str(&format!("  api.sse_keepalive.text: {}\n", self.api.sse_keepalive.text));
         output.push_str(&format!(
             "  api.health.max_indexer_lag: {}\n",
             self.api.health.max_indexer_lag
@@ -447,7 +405,26 @@ pub struct ApiConfig {
     pub playground_enabled: bool,
 
     #[serde(default)]
+    pub sse_keepalive: SseKeepAliveConfig,
+
+    #[serde(default)]
     pub health: HealthConfig,
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
+#[serde(deny_unknown_fields)]
+pub struct SseKeepAliveConfig {
+    #[default(true)]
+    #[serde(default = "default_sse_keepalive_enabled")]
+    pub enabled: bool,
+
+    #[default(_code = "Duration::from_secs(15)")]
+    #[serde(default = "default_sse_keepalive_interval", with = "humantime_serde")]
+    pub interval: Duration,
+
+    #[default(_code = "default_sse_keepalive_text()")]
+    #[serde(default = "default_sse_keepalive_text")]
+    pub text: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
@@ -492,6 +469,18 @@ fn default_shutdown_signal_capacity() -> usize {
 
 fn default_batch_size() -> usize {
     100
+}
+
+fn default_sse_keepalive_enabled() -> bool {
+    true
+}
+
+fn default_sse_keepalive_interval() -> Duration {
+    Duration::from_secs(15)
+}
+
+fn default_sse_keepalive_text() -> String {
+    "keep-alive".to_string()
 }
 
 fn default_max_indexer_lag() -> u64 {
@@ -627,6 +616,38 @@ mod tests {
      "#;
         let res: Result<Config, _> = toml::from_str(config);
         assert!(res.is_ok(), "Should pass on valid config: {:?}", res.err());
+    }
+
+    #[test]
+    fn test_api_sse_keepalive_defaults() {
+        let config = r#"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let cfg: Config = toml::from_str(config).expect("Failed to parse config");
+        assert!(cfg.api.sse_keepalive.enabled);
+        assert_eq!(cfg.api.sse_keepalive.interval, Duration::from_secs(15));
+        assert_eq!(cfg.api.sse_keepalive.text, "keep-alive");
+    }
+
+    #[test]
+    fn test_api_sse_keepalive_override() {
+        let config = r#"
+         [api.sse_keepalive]
+         enabled = false
+         interval = "5s"
+         text = "ping"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let cfg: Config = toml::from_str(config).expect("Failed to parse config");
+        assert!(!cfg.api.sse_keepalive.enabled);
+        assert_eq!(cfg.api.sse_keepalive.interval, Duration::from_secs(5));
+        assert_eq!(cfg.api.sse_keepalive.text, "ping");
     }
 
     #[test]
@@ -767,66 +788,9 @@ mod tests {
     }
 
     #[test]
-    fn test_redact_rpc_url_with_credentials_and_path() {
-        // URL with credentials and path should redact both
-        let url = "https://user:pass@api.infura.io/v3/secret-key-123";
-        let redacted = redact_rpc_url(url);
-        assert_eq!(redacted, "https://api.infura.io/REDACTED");
-    }
-
-    #[test]
-    fn test_redact_rpc_url_with_path_only() {
-        // URL with path but no credentials should hide path
-        let url = "https://api.infura.io/v3/secret-key-123";
-        let redacted = redact_rpc_url(url);
-        assert_eq!(redacted, "https://api.infura.io/REDACTED");
-    }
-
-    #[test]
-    fn test_redact_rpc_url_without_path_or_credentials() {
-        // URL with neither path nor credentials should remain unchanged
-        let url = "http://localhost:8545";
-        let redacted = redact_rpc_url(url);
-        assert_eq!(redacted, "http://localhost:8545");
-    }
-
-    #[test]
-    fn test_redact_rpc_url_with_credentials_no_path() {
-        // URL with credentials but no path
-        let url = "https://user:pass@api.example.com";
-        let redacted = redact_rpc_url(url);
-        assert_eq!(redacted, "https://api.example.com/REDACTED");
-    }
-
-    #[test]
-    fn test_redact_rpc_url_with_query_string() {
-        // URL with query string should hide it
-        let url = "https://api.example.com/endpoint?apiKey=secret123";
-        let redacted = redact_rpc_url(url);
-        assert_eq!(redacted, "https://api.example.com/REDACTED");
-    }
-
-    #[test]
-    fn test_redact_rpc_url_with_port() {
-        // URL with port but no path
-        let url = "http://localhost:3000";
-        let redacted = redact_rpc_url(url);
-        assert_eq!(redacted, "http://localhost:3000");
-    }
-
-    #[test]
-    fn test_redact_rpc_url_with_port_and_path() {
-        // URL with port and path
-        let url = "http://localhost:3000/api/v1";
-        let redacted = redact_rpc_url(url);
-        assert_eq!(redacted, "http://localhost:3000/REDACTED");
-    }
-
-    #[test]
     fn test_redact_non_url_string() {
-        // Non-URL string should remain unchanged
+        // Non-URL string should remain unchanged for database URLs
         let not_url = "just-a-string";
         assert_eq!(redact_database_url(not_url), not_url);
-        assert_eq!(redact_rpc_url(not_url), not_url);
     }
 }
