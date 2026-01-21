@@ -5,6 +5,7 @@ mod network;
 
 use std::{
     path::PathBuf,
+    process::ExitCode,
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -251,22 +252,12 @@ impl Args {
     }
 }
 
-#[tokio::main]
-async fn main() {
-    if let Err(error) = run().await {
-        eprintln!("Error: {}", error);
-        std::process::exit(1);
-    }
-}
-
-async fn run() -> errors::Result<()> {
-    let args = Args::parse();
-
+fn init_logger(verbosity: u8) -> errors::Result<()> {
     // Initialize tracing subscriber. Precedence: RUST_LOG env > -v flag > default info
     let env_filter = if std::env::var(EnvFilter::DEFAULT_ENV).is_ok() {
         EnvFilter::from_default_env()
     } else {
-        match args.verbose {
+        match verbosity {
             0 => EnvFilter::new("info"),
             1 => EnvFilter::new("debug"),
             _ => EnvFilter::new("trace"),
@@ -294,6 +285,35 @@ async fn run() -> errors::Result<()> {
 
     tracing::subscriber::set_global_default(registry).map_err(|e| BloklidError::NonSpecific(e.to_string()))?;
 
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    const BIN_NAME: &str = env!("CARGO_PKG_NAME");
+
+    let args = match Args::try_parse() {
+        Ok(args) => args,
+        Err(error) => {
+            eprintln!("error parsing '{BIN_NAME}' arguments: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if let Err(error) = init_logger(args.verbose) {
+        eprintln!("error initializing '{BIN_NAME}' logger: {error}");
+        return ExitCode::FAILURE;
+    }
+
+    if let Err(error) = run(args).await {
+        tracing::error!(%error, "error while running '{BIN_NAME}'");
+        return ExitCode::FAILURE;
+    }
+
+    ExitCode::SUCCESS
+}
+
+async fn run(args: Args) -> errors::Result<()> {
     // Handle subcommands
     if let Some(command) = args.command {
         match command {
