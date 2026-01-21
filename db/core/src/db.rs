@@ -190,43 +190,21 @@ impl BlokliDb {
         // Apply migrations based on database backend
         if is_sqlite && logs_db.is_some() {
             // For SQLite with dual databases: run separate migrations on each database
-            if cfg.network_name.eq_ignore_ascii_case("rotsee") {
-                MigratorIndex::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
-                    .await
-                    .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
-            } else if cfg.network_name.eq_ignore_ascii_case("dufour") {
-                MigratorIndex::<{ SafeDataOrigin::Dufour as u8 }>::up(&db, None)
-                    .await
-                    .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
-            } else {
-                MigratorIndex::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-                    .await
-                    .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
-            }
+            MigratorIndex::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+                .await
+                .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
 
             MigratorChainLogs::up(logs_db.as_ref().unwrap(), None)
                 .await
                 .map_err(|e| DbSqlError::Construction(format!("cannot apply logs migrations: {e}")))?;
+        } else if is_sqlite {
+            Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+                .await
+                .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
         } else {
-            if is_sqlite {
-                if cfg.network_name.eq_ignore_ascii_case("rotsee") {
-                    Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
-                        .await
-                        .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
-                } else if cfg.network_name.eq_ignore_ascii_case("dufour") {
-                    Migrator::<{ SafeDataOrigin::Dufour as u8 }>::up(&db, None)
-                        .await
-                        .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
-                } else {
-                    Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-                        .await
-                        .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
-                }
-            } else {
-                Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-                    .await
-                    .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
-            }
+            Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+                .await
+                .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
         }
 
         // Check schema version and clear data if needed

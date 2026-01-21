@@ -187,7 +187,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
 
     // Run migrations if configured
     if config.run_migrations {
-        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
             .await
             .expect("Failed to run database migrations");
     }
