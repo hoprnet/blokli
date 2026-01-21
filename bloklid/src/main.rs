@@ -295,6 +295,13 @@ async fn main() -> ExitCode {
     let args = match Args::try_parse() {
         Ok(args) => args,
         Err(error) => {
+            if matches!(
+                error.kind(),
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+            ) {
+                let _ = error.print();
+                return ExitCode::SUCCESS;
+            }
             eprintln!("error parsing '{BIN_NAME}' arguments: {error}");
             return ExitCode::FAILURE;
         }
