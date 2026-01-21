@@ -189,6 +189,10 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         self.indexer_state.clone()
     }
 
+    pub fn db(&self) -> &T {
+        &self.db
+    }
+
     pub fn transaction_executor(&self) -> Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>> {
         self.transaction_executor.clone()
     }

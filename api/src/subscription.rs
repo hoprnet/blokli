@@ -1802,7 +1802,10 @@ mod tests {
             id: Default::default(),
             address: Set(safe_address_1.clone()),
         };
-        let identity_1 = safe_identity_1.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
+        let identity_1 = safe_identity_1
+            .insert(db.conn(blokli_db::TargetDb::Index))
+            .await
+            .unwrap();
 
         // Create state 1
         let safe_state_1 = hopr_safe_contract_state::ActiveModel {
@@ -1825,7 +1828,10 @@ mod tests {
             id: Default::default(),
             address: Set(safe_address_2.clone()),
         };
-        let identity_2 = safe_identity_2.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
+        let identity_2 = safe_identity_2
+            .insert(db.conn(blokli_db::TargetDb::Index))
+            .await
+            .unwrap();
 
         // Create state 2
         let safe_state_2 = hopr_safe_contract_state::ActiveModel {
