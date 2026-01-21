@@ -482,7 +482,6 @@ async fn run(args: Args) -> errors::Result<()> {
         // Create BlokliChain instance
         let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, rpc_url)?;
 
-        startup::load_preseeded_safes(blokli_chain.db()).await?;
         startup::refresh_preseeded_safe_modules(blokli_chain.db(), blokli_chain.rpc()).await?;
 
         // Get IndexerState for API subscriptions

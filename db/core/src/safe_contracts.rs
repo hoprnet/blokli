@@ -39,6 +39,87 @@ pub struct SafeContractEntry {
 /// need their module addresses refreshed on startup.
 pub const PRESEEDED_BLOCK: i64 = 30_000_000;
 
+struct SafeCsvEntry {
+    address: Address,
+    module_address: Address,
+    chain_key: Address,
+    deployed_tx_index: u64,
+    deployed_log_index: u64,
+}
+
+fn parse_csv_entry(line: &str, line_number: usize) -> Result<Option<SafeCsvEntry>> {
+    let fields: Vec<&str> = line.split(',').map(str::trim).collect();
+    if fields.len() < 6 {
+        return Ok(None);
+    }
+
+    let address: Address = fields[0]
+        .parse()
+        .map_err(|e| DbSqlError::Construction(format!("invalid safe address on line {line_number}: {e}")))?;
+    let module_address: Address = fields[1]
+        .parse()
+        .map_err(|e| DbSqlError::Construction(format!("invalid module address on line {line_number}: {e}")))?;
+    let chain_key: Address = fields[2]
+        .parse()
+        .map_err(|e| DbSqlError::Construction(format!("invalid chain key on line {line_number}: {e}")))?;
+    let deployed_tx_index: u64 = fields[4]
+        .parse()
+        .map_err(|e| DbSqlError::Construction(format!("invalid tx index on line {line_number}: {e}")))?;
+    let deployed_log_index: u64 = fields[5]
+        .parse()
+        .map_err(|e| DbSqlError::Construction(format!("invalid log index on line {line_number}: {e}")))?;
+
+    Ok(Some(SafeCsvEntry {
+        address,
+        module_address,
+        chain_key,
+        deployed_tx_index,
+        deployed_log_index,
+    }))
+}
+
+async fn load_preseeded_safes_from_csv<'a, Db>(db: &'a Db, tx: OptTx<'a>, csv_data: &str) -> Result<usize>
+where
+    Db: BlokliDbSafeContractOperations + Sync,
+{
+    let mut loaded = 0;
+
+    let tx = db.nest_transaction(tx).await?;
+
+    for (index, line) in csv_data.lines().enumerate() {
+        if index == 0 {
+            continue;
+        }
+
+        let Some(entry) = parse_csv_entry(line, index + 1)? else {
+            continue;
+        };
+
+        let existing = HoprSafeContract::find()
+            .filter(hopr_safe_contract::Column::Address.eq(entry.address.as_ref().to_vec()))
+            .one(tx.as_ref())
+            .await?;
+        if existing.is_some() {
+            continue;
+        }
+
+        db.upsert_safe_contract(
+            Some(&tx),
+            entry.address,
+            entry.module_address,
+            entry.chain_key,
+            PRESEEDED_BLOCK as u64,
+            entry.deployed_tx_index,
+            entry.deployed_log_index,
+        )
+        .await?;
+        loaded += 1;
+    }
+
+    tx.commit().await?;
+    Ok(loaded)
+}
+
 #[async_trait]
 pub trait BlokliDbSafeContractOperations: BlokliDbGeneralModelOperations {
     /// Create safe contract entry from deployment event (temporal pattern).
@@ -170,6 +251,8 @@ pub trait BlokliDbSafeContractOperations: BlokliDbGeneralModelOperations {
     /// # Returns
     /// Vector of safe entries that only have pre-seeded state
     async fn get_preseeded_safes<'a>(&'a self, tx: OptTx<'a>) -> Result<Vec<SafeContractEntry>>;
+
+    async fn load_preseeded_safes<'a>(&'a self, tx: OptTx<'a>) -> Result<usize>;
 
     #[allow(clippy::too_many_arguments)]
     async fn update_safe_module_address<'a>(
@@ -416,6 +499,11 @@ impl BlokliDbSafeContractOperations for BlokliDb {
         Ok(states.iter().map(|s| combine_entry(&identity, s)).collect())
     }
 
+    async fn load_preseeded_safes<'a>(&'a self, tx: OptTx<'a>) -> Result<usize> {
+        let csv_data = include_str!("../../migration/src/data/safe-v3-rotsee.csv");
+        load_preseeded_safes_from_csv(self, tx, csv_data).await
+    }
+
     async fn get_preseeded_safes<'a>(&'a self, tx: OptTx<'a>) -> Result<Vec<SafeContractEntry>> {
         let tx = self.nest_transaction(tx).await?;
 
@@ -524,6 +612,7 @@ impl BlokliDbSafeContractOperations for BlokliDb {
 
 #[cfg(test)]
 mod tests {
+    use hopr_primitive_types::prelude::ToHex;
     use sea_orm::PaginatorTrait;
 
     use super::*;
@@ -532,6 +621,38 @@ mod tests {
     /// Generates a new random `Address` from cryptographically secure random bytes.
     fn random_address() -> Address {
         Address::from(hopr_crypto_random::random_bytes())
+    }
+
+    #[tokio::test]
+    async fn test_load_preseeded_safes_from_csv() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let safe_address = random_address();
+        let module_address = random_address();
+        let chain_key = random_address();
+
+        let csv_data = format!(
+            "address,module_address,chain_key,deployed_block,deployed_tx_index,deployed_log_index\n{},{},{},30000000,\
+             0,1\n",
+            safe_address.to_hex(),
+            module_address.to_hex(),
+            chain_key.to_hex()
+        );
+
+        let loaded = load_preseeded_safes_from_csv(&db, None, &csv_data).await?;
+        assert_eq!(loaded, 1);
+
+        let entry = db
+            .get_safe_contract_by_address(None, safe_address)
+            .await?
+            .expect("safe should exist");
+        assert_eq!(entry.module_address, module_address.as_ref().to_vec());
+        assert_eq!(entry.published_block, PRESEEDED_BLOCK);
+
+        let loaded_again = load_preseeded_safes_from_csv(&db, None, &csv_data).await?;
+        assert_eq!(loaded_again, 0);
+
+        Ok(())
     }
 
     // ============================================================================
