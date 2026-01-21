@@ -364,18 +364,17 @@ mod tests {
             .await?;
 
         // Verify safe was created in database with module address from RPC
-        let safe = HoprSafeContract::find()
-            .filter(hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
-            .one(db.conn(blokli_db::TargetDb::Index))
+        let safe = db
+            .get_safe_contract_by_address(None, safe_address)
             .await?
             .expect("safe should exist");
 
         assert_eq!(safe.address, safe_address.as_ref().to_vec());
         assert_eq!(safe.chain_key, node_address.as_ref().to_vec());
         assert_eq!(safe.module_address, module_address.as_ref().to_vec()); // Module should be from RPC
-        assert_eq!(safe.deployed_block, 100);
-        assert_eq!(safe.deployed_tx_index, 5);
-        assert_eq!(safe.deployed_log_index, 10);
+        assert_eq!(safe.published_block, 100);
+        assert_eq!(safe.published_tx_index, 5);
+        assert_eq!(safe.published_log_index, 10);
 
         Ok(())
     }
@@ -429,15 +428,19 @@ mod tests {
             })
             .await?;
 
-        // Verify only 1 entry exists (the original one, since unique address constraint)
-        let safes = HoprSafeContract::find()
+        // Verify only 1 identity exists (the original one, since unique address constraint)
+        let safe_count = HoprSafeContract::find()
             .filter(hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
-            .all(db.conn(blokli_db::TargetDb::Index))
+            .count(db.conn(blokli_db::TargetDb::Index))
             .await?;
-        assert_eq!(safes.len(), 1);
+        assert_eq!(safe_count, 1);
 
-        // The entry should have the existing module address
-        assert_eq!(safes[0].module_address, existing_module_address.as_ref().to_vec());
+        // The latest state should have the existing module address
+        let safe = db
+            .get_safe_contract_by_address(None, safe_address)
+            .await?
+            .expect("safe should exist");
+        assert_eq!(safe.module_address, existing_module_address.as_ref().to_vec());
 
         Ok(())
     }
@@ -492,20 +495,19 @@ mod tests {
             })
             .await?;
 
-        // The handler should succeed with upsert - it updates the existing entry
-        // Verify the RPC was called and the existing entry was updated with the module address
-        let safe = HoprSafeContract::find()
-            .filter(hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
-            .one(db.conn(blokli_db::TargetDb::Index))
+        // The handler should succeed with upsert - it adds a new state entry
+        // Verify the RPC was called and the module address is now the RPC value
+        let safe = db
+            .get_safe_contract_by_address(None, safe_address)
             .await?
             .expect("safe should exist");
 
-        // The module address should now be updated to the RPC value (not zero anymore)
+        // The module address should be the RPC value
         assert_eq!(safe.module_address, rpc_module_address.as_ref().to_vec());
-        // The deployment coordinates should also be updated to the new event
-        assert_eq!(safe.deployed_block, 100);
-        assert_eq!(safe.deployed_tx_index, 5);
-        assert_eq!(safe.deployed_log_index, 10);
+        // The latest state should have the new event coordinates
+        assert_eq!(safe.published_block, 100);
+        assert_eq!(safe.published_tx_index, 5);
+        assert_eq!(safe.published_log_index, 10);
 
         Ok(())
     }
@@ -554,9 +556,8 @@ mod tests {
             .await?;
 
         // Verify safe was created with zero address for module
-        let safe = HoprSafeContract::find()
-            .filter(hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
-            .one(db.conn(blokli_db::TargetDb::Index))
+        let safe = db
+            .get_safe_contract_by_address(None, safe_address)
             .await?
             .expect("safe should exist");
 

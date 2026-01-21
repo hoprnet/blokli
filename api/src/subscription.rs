@@ -19,7 +19,7 @@ use blokli_db_entity::{
         account_aggregation::{fetch_accounts_by_keyids, fetch_accounts_with_filters},
         channel_aggregation::fetch_channels_with_state,
     },
-    hopr_node_safe_registration, hopr_safe_contract,
+    hopr_node_safe_registration, hopr_safe_contract, hopr_safe_contract_state,
 };
 use chrono::Utc;
 use futures::Stream;
@@ -747,48 +747,72 @@ impl SubscriptionRoot {
                             Ok(IndexerEvent::SafeDeployed(safe_addr)) => {
                                 let safe_addr_bytes = safe_addr.as_ref().to_vec();
                                 debug!(?safe_addr_bytes, "safe address");
-                                match hopr_safe_contract::Entity::find()
+                                // First find the identity
+                                let identity_result = hopr_safe_contract::Entity::find()
                                     .filter(hopr_safe_contract::Column::Address.eq(safe_addr_bytes))
                                     .one(&db)
-                                    .await
-                                {
-                                    Ok(Some(safe)) => {
-                                        debug!(safe_address = ?safe.address, "processing SafeDeployed event");
-                                        // Fetch registered nodes for this safe
-                                        let registered_nodes = match hopr_node_safe_registration::Entity::find()
-                                            .filter(hopr_node_safe_registration::Column::SafeAddress.eq(safe.address.clone()))
-                                            .all(&db)
-                                            .await
-                                        {
-                                            Ok(registrations) => registrations
-                                                .into_iter()
-                                                .filter_map(|reg| Address::try_from(reg.node_address.as_slice()).ok())
-                                                .map(|addr| addr.to_hex())
-                                                .collect(),
-                                            Err(e) => {
-                                                warn!(
-                                                    safe_address = ?safe.address,
-                                                    error = %e,
-                                                    "Failed to fetch registered nodes for safe, returning empty list"
-                                                );
-                                                Vec::new()
-                                            }
-                                        };
-                                        debug!(?safe, "yielding Safe from SafeDeployed event");
-                                        yield Safe {
-                                            address: Address::new(&safe.address).to_hex(),
-                                            module_address: Address::new(&safe.module_address).to_hex(),
-                                            chain_key: Address::new(&safe.chain_key).to_hex(),
-                                            registered_nodes,
-                                        };
-                                    }
+                                    .await;
+
+                                let identity = match identity_result {
+                                    Ok(Some(i)) => i,
                                     Ok(None) => {
                                         error!("Safe deployed event received but safe not found in DB: {}", safe_addr);
+                                        continue;
                                     }
                                     Err(e) => {
                                         error!("Failed to query safe for deployed event: {}", e);
+                                        continue;
                                     }
-                                }
+                                };
+
+                                // Fetch latest state for this identity
+                                let state = match hopr_safe_contract_state::Entity::find()
+                                    .filter(hopr_safe_contract_state::Column::HoprSafeContractId.eq(identity.id))
+                                    .order_by_desc(hopr_safe_contract_state::Column::PublishedBlock)
+                                    .order_by_desc(hopr_safe_contract_state::Column::PublishedTxIndex)
+                                    .order_by_desc(hopr_safe_contract_state::Column::PublishedLogIndex)
+                                    .one(&db)
+                                    .await
+                                {
+                                    Ok(Some(s)) => s,
+                                    Ok(None) => {
+                                        error!("Safe deployed but no state found: {}", safe_addr);
+                                        continue;
+                                    }
+                                    Err(e) => {
+                                        error!("Failed to query safe state: {}", e);
+                                        continue;
+                                    }
+                                };
+
+                                debug!(safe_address = ?identity.address, "processing SafeDeployed event");
+                                // Fetch registered nodes for this safe
+                                let registered_nodes = match hopr_node_safe_registration::Entity::find()
+                                    .filter(hopr_node_safe_registration::Column::SafeAddress.eq(identity.address.clone()))
+                                    .all(&db)
+                                    .await
+                                {
+                                    Ok(registrations) => registrations
+                                        .into_iter()
+                                        .filter_map(|reg| Address::try_from(reg.node_address.as_slice()).ok())
+                                        .map(|addr| addr.to_hex())
+                                        .collect(),
+                                    Err(e) => {
+                                        warn!(
+                                            safe_address = ?identity.address,
+                                            error = %e,
+                                            "Failed to fetch registered nodes for safe, returning empty list"
+                                        );
+                                        Vec::new()
+                                    }
+                                };
+                                debug!(?identity, "yielding Safe from SafeDeployed event");
+                                yield Safe {
+                                    address: Address::new(&identity.address).to_hex(),
+                                    module_address: Address::new(&state.module_address).to_hex(),
+                                    chain_key: Address::new(&state.chain_key).to_hex(),
+                                    registered_nodes,
+                                };
                             }
                             Ok(_) => {}
                             Err(async_broadcast::RecvError::Closed) => {
@@ -1625,21 +1649,29 @@ mod tests {
             .await
             .unwrap();
 
-        // Create a test safe in the database
+        // Create a test safe in the database (identity + state)
         let safe_address = vec![1; 20];
         let module_address = vec![2; 20];
         let chain_key = vec![3; 20];
 
-        let safe = hopr_safe_contract::ActiveModel {
+        // Create identity
+        let safe_identity = hopr_safe_contract::ActiveModel {
             id: Default::default(),
             address: Set(safe_address.clone()),
+        };
+        let identity = safe_identity.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
+
+        // Create state
+        let safe_state = hopr_safe_contract_state::ActiveModel {
+            id: Default::default(),
+            hopr_safe_contract_id: Set(identity.id),
             module_address: Set(module_address.clone()),
             chain_key: Set(chain_key.clone()),
-            deployed_block: Set(100),
-            deployed_tx_index: Set(0),
-            deployed_log_index: Set(0),
+            published_block: Set(100),
+            published_tx_index: Set(0),
+            published_log_index: Set(0),
         };
-        safe.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
+        safe_state.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
 
         // Setup schema
         let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
@@ -1760,36 +1792,52 @@ mod tests {
             .await
             .unwrap();
 
-        // Create two test safes in the database
+        // Create two test safes in the database (identity + state)
         let safe_address_1 = vec![1; 20];
         let module_address_1 = vec![2; 20];
         let chain_key_1 = vec![3; 20];
 
-        let safe1 = hopr_safe_contract::ActiveModel {
+        // Create identity 1
+        let safe_identity_1 = hopr_safe_contract::ActiveModel {
             id: Default::default(),
             address: Set(safe_address_1.clone()),
+        };
+        let identity_1 = safe_identity_1.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
+
+        // Create state 1
+        let safe_state_1 = hopr_safe_contract_state::ActiveModel {
+            id: Default::default(),
+            hopr_safe_contract_id: Set(identity_1.id),
             module_address: Set(module_address_1.clone()),
             chain_key: Set(chain_key_1.clone()),
-            deployed_block: Set(100),
-            deployed_tx_index: Set(0),
-            deployed_log_index: Set(0),
+            published_block: Set(100),
+            published_tx_index: Set(0),
+            published_log_index: Set(0),
         };
-        safe1.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
+        safe_state_1.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
 
         let safe_address_2 = vec![4; 20];
         let module_address_2 = vec![5; 20];
         let chain_key_2 = vec![6; 20];
 
-        let safe2 = hopr_safe_contract::ActiveModel {
+        // Create identity 2
+        let safe_identity_2 = hopr_safe_contract::ActiveModel {
             id: Default::default(),
             address: Set(safe_address_2.clone()),
+        };
+        let identity_2 = safe_identity_2.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
+
+        // Create state 2
+        let safe_state_2 = hopr_safe_contract_state::ActiveModel {
+            id: Default::default(),
+            hopr_safe_contract_id: Set(identity_2.id),
             module_address: Set(module_address_2.clone()),
             chain_key: Set(chain_key_2.clone()),
-            deployed_block: Set(101),
-            deployed_tx_index: Set(0),
-            deployed_log_index: Set(0),
+            published_block: Set(101),
+            published_tx_index: Set(0),
+            published_log_index: Set(0),
         };
-        safe2.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
+        safe_state_2.insert(db.conn(blokli_db::TargetDb::Index)).await.unwrap();
 
         // Setup schema
         let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)

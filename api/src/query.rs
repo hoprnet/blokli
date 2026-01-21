@@ -14,7 +14,7 @@ use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::{
     account, chain_info, channel,
     conversions::{account_aggregation::fetch_accounts_with_filters, channel_aggregation::fetch_channels_with_state},
-    hopr_node_safe_registration, hopr_safe_contract,
+    hopr_node_safe_registration, hopr_safe_contract, hopr_safe_contract_state,
 };
 use hopr_crypto_types::prelude::Hash;
 use hopr_primitive_types::{
@@ -22,7 +22,7 @@ use hopr_primitive_types::{
     primitives::Address,
     traits::{IntoEndian, ToHex},
 };
-use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder};
 use tracing::warn;
 
 use crate::{errors, mutation::TransactionResult, validation::validate_eth_address};
@@ -116,33 +116,38 @@ fn parse_safe_address(address: String) -> Result<Vec<u8>, SafeResult> {
         .map_err(|e| SafeResult::InvalidAddress(errors::invalid_address_error(address, e)))
 }
 
-/// Helper function to convert database Safe model to GraphQL Safe type
+/// Helper function to convert database Safe identity + state models to GraphQL Safe type
 ///
 /// Validates that all address fields in the database are exactly 20 bytes.
 /// Returns an error message if any address field has an invalid length.
 ///
 /// # Arguments
-/// * `safe` - The Safe contract database model
+/// * `identity` - The Safe contract identity model (address only)
+/// * `state` - The Safe contract state model (module_address, chain_key, etc.)
 /// * `registered_nodes` - List of registered node addresses (hex format)
-fn safe_from_db_model(safe: hopr_safe_contract::Model, registered_nodes: Vec<String>) -> Result<Safe, String> {
-    let address = Address::try_from(&safe.address[..]).map_err(|_| {
+fn safe_from_db_model(
+    identity: hopr_safe_contract::Model,
+    state: hopr_safe_contract_state::Model,
+    registered_nodes: Vec<String>,
+) -> Result<Safe, String> {
+    let address = Address::try_from(&identity.address[..]).map_err(|_| {
         format!(
             "Invalid address length in database: expected 20 bytes, got {}",
-            safe.address.len()
+            identity.address.len()
         )
     })?;
 
-    let module_address = Address::try_from(&safe.module_address[..]).map_err(|_| {
+    let module_address = Address::try_from(&state.module_address[..]).map_err(|_| {
         format!(
             "Invalid module address length in database: expected 20 bytes, got {}",
-            safe.module_address.len()
+            state.module_address.len()
         )
     })?;
 
-    let chain_key = Address::try_from(&safe.chain_key[..]).map_err(|_| {
+    let chain_key = Address::try_from(&state.chain_key[..]).map_err(|_| {
         format!(
             "Invalid chain key length in database: expected 20 bytes, got {}",
-            safe.chain_key.len()
+            state.chain_key.len()
         )
     })?;
 
@@ -152,6 +157,70 @@ fn safe_from_db_model(safe: hopr_safe_contract::Model, registered_nodes: Vec<Str
         chain_key: chain_key.to_hex(),
         registered_nodes,
     })
+}
+
+/// Fetch a Safe contract by its address with current (latest) state
+///
+/// Retrieves the safe identity and joins with the most recent state entry.
+async fn fetch_safe_by_address(
+    db: &DatabaseConnection,
+    safe_address_bytes: Vec<u8>,
+) -> Result<Option<(hopr_safe_contract::Model, hopr_safe_contract_state::Model)>, sea_orm::DbErr> {
+    // Find safe identity by address
+    let identity = hopr_safe_contract::Entity::find()
+        .filter(hopr_safe_contract::Column::Address.eq(safe_address_bytes))
+        .one(db)
+        .await?;
+
+    let Some(identity) = identity else {
+        return Ok(None);
+    };
+
+    // Get latest state for this identity
+    let state = hopr_safe_contract_state::Entity::find()
+        .filter(hopr_safe_contract_state::Column::HoprSafeContractId.eq(identity.id))
+        .order_by_desc(hopr_safe_contract_state::Column::PublishedBlock)
+        .order_by_desc(hopr_safe_contract_state::Column::PublishedTxIndex)
+        .order_by_desc(hopr_safe_contract_state::Column::PublishedLogIndex)
+        .one(db)
+        .await?;
+
+    match state {
+        Some(state) => Ok(Some((identity, state))),
+        None => Ok(None), // Identity exists but no state - shouldn't happen normally
+    }
+}
+
+/// Fetch a Safe contract by chain key with current (latest) state
+///
+/// Searches for a state entry with the given chain key, then retrieves the identity.
+async fn fetch_safe_by_chain_key(
+    db: &DatabaseConnection,
+    chain_key_bytes: Vec<u8>,
+) -> Result<Option<(hopr_safe_contract::Model, hopr_safe_contract_state::Model)>, sea_orm::DbErr> {
+    // Find the most recent state entry with this chain key
+    // Group by safe contract id to handle cases where a safe has multiple states with same chain key
+    let state = hopr_safe_contract_state::Entity::find()
+        .filter(hopr_safe_contract_state::Column::ChainKey.eq(chain_key_bytes))
+        .order_by_desc(hopr_safe_contract_state::Column::PublishedBlock)
+        .order_by_desc(hopr_safe_contract_state::Column::PublishedTxIndex)
+        .order_by_desc(hopr_safe_contract_state::Column::PublishedLogIndex)
+        .one(db)
+        .await?;
+
+    let Some(state) = state else {
+        return Ok(None);
+    };
+
+    // Get the identity for this state
+    let identity = hopr_safe_contract::Entity::find_by_id(state.hopr_safe_contract_id)
+        .one(db)
+        .await?;
+
+    match identity {
+        Some(identity) => Ok(Some((identity, state))),
+        None => Ok(None), // State exists but no identity - shouldn't happen
+    }
 }
 
 /// Root query type providing read-only access to indexed blockchain data
@@ -677,12 +746,8 @@ impl QueryRoot {
 
         let safe_address_vec = safe_address.clone();
 
-        match hopr_safe_contract::Entity::find()
-            .filter(hopr_safe_contract::Column::Address.eq(safe_address))
-            .one(db)
-            .await
-        {
-            Ok(Some(safe)) => {
+        match fetch_safe_by_address(db, safe_address).await {
+            Ok(Some((identity, state))) => {
                 // Fetch registered nodes for this safe
                 let registered_nodes_result = hopr_node_safe_registration::Entity::find()
                     .filter(hopr_node_safe_registration::Column::SafeAddress.eq(safe_address_vec))
@@ -697,7 +762,7 @@ impl QueryRoot {
                         .collect(),
                     Err(e) => {
                         warn!(
-                            safe_address = ?safe.address,
+                            safe_address = ?identity.address,
                             error = %e,
                             "Failed to fetch registered nodes for safe, returning empty list"
                         );
@@ -705,7 +770,7 @@ impl QueryRoot {
                     }
                 };
 
-                match safe_from_db_model(safe, registered_nodes) {
+                match safe_from_db_model(identity, state, registered_nodes) {
                     Ok(safe_data) => Ok(Some(SafeResult::Safe(safe_data))),
                     Err(e) => Ok(Some(SafeResult::QueryFailed(errors::invalid_db_data(
                         "safe addresses",
@@ -762,14 +827,10 @@ impl QueryRoot {
 
         let db = ctx.data::<DatabaseConnection>()?;
 
-        match hopr_safe_contract::Entity::find()
-            .filter(hopr_safe_contract::Column::ChainKey.eq(chain_key_address))
-            .one(db)
-            .await
-        {
-            Ok(Some(safe)) => {
+        match fetch_safe_by_chain_key(db, chain_key_address).await {
+            Ok(Some((identity, state))) => {
                 // Fetch registered nodes for this safe
-                let safe_address_vec = safe.address.clone();
+                let safe_address_vec = identity.address.clone();
                 let registered_nodes_result = hopr_node_safe_registration::Entity::find()
                     .filter(hopr_node_safe_registration::Column::SafeAddress.eq(safe_address_vec))
                     .all(db)
@@ -784,7 +845,7 @@ impl QueryRoot {
                     Err(_) => Vec::new(), // If query fails, return empty list
                 };
 
-                match safe_from_db_model(safe, registered_nodes) {
+                match safe_from_db_model(identity, state, registered_nodes) {
                     Ok(safe_data) => Ok(Some(SafeResult::Safe(safe_data))),
                     Err(e) => Ok(Some(SafeResult::QueryFailed(errors::invalid_db_data(
                         "safe addresses",
@@ -873,14 +934,11 @@ impl QueryRoot {
             }
         };
 
-        // Fetch the safe contract
-        let safe_result = hopr_safe_contract::Entity::find()
-            .filter(hopr_safe_contract::Column::Address.eq(registration.safe_address.clone()))
-            .one(db)
-            .await;
+        // Fetch the safe contract with its latest state
+        let safe_result = fetch_safe_by_address(db, registration.safe_address.clone()).await;
 
-        let safe = match safe_result {
-            Ok(Some(s)) => s,
+        let (identity, state) = match safe_result {
+            Ok(Some((i, s))) => (i, s),
             Ok(None) => {
                 // This shouldn't happen (orphaned registration), but handle gracefully
                 return Ok(Some(SafeResult::QueryFailed(errors::query_failed(
@@ -910,7 +968,7 @@ impl QueryRoot {
                 .collect(),
             Err(e) => {
                 warn!(
-                    safe_address = ?safe.address,
+                    safe_address = ?identity.address,
                     error = %e,
                     "Failed to fetch registered nodes for safe, returning empty list"
                 );
@@ -918,7 +976,7 @@ impl QueryRoot {
             }
         };
 
-        match safe_from_db_model(safe, registered_nodes) {
+        match safe_from_db_model(identity, state, registered_nodes) {
             Ok(safe_obj) => Ok(Some(SafeResult::Safe(safe_obj))),
             Err(e) => Ok(Some(SafeResult::QueryFailed(errors::invalid_db_data(
                 "safe address",
@@ -956,43 +1014,64 @@ impl QueryRoot {
     async fn safes(&self, ctx: &Context<'_>) -> Result<SafesResult> {
         let db = ctx.data::<DatabaseConnection>()?;
 
-        match hopr_safe_contract::Entity::find().all(db).await {
-            Ok(safes) => {
-                // Fetch all registrations in a single query to avoid N+1
-                let all_registrations = hopr_node_safe_registration::Entity::find()
-                    .all(db)
-                    .await
-                    .unwrap_or_default();
+        // Fetch all safe identities
+        let identities = match hopr_safe_contract::Entity::find().all(db).await {
+            Ok(i) => i,
+            Err(e) => return Ok(SafesResult::QueryFailed(errors::query_failed("fetch safes", e))),
+        };
 
-                // Group registrations by safe address
-                let mut registrations_by_safe: HashMap<Vec<u8>, Vec<String>> = HashMap::new();
+        // Fetch all states in a single query
+        let all_states = match hopr_safe_contract_state::Entity::find()
+            .order_by_desc(hopr_safe_contract_state::Column::PublishedBlock)
+            .order_by_desc(hopr_safe_contract_state::Column::PublishedTxIndex)
+            .order_by_desc(hopr_safe_contract_state::Column::PublishedLogIndex)
+            .all(db)
+            .await
+        {
+            Ok(s) => s,
+            Err(e) => return Ok(SafesResult::QueryFailed(errors::query_failed("fetch safe states", e))),
+        };
 
-                for reg in all_registrations {
-                    if let Ok(node_addr) = Address::try_from(reg.node_address.as_slice()) {
-                        registrations_by_safe
-                            .entry(reg.safe_address.clone())
-                            .or_default()
-                            .push(node_addr.to_hex());
-                    }
-                }
+        // Group states by safe contract id - first entry for each id is the latest (due to ordering)
+        let mut latest_state_by_id: HashMap<i64, hopr_safe_contract_state::Model> = HashMap::new();
+        for state in all_states {
+            latest_state_by_id.entry(state.hopr_safe_contract_id).or_insert(state);
+        }
 
-                let safe_results: Result<Vec<Safe>, String> = safes
-                    .into_iter()
-                    .map(|safe| {
-                        let registered_nodes = registrations_by_safe
-                            .get(&safe.address)
-                            .cloned()
-                            .unwrap_or_else(Vec::new);
-                        safe_from_db_model(safe, registered_nodes)
-                    })
-                    .collect();
+        // Fetch all registrations in a single query to avoid N+1
+        let all_registrations = hopr_node_safe_registration::Entity::find()
+            .all(db)
+            .await
+            .unwrap_or_default();
 
-                match safe_results {
-                    Ok(safe_list) => Ok(SafesResult::Safes(SafesList { safes: safe_list })),
-                    Err(e) => Ok(SafesResult::QueryFailed(errors::invalid_db_data("safe addresses", &e))),
-                }
+        // Group registrations by safe address
+        let mut registrations_by_safe: HashMap<Vec<u8>, Vec<String>> = HashMap::new();
+        for reg in all_registrations {
+            if let Ok(node_addr) = Address::try_from(reg.node_address.as_slice()) {
+                registrations_by_safe
+                    .entry(reg.safe_address.clone())
+                    .or_default()
+                    .push(node_addr.to_hex());
             }
-            Err(e) => Ok(SafesResult::QueryFailed(errors::query_failed("fetch safes", e))),
+        }
+
+        // Convert each identity + state to Safe
+        let safe_results: Result<Vec<Safe>, String> = identities
+            .into_iter()
+            .filter_map(|identity| {
+                // Get the latest state for this identity
+                let state = latest_state_by_id.remove(&identity.id)?;
+                let registered_nodes = registrations_by_safe
+                    .get(&identity.address)
+                    .cloned()
+                    .unwrap_or_else(Vec::new);
+                Some(safe_from_db_model(identity, state, registered_nodes))
+            })
+            .collect();
+
+        match safe_results {
+            Ok(safe_list) => Ok(SafesResult::Safes(SafesList { safes: safe_list })),
+            Err(e) => Ok(SafesResult::QueryFailed(errors::invalid_db_data("safe addresses", &e))),
         }
     }
 
