@@ -4,7 +4,7 @@ use blokli_db_entity::{
     prelude::{HoprSafeContract, HoprSafeContractState},
 };
 use hopr_primitive_types::prelude::Address;
-use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set};
+use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter, QueryOrder, Set, Statement};
 use sea_query::OnConflict;
 
 use crate::{BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result};
@@ -38,6 +38,16 @@ pub struct SafeContractEntry {
 /// not from real blockchain events. This allows identifying which safes
 /// need their module addresses refreshed on startup.
 pub const PRESEEDED_BLOCK: i64 = 30_000_000;
+
+struct SafeContractCurrentRow {
+    safe_contract_id: i64,
+    address: Vec<u8>,
+    module_address: Vec<u8>,
+    chain_key: Vec<u8>,
+    published_block: i64,
+    published_tx_index: i64,
+    published_log_index: i64,
+}
 
 struct SafeCsvEntry {
     address: Address,
@@ -279,6 +289,32 @@ fn combine_entry(identity: &hopr_safe_contract::Model, state: &hopr_safe_contrac
     }
 }
 
+fn combine_current_row(row: SafeContractCurrentRow) -> SafeContractEntry {
+    SafeContractEntry {
+        id: row.safe_contract_id,
+        address: row.address,
+        module_address: row.module_address,
+        chain_key: row.chain_key,
+        published_block: row.published_block,
+        published_tx_index: row.published_tx_index,
+        published_log_index: row.published_log_index,
+    }
+}
+
+fn current_row_statement(backend: DatabaseBackend, column: &str, value: Vec<u8>) -> Statement {
+    let placeholder = if backend == DatabaseBackend::Postgres {
+        "$1"
+    } else {
+        "?"
+    };
+    let sql = format!(
+        "SELECT safe_contract_id, address, module_address, chain_key, published_block, published_tx_index, \
+         published_log_index FROM safe_contract_current WHERE {} = {}",
+        column, placeholder
+    );
+    Statement::from_sql_and_values(backend, sql, vec![value.into()])
+}
+
 #[async_trait]
 impl BlokliDbSafeContractOperations for BlokliDb {
     #[allow(clippy::too_many_arguments)]
@@ -406,30 +442,29 @@ impl BlokliDbSafeContractOperations for BlokliDb {
     ) -> Result<Option<SafeContractEntry>> {
         let tx = self.nest_transaction(tx).await?;
 
-        // Step 1: Find safe identity by address
-        let identity = HoprSafeContract::find()
-            .filter(hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
-            .one(tx.as_ref())
-            .await?;
+        let stmt = current_row_statement(
+            tx.as_ref().get_database_backend(),
+            "address",
+            safe_address.as_ref().to_vec(),
+        );
 
-        let identity = match identity {
-            Some(i) => i,
+        let row = tx.as_ref().query_one_raw(stmt).await?;
+        let row = match row {
+            Some(row) => row,
             None => return Ok(None),
         };
 
-        // Step 2: Get the latest state
-        let state = HoprSafeContractState::find()
-            .filter(hopr_safe_contract_state::Column::HoprSafeContractId.eq(identity.id))
-            .order_by_desc(hopr_safe_contract_state::Column::PublishedBlock)
-            .order_by_desc(hopr_safe_contract_state::Column::PublishedTxIndex)
-            .order_by_desc(hopr_safe_contract_state::Column::PublishedLogIndex)
-            .one(tx.as_ref())
-            .await?;
+        let current = SafeContractCurrentRow {
+            safe_contract_id: row.try_get("", "safe_contract_id")?,
+            address: row.try_get("", "address")?,
+            module_address: row.try_get("", "module_address")?,
+            chain_key: row.try_get("", "chain_key")?,
+            published_block: row.try_get("", "published_block")?,
+            published_tx_index: row.try_get("", "published_tx_index")?,
+            published_log_index: row.try_get("", "published_log_index")?,
+        };
 
-        match state {
-            Some(s) => Ok(Some(combine_entry(&identity, &s))),
-            None => Ok(None), // Identity exists but no state - shouldn't happen normally
-        }
+        Ok(Some(combine_current_row(current)))
     }
 
     #[allow(clippy::cast_possible_wrap)]

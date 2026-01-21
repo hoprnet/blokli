@@ -19,7 +19,7 @@ use blokli_db_entity::{
         account_aggregation::{fetch_accounts_by_keyids, fetch_accounts_with_filters},
         channel_aggregation::fetch_channels_with_state,
     },
-    hopr_node_safe_registration, hopr_safe_contract, hopr_safe_contract_state,
+    hopr_node_safe_registration,
 };
 use chrono::Utc;
 use futures::Stream;
@@ -28,12 +28,35 @@ use hopr_primitive_types::{
     primitives::Address,
     traits::{IntoEndian, ToHex},
 };
-use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{
+    ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
+    Statement,
+};
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::errors;
+
+#[derive(Debug)]
+struct SafeContractCurrentRow {
+    address: Vec<u8>,
+    module_address: Vec<u8>,
+    chain_key: Vec<u8>,
+}
+
+fn current_row_statement(backend: DatabaseBackend, value: Vec<u8>) -> Statement {
+    let placeholder = if backend == DatabaseBackend::Postgres {
+        "$1"
+    } else {
+        "?"
+    };
+    let sql = format!(
+        "SELECT address, module_address, chain_key FROM safe_contract_current WHERE address = {}",
+        placeholder
+    );
+    Statement::from_sql_and_values(backend, sql, vec![value.into()])
+}
 
 /// Watermark representing the last fully processed blockchain position
 ///
@@ -747,14 +770,9 @@ impl SubscriptionRoot {
                             Ok(IndexerEvent::SafeDeployed(safe_addr)) => {
                                 let safe_addr_bytes = safe_addr.as_ref().to_vec();
                                 debug!(?safe_addr_bytes, "safe address");
-                                // First find the identity
-                                let identity_result = hopr_safe_contract::Entity::find()
-                                    .filter(hopr_safe_contract::Column::Address.eq(safe_addr_bytes))
-                                    .one(&db)
-                                    .await;
-
-                                let identity = match identity_result {
-                                    Ok(Some(i)) => i,
+                                let stmt = current_row_statement(db.get_database_backend(), safe_addr_bytes);
+                                let row = match db.query_one_raw(stmt).await {
+                                    Ok(Some(row)) => row,
                                     Ok(None) => {
                                         error!("Safe deployed event received but safe not found in DB: {}", safe_addr);
                                         continue;
@@ -765,30 +783,37 @@ impl SubscriptionRoot {
                                     }
                                 };
 
-                                // Fetch latest state for this identity
-                                let state = match hopr_safe_contract_state::Entity::find()
-                                    .filter(hopr_safe_contract_state::Column::HoprSafeContractId.eq(identity.id))
-                                    .order_by_desc(hopr_safe_contract_state::Column::PublishedBlock)
-                                    .order_by_desc(hopr_safe_contract_state::Column::PublishedTxIndex)
-                                    .order_by_desc(hopr_safe_contract_state::Column::PublishedLogIndex)
-                                    .one(&db)
-                                    .await
-                                {
-                                    Ok(Some(s)) => s,
-                                    Ok(None) => {
-                                        error!("Safe deployed but no state found: {}", safe_addr);
+                                let address: Vec<u8> = match row.try_get("", "address") {
+                                    Ok(value) => value,
+                                    Err(e) => {
+                                        error!("Failed to parse safe address from view: {}", e);
                                         continue;
                                     }
+                                };
+                                let module_address: Vec<u8> = match row.try_get("", "module_address") {
+                                    Ok(value) => value,
                                     Err(e) => {
-                                        error!("Failed to query safe state: {}", e);
+                                        error!("Failed to parse module address from view: {}", e);
+                                        continue;
+                                    }
+                                };
+                                let chain_key: Vec<u8> = match row.try_get("", "chain_key") {
+                                    Ok(value) => value,
+                                    Err(e) => {
+                                        error!("Failed to parse chain key from view: {}", e);
                                         continue;
                                     }
                                 };
 
-                                debug!(safe_address = ?identity.address, "processing SafeDeployed event");
-                                // Fetch registered nodes for this safe
+                                let current = SafeContractCurrentRow {
+                                    address,
+                                    module_address,
+                                    chain_key,
+                                };
+
+                                debug!(safe_address = ?current.address, "processing SafeDeployed event");
                                 let registered_nodes = match hopr_node_safe_registration::Entity::find()
-                                    .filter(hopr_node_safe_registration::Column::SafeAddress.eq(identity.address.clone()))
+                                    .filter(hopr_node_safe_registration::Column::SafeAddress.eq(current.address.clone()))
                                     .all(&db)
                                     .await
                                 {
@@ -799,18 +824,18 @@ impl SubscriptionRoot {
                                         .collect(),
                                     Err(e) => {
                                         warn!(
-                                            safe_address = ?identity.address,
+                                            safe_address = ?current.address,
                                             error = %e,
                                             "Failed to fetch registered nodes for safe, returning empty list"
                                         );
                                         Vec::new()
                                     }
                                 };
-                                debug!(?identity, "yielding Safe from SafeDeployed event");
+                                debug!(?current, "yielding Safe from SafeDeployed event");
                                 yield Safe {
-                                    address: Address::new(&identity.address).to_hex(),
-                                    module_address: Address::new(&state.module_address).to_hex(),
-                                    chain_key: Address::new(&state.chain_key).to_hex(),
+                                    address: Address::new(&current.address).to_hex(),
+                                    module_address: Address::new(&current.module_address).to_hex(),
+                                    chain_key: Address::new(&current.chain_key).to_hex(),
                                     registered_nodes,
                                 };
                             }
@@ -1040,6 +1065,7 @@ mod tests {
     use async_graphql::{EmptyMutation, Object, Schema};
     use blokli_chain_indexer::state::IndexerEvent;
     use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb};
+    use blokli_db_entity::{hopr_safe_contract, hopr_safe_contract_state};
     use futures::StreamExt;
     use sea_orm::{ActiveModelTrait, Set};
 
