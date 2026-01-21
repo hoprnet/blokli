@@ -170,13 +170,21 @@ pub trait BlokliDbSafeContractOperations: BlokliDbGeneralModelOperations {
     /// # Returns
     /// Vector of safe entries that only have pre-seeded state
     async fn get_preseeded_safes<'a>(&'a self, tx: OptTx<'a>) -> Result<Vec<SafeContractEntry>>;
+
+    #[allow(clippy::too_many_arguments)]
+    async fn update_safe_module_address<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        safe_address: Address,
+        new_module_address: Address,
+        block: u64,
+        tx_index: u64,
+        log_index: u64,
+    ) -> Result<()>;
 }
 
 /// Combine identity and state into a SafeContractEntry.
-fn combine_entry(
-    identity: &hopr_safe_contract::Model,
-    state: &hopr_safe_contract_state::Model,
-) -> SafeContractEntry {
+fn combine_entry(identity: &hopr_safe_contract::Model, state: &hopr_safe_contract_state::Model) -> SafeContractEntry {
     SafeContractEntry {
         id: identity.id,
         address: identity.address.clone(),
@@ -443,6 +451,74 @@ impl BlokliDbSafeContractOperations for BlokliDb {
         }
 
         Ok(preseeded)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    async fn update_safe_module_address<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        safe_address: Address,
+        new_module_address: Address,
+        block: u64,
+        tx_index: u64,
+        log_index: u64,
+    ) -> Result<()> {
+        let tx = self.nest_transaction(tx).await?;
+
+        let identity = HoprSafeContract::find()
+            .filter(hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
+            .one(tx.as_ref())
+            .await?
+            .ok_or_else(|| DbSqlError::EntityNotFound(format!("Safe contract not found: {}", safe_address)))?;
+
+        let current_state = HoprSafeContractState::find()
+            .filter(hopr_safe_contract_state::Column::HoprSafeContractId.eq(identity.id))
+            .order_by_desc(hopr_safe_contract_state::Column::PublishedBlock)
+            .order_by_desc(hopr_safe_contract_state::Column::PublishedTxIndex)
+            .order_by_desc(hopr_safe_contract_state::Column::PublishedLogIndex)
+            .one(tx.as_ref())
+            .await?
+            .ok_or_else(|| DbSqlError::EntityNotFound(format!("Safe contract state not found: {}", safe_address)))?;
+
+        let published_block = i64::try_from(block).map_err(|_| {
+            DbSqlError::Construction(format!("Block number {} out of range for safe module update", block))
+        })?;
+        let published_tx_index = i64::try_from(tx_index).map_err(|_| {
+            DbSqlError::Construction(format!(
+                "Transaction index {} out of range for safe module update",
+                tx_index
+            ))
+        })?;
+        let published_log_index = i64::try_from(log_index).map_err(|_| {
+            DbSqlError::Construction(format!("Log index {} out of range for safe module update", log_index))
+        })?;
+
+        let state_model = hopr_safe_contract_state::ActiveModel {
+            hopr_safe_contract_id: Set(identity.id),
+            module_address: Set(new_module_address.as_ref().to_vec()),
+            chain_key: Set(current_state.chain_key),
+            published_block: Set(published_block),
+            published_tx_index: Set(published_tx_index),
+            published_log_index: Set(published_log_index),
+            ..Default::default()
+        };
+
+        let _ = HoprSafeContractState::insert(state_model)
+            .on_conflict(
+                OnConflict::columns([
+                    hopr_safe_contract_state::Column::HoprSafeContractId,
+                    hopr_safe_contract_state::Column::PublishedBlock,
+                    hopr_safe_contract_state::Column::PublishedTxIndex,
+                    hopr_safe_contract_state::Column::PublishedLogIndex,
+                ])
+                .do_nothing()
+                .to_owned(),
+            )
+            .exec(tx.as_ref())
+            .await;
+
+        tx.commit().await?;
+        Ok(())
     }
 }
 
