@@ -6,107 +6,10 @@ use tracing::{info, warn};
 use crate::errors::{CoreEthereumIndexerError, Result};
 
 #[derive(Default, Debug, Clone, PartialEq, Eq)]
-pub struct LoadStats {
-    pub loaded: usize,
-    pub skipped: usize,
-}
-
-#[derive(Default, Debug, Clone, PartialEq, Eq)]
 pub struct RefreshStats {
     pub updated: usize,
     pub unchanged: usize,
     pub errors: usize,
-}
-
-struct SafeCsvEntry {
-    address: Address,
-    module_address: Address,
-    chain_key: Address,
-    deployed_tx_index: u64,
-    deployed_log_index: u64,
-}
-
-fn parse_csv_entry(line: &str, line_number: usize) -> Result<Option<SafeCsvEntry>> {
-    let fields: Vec<&str> = line.split(',').map(str::trim).collect();
-    if fields.len() < 6 {
-        return Ok(None);
-    }
-
-    let address: Address = fields[0].parse().map_err(|e| {
-        CoreEthereumIndexerError::ValidationError(format!("invalid safe address on line {line_number}: {e}"))
-    })?;
-    let module_address: Address = fields[1].parse().map_err(|e| {
-        CoreEthereumIndexerError::ValidationError(format!("invalid module address on line {line_number}: {e}"))
-    })?;
-    let chain_key: Address = fields[2].parse().map_err(|e| {
-        CoreEthereumIndexerError::ValidationError(format!("invalid chain key on line {line_number}: {e}"))
-    })?;
-    let deployed_tx_index: u64 = fields[4].parse().map_err(|e| {
-        CoreEthereumIndexerError::ValidationError(format!("invalid tx index on line {line_number}: {e}"))
-    })?;
-    let deployed_log_index: u64 = fields[5].parse().map_err(|e| {
-        CoreEthereumIndexerError::ValidationError(format!("invalid log index on line {line_number}: {e}"))
-    })?;
-
-    Ok(Some(SafeCsvEntry {
-        address,
-        module_address,
-        chain_key,
-        deployed_tx_index,
-        deployed_log_index,
-    }))
-}
-
-async fn load_preseeded_safes_from_csv<Db>(db: &Db, csv_data: &str) -> Result<LoadStats>
-where
-    Db: BlokliDbAllOperations,
-{
-    let mut stats = LoadStats::default();
-
-    for (index, line) in csv_data.lines().enumerate() {
-        if index == 0 {
-            continue;
-        }
-
-        let Some(entry) = parse_csv_entry(line, index + 1)? else {
-            continue;
-        };
-
-        if db.get_safe_contract_by_address(None, entry.address).await?.is_some() {
-            stats.skipped += 1;
-            continue;
-        }
-
-        db.upsert_safe_contract(
-            None,
-            entry.address,
-            entry.module_address,
-            entry.chain_key,
-            PRESEEDED_BLOCK as u64,
-            entry.deployed_tx_index,
-            entry.deployed_log_index,
-        )
-        .await?;
-        stats.loaded += 1;
-    }
-
-    Ok(stats)
-}
-
-pub async fn load_preseeded_safes<Db>(db: &Db) -> Result<LoadStats>
-where
-    Db: BlokliDbAllOperations,
-{
-    let csv_data = include_str!("../../../db/migration/src/data/safe-v3-rotsee.csv");
-    let stats = load_preseeded_safes_from_csv(db, csv_data).await?;
-
-    info!(
-        loaded = stats.loaded,
-        skipped = stats.skipped,
-        "Loaded pre-seeded safes"
-    );
-
-    Ok(stats)
 }
 
 fn address_from_bytes(bytes: &[u8], context: &str) -> Result<Address> {
@@ -165,7 +68,7 @@ mod tests {
     use blokli_db::{db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations};
     use futures::Stream;
     use hopr_crypto_types::types::Hash;
-    use hopr_primitive_types::prelude::{Address, HoprBalance, ToHex, XDaiBalance};
+    use hopr_primitive_types::prelude::{Address, HoprBalance, XDaiBalance};
 
     use super::*;
 
@@ -227,40 +130,6 @@ mod tests {
         ) -> blokli_chain_rpc::errors::Result<Option<Address>> {
             Ok(self.modules.get(&safe_address).cloned().unwrap_or(None))
         }
-    }
-
-    #[tokio::test]
-    async fn test_load_preseeded_safes_from_csv() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory().await?;
-
-        let safe_address = random_address();
-        let module_address = random_address();
-        let chain_key = random_address();
-
-        let csv_data = format!(
-            "address,module_address,chain_key,deployed_block,deployed_tx_index,deployed_log_index\n{},{},{},30000000,\
-             0,1\n",
-            safe_address.to_hex(),
-            module_address.to_hex(),
-            chain_key.to_hex()
-        );
-
-        let stats = load_preseeded_safes_from_csv(&db, &csv_data).await?;
-        assert_eq!(stats.loaded, 1);
-        assert_eq!(stats.skipped, 0);
-
-        let entry = db
-            .get_safe_contract_by_address(None, safe_address)
-            .await?
-            .expect("safe should exist");
-        assert_eq!(entry.module_address, module_address.as_ref().to_vec());
-        assert_eq!(entry.published_block, PRESEEDED_BLOCK);
-
-        let stats_second = load_preseeded_safes_from_csv(&db, &csv_data).await?;
-        assert_eq!(stats_second.loaded, 0);
-        assert_eq!(stats_second.skipped, 1);
-
-        Ok(())
     }
 
     #[tokio::test]
