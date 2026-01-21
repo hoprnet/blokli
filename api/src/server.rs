@@ -13,7 +13,7 @@ use axum::{
     http::{HeaderMap, Method, StatusCode, header},
     response::{
         Html, IntoResponse, Response,
-        sse::{Event, Sse},
+        sse::{Event, KeepAlive, Sse},
     },
     routing::get,
 };
@@ -133,6 +133,7 @@ pub struct AppState {
     pub rpc_operations: Arc<RpcOperations<ReqwestClient>>,
     pub health_config: HealthConfig,
     pub readiness_checker: ReadinessChecker,
+    pub sse_keepalive: crate::config::SseKeepAliveConfig,
 }
 
 /// Build the Axum application router
@@ -171,6 +172,7 @@ pub async fn build_app(
         rpc_operations,
         health_config: config.health,
         readiness_checker,
+        sse_keepalive: config.sse_keepalive,
     };
 
     // Configure CORS based on allowed origins
@@ -268,6 +270,16 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
                     yield Ok::<_, std::convert::Infallible>(Event::default().data(json));
                 }
             });
+
+        if state.sse_keepalive.enabled {
+            return Sse::new(sse_stream)
+                .keep_alive(
+                    KeepAlive::new()
+                        .interval(state.sse_keepalive.interval)
+                        .text(state.sse_keepalive.text.clone()),
+                )
+                .into_response();
+        }
 
         return Sse::new(sse_stream).into_response();
     }

@@ -2,13 +2,14 @@
 edition = "2021"
 name    = "blokli-integration-tests"
 publish = false
-version = "0.1.0"
+version = "0.1.1"
 
 [dependencies]
 anyhow               = { workspace = true }
 blokli-client        = { path = "../../client" }
 chrono               = { workspace = true }
 clap                 = { workspace = true, features = ["derive"] }
+eventsource-client   = { workspace = true }
 futures              = { workspace = true }
 futures-time         = { workspace = true }
 hex                  = { workspace = true }
@@ -31,3 +32,4 @@ test-log             = { workspace = true }
 tokio                = { workspace = true }
 tracing              = { workspace = true }
 url                  = { workspace = true }
+uuid                 = { workspace = true }
