@@ -32,6 +32,7 @@ mod m028_add_node_safe_registration_table;
 mod m029_update_safe_contract_indices;
 mod m030_migrate_v3_safes;
 mod m031_remove_ticket_params_notify_trigger;
+mod m032_safe_contract_temporal_schema;
 
 /// This is a special block ID that even pre-dates the v3 contract deployment on Gnosis chain,
 /// and therefore could be safely used to mark data added via the migration.
@@ -93,6 +94,9 @@ impl<const NETWORK: u8> Migrator<NETWORK> {
             Box::new(m028_add_node_safe_registration_table::Migration),
             Box::new(m029_update_safe_contract_indices::Migration),
             Box::new(m031_remove_ticket_params_notify_trigger::Migration),
+            Box::new(m032_safe_contract_temporal_schema::Migration),
+            // Note: m030 (safe CSV data) is added by network-specific impls AFTER m032
+            // because m030 now uses the temporal schema (hopr_safe_contract_state)
         ]
     }
 }
@@ -108,6 +112,7 @@ impl MigratorTrait for Migrator<{ SafeDataOrigin::NoData as u8 }> {
 impl MigratorTrait for Migrator<{ SafeDataOrigin::Rotsee as u8 }> {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         let mut migrations = Self::base_migrations();
+        // m030 inserts CSV data into the temporal schema (hopr_safe_contract_state)
         migrations.push(Box::new(m030_migrate_v3_safes::Migration(SafeDataOrigin::Rotsee)));
         migrations
     }
@@ -117,6 +122,7 @@ impl MigratorTrait for Migrator<{ SafeDataOrigin::Rotsee as u8 }> {
 impl MigratorTrait for Migrator<{ SafeDataOrigin::Dufour as u8 }> {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         let mut migrations = Self::base_migrations();
+        // m030 inserts CSV data into the temporal schema (hopr_safe_contract_state)
         migrations.push(Box::new(m030_migrate_v3_safes::Migration(SafeDataOrigin::Dufour)));
         migrations
     }
@@ -157,6 +163,9 @@ impl<const NETWORK: u8> MigratorIndex<NETWORK> {
             Box::new(m028_add_node_safe_registration_table::Migration),
             Box::new(m029_update_safe_contract_indices::Migration),
             Box::new(m031_remove_ticket_params_notify_trigger::Migration),
+            Box::new(m032_safe_contract_temporal_schema::Migration),
+            // Note: m030 (safe CSV data) is added by network-specific impls AFTER m032
+            // because m030 now uses the temporal schema (hopr_safe_contract_state)
         ]
     }
 }
@@ -172,6 +181,7 @@ impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::NoData as u8 }> {
 impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::Rotsee as u8 }> {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         let mut migrations = Self::base_migrations();
+        // m030 inserts CSV data into the temporal schema (hopr_safe_contract_state)
         migrations.push(Box::new(m030_migrate_v3_safes::Migration(SafeDataOrigin::Rotsee)));
         migrations
     }
@@ -181,6 +191,7 @@ impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::Rotsee as u8 }> {
 impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::Dufour as u8 }> {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         let mut migrations = Self::base_migrations();
+        // m030 inserts CSV data into the temporal schema (hopr_safe_contract_state)
         migrations.push(Box::new(m030_migrate_v3_safes::Migration(SafeDataOrigin::Dufour)));
         migrations
     }
