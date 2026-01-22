@@ -1,12 +1,8 @@
-use blokli_db_entity::{
-    hopr_safe_contract::Column as SafeContractColumn,
-    prelude::{
-        Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, HoprBalance, HoprNodeSafeRegistration,
-        HoprSafeContract, Log, LogStatus, LogTopicInfo, NativeBalance,
-    },
+use blokli_db_entity::prelude::{
+    Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, HoprBalance, HoprNodeSafeRegistration,
+    HoprSafeContract, HoprSafeContractState, Log, LogStatus, LogTopicInfo, NativeBalance,
 };
-use migration::MIGRATION_MARKER_BLOCK_ID;
-use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseConnection, EntityTrait, QueryFilter, Statement};
+use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, Statement};
 use tracing::{info, warn};
 
 use crate::errors::{DbSqlError, Result};
@@ -24,7 +20,9 @@ use crate::errors::{DbSqlError, Result};
 /// - 7: Update account indexing to include safe address once deployed
 /// - 8: Add v3 Safe deployment data
 /// - 9: Fix handling of node safe deregister events
-pub const CURRENT_SCHEMA_VERSION: i64 = 9;
+/// - 10: Convert hopr_safe_contract to temporal table with separate state table
+/// - 11: Reset safe contract data and move pre-seeded loading to startup
+pub const CURRENT_SCHEMA_VERSION: i64 = 11;
 
 /// The singleton ID used for the schema_version table
 const SCHEMA_VERSION_TABLE_ID: i64 = 1;
@@ -169,13 +167,8 @@ async fn clear_index_data(db: &DatabaseConnection) -> Result<()> {
     HoprBalance::delete_many().exec(db).await?;
     NativeBalance::delete_many().exec(db).await?;
 
-    // Safe contract table
-    // Do not delete those rows marked with `MIGRATION_MARKER_BLOCK_ID` so that v3 Safe data
-    // created during the migration are kept.
-    HoprSafeContract::delete_many()
-        .filter(SafeContractColumn::DeployedBlock.ne(MIGRATION_MARKER_BLOCK_ID))
-        .exec(db)
-        .await?;
+    HoprSafeContractState::delete_many().exec(db).await?;
+    HoprSafeContract::delete_many().exec(db).await?;
 
     // NodeSafeRegistrations table
     HoprNodeSafeRegistration::delete_many().exec(db).await?;
@@ -208,7 +201,7 @@ async fn clear_logs_data(db: &DatabaseConnection) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use blokli_db_entity::{chain_info, log};
+    use blokli_db_entity::{chain_info, log, prelude::HoprSafeContract};
     use sea_orm::{ActiveModelTrait, EntityTrait, PaginatorTrait, Set};
 
     use super::*;
@@ -427,8 +420,7 @@ mod tests {
         let log_count = Log::find().count(db.conn(crate::TargetDb::Logs)).await?;
         assert_eq!(log_count, 0, "Logs should be cleared");
 
-        // v3 Safe data should be kept
-        assert_ne!(
+        assert_eq!(
             0,
             HoprSafeContract::find().count(db.conn(crate::TargetDb::Index)).await?
         );

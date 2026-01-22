@@ -15,6 +15,7 @@ use crate::{
     accounts::model_to_account_entry,
     errors::{DbSqlError, Result},
     events::EventBus,
+    safe_contracts::BlokliDbSafeContractOperations,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, smart_default::SmartDefault, validator::Validate)]
@@ -189,40 +190,21 @@ impl BlokliDb {
         // Apply migrations based on database backend
         if is_sqlite && logs_db.is_some() {
             // For SQLite with dual databases: run separate migrations on each database
-            if cfg.network_name.eq_ignore_ascii_case("rotsee") {
-                MigratorIndex::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
-                    .await
-                    .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
-            } else if cfg.network_name.eq_ignore_ascii_case("dufour") {
-                MigratorIndex::<{ SafeDataOrigin::Dufour as u8 }>::up(&db, None)
-                    .await
-                    .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
-            } else {
-                MigratorIndex::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-                    .await
-                    .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
-            }
+            MigratorIndex::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+                .await
+                .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
 
             MigratorChainLogs::up(logs_db.as_ref().unwrap(), None)
                 .await
                 .map_err(|e| DbSqlError::Construction(format!("cannot apply logs migrations: {e}")))?;
+        } else if is_sqlite {
+            Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+                .await
+                .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
         } else {
-            // For PostgreSQL (or legacy single-file SQLite): run all migrations on single database
-            // Use unified Migrator to avoid SeaORM validation errors when migrations from one
-            // migrator are recorded but not present in another migrator's list
-            if cfg.network_name.eq_ignore_ascii_case("rotsee") {
-                Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
-                    .await
-                    .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
-            } else if cfg.network_name.eq_ignore_ascii_case("dufour") {
-                Migrator::<{ SafeDataOrigin::Dufour as u8 }>::up(&db, None)
-                    .await
-                    .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
-            } else {
-                Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-                    .await
-                    .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
-            }
+            Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+                .await
+                .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
         }
 
         // Check schema version and clear data if needed
@@ -231,33 +213,37 @@ impl BlokliDb {
             tracing::warn!("Database data was reset due to schema version change");
         }
 
+        // Initialize event bus with capacity for 1000 events per subscriber
+        let event_bus = EventBus::new(1000);
+
+        let db_instance = Self {
+            db,
+            logs_db,
+            event_bus,
+            cfg,
+        };
+
+        if !database_url.contains(":memory:") {
+            db_instance
+                .load_preseeded_safes(None, &db_instance.cfg.network_name)
+                .await?;
+        }
+
         // Initialize KeyId mapping for accounts
         Account::find()
             .find_with_related(Announcement)
-            .all(&db)
+            .all(&db_instance.db)
             .await?
             .into_iter()
             .try_for_each(|(a, b)| match model_to_account_entry(a, None, b) {
-                Ok(_account) => {
-                    // FIXME: update key id mapper
-                    Ok::<(), DbSqlError>(())
-                }
+                Ok(_account) => Ok::<(), DbSqlError>(()),
                 Err(error) => {
-                    // Undecodeable accounts are skipped and will be unreachable
                     tracing::error!(%error, "undecodeable account");
                     Ok(())
                 }
             })?;
 
-        // Initialize event bus with capacity for 1000 events per subscriber
-        let event_bus = EventBus::new(1000);
-
-        Ok(Self {
-            db,
-            logs_db,
-            event_bus,
-            cfg,
-        })
+        Ok(db_instance)
     }
 
     /// Create an in-memory SQLite database for testing.

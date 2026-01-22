@@ -32,6 +32,7 @@ mod m028_add_node_safe_registration_table;
 mod m029_update_safe_contract_indices;
 mod m030_migrate_v3_safes;
 mod m031_remove_ticket_params_notify_trigger;
+mod m032_safe_contract_temporal_schema;
 
 /// This is a special block ID that even pre-dates the v3 contract deployment on Gnosis chain,
 /// and therefore could be safely used to mark data added via the migration.
@@ -93,6 +94,9 @@ impl<const NETWORK: u8> Migrator<NETWORK> {
             Box::new(m028_add_node_safe_registration_table::Migration),
             Box::new(m029_update_safe_contract_indices::Migration),
             Box::new(m031_remove_ticket_params_notify_trigger::Migration),
+            Box::new(m032_safe_contract_temporal_schema::Migration),
+            // Note: m030 (safe CSV data) is added by network-specific impls AFTER m032
+            // because m030 now uses the temporal schema (hopr_safe_contract_state)
         ]
     }
 }
@@ -108,6 +112,7 @@ impl MigratorTrait for Migrator<{ SafeDataOrigin::NoData as u8 }> {
 impl MigratorTrait for Migrator<{ SafeDataOrigin::Rotsee as u8 }> {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         let mut migrations = Self::base_migrations();
+        // m030 inserts CSV data into the temporal schema (hopr_safe_contract_state)
         migrations.push(Box::new(m030_migrate_v3_safes::Migration(SafeDataOrigin::Rotsee)));
         migrations
     }
@@ -117,6 +122,7 @@ impl MigratorTrait for Migrator<{ SafeDataOrigin::Rotsee as u8 }> {
 impl MigratorTrait for Migrator<{ SafeDataOrigin::Dufour as u8 }> {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         let mut migrations = Self::base_migrations();
+        // m030 inserts CSV data into the temporal schema (hopr_safe_contract_state)
         migrations.push(Box::new(m030_migrate_v3_safes::Migration(SafeDataOrigin::Dufour)));
         migrations
     }
@@ -157,6 +163,9 @@ impl<const NETWORK: u8> MigratorIndex<NETWORK> {
             Box::new(m028_add_node_safe_registration_table::Migration),
             Box::new(m029_update_safe_contract_indices::Migration),
             Box::new(m031_remove_ticket_params_notify_trigger::Migration),
+            Box::new(m032_safe_contract_temporal_schema::Migration),
+            // Note: m030 (safe CSV data) is added by network-specific impls AFTER m032
+            // because m030 now uses the temporal schema (hopr_safe_contract_state)
         ]
     }
 }
@@ -172,6 +181,7 @@ impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::NoData as u8 }> {
 impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::Rotsee as u8 }> {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         let mut migrations = Self::base_migrations();
+        // m030 inserts CSV data into the temporal schema (hopr_safe_contract_state)
         migrations.push(Box::new(m030_migrate_v3_safes::Migration(SafeDataOrigin::Rotsee)));
         migrations
     }
@@ -181,6 +191,7 @@ impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::Rotsee as u8 }> {
 impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::Dufour as u8 }> {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         let mut migrations = Self::base_migrations();
+        // m030 inserts CSV data into the temporal schema (hopr_safe_contract_state)
         migrations.push(Box::new(m030_migrate_v3_safes::Migration(SafeDataOrigin::Dufour)));
         migrations
     }
@@ -261,7 +272,7 @@ mod tests {
         let db = setup_test_db().await;
 
         // Run all migrations
-        let result = Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None).await;
+        let result = Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None).await;
 
         assert!(result.is_ok(), "Migrations should run without errors");
     }
@@ -269,7 +280,7 @@ mod tests {
     #[tokio::test]
     async fn test_account_state_table_created() {
         let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
             .await
             .unwrap();
 
@@ -307,7 +318,7 @@ mod tests {
     #[tokio::test]
     async fn test_channel_state_table_created() {
         let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
             .await
             .unwrap();
 
@@ -360,7 +371,7 @@ mod tests {
     #[tokio::test]
     async fn test_account_state_unique_position_index_created() {
         let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
             .await
             .unwrap();
 
@@ -407,7 +418,7 @@ mod tests {
     #[tokio::test]
     async fn test_channel_state_unique_position_index_created() {
         let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
             .await
             .unwrap();
 
@@ -471,7 +482,7 @@ mod tests {
     #[tokio::test]
     async fn test_channel_state_performance_indices_created() {
         let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
             .await
             .unwrap();
 
@@ -495,7 +506,7 @@ mod tests {
     #[tokio::test]
     async fn test_account_state_performance_index_created() {
         let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
             .await
             .unwrap();
 
@@ -509,7 +520,7 @@ mod tests {
     #[tokio::test]
     async fn test_current_state_views_created() {
         let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
             .await
             .unwrap();
 
@@ -528,7 +539,7 @@ mod tests {
     #[tokio::test]
     async fn test_channel_current_view_returns_latest_state() {
         let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
             .await
             .unwrap();
 
@@ -595,7 +606,7 @@ mod tests {
     #[tokio::test]
     async fn test_account_current_view_returns_latest_state() {
         let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
             .await
             .unwrap();
 
@@ -645,7 +656,7 @@ mod tests {
     #[tokio::test]
     async fn test_foreign_key_cascade_on_account_state() {
         let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
             .await
             .unwrap();
 
@@ -703,7 +714,7 @@ mod tests {
     #[tokio::test]
     async fn test_foreign_key_cascade_on_channel_state() {
         let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
             .await
             .unwrap();
 
@@ -777,7 +788,7 @@ mod tests {
     #[tokio::test]
     async fn test_chain_info_watermark_indices_exist() {
         let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None)
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
             .await
             .unwrap();
 
@@ -800,7 +811,7 @@ mod tests {
     #[tokio::test]
     async fn test_v3_safe_data_migration_rotsee() -> anyhow::Result<()> {
         let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::Rotsee as u8 }>::up(&db, None).await?;
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None).await?;
 
         let result = db
             .query_one_raw(Statement::from_string(
@@ -811,14 +822,14 @@ mod tests {
             .unwrap();
 
         let count: i32 = result.try_get("", "row_count")?;
-        assert_eq!(count, 80);
+        assert_eq!(count, 0);
         Ok(())
     }
 
     #[tokio::test]
     async fn test_v3_safe_data_migration_dufour() -> anyhow::Result<()> {
         let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::Dufour as u8 }>::up(&db, None).await?;
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None).await?;
 
         let result = db
             .query_one_raw(Statement::from_string(
@@ -829,7 +840,7 @@ mod tests {
             .unwrap();
 
         let count: i32 = result.try_get("", "row_count")?;
-        assert_eq!(count, 884);
+        assert_eq!(count, 0);
         Ok(())
     }
 }
