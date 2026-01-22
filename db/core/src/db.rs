@@ -224,7 +224,9 @@ impl BlokliDb {
         };
 
         if !database_url.contains(":memory:") {
-            db_instance.load_preseeded_safes(None).await?;
+            db_instance
+                .load_preseeded_safes(None, &db_instance.cfg.network_name)
+                .await?;
         }
 
         // Initialize KeyId mapping for accounts

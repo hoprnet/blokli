@@ -88,6 +88,16 @@ fn parse_csv_entry(line: &str, line_number: usize) -> Result<Option<SafeCsvEntry
     }))
 }
 
+fn preseeded_csv_for_network(network_name: &str) -> Option<&'static str> {
+    if network_name.eq_ignore_ascii_case("rotsee") {
+        Some(include_str!("../../migration/src/data/safe-v3-rotsee.csv"))
+    } else if network_name.eq_ignore_ascii_case("dufour") {
+        Some(include_str!("../../migration/src/data/safe-v3-dufour.csv"))
+    } else {
+        None
+    }
+}
+
 async fn load_preseeded_safes_from_csv<'a, Db>(db: &'a Db, tx: OptTx<'a>, csv_data: &str) -> Result<usize>
 where
     Db: BlokliDbSafeContractOperations + Sync,
@@ -262,7 +272,7 @@ pub trait BlokliDbSafeContractOperations: BlokliDbGeneralModelOperations {
     /// Vector of safe entries that only have pre-seeded state
     async fn get_preseeded_safes<'a>(&'a self, tx: OptTx<'a>) -> Result<Vec<SafeContractEntry>>;
 
-    async fn load_preseeded_safes<'a>(&'a self, tx: OptTx<'a>) -> Result<usize>;
+    async fn load_preseeded_safes<'a>(&'a self, tx: OptTx<'a>, network_name: &str) -> Result<usize>;
 
     #[allow(clippy::too_many_arguments)]
     async fn update_safe_module_address<'a>(
@@ -534,43 +544,50 @@ impl BlokliDbSafeContractOperations for BlokliDb {
         Ok(states.iter().map(|s| combine_entry(&identity, s)).collect())
     }
 
-    async fn load_preseeded_safes<'a>(&'a self, tx: OptTx<'a>) -> Result<usize> {
-        let csv_data = include_str!("../../migration/src/data/safe-v3-rotsee.csv");
+    async fn load_preseeded_safes<'a>(&'a self, tx: OptTx<'a>, network_name: &str) -> Result<usize> {
+        let Some(csv_data) = preseeded_csv_for_network(network_name) else {
+            return Ok(0);
+        };
         load_preseeded_safes_from_csv(self, tx, csv_data).await
     }
 
     async fn get_preseeded_safes<'a>(&'a self, tx: OptTx<'a>) -> Result<Vec<SafeContractEntry>> {
         let tx = self.nest_transaction(tx).await?;
+        let backend = tx.as_ref().get_database_backend();
+        let placeholder = if backend == DatabaseBackend::Postgres {
+            "$1"
+        } else {
+            "?"
+        };
+        let sql = format!(
+            "SELECT sc.id AS safe_contract_id, sc.address, scs.module_address, scs.chain_key, scs.published_block, \
+             scs.published_tx_index, scs.published_log_index FROM hopr_safe_contract sc JOIN hopr_safe_contract_state \
+             scs ON scs.hopr_safe_contract_id = sc.id WHERE sc.id IN (SELECT hopr_safe_contract_id FROM \
+             hopr_safe_contract_state GROUP BY hopr_safe_contract_id HAVING MIN(published_block) = {placeholder} AND \
+             MAX(published_block) = {placeholder}) AND scs.id = (SELECT s2.id FROM hopr_safe_contract_state s2 WHERE \
+             s2.hopr_safe_contract_id = sc.id ORDER BY s2.published_block DESC, s2.published_tx_index DESC, \
+             s2.published_log_index DESC LIMIT 1)"
+        );
+        let values = if backend == DatabaseBackend::Postgres {
+            vec![PRESEEDED_BLOCK.into()]
+        } else {
+            vec![PRESEEDED_BLOCK.into(), PRESEEDED_BLOCK.into()]
+        };
+        let stmt = Statement::from_sql_and_values(backend, sql, values);
+        let rows = tx.as_ref().query_all_raw(stmt).await?;
 
-        // Find all safes that have exactly one state record at PRESEEDED_BLOCK
-        // This is a bit complex - we need safes where:
-        // 1. They have a state at PRESEEDED_BLOCK
-        // 2. They don't have any state at other blocks
-
-        // First, get all safe IDs that have ONLY pre-seeded state
-        // We do this by finding safes where max(published_block) == min(published_block) == PRESEEDED_BLOCK
-
-        // For simplicity and correctness, we'll query all safes and filter in Rust
-        // This could be optimized with raw SQL if performance becomes an issue
-
-        let all_identities = HoprSafeContract::find().all(tx.as_ref()).await?;
-
-        let mut preseeded = Vec::new();
-
-        for identity in all_identities {
-            // Get all states for this safe
-            let states = HoprSafeContractState::find()
-                .filter(hopr_safe_contract_state::Column::HoprSafeContractId.eq(identity.id))
-                .all(tx.as_ref())
-                .await?;
-
-            // Check if all states are at PRESEEDED_BLOCK
-            if !states.is_empty() && states.iter().all(|s| s.published_block == PRESEEDED_BLOCK) {
-                // Use the first (and only) state
-                if let Some(state) = states.first() {
-                    preseeded.push(combine_entry(&identity, state));
-                }
-            }
+        let mut preseeded = Vec::with_capacity(rows.len());
+        for row in rows {
+            let current = SafeContractCurrentRow {
+                safe_contract_id: row.try_get("", "safe_contract_id")?,
+                address: row.try_get("", "address")?,
+                module_address: row.try_get("", "module_address")?,
+                chain_key: row.try_get("", "chain_key")?,
+                published_block: row.try_get("", "published_block")?,
+                published_tx_index: row.try_get("", "published_tx_index")?,
+                published_log_index: row.try_get("", "published_log_index")?,
+            };
+            preseeded.push(combine_current_row(current));
         }
 
         Ok(preseeded)
@@ -656,6 +673,14 @@ mod tests {
     /// Generates a new random `Address` from cryptographically secure random bytes.
     fn random_address() -> Address {
         Address::from(hopr_crypto_random::random_bytes())
+    }
+
+    #[test]
+    fn test_preseeded_csv_for_network() {
+        assert!(preseeded_csv_for_network("rotsee").is_some());
+        assert!(preseeded_csv_for_network("dufour").is_some());
+        assert!(preseeded_csv_for_network("ROTSEE").is_some());
+        assert!(preseeded_csv_for_network("unknown").is_none());
     }
 
     #[tokio::test]
