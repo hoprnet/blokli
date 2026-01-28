@@ -23,11 +23,9 @@ pub enum Network {
     #[serde(alias = "rotsee")]
     Rotsee,
     /// Jura testnet (staging network)
-    #[default]
     #[serde(alias = "jura")]
     Jura,
     /// Dufour mainnet (production network)
-    #[default]
     #[serde(alias = "dufour")]
     Dufour,
 
