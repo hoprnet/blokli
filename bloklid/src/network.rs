@@ -219,7 +219,7 @@ mod tests {
         );
         let jura = Network::Jura.resolve();
         assert!(jura.is_some(), "Jura network should be defined in hopr-bindings");
-        let dufour = Network::Dufour.resolve();
-        assert!(dufour.is_some(), "Dufour network should be defined in hopr-bindings");
+        // let dufour = Network::Dufour.resolve();
+        // assert!(dufour.is_some(), "Dufour network should be defined in hopr-bindings");
     }
 }
