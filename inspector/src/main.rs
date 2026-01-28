@@ -9,7 +9,8 @@ use blokli_client::{
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use futures::{StreamExt, TryFuture, TryFutureExt, future::Either, pin_mut};
-use hopr_primitive_types::prelude::Address;
+use hopr_crypto_types::types::OffchainPublicKey;
+use hopr_primitive_types::prelude::{Address, ToHex};
 use queries::QueryTarget;
 use tokio::io::AsyncReadExt;
 use tracing_subscriber::{EnvFilter, fmt};
@@ -138,6 +139,9 @@ pub(crate) struct AccountArgs {
     /// Account chain address.
     #[arg(short, long, value_parser = clap::value_parser!(Address), group = "selector")]
     address: Option<Address>,
+    /// Account packet key (either in hex or as a Peer ID).
+    #[arg(short, long, group = "selector")]
+    packet_key: Option<String>,
     /// Account key id.
     #[arg(short, long, group = "selector")]
     key_id: Option<u32>,
@@ -147,11 +151,26 @@ impl TryFrom<AccountArgs> for AccountSelector {
     type Error = anyhow::Error;
 
     fn try_from(value: AccountArgs) -> Result<Self, Self::Error> {
-        let AccountArgs { address, key_id } = value;
-        match (address, key_id) {
-            (Some(address), None) => Ok(AccountSelector::Address(address.into())),
-            (None, Some(key_id)) => Ok(AccountSelector::KeyId(key_id)),
-            (None, None) => Ok(AccountSelector::Any),
+        let AccountArgs {
+            address,
+            key_id,
+            packet_key,
+        } = value;
+        match (address, key_id, packet_key) {
+            (Some(address), None, None) => Ok(AccountSelector::Address(address.into())),
+            (None, Some(key_id), None) => Ok(AccountSelector::KeyId(key_id)),
+            (None, None, Some(packet_key)) => {
+                if let Ok(key) = OffchainPublicKey::from_hex(&packet_key) {
+                    eprintln!("Corresponding PeerId: {}", key.to_peerid_str());
+                    Ok(AccountSelector::PacketKey(key.into()))
+                } else if let Ok(key) = OffchainPublicKey::from_peerid(&packet_key.parse()?) {
+                    eprintln!("Corresponding packet key: {}", key.to_hex());
+                    Ok(AccountSelector::PacketKey(key.into()))
+                } else {
+                    Err(anyhow::anyhow!("Cannot parse packet key: {packet_key}"))
+                }
+            }
+            (None, None, None) => Ok(AccountSelector::Any),
             _ => Err(anyhow::anyhow!("Cannot specify both --address and --key-id.")),
         }
     }
