@@ -22,6 +22,15 @@ pub enum Network {
     #[default]
     #[serde(alias = "rotsee")]
     Rotsee,
+    /// Jura testnet (staging network)
+    #[default]
+    #[serde(alias = "jura")]
+    Jura,
+    /// Dufour mainnet (production network)
+    #[default]
+    #[serde(alias = "dufour")]
+    Dufour,
+
 }
 
 impl Network {
@@ -30,7 +39,7 @@ impl Network {
     /// This is useful for generating error messages that show users
     /// what networks are supported.
     pub fn all() -> Vec<Network> {
-        vec![Network::AnvilLocalhost, Network::Rotsee]
+        vec![Network::AnvilLocalhost, Network::Rotsee, Network::Jura, Network::Dufour]
     }
 
     /// Returns all available network names as strings.
@@ -48,6 +57,8 @@ impl Network {
         match self {
             Network::AnvilLocalhost => "anvil-localhost",
             Network::Rotsee => "rotsee",
+            Network::Jura => "jura",
+            Network::Dufour => "dufour",
         }
     }
 
@@ -77,6 +88,8 @@ impl Network {
         match self {
             Network::AnvilLocalhost => 100,
             Network::Rotsee => 1000,
+            Network::Jura => 1000,
+            Network::Dufour => 1000,
         }
     }
 
@@ -85,6 +98,8 @@ impl Network {
         match self {
             Network::AnvilLocalhost => 1,
             Network::Rotsee => 8,
+            Network::Jura => 8,
+            Network::Dufour => 8,
         }
     }
 
@@ -93,6 +108,8 @@ impl Network {
         match self {
             Network::AnvilLocalhost => 10000,
             Network::Rotsee => 10000,
+            Network::Jura => 10000,
+            Network::Dufour => 10000,
         }
     }
 
@@ -101,6 +118,8 @@ impl Network {
         match self {
             Network::AnvilLocalhost => 1,
             Network::Rotsee => 5,
+            Network::Jura => 5,
+            Network::Dufour => 5,
         }
     }
 }
@@ -118,6 +137,8 @@ impl FromStr for Network {
         match s.to_lowercase().as_str() {
             "anvil-localhost" | "anvil_localhost" | "localhost" => Ok(Network::AnvilLocalhost),
             "rotsee" => Ok(Network::Rotsee),
+            "jura" => Ok(Network::Jura),
+            "dufour" => Ok(Network::Dufour),
             _ => Err(NetworkParseError::UnknownNetwork {
                 name: s.to_string(),
                 available: Self::all_names(),
@@ -147,6 +168,8 @@ mod tests {
     fn test_network_from_str() {
         assert_eq!("rotsee".parse::<Network>().unwrap(), Network::Rotsee);
         assert_eq!("ROTSEE".parse::<Network>().unwrap(), Network::Rotsee);
+        assert_eq!("jura".parse::<Network>().unwrap(), Network::Jura);
+        assert_eq!("DUFOUR".parse::<Network>().unwrap(), Network::Dufour);
         assert_eq!("anvil-localhost".parse::<Network>().unwrap(), Network::AnvilLocalhost);
         assert_eq!("localhost".parse::<Network>().unwrap(), Network::AnvilLocalhost);
     }
@@ -158,20 +181,26 @@ mod tests {
         let err = result.unwrap_err();
         assert!(err.to_string().contains("invalid-network"));
         assert!(err.to_string().contains("rotsee"));
+        assert!(err.to_string().contains("jura"));
+        assert!(err.to_string().contains("dufour"));
     }
 
     #[test]
     fn test_network_display() {
         assert_eq!(Network::Rotsee.to_string(), "rotsee");
         assert_eq!(Network::AnvilLocalhost.to_string(), "anvil-localhost");
+        assert_eq!(Network::Jura.to_string(), "jura");
+        assert_eq!(Network::Dufour.to_string(), "dufour");
     }
 
     #[test]
     fn test_network_all() {
         let networks = Network::all();
-        assert_eq!(networks.len(), 2);
+        assert_eq!(networks.len(), 4);
         assert!(networks.contains(&Network::AnvilLocalhost));
         assert!(networks.contains(&Network::Rotsee));
+        assert!(networks.contains(&Network::Jura));
+        assert!(networks.contains(&Network::Dufour));
     }
 
     #[test]
@@ -190,5 +219,9 @@ mod tests {
             anvil.is_some(),
             "AnvilLocalhost network should be defined in hopr-bindings"
         );
+        let jura = Network::Jura.resolve();
+        assert!(jura.is_some(), "Jura network should be defined in hopr-bindings");
+        let dufour = Network::Dufour.resolve();
+        assert!(dufour.is_some(), "Dufour network should be defined in hopr-bindings");
     }
 }
