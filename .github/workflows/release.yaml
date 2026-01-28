@@ -26,6 +26,8 @@ jobs:
             command: nix run -L .#docker-blokli-upload-x86_64-linux
     permissions:
       contents: read
+      security-events: write
+      id-token: write
     with:
       source_branch: ${{ github.ref }}
       version_type: "release"
