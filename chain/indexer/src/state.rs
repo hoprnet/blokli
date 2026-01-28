@@ -10,7 +10,7 @@
 use std::sync::Arc;
 
 use async_broadcast::{Receiver, Sender, broadcast};
-use blokli_api_types::{Account, ChannelUpdate, TokenValueString};
+use blokli_api_types::{Account, ChannelUpdate, TicketParameters, TokenValueString};
 use hopr_primitive_types::prelude::Address;
 use tokio::sync::RwLock;
 
@@ -36,6 +36,12 @@ pub enum IndexerEvent {
 
     /// A new safe was deployed
     SafeDeployed(Address),
+
+    /// Ticket parameters (price or winning probability) were updated
+    ///
+    /// Contains both ticket price and winning probability since both are needed
+    /// for the GraphQL subscription.
+    TicketParametersUpdated(TicketParameters),
 }
 
 /// Shared state for coordinating indexer operations with subscriptions

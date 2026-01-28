@@ -102,12 +102,35 @@ bind_address = "0.0.0.0:8080"
 # Enable GraphQL Playground for development and testing (default: true)
 playground_enabled = true
 
+# SSE keepalive configuration
+[api.sse_keepalive]
+# Enable keepalive comments to prevent idle timeouts (default: true)
+enabled = true
+# Interval between keepalive comments (default: 15s)
+interval = "15s"
+# Comment text sent for keepalive messages (default: "keep-alive")
+text = "keep-alive"
+
 # Health check configuration for Kubernetes probes
 [api.health]
-# Maximum allowed indexer lag (in blocks) before readiness check fails (default: 10)
+# Maximum allowed indexer lag before the server reports "not ready"
+#
+# This limit is compared against finality-adjusted blocks from the RPC:
+#   lag = (rpc_block - finality) - indexed_block
+#
+# For Rotsee (Gnosis), finality=8 blocks. So with max_indexer_lag=10:
+# - The indexer can be up to 18 blocks behind the RPC chain head
+# - But must be within 10 blocks of confirmed blocks (with 8 confirmations)
+#
+# This ensures the server doesn't report "ready" when caught up to
+# unconfirmed blocks that might be reorganized.
+#
+# Default: 10 blocks
 max_indexer_lag = 10
+
 # Timeout for health check queries (default: 5s)
 timeout = "5s"
+
 # Interval for periodic readiness checks (default: 60s)
 # This controls how often the cached readiness state is updated by a background task
 # Set lower for faster detection of readiness changes, higher to reduce I/O overhead

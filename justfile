@@ -64,6 +64,13 @@ nextest:
 nextest-package package:
     cargo nextest run -p {{ package }}
 
+# Run integration tests (requires Docker image with BLOKLI_TEST_REMOTE_IMAGE env var)
+integration-test:
+    cargo test --package blokli-integration-tests
+
+# Run system tests (full smoke test suite)
+system-test: smoke-test-full
+
 # ============================================================================
 # Code Quality
 # ============================================================================
@@ -201,12 +208,12 @@ docker-logs service="":
 
 # Build bloklid Docker image from Nix
 docker-build:
-    nix build .#bloklid-docker
+    nix build .#docker-blokli-x86_64-linux
     docker load < result
 
 # Build bloklid + anvil Docker image from Nix
 docker-build-anvil:
-    nix build .#bloklid-anvil-docker-amd64
+    nix build .#docker-blokli-anvil-x86_64-linux
     docker load < result
 
 # Run bloklid + anvil container (GraphQL API on port 8080)
@@ -296,6 +303,14 @@ smoke-test-gnosis:
 # Run smoke tests against Gnosis Chain RPC with full sync (requires indexer to catch up within 10 blocks) - includes checkpoint resume validation
 smoke-test-gnosis-full-sync:
     SMOKE_CONFIG=config-smoke-gnosis-full-sync.toml ./tests/smoke/run-smoke-test.sh
+
+# Run Gnosis Chain full sync smoke test and keep services running for inspection
+smoke-test-gnosis-full-sync-up:
+    KEEP_RUNNING=1 SMOKE_CONFIG=config-smoke-gnosis-full-sync.toml ./tests/smoke/run-smoke-test.sh
+
+# Stop and remove the Gnosis Chain full sync smoke stack
+smoke-test-gnosis-full-sync-down:
+    docker compose -f tests/smoke/docker-compose.yml down -v
 
 # Build Docker image and run all smoke tests (Anvil + Gnosis Chain connectivity + Gnosis Chain full sync) - all include checkpoint resume validation
 smoke-test-full: smoke-test smoke-test-gnosis smoke-test-gnosis-full-sync

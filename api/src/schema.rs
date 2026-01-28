@@ -10,7 +10,6 @@ use blokli_chain_api::{
 use blokli_chain_indexer::IndexerState;
 use blokli_chain_rpc::{rpc::RpcOperations, transport::HttpRequestor};
 use blokli_chain_types::ContractAddresses;
-use blokli_db::notifications::SqliteNotificationManager;
 use sea_orm::DatabaseConnection;
 
 use crate::{mutation::MutationRoot, query::QueryRoot, subscription::SubscriptionRoot};
@@ -36,7 +35,6 @@ pub struct ExpectedBlockTime(pub u64);
 /// - IndexerState injected as context data (for subscription coordination)
 /// - Transaction executor and store injected as context data (for mutations and transaction queries)
 /// - RPC operations injected as context data (for passthrough balance queries)
-/// - SQLite notification manager injected as context data (for SQLite change notifications)
 /// - Query depth limit (10 levels) to prevent excessive nesting
 /// - Query complexity limit (100 points) to prevent expensive operations
 #[allow(clippy::too_many_arguments)]
@@ -50,7 +48,6 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
     rpc_operations: Arc<RpcOperations<R>>,
-    sqlite_notification_manager: Option<SqliteNotificationManager>,
 ) -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
     Schema::build(QueryRoot, MutationRoot, SubscriptionRoot)
         .limit_depth(10)
@@ -64,7 +61,6 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
         .data(transaction_executor)
         .data(transaction_store)
         .data(rpc_operations)
-        .data(sqlite_notification_manager)
         .finish()
 }
 
@@ -81,7 +77,6 @@ pub fn export_schema_sdl<R: HttpRequestor + 'static + Clone>(
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
     rpc_operations: Arc<RpcOperations<R>>,
-    sqlite_notification_manager: Option<SqliteNotificationManager>,
 ) -> String {
     let schema = build_schema(
         db,
@@ -93,7 +88,6 @@ pub fn export_schema_sdl<R: HttpRequestor + 'static + Clone>(
         transaction_executor,
         transaction_store,
         rpc_operations,
-        sqlite_notification_manager,
     );
 
     schema.sdl()

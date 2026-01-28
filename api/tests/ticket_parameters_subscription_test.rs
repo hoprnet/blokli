@@ -4,13 +4,14 @@ use std::{sync::Arc, time::Duration};
 
 use async_graphql::Schema;
 use blokli_api::{mutation::MutationRoot, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot};
+use blokli_api_types::{TicketParameters, TokenValueString};
 use blokli_chain_api::{
     rpc_adapter::RpcAdapter,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
     transaction_store::TransactionStore,
     transaction_validator::TransactionValidator,
 };
-use blokli_chain_indexer::IndexerState;
+use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
 use blokli_chain_rpc::{
     rpc::{RpcOperations, RpcOperationsConfig},
     transport::ReqwestClient,
@@ -55,7 +56,8 @@ async fn init_chain_info_with_params(
 }
 
 /// Create a minimal GraphQL schema for testing subscriptions
-fn create_test_schema(db: &BlokliDb) -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
+/// Returns both the schema and the IndexerState for publishing test events
+fn create_test_schema(db: &BlokliDb) -> (Schema<QueryRoot, MutationRoot, SubscriptionRoot>, IndexerState) {
     let indexer_state = IndexerState::new(10, 100);
     let transaction_store = Arc::new(TransactionStore::new());
     let transaction_validator = Arc::new(TransactionValidator::new());
@@ -88,18 +90,19 @@ fn create_test_schema(db: &BlokliDb) -> Schema<QueryRoot, MutationRoot, Subscrip
         RawTransactionExecutorConfig::default(),
     ));
 
-    build_schema(
+    let schema = build_schema(
         db.conn(TargetDb::Index).clone(),
         1,
         "test-network".to_string(),
         ContractAddresses::default(),
         1,
-        indexer_state,
+        indexer_state.clone(),
         transaction_executor,
         transaction_store,
         rpc_ops,
-        db.sqlite_notification_manager().cloned(),
-    )
+    );
+
+    (schema, indexer_state)
 }
 
 #[tokio::test]
@@ -114,8 +117,8 @@ async fn test_ticket_parameters_subscription_emits_initial_values() {
         .await
         .unwrap();
 
-    // Create GraphQL schema
-    let schema = create_test_schema(&db);
+    // Create GraphQL schema and get IndexerState
+    let (schema, _indexer_state) = create_test_schema(&db);
 
     // Execute subscription query
     let query = r#"
@@ -180,8 +183,8 @@ async fn test_ticket_parameters_subscription_handles_missing_ticket_price() {
     };
     chain_info.insert(db.conn(TargetDb::Index)).await.unwrap();
 
-    // Create GraphQL schema
-    let schema = create_test_schema(&db);
+    // Create GraphQL schema and get IndexerState
+    let (schema, _indexer_state) = create_test_schema(&db);
 
     // Execute subscription query
     let query = r#"
@@ -221,8 +224,8 @@ async fn test_ticket_parameters_subscription_handles_zero_values() {
         .await
         .unwrap();
 
-    // Create GraphQL schema
-    let schema = create_test_schema(&db);
+    // Create GraphQL schema and get IndexerState
+    let (schema, _indexer_state) = create_test_schema(&db);
 
     // Execute subscription query
     let query = r#"
@@ -261,8 +264,8 @@ async fn test_ticket_parameters_subscription_handles_max_values() {
         .await
         .unwrap();
 
-    // Create GraphQL schema
-    let schema = create_test_schema(&db);
+    // Create GraphQL schema and get IndexerState
+    let (schema, _indexer_state) = create_test_schema(&db);
 
     // Execute subscription query
     let query = r#"
@@ -301,7 +304,7 @@ async fn test_subscription_receives_ticket_price_update() {
         .await
         .unwrap();
 
-    let schema = create_test_schema(&db);
+    let (schema, indexer_state) = create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -338,6 +341,12 @@ async fn test_subscription_receives_ticket_price_update() {
         .await
         .unwrap();
 
+    // Publish event through IndexerState
+    indexer_state.publish_event(IndexerEvent::TicketParametersUpdated(TicketParameters {
+        ticket_price: TokenValueString("0.000000000000002 wxHOPR".to_string()),
+        min_ticket_winning_probability: 0.5,
+    }));
+
     // Should receive update
     let updated = tokio::time::timeout(Duration::from_secs(3), stream.next())
         .await
@@ -367,7 +376,7 @@ async fn test_subscription_receives_winning_probability_update() {
         .await
         .unwrap();
 
-    let schema = create_test_schema(&db);
+    let (schema, indexer_state) = create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -400,7 +409,13 @@ async fn test_subscription_receives_winning_probability_update() {
         .await
         .unwrap();
 
-    // Should receive update (polling will pick it up within 2 seconds)
+    // Publish event through IndexerState
+    indexer_state.publish_event(IndexerEvent::TicketParametersUpdated(TicketParameters {
+        ticket_price: TokenValueString("0.000000000000001 wxHOPR".to_string()),
+        min_ticket_winning_probability: 0.9,
+    }));
+
+    // Should receive update
     let updated = tokio::time::timeout(Duration::from_secs(3), stream.next())
         .await
         .unwrap()
@@ -427,7 +442,7 @@ async fn test_subscription_receives_both_parameters_update() {
         .await
         .unwrap();
 
-    let schema = create_test_schema(&db);
+    let (schema, indexer_state) = create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -452,6 +467,12 @@ async fn test_subscription_receives_both_parameters_update() {
     init_chain_info_with_params(db.conn(TargetDb::Index), 110, HoprBalance::from(3000_u64), 0.95)
         .await
         .unwrap();
+
+    // Publish event through IndexerState
+    indexer_state.publish_event(IndexerEvent::TicketParametersUpdated(TicketParameters {
+        ticket_price: TokenValueString("0.000000000000003 wxHOPR".to_string()),
+        min_ticket_winning_probability: 0.95,
+    }));
 
     // Should receive update with both new values
     let updated = tokio::time::timeout(Duration::from_secs(3), stream.next())
@@ -480,7 +501,7 @@ async fn test_subscription_receives_multiple_updates() {
         .await
         .unwrap();
 
-    let schema = create_test_schema(&db);
+    let (schema, indexer_state) = create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -504,6 +525,12 @@ async fn test_subscription_receives_multiple_updates() {
         .await
         .unwrap();
 
+    // Publish event 1 through IndexerState
+    indexer_state.publish_event(IndexerEvent::TicketParametersUpdated(TicketParameters {
+        ticket_price: TokenValueString("0.0000000000000002 wxHOPR".to_string()),
+        min_ticket_winning_probability: 0.1,
+    }));
+
     let update1 = tokio::time::timeout(Duration::from_secs(3), stream.next())
         .await
         .unwrap()
@@ -519,6 +546,12 @@ async fn test_subscription_receives_multiple_updates() {
     init_chain_info_with_params(db.conn(TargetDb::Index), 120, HoprBalance::from(300_u64), 0.1)
         .await
         .unwrap();
+
+    // Publish event 2 through IndexerState
+    indexer_state.publish_event(IndexerEvent::TicketParametersUpdated(TicketParameters {
+        ticket_price: TokenValueString("0.0000000000000003 wxHOPR".to_string()),
+        min_ticket_winning_probability: 0.1,
+    }));
 
     let update2 = tokio::time::timeout(Duration::from_secs(3), stream.next())
         .await

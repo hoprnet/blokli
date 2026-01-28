@@ -7,13 +7,16 @@ use blokli_integration_tests::{
     constants::{EPSILON, parsed_safe_balance, subscription_timeout},
     fixtures::{IntegrationFixture, integration_fixture as fixture},
 };
+use eventsource_client::{Client, ClientBuilder, SSE};
 use futures::stream::StreamExt;
 use futures_time::future::FutureExt as FutureTimeoutExt;
 use hex::ToHex;
 use hopr_crypto_types::{keypairs::Keypair, types::Hash};
 use hopr_internal_types::channels::generate_channel_id;
 use rstest::*;
+use serde_json::json;
 use serial_test::serial;
+use uuid::Uuid;
 
 #[rstest]
 #[test_log::test(tokio::test)]
@@ -268,6 +271,59 @@ async fn subscribe_safe_deployments(#[future(awt)] fixture: IntegrationFixture) 
 
     // re-registering the same safe should fail
     assert!(fixture.register_safe(account, &safe.address).await.is_err());
+
+    Ok(())
+}
+
+#[rstest]
+#[test_log::test(tokio::test)]
+#[serial]
+async fn subscribe_keepalive_comments(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    // Open an SSE subscription without emitting events.
+    let query = json!({
+        "query": format!(
+            "subscription {{ transactionUpdated(id: \"{}\") {{ id status }} }}",
+            Uuid::new_v4()
+        )
+    });
+    let request_body = serde_json::to_string(&query).expect("Failed to serialize request");
+    let url = fixture
+        .config()
+        .bloklid_url
+        .join("graphql")
+        .map_err(|e| anyhow!("failed to build GraphQL URL: {e}"))?;
+
+    let client = ClientBuilder::for_url(url.as_str())
+        .map_err(|e| anyhow!("failed to build SSE client: {e}"))?
+        .connect_timeout(fixture.config().http_timeout)
+        .header("Accept", "text/event-stream")
+        .map_err(|e| anyhow!("failed to set Accept header: {e}"))?
+        .header("Content-Type", "application/json")
+        .map_err(|e| anyhow!("failed to set Content-Type header: {e}"))?
+        .method("POST".into())
+        .body(request_body)
+        .build();
+
+    let stream = client.stream();
+    // Validate that the server emits keepalive comments on idle streams.
+    let comment = stream
+        .filter_map(|item| {
+            futures::future::ready(match item {
+                Ok(SSE::Comment(comment)) => Some(Ok(comment)),
+                Ok(_) => None,
+                Err(err) => Some(Err(anyhow!("SSE error: {err}"))),
+            })
+        })
+        .next()
+        .timeout(subscription_timeout())
+        .await
+        .map_err(|_| anyhow!("timed out waiting for keepalive comment"))?
+        .ok_or_else(|| anyhow!("SSE stream closed before keepalive"))??;
+
+    assert!(
+        comment.contains("keep-alive"),
+        "unexpected keepalive comment: {comment}"
+    );
 
     Ok(())
 }

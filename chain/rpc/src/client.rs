@@ -580,8 +580,9 @@ where
                         });
                     }
                 },
-                Err(err) => {
-                    error!(error = ?err, "Error occurred while processing request");
+                Err(_err) => {
+                    // Error details may contain sensitive URL information - avoid logging
+                    error!("RPC request failed");
                     method_names.iter().for_each(|_m| {
                         #[cfg(all(feature = "prometheus", not(test)))]
                         METRIC_COUNT_RPC_CALLS.increment(&[_m, "failure"]);
@@ -802,7 +803,7 @@ where
                 .entry(request_string.clone())
                 .or_try_insert_with(async {
                     if snapshot_requestor.fail_on_miss {
-                        tracing::error!("{request_string} is missing in {}", &snapshot_requestor.file);
+                        tracing::error!("Snapshot entry missing in {}", &snapshot_requestor.file);
                         return Err(TransportErrorKind::http_error(
                             http::StatusCode::NOT_FOUND.into(),
                             "".into(),
@@ -835,12 +836,12 @@ where
                                 responses.join(", ")
                             }
                         },
-                        Err(err) => {
-                            error!(error = ?err, "Error occurred while processing request");
-                            return Err(TransportErrorKind::Custom(
-                                format!("Error occurred while processing request: {err}").into(),
-                            )
-                            .into());
+                        Err(_err) => {
+                            // Error details may contain sensitive URL information - avoid logging
+                            error!("Error occurred while processing snapshot request");
+                            return Err(
+                                TransportErrorKind::Custom("Error occurred while processing request".into()).into(),
+                            );
                         }
                     };
 
@@ -859,12 +860,12 @@ where
                 .map_err(|e| TransportErrorKind::Custom(format!("{e}").into()))?;
 
             if inserted.load(Ordering::Relaxed) && snapshot_requestor.aggressive_save {
-                tracing::debug!("{request_string} was NOT found and was resolved");
+                tracing::debug!("Snapshot entry was NOT found and was resolved");
                 snapshot_requestor
                     .save()
                     .map_err(|e| TransportErrorKind::Custom(format!("{e}").into()))?;
             } else {
-                tracing::debug!("{request_string} was found");
+                tracing::debug!("Snapshot entry was found");
             }
 
             res

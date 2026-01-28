@@ -5,6 +5,7 @@ mod network;
 
 use std::{
     path::PathBuf,
+    process::ExitCode,
     sync::{Arc, RwLock},
     time::Duration,
 };
@@ -13,6 +14,7 @@ use std::{
 use ::config as config_rs;
 use async_signal::{Signal, Signals};
 use blokli_chain_api::BlokliChain;
+use blokli_chain_indexer::utils::redact_url;
 use blokli_chain_types::{AlloyAddressExt, ChainConfig};
 use blokli_db::db::{BlokliDb, BlokliDbConfig};
 use clap::{Parser, Subcommand};
@@ -24,7 +26,7 @@ use tracing_subscriber::{EnvFilter, prelude::*};
 use validator::Validate;
 
 use crate::{
-    config::{Config, redact_database_url, redact_rpc_url},
+    config::{Config, redact_database_url},
     errors::{BloklidError, ConfigError},
     network::Network,
 };
@@ -134,6 +136,9 @@ impl Args {
             ("BLOKLI_API_ENABLED", "api.enabled"),
             ("BLOKLI_API_BIND_ADDRESS", "api.bind_address"),
             ("BLOKLI_API_PLAYGROUND_ENABLED", "api.playground_enabled"),
+            ("BLOKLI_API_SSE_KEEPALIVE_ENABLED", "api.sse_keepalive.enabled"),
+            ("BLOKLI_API_SSE_KEEPALIVE_INTERVAL", "api.sse_keepalive.interval"),
+            ("BLOKLI_API_SSE_KEEPALIVE_TEXT", "api.sse_keepalive.text"),
             // API Health
             ("BLOKLI_API_HEALTH_MAX_INDEXER_LAG", "api.health.max_indexer_lag"),
             ("BLOKLI_API_HEALTH_TIMEOUT", "api.health.timeout"),
@@ -149,6 +154,7 @@ impl Args {
             "indexer.enable_logs_snapshot",
             "api.enabled",
             "api.playground_enabled",
+            "api.sse_keepalive.enabled",
         ];
 
         for (env_var, config_key) in env_mappings {
@@ -218,6 +224,7 @@ impl Args {
             max_block_range: config.network.max_block_range(),
             channel_contract_deploy_block: network_config.indexer_start_block_number,
             max_requests_per_sec: max_rpc_req,
+            expected_block_time: config.network.expected_block_time(),
         };
 
         // Store resolved config and contracts
@@ -250,22 +257,12 @@ impl Args {
     }
 }
 
-#[tokio::main]
-async fn main() {
-    if let Err(error) = run().await {
-        eprintln!("Error: {}", error);
-        std::process::exit(1);
-    }
-}
-
-async fn run() -> errors::Result<()> {
-    let args = Args::parse();
-
+fn init_logger(verbosity: u8) -> errors::Result<()> {
     // Initialize tracing subscriber. Precedence: RUST_LOG env > -v flag > default info
     let env_filter = if std::env::var(EnvFilter::DEFAULT_ENV).is_ok() {
         EnvFilter::from_default_env()
     } else {
-        match args.verbose {
+        match verbosity {
             0 => EnvFilter::new("info"),
             1 => EnvFilter::new("debug"),
             _ => EnvFilter::new("trace"),
@@ -293,6 +290,42 @@ async fn run() -> errors::Result<()> {
 
     tracing::subscriber::set_global_default(registry).map_err(|e| BloklidError::NonSpecific(e.to_string()))?;
 
+    Ok(())
+}
+
+#[tokio::main]
+async fn main() -> ExitCode {
+    const BIN_NAME: &str = env!("CARGO_PKG_NAME");
+
+    let args = match Args::try_parse() {
+        Ok(args) => args,
+        Err(error) => {
+            if matches!(
+                error.kind(),
+                clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
+            ) {
+                let _ = error.print();
+                return ExitCode::SUCCESS;
+            }
+            eprintln!("error parsing '{BIN_NAME}' arguments: {error}");
+            return ExitCode::FAILURE;
+        }
+    };
+
+    if let Err(error) = init_logger(args.verbose) {
+        eprintln!("error initializing '{BIN_NAME}' logger: {error}");
+        return ExitCode::FAILURE;
+    }
+
+    if let Err(error) = run(args).await {
+        tracing::error!(%error, "error while running '{BIN_NAME}'");
+        return ExitCode::FAILURE;
+    }
+
+    ExitCode::SUCCESS
+}
+
+async fn run(args: Args) -> errors::Result<()> {
     // Handle subcommands
     if let Some(command) = args.command {
         match command {
@@ -435,10 +468,7 @@ async fn run() -> errors::Result<()> {
             .await
             .map_err(|e| BloklidError::NonSpecific(format!("Failed to initialize database singletons: {e}")))?;
 
-        // Clone notification manager for API before db is moved to BlokliChain
-        let sqlite_notification_manager = db.sqlite_notification_manager().cloned();
-
-        info!("Connecting to RPC endpoint: {}", redact_rpc_url(&rpc_url));
+        info!("Connecting to RPC endpoint: {}", redact_url(&rpc_url));
 
         // Extract chain_id and network name for configuration
         let chain_id = chain_network.chain_id;
@@ -484,6 +514,11 @@ async fn run() -> errors::Result<()> {
                 rpc_url: rpc_url_for_api,
                 contract_addresses: contracts,
                 expected_block_time,
+                sse_keepalive: blokli_api::config::SseKeepAliveConfig {
+                    enabled: api_config.sse_keepalive.enabled,
+                    interval: api_config.sse_keepalive.interval,
+                    text: api_config.sse_keepalive.text.clone(),
+                },
                 health: blokli_api::config::HealthConfig {
                     max_indexer_lag: api_config.health.max_indexer_lag,
                     timeout: api_config.health.timeout,
@@ -504,7 +539,6 @@ async fn run() -> errors::Result<()> {
                 blokli_chain.transaction_executor(),
                 blokli_chain.transaction_store(),
                 rpc_operations,
-                sqlite_notification_manager,
             )
             .await
             .map_err(|e| BloklidError::NonSpecific(format!("Failed to build API app: {}", e)))?;
