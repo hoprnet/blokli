@@ -208,7 +208,6 @@ fn create_test_schema_with_state(
         transaction_executor,
         transaction_store,
         rpc_ops,
-        db.sqlite_notification_manager().cloned(),
     )
 }
 

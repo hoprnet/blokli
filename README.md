@@ -2,6 +2,12 @@
 
 This repository contains `Blokli`: On-chain Indexer of HOPR smart contracts and on-chain operations provider.
 
+## Components
+
+- `bloklid`: Daemon that indexes on-chain events and submits transactions
+- `blokli-api`: GraphQL server for querying indexed data and streaming updates
+- `db`: Database abstractions, entities, and migrations
+
 ## Development
 
 This project uses [just](https://github.com/casey/just) as a command runner and [Nix Flake](https://nix.dev/manual/nix/2.30/command-ref/new-cli/nix3-flake.html#description) as the build system.
@@ -30,6 +36,20 @@ Format, lint, and check compilation (recommended after changes):
 
 ```bash
 just quick
+```
+
+### Run Locally
+
+Run the indexer daemon:
+
+```bash
+just run
+```
+
+Run the GraphQL API server on its own:
+
+```bash
+just run-api
 ```
 
 ## Docker Images
@@ -158,10 +178,20 @@ Blokli implements a temporal database system for tracking blockchain state chang
 - **Position Ordering**: Lexicographic ordering ensures correct temporal queries
 - **Performance**: Efficient point-in-time queries using database indexes
 
+## Repository Layout
+
+- `bloklid/`: Indexer daemon and chain operations
+- `blokli-api/`: GraphQL API server
+- `db/`: Database abstractions, entities, and migrations
+- `design/`: Architecture and target schema references
+- `tests/`: Integration and smoke tests
+
 ## Documentation
 
 - **[TESTING.md](TESTING.md)** - Comprehensive testing guide
-- **[design/](design/)** - Design documents and architecture
+- **`design/architecture.md`** - System architecture and data flows
+- **`design/target-api-schema.graphql`** - Target GraphQL schema reference
+- **`design/target-db-schema.mmd`** - Target database schema reference
 
 ## Configuration
 
@@ -176,6 +206,8 @@ To generate a template configuration file:
 ```bash
 bloklid generate-config config.toml
 ```
+
+For a complete example with defaults and comments, see `bloklid/example-config.toml`.
 
 ### Environment Variables
 
@@ -224,6 +256,9 @@ You can override any configuration setting using environment variables.
 | `api.enabled`                         | `BLOKLI_API_ENABLED`                         |
 | `api.bind_address`                    | `BLOKLI_API_BIND_ADDRESS`                    |
 | `api.playground_enabled`              | `BLOKLI_API_PLAYGROUND_ENABLED`              |
+| `api.sse_keepalive.enabled`           | `BLOKLI_API_SSE_KEEPALIVE_ENABLED`           |
+| `api.sse_keepalive.interval`          | `BLOKLI_API_SSE_KEEPALIVE_INTERVAL`          |
+| `api.sse_keepalive.text`              | `BLOKLI_API_SSE_KEEPALIVE_TEXT`              |
 | `api.health.max_indexer_lag`          | `BLOKLI_API_HEALTH_MAX_INDEXER_LAG`          |
 | `api.health.timeout`                  | `BLOKLI_API_HEALTH_TIMEOUT`                  |
 | `api.health.readiness_check_interval` | `BLOKLI_API_HEALTH_READINESS_CHECK_INTERVAL` |

@@ -72,7 +72,6 @@ fn create_test_schema(db: &BlokliDb, indexer_state: IndexerState) -> Schema<Quer
         transaction_executor,
         transaction_store,
         rpc_ops,
-        db.sqlite_notification_manager().cloned(),
     )
 }
 

@@ -86,7 +86,6 @@ fn create_test_schema(db: &BlokliDb) -> (Schema<QueryRoot, MutationRoot, Subscri
         transaction_executor,
         transaction_store,
         rpc_ops,
-        db.sqlite_notification_manager().cloned(),
     );
 
     (schema, indexer_state)

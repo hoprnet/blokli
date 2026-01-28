@@ -304,5 +304,13 @@ smoke-test-gnosis:
 smoke-test-gnosis-full-sync:
     SMOKE_CONFIG=config-smoke-gnosis-full-sync.toml ./tests/smoke/run-smoke-test.sh
 
+# Run Gnosis Chain full sync smoke test and keep services running for inspection
+smoke-test-gnosis-full-sync-up:
+    KEEP_RUNNING=1 SMOKE_CONFIG=config-smoke-gnosis-full-sync.toml ./tests/smoke/run-smoke-test.sh
+
+# Stop and remove the Gnosis Chain full sync smoke stack
+smoke-test-gnosis-full-sync-down:
+    docker compose -f tests/smoke/docker-compose.yml down -v
+
 # Build Docker image and run all smoke tests (Anvil + Gnosis Chain connectivity + Gnosis Chain full sync) - all include checkpoint resume validation
 smoke-test-full: smoke-test smoke-test-gnosis smoke-test-gnosis-full-sync

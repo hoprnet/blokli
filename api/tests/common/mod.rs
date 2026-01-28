@@ -19,7 +19,7 @@ use std::{sync::Arc, time::Duration};
 use async_graphql::Schema;
 use axum::Router;
 use blokli_api::{
-    config::{ApiConfig, HealthConfig},
+    config::{ApiConfig, HealthConfig, SseKeepAliveConfig},
     mutation::MutationRoot,
     query::QueryRoot,
     schema::build_schema,
@@ -231,7 +231,6 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
         transaction_executor.clone(),
         transaction_store.clone(),
         rpc_operations.clone(),
-        None, // No SQLite notification manager for tests
     );
 
     Ok(TestContext {
@@ -306,6 +305,11 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
         playground_enabled: false,
         chain_id: ctx.chain_id,
         contract_addresses: ctx.contract_addrs.clone(),
+        sse_keepalive: SseKeepAliveConfig {
+            enabled: true,
+            interval: Duration::from_millis(50),
+            text: "keepalive-test".to_string(),
+        },
         health: HealthConfig {
             max_indexer_lag: 10,
             timeout: Duration::from_millis(5000),
@@ -324,7 +328,6 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
         ctx.transaction_executor.clone(),
         ctx.transaction_store.clone(),
         ctx.rpc_operations.clone(),
-        None, // SQLite notification manager not needed for tests
     )
     .await
     .expect("Failed to build app");
@@ -358,7 +361,6 @@ pub struct TransactionTestContext {
 
 impl Drop for TransactionTestContext {
     fn drop(&mut self) {
-        // Stop the monitor if it's running
         if let Some(handle) = self.monitor_handle.take() {
             handle.abort();
         }
@@ -396,17 +398,14 @@ pub async fn setup_transaction_test_environment(
     finality: u32,
     executor_config: Option<RawTransactionExecutorConfig>,
 ) -> anyhow::Result<TransactionTestContext> {
-    // Initialize logging for tests
     let _ = env_logger::builder().is_test(true).try_init();
 
-    // Use common setup but we need custom RPC config
     let mut config = TestEnvironmentConfig::default();
     config.expected_block_time = block_time;
     config.num_test_accounts = 1;
 
     let ctx = setup_test_environment(config).await?;
 
-    // Create RPC configuration with custom settings for transactions
     let rpc_config = RpcOperationsConfig {
         chain_id: ctx.chain_id,
         tx_polling_interval: poll_interval,
@@ -417,7 +416,6 @@ pub async fn setup_transaction_test_environment(
         ..Default::default()
     };
 
-    // Set up RPC client with retry policy
     let transport_client = ReqwestTransport::new(ctx.anvil.endpoint_url());
     let rpc_client = ClientBuilder::default()
         .layer(RetryBackoffLayer::new_with_policy(
@@ -431,7 +429,6 @@ pub async fn setup_transaction_test_environment(
     let rpc_operations = RpcOperations::new(rpc_client, ReqwestClient::new(), rpc_config, None)?;
     let rpc_adapter = Arc::new(RpcAdapter::new(rpc_operations));
 
-    // Create transaction components
     let transaction_store = Arc::new(TransactionStore::new());
     let transaction_validator = Arc::new(TransactionValidator::new());
 
@@ -442,7 +439,6 @@ pub async fn setup_transaction_test_environment(
         executor_config.unwrap_or_default(),
     ));
 
-    // Create and start transaction monitor
     let monitor_config = TransactionMonitorConfig {
         poll_interval,
         timeout: Duration::from_secs(30),

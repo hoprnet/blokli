@@ -16,6 +16,7 @@
 #   SOURCE_IMAGE     - Image to pull from remote registry (optional, builds from nix if not set)
 #   REGISTRY_HOST    - Local registry hostname (default: localhost)
 #   REGISTRY_PORT    - Local registry port (default: 5000)
+#   KEEP_RUNNING     - If set to "1" or "true", keeps services running after tests
 #
 # Exit codes:
 #   0 - All tests passed
@@ -48,7 +49,7 @@ REGISTRY_TIMEOUT=30
 REGISTRY_POLL_INTERVAL=1
 CHAIN_SYNC_TIMEOUT=30      # Default timeout, overridden for full sync test
 CHAIN_SYNC_POLL_INTERVAL=2 # Default poll interval, overridden for full sync test
-MAX_INDEXER_LAG=10
+MAX_INDEXER_LAG=2
 
 # Logging functions
 log_info() {
@@ -61,6 +62,10 @@ log_warn() {
 
 log_error() {
   echo "[ERROR] $1"
+}
+
+should_keep_running() {
+  [ "${KEEP_RUNNING:-}" = "1" ] || [ "${KEEP_RUNNING:-}" = "true" ]
 }
 
 # JSON parsing helper - Extract a single field from JSON response
@@ -193,6 +198,11 @@ collect_blokli_logs() {
 
 # Cleanup function
 cleanup() {
+  if should_keep_running; then
+    log_info "KEEP_RUNNING enabled, leaving Docker Compose stack running"
+    return
+  fi
+
   log_info "Collecting blokli container logs..."
   collect_blokli_logs
 
