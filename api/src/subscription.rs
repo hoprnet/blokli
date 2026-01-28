@@ -11,7 +11,6 @@ use blokli_api_types::{
 };
 use blokli_chain_api::transaction_store::{TransactionStatus as StoreTransactionStatus, TransactionStore};
 use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
-use blokli_db::notifications::SqliteNotificationManager;
 use blokli_db_entity::{
     chain_info,
     chain_info::Entity as ChainInfoEntity,
@@ -23,7 +22,7 @@ use blokli_db_entity::{
     hopr_node_safe_registration, hopr_safe_contract,
 };
 use chrono::Utc;
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use hopr_primitive_types::{
     prelude::HoprBalance as PrimitiveHoprBalance,
     primitives::Address,
@@ -396,6 +395,9 @@ impl SubscriptionRoot {
                             Ok(IndexerEvent::SafeDeployed(_)) => {
                                 // Safe deployment doesn't affect this subscription
                             }
+                            Ok(IndexerEvent::TicketParametersUpdated(_)) => {
+                                // Ticket parameter updates don't affect this subscription
+                            }
                             Err(async_broadcast::RecvError::Closed) => {
                                 info!("Event bus closed, ending subscription");
                                 return;
@@ -501,50 +503,87 @@ impl SubscriptionRoot {
     /// winning probability on-chain. These values are essential for ticket validation
     /// and payment channel operation.
     ///
-    /// Uses database-native notifications:
-    /// - PostgreSQL: LISTEN/NOTIFY via database trigger
-    /// - SQLite: Polling (1-second interval for tests)
+    /// Uses the IndexerState event bus for real-time notifications:
+    /// - Emits current value on subscription start
+    /// - Streams updates when TicketParametersUpdated events are received
+    /// - Automatically shuts down on blockchain reorganization
     #[graphql(name = "ticketParametersUpdated")]
     async fn ticket_parameters_updated(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = TicketParameters>> {
         let db = ctx.data::<DatabaseConnection>()?.clone();
-        let sqlite_manager = ctx.data::<Option<SqliteNotificationManager>>()?.clone();
+        let indexer_state = ctx
+            .data::<IndexerState>()
+            .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
+            .clone();
 
         Ok(stream! {
+            // Create subscription channels early to avoid missing events between initial fetch and loop
+            let mut event_receiver = indexer_state.subscribe_to_events();
+            let mut shutdown_receiver = indexer_state.subscribe_to_shutdown();
+
             // Track last emitted value to avoid duplicate emissions
             let mut last_params: Option<TicketParameters> = None;
 
-            // Create notification stream FIRST to ensure we don't miss any updates
-            // that occur between emitting initial value and waiting for notifications
-            let mut notifications = match crate::notifications::create_ticket_params_notification_stream(&db, sqlite_manager.as_ref()).await {
-                Ok(stream) => stream,
-                Err(e) => {
-                    error!("Failed to create notification stream: {:?}", e);
-                    return;
-                }
-            };
-
-            // Emit current value
+            // Emit current value from DB (if available)
             match Self::fetch_ticket_parameters(&db).await {
                 Ok(Some(params)) => {
                     last_params = Some(params.clone());
                     yield params;
                 }
-                Ok(None) => {}
+                Ok(None) => {
+                    warn!("Ticket parameters not initialized when subscribing to ticketParametersUpdated");
+                }
                 Err(e) => {
                     error!("Failed to fetch ticket parameters: {:?}", e);
                 }
             }
 
-            // Stream updates when notified, only if value changed
-            while (notifications.next().await).is_some() {
-                match Self::fetch_ticket_parameters(&db).await {
-                    Ok(Some(params)) if last_params.as_ref() != Some(&params) => {
-                        last_params = Some(params.clone());
-                        yield params;
+            // Stream real-time updates from event bus
+            loop {
+                tokio::select! {
+                    shutdown_result = shutdown_receiver.recv() => {
+                        match shutdown_result {
+                            Ok(_) => {
+                                info!("ticketParametersUpdated subscription shutting down due to reorg");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                warn!("Shutdown channel closed for ticketParametersUpdated");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Shutdown signal overflowed ({}), continuing", n);
+                            }
+                        }
                     }
-                    Ok(_) => {}
-                    Err(e) => {
-                        error!("Failed to fetch ticket parameters: {:?}", e);
+                    event_result = event_receiver.recv() => {
+                        match event_result {
+                            Ok(IndexerEvent::TicketParametersUpdated(params)) => {
+                                // Only emit if value changed
+                                if last_params.as_ref() != Some(&params) {
+                                    last_params = Some(params.clone());
+                                    yield params;
+                                }
+                            }
+                            Ok(IndexerEvent::AccountUpdated(_)) => {
+                                // Irrelevant for this subscription
+                            }
+                            Ok(IndexerEvent::ChannelUpdated(_)) => {
+                                // Irrelevant for this subscription
+                            }
+                            Ok(IndexerEvent::KeyBindingFeeUpdated(_)) => {
+                                // Irrelevant for this subscription
+                            }
+                            Ok(IndexerEvent::SafeDeployed(_)) => {
+                                // Irrelevant for this subscription
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                info!("Event bus closed, ending ticketParametersUpdated subscription");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Event bus overflowed ({}); ticketParametersUpdated may miss events", n);
+                            }
+                        }
                     }
                 }
             }
@@ -635,6 +674,9 @@ impl SubscriptionRoot {
                                 // Irrelevant for this subscription
                             }
                             Ok(IndexerEvent::SafeDeployed(_)) => {
+                                // Irrelevant for this subscription
+                            }
+                            Ok(IndexerEvent::TicketParametersUpdated(_)) => {
                                 // Irrelevant for this subscription
                             }
                             Err(async_broadcast::RecvError::Closed) => {

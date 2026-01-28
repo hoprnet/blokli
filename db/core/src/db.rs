@@ -15,7 +15,6 @@ use crate::{
     accounts::model_to_account_entry,
     errors::{DbSqlError, Result},
     events::EventBus,
-    notifications::{SqliteHookSender, SqliteNotification, SqliteNotificationManager},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, smart_default::SmartDefault, validator::Validate)]
@@ -50,9 +49,6 @@ pub struct BlokliDb {
     /// Event bus for broadcasting state changes
     pub(crate) event_bus: EventBus,
 
-    /// SQLite notification manager for update hooks (None for PostgreSQL)
-    pub(crate) sqlite_notification_manager: Option<SqliteNotificationManager>,
-
     #[allow(dead_code)]
     pub(crate) cfg: BlokliDbConfig,
 }
@@ -63,7 +59,6 @@ impl std::fmt::Debug for BlokliDb {
             .field("db", &self.db)
             .field("logs_db", &self.logs_db)
             .field("event_bus_subscribers", &self.event_bus.subscriber_count())
-            .field("sqlite_notification_manager", &self.sqlite_notification_manager)
             .field("cfg", &self.cfg)
             .finish()
     }
@@ -139,14 +134,10 @@ impl BlokliDb {
             opt
         };
 
-        // Create database connections with notification support
-        let (db, logs_db, sqlite_notification_manager) = if is_sqlite {
-            // Create SQLite notification manager
-            let (manager, sync_sender) = SqliteNotificationManager::new(100);
-            let hook_sender = SqliteHookSender::new(sync_sender);
-
-            // Helper to create SQLite pool with update hooks
-            let create_sqlite_pool = |url: String, sender: SqliteHookSender| async move {
+        // Create database connections
+        let (db, logs_db) = if is_sqlite {
+            // Helper to create SQLite pool
+            let create_sqlite_pool = |url: String| async move {
                 // Parse URL to extract path and mode
                 let connect_opts: SqliteConnectOptions = url
                     .parse()
@@ -158,27 +149,6 @@ impl BlokliDb {
                     .acquire_timeout(Duration::from_secs(8))
                     .idle_timeout(Duration::from_secs(300))
                     .max_lifetime(Duration::from_secs(1800))
-                    .after_connect({
-                        let sender = sender.clone();
-                        move |conn, _meta| {
-                            let sender = sender.clone();
-                            Box::pin(async move {
-                                let mut handle = conn
-                                    .lock_handle()
-                                    .await
-                                    .map_err(|e| sqlx::Error::Protocol(format!("failed to lock handle: {e}")))?;
-
-                                // Set up update hook to notify on chain_info changes
-                                handle.set_update_hook(move |result| {
-                                    if result.table == "chain_info" {
-                                        sender.send(SqliteNotification::ChainInfoUpdated);
-                                    }
-                                });
-
-                                Ok(())
-                            })
-                        }
-                    })
                     .connect_with(connect_opts)
                     .await
                     .map_err(|e| DbSqlError::Construction(format!("failed to connect: {e}")))?;
@@ -186,19 +156,19 @@ impl BlokliDb {
                 Ok::<_, DbSqlError>(SqlxSqliteConnector::from_sqlx_sqlite_pool(pool))
             };
 
-            // Create index database with hooks
-            let index_db = create_sqlite_pool(database_url.to_string(), hook_sender.clone()).await?;
+            // Create index database
+            let index_db = create_sqlite_pool(database_url.to_string()).await?;
 
-            // Create logs database with hooks (if provided)
+            // Create logs database (if provided)
             let logs_db = if let Some(logs_url) = logs_database_url {
-                Some(create_sqlite_pool(logs_url.to_string(), hook_sender).await?)
+                Some(create_sqlite_pool(logs_url.to_string()).await?)
             } else {
                 None
             };
 
-            (index_db, logs_db, Some(manager))
+            (index_db, logs_db)
         } else {
-            // PostgreSQL: use standard SeaORM connection (uses LISTEN/NOTIFY instead)
+            // PostgreSQL: use standard SeaORM connection
             let db = Database::connect(create_connection_opts(database_url))
                 .await
                 .map_err(|e| DbSqlError::Construction(format!("failed to connect to index database: {e}")))?;
@@ -213,7 +183,7 @@ impl BlokliDb {
                 None
             };
 
-            (db, logs_db, None)
+            (db, logs_db)
         };
 
         // Apply migrations based on database backend
@@ -286,7 +256,6 @@ impl BlokliDb {
             db,
             logs_db,
             event_bus,
-            sqlite_notification_manager,
             cfg,
         })
     }
@@ -373,25 +342,6 @@ impl BlokliDb {
     /// ```
     pub fn event_bus(&self) -> &EventBus {
         &self.event_bus
-    }
-
-    /// Get a reference to the SQLite notification manager.
-    ///
-    /// Returns `Some` for SQLite databases (including in-memory), `None` for PostgreSQL.
-    /// Use this to subscribe to real-time table change notifications.
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// if let Some(manager) = db.sqlite_notification_manager() {
-    ///     let mut rx = manager.subscribe();
-    ///     while let Ok(notification) = rx.recv().await {
-    ///         // Handle notification
-    ///     }
-    /// }
-    /// ```
-    pub fn sqlite_notification_manager(&self) -> Option<&SqliteNotificationManager> {
-        self.sqlite_notification_manager.as_ref()
     }
 }
 

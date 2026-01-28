@@ -1,5 +1,24 @@
 # Blokli Architecture
 
+## Document Scope
+
+This document describes the conceptual architecture, component responsibilities, and data flows for Blokli. It intentionally avoids code-level details and configuration snippets. For schema references, see `design/target-api-schema.graphql` and `design/target-db-schema.mmd`.
+
+## Table of Contents
+
+- System Overview
+- High-Level Component Diagram
+- Core Components
+- User Flows
+- Data Flow Architecture
+- Deployment Architectures
+- Performance Characteristics
+- Security Considerations
+- Error Handling Strategy
+- Future Architecture Considerations
+- Design Principles and Patterns
+- Conclusion
+
 ## System Overview
 
 Blokli is an on-chain indexer and operations provider for HOPR smart contracts. The system consists of two main components that can run together or separately:
@@ -170,6 +189,8 @@ RPC Endpoint
 
 **Database Schema Architecture**:
 
+The target database schema reference lives in `design/target-db-schema.mmd` and should remain consistent with the implemented entities and migrations.
+
 The database implements an event sourcing pattern with temporal versioning:
 
 **Core Tables**:
@@ -250,6 +271,8 @@ The database layer uses SeaORM for type-safe database access with auto-generated
 ```
 
 **GraphQL Schema Structure**:
+
+The target schema reference lives in `design/target-api-schema.graphql` and should remain consistent with the implemented API surface.
 
 The schema is organized into three root types following GraphQL best practices:
 
@@ -716,77 +739,100 @@ Clients can query Safe contracts through three methods:
 
 The unique constraint on `(deployed_block, deployed_tx_index, deployed_log_index)` ensures that processing the same event multiple times (due to retries or reorgs) will not create duplicate Safe entries.
 
-### Database Change Notifications
+### Subscription Event Bus
 
-Blokli uses database-native notification mechanisms to provide real-time updates for GraphQL subscriptions without polling overhead.
+Blokli provides real-time GraphQL subscriptions using an in-memory event bus architecture. All subscriptions use the same unified mechanism for consistency and simplicity.
 
-**PostgreSQL LISTEN/NOTIFY (Production)**:
-
-When running on PostgreSQL, database triggers automatically send notifications when critical data changes:
+**Event Bus Architecture**:
 
 ```
-Chain Info Update (ticket price or winning probability changes)
+Indexer Handler
     ↓
-PostgreSQL Trigger: trigger_notify_ticket_params
+Process blockchain log
     ↓
-Function: notify_ticket_params_changed()
-    - Checks if ticket_price changed
-    - Checks if min_incoming_ticket_win_prob changed
+Update database (transaction committed)
     ↓
-If changed: pg_notify('ticket_params_updated', '')
+Publish IndexerEvent to event bus
     ↓
-All LISTEN connections receive notification
+IndexerState broadcasts to all subscribers
     ↓
-API subscription queries latest values from database
+GraphQL subscriptions receive event
     ↓
-Streams update to GraphQL clients via SSE
+Filter and emit to matching clients via SSE
 ```
 
-**SQLite Update Hooks (Tests/Development)**:
+**Event Types**:
 
-SQLite environments use native update hooks via `SqliteNotificationManager` for event-driven notifications:
+Indexer handlers publish structured events containing complete data to avoid N+1 database queries:
+
+| Event Type                | Published When                        | Payload                       | Subscribers                 |
+| ------------------------- | ------------------------------------- | ----------------------------- | --------------------------- |
+| `AccountUpdated`          | Account state changes                 | Full Account object           | `accountUpdated`            |
+| `ChannelUpdated`          | Channel opened/closed/balance changes | Full Channel object           | `openedChannelGraphUpdated` |
+| `KeyBindingFeeUpdated`    | Protocol fee parameter changes        | Fee amount (TokenValueString) | `keyBindingFeeUpdated`      |
+| `SafeDeployed`            | New safe contract deployed            | Safe address                  | `safeDeployed`              |
+| `TicketParametersUpdated` | Ticket price/probability changes      | Full TicketParameters object  | `ticketParametersUpdated`   |
+
+**Two-Phase Subscription Pattern**:
+
+All event bus subscriptions follow a consistent pattern to prevent data loss:
 
 ```
-Chain Info Update (ticket price or winning probability changes)
+Client subscribes
     ↓
-SQLite update hook fires on chain_info table modification
+Phase 1: Capture watermark and subscribe to event bus
+    - Read current IndexerState position (watermark)
+    - Subscribe to event channel (buffered)
+    - Subscribe to shutdown channel (reorg detection)
     ↓
-SqliteHookSender sends to sync channel
+Phase 2: Emit historical snapshot
+    - Query database for current state at watermark
+    - Emit initial values to client
     ↓
-Bridge thread forwards to async broadcast channel
-    ↓
-Subscribed streams receive notification
-    ↓
-API subscription queries latest values from database
-    ↓
-Streams update to GraphQL clients via SSE
+Phase 3: Stream real-time updates
+    - Receive events from event bus
+    - Filter for relevant events
+    - Deduplicate (compare to last emitted value)
+    - Emit updates to client via SSE
 ```
 
-- Event-driven via SQLite's `set_update_hook()` callback
-- Sync-to-async bridge using mpsc → broadcast channels
-- Zero polling overhead (same as PostgreSQL)
+**Synchronization Guarantee**:
 
-**Notification Channels**:
+The IndexerState uses an RwLock to ensure no events are missed between the snapshot and subscription:
 
-| Channel Name            | Trigger Condition                                                              | Payload | Subscribers                                    |
-| ----------------------- | ------------------------------------------------------------------------------ | ------- | ---------------------------------------------- |
-| `ticket_params_updated` | `chain_info.ticket_price` OR `chain_info.min_incoming_ticket_win_prob` changed | Empty   | `ticketParametersUpdated` GraphQL subscription |
+1. Acquire read lock
+2. Capture watermark (last indexed block/tx/log)
+3. Subscribe to event channels
+4. Release read lock
+5. Events published during this time are buffered in the channel
+
+**Overflow Handling**:
+
+Event channels use `async-broadcast` with bounded capacity. Slow subscribers that can't keep up will receive `RecvError::Lagged(n)` and skip old messages. This prevents fast producers from being blocked by slow consumers.
+
+**Reorg Safety**:
+
+When a blockchain reorganization is detected:
+
+1. IndexerState publishes shutdown signal
+2. All active subscriptions receive the signal
+3. Subscriptions terminate gracefully
+4. Clients must reconnect after reorg completes
 
 **Scalability Benefits**:
 
-- **Zero polling overhead** (event-driven for both PostgreSQL and SQLite)
-- **Multiple API instances** can all LISTEN to same channel
-- **Database-level fan-out** handles notification distribution
-- **Atomic with writes** - notifications only sent on successful commit
-- **No application code** required to maintain notification logic
+- **In-memory pub/sub**: No database overhead for notifications
+- **Complete event data**: No N+1 queries in subscriptions
+- **Consistent pattern**: Same two-phase approach across all subscriptions
+- **Testable**: Easy to mock events for testing
+- **Database agnostic**: Works identically with PostgreSQL and SQLite
 
 **Implementation Details**:
 
-- Migration: `m017_add_ticket_params_notify_trigger.rs` (PostgreSQL trigger)
-- Trigger Function: `notify_ticket_params_changed()` (PostgreSQL only)
-- SQLite Manager: `db/src/notifications.rs::SqliteNotificationManager`
-- Notification Module: `api/src/notifications.rs` (unified abstraction)
-- Subscription: `api/src/subscription.rs::ticket_parameters_updated`
+- Event Bus: `chain/indexer/src/state.rs::IndexerState`
+- Event Types: `chain/indexer/src/state.rs::IndexerEvent`
+- Subscriptions: `api/src/subscription.rs`
+- Watermark Helper: `api/src/subscription.rs::capture_watermark_synchronized`
 
 ## Deployment Architectures
 
@@ -1226,6 +1272,33 @@ Health check configuration:
 
 - `max_indexer_lag` - Maximum allowed lag before readiness fails
 - `timeout_ms` - Timeout for health check operations
+
+### Finality Handling in Readiness Checks
+
+The readiness check automatically accounts for blockchain finality to prevent false-positive "ready" states:
+
+**Block Number Finality Adjustment**:
+RPC block heights are treated as confirmed by subtracting the configured finality depth. For example, with a finality depth of 8, a chain head at block 1000 yields a confirmed height of 992, so only blocks with 8+ confirmations count as confirmed.
+
+**Readiness Calculation**:
+Readiness compares the confirmed height with the indexer watermark. If the lag in confirmed blocks is within `max_indexer_lag`, readiness passes.
+
+**Effective Threshold**:
+Because readiness uses confirmed height (not chain head), the indexer can be up to `max_indexer_lag + finality` behind the tip while still reporting ready.
+
+**Example (Gnosis Chain)**:
+
+- Configuration: `max_indexer_lag=10`, `finality=8`
+- Latest RPC block: 1000
+- Confirmed RPC block: 992
+- Indexed block: 982
+- Calculated lag: 10 blocks
+- Result: READY
+
+The indexer is actually 18 blocks behind the RPC chain head (1000 - 982), but only 10 blocks behind confirmed blocks—within the acceptable threshold.
+
+**Configuration Flow**:
+Finality is defined by the selected network, propagated through runtime configuration into the RPC layer, and reused by the readiness checks.
 
 ## Design Principles and Patterns
 

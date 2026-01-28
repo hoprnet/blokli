@@ -1,3 +1,4 @@
+use blokli_api_types::{TicketParameters, TokenValueString};
 use blokli_chain_rpc::HoprIndexerRpcOperations;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction};
 use hopr_bindings::{
@@ -55,6 +56,20 @@ where
                     %new_minimum_win_prob,
                     "minimum ticket winning probability updated"
                 );
+
+                // Fetch current ticket parameters to publish event
+                let indexer_data = self.db.get_indexer_data(Some(tx)).await?;
+                let ticket_params = TicketParameters {
+                    min_ticket_winning_probability: f64::from(indexer_data.minimum_incoming_ticket_winning_prob),
+                    ticket_price: TokenValueString(
+                        indexer_data
+                            .ticket_price
+                            .map(|p| p.to_string())
+                            .unwrap_or_else(|| "0 wxHOPR".to_string()),
+                    ),
+                };
+
+                return Ok(vec![IndexerEvent::TicketParametersUpdated(ticket_params)]);
             }
             HoprWinningProbabilityOracleEvents::OwnershipTransferStarted(transfer_started) => {
                 debug!(
@@ -96,6 +111,20 @@ where
                     .await?;
 
                 info!(price = %update._1, "ticket price updated");
+
+                // Fetch current ticket parameters to publish event
+                let indexer_data = self.db.get_indexer_data(Some(tx)).await?;
+                let ticket_params = TicketParameters {
+                    min_ticket_winning_probability: f64::from(indexer_data.minimum_incoming_ticket_winning_prob),
+                    ticket_price: TokenValueString(
+                        indexer_data
+                            .ticket_price
+                            .map(|p| p.to_string())
+                            .unwrap_or_else(|| "0 wxHOPR".to_string()),
+                    ),
+                };
+
+                return Ok(vec![IndexerEvent::TicketParametersUpdated(ticket_params)]);
             }
             HoprTicketPriceOracleEvents::OwnershipTransferred(_event) => {
                 // ignore ownership transfer event

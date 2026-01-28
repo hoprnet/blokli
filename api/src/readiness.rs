@@ -18,7 +18,7 @@ use blokli_chain_rpc::rpc::RpcOperations;
 use blokli_db_entity::prelude::ChainInfo;
 use sea_orm::{DatabaseConnection, EntityTrait};
 use tokio::sync::RwLock;
-use tracing::{error, info};
+use tracing::{error, info, warn};
 
 use crate::config::HealthConfig;
 
@@ -115,6 +115,8 @@ impl ReadinessChecker {
         };
 
         // 2. Check RPC connectivity and get current block
+        // NOTE: get_block_number() returns finality-adjusted blocks (RPC block - confirmations)
+        // This ensures we only compare lag against confirmed blocks, not unconfirmed chain head
         let rpc_block = match self.rpc_operations.get_block_number().await {
             Ok(block) => Some(block),
             Err(e) => {
@@ -129,8 +131,23 @@ impl ReadinessChecker {
             let lag = rpc_block.saturating_sub(indexed_u64);
 
             if lag > self.health_config.max_indexer_lag {
+                warn!(
+                    %lag,
+                    confirmed_block = %rpc_block,
+                    %indexed,
+                    max_lag = self.health_config.max_indexer_lag,
+                    "Indexer lag exceeds threshold (lag compared against finality-adjusted RPC block)"
+                );
                 return ReadinessState::NotReady;
             }
+
+            // Log successful readiness check
+            info!(
+                %lag,
+                confirmed_block = %rpc_block,
+                indexed = %indexed,
+                "Indexer within acceptable lag of confirmed blocks"
+            );
         } else {
             return ReadinessState::NotReady;
         }

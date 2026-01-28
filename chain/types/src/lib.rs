@@ -69,6 +69,7 @@ impl AlloyAddressExt for AlloyAddress {
 ///
 /// This struct encapsulates chain-level configuration needed by the indexer and RPC operations.
 /// Chain ID and contract addresses are resolved from hopr-bindings network definitions.
+/// Expected block time is network-specific and affects indexer polling frequency.
 #[derive(Clone, Debug)]
 pub struct ChainConfig {
     /// Chain ID (e.g., 100 for Gnosis Chain) - read from hopr-bindings
@@ -83,6 +84,8 @@ pub struct ChainConfig {
     pub channel_contract_deploy_block: u32,
     /// Maximum RPC requests per second (None = unlimited)
     pub max_requests_per_sec: Option<u32>,
+    /// Expected block time in seconds (network-specific, affects indexer polling frequency)
+    pub expected_block_time: u64,
 }
 
 /// Holds addresses of all smart contracts.
