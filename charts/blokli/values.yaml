@@ -270,7 +270,7 @@ database:
   maxConnections: 10
 # Bloklid configuration
 config:
-  ## @param config.network HOPR network to index (e.g., dufour, rotsee)
+  ## @param config.network HOPR network to index (e.g., dufour, rotsee, jura)
   ##
   network: "dufour"
   ## @param config.rpcUrl Blockchain RPC URL
