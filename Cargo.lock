@@ -1728,7 +1728,7 @@ dependencies = [
  "env_logger",
  "futures",
  "hex",
- "hopr-bindings 4.6.0",
+ "hopr-bindings",
  "hopr-crypto-types",
  "hopr-internal-types",
  "hopr-primitive-types",
@@ -1787,7 +1787,7 @@ dependencies = [
  "futures",
  "hex-literal",
  "hopr-async-runtime",
- "hopr-bindings 4.6.0",
+ "hopr-bindings",
  "hopr-crypto-types",
  "hopr-internal-types",
  "hopr-primitive-types",
@@ -1828,7 +1828,7 @@ dependencies = [
  "futures-util",
  "hex-literal",
  "hopr-async-runtime",
- "hopr-bindings 4.6.0",
+ "hopr-bindings",
  "hopr-crypto-random",
  "hopr-crypto-types",
  "hopr-internal-types",
@@ -1863,7 +1863,7 @@ dependencies = [
  "futures-timer",
  "hex-literal",
  "hopr-async-runtime",
- "hopr-bindings 4.6.0",
+ "hopr-bindings",
  "hopr-crypto-types",
  "hopr-internal-types",
  "hopr-metrics",
@@ -1898,7 +1898,7 @@ version = "0.2.0"
 dependencies = [
  "hex",
  "hex-literal",
- "hopr-bindings 4.6.0",
+ "hopr-bindings",
  "hopr-crypto-types",
  "hopr-internal-types",
  "hopr-primitive-types",
@@ -2073,7 +2073,7 @@ dependencies = [
  "futures-time",
  "hex",
  "hopli",
- "hopr-bindings 4.6.0",
+ "hopr-bindings",
  "hopr-chain-connector",
  "hopr-chain-types",
  "hopr-crypto-types",
@@ -4027,7 +4027,7 @@ dependencies = [
  "clap",
  "hex",
  "hex-literal",
- "hopr-bindings 4.5.0",
+ "hopr-bindings",
  "hopr-chain-types",
  "hopr-crypto-keypair",
  "hopr-crypto-types",
@@ -4094,23 +4094,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hopr-bindings"
-version = "4.6.0"
-source = "git+https://github.com/hoprnet/contracts?branch=q%2Faudit-report-202601#2bef30b2eb22696d8558d720a7fd5c55884eef18"
-dependencies = [
- "alloy",
- "anyhow",
- "const_format",
- "hex-literal",
- "serde",
- "serde_json",
- "serde_with",
- "thiserror 2.0.17",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "hopr-chain-connector"
 version = "0.11.0"
 source = "git+https://github.com/hoprnet/hoprnet?branch=master#763ab4bd34eba522d526e48b1310db959a6af6ce"
@@ -4152,7 +4135,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "hex-literal",
- "hopr-bindings 4.5.0",
+ "hopr-bindings",
  "hopr-crypto-types",
  "hopr-internal-types",
  "hopr-primitive-types",
