@@ -24,8 +24,7 @@ pub enum Network {
     Rotsee,
     /// Jura testnet (staging network)
     #[serde(alias = "jura")]
-    Jura
-
+    Jura,
 }
 
 impl Network {
