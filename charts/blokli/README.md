@@ -129,7 +129,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | `database.logs_path`                                 | Sqlite logs database file path (used only if database.type is "sqlite")                                       | `""`                |
 | `database.existingSecret`                            | Name of existing secret containing database credentials                                                       | `""`                |
 | `database.maxConnections`                            | Maximum number of database connections                                                                        | `10`                |
-| `config.network`                                     | HOPR network to index (e.g., dufour, rotsee)                                                                  | `dufour`            |
+| `config.network`                                     | HOPR network to index (e.g., dufour, rotsee, jura)                                                                  | `dufour`            |
 | `config.rpcUrl`                                      | Blockchain RPC URL                                                                                            | `""`                |
 | `config.maxRpcRequestsPerSec`                        | Maximum RPC requests per second (0 = unlimited)                                                               | `0`                 |
 | `config.dataDirectory`                               | Data directory path (should match persistence mount path)                                                     | `/data`             |
