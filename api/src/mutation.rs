@@ -2,7 +2,7 @@
 
 use std::sync::Arc;
 
-use async_graphql::{Context, ID, Object, Result, Union};
+use async_graphql::{Context, Object, Result, Union};
 use blokli_api_types::{
     ContractNotAllowedError, FunctionNotAllowedError, InvalidTransactionIdError, RpcError, SendTransactionSuccess,
     TimeoutError, Transaction, TransactionInput,
@@ -11,7 +11,7 @@ use blokli_chain_api::{
     DefaultHttpRequestor,
     rpc_adapter::RpcAdapter,
     transaction_executor::{RawTransactionExecutor, TransactionExecutorError},
-    transaction_store::{TransactionRecord, TransactionStore},
+    transaction_store::TransactionStore,
     transaction_validator::ValidationError,
 };
 
@@ -111,7 +111,7 @@ impl MutationRoot {
                     .get(uuid)
                     .map_err(|e| async_graphql::Error::new(format!("Failed to retrieve transaction: {}", e)))?;
 
-                Ok(SendTransactionAsyncResult::Transaction(record_to_graphql(record)))
+                Ok(SendTransactionAsyncResult::Transaction(record.into()))
             }
             Err(e) => Ok(executor_error_to_async_result(e)),
         }
@@ -150,7 +150,7 @@ impl MutationRoot {
 
         // Execute transaction in sync mode
         match executor.send_raw_transaction_sync(raw_tx, confirmations).await {
-            Ok(record) => Ok(SendTransactionSyncResult::Transaction(record_to_graphql(record))),
+            Ok(record) => Ok(SendTransactionSyncResult::Transaction(record.into())),
             Err(e) => Ok(executor_error_to_sync_result(e)),
         }
     }
@@ -161,16 +161,6 @@ fn hex_to_bytes(hex_str: &str) -> Result<Vec<u8>> {
     let hex_str = hex_str.to_lowercase();
     let hex_str = hex_str.strip_prefix("0x").unwrap_or(&hex_str);
     hex::decode(hex_str).map_err(|e| async_graphql::Error::new(format!("Invalid hex string: {}", e)))
-}
-
-/// Convert TransactionRecord to GraphQL Transaction
-fn record_to_graphql(record: TransactionRecord) -> Transaction {
-    Transaction {
-        id: ID::from(record.id.to_string()),
-        status: crate::conversions::store_status_to_graphql(record.status),
-        submitted_at: record.submitted_at,
-        transaction_hash: record.transaction_hash.into(),
-    }
 }
 
 /// Convert TransactionExecutorError to SendTransactionResult

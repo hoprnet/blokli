@@ -6,6 +6,8 @@
 
 use std::sync::Arc;
 
+use async_graphql::ID;
+use blokli_api_types::{Hex32, SafeExecution, Transaction, TransactionStatus as GqlTransactionStatus};
 use chrono::{DateTime, Utc};
 use dashmap::{DashMap, mapref::entry::Entry};
 use hopr_crypto_types::types::Hash;
@@ -19,6 +21,20 @@ pub enum TransactionStoreError {
     NotFound(Uuid),
     #[error("Transaction already exists: {0}")]
     AlreadyExists(Uuid),
+}
+
+/// Result of internal Safe contract execution
+///
+/// Populated after a transaction targeting a Safe contract is confirmed on-chain.
+/// Extracted from ExecutionSuccess/ExecutionFailure events in the receipt logs.
+#[derive(Debug, Clone)]
+pub struct SafeExecutionResult {
+    /// Whether the internal Safe transaction succeeded
+    pub success: bool,
+    /// Safe internal transaction hash (bytes32 from event)
+    pub safe_tx_hash: Hash,
+    /// Revert reason string (if execution failed and reason is decodable)
+    pub revert_reason: Option<String>,
 }
 
 /// Status of a submitted transaction
@@ -57,6 +73,40 @@ pub struct TransactionRecord {
     pub confirmed_at: Option<DateTime<Utc>>,
     /// Error message (if submission or confirmation failed)
     pub error_message: Option<String>,
+    /// Internal Safe execution result (populated after confirmation for Safe transactions)
+    pub safe_execution: Option<SafeExecutionResult>,
+}
+
+impl From<TransactionStatus> for GqlTransactionStatus {
+    fn from(status: TransactionStatus) -> Self {
+        match status {
+            TransactionStatus::Pending => GqlTransactionStatus::Pending,
+            TransactionStatus::Submitted => GqlTransactionStatus::Submitted,
+            TransactionStatus::Confirmed => GqlTransactionStatus::Confirmed,
+            TransactionStatus::Reverted => GqlTransactionStatus::Reverted,
+            TransactionStatus::Timeout => GqlTransactionStatus::Timeout,
+            TransactionStatus::ValidationFailed => GqlTransactionStatus::ValidationFailed,
+            TransactionStatus::SubmissionFailed => GqlTransactionStatus::SubmissionFailed,
+        }
+    }
+}
+
+impl From<TransactionRecord> for Transaction {
+    fn from(record: TransactionRecord) -> Self {
+        let safe_execution = record.safe_execution.map(|se| SafeExecution {
+            success: se.success,
+            safe_tx_hash: Hex32::from(se.safe_tx_hash),
+            revert_reason: se.revert_reason,
+        });
+
+        Transaction {
+            id: ID::from(record.id.to_string()),
+            status: record.status.into(),
+            submitted_at: record.submitted_at,
+            transaction_hash: record.transaction_hash.into(),
+            safe_execution,
+        }
+    }
 }
 
 /// Thread-safe in-memory store for transaction records
@@ -137,6 +187,23 @@ impl TransactionStore {
             .ok_or(TransactionStoreError::NotFound(id))
     }
 
+    /// Update the Safe execution result for a transaction
+    ///
+    /// # Errors
+    /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
+    pub fn update_safe_execution(
+        &self,
+        id: Uuid,
+        safe_execution: SafeExecutionResult,
+    ) -> Result<(), TransactionStoreError> {
+        self.transactions
+            .get_mut(&id)
+            .map(|mut entry| {
+                entry.value_mut().safe_execution = Some(safe_execution);
+            })
+            .ok_or(TransactionStoreError::NotFound(id))
+    }
+
     /// List all transactions with a specific status
     pub fn list_by_status(&self, status: TransactionStatus) -> Vec<TransactionRecord> {
         self.transactions
@@ -176,6 +243,7 @@ mod tests {
             submitted_at: Utc::now(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id = record.id;
@@ -201,6 +269,7 @@ mod tests {
             submitted_at: Utc::now(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         assert!(store.insert(record.clone()).is_ok());
@@ -231,6 +300,7 @@ mod tests {
             submitted_at: Utc::now(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id = record.id;
@@ -278,6 +348,7 @@ mod tests {
                 submitted_at: Utc::now(),
                 confirmed_at: None,
                 error_message: None,
+                safe_execution: None,
             };
 
             store.insert(record).unwrap();
@@ -307,6 +378,7 @@ mod tests {
                     submitted_at: Utc::now(),
                     confirmed_at: None,
                     error_message: None,
+                    safe_execution: None,
                 };
                 store_clone1.insert(record).unwrap();
             }
@@ -323,6 +395,7 @@ mod tests {
                     submitted_at: Utc::now(),
                     confirmed_at: None,
                     error_message: None,
+                    safe_execution: None,
                 };
                 store_clone2.insert(record).unwrap();
             }
@@ -347,6 +420,7 @@ mod tests {
             submitted_at: Utc::now(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id = record.id;
@@ -361,6 +435,7 @@ mod tests {
             submitted_at: Utc::now(),
             confirmed_at: Some(Utc::now()),
             error_message: None,
+            safe_execution: None,
         };
 
         store.update(updated_record.clone()).unwrap();

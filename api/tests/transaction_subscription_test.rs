@@ -118,6 +118,7 @@ async fn test_transaction_updated_emits_initial_state() -> Result<()> {
         submitted_at: chrono::Utc::now(),
         confirmed_at: None,
         error_message: None,
+        safe_execution: None,
     };
     ctx.store.insert(record)?;
 
@@ -166,6 +167,7 @@ async fn test_transaction_updated_receives_status_changes() -> Result<()> {
         submitted_at: chrono::Utc::now(),
         confirmed_at: None,
         error_message: None,
+        safe_execution: None,
     };
     ctx.store.insert(record)?;
 
@@ -273,6 +275,7 @@ async fn test_transaction_updated_multiple_status_transitions() -> Result<()> {
         submitted_at: chrono::Utc::now(),
         confirmed_at: None,
         error_message: None,
+        safe_execution: None,
     };
     ctx.store.insert(record)?;
 
@@ -330,6 +333,7 @@ async fn test_transaction_updated_concurrent_subscriptions() -> Result<()> {
         submitted_at: chrono::Utc::now(),
         confirmed_at: None,
         error_message: None,
+        safe_execution: None,
     };
     ctx.store.insert(record)?;
 
@@ -411,6 +415,7 @@ async fn test_transaction_updated_handles_all_status_types() -> Result<()> {
                 None
             },
             error_message: None,
+            safe_execution: None,
         };
         ctx.store.insert(record)?;
 

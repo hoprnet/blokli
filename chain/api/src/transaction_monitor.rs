@@ -8,9 +8,23 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use hopr_crypto_types::types::Hash;
 use tokio::time::sleep;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
-use crate::transaction_store::{TransactionStatus, TransactionStore};
+use crate::{
+    safe_execution::{decode_transaction_to_address, inspect_safe_execution_logs},
+    transaction_store::{TransactionStatus, TransactionStore},
+};
+
+/// A single log entry from a transaction receipt
+#[derive(Debug, Clone)]
+pub struct ReceiptLog {
+    /// Address of the contract that emitted the log
+    pub address: [u8; 20],
+    /// Log topics (indexed parameters, first topic is event signature)
+    pub topics: Vec<[u8; 32]>,
+    /// Non-indexed log data
+    pub data: Vec<u8>,
+}
 
 /// Trait for querying transaction receipts from the RPC
 #[async_trait]
@@ -18,6 +32,16 @@ pub trait ReceiptProvider: Send + Sync {
     /// Get the status of a transaction by its hash
     /// Returns Some(true) if confirmed, Some(false) if reverted, None if still pending
     async fn get_transaction_status(&self, tx_hash: Hash) -> Result<Option<bool>, String>;
+
+    /// Fetch receipt logs for a confirmed transaction
+    async fn get_transaction_receipt_logs(&self, tx_hash: Hash) -> Result<Vec<ReceiptLog>, String>;
+}
+
+/// Trait for checking if an address is a known Safe contract
+#[async_trait]
+pub trait SafeAddressChecker: Send + Sync + std::fmt::Debug {
+    /// Check if the given address is a known Safe contract in the database
+    async fn is_known_safe(&self, address: &[u8; 20]) -> bool;
 }
 
 /// Configuration for the transaction monitor
@@ -43,11 +67,20 @@ impl Default for TransactionMonitorConfig {
 }
 
 /// Background monitor for tracking transaction confirmations
-#[derive(Debug)]
 pub struct TransactionMonitor<R: ReceiptProvider> {
     transaction_store: Arc<TransactionStore>,
     receipt_provider: Arc<R>,
+    safe_checker: Option<Arc<dyn SafeAddressChecker>>,
     config: TransactionMonitorConfig,
+}
+
+impl<R: ReceiptProvider> std::fmt::Debug for TransactionMonitor<R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransactionMonitor")
+            .field("config", &self.config)
+            .field("safe_checker", &self.safe_checker)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<R: ReceiptProvider> TransactionMonitor<R> {
@@ -56,10 +89,12 @@ impl<R: ReceiptProvider> TransactionMonitor<R> {
         transaction_store: Arc<TransactionStore>,
         receipt_provider: R,
         config: TransactionMonitorConfig,
+        safe_checker: Option<Arc<dyn SafeAddressChecker>>,
     ) -> Self {
         Self {
             transaction_store,
             receipt_provider: Arc::new(receipt_provider),
+            safe_checker,
             config,
         }
     }
@@ -113,6 +148,9 @@ impl<R: ReceiptProvider> TransactionMonitor<R> {
                     {
                         error!("Failed to update transaction {} status to Confirmed: {}", record.id, e);
                     }
+
+                    // Enrich confirmed transactions targeting Safe contracts
+                    self.try_enrich_safe_execution(&record).await;
                 }
                 Ok(Some(false)) => {
                     info!("Transaction {} reverted", record.id);
@@ -138,6 +176,54 @@ impl<R: ReceiptProvider> TransactionMonitor<R> {
         }
 
         Ok(())
+    }
+
+    /// Attempt to enrich a confirmed transaction with Safe execution results.
+    ///
+    /// Decodes the raw transaction to extract the `to` address, checks if it is a
+    /// known Safe contract, and if so, fetches receipt logs to find
+    /// ExecutionSuccess/ExecutionFailure events.
+    async fn try_enrich_safe_execution(&self, record: &crate::transaction_store::TransactionRecord) {
+        let Some(ref safe_checker) = self.safe_checker else {
+            return;
+        };
+
+        // Decode the raw transaction to extract the `to` address
+        let Some(to_addr) = decode_transaction_to_address(&record.raw_transaction) else {
+            return;
+        };
+
+        // Check if the `to` address is a known Safe contract
+        if !safe_checker.is_known_safe(&to_addr).await {
+            return;
+        }
+
+        debug!(
+            "Transaction {} targets a known Safe contract, fetching receipt logs",
+            record.id
+        );
+
+        // Fetch receipt logs and look for Safe execution events
+        match self
+            .receipt_provider
+            .get_transaction_receipt_logs(record.transaction_hash)
+            .await
+        {
+            Ok(logs) => {
+                if let Some(result) = inspect_safe_execution_logs(&to_addr, &logs) {
+                    info!(
+                        "Transaction {} Safe execution: success={}, safe_tx_hash={:?}",
+                        record.id, result.success, result.safe_tx_hash
+                    );
+                    if let Err(e) = self.transaction_store.update_safe_execution(record.id, result) {
+                        error!("Failed to update Safe execution for transaction {}: {}", record.id, e);
+                    }
+                }
+            }
+            Err(e) => {
+                warn!("Failed to fetch receipt logs for Safe tx {}: {}", record.id, e);
+            }
+        }
     }
 }
 
@@ -173,13 +259,17 @@ mod tests {
         async fn get_transaction_status(&self, tx_hash: Hash) -> Result<Option<bool>, String> {
             Ok(self.statuses.get(&tx_hash).map(|entry| *entry.value()).unwrap_or(None))
         }
+
+        async fn get_transaction_receipt_logs(&self, _tx_hash: Hash) -> Result<Vec<ReceiptLog>, String> {
+            Ok(vec![])
+        }
     }
 
     fn create_monitor(
         store: Arc<TransactionStore>,
         provider: MockReceiptProvider,
     ) -> TransactionMonitor<MockReceiptProvider> {
-        TransactionMonitor::new(store, provider, TransactionMonitorConfig::default())
+        TransactionMonitor::new(store, provider, TransactionMonitorConfig::default(), None)
     }
 
     #[tokio::test]
@@ -196,6 +286,7 @@ mod tests {
             submitted_at: Utc::now(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id = record.id;
@@ -227,6 +318,7 @@ mod tests {
             submitted_at: Utc::now(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id = record.id;
@@ -258,6 +350,7 @@ mod tests {
             submitted_at: Utc::now(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id = record.id;
@@ -287,6 +380,7 @@ mod tests {
             submitted_at: Utc::now() - chrono::Duration::try_seconds(400).unwrap(), // 400 seconds ago
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id = record.id;
@@ -318,6 +412,7 @@ mod tests {
             submitted_at: Utc::now(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let record2 = TransactionRecord {
@@ -328,6 +423,7 @@ mod tests {
             submitted_at: Utc::now(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id1 = record1.id;

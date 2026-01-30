@@ -168,6 +168,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             submitted_at: Utc::now(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         self.transaction_store.insert(record)?;
@@ -208,6 +209,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             submitted_at: Utc::now(),
             confirmed_at: Some(Utc::now()),
             error_message: None,
+            safe_execution: None,
         };
 
         self.transaction_store.insert(record.clone())?;

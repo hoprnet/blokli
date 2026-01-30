@@ -2,6 +2,7 @@
 
 pub mod errors;
 pub mod rpc_adapter;
+pub mod safe_execution;
 pub mod transaction_executor;
 pub mod transaction_monitor;
 pub mod transaction_store;
@@ -41,8 +42,9 @@ use hopr_primitive_types::{
 use crate::{
     errors::{BlokliChainError, Result},
     rpc_adapter::RpcAdapter,
+    safe_execution::DbSafeAddressChecker,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
-    transaction_monitor::{TransactionMonitor, TransactionMonitorConfig},
+    transaction_monitor::{SafeAddressChecker, TransactionMonitor, TransactionMonitorConfig},
     transaction_store::TransactionStore,
     transaction_validator::TransactionValidator,
 };
@@ -135,10 +137,13 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
             RawTransactionExecutorConfig::default(),
         ));
 
+        let safe_checker: Arc<dyn SafeAddressChecker> = Arc::new(DbSafeAddressChecker::new(db.clone()));
+
         let transaction_monitor = Arc::new(TransactionMonitor::new(
             transaction_store.clone(),
             (*rpc_adapter).clone(),
             TransactionMonitorConfig::default(),
+            Some(safe_checker),
         ));
 
         Ok(Self {

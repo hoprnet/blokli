@@ -87,6 +87,7 @@ async fn test_transaction_query_finds_existing_transaction() -> Result<()> {
         submitted_at: chrono::Utc::now(),
         confirmed_at: None,
         error_message: None,
+        safe_execution: None,
     };
     ctx.store.insert(record)?;
 
@@ -237,6 +238,7 @@ async fn test_transaction_query_all_status_types() -> Result<()> {
                 None
             },
             error_message: None,
+            safe_execution: None,
         };
         ctx.store.insert(record)?;
 
@@ -275,6 +277,7 @@ async fn test_transaction_query_uuid_format_variations() -> Result<()> {
         submitted_at: chrono::Utc::now(),
         confirmed_at: None,
         error_message: None,
+        safe_execution: None,
     };
     ctx.store.insert(record)?;
 

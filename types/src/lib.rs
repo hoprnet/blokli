@@ -465,6 +465,19 @@ pub struct TransactionInput {
     pub raw_transaction: String,
 }
 
+/// Internal Safe contract execution result
+#[derive(SimpleObject, Clone, Debug)]
+pub struct SafeExecution {
+    /// Whether the internal Safe transaction succeeded
+    pub success: bool,
+    /// Safe internal transaction hash (bytes32 hex)
+    #[graphql(name = "safeTxHash")]
+    pub safe_tx_hash: Hex32,
+    /// Revert reason (if execution failed and reason is decodable)
+    #[graphql(name = "revertReason")]
+    pub revert_reason: Option<String>,
+}
+
 /// Transaction submission result
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Transaction {
@@ -478,6 +491,9 @@ pub struct Transaction {
     /// Transaction hash from successful blockchain submission
     #[graphql(name = "transactionHash")]
     pub transaction_hash: Hex32,
+    /// Internal Safe execution result (null for non-Safe transactions or before confirmation)
+    #[graphql(name = "safeExecution")]
+    pub safe_execution: Option<SafeExecution>,
 }
 
 /// Success response for fire-and-forget transaction submission

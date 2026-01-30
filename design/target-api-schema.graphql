@@ -549,6 +549,16 @@ type Safe {
   registeredNodes: [String!]!
 }
 
+"""Internal Safe contract execution result"""
+type SafeExecution {
+  "Revert reason if execution failed and reason is decodable (null if succeeded or reason unavailable)"
+  revertReason: String
+  "Safe internal transaction hash (bytes32 hex)"
+  safeTxHash: Hex32!
+  "Whether the internal Safe transaction succeeded"
+  success: Boolean!
+}
+
 """Safe HOPR token allowance information for a specific Safe address"""
 type SafeHoprAllowance {
   "Safe contract address"
@@ -714,6 +724,8 @@ scalar TokenValueString
 type Transaction {
   "Unique identifier for the transaction (UUID)"
   id: ID!
+  "Internal Safe execution result (null for non-Safe transactions or before confirmation)"
+  safeExecution: SafeExecution
   "Current status of the transaction"
   status: TransactionStatus!
   "Timestamp when transaction was submitted"

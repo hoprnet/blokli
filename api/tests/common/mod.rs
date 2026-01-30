@@ -449,6 +449,7 @@ pub async fn setup_transaction_test_environment(
         transaction_store.clone(),
         (*rpc_adapter).clone(),
         monitor_config,
+        None,
     ));
 
     let monitor_handle = Some(

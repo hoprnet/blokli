@@ -4,21 +4,7 @@
 //! models into GraphQL types. These conversions are kept separate from
 //! the type definitions to avoid requiring API clients to depend on database entities.
 
-use blokli_api_types::{Announcement, TransactionStatus};
-use blokli_chain_api::transaction_store::TransactionStatus as StoreStatus;
-
-/// Convert store TransactionStatus to GraphQL TransactionStatus
-pub fn store_status_to_graphql(status: StoreStatus) -> TransactionStatus {
-    match status {
-        StoreStatus::Pending => TransactionStatus::Pending,
-        StoreStatus::Submitted => TransactionStatus::Submitted,
-        StoreStatus::Confirmed => TransactionStatus::Confirmed,
-        StoreStatus::Reverted => TransactionStatus::Reverted,
-        StoreStatus::Timeout => TransactionStatus::Timeout,
-        StoreStatus::ValidationFailed => TransactionStatus::ValidationFailed,
-        StoreStatus::SubmissionFailed => TransactionStatus::SubmissionFailed,
-    }
-}
+use blokli_api_types::Announcement;
 
 /// Convert database announcement model to GraphQL type
 pub fn announcement_from_model(model: blokli_db_entity::announcement::Model) -> Announcement {

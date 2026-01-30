@@ -6,8 +6,8 @@ use async_broadcast::Receiver;
 use async_graphql::{Context, ID, Result, Subscription};
 use async_stream::stream;
 use blokli_api_types::{
-    Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, Safe, TicketParameters, TokenValueString,
-    Transaction, TransactionStatus as GqlTransactionStatus, UInt64,
+    Account, Channel, ChannelUpdate, OpenedChannelsGraphEntry, Safe, TicketParameters, TokenValueString, Transaction,
+    UInt64,
 };
 use blokli_chain_api::transaction_store::{TransactionStatus as StoreTransactionStatus, TransactionStore};
 use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
@@ -886,26 +886,7 @@ impl SubscriptionRoot {
                     if last_status.as_ref() != Some(&record.status) {
                         last_status = Some(record.status);
 
-                        // Convert store transaction status to GraphQL status
-                        let gql_status = match record.status {
-                            StoreTransactionStatus::Pending => GqlTransactionStatus::Pending,
-                            StoreTransactionStatus::Submitted => GqlTransactionStatus::Submitted,
-                            StoreTransactionStatus::Confirmed => GqlTransactionStatus::Confirmed,
-                            StoreTransactionStatus::Reverted => GqlTransactionStatus::Reverted,
-                            StoreTransactionStatus::Timeout => GqlTransactionStatus::Timeout,
-                            StoreTransactionStatus::ValidationFailed => GqlTransactionStatus::ValidationFailed,
-                            StoreTransactionStatus::SubmissionFailed => GqlTransactionStatus::SubmissionFailed,
-                        };
-
-                        // Convert transaction hash to hex string
-                        let hash_hex = record.transaction_hash.to_hex();
-
-                        yield Transaction {
-                            id: ID::from(record.id.to_string()),
-                            status: gql_status,
-                            submitted_at: record.submitted_at,
-                            transaction_hash: Hex32(hash_hex),
-                        };
+                        yield record.into();
                     }
                 }
                 // If transaction not found, continue polling (it might be added later)

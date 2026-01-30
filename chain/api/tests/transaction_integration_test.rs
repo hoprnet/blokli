@@ -118,6 +118,7 @@ async fn setup_test_environment(
         transaction_store.clone(),
         (*rpc_adapter).clone(),
         monitor_config,
+        None,
     ));
 
     Ok(TestContext {

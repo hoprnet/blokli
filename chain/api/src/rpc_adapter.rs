@@ -15,7 +15,10 @@ use hopr_bindings::exports::alloy::{
 use hopr_crypto_types::types::Hash;
 use tracing::{debug, error};
 
-use crate::{transaction_executor::RpcClient, transaction_monitor::ReceiptProvider};
+use crate::{
+    transaction_executor::RpcClient,
+    transaction_monitor::{ReceiptLog, ReceiptProvider},
+};
 
 /// RPC adapter that implements RpcClient and ReceiptProvider traits for RpcOperations
 ///
@@ -157,6 +160,36 @@ impl<R: HttpRequestor + 'static + Clone> ReceiptProvider for RpcAdapter<R> {
             }
             Err(e) => {
                 error!("Error getting transaction receipt for {:?}: {}", tx_hash, e);
+                Err(format!("Receipt error: {}", e))
+            }
+        }
+    }
+
+    async fn get_transaction_receipt_logs(&self, tx_hash: Hash) -> Result<Vec<ReceiptLog>, String> {
+        debug!("Fetching receipt logs for hash: {:?}", tx_hash);
+
+        let b256_hash = B256::from_slice(tx_hash.as_ref());
+
+        match self.rpc.provider.get_transaction_receipt(b256_hash).await {
+            Ok(Some(receipt)) => {
+                let logs = receipt
+                    .inner
+                    .logs()
+                    .iter()
+                    .map(|log| ReceiptLog {
+                        address: log.address().into_array(),
+                        topics: log.topics().iter().map(|t| t.0).collect(),
+                        data: log.data().data.to_vec(),
+                    })
+                    .collect();
+                Ok(logs)
+            }
+            Ok(None) => {
+                debug!("No receipt found for {:?}", tx_hash);
+                Ok(vec![])
+            }
+            Err(e) => {
+                error!("Error getting receipt logs for {:?}: {}", tx_hash, e);
                 Err(format!("Receipt error: {}", e))
             }
         }
