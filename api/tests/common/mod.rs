@@ -397,7 +397,6 @@ impl Drop for TransactionTestContext {
 ///
 /// let ctx = setup_transaction_test_environment(Duration::from_secs(1), Duration::from_millis(100), 2, None).await?;
 /// ```
-#[allow(dead_code)]
 pub async fn setup_transaction_test_environment(
     block_time: Duration,
     poll_interval: Duration,
