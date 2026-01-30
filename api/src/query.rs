@@ -7,7 +7,7 @@ use blokli_api_types::{
     Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelsList, ChannelsResult,
     ContractAddressMap, CountResult, HoprBalance, InvalidAddressError, MissingFilterError, ModuleAddress,
     NativeBalance, QueryFailedError, RedeemedStats, RedeemedStatsFilter, Safe, SafeHoprAllowance, TokenValueString,
-    Transaction, TransactionCount, UInt64,
+    TransactionCount, UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations};
@@ -1495,16 +1495,7 @@ impl QueryRoot {
 
         // Try to retrieve the transaction
         match store.get(uuid) {
-            Ok(record) => {
-                // Convert to GraphQL Transaction type
-                let transaction = Transaction {
-                    id: ID::from(record.id.to_string()),
-                    status: crate::conversions::store_status_to_graphql(record.status),
-                    submitted_at: record.submitted_at,
-                    transaction_hash: record.transaction_hash.into(),
-                };
-                Ok(Some(TransactionResult::Transaction(transaction)))
-            }
+            Ok(record) => Ok(Some(TransactionResult::Transaction(record.into()))),
             Err(_) => Ok(None), // Transaction not found
         }
     }

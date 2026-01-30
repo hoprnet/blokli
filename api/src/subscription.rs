@@ -6,8 +6,8 @@ use async_broadcast::Receiver;
 use async_graphql::{Context, ID, Result, Subscription};
 use async_stream::stream;
 use blokli_api_types::{
-    Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, Safe, TicketParameters, TokenValueString,
-    Transaction, TransactionStatus as GqlTransactionStatus, UInt64,
+    Account, Channel, ChannelUpdate, OpenedChannelsGraphEntry, Safe, TicketParameters, TokenValueString, Transaction,
+    UInt64,
 };
 use blokli_chain_api::transaction_store::{
     TransactionEvent, TransactionStatus as StoreTransactionStatus, TransactionStore,
