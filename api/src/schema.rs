@@ -22,6 +22,14 @@ pub struct ExpectedBlockTime(pub u64);
 #[derive(Debug, Clone, Copy)]
 pub struct Finality(pub u16);
 
+/// Wrapper type for chain ID to avoid type confusion in context
+#[derive(Debug, Clone, Copy)]
+pub struct ChainId(pub u64);
+
+/// Wrapper type for network name to avoid type confusion in context
+#[derive(Debug, Clone)]
+pub struct NetworkName(pub String);
+
 /// Build the async-graphql schema with database connection, chain ID, network, indexer state, and transaction
 /// components
 ///
@@ -59,8 +67,8 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
         .limit_depth(10)
         .limit_complexity(100)
         .data(db)
-        .data(chain_id)
-        .data(network)
+        .data(ChainId(chain_id))
+        .data(NetworkName(network))
         .data(contract_addresses)
         .data(ExpectedBlockTime(expected_block_time))
         .data(Finality(finality))

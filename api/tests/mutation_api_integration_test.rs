@@ -17,7 +17,11 @@ use std::{
 
 use anyhow::Result;
 use async_graphql::{EmptySubscription, Schema};
-use blokli_api::{mutation::MutationRoot, query::QueryRoot};
+use blokli_api::{
+    mutation::MutationRoot,
+    query::QueryRoot,
+    schema::{ChainId, NetworkName},
+};
 use blokli_chain_api::{
     transaction_executor::RawTransactionExecutorConfig,
     transaction_store::{TransactionStatus, TransactionStore},
@@ -71,8 +75,8 @@ async fn setup_test_environment(
     // Build GraphQL schema with EmptySubscription variant
     let schema = Schema::build(QueryRoot, MutationRoot, EmptySubscription)
         .data(db.conn(TargetDb::Index).clone())
-        .data(31337u64) // Anvil chain ID
-        .data("test".to_string())
+        .data(ChainId(31337)) // Anvil chain ID
+        .data(NetworkName("test".to_string()))
         .data(ContractAddresses::default())
         .data(tx_ctx.executor.clone())
         .data(tx_ctx.store.clone())

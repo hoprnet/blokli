@@ -522,6 +522,33 @@ cargo doc --package hopr-bindings --open
 - Implement DataLoader pattern for N+1 query prevention
 - Support GraphQL subscriptions via Server-Sent Events (SSE) with keep-alive events enabled by default
 
+#### GraphQL Context Type Safety
+
+**CRITICAL RULE:** All GraphQL schema context data MUST use wrapper types (newtypes) for scalar values to prevent type ambiguity. Never register raw primitives (`u64`, `String`, `u16`, etc.) directly in schema context.
+
+**Why:** Multiple resolvers accessing context could retrieve the wrong value if multiple instances of the same primitive type exist. Wrapper types provide compile-time safety.
+
+**Pattern:**
+
+```rust
+// ❌ BAD - Raw primitives (ambiguous)
+.data(chain_id: u64)
+.data(network: String)
+
+// ✅ GOOD - Wrapper types (unambiguous)
+.data(ChainId(chain_id))
+.data(NetworkName(network))
+```
+
+**Existing wrapper types in `api/src/schema.rs`:**
+
+- `ChainId(u64)` - Blockchain chain ID
+- `NetworkName(String)` - Network name identifier
+- `ExpectedBlockTime(u64)` - Expected block time in seconds
+- `Finality(u16)` - Number of block confirmations required
+
+When adding new context data, always create a wrapper type first.
+
 ### Database Notifications
 
 Blokli uses database-native notification mechanisms for real-time GraphQL subscriptions:

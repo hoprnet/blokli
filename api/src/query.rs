@@ -1093,14 +1093,14 @@ impl QueryRoot {
                 return ChainInfoResult::QueryFailed(errors::db_connection_error(format!("{:?}", e)));
             }
         };
-        let chain_id = match ctx.data::<u64>() {
-            Ok(id) => id,
+        let chain_id = match ctx.data::<crate::schema::ChainId>() {
+            Ok(id) => id.0,
             Err(e) => {
                 return ChainInfoResult::QueryFailed(errors::context_error("chain ID", format!("{:?}", e)));
             }
         };
-        let network = match ctx.data::<String>() {
-            Ok(net) => net,
+        let network = match ctx.data::<crate::schema::NetworkName>() {
+            Ok(net) => &net.0,
             Err(e) => {
                 return ChainInfoResult::QueryFailed(errors::context_error("network name", format!("{:?}", e)));
             }
@@ -1162,7 +1162,7 @@ impl QueryRoot {
         };
 
         // Convert chain_id from u64 to i32 with validation
-        let chain_id_i32 = match i32::try_from(*chain_id) {
+        let chain_id_i32 = match i32::try_from(chain_id) {
             Ok(id) => id,
             Err(_) => {
                 return ChainInfoResult::QueryFailed(errors::conversion_error("u64", "i32", chain_id.to_string()));
