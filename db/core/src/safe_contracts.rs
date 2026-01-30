@@ -389,7 +389,7 @@ impl BlokliDbSafeContractOperations for BlokliDb {
         };
 
         // Use ON CONFLICT DO NOTHING for idempotency on state position
-        let _ = HoprSafeContractState::insert(state_model)
+        match HoprSafeContractState::insert(state_model)
             .on_conflict(
                 OnConflict::columns([
                     hopr_safe_contract_state::Column::HoprSafeContractId,
@@ -401,7 +401,14 @@ impl BlokliDbSafeContractOperations for BlokliDb {
                 .to_owned(),
             )
             .exec(tx.as_ref())
-            .await;
+            .await
+        {
+            Ok(_) => {}
+            Err(sea_orm::DbErr::RecordNotInserted) => {
+                // Expected: ON CONFLICT DO NOTHING prevented duplicate insert (idempotent)
+            }
+            Err(e) => return Err(e.into()),
+        }
 
         tx.commit().await?;
         Ok(safe_id)
@@ -643,7 +650,7 @@ impl BlokliDbSafeContractOperations for BlokliDb {
             ..Default::default()
         };
 
-        let _ = HoprSafeContractState::insert(state_model)
+        match HoprSafeContractState::insert(state_model)
             .on_conflict(
                 OnConflict::columns([
                     hopr_safe_contract_state::Column::HoprSafeContractId,
@@ -655,7 +662,14 @@ impl BlokliDbSafeContractOperations for BlokliDb {
                 .to_owned(),
             )
             .exec(tx.as_ref())
-            .await;
+            .await
+        {
+            Ok(_) => {}
+            Err(sea_orm::DbErr::RecordNotInserted) => {
+                // Expected: ON CONFLICT DO NOTHING prevented duplicate insert (idempotent)
+            }
+            Err(e) => return Err(e.into()),
+        }
 
         tx.commit().await?;
         Ok(())
