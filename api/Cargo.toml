@@ -6,7 +6,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-api"
 repository  = "https://github.com/hoprnet/hoprnet"
-version     = "0.13.0"
+version     = "0.14.0"
 
 [lints]
 workspace = true
@@ -87,6 +87,7 @@ hopr-internal-types = { workspace = true }
 mockall             = { workspace = true }
 multiaddr           = { workspace = true }
 rand                = { workspace = true }
+regex               = { workspace = true }
 temp-env            = { workspace = true }
 test-log            = { workspace = true }
 tokio-test          = { workspace = true }

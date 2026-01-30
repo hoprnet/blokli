@@ -5,7 +5,10 @@
 //! - Executing GraphQL queries against the schema
 //! - Verifying filtering, validation, and type conversions
 
-use blokli_api::query::QueryRoot;
+use blokli_api::{
+    query::QueryRoot,
+    schema::{ChainId, NetworkName},
+};
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, accounts::BlokliDbAccountOperations, db::BlokliDb};
 use blokli_db_entity::prelude::Account as AccountEntity;
@@ -121,8 +124,8 @@ async fn test_accounts_query_with_filters() -> anyhow::Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64) // chain_id
-    .data("test".to_string()) // network
+    .data(ChainId(100)) // chain_id
+    .data(NetworkName("test".to_string())) // network
     .finish();
 
     // Test 1: Query by keyid
@@ -251,8 +254,8 @@ async fn test_accounts_query_requires_filter() -> anyhow::Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
     .finish();
 
     // Test: Query without any filters should return MissingFilterError variant
@@ -306,8 +309,8 @@ async fn test_accounts_query_invalid_chain_key() -> anyhow::Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
     .finish();
 
     // Test: Query with invalid chain key should return QueryFailedError
@@ -365,8 +368,8 @@ async fn test_accounts_query_combined_filters() -> anyhow::Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
     .finish();
 
     // Test: Query with multiple filters (keyid + chainKey)
@@ -427,8 +430,8 @@ async fn test_accounts_query_with_multiaddresses() -> anyhow::Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
     .finish();
 
     // Test: Query should include multiaddresses
@@ -474,7 +477,7 @@ async fn test_account_count_no_filters() -> anyhow::Result<()> {
         let chain_key = keypair.public().to_address();
         let packet_key = offchain.public();
 
-        db.upsert_account(None, i, chain_key, *packet_key, None, 100 + i as u32, 0, 0)
+        db.upsert_account(None, i, chain_key, *packet_key, None, 100 + i, 0, 0)
             .await?;
     }
 
@@ -485,8 +488,8 @@ async fn test_account_count_no_filters() -> anyhow::Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
     .finish();
 
     // Test: Count all accounts without filters
@@ -546,8 +549,8 @@ async fn test_account_count_with_filters() -> anyhow::Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
     .finish();
 
     // Test 1: Count by keyid
@@ -657,8 +660,8 @@ async fn test_account_count_invalid_chain_key() -> anyhow::Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
     .finish();
 
     // Test: Count with invalid chain key
@@ -708,8 +711,8 @@ async fn test_account_count_nonexistent_account() -> anyhow::Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
     .finish();
 
     // Test: Count for non-existent keyid
@@ -768,8 +771,8 @@ async fn test_accounts_query_with_union_result_types() -> anyhow::Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
     .finish();
 
     // Test: Query with union result types as defined in target schema

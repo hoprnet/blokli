@@ -499,11 +499,16 @@ async fn run(args: Args) -> errors::Result<()> {
 
             // Construct blokli-api ApiConfig from bloklid config
             // We need to get rpc_url and contracts from the original config
-            let (rpc_url_for_api, _contracts_for_api, expected_block_time) = {
+            let (rpc_url_for_api, _contracts_for_api, expected_block_time, finality) = {
                 let cfg = config
                     .read()
                     .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
-                (cfg.rpc_url.clone(), cfg.contracts, cfg.network.expected_block_time())
+                (
+                    cfg.rpc_url.clone(),
+                    cfg.contracts,
+                    cfg.network.expected_block_time(),
+                    cfg.network.confirmations(),
+                )
             };
 
             let blokli_api_config = blokli_api::config::ApiConfig {
@@ -537,6 +542,7 @@ async fn run(args: Args) -> errors::Result<()> {
                 network.clone(),
                 blokli_api_config,
                 expected_block_time,
+                finality,
                 indexer_state,
                 blokli_chain.transaction_executor(),
                 blokli_chain.transaction_store(),
