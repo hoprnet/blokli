@@ -1031,10 +1031,15 @@ impl QueryRoot {
         }
 
         // Fetch all registrations in a single query to avoid N+1
-        let all_registrations = hopr_node_safe_registration::Entity::find()
-            .all(db)
-            .await
-            .unwrap_or_default();
+        let all_registrations = match hopr_node_safe_registration::Entity::find().all(db).await {
+            Ok(registrations) => registrations,
+            Err(e) => {
+                return Ok(SafesResult::QueryFailed(errors::query_failed(
+                    "fetch safe registrations",
+                    e,
+                )));
+            }
+        };
 
         // Group registrations by safe address
         let mut registrations_by_safe: HashMap<Vec<u8>, Vec<String>> = HashMap::new();
