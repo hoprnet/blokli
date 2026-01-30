@@ -87,6 +87,7 @@ hopr-internal-types = { workspace = true }
 mockall             = { workspace = true }
 multiaddr           = { workspace = true }
 rand                = { workspace = true }
+regex               = { workspace = true }
 temp-env            = { workspace = true }
 test-log            = { workspace = true }
 tokio-test          = { workspace = true }

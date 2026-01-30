@@ -37,6 +37,7 @@ use tower_http::{
     cors::CorsLayer,
     trace::TraceLayer,
 };
+use uuid::Uuid;
 
 use crate::{
     config::{ApiConfig, HealthConfig},
@@ -122,6 +123,43 @@ impl Predicate for NotSse {
         // Only compress if NOT SSE
         !is_sse
     }
+}
+
+/// Extracts the subscription name from a GraphQL query string.
+/// Converts to kebab-case format for consistency.
+///
+/// # Arguments
+/// * `query` - The GraphQL query string
+///
+/// # Returns
+/// The subscription name in kebab-case, or "unknown" if not found
+///
+/// # Examples
+/// - "subscription SafeDeployed { ... }" → "safe-deployed"
+/// - "subscription ChannelUpdated { ... }" → "channel-updated"
+/// - "subscription { ... }" → "unknown"
+fn extract_subscription_name(query: &str) -> String {
+    let trimmed = query.trim();
+    if let Some(start) = trimmed.find("subscription") {
+        let after_keyword = &trimmed[start + "subscription".len()..];
+        if let Some(name) = after_keyword
+            .trim_start()
+            .split(|c: char| c.is_whitespace() || c == '{')
+            .next()
+            .filter(|s| !s.is_empty())
+        {
+            // Convert PascalCase/camelCase to kebab-case
+            let mut kebab = String::with_capacity(name.len() + 5);
+            for (i, ch) in name.chars().enumerate() {
+                if ch.is_uppercase() && i > 0 {
+                    kebab.push('-');
+                }
+                kebab.push(ch.to_ascii_lowercase());
+            }
+            return kebab;
+        }
+    }
+    "unknown".to_string()
 }
 
 /// Application state shared across handlers
@@ -260,6 +298,18 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
 
     // Handle subscription requests via SSE
     if accepts_sse && is_subscription {
+        // Generate unique identifier for this SSE connection
+        let subscription_name = extract_subscription_name(&request.query);
+        let connection_id = Uuid::new_v4();
+        let identifier = format!("sub-{}-{}-keep-alive", subscription_name, connection_id);
+
+        // Log connection establishment
+        tracing::info!(
+            identifier = %identifier,
+            subscription = %subscription_name,
+            "SSE connection established"
+        );
+
         let schema = state.schema.clone();
         let sse_stream: Pin<Box<dyn Stream<Item = Result<Event, std::convert::Infallible>> + Send>> =
             Box::pin(stream! {
@@ -273,11 +323,7 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
 
         if state.sse_keepalive.enabled {
             return Sse::new(sse_stream)
-                .keep_alive(
-                    KeepAlive::new()
-                        .interval(state.sse_keepalive.interval)
-                        .text(state.sse_keepalive.text.clone()),
-                )
+                .keep_alive(KeepAlive::new().interval(state.sse_keepalive.interval).text(identifier))
                 .into_response();
         }
 
@@ -730,6 +776,55 @@ mod tests {
         assert!(
             predicate.should_compress(&response),
             "Missing Content-Type header should default to compress"
+        );
+    }
+
+    #[test]
+    fn test_extract_named_subscription() {
+        assert_eq!(
+            extract_subscription_name("subscription SafeDeployed { address }"),
+            "safe-deployed"
+        );
+        assert_eq!(
+            extract_subscription_name("subscription ChannelUpdated { id }"),
+            "channel-updated"
+        );
+    }
+
+    #[test]
+    fn test_extract_unnamed_subscription() {
+        assert_eq!(
+            extract_subscription_name("subscription { safeDeployed { address } }"),
+            "unknown"
+        );
+    }
+
+    #[test]
+    fn test_extract_with_whitespace() {
+        assert_eq!(
+            extract_subscription_name("  subscription   SafeDeployed   {  address  }  "),
+            "safe-deployed"
+        );
+    }
+
+    #[test]
+    fn test_extract_non_subscription() {
+        assert_eq!(extract_subscription_name("query { accounts { id } }"), "unknown");
+    }
+
+    #[test]
+    fn test_extract_subscription_transaction_updated() {
+        assert_eq!(
+            extract_subscription_name("subscription TransactionUpdated { id status }"),
+            "transaction-updated"
+        );
+    }
+
+    #[test]
+    fn test_extract_subscription_ticket_params_updated() {
+        assert_eq!(
+            extract_subscription_name("subscription TicketParamsUpdated { price winningProbability }"),
+            "ticket-params-updated"
         );
     }
 }
