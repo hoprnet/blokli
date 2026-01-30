@@ -324,7 +324,7 @@
 
           utilityApps = {
             update-github-labels = nixLib.mkUpdateGithubLabelsApp;
-            audit = nixLib.mkAuditApp;
+            audit = nixLib.mkAuditApp { };
             check = nixLib.mkCheckApp { inherit system; };
             test = {
               type = "app";
@@ -494,14 +494,12 @@
                 includes = [ "design/*.graphql" ];
               };
               # Markdown linter
-              settings.formatter.markdownlint-cli2 = {
+              settings.formatter.rumdl = {
                 command = pkgs.writeShellApplication {
-                  name = "markdownlint-cli2";
-                  runtimeInputs = with pkgs; [
-                    bun
-                  ];
+                  name = "rumdl";
+                  runtimeInputs = [ pkgs.uv ];
                   text = ''
-                    bunx markdownlint-cli2 --fix "$@"
+                    uv tool run rumdl fmt "$@"
                   '';
                 };
                 includes = [
