@@ -144,7 +144,7 @@ fn extract_subscription_name(query: &str) -> String {
         let after_keyword = &trimmed[start + "subscription".len()..];
         if let Some(name) = after_keyword
             .trim_start()
-            .split(|c: char| c.is_whitespace() || c == '{')
+            .split(|c: char| c.is_whitespace() || c == '{' || c == '(')
             .next()
             .filter(|s| !s.is_empty())
         {
@@ -827,6 +827,14 @@ mod tests {
         assert_eq!(
             extract_subscription_name("subscription TicketParamsUpdated { price winningProbability }"),
             "ticket-params-updated"
+        );
+    }
+
+    #[test]
+    fn test_extract_subscription_with_variables() {
+        assert_eq!(
+            extract_subscription_name("subscription SafeDeployed($id: ID!) { address }"),
+            "safe-deployed"
         );
     }
 }
