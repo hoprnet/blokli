@@ -1117,6 +1117,12 @@ impl QueryRoot {
                 return ChainInfoResult::QueryFailed(errors::context_error("expected block time", format!("{:?}", e)));
             }
         };
+        let finality = match ctx.data::<crate::schema::Finality>() {
+            Ok(f) => f,
+            Err(e) => {
+                return ChainInfoResult::QueryFailed(errors::context_error("finality", format!("{:?}", e)));
+            }
+        };
 
         // Fetch chain_info from database (assuming single row with id=1)
         let chain_info = match chain_info::Entity::find_by_id(1).one(db).await {
@@ -1239,6 +1245,7 @@ impl QueryRoot {
             safe_registry_dst,
             channel_closure_grace_period,
             expected_block_time: UInt64(expected_block_time.0),
+            finality: UInt64(finality.0 as u64),
         })
     }
 
