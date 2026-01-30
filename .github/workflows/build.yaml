@@ -104,5 +104,5 @@ jobs:
     needs: [build-docker, build-docker-manifest]
     uses: ./.github/workflows/integration-test.yaml
     with:
-      image: ${{ needs.build-docker.outputs.docker_build_version }}
+      image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid:${{ needs.build-docker.outputs.docker_build_version }}
     secrets: inherit

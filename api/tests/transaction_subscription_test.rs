@@ -14,7 +14,11 @@ use std::{sync::Arc, time::Duration};
 
 use anyhow::Result;
 use async_graphql::{EmptyMutation, Schema};
-use blokli_api::{query::QueryRoot, subscription::SubscriptionRoot};
+use blokli_api::{
+    query::QueryRoot,
+    schema::{ChainId, NetworkName},
+    subscription::SubscriptionRoot,
+};
 use blokli_chain_api::transaction_store::{TransactionRecord, TransactionStatus, TransactionStore};
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
@@ -65,8 +69,8 @@ async fn setup_test_environment() -> Result<TestContext> {
     // Build GraphQL schema with SubscriptionRoot (EmptyMutation variant)
     let schema = Schema::build(QueryRoot, EmptyMutation, SubscriptionRoot)
         .data(db.conn(TargetDb::Index).clone())
-        .data(31337u64) // Anvil chain ID
-        .data("test".to_string())
+        .data(ChainId(31337)) // Anvil chain ID
+        .data(NetworkName("test".to_string()))
         .data(ContractAddresses::default())
         .data(tx_ctx.executor.clone())
         .data(tx_ctx.store.clone())
@@ -222,7 +226,7 @@ async fn test_transaction_updated_with_invalid_uuid() -> Result<()> {
     let response = stream.next().await.expect("Should return error");
 
     // Check for error in response
-    assert!(response.errors.len() > 0, "Expected errors in response");
+    assert!(!response.errors.is_empty(), "Expected errors in response");
     let error_message = &response.errors[0].message;
     assert!(error_message.to_lowercase().contains("invalid") || error_message.to_lowercase().contains("uuid"));
 

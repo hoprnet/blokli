@@ -134,7 +134,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
     let test_accounts: Vec<ChainKeypair> = (0..config.num_test_accounts)
         .map(|i| {
             ChainKeypair::from_secret(anvil.keys()[i].to_bytes().as_ref())
-                .expect(&format!("Failed to create test account {}", i))
+                .unwrap_or_else(|_| panic!("Failed to create test account {}", i))
         })
         .collect();
 
@@ -171,7 +171,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
             ReqwestClient::new(),
             RpcOperationsConfig {
                 chain_id,
-                contract_addrs: contract_addrs.clone(),
+                contract_addrs,
                 expected_block_time: config.expected_block_time,
                 ..Default::default()
             },
@@ -201,7 +201,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
             ReqwestClient::new(),
             RpcOperationsConfig {
                 chain_id,
-                contract_addrs: contract_addrs.clone(),
+                contract_addrs,
                 expected_block_time: config.expected_block_time,
                 ..Default::default()
             },
@@ -225,8 +225,9 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
         db.clone(),
         chain_id,
         "test-network".to_string(),
-        contract_addrs.clone(),
+        contract_addrs,
         config.expected_block_time.as_secs(),
+        8, // Test finality value
         indexer_state,
         transaction_executor.clone(),
         transaction_store.clone(),
@@ -285,11 +286,14 @@ pub struct HttpTestContext {
 /// let ctx = setup_http_test_environment().await?;
 /// // Make HTTP requests to ctx.app
 /// ```
+#[allow(dead_code)]
 pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
     // Use custom config to enable migrations and only 1 test account
-    let mut config = TestEnvironmentConfig::default();
-    config.run_migrations = true;
-    config.num_test_accounts = 1;
+    let config = TestEnvironmentConfig {
+        run_migrations: true,
+        num_test_accounts: 1,
+        ..Default::default()
+    };
     let expected_block_time = config.expected_block_time.as_secs();
 
     let ctx = setup_test_environment(config).await?;
@@ -304,7 +308,7 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
     let api_config = ApiConfig {
         playground_enabled: false,
         chain_id: ctx.chain_id,
-        contract_addresses: ctx.contract_addrs.clone(),
+        contract_addresses: ctx.contract_addrs,
         sse_keepalive: SseKeepAliveConfig {
             enabled: true,
             interval: Duration::from_millis(50),
@@ -324,6 +328,7 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
         "test-network".to_string(),
         api_config,
         expected_block_time,
+        8, // Test finality value
         indexer_state,
         ctx.transaction_executor.clone(),
         ctx.transaction_store.clone(),
@@ -400,9 +405,11 @@ pub async fn setup_transaction_test_environment(
 ) -> anyhow::Result<TransactionTestContext> {
     let _ = env_logger::builder().is_test(true).try_init();
 
-    let mut config = TestEnvironmentConfig::default();
-    config.expected_block_time = block_time;
-    config.num_test_accounts = 1;
+    let config = TestEnvironmentConfig {
+        expected_block_time: block_time,
+        num_test_accounts: 1,
+        ..Default::default()
+    };
 
     let ctx = setup_test_environment(config).await?;
 
@@ -412,7 +419,7 @@ pub async fn setup_transaction_test_environment(
         expected_block_time: block_time,
         finality,
         gas_oracle_url: None,
-        contract_addrs: ctx.contract_addrs.clone(),
+        contract_addrs: ctx.contract_addrs,
         ..Default::default()
     };
 

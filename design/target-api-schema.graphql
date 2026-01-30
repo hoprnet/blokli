@@ -50,6 +50,8 @@ type ChainInfo {
   contractAddresses: ContractAddressMap!
   "Expected block time in seconds"
   expectedBlockTime: UInt64!
+  "Number of block confirmations required for finality"
+  finality: UInt64!
   "Current key binding fee"
   keyBindingFee: TokenValueString!
   "Ledger smart contract domain separator (hex string)"

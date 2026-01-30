@@ -5,7 +5,7 @@ This repository contains `Blokli`: On-chain Indexer of HOPR smart contracts and 
 ## Components
 
 - `bloklid`: Daemon that indexes on-chain events and submits transactions
-- `blokli-api`: GraphQL server for querying indexed data and streaming updates
+- `blokli-api`: GraphQL server for querying indexed data and streaming updates over SSE with keep-alive support
 - `db`: Database abstractions, entities, and migrations
 
 ## Development
@@ -262,6 +262,8 @@ You can override any configuration setting using environment variables.
 | `api.health.max_indexer_lag`          | `BLOKLI_API_HEALTH_MAX_INDEXER_LAG`          |
 | `api.health.timeout`                  | `BLOKLI_API_HEALTH_TIMEOUT`                  |
 | `api.health.readiness_check_interval` | `BLOKLI_API_HEALTH_READINESS_CHECK_INTERVAL` |
+
+GraphQL subscriptions stream over SSE and send periodic keep-alive events to prevent idle connection timeouts. Keep-alive is enabled by default with a 15s interval and `keep-alive` payload, and can be customized via the `api.sse_keepalive.*` settings.
 
 ### Contract Address Overrides
 

@@ -87,6 +87,7 @@ fn create_test_schema(db: &BlokliDb) -> Schema<QueryRoot, MutationRoot, Subscrip
         "test-network".to_string(),
         ContractAddresses::default(),
         1,
+        8, // Test finality value
         indexer_state,
         transaction_executor,
         transaction_store,
@@ -116,7 +117,7 @@ async fn test_channel_subscription_emits_initial_channel_with_source_filter() {
     // Create channel
     let balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
     let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
-    db.upsert_channel(None, channel.clone(), 100, 0, 0).await.unwrap();
+    db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
     // Create GraphQL schema
     let schema = create_test_schema(&db);
