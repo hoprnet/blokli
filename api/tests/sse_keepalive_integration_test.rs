@@ -172,7 +172,7 @@ async fn test_sse_identifier_uniqueness() -> anyhow::Result<()> {
         min_incoming_ticket_win_prob: Set(0.0),
         ..Default::default()
     };
-    chain_info::Entity::insert(chain_info)
+    chain_info::Entity::insert(chain_info.clone())
         .on_conflict(
             OnConflict::column(chain_info::Column::Id)
                 .update_column(chain_info::Column::LastIndexedBlock)
@@ -219,6 +219,50 @@ async fn test_sse_identifier_uniqueness() -> anyhow::Result<()> {
     let ctx1 = common::setup_http_test_environment().await?;
     let ctx2 = common::setup_http_test_environment().await?;
 
+    // Get current block numbers for each context to avoid lag issues
+    let current_block1 = ctx1.rpc_operations.get_block_number().await?;
+    let block_number1 = i64::try_from(current_block1)?;
+    let chain_info1 = chain_info::ActiveModel {
+        id: Set(1),
+        last_indexed_block: Set(block_number1),
+        last_indexed_tx_index: Set(Some(0)),
+        last_indexed_log_index: Set(Some(0)),
+        min_incoming_ticket_win_prob: Set(0.0),
+        ..Default::default()
+    };
+
+    let current_block2 = ctx2.rpc_operations.get_block_number().await?;
+    let block_number2 = i64::try_from(current_block2)?;
+    let chain_info2 = chain_info::ActiveModel {
+        id: Set(1),
+        last_indexed_block: Set(block_number2),
+        last_indexed_tx_index: Set(Some(0)),
+        last_indexed_log_index: Set(Some(0)),
+        min_incoming_ticket_win_prob: Set(0.0),
+        ..Default::default()
+    };
+
+    // Insert chain_info into both databases for readiness checks
+    chain_info::Entity::insert(chain_info1)
+        .on_conflict(
+            OnConflict::column(chain_info::Column::Id)
+                .update_column(chain_info::Column::LastIndexedBlock)
+                .to_owned(),
+        )
+        .exec(&ctx1.db)
+        .await?;
+
+    chain_info::Entity::insert(chain_info2)
+        .on_conflict(
+            OnConflict::column(chain_info::Column::Id)
+                .update_column(chain_info::Column::LastIndexedBlock)
+                .to_owned(),
+        )
+        .exec(&ctx2.db)
+        .await?;
+
+    tokio::time::sleep(Duration::from_millis(150)).await;
+
     let response1 = ctx1.app.oneshot(request1).await.expect("Failed to execute request 1");
     let response2 = ctx2.app.oneshot(request2).await.expect("Failed to execute request 2");
 
@@ -244,8 +288,9 @@ async fn test_sse_identifier_uniqueness() -> anyhow::Result<()> {
     let payload2 = String::from_utf8_lossy(&frame2);
 
     // Extract UUIDs from both payloads
+    // Match any subscription name followed by UUID and keep-alive suffix
     let uuid_regex = regex::Regex::new(
-        r"sub-transaction-updated-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})-keep-alive",
+        r"sub-[a-z-]+-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})-keep-alive",
     )?;
 
     let uuid1 = uuid_regex
