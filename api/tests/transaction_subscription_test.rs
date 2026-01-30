@@ -220,7 +220,7 @@ async fn test_transaction_updated_with_invalid_uuid() -> Result<()> {
     let response = stream.next().await.expect("Should return error");
 
     // Check for error in response
-    assert!(response.errors.len() > 0, "Expected errors in response");
+    assert!(!response.errors.is_empty(), "Expected errors in response");
     let error_message = &response.errors[0].message;
     assert!(error_message.to_lowercase().contains("invalid") || error_message.to_lowercase().contains("uuid"));
 

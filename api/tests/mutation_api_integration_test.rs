@@ -494,15 +494,15 @@ async fn test_send_transaction_sync_timeout() -> Result<()> {
     );
 
     // Check that error message indicates timeout
-    if let Some(message_val) = data.get("message") {
-        if let Some(message) = message_val.as_str() {
-            let msg_lower = message.to_lowercase();
-            assert!(
-                msg_lower.contains("timeout") || msg_lower.contains("timed out"),
-                "Error message should mention timeout: {}",
-                message
-            );
-        }
+    if let Some(message_val) = data.get("message")
+        && let Some(message) = message_val.as_str()
+    {
+        let msg_lower = message.to_lowercase();
+        assert!(
+            msg_lower.contains("timeout") || msg_lower.contains("timed out"),
+            "Error message should mention timeout: {}",
+            message
+        );
     }
 
     Ok(())

@@ -50,7 +50,7 @@ async fn test_channel_closure_grace_period_always_non_null() {
     let chain_info_result = &data["chainInfo"];
 
     // Verify we got ChainInfo (not error)
-    let type_name = chain_info_result.get("__typename").map(|v| v.as_str()).flatten();
+    let type_name = chain_info_result.get("__typename").and_then(|v| v.as_str());
     assert_eq!(
         type_name,
         Some("ChainInfo"),

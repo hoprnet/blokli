@@ -474,7 +474,7 @@ async fn test_account_count_no_filters() -> anyhow::Result<()> {
         let chain_key = keypair.public().to_address();
         let packet_key = offchain.public();
 
-        db.upsert_account(None, i, chain_key, *packet_key, None, 100 + i as u32, 0, 0)
+        db.upsert_account(None, i, chain_key, *packet_key, None, 100 + i, 0, 0)
             .await?;
     }
 

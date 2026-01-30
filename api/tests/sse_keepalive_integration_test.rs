@@ -40,7 +40,7 @@ async fn test_sse_keepalive_comments_emitted() -> anyhow::Result<()> {
     // Subscribe with no events and assert the keepalive comment arrives.
     let request_body = json!({
         "query": format!(
-            "subscription {{ transactionUpdated(id: \"{}\") {{ id status }} }}",
+            "subscription TransactionUpdated {{ transactionUpdated(id: \"{}\") {{ id status }} }}",
             Uuid::new_v4()
         )
     });
@@ -105,10 +105,7 @@ async fn test_sse_keepalive_uuid_identifier_format() -> anyhow::Result<()> {
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     let request_body = json!({
-        "query": format!(
-            "subscription SafeDeployed {{ safeDeployed(address: \"{}\") {{ address }} }}",
-            "0x0000000000000000000000000000000000000000"
-        )
+        "query": "subscription SafeDeployed { safeDeployed { address } }"
     });
 
     let request = Request::builder()
@@ -191,7 +188,7 @@ async fn test_sse_identifier_uniqueness() -> anyhow::Result<()> {
         .body(Body::from(
             serde_json::to_string(&json!({
                 "query": format!(
-                    "subscription {{ transactionUpdated(id: \"{}\") {{ id status }} }}",
+                    "subscription TransactionUpdated {{ transactionUpdated(id: \"{}\") {{ id status }} }}",
                     Uuid::new_v4()
                 )
             }))
@@ -207,7 +204,7 @@ async fn test_sse_identifier_uniqueness() -> anyhow::Result<()> {
         .body(Body::from(
             serde_json::to_string(&json!({
                 "query": format!(
-                    "subscription {{ transactionUpdated(id: \"{}\") {{ id status }} }}",
+                    "subscription TransactionUpdated {{ transactionUpdated(id: \"{}\") {{ id status }} }}",
                     Uuid::new_v4()
                 )
             }))
@@ -288,9 +285,8 @@ async fn test_sse_identifier_uniqueness() -> anyhow::Result<()> {
     let payload2 = String::from_utf8_lossy(&frame2);
 
     // Extract UUIDs from both payloads
-    // Match any subscription name followed by UUID and keep-alive suffix
     let uuid_regex = regex::Regex::new(
-        r"sub-[a-z-]+-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})-keep-alive",
+        r"sub-transaction-updated-([0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})-keep-alive",
     )?;
 
     let uuid1 = uuid_regex

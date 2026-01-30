@@ -288,7 +288,7 @@ async fn test_transaction_query_uuid_format_variations() -> Result<()> {
                 }}
             }}
         }}"#,
-        tx_id.to_string()
+        tx_id
     );
 
     let result1 = execute_query(&ctx.schema, &query1).await;
