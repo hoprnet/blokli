@@ -14,7 +14,7 @@ use std::{
 use ::config as config_rs;
 use async_signal::{Signal, Signals};
 use blokli_chain_api::BlokliChain;
-use blokli_chain_indexer::utils::redact_url;
+use blokli_chain_indexer::{startup, utils::redact_url};
 use blokli_chain_types::{AlloyAddressExt, ChainConfig};
 use blokli_db::db::{BlokliDb, BlokliDbConfig};
 use clap::{Parser, Subcommand};
@@ -481,6 +481,8 @@ async fn run(args: Args) -> errors::Result<()> {
 
         // Create BlokliChain instance
         let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, rpc_url)?;
+
+        startup::refresh_preseeded_safe_modules(blokli_chain.db(), blokli_chain.rpc()).await?;
 
         // Get IndexerState for API subscriptions
         let indexer_state = blokli_chain.indexer_state();
