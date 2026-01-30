@@ -240,6 +240,7 @@ The database layer uses SeaORM for type-safe database access with auto-generated
 - Support real-time updates via Server-Sent Events (SSE) subscriptions
 - Handle transaction submission in three distinct modes
 - Provide health checks and optional GraphQL Playground
+- Maintain SSE subscriptions with periodic keep-alive events to prevent idle timeouts
 
 **API Architecture**:
 
@@ -466,7 +467,7 @@ Process continues until client disconnects or shutdown signal
 
 **Two-Phase Guarantee**: Phase 1 delivers all historical data at watermark. Phase 2 delivers all changes after watermark. The watermark synchronization prevents gaps or duplicates between phases.
 
-**SSE Streaming**: Server-Sent Events provide one-way streaming from server to client over HTTP. Each event is a JSON-encoded GraphQL response. Connection stays open indefinitely.
+**SSE Streaming**: Server-Sent Events provide one-way streaming from server to client over HTTP. Each event is a JSON-encoded GraphQL response. Periodic keep-alive events keep idle connections from timing out while the stream stays open.
 
 ### Flow 3: Submit Transaction (Async Mode)
 

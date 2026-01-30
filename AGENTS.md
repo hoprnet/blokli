@@ -520,7 +520,7 @@ cargo doc --package hopr-bindings --open
 - The actual schema can be generated using `just export-schema-sqlite` and will be stored in `schema.graphql`
 - Use async-graphql resolvers with proper error handling
 - Implement DataLoader pattern for N+1 query prevention
-- Support GraphQL subscriptions via Server-Sent Events (SSE)
+- Support GraphQL subscriptions via Server-Sent Events (SSE) with keep-alive events enabled by default
 
 ### Database Notifications
 
