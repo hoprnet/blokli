@@ -1,8 +1,7 @@
+use crate::{AccountArgs, AltAccount, ChannelArgs, Formats};
 use blokli_client::{BlokliClient, api::BlokliSubscriptionClient};
 use clap::{Subcommand, ValueEnum};
 use futures::{StreamExt, TryStreamExt};
-
-use crate::{AccountArgs, ChannelArgs, Formats};
 
 #[derive(Debug, Copy, Clone, ValueEnum)]
 pub(crate) enum ChannelAllowedStates {
@@ -69,17 +68,26 @@ impl SubscriptionTarget {
                 })
                 .boxed()),
 
-            SubscriptionTarget::Accounts(sel) => Ok(client
-                .subscribe_accounts(sel.try_into()?)?
-                .map_err(anyhow::Error::from)
-                .filter_map(move |f| {
-                    futures::future::ready(
-                        f.and_then(|v| format.serialize(v))
+            SubscriptionTarget::Accounts(sel) => {
+                let serialize_alt_account = sel.show_peer_ids;
+                Ok(client
+                    .subscribe_accounts(sel.try_into()?)?
+                    .map_err(anyhow::Error::from)
+                    .filter_map(move |f| {
+                        futures::future::ready(
+                            f.and_then(|v| {
+                                if serialize_alt_account {
+                                    format.serialize(AltAccount::try_from(v)?)
+                                } else {
+                                    format.serialize(v)
+                                }
+                            })
                             .inspect_err(|e| eprintln!("failed to decode account event: {e}"))
                             .ok(),
-                    )
-                })
-                .boxed()),
+                        )
+                    })
+                    .boxed())
+            }
             SubscriptionTarget::Channels(sel) => Ok(client
                 .subscribe_channels(sel.try_into()?)?
                 .map_err(anyhow::Error::from)
