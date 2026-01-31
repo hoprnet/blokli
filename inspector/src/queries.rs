@@ -5,7 +5,7 @@ use blokli_client::{
 use clap::Subcommand;
 use hopr_primitive_types::prelude::Address;
 
-use crate::{AccountArgs, ChannelArgs, Formats};
+use crate::{AccountArgs, AltAccount, ChannelArgs, Formats};
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum QueryTarget {
@@ -94,7 +94,20 @@ impl QueryTarget {
                     })
                     .await?,
             ),
-            QueryTarget::Account(sel) => format.serialize(client.query_accounts(sel.try_into()?).await?),
+            QueryTarget::Account(sel) => {
+                if sel.show_peer_ids {
+                    format.serialize(
+                        client
+                            .query_accounts(sel.try_into()?)
+                            .await?
+                            .into_iter()
+                            .map(AltAccount::try_from)
+                            .collect::<Result<Vec<_>, _>>()?,
+                    )
+                } else {
+                    format.serialize(client.query_accounts(sel.try_into()?).await?)
+                }
+            }
             QueryTarget::Channel(sel) => format.serialize(client.query_channels(sel.try_into()?).await?),
             QueryTarget::ModuleAddress {
                 nonce,

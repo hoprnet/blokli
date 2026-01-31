@@ -1,11 +1,14 @@
 mod queries;
 mod subscriptions;
 
-use std::time::Duration;
+use std::{str::FromStr, time::Duration};
 
 use blokli_client::{
     BlokliClient, BlokliClientConfig,
-    api::{AccountSelector, BlokliTransactionClient, ChannelFilter, ChannelSelector, types::ChannelStatus},
+    api::{
+        AccountSelector, BlokliTransactionClient, ChannelFilter, ChannelSelector,
+        types::{Account, ChannelStatus},
+    },
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use futures::{StreamExt, TryFuture, TryFutureExt, future::Either, pin_mut};
@@ -20,7 +23,7 @@ use crate::subscriptions::{ChannelAllowedStates, SubscriptionTarget};
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
 struct Cli {
-    /// URL of Blokli instance connect to.
+    /// URL of Blokli instance connect to (e.g., http://localhost:8080).
     #[arg(short, long, env = "BLOKLI_URL", value_parser = clap::value_parser!(url::Url))]
     url: url::Url,
     /// Output format.
@@ -145,6 +148,9 @@ pub(crate) struct AccountArgs {
     /// Account key id.
     #[arg(short, long, group = "selector")]
     key_id: Option<u32>,
+    /// Show peer IDs for accounts.
+    #[arg(short, long)]
+    show_peer_ids: bool,
 }
 
 impl TryFrom<AccountArgs> for AccountSelector {
@@ -155,6 +161,7 @@ impl TryFrom<AccountArgs> for AccountSelector {
             address,
             key_id,
             packet_key,
+            ..
         } = value;
         match (address, key_id, packet_key) {
             (Some(address), None, None) => Ok(AccountSelector::Address(address.into())),
@@ -173,6 +180,31 @@ impl TryFrom<AccountArgs> for AccountSelector {
             (None, None, None) => Ok(AccountSelector::Any),
             _ => Err(anyhow::anyhow!("Cannot specify both --address and --key-id.")),
         }
+    }
+}
+
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct AltAccount {
+    pub chain_key: String,
+    pub keyid: i32,
+    pub multi_addresses: Vec<String>,
+    pub packet_key: String,
+    pub peer_id: String,
+    pub safe_address: Option<String>,
+}
+
+impl TryFrom<Account> for AltAccount {
+    type Error = anyhow::Error;
+
+    fn try_from(value: Account) -> Result<Self, Self::Error> {
+        Ok(Self {
+            chain_key: value.chain_key,
+            keyid: value.keyid,
+            multi_addresses: value.multi_addresses,
+            peer_id: OffchainPublicKey::from_str(&value.packet_key)?.to_peerid_str(),
+            packet_key: value.packet_key,
+            safe_address: value.safe_address,
+        })
     }
 }
 
