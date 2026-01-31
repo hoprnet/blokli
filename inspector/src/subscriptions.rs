@@ -1,7 +1,8 @@
-use crate::{AccountArgs, AltAccount, ChannelArgs, Formats};
 use blokli_client::{BlokliClient, api::BlokliSubscriptionClient};
 use clap::{Subcommand, ValueEnum};
 use futures::{StreamExt, TryStreamExt};
+
+use crate::{AccountArgs, AltAccount, ChannelArgs, Formats};
 
 #[derive(Debug, Copy, Clone, ValueEnum)]
 pub(crate) enum ChannelAllowedStates {

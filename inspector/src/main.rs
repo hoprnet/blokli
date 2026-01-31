@@ -1,14 +1,14 @@
 mod queries;
 mod subscriptions;
 
-use std::str::FromStr;
-use std::time::Duration;
+use std::{str::FromStr, time::Duration};
 
-use crate::subscriptions::{ChannelAllowedStates, SubscriptionTarget};
-use blokli_client::api::types::Account;
 use blokli_client::{
     BlokliClient, BlokliClientConfig,
-    api::{AccountSelector, BlokliTransactionClient, ChannelFilter, ChannelSelector, types::ChannelStatus},
+    api::{
+        AccountSelector, BlokliTransactionClient, ChannelFilter, ChannelSelector,
+        types::{Account, ChannelStatus},
+    },
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use futures::{StreamExt, TryFuture, TryFutureExt, future::Either, pin_mut};
@@ -17,6 +17,8 @@ use hopr_primitive_types::prelude::{Address, ToHex};
 use queries::QueryTarget;
 use tokio::io::AsyncReadExt;
 use tracing_subscriber::{EnvFilter, fmt};
+
+use crate::subscriptions::{ChannelAllowedStates, SubscriptionTarget};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
