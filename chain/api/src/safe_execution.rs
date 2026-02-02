@@ -21,7 +21,7 @@ use crate::{
 };
 
 /// Gnosis Safe event topic: keccak256("ExecutionSuccess(bytes32,uint256)")
-const EXECUTION_SUCCESS_TOPIC: [u8; 32] = [
+pub(crate) const EXECUTION_SUCCESS_TOPIC: [u8; 32] = [
     0x44, 0x2e, 0x71, 0x5f, 0x62, 0x63, 0x46, 0xe8, 0xc5, 0x43, 0x81, 0x00, 0x2d, 0xa6, 0x14, 0xf6, 0x2b, 0xee, 0x8d,
     0x27, 0x38, 0x65, 0x35, 0xb2, 0x52, 0x1e, 0xc8, 0x54, 0x08, 0x98, 0x55, 0x6e,
 ];
@@ -58,19 +58,17 @@ pub fn inspect_safe_execution_logs(safe_address: &[u8; 20], logs: &[ReceiptLog])
         };
 
         if *topic0 == EXECUTION_SUCCESS_TOPIC {
-            let safe_tx_hash = extract_safe_tx_hash(log);
             return Some(SafeExecutionResult {
                 success: true,
-                safe_tx_hash,
+                safe_tx_hash: extract_safe_tx_hash(log),
                 revert_reason: None,
             });
         }
 
         if *topic0 == EXECUTION_FAILURE_TOPIC {
-            let safe_tx_hash = extract_safe_tx_hash(log);
             return Some(SafeExecutionResult {
                 success: false,
-                safe_tx_hash,
+                safe_tx_hash: extract_safe_tx_hash(log),
                 // Revert reason is not available from Safe events directly.
                 // The Safe contract catches the revert internally and only
                 // emits the txHash and payment in the event data.
@@ -87,24 +85,26 @@ pub fn inspect_safe_execution_logs(safe_address: &[u8; 20], logs: &[ReceiptLog])
 /// Both `ExecutionSuccess` and `ExecutionFailure` events encode txHash as either:
 /// - `topics[1]` (if the parameter is indexed)
 /// - First 32 bytes of `data` (if not indexed, as in Safe v1.3.0)
-fn extract_safe_tx_hash(log: &ReceiptLog) -> Hash {
+///
+/// Returns `None` if the log data is too short to contain a transaction hash.
+fn extract_safe_tx_hash(log: &ReceiptLog) -> Option<Hash> {
     // Check if txHash is in topics[1] (indexed parameter)
     if log.topics.len() > 1 {
-        return Hash::from(log.topics[1]);
+        return Some(Hash::from(log.topics[1]));
     }
 
     // Fall back to first 32 bytes of data (non-indexed parameter)
     if log.data.len() >= 32 {
         let mut hash_bytes = [0u8; 32];
         hash_bytes.copy_from_slice(&log.data[..32]);
-        return Hash::from(hash_bytes);
+        return Some(Hash::from(hash_bytes));
     }
 
     warn!(
         "Safe execution event data is too short ({} bytes), expected at least 32",
         log.data.len()
     );
-    Hash::default()
+    None
 }
 
 /// Database-backed Safe address checker.
@@ -145,6 +145,8 @@ impl<T: BlokliDbAllOperations + Send + Sync> SafeAddressChecker for DbSafeAddres
 
 #[cfg(test)]
 mod tests {
+    use hopr_bindings::exports::alloy::primitives::keccak256;
+
     use super::*;
 
     #[test]
@@ -187,7 +189,8 @@ mod tests {
         assert!(result.success);
         assert!(result.revert_reason.is_none());
 
-        let hash_bytes: &[u8] = result.safe_tx_hash.as_ref();
+        let safe_tx_hash = result.safe_tx_hash.expect("safe_tx_hash should be present");
+        let hash_bytes: &[u8] = safe_tx_hash.as_ref();
         assert_eq!(hash_bytes[0], 0x42);
         assert_eq!(hash_bytes[31], 0xFF);
     }
@@ -225,7 +228,8 @@ mod tests {
         let result = inspect_safe_execution_logs(&safe_address, &logs).unwrap();
         assert!(result.success);
 
-        let hash_bytes: &[u8] = result.safe_tx_hash.as_ref();
+        let safe_tx_hash = result.safe_tx_hash.expect("safe_tx_hash should be present");
+        let hash_bytes: &[u8] = safe_tx_hash.as_ref();
         assert_eq!(hash_bytes, &indexed_hash);
     }
 
@@ -245,5 +249,36 @@ mod tests {
         }];
 
         assert!(inspect_safe_execution_logs(&safe_address, &logs).is_none());
+    }
+
+    #[test]
+    fn test_execution_success_topic_hash() {
+        let computed = keccak256("ExecutionSuccess(bytes32,uint256)");
+        assert_eq!(computed.0, EXECUTION_SUCCESS_TOPIC);
+    }
+
+    #[test]
+    fn test_execution_failure_topic_hash() {
+        let computed = keccak256("ExecutionFailure(bytes32,uint256)");
+        assert_eq!(computed.0, EXECUTION_FAILURE_TOPIC);
+    }
+
+    #[test]
+    fn test_inspect_safe_execution_logs_short_data_returns_none_hash() {
+        let safe_address = [0xAA; 20];
+
+        // Event with only the topic (no indexed txHash) and data shorter than 32 bytes
+        let logs = vec![ReceiptLog {
+            address: safe_address,
+            topics: vec![EXECUTION_SUCCESS_TOPIC],
+            data: vec![0u8; 10], // Too short to contain txHash
+        }];
+
+        let result = inspect_safe_execution_logs(&safe_address, &logs).unwrap();
+        assert!(result.success);
+        assert!(
+            result.safe_tx_hash.is_none(),
+            "safe_tx_hash should be None for short data"
+        );
     }
 }

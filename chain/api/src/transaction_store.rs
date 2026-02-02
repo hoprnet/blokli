@@ -31,8 +31,9 @@ pub enum TransactionStoreError {
 pub struct SafeExecutionResult {
     /// Whether the internal Safe transaction succeeded
     pub success: bool,
-    /// Safe internal transaction hash (bytes32 from event)
-    pub safe_tx_hash: Hash,
+    /// Safe internal transaction hash (bytes32 from event).
+    /// `None` if the event data was malformed and the hash could not be extracted.
+    pub safe_tx_hash: Option<Hash>,
     /// Revert reason string (if execution failed and reason is decodable)
     pub revert_reason: Option<String>,
 }
@@ -95,7 +96,7 @@ impl From<TransactionRecord> for Transaction {
     fn from(record: TransactionRecord) -> Self {
         let safe_execution = record.safe_execution.map(|se| SafeExecution {
             success: se.success,
-            safe_tx_hash: Hex32::from(se.safe_tx_hash),
+            safe_tx_hash: se.safe_tx_hash.map(Hex32::from),
             revert_reason: se.revert_reason,
         });
 
@@ -183,6 +184,32 @@ impl TransactionStore {
                 if status == TransactionStatus::Confirmed && record.confirmed_at.is_none() {
                     record.confirmed_at = Some(Utc::now());
                 }
+            })
+            .ok_or(TransactionStoreError::NotFound(id))
+    }
+
+    /// Atomically confirm a transaction and set its Safe execution result.
+    ///
+    /// Sets `status = Confirmed`, `confirmed_at = Some(Utc::now())`, and
+    /// `safe_execution` in a single operation, preventing a window where
+    /// subscribers see `Confirmed` with `safeExecution: null`.
+    ///
+    /// # Errors
+    /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
+    pub fn confirm_with_safe_execution(
+        &self,
+        id: Uuid,
+        safe_execution: Option<SafeExecutionResult>,
+    ) -> Result<(), TransactionStoreError> {
+        self.transactions
+            .get_mut(&id)
+            .map(|mut entry| {
+                let record = entry.value_mut();
+                record.status = TransactionStatus::Confirmed;
+                if record.confirmed_at.is_none() {
+                    record.confirmed_at = Some(Utc::now());
+                }
+                record.safe_execution = safe_execution;
             })
             .ok_or(TransactionStoreError::NotFound(id))
     }
@@ -444,5 +471,129 @@ mod tests {
         assert_eq!(retrieved.status, TransactionStatus::Confirmed);
         assert_eq!(retrieved.transaction_hash, Hash::default());
         assert!(retrieved.confirmed_at.is_some());
+    }
+
+    #[test]
+    fn test_update_safe_execution() {
+        let store = TransactionStore::new();
+
+        let record = TransactionRecord {
+            id: Uuid::new_v4(),
+            raw_transaction: vec![0x01],
+            transaction_hash: Hash::default(),
+            status: TransactionStatus::Confirmed,
+            submitted_at: Utc::now(),
+            confirmed_at: Some(Utc::now()),
+            error_message: None,
+            safe_execution: None,
+        };
+
+        let id = record.id;
+        store.insert(record).unwrap();
+
+        // Initially no safe execution
+        let retrieved = store.get(id).unwrap();
+        assert!(retrieved.safe_execution.is_none());
+
+        // Update with safe execution result
+        let safe_exec = SafeExecutionResult {
+            success: true,
+            safe_tx_hash: Some(Hash::from([0x42u8; 32])),
+            revert_reason: None,
+        };
+
+        store.update_safe_execution(id, safe_exec).unwrap();
+
+        let retrieved = store.get(id).unwrap();
+        let exec = retrieved.safe_execution.expect("safe_execution should be set");
+        assert!(exec.success);
+        assert!(exec.safe_tx_hash.is_some());
+    }
+
+    #[test]
+    fn test_update_safe_execution_not_found() {
+        let store = TransactionStore::new();
+        let id = Uuid::new_v4();
+
+        let safe_exec = SafeExecutionResult {
+            success: true,
+            safe_tx_hash: None,
+            revert_reason: None,
+        };
+
+        let result = store.update_safe_execution(id, safe_exec);
+        assert!(matches!(result, Err(TransactionStoreError::NotFound(_))));
+    }
+
+    #[test]
+    fn test_confirm_with_safe_execution() {
+        let store = TransactionStore::new();
+
+        let record = TransactionRecord {
+            id: Uuid::new_v4(),
+            raw_transaction: vec![0x01],
+            transaction_hash: Hash::default(),
+            status: TransactionStatus::Submitted,
+            submitted_at: Utc::now(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        };
+
+        let id = record.id;
+        store.insert(record).unwrap();
+
+        // Atomically confirm with safe execution
+        let safe_exec = SafeExecutionResult {
+            success: false,
+            safe_tx_hash: Some(Hash::from([0xAB; 32])),
+            revert_reason: Some("revert reason".to_string()),
+        };
+
+        store.confirm_with_safe_execution(id, Some(safe_exec)).unwrap();
+
+        let retrieved = store.get(id).unwrap();
+        assert_eq!(retrieved.status, TransactionStatus::Confirmed);
+        assert!(retrieved.confirmed_at.is_some());
+
+        let exec = retrieved.safe_execution.expect("safe_execution should be set");
+        assert!(!exec.success);
+        assert_eq!(exec.revert_reason.as_deref(), Some("revert reason"));
+    }
+
+    #[test]
+    fn test_confirm_with_safe_execution_none() {
+        let store = TransactionStore::new();
+
+        let record = TransactionRecord {
+            id: Uuid::new_v4(),
+            raw_transaction: vec![0x01],
+            transaction_hash: Hash::default(),
+            status: TransactionStatus::Submitted,
+            submitted_at: Utc::now(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        };
+
+        let id = record.id;
+        store.insert(record).unwrap();
+
+        // Confirm without safe execution (non-Safe transaction)
+        store.confirm_with_safe_execution(id, None).unwrap();
+
+        let retrieved = store.get(id).unwrap();
+        assert_eq!(retrieved.status, TransactionStatus::Confirmed);
+        assert!(retrieved.confirmed_at.is_some());
+        assert!(retrieved.safe_execution.is_none());
+    }
+
+    #[test]
+    fn test_confirm_with_safe_execution_not_found() {
+        let store = TransactionStore::new();
+        let id = Uuid::new_v4();
+
+        let result = store.confirm_with_safe_execution(id, None);
+        assert!(matches!(result, Err(TransactionStoreError::NotFound(_))));
     }
 }

@@ -473,9 +473,10 @@ pub struct TransactionInput {
 pub struct SafeExecution {
     /// Whether the internal Safe transaction succeeded
     pub success: bool,
-    /// Safe internal transaction hash (bytes32 hex)
+    /// Safe internal transaction hash (bytes32 hex).
+    /// Null if the event data was malformed and the hash could not be extracted.
     #[graphql(name = "safeTxHash")]
-    pub safe_tx_hash: Hex32,
+    pub safe_tx_hash: Option<Hex32>,
     /// Revert reason (if execution failed and reason is decodable)
     #[graphql(name = "revertReason")]
     pub revert_reason: Option<String>,

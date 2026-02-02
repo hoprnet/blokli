@@ -555,8 +555,8 @@ type Safe {
 type SafeExecution {
   "Revert reason if execution failed and reason is decodable (null if succeeded or reason unavailable)"
   revertReason: String
-  "Safe internal transaction hash (bytes32 hex)"
-  safeTxHash: Hex32!
+  "Safe internal transaction hash (bytes32 hex, null if event data was malformed)"
+  safeTxHash: Hex32
   "Whether the internal Safe transaction succeeded"
   success: Boolean!
 }
