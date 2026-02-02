@@ -32,6 +32,26 @@ const EXECUTION_FAILURE_TOPIC: [u8; 32] = [
     0xc0, 0x90, 0x83, 0xca, 0x52, 0x72, 0xe6, 0x4d, 0x11, 0x5b, 0x68, 0x7d, 0x23,
 ];
 
+/// Gnosis Safe event topic: keccak256("ExecutionFromModuleSuccess(address)")
+///
+/// Emitted when a transaction is executed via a Safe module (e.g., `execTransactionFromModule`).
+/// The event signature is `event ExecutionFromModuleSuccess(address indexed module)`.
+/// Unlike direct execution events, there is no `txHash` parameter.
+pub(crate) const EXECUTION_FROM_MODULE_SUCCESS_TOPIC: [u8; 32] = [
+    0x68, 0x95, 0xc1, 0x36, 0x64, 0xaa, 0x4f, 0x67, 0x28, 0x8b, 0x25, 0xd7, 0xa2, 0x1d, 0x7a, 0xaa, 0x34, 0x91, 0x6e,
+    0x35, 0x5f, 0xb9, 0xb6, 0xfa, 0xe0, 0xa1, 0x39, 0xa9, 0x08, 0x5b, 0xec, 0xb8,
+];
+
+/// Gnosis Safe event topic: keccak256("ExecutionFromModuleFailure(address)")
+///
+/// Emitted when a module-initiated transaction fails inside the Safe.
+/// The event signature is `event ExecutionFromModuleFailure(address indexed module)`.
+/// Unlike direct execution events, there is no `txHash` parameter.
+pub(crate) const EXECUTION_FROM_MODULE_FAILURE_TOPIC: [u8; 32] = [
+    0xac, 0xd2, 0xc8, 0x70, 0x28, 0x04, 0x12, 0x8f, 0xdb, 0x0d, 0xb2, 0xbb, 0x49, 0xf6, 0xd1, 0x27, 0xdd, 0x01, 0x81,
+    0xc1, 0x3f, 0xd4, 0x5d, 0xbf, 0xe1, 0x6d, 0xe0, 0x93, 0x0e, 0x2b, 0xd3, 0x75,
+];
+
 /// Extract the `to` address from a raw signed transaction.
 ///
 /// Supports legacy, EIP-2930, EIP-1559, and EIP-4844 transaction types.
@@ -72,6 +92,25 @@ pub fn inspect_safe_execution_logs(safe_address: &[u8; 20], logs: &[ReceiptLog])
                 // Revert reason is not available from Safe events directly.
                 // The Safe contract catches the revert internally and only
                 // emits the txHash and payment in the event data.
+                revert_reason: None,
+            });
+        }
+
+        // Module execution events: ExecutionFromModuleSuccess/ExecutionFromModuleFailure
+        // These have signature `event ExecutionFromModule{Success,Failure}(address indexed module)`
+        // and do not contain a Safe txHash parameter.
+        if *topic0 == EXECUTION_FROM_MODULE_SUCCESS_TOPIC {
+            return Some(SafeExecutionResult {
+                success: true,
+                safe_tx_hash: None,
+                revert_reason: None,
+            });
+        }
+
+        if *topic0 == EXECUTION_FROM_MODULE_FAILURE_TOPIC {
+            return Some(SafeExecutionResult {
+                success: false,
+                safe_tx_hash: None,
                 revert_reason: None,
             });
         }
@@ -129,17 +168,24 @@ impl<T> DbSafeAddressChecker<T> {
 
 #[async_trait]
 impl<T: BlokliDbAllOperations + Send + Sync> SafeAddressChecker for DbSafeAddressChecker<T> {
-    async fn is_known_safe(&self, address: &[u8; 20]) -> bool {
-        let Ok(addr) = Address::try_from(address.as_slice()) else {
-            return false;
-        };
+    async fn find_safe_for_target(&self, target: &[u8; 20]) -> Option<[u8; 20]> {
+        let addr = Address::try_from(target.as_slice()).ok()?;
 
-        self.db
-            .get_safe_contract_by_address(None, addr)
-            .await
-            .ok()
-            .flatten()
-            .is_some()
+        // Check if the target is a known Safe contract address (returns itself)
+        if let Ok(Some(entry)) = self.db.get_safe_contract_by_address(None, addr).await {
+            let mut safe_addr = [0u8; 20];
+            safe_addr.copy_from_slice(&entry.address);
+            return Some(safe_addr);
+        }
+
+        // Check if the target is a module address associated with a Safe
+        if let Ok(Some(entry)) = self.db.get_safe_contract_by_module_address(None, addr).await {
+            let mut safe_addr = [0u8; 20];
+            safe_addr.copy_from_slice(&entry.address);
+            return Some(safe_addr);
+        }
+
+        None
     }
 }
 
@@ -280,5 +326,78 @@ mod tests {
             result.safe_tx_hash.is_none(),
             "safe_tx_hash should be None for short data"
         );
+    }
+
+    #[test]
+    fn test_execution_from_module_success_topic_hash() {
+        let computed = keccak256("ExecutionFromModuleSuccess(address)");
+        assert_eq!(computed.0, EXECUTION_FROM_MODULE_SUCCESS_TOPIC);
+    }
+
+    #[test]
+    fn test_execution_from_module_failure_topic_hash() {
+        let computed = keccak256("ExecutionFromModuleFailure(address)");
+        assert_eq!(computed.0, EXECUTION_FROM_MODULE_FAILURE_TOPIC);
+    }
+
+    #[test]
+    fn test_inspect_safe_execution_logs_module_success_event() {
+        let safe_address = [0xAA; 20];
+        let module_address = [0xBB; 32]; // indexed module address in topics[1]
+
+        let logs = vec![ReceiptLog {
+            address: safe_address,
+            topics: vec![EXECUTION_FROM_MODULE_SUCCESS_TOPIC, module_address],
+            data: vec![],
+        }];
+
+        let result = inspect_safe_execution_logs(&safe_address, &logs);
+        assert!(result.is_some());
+
+        let result = result.unwrap();
+        assert!(result.success);
+        assert!(
+            result.safe_tx_hash.is_none(),
+            "module execution events have no safe_tx_hash"
+        );
+        assert!(result.revert_reason.is_none());
+    }
+
+    #[test]
+    fn test_inspect_safe_execution_logs_module_failure_event() {
+        let safe_address = [0xAA; 20];
+        let module_address = [0xBB; 32]; // indexed module address in topics[1]
+
+        let logs = vec![ReceiptLog {
+            address: safe_address,
+            topics: vec![EXECUTION_FROM_MODULE_FAILURE_TOPIC, module_address],
+            data: vec![],
+        }];
+
+        let result = inspect_safe_execution_logs(&safe_address, &logs);
+        assert!(result.is_some());
+
+        let result = result.unwrap();
+        assert!(!result.success);
+        assert!(
+            result.safe_tx_hash.is_none(),
+            "module execution events have no safe_tx_hash"
+        );
+        assert!(result.revert_reason.is_none());
+    }
+
+    #[test]
+    fn test_inspect_safe_execution_logs_module_event_wrong_address() {
+        let safe_address = [0xAA; 20];
+        let other_address = [0xCC; 20];
+
+        // Module success event from a different contract address should be ignored
+        let logs = vec![ReceiptLog {
+            address: other_address,
+            topics: vec![EXECUTION_FROM_MODULE_SUCCESS_TOPIC],
+            data: vec![],
+        }];
+
+        assert!(inspect_safe_execution_logs(&safe_address, &logs).is_none());
     }
 }

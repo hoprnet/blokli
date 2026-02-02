@@ -57,11 +57,23 @@ pub struct MutateSendTransaction {
 
 #[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct SafeExecution {
+    pub success: bool,
+    #[cynic(rename = "safeTxHash")]
+    pub safe_tx_hash: Option<Hex32>,
+    #[cynic(rename = "revertReason")]
+    pub revert_reason: Option<String>,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Transaction {
     pub id: cynic::Id,
     pub status: TransactionStatus,
     pub submitted_at: DateTime,
     pub transaction_hash: Hex32,
+    #[cynic(rename = "safeExecution")]
+    pub safe_execution: Option<SafeExecution>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]

@@ -189,6 +189,7 @@ Blokli implements a temporal database system for tracking blockchain state chang
 ## Documentation
 
 - **[TESTING.md](TESTING.md)** - Comprehensive testing guide
+- **[docs/guide-internal-tx-debugging.md](docs/guide-internal-tx-debugging.md)** - Debugging Safe internal transactions with `cast`
 - **`design/architecture.md`** - System architecture and data flows
 - **`design/target-api-schema.graphql`** - Target GraphQL schema reference
 - **`design/target-db-schema.mmd`** - Target database schema reference

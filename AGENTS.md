@@ -740,6 +740,228 @@ mod tests {
 }
 ```
 
+### Integration Tests (`tests/integration`)
+
+The `tests/integration` crate provides end-to-end tests that exercise the full Blokli stack against a real blockchain (Anvil) and real database (PostgreSQL), running inside Docker containers.
+
+#### When to Use Integration Tests
+
+Write integration tests when:
+
+- Testing transaction submission, tracking, or confirmation flows end-to-end
+- Verifying GraphQL query or subscription behavior against real indexed data
+- Testing Safe deployment, registration, announcement, or channel operations
+- Validating that bloklid correctly indexes on-chain events and exposes them via the API
+- Testing interactions between the client library and the running bloklid server
+
+Do **not** use integration tests for:
+
+- Unit-level logic (event parsing, data conversions, DB queries) — use `#[cfg(test)]` unit tests instead
+- Testing code that doesn't need a running blockchain or bloklid instance
+- Fast iteration during development — integration tests require Docker and are slower
+
+#### Running Integration Tests
+
+```bash
+# Build the Docker image first (required)
+nix build .#docker-blokli-dev
+
+# Run integration tests
+just test-indexer
+```
+
+The `just test-indexer` command builds the test crate and runs all integration tests. Docker must be available on the host machine.
+
+#### Docker Stack Architecture
+
+The integration tests spin up a Docker Compose stack with four services:
+
+| Service    | Container Name                | Purpose                                                  |
+|------------|-------------------------------|----------------------------------------------------------|
+| `anvil`    | `blokli-integration-anvil`    | Local Ethereum node (Foundry Anvil) with 1s block time   |
+| `postgres` | `blokli-integration-postgres` | PostgreSQL database for bloklid                          |
+| `bloklid`  | `blokli-integration-bloklid`  | The bloklid daemon under test                            |
+| `registry` | `blokli-integration-registry` | Local Docker registry for image distribution             |
+
+The stack is defined in `tests/integration/docker-compose.yml`. All services share a `integration-test` bridge network. The bloklid service depends on all others being healthy before starting.
+
+#### Configuration
+
+Test configuration is managed via environment variables (see `tests/integration/src/config.rs`):
+
+| Environment Variable                  | Default                            | Description                      |
+|----------------------------------------|------------------------------------|----------------------------------|
+| `BLOKLI_TEST_IMAGE`                   | `bloklid:integration-test`         | Docker image to test             |
+| `BLOKLI_TEST_CONFIG`                  | `config-integration-anvil.toml`    | bloklid config file              |
+| `BLOKLI_TEST_BLOKLID_URL`             | `http://localhost:8081`            | bloklid GraphQL API URL          |
+| `BLOKLI_TEST_RPC_URL`                 | `http://localhost:8546`            | Anvil JSON-RPC URL               |
+| `BLOKLI_TEST_REMOTE_IMAGE`            | (unset)                            | Pull image from remote registry  |
+| `BLOKLI_TEST_HTTP_TIMEOUT_SECS`       | `30`                               | HTTP client timeout              |
+| `BLOKLI_TEST_CONFIRMATIONS`           | `1`                                | Transaction confirmations        |
+| `BLOKLI_TEST_REGISTRY_PORT`           | `5001`                             | Local registry port              |
+
+#### Fixture Lifecycle
+
+All integration tests share a single `IntegrationFixture` instance (via `OnceCell`). The fixture is lazily initialized on the first test that needs it:
+
+1. Loads `TestConfig` from environment variables
+2. Starts the Docker Compose stack (`docker compose up -d`)
+3. Waits for the stack to stabilize (8 seconds)
+4. Parses Anvil accounts from container logs
+5. Creates `RpcClient` (direct Anvil JSON-RPC) and `BlokliClient` (bloklid GraphQL API)
+6. Deploys HOPR smart contracts to Anvil via the deployer account (account 0)
+7. Mints and distributes HOPR tokens to all test accounts
+8. Registers a `libc::atexit` shutdown hook to tear down the stack on process exit
+
+On teardown, the `DockerEnvironment` collects container logs to `/tmp/blokli-integration/` before running `docker compose down`.
+
+#### Writing a New Integration Test
+
+Use the `rstest` fixture pattern with `#[serial]` to ensure tests run sequentially (they share the same blockchain state):
+
+```rust
+use std::time::Duration;
+
+use anyhow::Result;
+use blokli_client::api::{BlokliQueryClient, BlokliTransactionClient, types::TransactionStatus};
+use blokli_integration_tests::fixtures::{IntegrationFixture, integration_fixture as fixture};
+use rstest::*;
+use serial_test::serial;
+
+#[rstest]
+#[test_log::test(tokio::test)]
+#[serial]
+async fn test_my_feature(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    // 1. Get test accounts
+    let [sender, recipient] = fixture.sample_accounts::<2>();
+
+    // 2. Build and submit transactions using fixture helpers
+    let tx_value = U256::from(1_000_000u128);
+    let nonce = fixture.rpc().transaction_count(&sender.address).await?;
+    let raw_tx = fixture.build_raw_tx(tx_value, sender, recipient, nonce).await?;
+    let signed_bytes = Vec::from_hex(raw_tx.trim_start_matches("0x"))?;
+
+    // 3. Submit via bloklid client
+    let txid = fixture.submit_and_track_tx(&signed_bytes).await?;
+
+    // 4. Track and assert
+    let res = fixture.client().track_transaction(txid, Duration::from_secs(30)).await?;
+    assert_eq!(res.status, TransactionStatus::Confirmed);
+
+    Ok(())
+}
+```
+
+**Key attributes:**
+
+- `#[rstest]` — enables the `fixture` parameter injection
+- `#[test_log::test(tokio::test)]` — async test with tracing output
+- `#[serial]` — prevents concurrent execution (shared blockchain state)
+- `#[future(awt)]` — automatically `.await`s the async fixture
+
+#### `IntegrationFixture` API
+
+**Accessors:**
+
+| Method                | Returns              | Description                                  |
+|-----------------------|----------------------|----------------------------------------------|
+| `config()`            | `&TestConfig`        | Test configuration                           |
+| `accounts()`          | `&[AnvilAccount]`    | All available Anvil accounts                 |
+| `sample_accounts::<N>()` | `[&AnvilAccount; N]` | Randomly sample N accounts                |
+| `client()`            | `&BlokliClient`      | Blokli GraphQL client (via bloklid)          |
+| `rpc()`               | `&RpcClient`         | Direct Anvil JSON-RPC client                 |
+| `contract_addresses()`| `&ContractAddresses`  | Deployed HOPR contract addresses            |
+
+**Transaction helpers:**
+
+| Method                                       | Description                                         |
+|----------------------------------------------|-----------------------------------------------------|
+| `build_raw_tx(value, sender, recipient, nonce)` | Build an EIP-1559 raw transaction hex string     |
+| `submit_tx(signed_bytes)`                    | Submit a transaction without tracking               |
+| `submit_and_track_tx(signed_bytes)`          | Submit and get a tracking ID                        |
+| `submit_and_confirm_tx(signed_bytes, confirmations)` | Submit and wait for N confirmations          |
+
+**Safe helpers:**
+
+| Method                                        | Description                                        |
+|-----------------------------------------------|----------------------------------------------------|
+| `deploy_or_get_safe(owner, amount)`           | Deploy a Safe or retrieve existing one             |
+| `deploy_safe_and_announce(owner, amount)`     | Deploy Safe, register, and announce the account    |
+| `register_safe(owner, safe_address)`          | Register a Safe by node                            |
+
+**Channel helpers:**
+
+| Method                                           | Description                                     |
+|--------------------------------------------------|-------------------------------------------------|
+| `open_channel(from, to, amount, module)`         | Open a payment channel                          |
+| `initiate_outgoing_channel_closure(from, to, module)` | Start closing an outgoing channel          |
+
+**Account helpers:**
+
+| Method                                        | Description                                        |
+|-----------------------------------------------|----------------------------------------------------|
+| `announce_account(account, module)`           | Announce an account on-chain                       |
+| `announce_or_get_account(account, module)`    | Announce only if not already announced             |
+
+#### `RpcClient` — Direct Blockchain Access
+
+For operations that bypass bloklid and go directly to Anvil:
+
+| Method                        | Description                               |
+|-------------------------------|-------------------------------------------|
+| `chain_id()`                  | Get the chain ID                          |
+| `transaction_count(address)`  | Get nonce for an address                  |
+| `get_balance(address)`        | Get native token balance                  |
+| `execute_transaction(raw_tx)` | Send raw transaction directly via RPC     |
+
+#### Test File Organization
+
+Tests are organized by client trait:
+
+| File                                  | Covers                                                    |
+|---------------------------------------|-----------------------------------------------------------|
+| `tests/blokli_query_client.rs`        | `BlokliQueryClient` — queries for accounts, channels, safes, chain info |
+| `tests/blokli_subscription_client.rs` | `BlokliSubscriptionClient` — SSE subscriptions for real-time updates |
+| `tests/blokli_transaction_client.rs`  | `BlokliTransactionClient` — transaction submission, tracking, confirmation, Safe enrichment |
+
+When adding new tests, place them in the file corresponding to the client trait being tested. If the test spans multiple traits, put it in the file for the primary trait under test.
+
+#### Safe Module Transactions in Tests
+
+To test HOPR operations that go through a Safe module (the standard HOPR transaction path), use `SafePayloadGenerator` from `hopr-chain-connector`:
+
+```rust
+use hopr_chain_connector::{PayloadGenerator, SafePayloadGenerator};
+use hopr_chain_types::prelude::SignableTransaction;
+use hopr_primitive_types::prelude::Address as HoprAddress;
+
+// Deploy a Safe and announce the owner
+let safe = fixture.deploy_safe_and_announce(owner, parsed_safe_balance()).await?;
+
+// Build a module transaction payload
+let payload_generator = SafePayloadGenerator::new(
+    &owner.keypair,
+    *fixture.contract_addresses(),
+    HoprAddress::from_str(&safe.module_address)?,
+);
+let payload = payload_generator.approve(spender, amount)?;
+let payload_bytes = payload
+    .sign_and_encode_to_eip2718(nonce, fixture.rpc().chain_id().await?, None, &owner.keypair)
+    .await?;
+
+// Submit and track
+let txid = fixture.submit_and_track_tx(&payload_bytes).await?;
+```
+
+Note: `PayloadGenerator` and `SignableTransaction` traits must be in scope for `.approve()`, `.fund_channel()`, `.initiate_outgoing_channel_closure()`, and `.sign_and_encode_to_eip2718()` methods.
+
+#### Debugging Failing Integration Tests
+
+- Container logs are saved to `/tmp/blokli-integration/<timestamp>/` on teardown
+- Use `RUST_LOG=debug` or `RUST_LOG=trace` when running tests for verbose output
+- The `#[test_log::test(...)]` attribute enables tracing output in test runs
+- If the Docker stack fails to start, check that ports 8081, 8546, and 5001 are not in use
+
 ## Common Patterns
 
 ### Signal Handling

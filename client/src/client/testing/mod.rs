@@ -833,6 +833,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
                 status,
                 submitted_at: DateTime(chrono::DateTime::<chrono::Utc>::from(SystemTime::now()).to_rfc3339()),
                 transaction_hash: Hex32(tx_hash),
+                safe_execution: None,
             },
         );
 
