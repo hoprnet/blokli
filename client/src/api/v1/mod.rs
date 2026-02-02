@@ -10,7 +10,7 @@ pub mod types {
         graph::OpenedChannelsGraphEntry,
         info::{ChainInfo, ContractAddressMap, TicketParameters},
         safe::{ModuleAddress, Safe},
-        txs::{Transaction, TransactionStatus},
+        txs::{SafeExecution, Transaction, TransactionStatus},
     };
 }
 

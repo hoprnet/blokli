@@ -41,11 +41,20 @@ pub trait ReceiptProvider: Send + Sync {
     async fn get_transaction_receipt_logs(&self, tx_hash: Hash) -> Result<Option<Vec<ReceiptLog>>, String>;
 }
 
-/// Trait for checking if an address is a known Safe contract
+/// Trait for resolving a transaction target address to a Safe contract address.
+///
+/// The target may be a known Safe address directly, or a module address
+/// associated with a Safe (used by `execTransactionFromModule`).
 #[async_trait]
 pub trait SafeAddressChecker: Send + Sync + std::fmt::Debug {
-    /// Check if the given address is a known Safe contract in the database
-    async fn is_known_safe(&self, address: &[u8; 20]) -> bool;
+    /// Given a transaction target address, resolve the associated Safe address.
+    ///
+    /// Returns `Some(safe_address)` if the target is:
+    /// - A known Safe contract address (returns itself)
+    /// - A known module address associated with a Safe (returns the Safe address)
+    ///
+    /// Returns `None` if the target is not recognized as either.
+    async fn find_safe_for_target(&self, target: &[u8; 20]) -> Option<[u8; 20]>;
 }
 
 /// Configuration for the transaction monitor
@@ -201,10 +210,10 @@ impl<R: ReceiptProvider> TransactionMonitor<R> {
         // Decode the raw transaction to extract the `to` address
         let to_addr = decode_transaction_to_address(&record.raw_transaction)?;
 
-        // Check if the `to` address is a known Safe contract
-        if !safe_checker.is_known_safe(&to_addr).await {
-            return None;
-        }
+        // Resolve the target address to a Safe address.
+        // The target may be the Safe itself (direct execTransaction) or
+        // a module address (execTransactionFromModule).
+        let safe_address = safe_checker.find_safe_for_target(&to_addr).await?;
 
         debug!(
             "Transaction {} targets a known Safe contract, fetching receipt logs",
@@ -218,7 +227,7 @@ impl<R: ReceiptProvider> TransactionMonitor<R> {
             .await
         {
             Ok(Some(logs)) => {
-                let result = inspect_safe_execution_logs(&to_addr, &logs);
+                let result = inspect_safe_execution_logs(&safe_address, &logs);
                 if let Some(ref r) = result {
                     info!(
                         "Transaction {} Safe execution: success={}, safe_tx_hash={:?}",
@@ -299,28 +308,42 @@ mod tests {
         }
     }
 
-    // Mock Safe address checker for testing
+    // Mock Safe address checker for testing.
+    // Maps known Safe addresses to themselves, and module addresses to their Safe addresses.
     #[derive(Debug)]
     struct MockSafeAddressChecker {
+        /// Safe address -> () (direct safe lookup)
         known_safes: Arc<DashMap<[u8; 20], ()>>,
+        /// Module address -> Safe address (module-to-safe mapping)
+        module_to_safe: Arc<DashMap<[u8; 20], [u8; 20]>>,
     }
 
     impl MockSafeAddressChecker {
         fn new() -> Self {
             Self {
                 known_safes: Arc::new(DashMap::new()),
+                module_to_safe: Arc::new(DashMap::new()),
             }
         }
 
         fn add_safe(&self, address: [u8; 20]) {
             self.known_safes.insert(address, ());
         }
+
+        fn add_module(&self, module_address: [u8; 20], safe_address: [u8; 20]) {
+            self.module_to_safe.insert(module_address, safe_address);
+        }
     }
 
     #[async_trait]
     impl SafeAddressChecker for MockSafeAddressChecker {
-        async fn is_known_safe(&self, address: &[u8; 20]) -> bool {
-            self.known_safes.contains_key(address)
+        async fn find_safe_for_target(&self, target: &[u8; 20]) -> Option<[u8; 20]> {
+            // Check if target is a known Safe address
+            if self.known_safes.contains_key(target) {
+                return Some(*target);
+            }
+            // Check if target is a known module address
+            self.module_to_safe.get(target).map(|entry| *entry.value())
         }
     }
 
@@ -736,5 +759,58 @@ mod tests {
             .safe_execution
             .expect("safe_execution should be set alongside confirmed status");
         assert!(exec.success);
+    }
+
+    #[tokio::test]
+    async fn test_enrich_safe_execution_via_module_address() {
+        let module_address = [0xEE; 20];
+        let safe_address = [0xFF; 20];
+        let raw_tx = create_raw_tx_to(&module_address).await;
+        let tx_hash = Hash::from([0x55u8; 32]);
+
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // Set up receipt logs with ExecutionFromModuleSuccess event emitted by the Safe
+        provider.set_receipt_logs(
+            tx_hash,
+            vec![ReceiptLog {
+                address: safe_address,
+                topics: vec![crate::safe_execution::EXECUTION_FROM_MODULE_SUCCESS_TOPIC, {
+                    // module address padded to 32 bytes (indexed address parameter)
+                    let mut topic = [0u8; 32];
+                    topic[12..].copy_from_slice(&module_address);
+                    topic
+                }],
+                data: vec![],
+            }],
+        );
+
+        let safe_checker = MockSafeAddressChecker::new();
+        // Register the module -> safe mapping (not the safe directly)
+        safe_checker.add_module(module_address, safe_address);
+
+        let record = TransactionRecord {
+            id: Uuid::new_v4(),
+            raw_transaction: raw_tx,
+            transaction_hash: tx_hash,
+            status: TransactionStatus::Submitted,
+            submitted_at: Utc::now(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        };
+
+        store.insert(record.clone()).unwrap();
+
+        let monitor = create_monitor_with_safe_checker(store, provider, safe_checker);
+        let result = monitor.try_enrich_safe_execution(&record).await;
+
+        let exec = result.expect("enrichment should return a result for module transactions");
+        assert!(exec.success);
+        assert!(
+            exec.safe_tx_hash.is_none(),
+            "module execution events have no safe_tx_hash"
+        );
     }
 }
