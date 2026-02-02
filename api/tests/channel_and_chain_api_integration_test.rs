@@ -13,7 +13,10 @@ use std::{
 };
 
 use anyhow::Result;
-use blokli_api::{query::QueryRoot, schema::ExpectedBlockTime};
+use blokli_api::{
+    query::QueryRoot,
+    schema::{ChainId, ExpectedBlockTime, Finality, NetworkName},
+};
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{
     BlokliDbGeneralModelOperations, TargetDb, accounts::BlokliDbAccountOperations, channels::BlokliDbChannelOperations,
@@ -162,8 +165,8 @@ async fn test_channels_query_by_source_keyid() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
     .finish();
 
     let query = r#"
@@ -239,8 +242,8 @@ async fn test_channels_query_by_destination_keyid() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
     .finish();
 
     let query = r#"
@@ -323,8 +326,8 @@ async fn test_channels_query_with_status_filter() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
     .finish();
 
     // Query for OPEN channels
@@ -407,8 +410,8 @@ async fn test_channels_query_missing_filter_returns_error() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
     .finish();
 
     let query = r#"
@@ -487,8 +490,8 @@ async fn test_channel_count_with_filters() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
     .finish();
 
     let query = r#"
@@ -547,8 +550,8 @@ async fn test_channel_count_all_channels() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
     .finish();
 
     let query = r#"
@@ -592,10 +595,10 @@ async fn test_chain_info_query() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data(100u64)
-    .data("anvil-localhost".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("anvil-localhost".to_string()))
     .data(ExpectedBlockTime(1))
+    .data(Finality(8))
     .finish();
 
     let query = r#"
@@ -725,10 +728,10 @@ async fn test_chain_info_query_missing_data_returns_error() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data(100u64)
-    .data("anvil-localhost".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("anvil-localhost".to_string()))
     .data(ExpectedBlockTime(1))
+    .data(Finality(8))
     .finish();
 
     let query = r#"
@@ -793,10 +796,10 @@ async fn test_chain_info_query_with_null_optional_fields() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(200u64)
-    .data(200u64)
-    .data("test-network".to_string())
+    .data(ChainId(200))
+    .data(NetworkName("test-network".to_string()))
     .data(ExpectedBlockTime(5))
+    .data(Finality(8))
     .finish();
 
     let query = r#"
@@ -875,8 +878,8 @@ async fn test_channels_query_no_results() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
     .finish();
 
     let query = r#"
@@ -949,8 +952,8 @@ async fn test_channel_count_with_status_filter() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
     .finish();
 
     // Count OPEN channels (currently not implemented - expect error)

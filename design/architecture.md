@@ -30,7 +30,7 @@ The architecture follows an event-driven model with clear separation between dat
 
 ## High-Level Component Diagram
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                           bloklid                                │
 │  ┌────────────────────────────────────────────────────────────┐ │
@@ -79,7 +79,7 @@ The configuration layer aggregates settings from multiple sources (Env > File > 
 
 **Lifecycle Flow**:
 
-```
+```text
 Startup → Load Config → Validate Network → Initialize Database
     → Create BlokliChain → Start Processes → Signal Loop → Graceful Shutdown
 ```
@@ -94,7 +94,7 @@ Startup → Load Config → Validate Network → Initialize Database
 
 **Architecture**:
 
-```
+```text
 BlokliChain
 ├── Indexer (reads blockchain events)
 │   ├── Block/Log fetching from RPC
@@ -127,7 +127,7 @@ BlokliChain
 
 **Event Processing Pipeline**:
 
-```
+```text
 RPC Endpoint
      │
      ▼
@@ -240,10 +240,11 @@ The database layer uses SeaORM for type-safe database access with auto-generated
 - Support real-time updates via Server-Sent Events (SSE) subscriptions
 - Handle transaction submission in three distinct modes
 - Provide health checks and optional GraphQL Playground
+- Maintain SSE subscriptions with periodic keep-alive events to prevent idle timeouts
 
 **API Architecture**:
 
-```
+```text
 ┌─────────────────────────────────────────────────┐
 │              Axum HTTP Server                    │
 │  ┌─────────────────────────────────────────┐   │
@@ -359,7 +360,7 @@ Background process continuously monitoring pending transactions. Queries blockch
 
 **Transaction Lifecycle States**:
 
-```
+```text
 PENDING → Initial state after validation
 SUBMITTED → Transaction sent to blockchain
 CONFIRMED → Transaction included and confirmed
@@ -405,7 +406,7 @@ The event bus carries four event types: AccountUpdated (with account keyid), Cha
 
 This flow demonstrates a synchronous database query for account data with related entities:
 
-```
+```text
 Client sends GraphQL query request
     ↓
 API validates filter parameters (requires at least one identity filter)
@@ -431,7 +432,7 @@ Client receives structured account data with all related entities
 
 This flow demonstrates the two-phase subscription model with watermark synchronization:
 
-```
+```text
 Client sends subscription request with Accept: text/event-stream header
     ↓
 API recognizes subscription request (starts with "subscription" keyword)
@@ -466,13 +467,13 @@ Process continues until client disconnects or shutdown signal
 
 **Two-Phase Guarantee**: Phase 1 delivers all historical data at watermark. Phase 2 delivers all changes after watermark. The watermark synchronization prevents gaps or duplicates between phases.
 
-**SSE Streaming**: Server-Sent Events provide one-way streaming from server to client over HTTP. Each event is a JSON-encoded GraphQL response. Connection stays open indefinitely.
+**SSE Streaming**: Server-Sent Events provide one-way streaming from server to client over HTTP. Each event is a JSON-encoded GraphQL response. Periodic keep-alive events keep idle connections from timing out while the stream stays open.
 
 ### Flow 3: Submit Transaction (Async Mode)
 
 This flow demonstrates asynchronous transaction submission with background monitoring:
 
-```
+```text
 Client sends mutation with raw signed transaction (hex encoded)
     ↓
 API decodes hex transaction to bytes
@@ -515,7 +516,7 @@ Subscribed clients receive transactionUpdated events via SSE
 
 This flow demonstrates streaming network topology for routing decisions:
 
-```
+```text
 Client subscribes to openedChannelGraphUpdated
     ↓
 API executes watermark synchronization (acquire read lock)
@@ -556,7 +557,7 @@ Client accumulates entries to build directed graph
 
 This diagram illustrates the complete data flow from blockchain to clients:
 
-```
+```text
 Blockchain RPC
       │
       │ RPC calls: eth_getLogs, eth_getBlockByNumber
@@ -623,7 +624,7 @@ Blockchain RPC
 
 This diagram illustrates outbound transaction flow from clients to blockchain:
 
-```
+```text
 Client
   │
   │ Raw signed transaction (hex encoded)
@@ -698,7 +699,7 @@ Subscribed Clients
 
 This flow demonstrates how Safe contract deployments are indexed with module and owner information:
 
-```
+```text
 Blockchain emits NewHoprNodeStakeModuleForSafe event
     ↓
 Indexer receives log from RPC provider
@@ -745,7 +746,7 @@ Blokli provides real-time GraphQL subscriptions using an in-memory event bus arc
 
 **Event Bus Architecture**:
 
-```
+```text
 Indexer Handler
     ↓
 Process blockchain log
@@ -777,7 +778,7 @@ Indexer handlers publish structured events containing complete data to avoid N+1
 
 All event bus subscriptions follow a consistent pattern to prevent data loss:
 
-```
+```text
 Client subscribes
     ↓
 Phase 1: Capture watermark and subscribe to event bus
@@ -840,7 +841,7 @@ When a blockchain reorganization is detected:
 
 Single process running both indexer and API server:
 
-```
+```text
 ┌─────────────────────────────────────┐
 │           bloklid Process            │
 │  ┌──────────────┐  ┌──────────────┐ │
@@ -890,7 +891,7 @@ Single process running both indexer and API server:
 
 Independent processes for indexer and API with horizontal scaling capability:
 
-```
+```text
 ┌─────────────────┐        ┌─────────────────┐
 │  bloklid        │        │  blokli-api     │ (multiple instances)
 │  (indexer only) │        │  (standalone)   │
@@ -956,7 +957,7 @@ Independent processes for indexer and API with horizontal scaling capability:
 
 Lightweight deployment using SQLite with separated databases:
 
-```
+```text
 ┌─────────────────────────────────────┐
 │           bloklid Process            │
 │  ┌──────────────┐  ┌──────────────┐ │

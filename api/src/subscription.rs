@@ -1646,7 +1646,7 @@ mod tests {
         let response = stream.next().await.expect("Stream should return initial value");
         let data = response.into_result().expect("Response should be ok").data;
         // Balance is expected in format: "amount unit" (e.g., "0.000000000000012345 wxHOPR")
-        let expected_fee = PrimitiveHoprBalance::from_be_bytes(&starting_fee.to_be_bytes()).to_string();
+        let expected_fee = PrimitiveHoprBalance::from_be_bytes(starting_fee.to_be_bytes()).to_string();
         assert_eq!(
             data,
             async_graphql::Value::from_json(serde_json::json!({ "keyBindingFeeUpdated": expected_fee })).unwrap()
@@ -1794,7 +1794,7 @@ mod tests {
         let mut stream = stream.boxed();
 
         // Emit SafeDeployed event for address that is NOT in the database
-        let non_existent_address = Address::new(&vec![99; 20]);
+        let non_existent_address = Address::new(&[99; 20]);
         indexer_state.publish_event(IndexerEvent::SafeDeployed(non_existent_address));
 
         // Stream should not yield an item (safe not found logged, stream continues)

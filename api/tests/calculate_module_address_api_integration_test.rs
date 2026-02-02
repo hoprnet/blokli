@@ -407,8 +407,10 @@ async fn test_calculate_module_address_matches_direct_contract_call() -> anyhow:
 #[tokio::test]
 async fn test_calculate_module_address_with_different_parameters() -> anyhow::Result<()> {
     // This test needs 4 accounts
-    let mut config = common::TestEnvironmentConfig::default();
-    config.num_test_accounts = 4;
+    let config = common::TestEnvironmentConfig {
+        num_test_accounts: 4,
+        ..Default::default()
+    };
     let ctx = common::setup_test_environment(config).await?;
 
     // Query with different parameter combinations

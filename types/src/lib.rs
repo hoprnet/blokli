@@ -247,6 +247,9 @@ pub struct ChainInfo {
     /// Expected block time in seconds
     #[graphql(name = "expectedBlockTime")]
     pub expected_block_time: UInt64,
+    /// Number of block confirmations required for finality
+    #[graphql(name = "finality")]
+    pub finality: UInt64,
 }
 
 /// Result type for chain info queries
