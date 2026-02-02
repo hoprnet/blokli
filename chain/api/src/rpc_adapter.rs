@@ -165,7 +165,7 @@ impl<R: HttpRequestor + 'static + Clone> ReceiptProvider for RpcAdapter<R> {
         }
     }
 
-    async fn get_transaction_receipt_logs(&self, tx_hash: Hash) -> Result<Vec<ReceiptLog>, String> {
+    async fn get_transaction_receipt_logs(&self, tx_hash: Hash) -> Result<Option<Vec<ReceiptLog>>, String> {
         debug!("Fetching receipt logs for hash: {:?}", tx_hash);
 
         let b256_hash = B256::from_slice(tx_hash.as_ref());
@@ -182,11 +182,11 @@ impl<R: HttpRequestor + 'static + Clone> ReceiptProvider for RpcAdapter<R> {
                         data: log.data().data.to_vec(),
                     })
                     .collect();
-                Ok(logs)
+                Ok(Some(logs))
             }
             Ok(None) => {
-                debug!("No receipt found for {:?}", tx_hash);
-                Ok(vec![])
+                debug!("No receipt found for {:?} (transaction still pending)", tx_hash);
+                Ok(None)
             }
             Err(e) => {
                 error!("Error getting receipt logs for {:?}: {}", tx_hash, e);

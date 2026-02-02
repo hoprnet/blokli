@@ -33,8 +33,12 @@ pub trait ReceiptProvider: Send + Sync {
     /// Returns Some(true) if confirmed, Some(false) if reverted, None if still pending
     async fn get_transaction_status(&self, tx_hash: Hash) -> Result<Option<bool>, String>;
 
-    /// Fetch receipt logs for a confirmed transaction
-    async fn get_transaction_receipt_logs(&self, tx_hash: Hash) -> Result<Vec<ReceiptLog>, String>;
+    /// Fetch receipt logs for a confirmed transaction.
+    ///
+    /// Returns `Ok(Some(logs))` when the receipt exists (even if logs are empty),
+    /// `Ok(None)` when the receipt is not found (transaction still pending),
+    /// or `Err` on RPC failure.
+    async fn get_transaction_receipt_logs(&self, tx_hash: Hash) -> Result<Option<Vec<ReceiptLog>>, String>;
 }
 
 /// Trait for checking if an address is a known Safe contract
@@ -213,7 +217,7 @@ impl<R: ReceiptProvider> TransactionMonitor<R> {
             .get_transaction_receipt_logs(record.transaction_hash)
             .await
         {
-            Ok(logs) => {
+            Ok(Some(logs)) => {
                 let result = inspect_safe_execution_logs(&to_addr, &logs);
                 if let Some(ref r) = result {
                     info!(
@@ -222,6 +226,10 @@ impl<R: ReceiptProvider> TransactionMonitor<R> {
                     );
                 }
                 result
+            }
+            Ok(None) => {
+                debug!("No receipt found for Safe tx {} (still pending)", record.id);
+                None
             }
             Err(e) => {
                 warn!("Failed to fetch receipt logs for Safe tx {}: {}", record.id, e);
@@ -250,8 +258,9 @@ mod tests {
     struct MockReceiptProvider {
         // Map from tx_hash to status (Some(true) = confirmed, Some(false) = reverted, None = pending)
         statuses: Arc<DashMap<Hash, Option<bool>>>,
-        // Map from tx_hash to receipt logs (or error)
-        receipt_logs: Arc<DashMap<Hash, Result<Vec<ReceiptLog>, String>>>,
+        // Map from tx_hash to receipt logs (or error).
+        // Some(Ok(logs)) = receipt found with logs, Some(Err(..)) = RPC error, None = pending
+        receipt_logs: Arc<DashMap<Hash, Result<Option<Vec<ReceiptLog>>, String>>>,
     }
 
     impl MockReceiptProvider {
@@ -267,7 +276,7 @@ mod tests {
         }
 
         fn set_receipt_logs(&self, tx_hash: Hash, logs: Vec<ReceiptLog>) {
-            self.receipt_logs.insert(tx_hash, Ok(logs));
+            self.receipt_logs.insert(tx_hash, Ok(Some(logs)));
         }
 
         fn set_receipt_logs_error(&self, tx_hash: Hash, error: String) {
@@ -281,10 +290,11 @@ mod tests {
             Ok(self.statuses.get(&tx_hash).map(|entry| *entry.value()).unwrap_or(None))
         }
 
-        async fn get_transaction_receipt_logs(&self, tx_hash: Hash) -> Result<Vec<ReceiptLog>, String> {
+        async fn get_transaction_receipt_logs(&self, tx_hash: Hash) -> Result<Option<Vec<ReceiptLog>>, String> {
             match self.receipt_logs.get(&tx_hash) {
                 Some(entry) => entry.value().clone(),
-                None => Ok(vec![]),
+                // No entry configured: receipt not found (pending)
+                None => Ok(None),
             }
         }
     }
