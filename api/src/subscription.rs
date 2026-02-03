@@ -1,6 +1,8 @@
 //! GraphQL subscription root and resolver implementations
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+#[cfg(test)]
+use std::time::Duration;
+use std::{collections::HashMap, sync::Arc};
 
 use async_broadcast::Receiver;
 use async_graphql::{Context, ID, Result, Subscription};
@@ -9,7 +11,9 @@ use blokli_api_types::{
     Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, Safe, TicketParameters, TokenValueString,
     Transaction, TransactionStatus as GqlTransactionStatus, UInt64,
 };
-use blokli_chain_api::transaction_store::{TransactionStatus as StoreTransactionStatus, TransactionStore};
+use blokli_chain_api::transaction_store::{
+    TransactionEvent, TransactionStatus as StoreTransactionStatus, TransactionStore,
+};
 use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
 use blokli_db_entity::{
     chain_info,
@@ -29,6 +33,7 @@ use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     Statement,
 };
+#[cfg(test)]
 use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
@@ -1102,6 +1107,11 @@ impl SubscriptionRoot {
     ///
     /// Provides updates whenever the status of the specified transaction changes,
     /// including validation, submission, confirmation, revert, and failure events.
+    ///
+    /// Uses event-driven architecture to receive updates immediately when transaction
+    /// status changes, with zero polling overhead. Follows a 2-phase approach:
+    /// - Phase 1: Emit current transaction state if it exists
+    /// - Phase 2: Listen for future status update events
     #[graphql(name = "transactionUpdated")]
     async fn transaction_updated(
         &self,
@@ -1114,44 +1124,74 @@ impl SubscriptionRoot {
 
         let transaction_store = ctx.data::<Arc<TransactionStore>>()?.clone();
 
+        // Subscribe to transaction events before checking current state
+        // to avoid race condition where we miss an update
+        let mut event_receiver = transaction_store.subscribe();
+
         Ok(stream! {
-            // Track last status to emit only when it changes
-            let mut last_status: Option<StoreTransactionStatus> = None;
+            // Phase 1: Emit current state if transaction exists
+            if let Ok(record) = transaction_store.get(transaction_id) {
+                // Convert store transaction status to GraphQL status
+                let gql_status = match record.status {
+                    StoreTransactionStatus::Pending => GqlTransactionStatus::Pending,
+                    StoreTransactionStatus::Submitted => GqlTransactionStatus::Submitted,
+                    StoreTransactionStatus::Confirmed => GqlTransactionStatus::Confirmed,
+                    StoreTransactionStatus::Reverted => GqlTransactionStatus::Reverted,
+                    StoreTransactionStatus::Timeout => GqlTransactionStatus::Timeout,
+                    StoreTransactionStatus::ValidationFailed => GqlTransactionStatus::ValidationFailed,
+                    StoreTransactionStatus::SubmissionFailed => GqlTransactionStatus::SubmissionFailed,
+                };
 
+                // Convert transaction hash to hex string
+                let hash_hex = record.transaction_hash.to_hex();
+
+                yield Transaction {
+                    id: ID::from(record.id.to_string()),
+                    status: gql_status,
+                    submitted_at: record.submitted_at,
+                    transaction_hash: Hex32(hash_hex),
+                };
+            }
+
+            // Phase 2: Listen for future status update events
             loop {
-                // Poll the transaction store periodically
-                // TODO: use event-driven approach
-                sleep(Duration::from_millis(100)).await;
+                match event_receiver.recv().await {
+                    Ok(TransactionEvent::StatusUpdated { id, record }) => {
+                        // Only yield events for the transaction we're monitoring
+                        if id == transaction_id {
+                            // Convert store transaction status to GraphQL status
+                            let gql_status = match record.status {
+                                StoreTransactionStatus::Pending => GqlTransactionStatus::Pending,
+                                StoreTransactionStatus::Submitted => GqlTransactionStatus::Submitted,
+                                StoreTransactionStatus::Confirmed => GqlTransactionStatus::Confirmed,
+                                StoreTransactionStatus::Reverted => GqlTransactionStatus::Reverted,
+                                StoreTransactionStatus::Timeout => GqlTransactionStatus::Timeout,
+                                StoreTransactionStatus::ValidationFailed => GqlTransactionStatus::ValidationFailed,
+                                StoreTransactionStatus::SubmissionFailed => GqlTransactionStatus::SubmissionFailed,
+                            };
 
-                // Try to get the transaction from the store
-                if let Ok(record) = transaction_store.get(transaction_id) {
-                    // Only emit if status has changed
-                    if last_status.as_ref() != Some(&record.status) {
-                        last_status = Some(record.status);
+                            // Convert transaction hash to hex string
+                            let hash_hex = record.transaction_hash.to_hex();
 
-                        // Convert store transaction status to GraphQL status
-                        let gql_status = match record.status {
-                            StoreTransactionStatus::Pending => GqlTransactionStatus::Pending,
-                            StoreTransactionStatus::Submitted => GqlTransactionStatus::Submitted,
-                            StoreTransactionStatus::Confirmed => GqlTransactionStatus::Confirmed,
-                            StoreTransactionStatus::Reverted => GqlTransactionStatus::Reverted,
-                            StoreTransactionStatus::Timeout => GqlTransactionStatus::Timeout,
-                            StoreTransactionStatus::ValidationFailed => GqlTransactionStatus::ValidationFailed,
-                            StoreTransactionStatus::SubmissionFailed => GqlTransactionStatus::SubmissionFailed,
-                        };
-
-                        // Convert transaction hash to hex string
-                        let hash_hex = record.transaction_hash.to_hex();
-
-                        yield Transaction {
-                            id: ID::from(record.id.to_string()),
-                            status: gql_status,
-                            submitted_at: record.submitted_at,
-                            transaction_hash: Hex32(hash_hex),
-                        };
+                            yield Transaction {
+                                id: ID::from(record.id.to_string()),
+                                status: gql_status,
+                                submitted_at: record.submitted_at,
+                                transaction_hash: Hex32(hash_hex),
+                            };
+                        }
+                    }
+                    Err(async_broadcast::RecvError::Closed) => {
+                        // Event bus closed, terminate subscription
+                        break;
+                    }
+                    Err(async_broadcast::RecvError::Overflowed(_)) => {
+                        // Missed some events due to slow consumer, continue listening
+                        // This is acceptable since we only care about the latest status
+                        warn!("Transaction subscription for {} missed some events due to overflow", transaction_id);
+                        continue;
                     }
                 }
-                // If transaction not found, continue polling (it might be added later)
             }
         })
     }

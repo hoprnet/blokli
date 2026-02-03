@@ -1788,6 +1788,7 @@ name = "blokli-chain-api"
 version = "0.5.0"
 dependencies = [
  "anyhow",
+ "async-broadcast",
  "async-channel 2.5.0",
  "async-trait",
  "blokli-chain-indexer",
