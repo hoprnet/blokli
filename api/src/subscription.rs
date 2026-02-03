@@ -15,10 +15,7 @@ use blokli_db_entity::{
     chain_info,
     chain_info::Entity as ChainInfoEntity,
     channel, channel_state,
-    conversions::{
-        account_aggregation::{fetch_accounts_by_keyids, fetch_accounts_with_filters},
-        channel_aggregation::fetch_channels_with_state,
-    },
+    conversions::account_aggregation::{fetch_accounts_by_keyids, fetch_accounts_with_filters},
     hopr_node_safe_registration,
 };
 use chrono::Utc;
@@ -282,6 +279,148 @@ async fn query_channels_at_watermark(
     Ok(results)
 }
 
+/// Queries all channels at a specific watermark with optional filters
+///
+/// This implements the Phase 1 historical snapshot by querying all channels
+/// matching the given filters that existed at the watermark position.
+///
+/// # Arguments
+///
+/// * `db` - Database connection
+/// * `watermark` - Point in time to query channels at
+/// * `source_key_id` - Optional filter by source account ID
+/// * `destination_key_id` - Optional filter by destination account ID
+/// * `concrete_channel_id` - Optional filter by concrete channel ID
+/// * `status` - Optional filter by channel status
+///
+/// # Returns
+///
+/// Vector of Channel objects matching the filters
+async fn query_channels_at_watermark_with_filters(
+    db: &DatabaseConnection,
+    watermark: &Watermark,
+    source_key_id: Option<i32>,
+    destination_key_id: Option<i32>,
+    concrete_channel_id: Option<String>,
+    status: Option<blokli_api_types::ChannelStatus>,
+) -> Result<Vec<Channel>> {
+    // Convert i32 keyids to i64 for database queries
+    let source_i64 = source_key_id.map(|k| k as i64);
+    let dest_i64 = destination_key_id.map(|k| k as i64);
+
+    // Convert GraphQL ChannelStatus to internal status code (i16)
+    let status_code = status.map(|s| match s {
+        blokli_api_types::ChannelStatus::Closed => 0i16,
+        blokli_api_types::ChannelStatus::Open => 1i16,
+        blokli_api_types::ChannelStatus::PendingToClose => 2i16,
+    });
+
+    // Build query with filters
+    let mut query = channel::Entity::find();
+
+    if let Some(src) = source_i64 {
+        query = query.filter(channel::Column::Source.eq(src));
+    }
+
+    if let Some(dst) = dest_i64 {
+        query = query.filter(channel::Column::Destination.eq(dst));
+    }
+
+    if let Some(ch_id) = concrete_channel_id.as_ref() {
+        // Normalize channel ID by stripping 0x prefix
+        let normalized_id = ch_id.strip_prefix("0x").unwrap_or(ch_id);
+        query = query.filter(channel::Column::ConcreteChannelId.eq(normalized_id.to_string()));
+    }
+
+    let channels = query
+        .all(db)
+        .await
+        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channels query", e)))?;
+
+    if channels.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let channel_ids: Vec<i64> = channels.iter().map(|c| c.id).collect();
+
+    // Query channel_state for all channels, filtered by watermark
+    let channel_states_query = channel_state::Entity::find()
+        .filter(channel_state::Column::ChannelId.is_in(channel_ids))
+        .filter(
+            Condition::any()
+                .add(channel_state::Column::PublishedBlock.lt(watermark.block))
+                .add(
+                    Condition::all()
+                        .add(channel_state::Column::PublishedBlock.eq(watermark.block))
+                        .add(channel_state::Column::PublishedTxIndex.lt(watermark.tx_index)),
+                )
+                .add(
+                    Condition::all()
+                        .add(channel_state::Column::PublishedBlock.eq(watermark.block))
+                        .add(channel_state::Column::PublishedTxIndex.eq(watermark.tx_index))
+                        .add(channel_state::Column::PublishedLogIndex.lte(watermark.log_index)),
+                ),
+        )
+        .order_by_desc(channel_state::Column::PublishedBlock)
+        .order_by_desc(channel_state::Column::PublishedTxIndex)
+        .order_by_desc(channel_state::Column::PublishedLogIndex);
+
+    let channel_states = channel_states_query
+        .all(db)
+        .await
+        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channel_state query", e)))?;
+
+    // Build map of channel_id -> latest state
+    let mut state_map: HashMap<i64, channel_state::Model> = HashMap::new();
+    for state in channel_states {
+        state_map.entry(state.channel_id).or_insert(state);
+    }
+
+    // Filter channels by status and build result
+    let mut results = Vec::new();
+    for channel in channels {
+        let state = match state_map.get(&channel.id) {
+            Some(s) => s,
+            None => continue, // Skip channels without state
+        };
+
+        // Apply status filter if provided
+        if let Some(status_filter) = status_code
+            && state.status != status_filter
+        {
+            continue;
+        }
+
+        // Convert to GraphQL Channel type
+        let channel_gql = Channel {
+            concrete_channel_id: channel.concrete_channel_id,
+            source: channel.source,
+            destination: channel.destination,
+            balance: TokenValueString(PrimitiveHoprBalance::from_be_bytes(&state.balance).to_string()),
+            status: state.status.into(),
+            epoch: i32::try_from(state.epoch).map_err(|e| {
+                async_graphql::Error::new(errors::messages::conversion_error(
+                    "i64",
+                    "i32",
+                    format!("{} ({})", state.epoch, e),
+                ))
+            })?,
+            ticket_index: UInt64(u64::try_from(state.ticket_index).map_err(|e| {
+                async_graphql::Error::new(errors::messages::conversion_error(
+                    "i64",
+                    "u64",
+                    format!("{} ({})", state.ticket_index, e),
+                ))
+            })?),
+            closure_time: state.closure_time.map(|time| time.with_timezone(&Utc)),
+        };
+
+        results.push(channel_gql);
+    }
+
+    Ok(results)
+}
+
 /// fetch_channel_update is no longer needed - events now contain complete data
 /// Root subscription type providing real-time updates via Server-Sent Events (SSE)
 pub struct SubscriptionRoot;
@@ -290,9 +429,28 @@ pub struct SubscriptionRoot;
 impl SubscriptionRoot {
     /// Subscribe to real-time updates of payment channels
     ///
-    /// Provides updates whenever there is a change in the state of any payment channel,
-    /// including channel opening, balance updates, status changes, and channel closure.
-    /// Optional filters can be applied to only receive updates for specific channels.
+    /// **Streaming Behavior:**
+    /// - Emits all matching channels once on subscription start (Phase 1)
+    /// - Subsequently emits updates only when channels actually change (Phase 2)
+    /// - Uses IndexerState event bus for real-time notifications
+    ///
+    /// **Update Triggers:**
+    /// A channel is re-emitted when:
+    /// - The channel's status changes (e.g., OPEN -> PENDINGTOCLOSE -> CLOSED)
+    /// - The channel's balance changes
+    /// - The channel's epoch or ticket_index changes
+    /// - A new channel opens that matches the filters
+    ///
+    /// **Filters:**
+    /// All filters are optional and can be combined:
+    /// - `source_key_id`: Only channels from this source account
+    /// - `destination_key_id`: Only channels to this destination account
+    /// - `concrete_channel_id`: Only this specific channel (with or without 0x prefix)
+    /// - `status`: Only channels with this status (OPEN, CLOSED, PENDINGTOCLOSE)
+    ///
+    /// **Automatic Shutdown:**
+    /// The subscription automatically terminates on blockchain reorganization,
+    /// requiring clients to reconnect to re-establish consistent state.
     #[graphql(name = "channelUpdated")]
     async fn channel_updated(
         &self,
@@ -302,18 +460,103 @@ impl SubscriptionRoot {
         #[graphql(desc = "Filter by concrete channel ID (hexadecimal format)")] concrete_channel_id: Option<String>,
         #[graphql(desc = "Filter by channel status")] status: Option<blokli_api_types::ChannelStatus>,
     ) -> Result<impl Stream<Item = Channel>> {
+        // Get dependencies from context
         let db = ctx.data::<DatabaseConnection>()?.clone();
+        let indexer_state = ctx
+            .data::<IndexerState>()
+            .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
+            .clone();
+
+        // Capture watermark and subscribe to event bus (synchronized)
+        let (watermark, mut event_receiver, mut shutdown_receiver) =
+            capture_watermark_synchronized(&indexer_state, &db).await?;
 
         Ok(stream! {
-            loop {
-                // TODO: Replace with actual database change notifications
-                // For now, poll the database periodically
-                sleep(Duration::from_secs(1)).await;
-
-                // Query the latest channels with filters
-                if let Ok(channels) = Self::fetch_filtered_channels(&db, source_key_id, destination_key_id, concrete_channel_id.clone(), status).await {
-                    for channel in channels {
+            // Phase 1: Stream historical snapshot of all matching channels at watermark
+            match query_channels_at_watermark_with_filters(
+                &db,
+                &watermark,
+                source_key_id,
+                destination_key_id,
+                concrete_channel_id.clone(),
+                status,
+            )
+            .await
+            {
+                Ok(historical_channels) => {
+                    debug!("Phase 1: Yielding {} historical channels", historical_channels.len());
+                    for channel in historical_channels {
                         yield channel;
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to query historical channels: {:?}", e);
+                    return; // Terminate subscription on error
+                }
+            }
+
+            debug!("Phase 2: Listening for channel update events");
+
+            // Phase 2: Stream real-time updates from event bus
+            loop {
+                tokio::select! {
+                    // Check for shutdown signal first
+                    shutdown_result = shutdown_receiver.recv() => {
+                        match shutdown_result {
+                            Ok(_) => {
+                                info!("channelUpdated subscription shutting down due to reorg");
+                                return; // Terminate subscription on reorg
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                warn!("Shutdown channel closed for channelUpdated");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Shutdown signal overflowed ({}), continuing", n);
+                            }
+                        }
+                    }
+
+                    // Receive event from event bus
+                    event_result = event_receiver.recv() => {
+                        match event_result {
+                            Ok(IndexerEvent::ChannelUpdated(channel_update)) => {
+                                // Extract channel from event
+                                let channel = &channel_update.channel;
+
+                                // Apply filters to the channel
+                                if matches_channel_filters(
+                                    channel,
+                                    source_key_id,
+                                    destination_key_id,
+                                    concrete_channel_id.as_deref(),
+                                    status,
+                                ) {
+                                    debug!("Yielding channel update: {}", channel.concrete_channel_id);
+                                    yield channel.clone();
+                                }
+                            }
+                            Ok(IndexerEvent::AccountUpdated(_)) => {
+                                // Account updates don't affect this subscription
+                            }
+                            Ok(IndexerEvent::KeyBindingFeeUpdated(_)) => {
+                                // Key binding fee updates don't affect this subscription
+                            }
+                            Ok(IndexerEvent::SafeDeployed(_)) => {
+                                // Safe deployment doesn't affect this subscription
+                            }
+                            Ok(IndexerEvent::TicketParametersUpdated(_)) => {
+                                // Ticket parameter updates don't affect this subscription
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                info!("Event bus closed, ending channelUpdated subscription");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Event bus overflowed ({}); channelUpdated may miss events - client should reconnect", n);
+                                // Continue but log warning - client may need to reconnect
+                            }
+                        }
                     }
                 }
             }
@@ -942,60 +1185,6 @@ impl SubscriptionRoot {
         }))
     }
 
-    async fn fetch_filtered_channels(
-        db: &DatabaseConnection,
-        source_key_id: Option<i32>,
-        destination_key_id: Option<i32>,
-        concrete_channel_id: Option<String>,
-        status: Option<blokli_api_types::ChannelStatus>,
-    ) -> Result<Vec<Channel>, sea_orm::DbErr> {
-        // Convert i32 keyids to i64 for channel aggregation function
-        let source_i64 = source_key_id.map(|k| k as i64);
-        let dest_i64 = destination_key_id.map(|k| k as i64);
-
-        // Convert GraphQL ChannelStatus to internal status code (i16)
-        let status_code = status.map(|s| match s {
-            blokli_api_types::ChannelStatus::Closed => 0i16,
-            blokli_api_types::ChannelStatus::Open => 1i16,
-            blokli_api_types::ChannelStatus::PendingToClose => 2i16,
-        });
-
-        // Use optimized channel aggregation function
-        let aggregated_channels =
-            fetch_channels_with_state(db, source_i64, dest_i64, concrete_channel_id, status_code).await?;
-
-        // Convert to GraphQL Channel type
-        let channels: Vec<Channel> = aggregated_channels
-            .iter()
-            .map(|agg| -> Result<Channel, sea_orm::DbErr> {
-                Ok(Channel {
-                    concrete_channel_id: agg.concrete_channel_id.clone(),
-                    source: agg.source,
-                    destination: agg.destination,
-                    balance: TokenValueString(agg.balance.clone()),
-                    status: agg.status.into(),
-                    epoch: i32::try_from(agg.epoch).map_err(|e| {
-                        sea_orm::DbErr::Custom(errors::messages::conversion_error(
-                            "i64",
-                            "i32",
-                            format!("{} ({})", agg.epoch, e),
-                        ))
-                    })?,
-                    ticket_index: UInt64(u64::try_from(agg.ticket_index).map_err(|e| {
-                        sea_orm::DbErr::Custom(errors::messages::conversion_error(
-                            "i64",
-                            "u64",
-                            format!("{} ({})", agg.ticket_index, e),
-                        ))
-                    })?),
-                    closure_time: agg.closure_time,
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(channels)
-    }
-
     async fn fetch_filtered_accounts(
         db: &DatabaseConnection,
         keyid: Option<i64>,
@@ -1056,6 +1245,58 @@ fn matches_account_filters(
                 return false;
             }
         }
+    }
+    true
+}
+
+/// Helper to check if a channel matches the subscription filters
+///
+/// This is used to filter events from the broadcast channel to only emit
+/// channels that match the subscription's filter criteria.
+///
+/// # Arguments
+///
+/// * `channel` - The channel to check
+/// * `source_key_id` - Optional filter by source account keyid
+/// * `destination_key_id` - Optional filter by destination account keyid
+/// * `concrete_channel_id` - Optional filter by concrete channel ID (with or without 0x prefix)
+/// * `status` - Optional filter by channel status
+///
+/// # Returns
+///
+/// `true` if the channel matches all provided filters, `false` otherwise
+fn matches_channel_filters(
+    channel: &Channel,
+    source_key_id: Option<i32>,
+    destination_key_id: Option<i32>,
+    concrete_channel_id: Option<&str>,
+    status: Option<blokli_api_types::ChannelStatus>,
+) -> bool {
+    if let Some(src) = source_key_id
+        && channel.source != src as i64
+    {
+        return false;
+    }
+    if let Some(dst) = destination_key_id
+        && channel.destination != dst as i64
+    {
+        return false;
+    }
+    if let Some(ch_id) = concrete_channel_id {
+        // Normalize both sides by stripping 0x prefix
+        let ch_id_normalized = ch_id.strip_prefix("0x").unwrap_or(ch_id);
+        let channel_id_normalized = channel
+            .concrete_channel_id
+            .strip_prefix("0x")
+            .unwrap_or(&channel.concrete_channel_id);
+        if channel_id_normalized != ch_id_normalized {
+            return false;
+        }
+    }
+    if let Some(status_filter) = status
+        && channel.status != status_filter
+    {
+        return false;
     }
     true
 }
@@ -1923,6 +2164,140 @@ mod tests {
             }))
             .unwrap()
         );
+    }
+
+    #[tokio::test]
+    async fn test_matches_channel_filters_all_match() {
+        let channel = Channel {
+            concrete_channel_id: "abc123".to_string(),
+            source: 1,
+            destination: 2,
+            balance: TokenValueString("100 wxHOPR".to_string()),
+            status: blokli_api_types::ChannelStatus::Open,
+            epoch: 0,
+            ticket_index: UInt64(0),
+            closure_time: None,
+        };
+
+        let result = matches_channel_filters(
+            &channel,
+            Some(1),
+            Some(2),
+            Some("abc123"),
+            Some(blokli_api_types::ChannelStatus::Open),
+        );
+
+        assert!(result, "Channel should match all filters");
+    }
+
+    #[tokio::test]
+    async fn test_matches_channel_filters_normalizes_concrete_id() {
+        let channel = Channel {
+            concrete_channel_id: "abc123".to_string(),
+            source: 1,
+            destination: 2,
+            balance: TokenValueString("100 wxHOPR".to_string()),
+            status: blokli_api_types::ChannelStatus::Open,
+            epoch: 0,
+            ticket_index: UInt64(0),
+            closure_time: None,
+        };
+
+        // Test that "0xabc123" matches "abc123"
+        let result = matches_channel_filters(&channel, None, None, Some("0xabc123"), None);
+        assert!(result, "0xabc123 should match abc123 after normalization");
+
+        // Test that "abc123" matches "0xabc123"
+        let channel_with_prefix = Channel {
+            concrete_channel_id: "0xabc123".to_string(),
+            source: 1,
+            destination: 2,
+            balance: TokenValueString("100 wxHOPR".to_string()),
+            status: blokli_api_types::ChannelStatus::Open,
+            epoch: 0,
+            ticket_index: UInt64(0),
+            closure_time: None,
+        };
+
+        let result = matches_channel_filters(&channel_with_prefix, None, None, Some("abc123"), None);
+        assert!(result, "abc123 should match 0xabc123 after normalization");
+    }
+
+    #[tokio::test]
+    async fn test_matches_channel_filters_source_mismatch() {
+        let channel = Channel {
+            concrete_channel_id: "abc123".to_string(),
+            source: 1,
+            destination: 2,
+            balance: TokenValueString("100 wxHOPR".to_string()),
+            status: blokli_api_types::ChannelStatus::Open,
+            epoch: 0,
+            ticket_index: UInt64(0),
+            closure_time: None,
+        };
+
+        let result = matches_channel_filters(&channel, Some(999), None, None, None);
+        assert!(!result, "Channel should not match when source filter doesn't match");
+    }
+
+    #[tokio::test]
+    async fn test_matches_channel_filters_destination_mismatch() {
+        let channel = Channel {
+            concrete_channel_id: "abc123".to_string(),
+            source: 1,
+            destination: 2,
+            balance: TokenValueString("100 wxHOPR".to_string()),
+            status: blokli_api_types::ChannelStatus::Open,
+            epoch: 0,
+            ticket_index: UInt64(0),
+            closure_time: None,
+        };
+
+        let result = matches_channel_filters(&channel, None, Some(999), None, None);
+        assert!(
+            !result,
+            "Channel should not match when destination filter doesn't match"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_matches_channel_filters_status_mismatch() {
+        let channel = Channel {
+            concrete_channel_id: "abc123".to_string(),
+            source: 1,
+            destination: 2,
+            balance: TokenValueString("100 wxHOPR".to_string()),
+            status: blokli_api_types::ChannelStatus::Open,
+            epoch: 0,
+            ticket_index: UInt64(0),
+            closure_time: None,
+        };
+
+        let result = matches_channel_filters(
+            &channel,
+            None,
+            None,
+            None,
+            Some(blokli_api_types::ChannelStatus::Closed),
+        );
+        assert!(!result, "Channel should not match when status filter doesn't match");
+    }
+
+    #[tokio::test]
+    async fn test_matches_channel_filters_no_filters() {
+        let channel = Channel {
+            concrete_channel_id: "abc123".to_string(),
+            source: 1,
+            destination: 2,
+            balance: TokenValueString("100 wxHOPR".to_string()),
+            status: blokli_api_types::ChannelStatus::Open,
+            epoch: 0,
+            ticket_index: UInt64(0),
+            closure_time: None,
+        };
+
+        let result = matches_channel_filters(&channel, None, None, None, None);
+        assert!(result, "Channel should match when no filters are provided");
     }
 
     #[tokio::test]
