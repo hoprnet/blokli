@@ -1,7 +1,5 @@
 //! GraphQL subscription root and resolver implementations
 
-#[cfg(test)]
-use std::time::Duration;
 use std::{collections::HashMap, sync::Arc};
 
 use async_broadcast::Receiver;
@@ -33,8 +31,6 @@ use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     Statement,
 };
-#[cfg(test)]
-use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -164,21 +160,7 @@ async fn query_channels_at_watermark(
     // Only get states published at or before the watermark
     let channel_states_query = channel_state::Entity::find()
         .filter(channel_state::Column::ChannelId.is_in(channel_ids.clone()))
-        .filter(
-            Condition::any()
-                .add(channel_state::Column::PublishedBlock.lt(watermark.block))
-                .add(
-                    Condition::all()
-                        .add(channel_state::Column::PublishedBlock.eq(watermark.block))
-                        .add(channel_state::Column::PublishedTxIndex.lt(watermark.tx_index)),
-                )
-                .add(
-                    Condition::all()
-                        .add(channel_state::Column::PublishedBlock.eq(watermark.block))
-                        .add(channel_state::Column::PublishedTxIndex.eq(watermark.tx_index))
-                        .add(channel_state::Column::PublishedLogIndex.lte(watermark.log_index)),
-                ),
-        )
+        .filter(watermark_condition(watermark))
         .order_by_desc(channel_state::Column::PublishedBlock)
         .order_by_desc(channel_state::Column::PublishedTxIndex)
         .order_by_desc(channel_state::Column::PublishedLogIndex);
@@ -218,13 +200,21 @@ async fn query_channels_at_watermark(
         .map_err(|e| async_graphql::Error::new(errors::messages::query_error("accounts fetch", e)))?;
 
     // Build account map for quick lookup
-    let account_map: HashMap<i64, blokli_db_entity::conversions::account_aggregation::AggregatedAccount> =
-        accounts_result.into_iter().map(|a| (a.keyid, a)).collect();
+    let account_map: HashMap<_, _> = accounts_result.into_iter().map(|a| (a.keyid, a)).collect();
 
     // Build ChannelUpdate objects
     let mut results = Vec::new();
     for channel in open_channels {
-        let state = state_map.get(&channel.id).unwrap(); // Safe because we filtered by state presence
+        let state = match state_map.get(&channel.id) {
+            Some(s) => s,
+            None => {
+                error!(
+                    "Channel {} missing state after filtering - data inconsistency",
+                    channel.id
+                );
+                continue; // Skip this channel instead of panicking
+            }
+        };
 
         let source_account = account_map
             .get(&channel.source)
@@ -351,21 +341,7 @@ async fn query_channels_at_watermark_with_filters(
     // Query channel_state for all channels, filtered by watermark
     let channel_states_query = channel_state::Entity::find()
         .filter(channel_state::Column::ChannelId.is_in(channel_ids))
-        .filter(
-            Condition::any()
-                .add(channel_state::Column::PublishedBlock.lt(watermark.block))
-                .add(
-                    Condition::all()
-                        .add(channel_state::Column::PublishedBlock.eq(watermark.block))
-                        .add(channel_state::Column::PublishedTxIndex.lt(watermark.tx_index)),
-                )
-                .add(
-                    Condition::all()
-                        .add(channel_state::Column::PublishedBlock.eq(watermark.block))
-                        .add(channel_state::Column::PublishedTxIndex.eq(watermark.tx_index))
-                        .add(channel_state::Column::PublishedLogIndex.lte(watermark.log_index)),
-                ),
-        )
+        .filter(watermark_condition(watermark))
         .order_by_desc(channel_state::Column::PublishedBlock)
         .order_by_desc(channel_state::Column::PublishedTxIndex)
         .order_by_desc(channel_state::Column::PublishedLogIndex);
@@ -424,6 +400,42 @@ async fn query_channels_at_watermark_with_filters(
     }
 
     Ok(results)
+}
+
+/// Convert StoreTransactionStatus to GraphQL TransactionStatus
+///
+/// Provides a single source of truth for status conversion, eliminating
+/// duplicated match expressions throughout the codebase.
+fn convert_transaction_status(status: StoreTransactionStatus) -> GqlTransactionStatus {
+    match status {
+        StoreTransactionStatus::Pending => GqlTransactionStatus::Pending,
+        StoreTransactionStatus::Submitted => GqlTransactionStatus::Submitted,
+        StoreTransactionStatus::Confirmed => GqlTransactionStatus::Confirmed,
+        StoreTransactionStatus::Reverted => GqlTransactionStatus::Reverted,
+        StoreTransactionStatus::Timeout => GqlTransactionStatus::Timeout,
+        StoreTransactionStatus::ValidationFailed => GqlTransactionStatus::ValidationFailed,
+        StoreTransactionStatus::SubmissionFailed => GqlTransactionStatus::SubmissionFailed,
+    }
+}
+
+/// Builds SeaORM condition for filtering channel_state by watermark
+///
+/// Creates a condition that matches all channel states published at or before
+/// the given watermark position (block, tx_index, log_index).
+fn watermark_condition(watermark: &Watermark) -> Condition {
+    Condition::any()
+        .add(channel_state::Column::PublishedBlock.lt(watermark.block))
+        .add(
+            Condition::all()
+                .add(channel_state::Column::PublishedBlock.eq(watermark.block))
+                .add(channel_state::Column::PublishedTxIndex.lt(watermark.tx_index)),
+        )
+        .add(
+            Condition::all()
+                .add(channel_state::Column::PublishedBlock.eq(watermark.block))
+                .add(channel_state::Column::PublishedTxIndex.eq(watermark.tx_index))
+                .add(channel_state::Column::PublishedLogIndex.lte(watermark.log_index)),
+        )
 }
 
 /// fetch_channel_update is no longer needed - events now contain complete data
@@ -1131,55 +1143,34 @@ impl SubscriptionRoot {
         Ok(stream! {
             // Phase 1: Emit current state if transaction exists
             if let Ok(record) = transaction_store.get(transaction_id) {
-                // Convert store transaction status to GraphQL status
-                let gql_status = match record.status {
-                    StoreTransactionStatus::Pending => GqlTransactionStatus::Pending,
-                    StoreTransactionStatus::Submitted => GqlTransactionStatus::Submitted,
-                    StoreTransactionStatus::Confirmed => GqlTransactionStatus::Confirmed,
-                    StoreTransactionStatus::Reverted => GqlTransactionStatus::Reverted,
-                    StoreTransactionStatus::Timeout => GqlTransactionStatus::Timeout,
-                    StoreTransactionStatus::ValidationFailed => GqlTransactionStatus::ValidationFailed,
-                    StoreTransactionStatus::SubmissionFailed => GqlTransactionStatus::SubmissionFailed,
-                };
-
-                // Convert transaction hash to hex string
-                let hash_hex = record.transaction_hash.to_hex();
-
                 yield Transaction {
                     id: ID::from(record.id.to_string()),
-                    status: gql_status,
+                    status: convert_transaction_status(record.status),
                     submitted_at: record.submitted_at,
-                    transaction_hash: Hex32(hash_hex),
+                    transaction_hash: Hex32(record.transaction_hash.to_hex()),
                 };
             }
 
             // Phase 2: Listen for future status update events
             loop {
                 match event_receiver.recv().await {
-                    Ok(TransactionEvent::StatusUpdated { id, record }) => {
-                        // Only yield events for the transaction we're monitoring
-                        if id == transaction_id {
-                            // Convert store transaction status to GraphQL status
-                            let gql_status = match record.status {
-                                StoreTransactionStatus::Pending => GqlTransactionStatus::Pending,
-                                StoreTransactionStatus::Submitted => GqlTransactionStatus::Submitted,
-                                StoreTransactionStatus::Confirmed => GqlTransactionStatus::Confirmed,
-                                StoreTransactionStatus::Reverted => GqlTransactionStatus::Reverted,
-                                StoreTransactionStatus::Timeout => GqlTransactionStatus::Timeout,
-                                StoreTransactionStatus::ValidationFailed => GqlTransactionStatus::ValidationFailed,
-                                StoreTransactionStatus::SubmissionFailed => GqlTransactionStatus::SubmissionFailed,
-                            };
-
-                            // Convert transaction hash to hex string
-                            let hash_hex = record.transaction_hash.to_hex();
-
+                    // Use pattern matching guard to filter for matching transaction ID
+                    Ok(TransactionEvent::StatusUpdated { id, status, .. })
+                        if id == transaction_id =>
+                    {
+                        // Fetch full record to get transaction_hash and submitted_at
+                        // (event only contains delta fields)
+                        if let Ok(record) = transaction_store.get(transaction_id) {
                             yield Transaction {
-                                id: ID::from(record.id.to_string()),
-                                status: gql_status,
+                                id: ID::from(id.to_string()),
+                                status: convert_transaction_status(status),
                                 submitted_at: record.submitted_at,
-                                transaction_hash: Hex32(hash_hex),
+                                transaction_hash: Hex32(record.transaction_hash.to_hex()),
                             };
                         }
+                    }
+                    Ok(_) => {
+                        // Ignore events for other transactions
                     }
                     Err(async_broadcast::RecvError::Closed) => {
                         // Event bus closed, terminate subscription
@@ -1343,12 +1334,15 @@ fn matches_channel_filters(
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use async_graphql::{EmptyMutation, Object, Schema};
     use blokli_chain_indexer::state::IndexerEvent;
     use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb};
     use blokli_db_entity::{hopr_safe_contract, hopr_safe_contract_state};
     use futures::StreamExt;
     use sea_orm::{ActiveModelTrait, Set};
+    use tokio::time::sleep;
 
     use super::*;
 

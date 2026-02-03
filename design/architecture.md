@@ -400,6 +400,74 @@ When a GraphQL subscription starts, it acquires read lock. While holding lock, i
 **Event Types**:
 The event bus carries four event types: AccountUpdated (with account keyid), ChannelUpdated (with channel id), BalanceUpdated (with address bytes), and SafeDeployed (with Safe contract address). Subscribers filter events based on their query parameters.
 
+### 9. Transaction Store Architecture
+
+**Purpose**:
+
+The transaction store provides in-memory tracking of blockchain transactions submitted through the GraphQL API, enabling real-time status monitoring via subscriptions.
+
+**Design Principles**:
+
+1. **Ephemeral State**: Transaction records exist only during server runtime
+2. **Event-Driven**: Status updates broadcast to subscribers immediately
+3. **Zero Polling**: Subscriptions use event bus instead of database polling
+4. **Thread-Safe**: Lock-free concurrent access using `DashMap`
+
+**Data Flow**:
+
+```text
+GraphQL Mutation (send_transaction)
+  ↓
+Insert into TransactionStore
+  ↓
+Broadcast to RPC Provider
+  ↓
+Wait for Receipt (async/sync modes)
+  ↓
+Update Status in Store
+  ↓
+Broadcast StatusUpdated Event
+  ↓
+GraphQL Subscription Receives Update
+```
+
+**Event Bus Architecture**:
+
+- **Channel**: `async_broadcast` with configurable capacity (default: 100)
+- **Overflow Strategy**: Set to `true` - slow subscribers miss old events
+- **Event Types**: `TransactionEvent::StatusUpdated` with delta fields
+- **Subscriber Pattern**: Fresh receivers avoid backlog
+
+**Transaction Lifecycle**:
+
+1. **Pending**: Transaction created, awaiting submission
+2. **Submitted**: Sent to blockchain, awaiting confirmation
+3. **Confirmed**: Receipt received with success status
+4. **Reverted**: Receipt received with failure status
+5. **Timeout**: No receipt within configured window
+6. **ValidationFailed**: Pre-submission validation failed
+7. **SubmissionFailed**: RPC submission failed
+
+**Memory Considerations**:
+
+- **Raw Transaction Data**: Stored as `Vec<u8>` (not cloned in events)
+- **Event Payload**: Only delta fields (status, error_message, timestamps)
+- **Capacity**: Unbounded `DashMap` - grows with active transactions
+- **Cleanup**: Manual cleanup required (no automatic expiration)
+
+**Limitations**:
+
+- No persistence across restarts
+- No historical query support beyond current session
+- Requires manual cleanup of old transactions
+- Event overflow may cause subscribers to miss updates
+
+**Future Considerations**:
+
+- Add configurable event bus capacity in settings
+- Implement automatic transaction cleanup (TTL)
+- Consider WAL for crash recovery if persistence becomes required
+
 ## User Flows
 
 ### Flow 1: Query Account Information

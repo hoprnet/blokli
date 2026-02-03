@@ -44,12 +44,18 @@ pub enum TransactionStatus {
 /// Event type for transaction status updates
 ///
 /// Represents transaction status changes that should be broadcast to subscribers.
+/// Uses delta fields to keep copied data minimal.
 #[derive(Clone, Debug)]
 pub enum TransactionEvent {
     /// Transaction status was updated
     ///
-    /// Contains the transaction ID and the complete updated record
-    StatusUpdated { id: Uuid, record: TransactionRecord },
+    /// Contains only the changed fields (delta) instead of the full record
+    StatusUpdated {
+        id: Uuid,
+        status: TransactionStatus,
+        error_message: Option<String>,
+        confirmed_at: Option<DateTime<Utc>>,
+    },
 }
 
 /// Record of a submitted transaction
@@ -177,29 +183,31 @@ impl TransactionStore {
         status: TransactionStatus,
         error_message: Option<String>,
     ) -> Result<(), TransactionStoreError> {
-        // Update the transaction and get the updated record
-        let updated_record = self
+        // Update the transaction and extract delta fields for event
+        let (confirmed_at, error_msg) = self
             .transactions
             .get_mut(&id)
             .map(|mut entry| {
                 let record = entry.value_mut();
                 record.status = status;
-                record.error_message = error_message;
+                record.error_message = error_message.clone();
 
                 // Set confirmed_at timestamp if status is Confirmed
                 if status == TransactionStatus::Confirmed && record.confirmed_at.is_none() {
                     record.confirmed_at = Some(Utc::now());
                 }
 
-                // Clone the updated record for event broadcasting
-                record.clone()
+                // Extract only fields needed for event (no cloning raw_transaction)
+                (record.confirmed_at, record.error_message.clone())
             })
             .ok_or(TransactionStoreError::NotFound(id))?;
 
-        // Publish event to subscribers
+        // Publish event to subscribers with delta fields only
         let _ = self.event_bus.try_broadcast(TransactionEvent::StatusUpdated {
             id,
-            record: updated_record,
+            status,
+            error_message: error_msg,
+            confirmed_at,
         });
 
         Ok(())
@@ -482,11 +490,14 @@ mod tests {
         match event {
             TransactionEvent::StatusUpdated {
                 id: event_id,
-                record: event_record,
+                status: event_status,
+                error_message,
+                confirmed_at,
             } => {
                 assert_eq!(event_id, id);
-                assert_eq!(event_record.status, TransactionStatus::Submitted);
-                assert_eq!(event_record.id, id);
+                assert_eq!(event_status, TransactionStatus::Submitted);
+                assert_eq!(error_message, None);
+                assert_eq!(confirmed_at, None);
             }
         }
 
@@ -498,11 +509,14 @@ mod tests {
         match event {
             TransactionEvent::StatusUpdated {
                 id: event_id,
-                record: event_record,
+                status: event_status,
+                error_message,
+                confirmed_at,
             } => {
                 assert_eq!(event_id, id);
-                assert_eq!(event_record.status, TransactionStatus::Confirmed);
-                assert!(event_record.confirmed_at.is_some());
+                assert_eq!(event_status, TransactionStatus::Confirmed);
+                assert_eq!(error_message, None);
+                assert!(confirmed_at.is_some());
             }
         }
     }
@@ -540,17 +554,25 @@ mod tests {
             (
                 TransactionEvent::StatusUpdated {
                     id: id1,
-                    record: record1,
+                    status: status1,
+                    error_message: error1,
+                    confirmed_at: confirmed1,
                 },
                 TransactionEvent::StatusUpdated {
                     id: id2,
-                    record: record2,
+                    status: status2,
+                    error_message: error2,
+                    confirmed_at: confirmed2,
                 },
             ) => {
                 assert_eq!(id1, id);
                 assert_eq!(id2, id);
-                assert_eq!(record1.status, TransactionStatus::Confirmed);
-                assert_eq!(record2.status, TransactionStatus::Confirmed);
+                assert_eq!(status1, TransactionStatus::Confirmed);
+                assert_eq!(status2, TransactionStatus::Confirmed);
+                assert_eq!(error1, None);
+                assert_eq!(error2, None);
+                assert!(confirmed1.is_some());
+                assert!(confirmed2.is_some());
             }
         }
     }
@@ -585,10 +607,14 @@ mod tests {
         match event {
             TransactionEvent::StatusUpdated {
                 id: event_id,
-                record: event_record,
+                status: event_status,
+                error_message,
+                confirmed_at,
             } => {
                 assert_eq!(event_id, id);
-                assert_eq!(event_record.status, TransactionStatus::Confirmed);
+                assert_eq!(event_status, TransactionStatus::Confirmed);
+                assert_eq!(error_message, None);
+                assert!(confirmed_at.is_some());
             }
         }
     }

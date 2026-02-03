@@ -698,6 +698,42 @@ Before committing configuration changes, verify:
 
 **Note**: The architecture document focuses on high-level design and should NOT contain code examples, CLI commands, or configuration snippets. Keep it conceptual and architectural.
 
+### Transaction Store
+
+The transaction store (`chain/api/src/transaction_store.rs`) is an in-memory tracking system for submitted transactions. It provides:
+
+- Thread-safe storage using `DashMap`
+- Event-driven status updates via `async_broadcast`
+- GraphQL subscription support for real-time transaction monitoring
+
+**Important Limitations:**
+
+1. **In-Memory Only**: Transaction records are not persisted to database
+   - All transaction history is lost on server restart
+   - No audit trail for historical transactions
+   - Only active transactions during server uptime are queryable
+
+2. **No Persistence Required**: This is by design for the following reasons:
+   - Fire-and-forget transactions don't need tracking
+   - Async/sync mode transactions are confirmed via on-chain indexing
+   - Transaction store is for real-time monitoring only, not historical queries
+
+3. **Scope**: Only tracks transactions submitted in `async` or `sync` modes
+   - Fire-and-forget mode (`send_raw_transaction`) creates no store entries
+   - Use on-chain confirmation for permanent transaction records
+
+**When to Use:**
+
+- Real-time transaction status monitoring via GraphQL subscriptions
+- Temporary tracking during transaction submission and confirmation
+- Development and testing scenarios
+
+**When NOT to Use:**
+
+- Historical transaction queries (use blockchain explorer or database logs)
+- Audit trails (implement separate logging if required)
+- Cross-restart transaction tracking (not supported)
+
 ### Workspace Structure
 
 - `bloklid` - Daemon for indexing HOPR on-chain events
