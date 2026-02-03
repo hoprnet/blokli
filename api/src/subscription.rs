@@ -142,7 +142,7 @@ async fn capture_watermark_synchronized(
 async fn query_channels_at_watermark(
     db: &DatabaseConnection,
     watermark: &Watermark,
-    _batch_size: usize,
+    _batch_size: usize, // Reserved for future pagination implementation
 ) -> Result<Vec<ChannelUpdate>> {
     // Query all channels (identity table has no temporal component)
     let channels = channel::Entity::find()
@@ -517,6 +517,8 @@ impl SubscriptionRoot {
             // Phase 2: Stream real-time updates from event bus
             loop {
                 tokio::select! {
+                    biased;
+
                     // Check for shutdown signal first
                     shutdown_result = shutdown_receiver.recv() => {
                         match shutdown_result {
@@ -642,6 +644,8 @@ impl SubscriptionRoot {
             // Phase 2: Stream real-time updates from event bus
             loop {
                 tokio::select! {
+                    biased;
+
                     // Check for shutdown signal first
                     shutdown_result = shutdown_receiver.recv() => {
                         match shutdown_result {
@@ -740,6 +744,8 @@ impl SubscriptionRoot {
             // Stream updates from event bus
             loop {
                 tokio::select! {
+                    biased;
+
                     shutdown_result = shutdown_receiver.recv() => {
                         match shutdown_result {
                             Ok(_) => {
@@ -823,6 +829,8 @@ impl SubscriptionRoot {
             // Stream real-time updates from event bus
             loop {
                 tokio::select! {
+                    biased;
+
                     shutdown_result = shutdown_receiver.recv() => {
                         match shutdown_result {
                             Ok(_) => {
@@ -927,6 +935,8 @@ impl SubscriptionRoot {
 
             loop {
                 tokio::select! {
+                    biased;
+
                     shutdown_result = shutdown_receiver.recv() => {
                         match shutdown_result {
                             Ok(_) => {
@@ -1008,6 +1018,8 @@ impl SubscriptionRoot {
         Ok(stream! {
             loop {
                 tokio::select! {
+                    biased;
+
                     shutdown_result = shutdown_receiver.recv() => {
                         match shutdown_result {
                             Ok(_) => {
@@ -1342,7 +1354,6 @@ mod tests {
     use blokli_db_entity::{hopr_safe_contract, hopr_safe_contract_state};
     use futures::StreamExt;
     use sea_orm::{ActiveModelTrait, Set};
-    use tokio::time::sleep;
 
     use super::*;
 
