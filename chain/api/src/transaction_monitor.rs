@@ -39,6 +39,12 @@ pub trait ReceiptProvider: Send + Sync {
     /// `Ok(None)` when the receipt is not found (transaction still pending),
     /// or `Err` on RPC failure.
     async fn get_transaction_receipt_logs(&self, tx_hash: Hash) -> Result<Option<Vec<ReceiptLog>>, String>;
+
+    /// Extract the revert reason from a failed transaction using debug tracing.
+    ///
+    /// Returns `Ok(Some(reason))` if extracted, `Ok(None)` if tracing
+    /// succeeded but no decodable reason was found, or `Err` on RPC failure.
+    async fn get_revert_reason(&self, tx_hash: Hash) -> Result<Option<String>, String>;
 }
 
 /// Trait for resolving a transaction target address to a Safe contract address.
@@ -227,11 +233,23 @@ impl<R: ReceiptProvider> TransactionMonitor<R> {
             .await
         {
             Ok(Some(logs)) => {
-                let result = inspect_safe_execution_logs(&safe_address, &logs);
+                let mut result = inspect_safe_execution_logs(&safe_address, &logs);
+
+                // Attempt to extract revert reason for failed executions
+                if let Some(ref mut exec_result) = result {
+                    if !exec_result.success {
+                        exec_result.revert_reason = self
+                            .receipt_provider
+                            .get_revert_reason(record.transaction_hash)
+                            .await
+                            .unwrap_or(None);
+                    }
+                }
+
                 if let Some(ref r) = result {
                     info!(
-                        "Transaction {} Safe execution: success={}, safe_tx_hash={:?}",
-                        record.id, r.success, r.safe_tx_hash
+                        "Transaction {} Safe execution: success={}, safe_tx_hash={:?}, revert_reason={:?}",
+                        record.id, r.success, r.safe_tx_hash, r.revert_reason
                     );
                 }
                 result
@@ -270,6 +288,8 @@ mod tests {
         // Map from tx_hash to receipt logs (or error).
         // Some(Ok(logs)) = receipt found with logs, Some(Err(..)) = RPC error, None = pending
         receipt_logs: Arc<DashMap<Hash, Result<Option<Vec<ReceiptLog>>, String>>>,
+        // Map from tx_hash to revert reason result
+        revert_reasons: Arc<DashMap<Hash, Result<Option<String>, String>>>,
     }
 
     impl MockReceiptProvider {
@@ -277,6 +297,7 @@ mod tests {
             Self {
                 statuses: Arc::new(DashMap::new()),
                 receipt_logs: Arc::new(DashMap::new()),
+                revert_reasons: Arc::new(DashMap::new()),
             }
         }
 
@@ -291,6 +312,10 @@ mod tests {
         fn set_receipt_logs_error(&self, tx_hash: Hash, error: String) {
             self.receipt_logs.insert(tx_hash, Err(error));
         }
+
+        fn set_revert_reason(&self, tx_hash: Hash, reason: Result<Option<String>, String>) {
+            self.revert_reasons.insert(tx_hash, reason);
+        }
     }
 
     #[async_trait]
@@ -303,6 +328,13 @@ mod tests {
             match self.receipt_logs.get(&tx_hash) {
                 Some(entry) => entry.value().clone(),
                 // No entry configured: receipt not found (pending)
+                None => Ok(None),
+            }
+        }
+
+        async fn get_revert_reason(&self, tx_hash: Hash) -> Result<Option<String>, String> {
+            match self.revert_reasons.get(&tx_hash) {
+                Some(entry) => entry.value().clone(),
                 None => Ok(None),
             }
         }
@@ -811,6 +843,214 @@ mod tests {
         assert!(
             exec.safe_tx_hash.is_none(),
             "module execution events have no safe_tx_hash"
+        );
+    }
+
+    // =========================================================================
+    // Revert reason extraction tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_enrich_safe_execution_failure_with_revert_reason() {
+        let safe_address = [0xAA; 20];
+        let raw_tx = create_raw_tx_to(&safe_address).await;
+        let tx_hash = Hash::from([0x66u8; 32]);
+
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // Set up receipt logs with ExecutionFailure event
+        let safe_tx_hash_bytes = [0x42u8; 32];
+        let mut log_data = vec![0u8; 64];
+        log_data[..32].copy_from_slice(&safe_tx_hash_bytes);
+
+        provider.set_receipt_logs(
+            tx_hash,
+            vec![ReceiptLog {
+                address: safe_address,
+                topics: vec![crate::safe_execution::EXECUTION_FAILURE_TOPIC],
+                data: log_data,
+            }],
+        );
+
+        // Set up a revert reason for this transaction
+        provider.set_revert_reason(tx_hash, Ok(Some("insufficient funds".to_string())));
+
+        let safe_checker = MockSafeAddressChecker::new();
+        safe_checker.add_safe(safe_address);
+
+        let record = TransactionRecord {
+            id: Uuid::new_v4(),
+            raw_transaction: raw_tx,
+            transaction_hash: tx_hash,
+            status: TransactionStatus::Submitted,
+            submitted_at: Utc::now(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        };
+
+        store.insert(record.clone()).unwrap();
+
+        let monitor = create_monitor_with_safe_checker(store, provider, safe_checker);
+        let result = monitor.try_enrich_safe_execution(&record).await;
+
+        let exec = result.expect("enrichment should return a result");
+        assert!(!exec.success);
+        assert_eq!(exec.revert_reason, Some("insufficient funds".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_enrich_safe_execution_failure_revert_reason_rpc_error() {
+        let safe_address = [0xAA; 20];
+        let raw_tx = create_raw_tx_to(&safe_address).await;
+        let tx_hash = Hash::from([0x77u8; 32]);
+
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // Set up receipt logs with ExecutionFailure event
+        let mut log_data = vec![0u8; 64];
+        log_data[0] = 0x42;
+
+        provider.set_receipt_logs(
+            tx_hash,
+            vec![ReceiptLog {
+                address: safe_address,
+                topics: vec![crate::safe_execution::EXECUTION_FAILURE_TOPIC],
+                data: log_data,
+            }],
+        );
+
+        // Simulate RPC error when fetching revert reason
+        provider.set_revert_reason(tx_hash, Err("RPC timeout".to_string()));
+
+        let safe_checker = MockSafeAddressChecker::new();
+        safe_checker.add_safe(safe_address);
+
+        let record = TransactionRecord {
+            id: Uuid::new_v4(),
+            raw_transaction: raw_tx,
+            transaction_hash: tx_hash,
+            status: TransactionStatus::Submitted,
+            submitted_at: Utc::now(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        };
+
+        store.insert(record.clone()).unwrap();
+
+        let monitor = create_monitor_with_safe_checker(store, provider, safe_checker);
+        let result = monitor.try_enrich_safe_execution(&record).await;
+
+        let exec = result.expect("enrichment should return a result");
+        assert!(!exec.success);
+        assert!(
+            exec.revert_reason.is_none(),
+            "revert_reason should be None when get_revert_reason returns Err"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_enrich_safe_execution_failure_revert_reason_none() {
+        let safe_address = [0xAA; 20];
+        let raw_tx = create_raw_tx_to(&safe_address).await;
+        let tx_hash = Hash::from([0x88u8; 32]);
+
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // Set up receipt logs with ExecutionFailure event
+        let mut log_data = vec![0u8; 64];
+        log_data[0] = 0x42;
+
+        provider.set_receipt_logs(
+            tx_hash,
+            vec![ReceiptLog {
+                address: safe_address,
+                topics: vec![crate::safe_execution::EXECUTION_FAILURE_TOPIC],
+                data: log_data,
+            }],
+        );
+
+        // get_revert_reason returns Ok(None) — tracing succeeded but no decodable reason
+        provider.set_revert_reason(tx_hash, Ok(None));
+
+        let safe_checker = MockSafeAddressChecker::new();
+        safe_checker.add_safe(safe_address);
+
+        let record = TransactionRecord {
+            id: Uuid::new_v4(),
+            raw_transaction: raw_tx,
+            transaction_hash: tx_hash,
+            status: TransactionStatus::Submitted,
+            submitted_at: Utc::now(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        };
+
+        store.insert(record.clone()).unwrap();
+
+        let monitor = create_monitor_with_safe_checker(store, provider, safe_checker);
+        let result = monitor.try_enrich_safe_execution(&record).await;
+
+        let exec = result.expect("enrichment should return a result");
+        assert!(!exec.success);
+        assert!(exec.revert_reason.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_enrich_safe_execution_success_does_not_call_revert_reason() {
+        let safe_address = [0xAA; 20];
+        let raw_tx = create_raw_tx_to(&safe_address).await;
+        let tx_hash = Hash::from([0x99u8; 32]);
+
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // Set up receipt logs with ExecutionSuccess event
+        let safe_tx_hash_bytes = [0x42u8; 32];
+        let mut log_data = vec![0u8; 64];
+        log_data[..32].copy_from_slice(&safe_tx_hash_bytes);
+
+        provider.set_receipt_logs(
+            tx_hash,
+            vec![ReceiptLog {
+                address: safe_address,
+                topics: vec![crate::safe_execution::EXECUTION_SUCCESS_TOPIC],
+                data: log_data,
+            }],
+        );
+
+        // Set a revert reason that should NOT be used (success path skips it)
+        provider.set_revert_reason(tx_hash, Ok(Some("should not appear".to_string())));
+
+        let safe_checker = MockSafeAddressChecker::new();
+        safe_checker.add_safe(safe_address);
+
+        let record = TransactionRecord {
+            id: Uuid::new_v4(),
+            raw_transaction: raw_tx,
+            transaction_hash: tx_hash,
+            status: TransactionStatus::Submitted,
+            submitted_at: Utc::now(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        };
+
+        store.insert(record.clone()).unwrap();
+
+        let monitor = create_monitor_with_safe_checker(store, provider, safe_checker);
+        let result = monitor.try_enrich_safe_execution(&record).await;
+
+        let exec = result.expect("enrichment should return a result");
+        assert!(exec.success);
+        assert!(
+            exec.revert_reason.is_none(),
+            "revert_reason should be None for successful executions"
         );
     }
 }
