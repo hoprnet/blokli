@@ -776,12 +776,12 @@ The `just test-indexer` command builds the test crate and runs all integration t
 
 The integration tests spin up a Docker Compose stack with four services:
 
-| Service    | Container Name                | Purpose                                                  |
-|------------|-------------------------------|----------------------------------------------------------|
-| `anvil`    | `blokli-integration-anvil`    | Local Ethereum node (Foundry Anvil) with 1s block time   |
-| `postgres` | `blokli-integration-postgres` | PostgreSQL database for bloklid                          |
-| `bloklid`  | `blokli-integration-bloklid`  | The bloklid daemon under test                            |
-| `registry` | `blokli-integration-registry` | Local Docker registry for image distribution             |
+| Service    | Container Name                | Purpose                                                |
+| ---------- | ----------------------------- | ------------------------------------------------------ |
+| `anvil`    | `blokli-integration-anvil`    | Local Ethereum node (Foundry Anvil) with 1s block time |
+| `postgres` | `blokli-integration-postgres` | PostgreSQL database for bloklid                        |
+| `bloklid`  | `blokli-integration-bloklid`  | The bloklid daemon under test                          |
+| `registry` | `blokli-integration-registry` | Local Docker registry for image distribution           |
 
 The stack is defined in `tests/integration/docker-compose.yml`. All services share a `integration-test` bridge network. The bloklid service depends on all others being healthy before starting.
 
@@ -789,16 +789,16 @@ The stack is defined in `tests/integration/docker-compose.yml`. All services sha
 
 Test configuration is managed via environment variables (see `tests/integration/src/config.rs`):
 
-| Environment Variable                  | Default                            | Description                      |
-|----------------------------------------|------------------------------------|----------------------------------|
-| `BLOKLI_TEST_IMAGE`                   | `bloklid:integration-test`         | Docker image to test             |
-| `BLOKLI_TEST_CONFIG`                  | `config-integration-anvil.toml`    | bloklid config file              |
-| `BLOKLI_TEST_BLOKLID_URL`             | `http://localhost:8081`            | bloklid GraphQL API URL          |
-| `BLOKLI_TEST_RPC_URL`                 | `http://localhost:8546`            | Anvil JSON-RPC URL               |
-| `BLOKLI_TEST_REMOTE_IMAGE`            | (unset)                            | Pull image from remote registry  |
-| `BLOKLI_TEST_HTTP_TIMEOUT_SECS`       | `30`                               | HTTP client timeout              |
-| `BLOKLI_TEST_CONFIRMATIONS`           | `1`                                | Transaction confirmations        |
-| `BLOKLI_TEST_REGISTRY_PORT`           | `5001`                             | Local registry port              |
+| Environment Variable            | Default                         | Description                     |
+| ------------------------------- | ------------------------------- | ------------------------------- |
+| `BLOKLI_TEST_IMAGE`             | `bloklid:integration-test`      | Docker image to test            |
+| `BLOKLI_TEST_CONFIG`            | `config-integration-anvil.toml` | bloklid config file             |
+| `BLOKLI_TEST_BLOKLID_URL`       | `http://localhost:8081`         | bloklid GraphQL API URL         |
+| `BLOKLI_TEST_RPC_URL`           | `http://localhost:8546`         | Anvil JSON-RPC URL              |
+| `BLOKLI_TEST_REMOTE_IMAGE`      | (unset)                         | Pull image from remote registry |
+| `BLOKLI_TEST_HTTP_TIMEOUT_SECS` | `30`                            | HTTP client timeout             |
+| `BLOKLI_TEST_CONFIRMATIONS`     | `1`                             | Transaction confirmations       |
+| `BLOKLI_TEST_REGISTRY_PORT`     | `5001`                          | Local registry port             |
 
 #### Fixture Lifecycle
 
@@ -863,65 +863,65 @@ async fn test_my_feature(#[future(awt)] fixture: IntegrationFixture) -> Result<(
 
 **Accessors:**
 
-| Method                | Returns              | Description                                  |
-|-----------------------|----------------------|----------------------------------------------|
-| `config()`            | `&TestConfig`        | Test configuration                           |
-| `accounts()`          | `&[AnvilAccount]`    | All available Anvil accounts                 |
-| `sample_accounts::<N>()` | `[&AnvilAccount; N]` | Randomly sample N accounts                |
-| `client()`            | `&BlokliClient`      | Blokli GraphQL client (via bloklid)          |
-| `rpc()`               | `&RpcClient`         | Direct Anvil JSON-RPC client                 |
-| `contract_addresses()`| `&ContractAddresses`  | Deployed HOPR contract addresses            |
+| Method                   | Returns              | Description                         |
+| ------------------------ | -------------------- | ----------------------------------- |
+| `config()`               | `&TestConfig`        | Test configuration                  |
+| `accounts()`             | `&[AnvilAccount]`    | All available Anvil accounts        |
+| `sample_accounts::<N>()` | `[&AnvilAccount; N]` | Randomly sample N accounts          |
+| `client()`               | `&BlokliClient`      | Blokli GraphQL client (via bloklid) |
+| `rpc()`                  | `&RpcClient`         | Direct Anvil JSON-RPC client        |
+| `contract_addresses()`   | `&ContractAddresses` | Deployed HOPR contract addresses    |
 
 **Transaction helpers:**
 
-| Method                                       | Description                                         |
-|----------------------------------------------|-----------------------------------------------------|
-| `build_raw_tx(value, sender, recipient, nonce)` | Build an EIP-1559 raw transaction hex string     |
-| `submit_tx(signed_bytes)`                    | Submit a transaction without tracking               |
-| `submit_and_track_tx(signed_bytes)`          | Submit and get a tracking ID                        |
+| Method                                               | Description                                  |
+| ---------------------------------------------------- | -------------------------------------------- |
+| `build_raw_tx(value, sender, recipient, nonce)`      | Build an EIP-1559 raw transaction hex string |
+| `submit_tx(signed_bytes)`                            | Submit a transaction without tracking        |
+| `submit_and_track_tx(signed_bytes)`                  | Submit and get a tracking ID                 |
 | `submit_and_confirm_tx(signed_bytes, confirmations)` | Submit and wait for N confirmations          |
 
 **Safe helpers:**
 
-| Method                                        | Description                                        |
-|-----------------------------------------------|----------------------------------------------------|
-| `deploy_or_get_safe(owner, amount)`           | Deploy a Safe or retrieve existing one             |
-| `deploy_safe_and_announce(owner, amount)`     | Deploy Safe, register, and announce the account    |
-| `register_safe(owner, safe_address)`          | Register a Safe by node                            |
+| Method                                    | Description                                     |
+| ----------------------------------------- | ----------------------------------------------- |
+| `deploy_or_get_safe(owner, amount)`       | Deploy a Safe or retrieve existing one          |
+| `deploy_safe_and_announce(owner, amount)` | Deploy Safe, register, and announce the account |
+| `register_safe(owner, safe_address)`      | Register a Safe by node                         |
 
 **Channel helpers:**
 
-| Method                                           | Description                                     |
-|--------------------------------------------------|-------------------------------------------------|
-| `open_channel(from, to, amount, module)`         | Open a payment channel                          |
-| `initiate_outgoing_channel_closure(from, to, module)` | Start closing an outgoing channel          |
+| Method                                                | Description                       |
+| ----------------------------------------------------- | --------------------------------- |
+| `open_channel(from, to, amount, module)`              | Open a payment channel            |
+| `initiate_outgoing_channel_closure(from, to, module)` | Start closing an outgoing channel |
 
 **Account helpers:**
 
-| Method                                        | Description                                        |
-|-----------------------------------------------|----------------------------------------------------|
-| `announce_account(account, module)`           | Announce an account on-chain                       |
-| `announce_or_get_account(account, module)`    | Announce only if not already announced             |
+| Method                                     | Description                            |
+| ------------------------------------------ | -------------------------------------- |
+| `announce_account(account, module)`        | Announce an account on-chain           |
+| `announce_or_get_account(account, module)` | Announce only if not already announced |
 
 #### `RpcClient` — Direct Blockchain Access
 
 For operations that bypass bloklid and go directly to Anvil:
 
-| Method                        | Description                               |
-|-------------------------------|-------------------------------------------|
-| `chain_id()`                  | Get the chain ID                          |
-| `transaction_count(address)`  | Get nonce for an address                  |
-| `get_balance(address)`        | Get native token balance                  |
-| `execute_transaction(raw_tx)` | Send raw transaction directly via RPC     |
+| Method                        | Description                           |
+| ----------------------------- | ------------------------------------- |
+| `chain_id()`                  | Get the chain ID                      |
+| `transaction_count(address)`  | Get nonce for an address              |
+| `get_balance(address)`        | Get native token balance              |
+| `execute_transaction(raw_tx)` | Send raw transaction directly via RPC |
 
 #### Test File Organization
 
 Tests are organized by client trait:
 
-| File                                  | Covers                                                    |
-|---------------------------------------|-----------------------------------------------------------|
-| `tests/blokli_query_client.rs`        | `BlokliQueryClient` — queries for accounts, channels, safes, chain info |
-| `tests/blokli_subscription_client.rs` | `BlokliSubscriptionClient` — SSE subscriptions for real-time updates |
+| File                                  | Covers                                                                                      |
+| ------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `tests/blokli_query_client.rs`        | `BlokliQueryClient` — queries for accounts, channels, safes, chain info                     |
+| `tests/blokli_subscription_client.rs` | `BlokliSubscriptionClient` — SSE subscriptions for real-time updates                        |
 | `tests/blokli_transaction_client.rs`  | `BlokliTransactionClient` — transaction submission, tracking, confirmation, Safe enrichment |
 
 When adding new tests, place them in the file corresponding to the client trait being tested. If the test spans multiple traits, put it in the file for the primary trait under test.

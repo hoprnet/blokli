@@ -1,10 +1,11 @@
-use std::str::FromStr;
-use std::time::Duration;
+use std::{str::FromStr, time::Duration};
 
 use anyhow::{Context, Result};
 use blokli_client::api::{BlokliQueryClient, BlokliTransactionClient, types::TransactionStatus};
-use blokli_integration_tests::constants::parsed_safe_balance;
-use blokli_integration_tests::fixtures::{IntegrationFixture, integration_fixture as fixture};
+use blokli_integration_tests::{
+    constants::parsed_safe_balance,
+    fixtures::{IntegrationFixture, integration_fixture as fixture},
+};
 use hex::FromHex;
 use hopr_bindings::exports::alloy::primitives::U256;
 use hopr_chain_connector::{PayloadGenerator, SafePayloadGenerator};
@@ -184,9 +185,7 @@ async fn submit_and_confirm_transaction(#[future(awt)] fixture: IntegrationFixtu
 #[serial]
 /// Test that a Safe module transaction (via execTransactionFromModule) that succeeds internally
 /// is correctly detected and enriched with safe_execution data.
-async fn test_safe_module_transaction_execution_success(
-    #[future(awt)] fixture: IntegrationFixture,
-) -> Result<()> {
+async fn test_safe_module_transaction_execution_success(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [owner] = fixture.sample_accounts::<1>();
     let safe = fixture.deploy_safe_and_announce(owner, parsed_safe_balance()).await?;
 
@@ -228,9 +227,7 @@ async fn test_safe_module_transaction_execution_success(
 #[serial]
 /// Test that a Safe module transaction that fails internally (inner revert) is correctly
 /// detected with safe_execution.success = false while the outer transaction still confirms.
-async fn test_safe_module_transaction_execution_failure(
-    #[future(awt)] fixture: IntegrationFixture,
-) -> Result<()> {
+async fn test_safe_module_transaction_execution_failure(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [owner, counterparty] = fixture.sample_accounts::<2>();
     let safe = fixture.deploy_safe_and_announce(owner, parsed_safe_balance()).await?;
 
@@ -265,6 +262,16 @@ async fn test_safe_module_transaction_execution_failure(
         !safe_exec.success,
         "inner Safe execution should have failed for non-existent channel"
     );
+
+    // Anvil supports debug_traceTransaction, so we should get a revert reason
+    // for a failed channel closure on a non-existent channel.
+    assert!(
+        safe_exec.revert_reason.is_some(),
+        "revert reason should be extracted from failed Safe execution"
+    );
+    let reason = safe_exec.revert_reason.as_ref().unwrap();
+    assert!(!reason.is_empty(), "revert reason should not be empty");
+    tracing::info!("Revert reason: {reason}");
 
     Ok(())
 }

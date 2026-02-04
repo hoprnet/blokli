@@ -1,6 +1,7 @@
 //! Crate containing the API object for chain operations used by the HOPRd node.
 
 pub mod errors;
+pub(crate) mod revert_decoder;
 pub mod rpc_adapter;
 pub mod safe_execution;
 pub mod transaction_executor;
@@ -22,6 +23,7 @@ use blokli_db::BlokliDbAllOperations;
 use futures::future::AbortHandle;
 use hopr_async_runtime::spawn_as_abortable;
 use hopr_bindings::exports::alloy::{
+    providers::Provider,
     rpc::client::ClientBuilder,
     transports::{
         http::{Http, ReqwestTransport},
@@ -38,6 +40,7 @@ use hopr_primitive_types::{
     prelude::{Address, Balance, Currency, HoprBalance, U256, WxHOPR, XDai},
     traits::IntoEndian,
 };
+use tracing::info;
 
 use crate::{
     errors::{BlokliChainError, Result},
@@ -156,6 +159,66 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
             transaction_store,
             transaction_monitor,
         })
+    }
+
+    /// Verify that the RPC endpoint supports required capabilities.
+    ///
+    /// Fetches the latest block, picks a real transaction hash from it, and
+    /// attempts to trace it with `debug_traceTransaction`. If the trace
+    /// succeeds, the RPC supports debug tracing. If it fails, startup aborts
+    /// with a clear error.
+    ///
+    /// Walks backwards up to 64 blocks to find a block with transactions.
+    pub async fn verify_rpc_capabilities(&self) -> Result<()> {
+        info!("Verifying RPC debug tracing support...");
+
+        let latest_block = self.rpc_operations.provider.get_block_number().await.map_err(|e| {
+            BlokliChainError::Configuration(format!(
+                "Failed to query latest block number during RPC capability check: {e}"
+            ))
+        })?;
+
+        let mut probe_tx_hash = None;
+        for offset in 0..64u64 {
+            let block_num = latest_block.saturating_sub(offset);
+            if let Ok(Some(block)) = self.rpc_operations.provider.get_block_by_number(block_num.into()).await {
+                if let Some(tx_hash) = block.transactions.hashes().next() {
+                    probe_tx_hash = Some(tx_hash);
+                    break;
+                }
+            }
+            if block_num == 0 {
+                break;
+            }
+        }
+
+        let tx_hash = probe_tx_hash.ok_or_else(|| {
+            BlokliChainError::Configuration(
+                "No transactions found in the last 64 blocks; cannot verify debug_traceTransaction support. Ensure \
+                 the RPC is connected to an active chain."
+                    .to_string(),
+            )
+        })?;
+
+        let params = serde_json::json!([
+            format!("{tx_hash:#x}"),
+            { "tracer": "callTracer", "tracerConfig": { "onlyTopCall": true } }
+        ]);
+
+        self.rpc_operations
+            .provider
+            .raw_request::<_, serde_json::Value>("debug_traceTransaction".into(), params)
+            .await
+            .map_err(|e| {
+                BlokliChainError::Configuration(format!(
+                    "RPC does not support debug_traceTransaction: {e}. Blokli requires an RPC endpoint with debug \
+                     tracing enabled (e.g., Nethermind/Erigon with debug API). Revert reason extraction for Safe \
+                     transactions depends on this capability."
+                ))
+            })?;
+
+        info!("RPC debug tracing support verified (traced tx {tx_hash:#x})");
+        Ok(())
     }
 
     /// Execute all processes of the [`BlokliChain`] object.
