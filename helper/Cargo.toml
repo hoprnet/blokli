@@ -1,6 +1,6 @@
 [package]
 description = "CLI helper utilities for HOPR Blokli"
-edition     = "2024"
+edition     = "2021"
 homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-helper"
