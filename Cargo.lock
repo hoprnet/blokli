@@ -2056,6 +2056,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "blokli-helper"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "blokli-chain-types",
+ "clap",
+ "hex",
+ "hopr-bindings",
+ "hopr-internal-types",
+ "hopr-primitive-types",
+]
+
+[[package]]
 name = "blokli-inspector"
 version = "0.7.0"
 dependencies = [
