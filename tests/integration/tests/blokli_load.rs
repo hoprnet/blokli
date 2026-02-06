@@ -1,4 +1,4 @@
-use std::{collections::HashMap, time::Duration};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow};
 use blokli_client::api::{BlokliQueryClient, SafeSelector};
@@ -8,11 +8,14 @@ use blokli_integration_tests::{
 };
 use rstest::*;
 use serial_test::serial;
+use tokio::sync::Mutex;
 
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
-/// Deploy a safe for each account and announce it simultaneously, and then open a channel between each pair of safes simultaneously. This test verifies that the system can handle multiple concurrent deployments and channel openings without issues.
+/// Deploy a safe for each account and announce it simultaneously, and then open a channel between each pair of safes
+/// simultaneously. This test verifies that the system can handle multiple concurrent deployments and channel openings
+/// without issues.
 async fn open_multiple_channels_simultaneously(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let accounts = fixture.accounts();
 
@@ -41,14 +44,32 @@ async fn open_multiple_channels_simultaneously(#[future(awt)] fixture: Integrati
         .map(|safe| (safe.chain_key.clone(), safe.module_address.clone()))
         .collect::<HashMap<String, String>>();
 
-    // Create all possible pairs of accounts and open channels between them simultaneously
-    let pairs = accounts
-        .iter()
-        .zip(accounts.iter().cycle().skip(1))
-        .take(accounts.len());
+    // Create all possible source/destination pairs (excluding self)
+    let pairs = accounts.iter().flat_map(|src| {
+        accounts
+            .iter()
+            .filter(move |dst| dst.address != src.address)
+            .map(move |dst| (src, dst))
+    });
 
+    // Get the tx counts for each accounts and store them as hashmap of chain_key to tx_count
     let fixture_ref = &fixture;
+    let nonce_futures = accounts.iter().map(|account| {
+        let fixture_ref = fixture_ref;
+        async move {
+            let nonce = fixture_ref.rpc().transaction_count(&account.address).await?;
+            Ok::<(String, u64), anyhow::Error>((account.address.to_string(), nonce))
+        }
+    });
+    let nonces = futures::future::try_join_all(nonce_futures)
+        .await?
+        .into_iter()
+        .collect::<HashMap<String, u64>>();
+
+    let nonces_ref = Arc::new(Mutex::new(nonces));
     let open_channel_futs = pairs.map(|(src, dst)| {
+        let fixture_ref = fixture_ref;
+        let nonces_ref = Arc::clone(&nonces_ref);
         let src_chain_key = src.address.to_string();
         let module_address = modules_by_chain_key
             .get(&src_chain_key)
@@ -57,8 +78,16 @@ async fn open_multiple_channels_simultaneously(#[future(awt)] fixture: Integrati
 
         async move {
             let module_address = module_address?;
+            let nonce = {
+                let mut nonces_guard = nonces_ref.lock().await;
+                nonces_guard.get_mut(&src_chain_key).map(|value| {
+                    let nonce_value = *value;
+                    *value = nonce_value + 1;
+                    nonce_value
+                })
+            };
             fixture_ref
-                .open_channel(src, dst, parsed_safe_balance(), module_address.as_str())
+                .open_channel(src, dst, parsed_safe_balance(), module_address.as_str(), nonce)
                 .await
         }
     });

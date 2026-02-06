@@ -60,7 +60,7 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
     });
 
     fixture
-        .open_channel(&src, &dst, amount, &src_safe.module_address)
+        .open_channel(&src, &dst, amount, &src_safe.module_address, None)
         .await?;
 
     let channel = handle
@@ -171,7 +171,7 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
     });
 
     fixture
-        .open_channel(&src, &dst, amount, &src_safe.module_address)
+        .open_channel(&src, &dst, amount, &src_safe.module_address, None)
         .await?;
 
     let graph_entry = handle
