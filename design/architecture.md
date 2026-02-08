@@ -211,6 +211,15 @@ The database implements an event sourcing pattern with temporal versioning:
 - **log_status**: Processing status and checksums for each log
 - **log_topic_info**: Event signature tracking for filter generation
 
+**Database Views** (for efficient current-state access):
+
+- **account_current**: Returns one row per account with the latest `account_state`, using `ROW_NUMBER()` window function partitioned by account ID and ordered by position tuple descending
+- **channel_current**: Returns one row per channel with the latest `channel_state`, using the same window function pattern
+
+These views shift the "latest state" selection logic into the database engine, replacing application-level `ORDER BY ... LIMIT 1` subqueries. They simplify query code and enable the database to optimize current-state retrieval internally.
+
+View models can be converted into corresponding `*_state::Model` types via `From` trait implementations, allowing seamless reuse of existing state-handling code paths.
+
 **Database Architecture Modes**:
 
 The system supports two database configurations:
@@ -483,7 +492,7 @@ API validates address format if chain_key provided
     ↓
 Database executes optimized join query:
     - Fetch account identity from account table
-    - Join latest account_state for Safe address
+    - Look up latest account state via account_current view
     - Join hopr_balance and native_balance tables
     - Join announcement table for multiaddresses
     ↓
@@ -492,7 +501,7 @@ API assembles GraphQL Account response
 Client receives structured account data with all related entities
 ```
 
-**Query Optimization Strategy**: The account query uses batch loading pattern with four separate database queries to avoid N+1 problems while maintaining flexibility. Temporal join fetches only the latest state using position-based ordering.
+**Query Optimization Strategy**: The account query uses batch loading pattern with database queries to avoid N+1 problems while maintaining flexibility. Current state is retrieved via the `account_current` view, which encapsulates the "latest by position" logic in the database layer.
 
 **Required Filters**: To prevent exposing entire account database, at least one identity filter (keyid, packet_key, or chain_key) must be provided. This protects against excessive data exposure.
 
@@ -519,7 +528,7 @@ API queries all matching channels at watermark position
     ↓
 For each historical channel:
     - Load source and destination account details
-    - Stream as SSE event to client
+    - Stream as SSE event to client (order is randomized)
     ↓
 PHASE 2: Real-time Updates
     ↓
@@ -534,6 +543,8 @@ Process continues until client disconnects or shutdown signal
 ```
 
 **Two-Phase Guarantee**: Phase 1 delivers all historical data at watermark. Phase 2 delivers all changes after watermark. The watermark synchronization prevents gaps or duplicates between phases.
+
+**Phase 1 Ordering**: The historical snapshot emits entries in randomized order. Clients must not rely on any specific ordering of Phase 1 results. Reconnecting clients will receive entries in a different order each time.
 
 **SSE Streaming**: Server-Sent Events provide one-way streaming from server to client over HTTP. Each event is a JSON-encoded GraphQL response. Periodic keep-alive events keep idle connections from timing out while the stream stays open.
 
@@ -597,7 +608,7 @@ For each open channel:
     - Load source account details
     - Load destination account details
     - Create OpenedChannelsGraphEntry (directed edge)
-    - Stream as SSE event
+    - Stream as SSE event (order is randomized)
     ↓
 PHASE 2: Stream Topology Changes
     ↓
@@ -687,6 +698,7 @@ Blockchain RPC
 - **Event Sourcing**: Historical state preserved through version history
 - **Position Tracking**: Every state change tagged with (block, tx_index, log_index)
 - **Fan-out Pattern**: Single database update triggers multiple subscription notifications
+- **Batch Loading**: Account lookups for channels use batch-fetch with HashMap to avoid N+1 query patterns
 
 ### Transaction Submission Flow
 
