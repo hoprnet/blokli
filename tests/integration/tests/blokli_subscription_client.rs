@@ -16,6 +16,7 @@ use hex::{FromHex, ToHex};
 use hopr_bindings::exports::alloy::primitives::U256;
 use hopr_crypto_types::{keypairs::Keypair, types::Hash};
 use hopr_internal_types::channels::generate_channel_id;
+use hopr_primitive_types::prelude::HoprBalance;
 use rstest::*;
 use serde_json::json;
 use serial_test::serial;
@@ -185,6 +186,97 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
     assert_eq!(graph_entry.source.chain_key, src.address.to_string());
     assert_eq!(graph_entry.destination.chain_key, dst.address.to_string());
     assert_eq!(graph_entry.channel.status, ChannelStatus::Open);
+
+    Ok(())
+}
+
+#[rstest]
+#[test_log::test(tokio::test)]
+#[serial]
+/// Subscribes to graph updates after a channel is already open, then triggers a balance increase
+/// and a channel closure. Asserts each event sequentially interleaved with the actions that
+/// trigger them, proving that events arrive at the correct time relative to their triggers.
+async fn subscribe_graph_channel_update_on_closure(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    let [src, dst] = fixture.sample_accounts::<2>();
+    let expected_id = generate_channel_id(&src.address, &dst.address);
+    let expected_channel_id = Hash::from(expected_id).encode_hex::<String>();
+    let initial_amount = "1 wei wxHOPR".parse().expect("failed to parse amount");
+    let fund_amount = "2 wei wxHOPR".parse().expect("failed to parse amount");
+    let total_amount: HoprBalance = "3 wei wxHOPR".parse().expect("failed to parse amount");
+
+    // Setup: deploy safes, announce, approve, and open channel with initial balance
+    let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
+    fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
+    fixture.approve(&src, initial_amount, &src_safe.module_address).await?;
+    fixture
+        .open_channel(&src, &dst, initial_amount, &src_safe.module_address)
+        .await?;
+
+    // Wait for indexing so the channel is in the database
+    tokio::time::sleep(Duration::from_secs(8)).await;
+
+    // Subscribe after the channel exists - consume the stream directly in this task
+    let client = fixture.client().clone();
+    let mut stream = client.subscribe_graph().expect("failed to create graph subscription");
+
+    // Phase 1: receive and assert the initial Open state BEFORE triggering any updates
+    let phase1 = loop {
+        let entry = stream
+            .next()
+            .timeout(subscription_timeout())
+            .await?
+            .ok_or_else(|| anyhow!("stream ended before receiving initial channel state"))??;
+        if entry.channel.concrete_channel_id.to_lowercase() == expected_channel_id.to_lowercase() {
+            break entry;
+        }
+    };
+    assert_eq!(phase1.channel.status, ChannelStatus::Open);
+    assert_eq!(phase1.channel.balance.0, initial_amount.to_string());
+    assert_eq!(phase1.source.chain_key, src.address.to_string());
+    assert_eq!(phase1.destination.chain_key, dst.address.to_string());
+
+    // Fund the channel with additional tokens - triggers ChannelBalanceIncreased -> ChannelUpdated.
+    // This runs AFTER the initial state was received and asserted above.
+    fixture.approve(&src, fund_amount, &src_safe.module_address).await?;
+    fixture
+        .open_channel(&src, &dst, fund_amount, &src_safe.module_address)
+        .await?;
+
+    // Receive balance increase event - can only arrive after the fund action above
+    let balance_update = loop {
+        let entry = stream
+            .next()
+            .timeout(subscription_timeout())
+            .await?
+            .ok_or_else(|| anyhow!("stream ended before receiving balance update"))??;
+        if entry.channel.concrete_channel_id.to_lowercase() == expected_channel_id.to_lowercase() {
+            break entry;
+        }
+    };
+    assert_eq!(balance_update.channel.status, ChannelStatus::Open);
+    assert_eq!(balance_update.channel.balance.0, total_amount.to_string());
+
+    // Trigger channel closure - runs AFTER the balance update was received and asserted above
+    fixture
+        .initiate_outgoing_channel_closure(&src, &dst, &src_safe.module_address)
+        .await?;
+
+    // Receive closure event - can only arrive after the closure action above
+    let closure = loop {
+        let entry = stream
+            .next()
+            .timeout(subscription_timeout())
+            .await?
+            .ok_or_else(|| anyhow!("stream ended before receiving closure event"))??;
+        if entry.channel.concrete_channel_id.to_lowercase() == expected_channel_id.to_lowercase() {
+            break entry;
+        }
+    };
+    assert_eq!(closure.channel.status, ChannelStatus::PendingToClose);
+    assert_eq!(
+        closure.channel.concrete_channel_id.to_lowercase(),
+        expected_channel_id.to_lowercase()
+    );
 
     Ok(())
 }
