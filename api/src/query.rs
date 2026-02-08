@@ -12,9 +12,10 @@ use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
 use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::{
-    account, chain_info, channel,
+    account, chain_info,
     conversions::{account_aggregation::fetch_accounts_with_filters, channel_aggregation::fetch_channels_with_state},
     hopr_node_safe_registration,
+    views::channel_current,
 };
 use hopr_crypto_types::prelude::Hash;
 use hopr_primitive_types::{
@@ -366,28 +367,26 @@ impl QueryRoot {
             }
         };
 
-        let mut query = channel::Entity::find();
+        let mut query = channel_current::Entity::find();
 
         if let Some(src_keyid) = source_key_id {
-            query = query.filter(channel::Column::Source.eq(src_keyid));
+            query = query.filter(channel_current::Column::Source.eq(src_keyid));
         }
 
         if let Some(dst_keyid) = destination_key_id {
-            query = query.filter(channel::Column::Destination.eq(dst_keyid));
+            query = query.filter(channel_current::Column::Destination.eq(dst_keyid));
         }
 
         if let Some(channel_id) = concrete_channel_id {
             query = query.filter(
-                channel::Column::ConcreteChannelId.eq(channel_id.strip_prefix("0x").unwrap_or(&channel_id).to_string()),
+                channel_current::Column::ConcreteChannelId
+                    .eq(channel_id.strip_prefix("0x").unwrap_or(&channel_id).to_string()),
             );
         }
 
-        // TODO(Phase 2-3): Status filtering requires querying channel_state table
-        // Status column has been moved to channel_state table
-        if let Some(_status_filter) = status {
-            return CountResult::QueryFailed(errors::not_implemented(
-                "Channel status filtering during schema migration",
-            ));
+        if let Some(status_filter) = status {
+            let status_i16: i16 = status_filter.into();
+            query = query.filter(channel_current::Column::Status.eq(status_i16));
         }
 
         let count_u64 = match query.count(db).await {
@@ -442,11 +441,7 @@ impl QueryRoot {
         };
 
         // Convert GraphQL ChannelStatus to database i16 representation if status filter is provided
-        let status_i16 = status.map(|s| match s {
-            blokli_api_types::ChannelStatus::Closed => 0,
-            blokli_api_types::ChannelStatus::Open => 1,
-            blokli_api_types::ChannelStatus::PendingToClose => 2,
-        });
+        let status_i16: Option<i16> = status.map(|s| s.into());
 
         // Fetch channels with state using optimized batch loading (2 queries total)
         let aggregated_channels =
@@ -464,15 +459,7 @@ impl QueryRoot {
             .into_iter()
             .filter_map(|agg| {
                 // Convert status from i16 to ChannelStatus enum
-                let status = match agg.status {
-                    0 => blokli_api_types::ChannelStatus::Closed,
-                    1 => blokli_api_types::ChannelStatus::Open,
-                    2 => blokli_api_types::ChannelStatus::PendingToClose,
-                    _ => {
-                        // Skip invalid status values
-                        return None;
-                    }
-                };
+                let status: blokli_api_types::ChannelStatus = agg.status.into();
 
                 // Convert epoch from i64 to i32 with validation
                 let epoch = match i32::try_from(agg.epoch) {

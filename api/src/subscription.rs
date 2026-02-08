@@ -304,11 +304,7 @@ async fn query_channels_at_watermark_with_filters(
     let dest_i64 = destination_key_id.map(|k| k as i64);
 
     // Convert GraphQL ChannelStatus to internal status code (i16)
-    let status_code = status.map(|s| match s {
-        blokli_api_types::ChannelStatus::Closed => 0i16,
-        blokli_api_types::ChannelStatus::Open => 1i16,
-        blokli_api_types::ChannelStatus::PendingToClose => 2i16,
-    });
+    let status_code: Option<i16> = status.map(|s| s.into());
 
     // Build query with filters
     let mut query = channel::Entity::find();

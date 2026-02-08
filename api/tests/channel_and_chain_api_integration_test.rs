@@ -956,17 +956,13 @@ async fn test_channel_count_with_status_filter() -> Result<()> {
     .data(NetworkName("test".to_string()))
     .finish();
 
-    // Count OPEN channels (currently not implemented - expect error)
+    // Count OPEN channels — should return 1
     let query = r#"
         query {
             channelCount(status: OPEN) {
                 __typename
                 ... on Count {
                     count
-                }
-                ... on MissingFilterError {
-                    code
-                    message
                 }
                 ... on QueryFailedError {
                     code
@@ -980,22 +976,16 @@ async fn test_channel_count_with_status_filter() -> Result<()> {
     assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
 
     let data = response.data.into_json()?;
+    assert_eq!(data["channelCount"]["__typename"], "Count");
+    assert_eq!(data["channelCount"]["count"], 1);
 
-    // Status filtering is not yet implemented, expect QueryFailedError
-    assert_eq!(data["channelCount"]["__typename"], "QueryFailedError");
-    assert_eq!(data["channelCount"]["code"], "NOT_IMPLEMENTED");
-
-    // Count CLOSED channels (currently not implemented - expect error)
+    // Count CLOSED channels — should return 1
     let query2 = r#"
         query {
             channelCount(status: CLOSED) {
                 __typename
                 ... on Count {
                     count
-                }
-                ... on MissingFilterError {
-                    code
-                    message
                 }
                 ... on QueryFailedError {
                     code
@@ -1009,10 +999,54 @@ async fn test_channel_count_with_status_filter() -> Result<()> {
     assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
 
     let data = response.data.into_json()?;
+    assert_eq!(data["channelCount"]["__typename"], "Count");
+    assert_eq!(data["channelCount"]["count"], 1);
 
-    // Status filtering is not yet implemented, expect QueryFailedError
-    assert_eq!(data["channelCount"]["__typename"], "QueryFailedError");
-    assert_eq!(data["channelCount"]["code"], "NOT_IMPLEMENTED");
+    // Combined filter: sourceKeyId=1, status=OPEN — should return 1 (channel1: addr1→addr2, open)
+    let query3 = r#"
+        query {
+            channelCount(sourceKeyId: 1, status: OPEN) {
+                __typename
+                ... on Count {
+                    count
+                }
+                ... on QueryFailedError {
+                    code
+                    message
+                }
+            }
+        }
+    "#;
+
+    let response = execute_graphql_query(&schema, query3).await;
+    assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
+
+    let data = response.data.into_json()?;
+    assert_eq!(data["channelCount"]["__typename"], "Count");
+    assert_eq!(data["channelCount"]["count"], 1);
+
+    // Combined filter: sourceKeyId=1, status=PENDINGTOCLOSE — should return 0
+    let query4 = r#"
+        query {
+            channelCount(sourceKeyId: 1, status: PENDINGTOCLOSE) {
+                __typename
+                ... on Count {
+                    count
+                }
+                ... on QueryFailedError {
+                    code
+                    message
+                }
+            }
+        }
+    "#;
+
+    let response = execute_graphql_query(&schema, query4).await;
+    assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
+
+    let data = response.data.into_json()?;
+    assert_eq!(data["channelCount"]["__typename"], "Count");
+    assert_eq!(data["channelCount"]["count"], 0);
 
     Ok(())
 }
