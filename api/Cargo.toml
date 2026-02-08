@@ -73,6 +73,9 @@ hopr-bindings        = { workspace = true }
 hopr-crypto-types    = { workspace = true }
 hopr-primitive-types = { workspace = true }
 
+# Randomization
+rand = { workspace = true }
+
 # Logging
 tracing            = { workspace = true }
 tracing-subscriber = { workspace = true }

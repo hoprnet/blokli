@@ -27,6 +27,7 @@ use hopr_primitive_types::{
     primitives::Address,
     traits::{IntoEndian, ToHex},
 };
+use rand::seq::SliceRandom;
 use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     Statement,
@@ -496,7 +497,8 @@ impl SubscriptionRoot {
             )
             .await
             {
-                Ok(historical_channels) => {
+                Ok(mut historical_channels) => {
+                    historical_channels.shuffle(&mut rand::rng());
                     debug!("Phase 1: Yielding {} historical channels", historical_channels.len());
                     for channel in historical_channels {
                         yield channel;
@@ -626,7 +628,8 @@ impl SubscriptionRoot {
         Ok(stream! {
             // Phase 1: Stream historical snapshot of all open channels at watermark
             match query_channels_at_watermark(&db, &watermark, BATCH_SIZE).await {
-                Ok(historical_channels) => {
+                Ok(mut historical_channels) => {
+                    historical_channels.shuffle(&mut rand::rng());
                     for channel_update in historical_channels {
                         yield channel_update_to_graph_entry(channel_update);
                     }
@@ -727,7 +730,8 @@ impl SubscriptionRoot {
 
             // Emit initial matching accounts
             match Self::fetch_filtered_accounts(&db, keyid, packet_key.clone(), chain_key.clone()).await {
-                Ok(accounts) => {
+                Ok(mut accounts) => {
+                    accounts.shuffle(&mut rand::rng());
                     for account in accounts {
                         yield account;
                     }
@@ -2386,5 +2390,168 @@ mod tests {
 
         // Should timeout because non-SafeDeployed events are ignored
         assert!(timeout_result.is_err(), "Stream should ignore non-SafeDeployed events");
+    }
+
+    /// Helper to collect Phase 1 items from a subscription stream.
+    ///
+    /// Collects exactly `count` items, with a timeout to avoid hanging.
+    /// Each item's data is converted to a serde_json::Value for easy field access.
+    async fn collect_phase1_items(
+        stream: &mut (impl futures::Stream<Item = async_graphql::Response> + Unpin),
+        count: usize,
+    ) -> Vec<serde_json::Value> {
+        let mut items = Vec::with_capacity(count);
+        for _ in 0..count {
+            let response = tokio::time::timeout(Duration::from_secs(5), stream.next())
+                .await
+                .expect("timeout waiting for Phase 1 item")
+                .expect("stream ended early");
+            let data = response.into_result().expect("response error").data;
+            items.push(serde_json::to_value(data).expect("failed to convert to JSON"));
+        }
+        items
+    }
+
+    #[tokio::test]
+    async fn test_channel_updated_phase1_shuffles_entries() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let conn = db.conn(blokli_db::TargetDb::Index);
+
+        // Initialize chain_info watermark at block 100
+        init_chain_info(conn, 100, 0, 0).await.unwrap();
+
+        // Create 10 channels (enough for shuffle to be observable)
+        for i in 0..10u8 {
+            let src = create_test_account(conn, vec![i * 2 + 1; 20], &format!("src{i}"))
+                .await
+                .unwrap();
+            let dst = create_test_account(conn, vec![i * 2 + 2; 20], &format!("dst{i}"))
+                .await
+                .unwrap();
+            let ch = create_test_channel(conn, src, dst, &format!("ch{i:02}")).await.unwrap();
+            insert_channel_state(conn, ch, 50, 0, i as i64, vec![0; 12], 1)
+                .await
+                .unwrap();
+        }
+
+        let query = "subscription { channelUpdated { concreteChannelId } }";
+
+        // Run the subscription 5 times via the GraphQL schema, collect Phase 1 orderings
+        let mut orderings: Vec<Vec<String>> = Vec::new();
+        for _ in 0..5 {
+            let indexer_state = IndexerState::new(10, 100);
+            let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
+                .data(conn.clone())
+                .data(indexer_state)
+                .finish();
+
+            let mut stream = schema.execute_stream(query).boxed();
+            let items = collect_phase1_items(&mut stream, 10).await;
+            let ids: Vec<String> = items
+                .iter()
+                .map(|v| v["channelUpdated"]["concreteChannelId"].as_str().unwrap().to_string())
+                .collect();
+            orderings.push(ids);
+        }
+
+        // At least 2 of the 5 orderings should differ
+        let first = &orderings[0];
+        let seen_different = orderings.iter().skip(1).any(|o| o != first);
+        assert!(
+            seen_different,
+            "5 subscription runs of 10 channels should produce at least one different Phase 1 ordering"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_opened_channel_graph_phase1_shuffles_entries() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let conn = db.conn(blokli_db::TargetDb::Index);
+
+        // Initialize chain_info watermark at block 100
+        init_chain_info(conn, 100, 0, 0).await.unwrap();
+
+        for i in 0..10u8 {
+            let src = create_test_account(conn, vec![i * 2 + 1; 20], &format!("src{i}"))
+                .await
+                .unwrap();
+            let dst = create_test_account(conn, vec![i * 2 + 2; 20], &format!("dst{i}"))
+                .await
+                .unwrap();
+            let ch = create_test_channel(conn, src, dst, &format!("ch{i:02}")).await.unwrap();
+            insert_channel_state(conn, ch, 50, 0, i as i64, vec![0; 12], 1)
+                .await
+                .unwrap();
+        }
+
+        let query = "subscription { openedChannelGraphUpdated { channel { concreteChannelId } } }";
+
+        let mut orderings: Vec<Vec<String>> = Vec::new();
+        for _ in 0..5 {
+            let indexer_state = IndexerState::new(10, 100);
+            let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
+                .data(conn.clone())
+                .data(indexer_state)
+                .finish();
+
+            let mut stream = schema.execute_stream(query).boxed();
+            let items = collect_phase1_items(&mut stream, 10).await;
+            let ids: Vec<String> = items
+                .iter()
+                .map(|v| {
+                    v["openedChannelGraphUpdated"]["channel"]["concreteChannelId"]
+                        .as_str()
+                        .unwrap()
+                        .to_string()
+                })
+                .collect();
+            orderings.push(ids);
+        }
+
+        let first = &orderings[0];
+        let seen_different = orderings.iter().skip(1).any(|o| o != first);
+        assert!(
+            seen_different,
+            "5 subscription runs of 10 channels should produce at least one different Phase 1 ordering"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_account_updated_phase1_shuffles_entries() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let conn = db.conn(blokli_db::TargetDb::Index);
+
+        // Create 10 accounts
+        for i in 0..10u8 {
+            create_test_account(conn, vec![i + 1; 20], &format!("peer{i}"))
+                .await
+                .unwrap();
+        }
+
+        let query = "subscription { accountUpdated { keyid } }";
+
+        let mut orderings: Vec<Vec<i64>> = Vec::new();
+        for _ in 0..5 {
+            let indexer_state = IndexerState::new(10, 100);
+            let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
+                .data(conn.clone())
+                .data(indexer_state)
+                .finish();
+
+            let mut stream = schema.execute_stream(query).boxed();
+            let items = collect_phase1_items(&mut stream, 10).await;
+            let ids: Vec<i64> = items
+                .iter()
+                .map(|v| v["accountUpdated"]["keyid"].as_i64().unwrap())
+                .collect();
+            orderings.push(ids);
+        }
+
+        let first = &orderings[0];
+        let seen_different = orderings.iter().skip(1).any(|o| o != first);
+        assert!(
+            seen_different,
+            "5 subscription runs of 10 accounts should produce at least one different Phase 1 ordering"
+        );
     }
 }
