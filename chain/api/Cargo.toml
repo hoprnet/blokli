@@ -4,7 +4,7 @@ description = "Implements the main HOPR chain interface"
 edition     = "2021"
 license     = "GPL-3.0-only"
 name        = "blokli-chain-api"
-version     = "0.5.0"
+version     = "0.6.0"
 
 [lib]
 crate-type = ["rlib"]
