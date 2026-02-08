@@ -1,11 +1,11 @@
-//! Account aggregation utilities with optimized batch loading
+//! Account aggregation utilities using the `account_current` database view
 
 use std::collections::HashMap;
 
 use hopr_primitive_types::{primitives::Address, traits::ToHex};
-use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
 
-use crate::codegen::{account, account_state, announcement};
+use crate::{codegen::announcement, views::account_current};
 
 fn bytes_to_address_hex(bytes: &[u8]) -> Result<String, sea_orm::DbErr> {
     if bytes.len() != 20 {
@@ -29,58 +29,21 @@ pub struct AggregatedAccount {
     pub multi_addresses: Vec<String>,
 }
 
-/// Fetch all accounts with their related data using optimized batch loading
-///
-/// This function eliminates N+1 queries by:
-/// 1. Fetching all accounts in one query
-/// 2. Batch loading all announcements for those accounts
-/// 3. Aggregating the data in memory
-///
-/// Instead of 1 + (N * 2) queries, this uses only 2 queries total.
-///
-/// # Arguments
-/// * `db` - Database connection
-///
-/// # Returns
-/// * `Result<Vec<AggregatedAccount>, sea_orm::DbErr>` - List of aggregated accounts
-pub async fn fetch_accounts_with_balances<C>(conn: &C) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr>
+/// Given a list of `account_current` view rows, fetch announcements and build aggregated accounts
+async fn aggregate_accounts<C>(
+    conn: &C,
+    current_accounts: Vec<account_current::Model>,
+) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr>
 where
     C: ConnectionTrait,
 {
-    // 1. Fetch all accounts (1 query)
-    let accounts = account::Entity::find().all(conn).await?;
-
-    if accounts.is_empty() {
+    if current_accounts.is_empty() {
         return Ok(Vec::new());
     }
 
-    // Collect all account IDs
-    let account_ids: Vec<i64> = accounts.iter().map(|a| a.id).collect();
+    let account_ids: Vec<i64> = current_accounts.iter().map(|a| a.account_id).collect();
 
-    let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
-
-    // Batch query account_state for all accounts to get safe_address
-    let account_states = account_state::Entity::find()
-        .filter(account_state::Column::AccountId.is_in(account_ids.clone()))
-        .order_by_desc(account_state::Column::PublishedBlock)
-        .order_by_desc(account_state::Column::PublishedTxIndex)
-        .order_by_desc(account_state::Column::PublishedLogIndex)
-        .all(conn)
-        .await?;
-
-    // Build map of account_id -> safe_address (only keep latest state per account)
-    let mut safe_address_map: HashMap<i64, Vec<u8>> = HashMap::new();
-    for state in account_states {
-        if let Some(safe_addr) = state.safe_address {
-            // Only insert if we haven't seen this account yet (first occurrence is latest due to ordering)
-            safe_address_map.entry(state.account_id).or_insert(safe_addr);
-        }
-    }
-
-    // Add safe addresses to all_addresses for balance lookup
-    all_addresses.extend(safe_address_map.values().cloned());
-
-    // 2. Batch fetch all announcements (1 query)
+    // Batch fetch all announcements
     let announcements = announcement::Entity::find()
         .filter(announcement::Column::AccountId.is_in(account_ids))
         .all(conn)
@@ -95,23 +58,27 @@ where
             .push(ann.multiaddress);
     }
 
-    // 3. Aggregate all data
-    accounts
+    // Aggregate all data
+    current_accounts
         .into_iter()
-        .map(|account| {
-            let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
+        .map(|row| {
+            let multi_addresses = announcements_by_account
+                .get(&row.account_id)
+                .cloned()
+                .unwrap_or_default();
 
-            let chain_key_str = bytes_to_address_hex(&account.chain_key)?;
+            let chain_key_str = bytes_to_address_hex(&row.chain_key)?;
 
-            let safe_address_str = safe_address_map
-                .get(&account.id)
+            let safe_address_str = row
+                .safe_address
+                .as_ref()
                 .map(|addr| bytes_to_address_hex(addr))
                 .transpose()?;
 
             Ok(AggregatedAccount {
-                keyid: account.id,
+                keyid: row.account_id,
                 chain_key: chain_key_str,
-                packet_key: account.packet_key,
+                packet_key: row.packet_key,
                 safe_address: safe_address_str,
                 multi_addresses,
             })
@@ -119,16 +86,30 @@ where
         .collect()
 }
 
-/// Fetch accounts for specific addresses with their related data using optimized batch loading
+/// Fetch all accounts with their related data using the `account_current` view
 ///
-/// This function is similar to `fetch_accounts_with_balances` but only fetches accounts
-/// whose chain_key is in the provided address list. This is useful for queries that only
-/// need a subset of accounts.
-///
-/// Uses the same optimized batch loading approach: 2 queries total instead of N+1.
+/// The `account_current` view already returns one row per account with the latest state,
+/// so no deduplication or ordering is needed in application code.
 ///
 /// # Arguments
-/// * `db` - Database connection
+/// * `conn` - Database connection
+///
+/// # Returns
+/// * `Result<Vec<AggregatedAccount>, sea_orm::DbErr>` - List of aggregated accounts
+pub async fn fetch_accounts_with_balances<C>(conn: &C) -> Result<Vec<AggregatedAccount>, sea_orm::DbErr>
+where
+    C: ConnectionTrait,
+{
+    let current_accounts = account_current::Entity::find().all(conn).await?;
+    aggregate_accounts(conn, current_accounts).await
+}
+
+/// Fetch accounts for specific addresses with their related data
+///
+/// Filters by chain_key addresses, then uses the `account_current` view for latest state.
+///
+/// # Arguments
+/// * `conn` - Database connection
 /// * `addresses` - List of chain_key addresses to filter by
 ///
 /// # Returns
@@ -155,90 +136,20 @@ where
         .collect();
     let binary_addresses = binary_addresses?;
 
-    // 1. Fetch accounts filtered by chain_key (1 query)
-    let accounts = account::Entity::find()
-        .filter(account::Column::ChainKey.is_in(binary_addresses))
+    let current_accounts = account_current::Entity::find()
+        .filter(account_current::Column::ChainKey.is_in(binary_addresses))
         .all(conn)
         .await?;
 
-    if accounts.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Collect all account IDs
-    let account_ids: Vec<i64> = accounts.iter().map(|a| a.id).collect();
-
-    let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
-
-    // Batch query account_state for all accounts to get safe_address
-    let account_states = account_state::Entity::find()
-        .filter(account_state::Column::AccountId.is_in(account_ids.clone()))
-        .order_by_desc(account_state::Column::PublishedBlock)
-        .order_by_desc(account_state::Column::PublishedTxIndex)
-        .order_by_desc(account_state::Column::PublishedLogIndex)
-        .all(conn)
-        .await?;
-
-    // Build map of account_id -> safe_address (only keep latest state per account)
-    let mut safe_address_map: HashMap<i64, Vec<u8>> = HashMap::new();
-    for state in account_states {
-        if let Some(safe_addr) = state.safe_address {
-            // Only insert if we haven't seen this account yet (first occurrence is latest due to ordering)
-            safe_address_map.entry(state.account_id).or_insert(safe_addr);
-        }
-    }
-
-    // Add safe addresses to all_addresses for balance lookup
-    all_addresses.extend(safe_address_map.values().cloned());
-
-    // 2. Batch fetch all announcements (1 query)
-    let announcements = announcement::Entity::find()
-        .filter(announcement::Column::AccountId.is_in(account_ids))
-        .all(conn)
-        .await?;
-
-    // Group announcements by account_id
-    let mut announcements_by_account: HashMap<i64, Vec<String>> = HashMap::new();
-    for ann in announcements {
-        announcements_by_account
-            .entry(ann.account_id)
-            .or_default()
-            .push(ann.multiaddress);
-    }
-
-    // 3. Aggregate all data
-    accounts
-        .into_iter()
-        .map(|account| {
-            let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
-
-            let chain_key_str = bytes_to_address_hex(&account.chain_key)?;
-
-            let safe_address_str = safe_address_map
-                .get(&account.id)
-                .map(|addr| bytes_to_address_hex(addr))
-                .transpose()?;
-
-            Ok(AggregatedAccount {
-                keyid: account.id,
-                chain_key: chain_key_str,
-                packet_key: account.packet_key,
-                safe_address: safe_address_str,
-                multi_addresses,
-            })
-        })
-        .collect()
+    aggregate_accounts(conn, current_accounts).await
 }
 
-/// Fetch accounts by their keyids with optimized batch loading
+/// Fetch accounts by their keyids with the `account_current` view
 ///
-/// This function is similar to `fetch_accounts_with_balances_for_addresses` but filters
-/// by account IDs instead of addresses. Useful when you have keyids from channels.
-///
-/// Uses the same optimized batch loading approach: 2 queries total instead of N+1.
+/// Filters by account IDs, useful when you have keyids from channels.
 ///
 /// # Arguments
-/// * `db` - Database connection
+/// * `conn` - Database connection
 /// * `keyids` - List of account IDs (keyids) to fetch
 ///
 /// # Returns
@@ -251,90 +162,20 @@ where
         return Ok(Vec::new());
     }
 
-    // 1. Fetch accounts filtered by id (1 query)
-    let accounts = account::Entity::find()
-        .filter(account::Column::Id.is_in(keyids))
+    let current_accounts = account_current::Entity::find()
+        .filter(account_current::Column::AccountId.is_in(keyids))
         .all(conn)
         .await?;
 
-    if accounts.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Collect all account IDs
-    let account_ids: Vec<i64> = accounts.iter().map(|a| a.id).collect();
-
-    let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
-
-    // Batch query account_state for all accounts to get safe_address
-    let account_states = account_state::Entity::find()
-        .filter(account_state::Column::AccountId.is_in(account_ids.clone()))
-        .order_by_desc(account_state::Column::PublishedBlock)
-        .order_by_desc(account_state::Column::PublishedTxIndex)
-        .order_by_desc(account_state::Column::PublishedLogIndex)
-        .all(conn)
-        .await?;
-
-    // Build map of account_id -> safe_address (only keep latest state per account)
-    let mut safe_address_map: HashMap<i64, Vec<u8>> = HashMap::new();
-    for state in account_states {
-        if let Some(safe_addr) = state.safe_address {
-            // Only insert if we haven't seen this account yet (first occurrence is latest due to ordering)
-            safe_address_map.entry(state.account_id).or_insert(safe_addr);
-        }
-    }
-
-    // Add safe addresses to all_addresses for balance lookup
-    all_addresses.extend(safe_address_map.values().cloned());
-
-    // 2. Batch fetch all announcements (1 query)
-    let announcements = announcement::Entity::find()
-        .filter(announcement::Column::AccountId.is_in(account_ids))
-        .all(conn)
-        .await?;
-
-    // Group announcements by account_id
-    let mut announcements_by_account: HashMap<i64, Vec<String>> = HashMap::new();
-    for ann in announcements {
-        announcements_by_account
-            .entry(ann.account_id)
-            .or_default()
-            .push(ann.multiaddress);
-    }
-
-    // 3. Aggregate all data
-    accounts
-        .into_iter()
-        .map(|account| {
-            let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
-
-            let chain_key_str = bytes_to_address_hex(&account.chain_key)?;
-
-            let safe_address_str = safe_address_map
-                .get(&account.id)
-                .map(|addr| bytes_to_address_hex(addr))
-                .transpose()?;
-
-            Ok(AggregatedAccount {
-                keyid: account.id,
-                chain_key: chain_key_str,
-                packet_key: account.packet_key,
-                safe_address: safe_address_str,
-                multi_addresses,
-            })
-        })
-        .collect()
+    aggregate_accounts(conn, current_accounts).await
 }
 
-/// Fetch accounts with optional filters using optimized batch loading
+/// Fetch accounts with optional filters using the `account_current` view
 ///
-/// This function allows filtering accounts by keyid, packet_key, and/or chain_key.
 /// Multiple filters can be combined. If no filters are provided, returns all accounts.
 ///
-/// Uses the same optimized batch loading approach: 2 queries total instead of N+1.
-///
 /// # Arguments
-/// * `db` - Database connection
+/// * `conn` - Database connection
 /// * `keyid` - Optional filter by account ID (keyid)
 /// * `packet_key` - Optional filter by packet key
 /// * `chain_key` - Optional filter by chain key
@@ -350,15 +191,14 @@ pub async fn fetch_accounts_with_filters<C>(
 where
     C: ConnectionTrait,
 {
-    // 1. Build query with filters (1 query)
-    let mut query = account::Entity::find();
+    let mut query = account_current::Entity::find();
 
     if let Some(id) = keyid {
-        query = query.filter(account::Column::Id.eq(id));
+        query = query.filter(account_current::Column::AccountId.eq(id));
     }
 
     if let Some(pk) = packet_key {
-        query = query.filter(account::Column::PacketKey.eq(pk.strip_prefix("0x").unwrap_or(&pk).to_string()));
+        query = query.filter(account_current::Column::PacketKey.eq(pk.strip_prefix("0x").unwrap_or(&pk).to_string()));
     }
 
     if let Some(ck) = chain_key {
@@ -366,78 +206,11 @@ where
             .map_err(|e| sea_orm::DbErr::Custom(format!("Invalid address: {}", e)))?
             .as_ref()
             .to_vec();
-        query = query.filter(account::Column::ChainKey.eq(binary_chain_key));
+        query = query.filter(account_current::Column::ChainKey.eq(binary_chain_key));
     }
 
-    let accounts = query.all(conn).await?;
-
-    if accounts.is_empty() {
-        return Ok(Vec::new());
-    }
-
-    // Collect all account IDs
-    let account_ids: Vec<i64> = accounts.iter().map(|a| a.id).collect();
-
-    let mut all_addresses: Vec<Vec<u8>> = accounts.iter().map(|a| a.chain_key.clone()).collect();
-
-    // Batch query account_state for all accounts to get safe_address
-    let account_states = account_state::Entity::find()
-        .filter(account_state::Column::AccountId.is_in(account_ids.clone()))
-        .order_by_desc(account_state::Column::PublishedBlock)
-        .order_by_desc(account_state::Column::PublishedTxIndex)
-        .order_by_desc(account_state::Column::PublishedLogIndex)
-        .all(conn)
-        .await?;
-
-    // Build map of account_id -> safe_address (only keep latest state per account)
-    let mut safe_address_map: HashMap<i64, Vec<u8>> = HashMap::new();
-    for state in account_states {
-        if let Some(safe_addr) = state.safe_address {
-            // Only insert if we haven't seen this account yet (first occurrence is latest due to ordering)
-            safe_address_map.entry(state.account_id).or_insert(safe_addr);
-        }
-    }
-
-    // Add safe addresses to all_addresses for balance lookup
-    all_addresses.extend(safe_address_map.values().cloned());
-
-    // 2. Batch fetch all announcements (1 query)
-    let announcements = announcement::Entity::find()
-        .filter(announcement::Column::AccountId.is_in(account_ids))
-        .all(conn)
-        .await?;
-
-    // Group announcements by account_id
-    let mut announcements_by_account: HashMap<i64, Vec<String>> = HashMap::new();
-    for ann in announcements {
-        announcements_by_account
-            .entry(ann.account_id)
-            .or_default()
-            .push(ann.multiaddress);
-    }
-
-    // 3. Aggregate all data
-    accounts
-        .into_iter()
-        .map(|account| {
-            let multi_addresses = announcements_by_account.get(&account.id).cloned().unwrap_or_default();
-
-            let chain_key_str = bytes_to_address_hex(&account.chain_key)?;
-
-            let safe_address_str = safe_address_map
-                .get(&account.id)
-                .map(|addr| bytes_to_address_hex(addr))
-                .transpose()?;
-
-            Ok(AggregatedAccount {
-                keyid: account.id,
-                chain_key: chain_key_str,
-                packet_key: account.packet_key,
-                safe_address: safe_address_str,
-                multi_addresses,
-            })
-        })
-        .collect()
+    let current_accounts = query.all(conn).await?;
+    aggregate_accounts(conn, current_accounts).await
 }
 
 #[cfg(test)]

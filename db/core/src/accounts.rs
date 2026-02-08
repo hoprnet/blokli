@@ -5,6 +5,7 @@ use async_trait::async_trait;
 use blokli_db_entity::{
     account, account_state, announcement,
     prelude::{Account, AccountState, Announcement},
+    views::account_current,
 };
 use futures::TryFutureExt;
 use hopr_crypto_types::prelude::OffchainPublicKey;
@@ -317,14 +318,21 @@ impl BlokliDbAccountOperations for BlokliDb {
                         None => return Ok(None),
                     };
 
-                    // Step 2: Get the most recent account_state (latest by block, tx_index, log_index)
-                    let state_model = AccountState::find()
-                        .filter(account_state::Column::AccountId.eq(account_model.id))
-                        .order_by_desc(account_state::Column::PublishedBlock)
-                        .order_by_desc(account_state::Column::PublishedTxIndex)
-                        .order_by_desc(account_state::Column::PublishedLogIndex)
+                    // Step 2: Get the latest account state from the account_current view
+                    let current_state = account_current::Entity::find()
+                        .filter(account_current::Column::AccountId.eq(account_model.id))
                         .one(tx.as_ref())
                         .await?;
+
+                    // Convert view model to account_state::Model for model_to_account_entry
+                    let state_model = current_state.map(|cs| account_state::Model {
+                        id: cs.id,
+                        account_id: cs.account_id,
+                        safe_address: cs.safe_address,
+                        published_block: cs.published_block,
+                        published_tx_index: cs.published_tx_index,
+                        published_log_index: cs.published_log_index,
+                    });
 
                     // Step 3: Get announcements for account entry
                     let announcements = Announcement::find()
@@ -356,17 +364,34 @@ impl BlokliDbAccountOperations for BlokliDb {
                         .all(tx.as_ref())
                         .await?;
 
+                    // Batch-fetch latest state for all accounts via the account_current view
+                    let account_ids: Vec<i64> = accounts.iter().map(|(a, _)| a.id).collect();
+                    let current_states = account_current::Entity::find()
+                        .filter(account_current::Column::AccountId.is_in(account_ids))
+                        .all(tx.as_ref())
+                        .await?;
+
+                    // Build a map of account_id -> state for O(1) lookup
+                    let state_map: std::collections::HashMap<i64, account_state::Model> = current_states
+                        .into_iter()
+                        .map(|cs| {
+                            (
+                                cs.account_id,
+                                account_state::Model {
+                                    id: cs.id,
+                                    account_id: cs.account_id,
+                                    safe_address: cs.safe_address,
+                                    published_block: cs.published_block,
+                                    published_tx_index: cs.published_tx_index,
+                                    published_log_index: cs.published_log_index,
+                                },
+                            )
+                        })
+                        .collect();
+
                     let mut entries = Vec::new();
                     for (account_model, announcements) in accounts {
-                        // Get the most recent account_state for each account
-                        let state_model = AccountState::find()
-                            .filter(account_state::Column::AccountId.eq(account_model.id))
-                            .order_by_desc(account_state::Column::PublishedBlock)
-                            .order_by_desc(account_state::Column::PublishedTxIndex)
-                            .order_by_desc(account_state::Column::PublishedLogIndex)
-                            .one(tx.as_ref())
-                            .await?;
-
+                        let state_model = state_map.get(&account_model.id).cloned();
                         entries.push(model_to_account_entry(account_model, state_model, announcements)?);
                     }
                     Ok::<_, DbSqlError>(entries)
@@ -476,14 +501,20 @@ impl BlokliDbAccountOperations for BlokliDb {
                         existing_announcements.insert(0, new_announcement);
                     }
 
-                    // Get the most recent account_state for the account
-                    let state_model = AccountState::find()
-                        .filter(account_state::Column::AccountId.eq(existing_account.id))
-                        .order_by_desc(account_state::Column::PublishedBlock)
-                        .order_by_desc(account_state::Column::PublishedTxIndex)
-                        .order_by_desc(account_state::Column::PublishedLogIndex)
+                    // Get the latest account state from the account_current view
+                    let current_state = account_current::Entity::find()
+                        .filter(account_current::Column::AccountId.eq(existing_account.id))
                         .one(tx.as_ref())
                         .await?;
+
+                    let state_model = current_state.map(|cs| account_state::Model {
+                        id: cs.id,
+                        account_id: cs.account_id,
+                        safe_address: cs.safe_address,
+                        published_block: cs.published_block,
+                        published_tx_index: cs.published_tx_index,
+                        published_log_index: cs.published_log_index,
+                    });
 
                     model_to_account_entry(existing_account, state_model, existing_announcements)
                 })

@@ -1382,6 +1382,7 @@ mod tests {
     }
 
     // Helper: Create test account in database
+    // Also creates an initial account_state record so the account_current view returns it.
     async fn create_test_account(db: &DatabaseConnection, chain_key: Vec<u8>, packet_key: &str) -> anyhow::Result<i64> {
         let account = blokli_db_entity::account::ActiveModel {
             id: Default::default(),
@@ -1393,6 +1394,18 @@ mod tests {
         };
 
         let result = account.insert(db).await?;
+
+        // Insert initial account_state so account appears in account_current view
+        let state = blokli_db_entity::account_state::ActiveModel {
+            id: Default::default(),
+            account_id: Set(result.id),
+            safe_address: Set(None),
+            published_block: Set(0),
+            published_tx_index: Set(0),
+            published_log_index: Set(0),
+        };
+        state.insert(db).await?;
+
         Ok(result.id)
     }
 

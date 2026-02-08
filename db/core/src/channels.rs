@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use blokli_db_entity::{
     account, channel, channel_state,
     prelude::{Account, Channel, ChannelState},
+    views::channel_current,
 };
 use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
@@ -137,6 +138,54 @@ fn reconstruct_channel_entry(
         u64::try_from(state.ticket_index).map_err(|_| DbSqlError::DecodingError)?,
         status,
         u32::try_from(state.epoch).map_err(|_| DbSqlError::DecodingError)?,
+    ))
+}
+
+/// Helper function to reconstruct a ChannelEntry from a channel_current view model
+///
+/// # Arguments
+///
+/// * `view_row` - Channel current view row (contains both channel and latest state data)
+/// * `source_addr` - Source account address
+/// * `dest_addr` - Destination account address
+///
+/// # Returns
+///
+/// Reconstructed ChannelEntry
+fn reconstruct_channel_entry_from_view(
+    view_row: &blokli_db_entity::views::channel_current::Model,
+    source_addr: Address,
+    dest_addr: Address,
+) -> Result<ChannelEntry> {
+    // Convert balance from Vec<u8> (12 bytes) to HoprBalance
+    let balance_bytes: [u8; 12] = view_row
+        .balance
+        .as_slice()
+        .try_into()
+        .map_err(|_| DbSqlError::DecodingError)?;
+    let balance = HoprBalance::from_be_bytes(balance_bytes);
+
+    // Convert status from i16 to ChannelStatus
+    let status = match view_row.status {
+        0 => ChannelStatus::Closed,
+        1 => ChannelStatus::Open,
+        2 => {
+            // PendingToClose with closure_time
+            let closure_time = view_row
+                .closure_time
+                .ok_or_else(|| DbSqlError::LogicalError("PendingToClose status requires closure_time".to_string()))?;
+            ChannelStatus::PendingToClose(closure_time.into())
+        }
+        _ => return Err(DbSqlError::DecodingError),
+    };
+
+    Ok(ChannelEntry::new(
+        source_addr,
+        dest_addr,
+        balance,
+        u64::try_from(view_row.ticket_index).map_err(|_| DbSqlError::DecodingError)?,
+        status,
+        u32::try_from(view_row.epoch).map_err(|_| DbSqlError::DecodingError)?,
     ))
 }
 
@@ -340,37 +389,22 @@ impl BlokliDbChannelOperations for BlokliDb {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    // Step 1: Find channel by concrete_channel_id
-                    let channel_model = match Channel::find()
-                        .filter(channel::Column::ConcreteChannelId.eq(id_hex))
+                    // Step 1: Query channel_current view by concrete_channel_id
+                    let view_row = match channel_current::Entity::find()
+                        .filter(channel_current::Column::ConcreteChannelId.eq(id_hex))
                         .one(tx.as_ref())
                         .await?
                     {
-                        Some(c) => c,
+                        Some(r) => r,
                         None => return Ok(None),
                     };
 
-                    // Step 2: Get the latest channel_state for this channel
-                    let state_model = ChannelState::find()
-                        .filter(channel_state::Column::ChannelId.eq(channel_model.id))
-                        .order_by_desc(channel_state::Column::PublishedBlock)
-                        .order_by_desc(channel_state::Column::PublishedTxIndex)
-                        .order_by_desc(channel_state::Column::PublishedLogIndex)
-                        .one(tx.as_ref())
-                        .await?
-                        .ok_or_else(|| {
-                            DbSqlError::LogicalError(format!(
-                                "Channel {} exists but has no state records",
-                                channel_model.id
-                            ))
-                        })?;
-
-                    // Step 3: Lookup account addresses
+                    // Step 2: Lookup account addresses
                     let (source_addr, dest_addr) =
-                        lookup_account_addresses(tx.as_ref(), channel_model.source, channel_model.destination).await?;
+                        lookup_account_addresses(tx.as_ref(), view_row.source, view_row.destination).await?;
 
-                    // Step 4: Reconstruct ChannelEntry
-                    let entry = reconstruct_channel_entry(&channel_model, &state_model, source_addr, dest_addr)?;
+                    // Step 3: Reconstruct ChannelEntry
+                    let entry = reconstruct_channel_entry_from_view(&view_row, source_addr, dest_addr)?;
 
                     Ok::<_, DbSqlError>(Some(entry))
                 })
@@ -409,34 +443,19 @@ impl BlokliDbChannelOperations for BlokliDb {
                         _ => return Ok(None),
                     };
 
-                    // Step 2: Find channel by source and destination IDs
-                    let channel_model = match Channel::find()
-                        .filter(channel::Column::Source.eq(source_id))
-                        .filter(channel::Column::Destination.eq(dest_id))
+                    // Step 2: Query channel_current view by source and destination IDs
+                    let view_row = match channel_current::Entity::find()
+                        .filter(channel_current::Column::Source.eq(source_id))
+                        .filter(channel_current::Column::Destination.eq(dest_id))
                         .one(tx.as_ref())
                         .await?
                     {
-                        Some(c) => c,
+                        Some(r) => r,
                         None => return Ok(None),
                     };
 
-                    // Step 3: Get the latest channel_state
-                    let state_model = ChannelState::find()
-                        .filter(channel_state::Column::ChannelId.eq(channel_model.id))
-                        .order_by_desc(channel_state::Column::PublishedBlock)
-                        .order_by_desc(channel_state::Column::PublishedTxIndex)
-                        .order_by_desc(channel_state::Column::PublishedLogIndex)
-                        .one(tx.as_ref())
-                        .await?
-                        .ok_or_else(|| {
-                            DbSqlError::LogicalError(format!(
-                                "Channel {} exists but has no state records",
-                                channel_model.id
-                            ))
-                        })?;
-
-                    // Step 4: Reconstruct ChannelEntry
-                    let entry = reconstruct_channel_entry(&channel_model, &state_model, src_clone, dst_clone)?;
+                    // Step 3: Reconstruct ChannelEntry
+                    let entry = reconstruct_channel_entry_from_view(&view_row, src_clone, dst_clone)?;
 
                     Ok::<_, DbSqlError>(Some(entry))
                 })
@@ -467,46 +486,30 @@ impl BlokliDbChannelOperations for BlokliDb {
                         None => return Ok(vec![]), // No account means no channels
                     };
 
-                    // Step 2: Find channels based on direction
-                    let channels = match direction {
+                    // Step 2: Query channel_current view based on direction
+                    let view_rows = match direction {
                         ChannelDirection::Incoming => {
-                            // Channels where target is the destination
-                            Channel::find()
-                                .filter(channel::Column::Destination.eq(target_id))
+                            channel_current::Entity::find()
+                                .filter(channel_current::Column::Destination.eq(target_id))
                                 .all(tx.as_ref())
                                 .await?
                         }
                         ChannelDirection::Outgoing => {
-                            // Channels where target is the source
-                            Channel::find()
-                                .filter(channel::Column::Source.eq(target_id))
+                            channel_current::Entity::find()
+                                .filter(channel_current::Column::Source.eq(target_id))
                                 .all(tx.as_ref())
                                 .await?
                         }
                     };
 
-                    // Step 3: For each channel, get latest state and reconstruct ChannelEntry
+                    // Step 3: Reconstruct ChannelEntry for each row
                     let mut results = Vec::new();
-                    for channel_model in channels {
-                        // Get latest channel_state
-                        let state_model = ChannelState::find()
-                            .filter(channel_state::Column::ChannelId.eq(channel_model.id))
-                            .order_by_desc(channel_state::Column::PublishedBlock)
-                            .order_by_desc(channel_state::Column::PublishedTxIndex)
-                            .order_by_desc(channel_state::Column::PublishedLogIndex)
-                            .one(tx.as_ref())
-                            .await?;
+                    for view_row in &view_rows {
+                        let (source_addr, dest_addr) =
+                            lookup_account_addresses(tx.as_ref(), view_row.source, view_row.destination).await?;
 
-                        if let Some(state) = state_model {
-                            // Lookup account addresses
-                            let (source_addr, dest_addr) =
-                                lookup_account_addresses(tx.as_ref(), channel_model.source, channel_model.destination)
-                                    .await?;
-
-                            // Reconstruct ChannelEntry
-                            let entry = reconstruct_channel_entry(&channel_model, &state, source_addr, dest_addr)?;
-                            results.push(entry);
-                        }
+                        let entry = reconstruct_channel_entry_from_view(view_row, source_addr, dest_addr)?;
+                        results.push(entry);
                     }
 
                     Ok::<_, DbSqlError>(results)
@@ -520,31 +523,17 @@ impl BlokliDbChannelOperations for BlokliDb {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    // Step 1: Get all channels
-                    let channels = Channel::find().all(tx.as_ref()).await?;
+                    // Step 1: Get all channels via the channel_current view
+                    let view_rows = channel_current::Entity::find().all(tx.as_ref()).await?;
 
-                    // Step 2: For each channel, get latest state and reconstruct ChannelEntry
+                    // Step 2: Reconstruct ChannelEntry for each row
                     let mut results = Vec::new();
-                    for channel_model in channels {
-                        // Get latest channel_state
-                        let state_model = ChannelState::find()
-                            .filter(channel_state::Column::ChannelId.eq(channel_model.id))
-                            .order_by_desc(channel_state::Column::PublishedBlock)
-                            .order_by_desc(channel_state::Column::PublishedTxIndex)
-                            .order_by_desc(channel_state::Column::PublishedLogIndex)
-                            .one(tx.as_ref())
-                            .await?;
+                    for view_row in &view_rows {
+                        let (source_addr, dest_addr) =
+                            lookup_account_addresses(tx.as_ref(), view_row.source, view_row.destination).await?;
 
-                        if let Some(state) = state_model {
-                            // Lookup account addresses
-                            let (source_addr, dest_addr) =
-                                lookup_account_addresses(tx.as_ref(), channel_model.source, channel_model.destination)
-                                    .await?;
-
-                            // Reconstruct ChannelEntry
-                            let entry = reconstruct_channel_entry(&channel_model, &state, source_addr, dest_addr)?;
-                            results.push(entry);
-                        }
+                        let entry = reconstruct_channel_entry_from_view(view_row, source_addr, dest_addr)?;
+                        results.push(entry);
                     }
 
                     Ok::<_, DbSqlError>(results)
@@ -554,12 +543,38 @@ impl BlokliDbChannelOperations for BlokliDb {
     }
 
     async fn stream_active_channels<'a>(&'a self) -> Result<BoxStream<'a, Result<ChannelEntry>>> {
-        // TODO(Phase 2-3): Update to query channel_current view or join with channel_state
-        // Status and ClosureTime are now in channel_state table
-        // For now, return error as this requires complex query changes
-        Err(DbSqlError::LogicalError(
-            "stream_active_channels requires channel_state table - use channel_current view in Phase 2-3".to_string(),
-        ))
+        // Query channel_current view for Open (1) or PendingToClose (2) channels
+        let db = self.conn(crate::TargetDb::Index);
+        let view_rows = channel_current::Entity::find()
+            .filter(channel_current::Column::Status.is_in([1_i16, 2_i16]))
+            .all(db)
+            .await?;
+
+        // Reconstruct ChannelEntry for each row, looking up addresses
+        let mut entries = Vec::new();
+        for view_row in &view_rows {
+            let source_account = Account::find_by_id(view_row.source).one(db).await?.ok_or_else(|| {
+                DbSqlError::LogicalError(format!("Source account with ID {} not found", view_row.source))
+            })?;
+
+            let dest_account = Account::find_by_id(view_row.destination)
+                .one(db)
+                .await?
+                .ok_or_else(|| {
+                    DbSqlError::LogicalError(format!(
+                        "Destination account with ID {} not found",
+                        view_row.destination
+                    ))
+                })?;
+
+            let source_addr = Address::try_from(source_account.chain_key.as_slice())?;
+            let dest_addr = Address::try_from(dest_account.chain_key.as_slice())?;
+
+            let entry = reconstruct_channel_entry_from_view(view_row, source_addr, dest_addr)?;
+            entries.push(Ok(entry));
+        }
+
+        Ok(Box::pin(futures::stream::iter(entries)))
     }
 
     async fn upsert_channel<'a>(
