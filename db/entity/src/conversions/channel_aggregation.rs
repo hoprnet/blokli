@@ -68,15 +68,23 @@ where
     let result = rows
         .into_iter()
         .map(|row| {
+            let balance_slice: [u8; 12] = row.balance.as_slice().try_into().map_err(|_| {
+                sea_orm::DbErr::Custom(format!(
+                    "Invalid balance length for channel {}: expected 12, got {}",
+                    row.concrete_channel_id,
+                    row.balance.len()
+                ))
+            })?;
+
             let balance_bytes_32: [u8; 32] = {
                 let mut bytes = [0u8; 32];
-                bytes[20..32].copy_from_slice(row.balance.as_slice());
+                bytes[20..32].copy_from_slice(&balance_slice);
                 bytes
             };
 
             let hopr_balance = HoprBalance::from_be_bytes(balance_bytes_32);
 
-            AggregatedChannel {
+            Ok(AggregatedChannel {
                 concrete_channel_id: row.concrete_channel_id,
                 source: row.source,
                 destination: row.destination,
@@ -85,19 +93,9 @@ where
                 epoch: row.epoch,
                 ticket_index: row.ticket_index,
                 closure_time: row.closure_time.map(|time| time.with_timezone(&Utc)),
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, sea_orm::DbErr>>()?;
 
     Ok(result)
-}
-
-#[cfg(test)]
-mod tests {
-    // Note: These tests would require a test database setup
-    // For now, we just ensure the module compiles
-    #[test]
-    fn test_module_compiles() {
-        assert!(true);
-    }
 }

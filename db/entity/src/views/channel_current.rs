@@ -31,3 +31,22 @@ pub struct Model {
 pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
+
+impl From<Model> for crate::codegen::channel_state::Model {
+    fn from(view: Model) -> Self {
+        Self {
+            id: view.id,
+            channel_id: view.channel_id,
+            balance: view.balance,
+            status: view.status,
+            epoch: view.epoch,
+            ticket_index: view.ticket_index,
+            closure_time: view.closure_time,
+            corrupted_state: view.corrupted_state,
+            published_block: view.published_block,
+            published_tx_index: view.published_tx_index,
+            published_log_index: view.published_log_index,
+            reorg_correction: view.reorg_correction,
+        }
+    }
+}

@@ -448,6 +448,11 @@ impl SubscriptionRoot {
     /// - Subsequently emits updates only when channels actually change (Phase 2)
     /// - Uses IndexerState event bus for real-time notifications
     ///
+    /// **Phase 1 Ordering:**
+    /// The initial snapshot (Phase 1) emits channels in randomized order to prevent
+    /// clients from relying on a specific ordering. Clients that reconnect will
+    /// receive entries in a different order each time.
+    ///
     /// **Update Triggers:**
     /// A channel is re-emitted when:
     /// - The channel's status changes (e.g., OPEN -> PENDINGTOCLOSE -> CLOSED)
@@ -588,6 +593,11 @@ impl SubscriptionRoot {
     /// - On subscription start, emits all existing open channels as separate entries
     /// - Subsequently, emits updates when any channel changes
     ///
+    /// **Phase 1 Ordering:**
+    /// The initial snapshot (Phase 1) emits channels in randomized order to prevent
+    /// clients from relying on a specific ordering. Clients that reconnect will
+    /// receive entries in a different order each time.
+    ///
     /// **Building the Graph:**
     /// Clients receive entries incrementally (one per channel) and should accumulate
     /// them to build the complete network topology. The full graph is the union of all entries.
@@ -706,9 +716,14 @@ impl SubscriptionRoot {
     /// Optional filters can be applied to only receive updates for specific accounts.
     ///
     /// Uses the IndexerState event bus for real-time notifications:
-    /// - Emits matching accounts on subscription start
-    /// - Streams updates when `IndexerEvent::AccountUpdated` events are received
+    /// - Emits matching accounts on subscription start (Phase 1)
+    /// - Streams updates when `IndexerEvent::AccountUpdated` events are received (Phase 2)
     /// - Automatically shuts down on blockchain reorganization
+    ///
+    /// **Phase 1 Ordering:**
+    /// The initial snapshot (Phase 1) emits accounts in randomized order to prevent
+    /// clients from relying on a specific ordering. Clients that reconnect will
+    /// receive entries in a different order each time.
     #[graphql(name = "accountUpdated")]
     async fn account_updated(
         &self,

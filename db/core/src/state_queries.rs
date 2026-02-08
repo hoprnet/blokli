@@ -112,9 +112,7 @@ use blokli_db_entity::{
     prelude::{AccountState, ChannelState},
     views::{account_current, channel_current},
 };
-use sea_orm::{
-    ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, QuerySelect, sea_query::Condition,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, sea_query::Condition};
 
 use crate::{errors::Result, events::BlockPosition};
 
@@ -134,26 +132,12 @@ pub async fn get_current_channel_state(
     db: &DatabaseConnection,
     channel_id: i64,
 ) -> Result<Option<blokli_db_entity::channel_state::Model>> {
-    let state = channel_current::Entity::find()
-        .select_only()
-        .column(channel_current::Column::Id)
-        .column_as(channel_current::Column::ChannelId, channel_state::Column::ChannelId)
-        .column(channel_current::Column::Balance)
-        .column(channel_current::Column::Status)
-        .column(channel_current::Column::Epoch)
-        .column(channel_current::Column::TicketIndex)
-        .column(channel_current::Column::ClosureTime)
-        .column(channel_current::Column::CorruptedState)
-        .column(channel_current::Column::PublishedBlock)
-        .column(channel_current::Column::PublishedTxIndex)
-        .column(channel_current::Column::PublishedLogIndex)
-        .column(channel_current::Column::ReorgCorrection)
+    let view_row = channel_current::Entity::find()
         .filter(channel_current::Column::ChannelId.eq(channel_id))
-        .into_model::<blokli_db_entity::channel_state::Model>()
         .one(db)
         .await?;
 
-    Ok(state)
+    Ok(view_row.map(channel_state::Model::from))
 }
 
 /// Get channel state at a specific point in time
@@ -282,20 +266,12 @@ pub async fn get_current_account_state(
     db: &DatabaseConnection,
     account_id: i64,
 ) -> Result<Option<blokli_db_entity::account_state::Model>> {
-    let state = account_current::Entity::find()
-        .select_only()
-        .column(account_current::Column::Id)
-        .column_as(account_current::Column::AccountId, account_state::Column::AccountId)
-        .column(account_current::Column::SafeAddress)
-        .column(account_current::Column::PublishedBlock)
-        .column(account_current::Column::PublishedTxIndex)
-        .column(account_current::Column::PublishedLogIndex)
+    let view_row = account_current::Entity::find()
         .filter(account_current::Column::AccountId.eq(account_id))
-        .into_model::<blokli_db_entity::account_state::Model>()
         .one(db)
         .await?;
 
-    Ok(state)
+    Ok(view_row.map(account_state::Model::from))
 }
 
 /// Get account state at a specific point in time

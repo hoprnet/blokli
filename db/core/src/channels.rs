@@ -3,7 +3,7 @@
 // Allow casts from i64 back to u64 for values that originated from Solidity uints
 #![allow(clippy::cast_sign_loss)]
 
-use std::time::SystemTime;
+use std::{collections::HashMap, time::SystemTime};
 
 use async_trait::async_trait;
 use blokli_db_entity::{
@@ -28,6 +28,11 @@ use crate::{
     errors::{DbSqlError, Result},
     events::{ChannelStateChange, StateChange},
 };
+
+/// Database status code for an open channel
+const DB_STATUS_OPEN: i16 = 1;
+/// Database status code for a channel pending closure
+const DB_STATUS_PENDING_TO_CLOSE: i16 = 2;
 
 /// Helper function to find or create an account record and return its database ID
 ///
@@ -546,31 +551,45 @@ impl BlokliDbChannelOperations for BlokliDb {
         // Query channel_current view for Open (1) or PendingToClose (2) channels
         let db = self.conn(crate::TargetDb::Index);
         let view_rows = channel_current::Entity::find()
-            .filter(channel_current::Column::Status.is_in([1_i16, 2_i16]))
+            .filter(channel_current::Column::Status.is_in([DB_STATUS_OPEN, DB_STATUS_PENDING_TO_CLOSE]))
             .all(db)
             .await?;
 
-        // Reconstruct ChannelEntry for each row, looking up addresses
+        // Batch-fetch all needed accounts in one query to avoid N+1
+        let all_ids: Vec<i64> = view_rows
+            .iter()
+            .flat_map(|r| [r.source, r.destination])
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+
+        let accounts = Account::find()
+            .filter(account::Column::Id.is_in(all_ids))
+            .all(db)
+            .await?;
+
+        let account_map: HashMap<i64, Address> = accounts
+            .into_iter()
+            .map(|a| {
+                let addr = Address::try_from(a.chain_key.as_slice())?;
+                Ok((a.id, addr))
+            })
+            .collect::<Result<HashMap<_, _>>>()?;
+
         let mut entries = Vec::new();
         for view_row in &view_rows {
-            let source_account = Account::find_by_id(view_row.source).one(db).await?.ok_or_else(|| {
+            let source_addr = account_map.get(&view_row.source).ok_or_else(|| {
                 DbSqlError::LogicalError(format!("Source account with ID {} not found", view_row.source))
             })?;
 
-            let dest_account = Account::find_by_id(view_row.destination)
-                .one(db)
-                .await?
-                .ok_or_else(|| {
-                    DbSqlError::LogicalError(format!(
-                        "Destination account with ID {} not found",
-                        view_row.destination
-                    ))
-                })?;
+            let dest_addr = account_map.get(&view_row.destination).ok_or_else(|| {
+                DbSqlError::LogicalError(format!(
+                    "Destination account with ID {} not found",
+                    view_row.destination
+                ))
+            })?;
 
-            let source_addr = Address::try_from(source_account.chain_key.as_slice())?;
-            let dest_addr = Address::try_from(dest_account.chain_key.as_slice())?;
-
-            let entry = reconstruct_channel_entry_from_view(view_row, source_addr, dest_addr)?;
+            let entry = reconstruct_channel_entry_from_view(view_row, *source_addr, *dest_addr)?;
             entries.push(Ok(entry));
         }
 

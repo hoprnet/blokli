@@ -25,3 +25,16 @@ pub struct Model {
 pub enum Relation {}
 
 impl ActiveModelBehavior for ActiveModel {}
+
+impl From<Model> for crate::codegen::account_state::Model {
+    fn from(view: Model) -> Self {
+        Self {
+            id: view.id,
+            account_id: view.account_id,
+            safe_address: view.safe_address,
+            published_block: view.published_block,
+            published_tx_index: view.published_tx_index,
+            published_log_index: view.published_log_index,
+        }
+    }
+}
