@@ -823,8 +823,7 @@ let current = channel_current::Entity::find()
     .await?;
 
 // Convert view model to state model using From impl
-let state: channel_state::Model = current.map(channel_state::Model::from);
-```
+let state: Option<channel_state::Model> = current.map(channel_state::Model::from);
 
 View models implement `From` conversions to their corresponding `*_state::Model` types, allowing seamless reuse of existing state-handling code.
 
