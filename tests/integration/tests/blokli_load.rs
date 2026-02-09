@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, ops::Mul, sync::Arc, time::Duration};
 
 use anyhow::{Result, anyhow};
 use blokli_client::api::{BlokliQueryClient, SafeSelector};
@@ -52,8 +52,29 @@ async fn open_multiple_channels_simultaneously(#[future(awt)] fixture: Integrati
             .map(move |dst| (src, dst))
     });
 
-    // Get the tx counts for each accounts and store them as hashmap of chain_key to tx_count
     let fixture_ref = &fixture;
+
+    let approve_futs = accounts.iter().map(|account| {
+        let fixture_ref = &fixture_ref;
+
+        let src_chain_key: String = account.address.to_string();
+        let module_address = modules_by_chain_key
+            .get(&src_chain_key)
+            .cloned()
+            .unwrap_or_else(|| panic!("Missing safe for source chain key {src_chain_key}"));
+        
+        async move {
+            fixture_ref
+                .approve(
+                    account, 
+                    parsed_safe_balance().mul(accounts.len() - 1), 
+                    module_address.as_str()).await
+        }
+    });
+
+    let _ = futures::future::try_join_all(approve_futs).await?;
+
+    // Get the tx counts for each accounts and store them as hashmap of chain_key to tx_count
     let nonce_futures = accounts.iter().map(|account| {
         let fixture_ref = fixture_ref;
         async move {
@@ -62,9 +83,9 @@ async fn open_multiple_channels_simultaneously(#[future(awt)] fixture: Integrati
         }
     });
     let nonces = futures::future::try_join_all(nonce_futures)
-        .await?
-        .into_iter()
-        .collect::<HashMap<String, u64>>();
+    .await?
+    .into_iter()
+    .collect::<HashMap<String, u64>>();
 
     let nonces_ref = Arc::new(Mutex::new(nonces));
     let open_channel_futs = pairs.map(|(src, dst)| {
