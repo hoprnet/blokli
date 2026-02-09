@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use blokli_client::api::{
@@ -11,7 +11,7 @@ use blokli_integration_tests::{
 };
 use eventsource_client::{Client, ClientBuilder, SSE};
 use futures::stream::StreamExt;
-use futures_time::future::FutureExt as FutureTimeoutExt;
+use futures_time::{future::FutureExt as FutureTimeoutExt, time::Duration as FuturesDuration};
 use hex::{FromHex, ToHex};
 use hopr_bindings::exports::alloy::primitives::U256;
 use hopr_crypto_types::{keypairs::Keypair, types::Hash};
@@ -570,32 +570,39 @@ async fn subscribe_transaction_status_updates(#[future(awt)] fixture: Integratio
         })
     });
 
-    // 4. Collect first two status updates
+    // 4. Collect status updates until Confirmed or timeout
     let mut statuses = Vec::new();
-    for _ in 0..2 {
-        if let Some(update) = stream
-            .next()
-            .timeout(subscription_timeout())
-            .await
-            .map_err(|_| anyhow!("timed out waiting for transaction update"))?
-        {
-            if let Some(status_str) = update
-                .get("data")
-                .and_then(|d| d.get("transactionUpdated"))
-                .and_then(|tx| tx.get("status"))
-                .and_then(|s| s.as_str())
-            {
-                let status = match status_str {
-                    "SUBMITTED" => TransactionStatus::Submitted,
-                    "PENDING" => TransactionStatus::Pending,
-                    "CONFIRMED" => TransactionStatus::Confirmed,
-                    _ => continue,
-                };
-                statuses.push(status);
-                if status == TransactionStatus::Confirmed {
-                    break;
+    let start = Instant::now();
+    let overall_timeout: Duration = subscription_timeout().into();
+    loop {
+        let elapsed = start.elapsed();
+        if elapsed >= overall_timeout {
+            break;
+        }
+        let remaining = FuturesDuration::from(overall_timeout - elapsed);
+
+        match stream.next().timeout(remaining).await {
+            Ok(Some(update)) => {
+                if let Some(status_str) = update
+                    .get("data")
+                    .and_then(|d| d.get("transactionUpdated"))
+                    .and_then(|tx| tx.get("status"))
+                    .and_then(|s| s.as_str())
+                {
+                    let status = match status_str {
+                        "SUBMITTED" => TransactionStatus::Submitted,
+                        "PENDING" => TransactionStatus::Pending,
+                        "CONFIRMED" => TransactionStatus::Confirmed,
+                        _ => continue,
+                    };
+                    statuses.push(status);
+                    if status == TransactionStatus::Confirmed {
+                        break;
+                    }
                 }
             }
+            Ok(None) => break,
+            Err(_) => break,
         }
     }
 
