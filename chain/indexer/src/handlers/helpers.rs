@@ -1,12 +1,12 @@
 use std::collections::HashMap;
 
 use blokli_api_types::{Account, Channel, ChannelUpdate, TokenValueString, UInt64};
-use blokli_db_entity::{account, channel, channel_state, conversions::account_aggregation};
+use blokli_db_entity::{account, conversions::account_aggregation, views::channel_current};
 use chrono::Utc;
 use hopr_bindings::exports::alloy::hex;
 use hopr_crypto_types::prelude::Hash;
 use hopr_primitive_types::prelude::{Address, HoprBalance, IntoEndian, ToHex};
-use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
 
 use crate::errors::{CoreEthereumIndexerError, Result};
 
@@ -33,29 +33,16 @@ where
     // Convert Hash to hex string for database query
     let channel_id_hex = hex::encode(channel_id.as_ref());
 
-    // 1. Find the channel by concrete_channel_id
-    let channel = channel::Entity::find()
-        .filter(channel::Column::ConcreteChannelId.eq(&channel_id_hex))
+    // 1. Get the latest channel state via channel_current view (includes channel identity data)
+    let current = channel_current::Entity::find()
+        .filter(channel_current::Column::ConcreteChannelId.eq(&channel_id_hex))
         .one(conn)
         .await
-        .map_err(|e| CoreEthereumIndexerError::ProcessError(format!("Failed to query channel: {}", e)))?
+        .map_err(|e| CoreEthereumIndexerError::ProcessError(format!("Failed to query channel_current: {}", e)))?
         .ok_or_else(|| CoreEthereumIndexerError::ProcessError(format!("Channel {} not found", channel_id_hex)))?;
 
-    // 2. Get the latest channel_state for this channel
-    let state = channel_state::Entity::find()
-        .filter(channel_state::Column::ChannelId.eq(channel.id))
-        .order_by_desc(channel_state::Column::PublishedBlock)
-        .order_by_desc(channel_state::Column::PublishedTxIndex)
-        .order_by_desc(channel_state::Column::PublishedLogIndex)
-        .one(conn)
-        .await
-        .map_err(|e| CoreEthereumIndexerError::ProcessError(format!("Failed to query channel_state: {}", e)))?
-        .ok_or_else(|| {
-            CoreEthereumIndexerError::ProcessError(format!("Channel state not found for channel {}", channel.id))
-        })?;
-
-    // 3. Fetch both accounts using the optimized aggregation function
-    let account_ids = vec![channel.source, channel.destination];
+    // 2. Fetch both accounts using the optimized aggregation function
+    let account_ids = vec![current.source, current.destination];
     let accounts_result = account_aggregation::fetch_accounts_by_keyids(conn, account_ids)
         .await
         .map_err(|e| CoreEthereumIndexerError::ProcessError(format!("Failed to fetch accounts: {}", e)))?;
@@ -63,43 +50,51 @@ where
     let account_map: HashMap<i64, account_aggregation::AggregatedAccount> =
         accounts_result.into_iter().map(|a| (a.keyid, a)).collect();
 
-    let source_account = account_map.get(&channel.source).ok_or_else(|| {
-        CoreEthereumIndexerError::ProcessError(format!("Source account {} not found", channel.source))
+    let source_account = account_map.get(&current.source).ok_or_else(|| {
+        CoreEthereumIndexerError::ProcessError(format!("Source account {} not found", current.source))
     })?;
 
-    let dest_account = account_map.get(&channel.destination).ok_or_else(|| {
-        CoreEthereumIndexerError::ProcessError(format!("Destination account {} not found", channel.destination))
+    let dest_account = account_map.get(&current.destination).ok_or_else(|| {
+        CoreEthereumIndexerError::ProcessError(format!("Destination account {} not found", current.destination))
     })?;
 
-    // 4. Convert to GraphQL types
+    // 3. Convert to GraphQL types
+
+    if current.balance.len() != 12 {
+        return Err(CoreEthereumIndexerError::ValidationError(format!(
+            "Channel {} balance has unexpected length {} (expected 12)",
+            channel_id_hex,
+            current.balance.len()
+        )));
+    }
 
     let balance_bytes_32: [u8; 32] = {
         let mut bytes = [0u8; 32];
-        bytes[20..32].copy_from_slice(state.balance.as_slice());
+        bytes[20..32].copy_from_slice(current.balance.as_slice());
         bytes
     };
 
     let hopr_balance = HoprBalance::from_be_bytes(balance_bytes_32);
 
     let channel_gql = Channel {
-        concrete_channel_id: channel.concrete_channel_id,
-        source: channel.source,
-        destination: channel.destination,
+        concrete_channel_id: current.concrete_channel_id,
+        source: current.source,
+        destination: current.destination,
         balance: TokenValueString(hopr_balance.to_string()),
-        status: state.status.into(),
-        epoch: i32::try_from(state.epoch).map_err(|e| {
+        status: current.status.into(),
+        epoch: i32::try_from(current.epoch).map_err(|e| {
             CoreEthereumIndexerError::ValidationError(format!(
                 "Channel epoch {} out of range for i32: {}",
-                state.epoch, e
+                current.epoch, e
             ))
         })?,
-        ticket_index: UInt64(u64::try_from(state.ticket_index).map_err(|e| {
+        ticket_index: UInt64(u64::try_from(current.ticket_index).map_err(|e| {
             CoreEthereumIndexerError::ValidationError(format!(
                 "Channel ticket_index {} is negative or out of range: {}",
-                state.ticket_index, e
+                current.ticket_index, e
             ))
         })?),
-        closure_time: state.closure_time.map(|time| time.with_timezone(&Utc)),
+        closure_time: current.closure_time.map(|time| time.with_timezone(&Utc)),
     };
 
     let source_gql = Account {
