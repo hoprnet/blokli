@@ -62,13 +62,15 @@ async fn open_multiple_channels_simultaneously(#[future(awt)] fixture: Integrati
             .get(&src_chain_key)
             .cloned()
             .unwrap_or_else(|| panic!("Missing safe for source chain key {src_chain_key}"));
-        
+
         async move {
             fixture_ref
                 .approve(
-                    account, 
-                    parsed_safe_balance().mul(accounts.len() - 1), 
-                    module_address.as_str()).await
+                    account,
+                    parsed_safe_balance().mul(accounts.len() - 1),
+                    module_address.as_str(),
+                )
+                .await
         }
     });
 
@@ -83,9 +85,9 @@ async fn open_multiple_channels_simultaneously(#[future(awt)] fixture: Integrati
         }
     });
     let nonces = futures::future::try_join_all(nonce_futures)
-    .await?
-    .into_iter()
-    .collect::<HashMap<String, u64>>();
+        .await?
+        .into_iter()
+        .collect::<HashMap<String, u64>>();
 
     let nonces_ref = Arc::new(Mutex::new(nonces));
     let open_channel_futs = pairs.map(|(src, dst)| {
