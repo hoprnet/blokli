@@ -580,7 +580,8 @@ async fn subscribe_transaction_status_updates(#[future(awt)] fixture: Integratio
             .map_err(|_| anyhow!("timed out waiting for transaction update"))?
         {
             if let Some(status_str) = update
-                .get("transactionUpdated")
+                .get("data")
+                .and_then(|d| d.get("transactionUpdated"))
                 .and_then(|tx| tx.get("status"))
                 .and_then(|s| s.as_str())
             {

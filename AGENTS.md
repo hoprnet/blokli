@@ -812,7 +812,7 @@ let blocks = Block::find()
 
 For retrieving the latest state of accounts or channels, use the `*_current` database views instead of manual `ORDER BY published_* DESC LIMIT 1` queries:
 
-```rust
+````rust
 use blokli_db_entity::views::{account_current, channel_current};
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
@@ -845,7 +845,7 @@ account_ids.dedup();
 // Single batch fetch
 let accounts = fetch_accounts_by_keyids(db, account_ids).await?;
 let account_map: HashMap<_, _> = accounts.into_iter().map(|a| (a.keyid, a)).collect();
-```
+````
 
 ### GraphQL Resolvers
 
