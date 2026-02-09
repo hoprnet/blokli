@@ -60,6 +60,14 @@ where
 
     // 3. Convert to GraphQL types
 
+    if current.balance.len() != 12 {
+        return Err(CoreEthereumIndexerError::ValidationError(format!(
+            "Channel {} balance has unexpected length {} (expected 12)",
+            channel_id_hex,
+            current.balance.len()
+        )));
+    }
+
     let balance_bytes_32: [u8; 32] = {
         let mut bytes = [0u8; 32];
         bytes[20..32].copy_from_slice(current.balance.as_slice());

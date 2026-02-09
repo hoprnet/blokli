@@ -3,8 +3,37 @@
 //! This view returns one row per channel with the latest state, using window functions
 //! to select the most recent `channel_state` entry by `(published_block, published_tx_index, published_log_index)`.
 
-use sea_orm::entity::prelude::*;
+use sea_orm::entity::prelude::{
+    ActiveModelBehavior, DateTimeWithTimeZone, DeriveEntityModel, DerivePrimaryKey, DeriveRelation, EntityTrait,
+    EnumIter, PrimaryKeyTrait,
+};
 
+/// A row from the `channel_current` database view representing the latest
+/// state of a single channel.
+///
+/// This is a read-only view model — rows are produced by the database, not
+/// inserted directly. Each row corresponds to the most recent
+/// `channel_state` entry for a given channel, selected by
+/// `(published_block, published_tx_index, published_log_index)`.
+///
+/// # Examples
+///
+/// ```
+/// use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+/// # use blokli_db_entity::views::channel_current;
+///
+/// # async fn example(db: &sea_orm::DatabaseConnection) -> Result<(), sea_orm::DbErr> {
+/// let channel = channel_current::Entity::find()
+///     .filter(channel_current::Column::ChannelId.eq(42_i64))
+///     .one(db)
+///     .await?;
+///
+/// if let Some(ch) = channel {
+///     println!("status={}, epoch={}", ch.status, ch.epoch);
+/// }
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Clone, Debug, PartialEq, Eq, DeriveEntityModel)]
 #[sea_orm(table_name = "channel_current")]
 pub struct Model {
@@ -27,6 +56,11 @@ pub struct Model {
     pub reorg_correction: bool,
 }
 
+/// SeaORM relation enum for `channel_current`.
+///
+/// Empty because this entity backs a read-only database view with no foreign
+/// key relations defined at the ORM level. To resolve related data (e.g., the
+/// source or destination account), query the relevant entity directly by key ID.
 #[derive(Copy, Clone, Debug, EnumIter, DeriveRelation)]
 pub enum Relation {}
 
