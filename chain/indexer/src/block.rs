@@ -600,6 +600,7 @@ where
         U: ChainLogHandler + 'static,
         Db: BlokliDbLogOperations + 'static,
     {
+        let _lock = indexer_state.acquire_processing_lock().await;
         let block_id = block.block_id;
         let log_count = block.logs.len();
         debug!(block_id, "processing events");
