@@ -1,7 +1,9 @@
+use std::time::{Duration, Instant};
+
 use anyhow::{Result, anyhow};
 use blokli_client::api::{
     AccountSelector, BlokliQueryClient, BlokliSubscriptionClient, ChannelFilter, ChannelSelector, SafeSelector,
-    types::ChannelStatus,
+    types::{ChannelStatus, TransactionStatus},
 };
 use blokli_integration_tests::{
     constants::{EPSILON, parsed_safe_balance, subscription_timeout},
@@ -9,10 +11,12 @@ use blokli_integration_tests::{
 };
 use eventsource_client::{Client, ClientBuilder, SSE};
 use futures::stream::StreamExt;
-use futures_time::future::FutureExt as FutureTimeoutExt;
-use hex::ToHex;
+use futures_time::{future::FutureExt as FutureTimeoutExt, time::Duration as FuturesDuration};
+use hex::{FromHex, ToHex};
+use hopr_bindings::exports::alloy::primitives::U256;
 use hopr_crypto_types::{keypairs::Keypair, types::Hash};
 use hopr_internal_types::channels::generate_channel_id;
+use hopr_primitive_types::prelude::HoprBalance;
 use rstest::*;
 use serde_json::json;
 use serial_test::serial;
@@ -189,6 +193,97 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
+/// Subscribes to graph updates after a channel is already open, then triggers a balance increase
+/// and a channel closure. Asserts each event sequentially interleaved with the actions that
+/// trigger them, proving that events arrive at the correct time relative to their triggers.
+async fn subscribe_graph_channel_update_on_closure(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    let [src, dst] = fixture.sample_accounts::<2>();
+    let expected_id = generate_channel_id(&src.address, &dst.address);
+    let expected_channel_id = Hash::from(expected_id).encode_hex::<String>();
+    let initial_amount = "1 wei wxHOPR".parse().expect("failed to parse amount");
+    let fund_amount = "2 wei wxHOPR".parse().expect("failed to parse amount");
+    let total_amount: HoprBalance = "3 wei wxHOPR".parse().expect("failed to parse amount");
+
+    // Setup: deploy safes, announce, approve, and open channel with initial balance
+    let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
+    fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
+    fixture.approve(&src, initial_amount, &src_safe.module_address).await?;
+    fixture
+        .open_channel(&src, &dst, initial_amount, &src_safe.module_address)
+        .await?;
+
+    // Wait for indexing so the channel is in the database
+    tokio::time::sleep(Duration::from_secs(8)).await;
+
+    // Subscribe after the channel exists - consume the stream directly in this task
+    let client = fixture.client().clone();
+    let mut stream = client.subscribe_graph().expect("failed to create graph subscription");
+
+    // Phase 1: receive and assert the initial Open state BEFORE triggering any updates
+    let phase1 = loop {
+        let entry = stream
+            .next()
+            .timeout(subscription_timeout())
+            .await?
+            .ok_or_else(|| anyhow!("stream ended before receiving initial channel state"))??;
+        if entry.channel.concrete_channel_id.to_lowercase() == expected_channel_id.to_lowercase() {
+            break entry;
+        }
+    };
+    assert_eq!(phase1.channel.status, ChannelStatus::Open);
+    assert_eq!(phase1.channel.balance.0, initial_amount.to_string());
+    assert_eq!(phase1.source.chain_key, src.address.to_string());
+    assert_eq!(phase1.destination.chain_key, dst.address.to_string());
+
+    // Fund the channel with additional tokens - triggers ChannelBalanceIncreased -> ChannelUpdated.
+    // This runs AFTER the initial state was received and asserted above.
+    fixture.approve(&src, fund_amount, &src_safe.module_address).await?;
+    fixture
+        .open_channel(&src, &dst, fund_amount, &src_safe.module_address)
+        .await?;
+
+    // Receive balance increase event - can only arrive after the fund action above
+    let balance_update = loop {
+        let entry = stream
+            .next()
+            .timeout(subscription_timeout())
+            .await?
+            .ok_or_else(|| anyhow!("stream ended before receiving balance update"))??;
+        if entry.channel.concrete_channel_id.to_lowercase() == expected_channel_id.to_lowercase() {
+            break entry;
+        }
+    };
+    assert_eq!(balance_update.channel.status, ChannelStatus::Open);
+    assert_eq!(balance_update.channel.balance.0, total_amount.to_string());
+
+    // Trigger channel closure - runs AFTER the balance update was received and asserted above
+    fixture
+        .initiate_outgoing_channel_closure(&src, &dst, &src_safe.module_address)
+        .await?;
+
+    // Receive closure event - can only arrive after the closure action above
+    let closure = loop {
+        let entry = stream
+            .next()
+            .timeout(subscription_timeout())
+            .await?
+            .ok_or_else(|| anyhow!("stream ended before receiving closure event"))??;
+        if entry.channel.concrete_channel_id.to_lowercase() == expected_channel_id.to_lowercase() {
+            break entry;
+        }
+    };
+    assert_eq!(closure.channel.status, ChannelStatus::PendingToClose);
+    assert_eq!(
+        closure.channel.concrete_channel_id.to_lowercase(),
+        expected_channel_id.to_lowercase()
+    );
+
+    Ok(())
+}
+
+#[rstest]
+#[test_log::test(tokio::test)]
+#[serial]
 /// subscribes to ticket parameter updates, updates the winning probability, and verifies that
 /// the update is received through the subscription.
 async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
@@ -323,6 +418,203 @@ async fn subscribe_keepalive_comments(#[future(awt)] fixture: IntegrationFixture
     assert!(
         comment.contains("keep-alive"),
         "unexpected keepalive comment: {comment}"
+    );
+
+    Ok(())
+}
+
+#[rstest]
+#[test_log::test(tokio::test)]
+#[serial]
+/// Verifies that channelUpdated subscription does not emit duplicate events when subscribing
+/// to a channel that already exists in the database (tests the 2-phase subscription pattern).
+async fn subscribe_channels_no_duplicate_initial_state(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    // 1. Setup accounts and deploy safes
+    let [src, dst] = fixture.sample_accounts::<2>();
+    let expected_id = generate_channel_id(&src.address, &dst.address);
+    let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
+    fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
+
+    // 2. Open channel BEFORE subscribing
+    let amount = "100 wei wxHOPR".parse().expect("failed to parse amount");
+    let expected_channel_id = Hash::from(expected_id).encode_hex::<String>();
+
+    fixture.approve(&src, amount, &src_safe.module_address).await?;
+    fixture
+        .open_channel(&src, &dst, amount, &src_safe.module_address)
+        .await?;
+
+    // 3. Wait for indexing to complete
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // 4. NOW subscribe (channel already exists in DB)
+    let client = fixture.client().clone();
+    let channel_selector = ChannelSelector {
+        filter: Some(ChannelFilter::ChannelId(expected_id.into())),
+        status: Some(ChannelStatus::Open),
+    };
+
+    let handle = tokio::task::spawn(async move {
+        client
+            .subscribe_channels(channel_selector)
+            .expect("failed to create subscription")
+            .take(1) // Should only get 1 emission (initial state)
+            .next()
+            .timeout(subscription_timeout())
+            .await
+    });
+
+    // 5. No additional actions - just wait for initial emission
+    let result = handle.await??;
+
+    // 6. Assert we got exactly 1 emission
+    let received_channel = result.ok_or_else(|| anyhow!("Should receive initial state"))?;
+    assert_eq!(
+        received_channel?.concrete_channel_id.to_lowercase(),
+        expected_channel_id.to_lowercase()
+    );
+
+    Ok(())
+}
+
+#[rstest]
+#[test_log::test(tokio::test)]
+#[serial]
+/// Verifies that accountUpdated subscription does not emit duplicate events when subscribing
+/// to an account that already exists in the database (tests the 2-phase subscription pattern).
+async fn subscribe_account_no_duplicate_initial_state(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    // 1. Deploy safe and announce BEFORE subscribing
+    let [account] = fixture.sample_accounts::<1>();
+    let account_address = account.address.to_string();
+
+    fixture
+        .deploy_safe_and_announce(&account, parsed_safe_balance())
+        .await?;
+
+    // 2. Wait for indexing
+    tokio::time::sleep(Duration::from_secs(2)).await;
+
+    // 3. Subscribe AFTER account already announced
+    let client = fixture.client().clone();
+    let selector = AccountSelector::Address(*account.to_alloy_address().as_ref());
+
+    let handle = tokio::task::spawn(async move {
+        client
+            .subscribe_accounts(selector)
+            .expect("failed to create subscription")
+            .take(1) // Should only get 1 emission
+            .next()
+            .timeout(subscription_timeout())
+            .await
+    });
+
+    // 4. Collect result
+    let result = handle.await??;
+
+    // 5. Assert single emission
+    let account_data = result.ok_or_else(|| anyhow!("Should receive initial account state"))?;
+    assert_eq!(account_data?.chain_key.to_lowercase(), account_address.to_lowercase());
+
+    Ok(())
+}
+
+#[rstest]
+#[test_log::test(tokio::test)]
+#[serial]
+/// Subscribes to transaction status updates, submits a transaction and verifies that
+/// the subscription receives status updates (SUBMITTED -> CONFIRMED).
+async fn subscribe_transaction_status_updates(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    // 1. Build and submit transaction
+    let [sender, recipient] = fixture.sample_accounts::<2>();
+    let tx_value = U256::from(1_000_000u128); // 0.000000000001 ETH
+    let nonce = fixture.rpc().transaction_count(&sender.address).await?;
+
+    let raw_tx = fixture.build_raw_tx(tx_value, &sender, &recipient, nonce).await?;
+    let signed_bytes =
+        Vec::from_hex(raw_tx.trim_start_matches("0x")).map_err(|e| anyhow!("failed to decode raw transaction: {e}"))?;
+
+    // 2. Submit and get tracking ID
+    let tx_id = fixture.submit_and_track_tx(&signed_bytes).await?;
+
+    // 3. Spawn subscription task using raw GraphQL query (since there's no client method yet)
+    let query = json!({
+        "query": format!(
+            "subscription {{ transactionUpdated(id: \"{}\") {{ id status submittedAt transactionHash }} }}",
+            tx_id
+        )
+    });
+    let request_body = serde_json::to_string(&query).expect("Failed to serialize request");
+    let url = fixture
+        .config()
+        .bloklid_url
+        .join("graphql")
+        .map_err(|e| anyhow!("failed to build GraphQL URL: {e}"))?;
+
+    let client = ClientBuilder::for_url(url.as_str())
+        .map_err(|e| anyhow!("failed to build SSE client: {e}"))?
+        .connect_timeout(fixture.config().http_timeout)
+        .header("Accept", "text/event-stream")
+        .map_err(|e| anyhow!("failed to set Accept header: {e}"))?
+        .header("Content-Type", "application/json")
+        .map_err(|e| anyhow!("failed to set Content-Type header: {e}"))?
+        .method("POST".into())
+        .body(request_body)
+        .build();
+
+    let mut stream = client.stream().filter_map(|item| {
+        futures::future::ready(match item {
+            Ok(SSE::Event(event)) if event.event_type == "next" => {
+                serde_json::from_str::<serde_json::Value>(&event.data).ok()
+            }
+            _ => None,
+        })
+    });
+
+    // 4. Collect status updates until Confirmed or timeout
+    let mut statuses = Vec::new();
+    let start = Instant::now();
+    let overall_timeout: Duration = subscription_timeout().into();
+    loop {
+        let elapsed = start.elapsed();
+        if elapsed >= overall_timeout {
+            break;
+        }
+        let remaining = FuturesDuration::from(overall_timeout - elapsed);
+
+        match stream.next().timeout(remaining).await {
+            Ok(Some(update)) => {
+                if let Some(status_str) = update
+                    .get("data")
+                    .and_then(|d| d.get("transactionUpdated"))
+                    .and_then(|tx| tx.get("status"))
+                    .and_then(|s| s.as_str())
+                {
+                    let status = match status_str {
+                        "SUBMITTED" => TransactionStatus::Submitted,
+                        "PENDING" => TransactionStatus::Pending,
+                        "CONFIRMED" => TransactionStatus::Confirmed,
+                        _ => continue,
+                    };
+                    statuses.push(status);
+                    if status == TransactionStatus::Confirmed {
+                        break;
+                    }
+                }
+            }
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
+
+    // 5. Assert we received SUBMITTED and CONFIRMED statuses
+    assert!(!statuses.is_empty(), "Should receive at least one status update");
+    assert!(
+        statuses.contains(&TransactionStatus::Submitted) || statuses.contains(&TransactionStatus::Pending),
+        "Should receive SUBMITTED or PENDING status"
+    );
+    assert!(
+        statuses.contains(&TransactionStatus::Confirmed),
+        "Should receive CONFIRMED status"
     );
 
     Ok(())

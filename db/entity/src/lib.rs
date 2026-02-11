@@ -9,6 +9,8 @@ pub mod conversions;
 
 pub mod errors;
 
+pub mod views;
+
 // Re-export codegen entities
 #[cfg_attr(rustfmt, rustfmt_skip)]
 pub use codegen::*;

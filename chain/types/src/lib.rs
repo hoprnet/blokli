@@ -24,6 +24,7 @@ use serde::{Deserialize, Serialize};
 
 pub mod actions;
 pub mod chain_events;
+pub mod channel;
 pub mod constants;
 pub mod errors;
 // Various (mostly testing related) utility functions

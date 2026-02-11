@@ -698,6 +698,42 @@ Before committing configuration changes, verify:
 
 **Note**: The architecture document focuses on high-level design and should NOT contain code examples, CLI commands, or configuration snippets. Keep it conceptual and architectural.
 
+### Transaction Store
+
+The transaction store (`chain/api/src/transaction_store.rs`) is an in-memory tracking system for submitted transactions. It provides:
+
+- Thread-safe storage using `DashMap`
+- Event-driven status updates via `async_broadcast`
+- GraphQL subscription support for real-time transaction monitoring
+
+**Important Limitations:**
+
+1. **In-Memory Only**: Transaction records are not persisted to database
+   - All transaction history is lost on server restart
+   - No audit trail for historical transactions
+   - Only active transactions during server uptime are queryable
+
+2. **No Persistence Required**: This is by design for the following reasons:
+   - Fire-and-forget transactions don't need tracking
+   - Async/sync mode transactions are confirmed via on-chain indexing
+   - Transaction store is for real-time monitoring only, not historical queries
+
+3. **Scope**: Only tracks transactions submitted in `async` or `sync` modes
+   - Fire-and-forget mode (`send_raw_transaction`) creates no store entries
+   - Use on-chain confirmation for permanent transaction records
+
+**When to Use:**
+
+- Real-time transaction status monitoring via GraphQL subscriptions
+- Temporary tracking during transaction submission and confirmation
+- Development and testing scenarios
+
+**When NOT to Use:**
+
+- Historical transaction queries (use blockchain explorer or database logs)
+- Audit trails (implement separate logging if required)
+- Cross-restart transaction tracking (not supported)
+
 ### Workspace Structure
 
 - `bloklid` - Daemon for indexing HOPR on-chain events
@@ -716,6 +752,8 @@ Before committing configuration changes, verify:
 - `db/` - Database modules
   - Database abstraction via traits in `db/api`
   - SeaORM entities in `db/entity`
+    - `db/entity/src/views/` - SeaORM entities for database views (`account_current`, `channel_current`)
+    - `db/entity/src/conversions/` - Conversion and aggregation utilities (`account_aggregation`, `channel_aggregation`)
   - Migrations in `db/migration`
 
 ## Testing
@@ -770,6 +808,45 @@ let blocks = Block::find()
     .await?;
 ```
 
+### Current State via Database Views
+
+For retrieving the latest state of accounts or channels, use the `*_current` database views instead of manual `ORDER BY published_* DESC LIMIT 1` queries:
+
+````rust
+use blokli_db_entity::views::{account_current, channel_current};
+use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
+
+// Get current state for a specific channel
+let current = channel_current::Entity::find()
+    .filter(channel_current::Column::ChannelId.eq(channel_id))
+    .one(db)
+    .await?;
+
+// Convert view model to state model using From impl
+let state: Option<channel_state::Model> = current.map(channel_state::Model::from);
+
+View models implement `From` conversions to their corresponding `*_state::Model` types, allowing seamless reuse of existing state-handling code.
+
+### Batch Account Loading
+
+When resolving accounts for multiple channels, batch-fetch accounts and use a HashMap for O(1) lookup to avoid N+1 query patterns:
+
+```rust
+use std::collections::HashMap;
+
+// Collect all unique account IDs
+let mut account_ids: Vec<i64> = channels
+    .iter()
+    .flat_map(|c| vec![c.source, c.destination])
+    .collect();
+account_ids.sort_unstable();
+account_ids.dedup();
+
+// Single batch fetch
+let accounts = fetch_accounts_by_keyids(db, account_ids).await?;
+let account_map: HashMap<_, _> = accounts.into_iter().map(|a| (a.keyid, a)).collect();
+````
+
 ### GraphQL Resolvers
 
 ```rust
@@ -796,6 +873,9 @@ impl Query {
 - Creating custom contract encoding/decoding logic when `hopr-bindings` provides the necessary types and utilities
 - Missing type annotations on public function parameters and return types
 - Unwrap/expect in production code (use proper error handling)
+- Using `copy_from_slice` for fixed-size array conversion (use `try_into()` with error handling)
+- Manual `ORDER BY published_* DESC LIMIT 1` for current state (use `*_current` database views)
+- Per-row account lookups inside loops (use batch-fetch with HashMap)
 - Blocking operations in async contexts
 - Hardcoded configuration values
 - Direct database queries without using SeaORM entities

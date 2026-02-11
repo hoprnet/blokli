@@ -6,7 +6,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-api"
 repository  = "https://github.com/hoprnet/hoprnet"
-version     = "0.14.0"
+version     = "0.15.1"
 
 [lints]
 workspace = true
@@ -72,6 +72,9 @@ blokli-db-entity     = { workspace = true }
 hopr-bindings        = { workspace = true }
 hopr-crypto-types    = { workspace = true }
 hopr-primitive-types = { workspace = true }
+
+# Randomization
+rand = { workspace = true }
 
 # Logging
 tracing            = { workspace = true }

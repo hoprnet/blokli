@@ -319,7 +319,7 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
                 while let Some(response) = response_stream.next().await {
                     let json = serde_json::to_string(&response)
                         .unwrap_or_else(|_| r#"{"errors":[{"message":"Failed to serialize response"}]}"#.to_string());
-                    yield Ok::<_, std::convert::Infallible>(Event::default().data(json));
+                    yield Ok::<_, std::convert::Infallible>(Event::default().event("next").data(json));
                 }
             });
 

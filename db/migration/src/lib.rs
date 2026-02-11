@@ -33,6 +33,7 @@ mod m029_update_safe_contract_indices;
 mod m030_migrate_v3_safes;
 mod m031_remove_ticket_params_notify_trigger;
 mod m032_safe_contract_temporal_schema;
+mod m033_update_current_state_views;
 
 /// This is a special block ID that even pre-dates the v3 contract deployment on Gnosis chain,
 /// and therefore could be safely used to mark data added via the migration.
@@ -95,7 +96,8 @@ impl<const NETWORK: u8> Migrator<NETWORK> {
             Box::new(m029_update_safe_contract_indices::Migration),
             Box::new(m031_remove_ticket_params_notify_trigger::Migration),
             Box::new(m032_safe_contract_temporal_schema::Migration),
-            // Note: m030 (safe CSV data) is added by network-specific impls AFTER m032
+            Box::new(m033_update_current_state_views::Migration),
+            // Note: m030 (safe CSV data) is added by network-specific impls AFTER m033
             // because m030 now uses the temporal schema (hopr_safe_contract_state)
         ]
     }
@@ -164,7 +166,8 @@ impl<const NETWORK: u8> MigratorIndex<NETWORK> {
             Box::new(m029_update_safe_contract_indices::Migration),
             Box::new(m031_remove_ticket_params_notify_trigger::Migration),
             Box::new(m032_safe_contract_temporal_schema::Migration),
-            // Note: m030 (safe CSV data) is added by network-specific impls AFTER m032
+            Box::new(m033_update_current_state_views::Migration),
+            // Note: m030 (safe CSV data) is added by network-specific impls AFTER m033
             // because m030 now uses the temporal schema (hopr_safe_contract_state)
         ]
     }

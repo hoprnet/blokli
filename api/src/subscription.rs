@@ -1,6 +1,6 @@
 //! GraphQL subscription root and resolver implementations
 
-use std::{collections::HashMap, sync::Arc, time::Duration};
+use std::{collections::HashMap, sync::Arc};
 
 use async_broadcast::Receiver;
 use async_graphql::{Context, ID, Result, Subscription};
@@ -9,16 +9,15 @@ use blokli_api_types::{
     Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, Safe, TicketParameters, TokenValueString,
     Transaction, TransactionStatus as GqlTransactionStatus, UInt64,
 };
-use blokli_chain_api::transaction_store::{TransactionStatus as StoreTransactionStatus, TransactionStore};
+use blokli_chain_api::transaction_store::{
+    TransactionEvent, TransactionStatus as StoreTransactionStatus, TransactionStore,
+};
 use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
 use blokli_db_entity::{
     chain_info,
     chain_info::Entity as ChainInfoEntity,
     channel, channel_state,
-    conversions::{
-        account_aggregation::{fetch_accounts_by_keyids, fetch_accounts_with_filters},
-        channel_aggregation::fetch_channels_with_state,
-    },
+    conversions::account_aggregation::{fetch_accounts_by_keyids, fetch_accounts_with_filters},
     hopr_node_safe_registration,
 };
 use chrono::Utc;
@@ -28,11 +27,11 @@ use hopr_primitive_types::{
     primitives::Address,
     traits::{IntoEndian, ToHex},
 };
+use rand::seq::SliceRandom;
 use sea_orm::{
     ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
     Statement,
 };
-use tokio::time::sleep;
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -144,7 +143,7 @@ async fn capture_watermark_synchronized(
 async fn query_channels_at_watermark(
     db: &DatabaseConnection,
     watermark: &Watermark,
-    _batch_size: usize,
+    _batch_size: usize, // Reserved for future pagination implementation
 ) -> Result<Vec<ChannelUpdate>> {
     // Query all channels (identity table has no temporal component)
     let channels = channel::Entity::find()
@@ -162,21 +161,7 @@ async fn query_channels_at_watermark(
     // Only get states published at or before the watermark
     let channel_states_query = channel_state::Entity::find()
         .filter(channel_state::Column::ChannelId.is_in(channel_ids.clone()))
-        .filter(
-            Condition::any()
-                .add(channel_state::Column::PublishedBlock.lt(watermark.block))
-                .add(
-                    Condition::all()
-                        .add(channel_state::Column::PublishedBlock.eq(watermark.block))
-                        .add(channel_state::Column::PublishedTxIndex.lt(watermark.tx_index)),
-                )
-                .add(
-                    Condition::all()
-                        .add(channel_state::Column::PublishedBlock.eq(watermark.block))
-                        .add(channel_state::Column::PublishedTxIndex.eq(watermark.tx_index))
-                        .add(channel_state::Column::PublishedLogIndex.lte(watermark.log_index)),
-                ),
-        )
+        .filter(watermark_condition(watermark))
         .order_by_desc(channel_state::Column::PublishedBlock)
         .order_by_desc(channel_state::Column::PublishedTxIndex)
         .order_by_desc(channel_state::Column::PublishedLogIndex);
@@ -216,13 +201,21 @@ async fn query_channels_at_watermark(
         .map_err(|e| async_graphql::Error::new(errors::messages::query_error("accounts fetch", e)))?;
 
     // Build account map for quick lookup
-    let account_map: HashMap<i64, blokli_db_entity::conversions::account_aggregation::AggregatedAccount> =
-        accounts_result.into_iter().map(|a| (a.keyid, a)).collect();
+    let account_map: HashMap<_, _> = accounts_result.into_iter().map(|a| (a.keyid, a)).collect();
 
     // Build ChannelUpdate objects
     let mut results = Vec::new();
     for channel in open_channels {
-        let state = state_map.get(&channel.id).unwrap(); // Safe because we filtered by state presence
+        let state = match state_map.get(&channel.id) {
+            Some(s) => s,
+            None => {
+                error!(
+                    "Channel {} missing state after filtering - data inconsistency",
+                    channel.id
+                );
+                continue; // Skip this channel instead of panicking
+            }
+        };
 
         let source_account = account_map
             .get(&channel.source)
@@ -282,6 +275,156 @@ async fn query_channels_at_watermark(
     Ok(results)
 }
 
+/// Queries all channels at a specific watermark with optional filters
+///
+/// This implements the Phase 1 historical snapshot by querying all channels
+/// matching the given filters that existed at the watermark position.
+///
+/// # Arguments
+///
+/// * `db` - Database connection
+/// * `watermark` - Point in time to query channels at
+/// * `source_key_id` - Optional filter by source account ID
+/// * `destination_key_id` - Optional filter by destination account ID
+/// * `concrete_channel_id` - Optional filter by concrete channel ID
+/// * `status` - Optional filter by channel status
+///
+/// # Returns
+///
+/// Vector of Channel objects matching the filters
+async fn query_channels_at_watermark_with_filters(
+    db: &DatabaseConnection,
+    watermark: &Watermark,
+    source_key_id: Option<i32>,
+    destination_key_id: Option<i32>,
+    concrete_channel_id: Option<String>,
+    status: Option<blokli_api_types::ChannelStatus>,
+) -> Result<Vec<Channel>> {
+    // Convert i32 keyids to i64 for database queries
+    let source_i64 = source_key_id.map(|k| k as i64);
+    let dest_i64 = destination_key_id.map(|k| k as i64);
+
+    // Convert GraphQL ChannelStatus to internal status code (i16)
+    let status_code: Option<i16> = status.map(|s| s.into());
+
+    // Build query with filters
+    let mut query = channel::Entity::find();
+
+    if let Some(src) = source_i64 {
+        query = query.filter(channel::Column::Source.eq(src));
+    }
+
+    if let Some(dst) = dest_i64 {
+        query = query.filter(channel::Column::Destination.eq(dst));
+    }
+
+    if let Some(ch_id) = concrete_channel_id.as_ref() {
+        // Normalize channel ID by stripping 0x prefix
+        let normalized_id = ch_id.strip_prefix("0x").unwrap_or(ch_id);
+        query = query.filter(channel::Column::ConcreteChannelId.eq(normalized_id.to_string()));
+    }
+
+    let channels = query
+        .all(db)
+        .await
+        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channels query", e)))?;
+
+    if channels.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let channel_ids: Vec<i64> = channels.iter().map(|c| c.id).collect();
+
+    // Query channel_state for all channels, filtered by watermark
+    let channel_states_query = channel_state::Entity::find()
+        .filter(channel_state::Column::ChannelId.is_in(channel_ids))
+        .filter(watermark_condition(watermark))
+        .order_by_desc(channel_state::Column::PublishedBlock)
+        .order_by_desc(channel_state::Column::PublishedTxIndex)
+        .order_by_desc(channel_state::Column::PublishedLogIndex);
+
+    let channel_states = channel_states_query
+        .all(db)
+        .await
+        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channel_state query", e)))?;
+
+    // Build map of channel_id -> latest state
+    let mut state_map: HashMap<i64, channel_state::Model> = HashMap::new();
+    for state in channel_states {
+        state_map.entry(state.channel_id).or_insert(state);
+    }
+
+    // Filter channels by status and build result
+    let mut results = Vec::new();
+    for channel in channels {
+        let state = match state_map.get(&channel.id) {
+            Some(s) => s,
+            None => continue, // Skip channels without state
+        };
+
+        // Apply status filter if provided
+        if let Some(status_filter) = status_code
+            && state.status != status_filter
+        {
+            continue;
+        }
+
+        // Convert to GraphQL Channel type
+        let channel_gql = Channel {
+            concrete_channel_id: channel.concrete_channel_id,
+            source: channel.source,
+            destination: channel.destination,
+            balance: TokenValueString(PrimitiveHoprBalance::from_be_bytes(&state.balance).to_string()),
+            status: state.status.into(),
+            epoch: i32::try_from(state.epoch).map_err(|e| {
+                async_graphql::Error::new(errors::messages::conversion_error(
+                    "i64",
+                    "i32",
+                    format!("{} ({})", state.epoch, e),
+                ))
+            })?,
+            ticket_index: UInt64(u64::try_from(state.ticket_index).map_err(|e| {
+                async_graphql::Error::new(errors::messages::conversion_error(
+                    "i64",
+                    "u64",
+                    format!("{} ({})", state.ticket_index, e),
+                ))
+            })?),
+            closure_time: state.closure_time.map(|time| time.with_timezone(&Utc)),
+        };
+
+        results.push(channel_gql);
+    }
+
+    Ok(results)
+}
+
+/// Convert StoreTransactionStatus to GraphQL TransactionStatus
+///
+/// Provides a single source of truth for status conversion, eliminating
+/// duplicated match expressions throughout the codebase.
+fn convert_transaction_status(status: StoreTransactionStatus) -> GqlTransactionStatus {
+    match status {
+        StoreTransactionStatus::Pending => GqlTransactionStatus::Pending,
+        StoreTransactionStatus::Submitted => GqlTransactionStatus::Submitted,
+        StoreTransactionStatus::Confirmed => GqlTransactionStatus::Confirmed,
+        StoreTransactionStatus::Reverted => GqlTransactionStatus::Reverted,
+        StoreTransactionStatus::Timeout => GqlTransactionStatus::Timeout,
+        StoreTransactionStatus::ValidationFailed => GqlTransactionStatus::ValidationFailed,
+        StoreTransactionStatus::SubmissionFailed => GqlTransactionStatus::SubmissionFailed,
+    }
+}
+
+/// Builds SeaORM condition for filtering channel_state by watermark
+///
+/// Creates a condition that matches all channel states published in blocks up to
+/// and including the watermark block. The indexer processes blocks atomically —
+/// all events from a block are committed before the watermark is advanced — so
+/// block-level granularity is sufficient.
+fn watermark_condition(watermark: &Watermark) -> Condition {
+    Condition::all().add(channel_state::Column::PublishedBlock.lte(watermark.block))
+}
+
 /// fetch_channel_update is no longer needed - events now contain complete data
 /// Root subscription type providing real-time updates via Server-Sent Events (SSE)
 pub struct SubscriptionRoot;
@@ -290,9 +433,33 @@ pub struct SubscriptionRoot;
 impl SubscriptionRoot {
     /// Subscribe to real-time updates of payment channels
     ///
-    /// Provides updates whenever there is a change in the state of any payment channel,
-    /// including channel opening, balance updates, status changes, and channel closure.
-    /// Optional filters can be applied to only receive updates for specific channels.
+    /// **Streaming Behavior:**
+    /// - Emits all matching channels once on subscription start (Phase 1)
+    /// - Subsequently emits updates only when channels actually change (Phase 2)
+    /// - Uses IndexerState event bus for real-time notifications
+    ///
+    /// **Phase 1 Ordering:**
+    /// The initial snapshot (Phase 1) emits channels in randomized order to prevent
+    /// clients from relying on a specific ordering. Clients that reconnect will
+    /// receive entries in a different order each time.
+    ///
+    /// **Update Triggers:**
+    /// A channel is re-emitted when:
+    /// - The channel's status changes (e.g., OPEN -> PENDINGTOCLOSE -> CLOSED)
+    /// - The channel's balance changes
+    /// - The channel's epoch or ticket_index changes
+    /// - A new channel opens that matches the filters
+    ///
+    /// **Filters:**
+    /// All filters are optional and can be combined:
+    /// - `source_key_id`: Only channels from this source account
+    /// - `destination_key_id`: Only channels to this destination account
+    /// - `concrete_channel_id`: Only this specific channel (with or without 0x prefix)
+    /// - `status`: Only channels with this status (OPEN, CLOSED, PENDINGTOCLOSE)
+    ///
+    /// **Automatic Shutdown:**
+    /// The subscription automatically terminates on blockchain reorganization,
+    /// requiring clients to reconnect to re-establish consistent state.
     #[graphql(name = "channelUpdated")]
     async fn channel_updated(
         &self,
@@ -302,18 +469,106 @@ impl SubscriptionRoot {
         #[graphql(desc = "Filter by concrete channel ID (hexadecimal format)")] concrete_channel_id: Option<String>,
         #[graphql(desc = "Filter by channel status")] status: Option<blokli_api_types::ChannelStatus>,
     ) -> Result<impl Stream<Item = Channel>> {
+        // Get dependencies from context
         let db = ctx.data::<DatabaseConnection>()?.clone();
+        let indexer_state = ctx
+            .data::<IndexerState>()
+            .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
+            .clone();
+
+        // Capture watermark and subscribe to event bus (synchronized)
+        let (watermark, mut event_receiver, mut shutdown_receiver) =
+            capture_watermark_synchronized(&indexer_state, &db).await?;
 
         Ok(stream! {
-            loop {
-                // TODO: Replace with actual database change notifications
-                // For now, poll the database periodically
-                sleep(Duration::from_secs(1)).await;
-
-                // Query the latest channels with filters
-                if let Ok(channels) = Self::fetch_filtered_channels(&db, source_key_id, destination_key_id, concrete_channel_id.clone(), status).await {
-                    for channel in channels {
+            // Phase 1: Stream historical snapshot of all matching channels at watermark
+            match query_channels_at_watermark_with_filters(
+                &db,
+                &watermark,
+                source_key_id,
+                destination_key_id,
+                concrete_channel_id.clone(),
+                status,
+            )
+            .await
+            {
+                Ok(mut historical_channels) => {
+                    historical_channels.shuffle(&mut rand::rng());
+                    debug!("Phase 1: Yielding {} historical channels", historical_channels.len());
+                    for channel in historical_channels {
                         yield channel;
+                    }
+                }
+                Err(e) => {
+                    error!("Failed to query historical channels: {:?}", e);
+                    return; // Terminate subscription on error
+                }
+            }
+
+            debug!("Phase 2: Listening for channel update events");
+
+            // Phase 2: Stream real-time updates from event bus
+            loop {
+                tokio::select! {
+                    biased;
+
+                    // Check for shutdown signal first
+                    shutdown_result = shutdown_receiver.recv() => {
+                        match shutdown_result {
+                            Ok(_) => {
+                                info!("channelUpdated subscription shutting down due to reorg");
+                                return; // Terminate subscription on reorg
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                warn!("Shutdown channel closed for channelUpdated");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Shutdown signal overflowed ({}), continuing", n);
+                            }
+                        }
+                    }
+
+                    // Receive event from event bus
+                    event_result = event_receiver.recv() => {
+                        match event_result {
+                            Ok(IndexerEvent::ChannelUpdated(channel_update)) => {
+                                // Extract channel from event
+                                let channel = &channel_update.channel;
+
+                                // Apply filters to the channel
+                                if matches_channel_filters(
+                                    channel,
+                                    source_key_id,
+                                    destination_key_id,
+                                    concrete_channel_id.as_deref(),
+                                    status,
+                                ) {
+                                    debug!("Yielding channel update: {}", channel.concrete_channel_id);
+                                    yield channel.clone();
+                                }
+                            }
+                            Ok(IndexerEvent::AccountUpdated(_)) => {
+                                // Account updates don't affect this subscription
+                            }
+                            Ok(IndexerEvent::KeyBindingFeeUpdated(_)) => {
+                                // Key binding fee updates don't affect this subscription
+                            }
+                            Ok(IndexerEvent::SafeDeployed(_)) => {
+                                // Safe deployment doesn't affect this subscription
+                            }
+                            Ok(IndexerEvent::TicketParametersUpdated(_)) => {
+                                // Ticket parameter updates don't affect this subscription
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                info!("Event bus closed, ending channelUpdated subscription");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Event bus overflowed ({}); channelUpdated may miss events - client should reconnect", n);
+                                // Continue but log warning - client may need to reconnect
+                            }
+                        }
                     }
                 }
             }
@@ -327,6 +582,11 @@ impl SubscriptionRoot {
     /// - Each entry contains a single channel with its source and destination accounts
     /// - On subscription start, emits all existing open channels as separate entries
     /// - Subsequently, emits updates when any channel changes
+    ///
+    /// **Phase 1 Ordering:**
+    /// The initial snapshot (Phase 1) emits channels in randomized order to prevent
+    /// clients from relying on a specific ordering. Clients that reconnect will
+    /// receive entries in a different order each time.
     ///
     /// **Building the Graph:**
     /// Clients receive entries incrementally (one per channel) and should accumulate
@@ -368,7 +628,8 @@ impl SubscriptionRoot {
         Ok(stream! {
             // Phase 1: Stream historical snapshot of all open channels at watermark
             match query_channels_at_watermark(&db, &watermark, BATCH_SIZE).await {
-                Ok(historical_channels) => {
+                Ok(mut historical_channels) => {
+                    historical_channels.shuffle(&mut rand::rng());
                     for channel_update in historical_channels {
                         yield channel_update_to_graph_entry(channel_update);
                     }
@@ -382,6 +643,8 @@ impl SubscriptionRoot {
             // Phase 2: Stream real-time updates from event bus
             loop {
                 tokio::select! {
+                    biased;
+
                     // Check for shutdown signal first
                     shutdown_result = shutdown_receiver.recv() => {
                         match shutdown_result {
@@ -443,9 +706,14 @@ impl SubscriptionRoot {
     /// Optional filters can be applied to only receive updates for specific accounts.
     ///
     /// Uses the IndexerState event bus for real-time notifications:
-    /// - Emits matching accounts on subscription start
-    /// - Streams updates when `IndexerEvent::AccountUpdated` events are received
+    /// - Emits matching accounts on subscription start (Phase 1)
+    /// - Streams updates when `IndexerEvent::AccountUpdated` events are received (Phase 2)
     /// - Automatically shuts down on blockchain reorganization
+    ///
+    /// **Phase 1 Ordering:**
+    /// The initial snapshot (Phase 1) emits accounts in randomized order to prevent
+    /// clients from relying on a specific ordering. Clients that reconnect will
+    /// receive entries in a different order each time.
     #[graphql(name = "accountUpdated")]
     async fn account_updated(
         &self,
@@ -467,7 +735,8 @@ impl SubscriptionRoot {
 
             // Emit initial matching accounts
             match Self::fetch_filtered_accounts(&db, keyid, packet_key.clone(), chain_key.clone()).await {
-                Ok(accounts) => {
+                Ok(mut accounts) => {
+                    accounts.shuffle(&mut rand::rng());
                     for account in accounts {
                         yield account;
                     }
@@ -480,6 +749,8 @@ impl SubscriptionRoot {
             // Stream updates from event bus
             loop {
                 tokio::select! {
+                    biased;
+
                     shutdown_result = shutdown_receiver.recv() => {
                         match shutdown_result {
                             Ok(_) => {
@@ -563,6 +834,8 @@ impl SubscriptionRoot {
             // Stream real-time updates from event bus
             loop {
                 tokio::select! {
+                    biased;
+
                     shutdown_result = shutdown_receiver.recv() => {
                         match shutdown_result {
                             Ok(_) => {
@@ -667,6 +940,8 @@ impl SubscriptionRoot {
 
             loop {
                 tokio::select! {
+                    biased;
+
                     shutdown_result = shutdown_receiver.recv() => {
                         match shutdown_result {
                             Ok(_) => {
@@ -748,6 +1023,8 @@ impl SubscriptionRoot {
         Ok(stream! {
             loop {
                 tokio::select! {
+                    biased;
+
                     shutdown_result = shutdown_receiver.recv() => {
                         match shutdown_result {
                             Ok(_) => {
@@ -859,6 +1136,11 @@ impl SubscriptionRoot {
     ///
     /// Provides updates whenever the status of the specified transaction changes,
     /// including validation, submission, confirmation, revert, and failure events.
+    ///
+    /// Uses event-driven architecture to receive updates immediately when transaction
+    /// status changes, with zero polling overhead. Follows a 2-phase approach:
+    /// - Phase 1: Emit current transaction state if it exists
+    /// - Phase 2: Listen for future status update events
     #[graphql(name = "transactionUpdated")]
     async fn transaction_updated(
         &self,
@@ -871,44 +1153,53 @@ impl SubscriptionRoot {
 
         let transaction_store = ctx.data::<Arc<TransactionStore>>()?.clone();
 
+        // Subscribe to transaction events before checking current state
+        // to avoid race condition where we miss an update
+        let mut event_receiver = transaction_store.subscribe();
+
         Ok(stream! {
-            // Track last status to emit only when it changes
-            let mut last_status: Option<StoreTransactionStatus> = None;
+            // Phase 1: Emit current state if transaction exists
+            if let Ok(record) = transaction_store.get(transaction_id) {
+                yield Transaction {
+                    id: ID::from(record.id.to_string()),
+                    status: convert_transaction_status(record.status),
+                    submitted_at: record.submitted_at,
+                    transaction_hash: Hex32(record.transaction_hash.to_hex()),
+                };
+            }
 
+            // Phase 2: Listen for future status update events
             loop {
-                // Poll the transaction store periodically
-                // TODO: use event-driven approach
-                sleep(Duration::from_millis(100)).await;
-
-                // Try to get the transaction from the store
-                if let Ok(record) = transaction_store.get(transaction_id) {
-                    // Only emit if status has changed
-                    if last_status.as_ref() != Some(&record.status) {
-                        last_status = Some(record.status);
-
-                        // Convert store transaction status to GraphQL status
-                        let gql_status = match record.status {
-                            StoreTransactionStatus::Pending => GqlTransactionStatus::Pending,
-                            StoreTransactionStatus::Submitted => GqlTransactionStatus::Submitted,
-                            StoreTransactionStatus::Confirmed => GqlTransactionStatus::Confirmed,
-                            StoreTransactionStatus::Reverted => GqlTransactionStatus::Reverted,
-                            StoreTransactionStatus::Timeout => GqlTransactionStatus::Timeout,
-                            StoreTransactionStatus::ValidationFailed => GqlTransactionStatus::ValidationFailed,
-                            StoreTransactionStatus::SubmissionFailed => GqlTransactionStatus::SubmissionFailed,
-                        };
-
-                        // Convert transaction hash to hex string
-                        let hash_hex = record.transaction_hash.to_hex();
-
-                        yield Transaction {
-                            id: ID::from(record.id.to_string()),
-                            status: gql_status,
-                            submitted_at: record.submitted_at,
-                            transaction_hash: Hex32(hash_hex),
-                        };
+                match event_receiver.recv().await {
+                    // Use pattern matching guard to filter for matching transaction ID
+                    Ok(TransactionEvent::StatusUpdated { id, status, .. })
+                        if id == transaction_id =>
+                    {
+                        // Fetch full record to get transaction_hash and submitted_at
+                        // (event only contains delta fields)
+                        if let Ok(record) = transaction_store.get(transaction_id) {
+                            yield Transaction {
+                                id: ID::from(id.to_string()),
+                                status: convert_transaction_status(status),
+                                submitted_at: record.submitted_at,
+                                transaction_hash: Hex32(record.transaction_hash.to_hex()),
+                            };
+                        }
+                    }
+                    Ok(_) => {
+                        // Ignore events for other transactions
+                    }
+                    Err(async_broadcast::RecvError::Closed) => {
+                        // Event bus closed, terminate subscription
+                        break;
+                    }
+                    Err(async_broadcast::RecvError::Overflowed(_)) => {
+                        // Missed some events due to slow consumer, continue listening
+                        // This is acceptable since we only care about the latest status
+                        warn!("Transaction subscription for {} missed some events due to overflow", transaction_id);
+                        continue;
                     }
                 }
-                // If transaction not found, continue polling (it might be added later)
             }
         })
     }
@@ -940,60 +1231,6 @@ impl SubscriptionRoot {
                 ticket_price: TokenValueString(ticket_price),
             }
         }))
-    }
-
-    async fn fetch_filtered_channels(
-        db: &DatabaseConnection,
-        source_key_id: Option<i32>,
-        destination_key_id: Option<i32>,
-        concrete_channel_id: Option<String>,
-        status: Option<blokli_api_types::ChannelStatus>,
-    ) -> Result<Vec<Channel>, sea_orm::DbErr> {
-        // Convert i32 keyids to i64 for channel aggregation function
-        let source_i64 = source_key_id.map(|k| k as i64);
-        let dest_i64 = destination_key_id.map(|k| k as i64);
-
-        // Convert GraphQL ChannelStatus to internal status code (i16)
-        let status_code = status.map(|s| match s {
-            blokli_api_types::ChannelStatus::Closed => 0i16,
-            blokli_api_types::ChannelStatus::Open => 1i16,
-            blokli_api_types::ChannelStatus::PendingToClose => 2i16,
-        });
-
-        // Use optimized channel aggregation function
-        let aggregated_channels =
-            fetch_channels_with_state(db, source_i64, dest_i64, concrete_channel_id, status_code).await?;
-
-        // Convert to GraphQL Channel type
-        let channels: Vec<Channel> = aggregated_channels
-            .iter()
-            .map(|agg| -> Result<Channel, sea_orm::DbErr> {
-                Ok(Channel {
-                    concrete_channel_id: agg.concrete_channel_id.clone(),
-                    source: agg.source,
-                    destination: agg.destination,
-                    balance: TokenValueString(agg.balance.clone()),
-                    status: agg.status.into(),
-                    epoch: i32::try_from(agg.epoch).map_err(|e| {
-                        sea_orm::DbErr::Custom(errors::messages::conversion_error(
-                            "i64",
-                            "i32",
-                            format!("{} ({})", agg.epoch, e),
-                        ))
-                    })?,
-                    ticket_index: UInt64(u64::try_from(agg.ticket_index).map_err(|e| {
-                        sea_orm::DbErr::Custom(errors::messages::conversion_error(
-                            "i64",
-                            "u64",
-                            format!("{} ({})", agg.ticket_index, e),
-                        ))
-                    })?),
-                    closure_time: agg.closure_time,
-                })
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        Ok(channels)
     }
 
     async fn fetch_filtered_accounts(
@@ -1060,8 +1297,62 @@ fn matches_account_filters(
     true
 }
 
+/// Helper to check if a channel matches the subscription filters
+///
+/// This is used to filter events from the broadcast channel to only emit
+/// channels that match the subscription's filter criteria.
+///
+/// # Arguments
+///
+/// * `channel` - The channel to check
+/// * `source_key_id` - Optional filter by source account keyid
+/// * `destination_key_id` - Optional filter by destination account keyid
+/// * `concrete_channel_id` - Optional filter by concrete channel ID (with or without 0x prefix)
+/// * `status` - Optional filter by channel status
+///
+/// # Returns
+///
+/// `true` if the channel matches all provided filters, `false` otherwise
+fn matches_channel_filters(
+    channel: &Channel,
+    source_key_id: Option<i32>,
+    destination_key_id: Option<i32>,
+    concrete_channel_id: Option<&str>,
+    status: Option<blokli_api_types::ChannelStatus>,
+) -> bool {
+    if let Some(src) = source_key_id
+        && channel.source != src as i64
+    {
+        return false;
+    }
+    if let Some(dst) = destination_key_id
+        && channel.destination != dst as i64
+    {
+        return false;
+    }
+    if let Some(ch_id) = concrete_channel_id {
+        // Normalize both sides by stripping 0x prefix
+        let ch_id_normalized = ch_id.strip_prefix("0x").unwrap_or(ch_id);
+        let channel_id_normalized = channel
+            .concrete_channel_id
+            .strip_prefix("0x")
+            .unwrap_or(&channel.concrete_channel_id);
+        if channel_id_normalized != ch_id_normalized {
+            return false;
+        }
+    }
+    if let Some(status_filter) = status
+        && channel.status != status_filter
+    {
+        return false;
+    }
+    true
+}
+
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use async_graphql::{EmptyMutation, Object, Schema};
     use blokli_chain_indexer::state::IndexerEvent;
     use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb};
@@ -1100,6 +1391,7 @@ mod tests {
     }
 
     // Helper: Create test account in database
+    // Also creates an initial account_state record so the account_current view returns it.
     async fn create_test_account(db: &DatabaseConnection, chain_key: Vec<u8>, packet_key: &str) -> anyhow::Result<i64> {
         let account = blokli_db_entity::account::ActiveModel {
             id: Default::default(),
@@ -1111,6 +1403,18 @@ mod tests {
         };
 
         let result = account.insert(db).await?;
+
+        // Insert initial account_state so account appears in account_current view
+        let state = blokli_db_entity::account_state::ActiveModel {
+            id: Default::default(),
+            account_id: Set(result.id),
+            safe_address: Set(None),
+            published_block: Set(0),
+            published_tx_index: Set(0),
+            published_log_index: Set(0),
+        };
+        state.insert(db).await?;
+
         Ok(result.id)
     }
 
@@ -1926,6 +2230,140 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_matches_channel_filters_all_match() {
+        let channel = Channel {
+            concrete_channel_id: "abc123".to_string(),
+            source: 1,
+            destination: 2,
+            balance: TokenValueString("100 wxHOPR".to_string()),
+            status: blokli_api_types::ChannelStatus::Open,
+            epoch: 0,
+            ticket_index: UInt64(0),
+            closure_time: None,
+        };
+
+        let result = matches_channel_filters(
+            &channel,
+            Some(1),
+            Some(2),
+            Some("abc123"),
+            Some(blokli_api_types::ChannelStatus::Open),
+        );
+
+        assert!(result, "Channel should match all filters");
+    }
+
+    #[tokio::test]
+    async fn test_matches_channel_filters_normalizes_concrete_id() {
+        let channel = Channel {
+            concrete_channel_id: "abc123".to_string(),
+            source: 1,
+            destination: 2,
+            balance: TokenValueString("100 wxHOPR".to_string()),
+            status: blokli_api_types::ChannelStatus::Open,
+            epoch: 0,
+            ticket_index: UInt64(0),
+            closure_time: None,
+        };
+
+        // Test that "0xabc123" matches "abc123"
+        let result = matches_channel_filters(&channel, None, None, Some("0xabc123"), None);
+        assert!(result, "0xabc123 should match abc123 after normalization");
+
+        // Test that "abc123" matches "0xabc123"
+        let channel_with_prefix = Channel {
+            concrete_channel_id: "0xabc123".to_string(),
+            source: 1,
+            destination: 2,
+            balance: TokenValueString("100 wxHOPR".to_string()),
+            status: blokli_api_types::ChannelStatus::Open,
+            epoch: 0,
+            ticket_index: UInt64(0),
+            closure_time: None,
+        };
+
+        let result = matches_channel_filters(&channel_with_prefix, None, None, Some("abc123"), None);
+        assert!(result, "abc123 should match 0xabc123 after normalization");
+    }
+
+    #[tokio::test]
+    async fn test_matches_channel_filters_source_mismatch() {
+        let channel = Channel {
+            concrete_channel_id: "abc123".to_string(),
+            source: 1,
+            destination: 2,
+            balance: TokenValueString("100 wxHOPR".to_string()),
+            status: blokli_api_types::ChannelStatus::Open,
+            epoch: 0,
+            ticket_index: UInt64(0),
+            closure_time: None,
+        };
+
+        let result = matches_channel_filters(&channel, Some(999), None, None, None);
+        assert!(!result, "Channel should not match when source filter doesn't match");
+    }
+
+    #[tokio::test]
+    async fn test_matches_channel_filters_destination_mismatch() {
+        let channel = Channel {
+            concrete_channel_id: "abc123".to_string(),
+            source: 1,
+            destination: 2,
+            balance: TokenValueString("100 wxHOPR".to_string()),
+            status: blokli_api_types::ChannelStatus::Open,
+            epoch: 0,
+            ticket_index: UInt64(0),
+            closure_time: None,
+        };
+
+        let result = matches_channel_filters(&channel, None, Some(999), None, None);
+        assert!(
+            !result,
+            "Channel should not match when destination filter doesn't match"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_matches_channel_filters_status_mismatch() {
+        let channel = Channel {
+            concrete_channel_id: "abc123".to_string(),
+            source: 1,
+            destination: 2,
+            balance: TokenValueString("100 wxHOPR".to_string()),
+            status: blokli_api_types::ChannelStatus::Open,
+            epoch: 0,
+            ticket_index: UInt64(0),
+            closure_time: None,
+        };
+
+        let result = matches_channel_filters(
+            &channel,
+            None,
+            None,
+            None,
+            Some(blokli_api_types::ChannelStatus::Closed),
+        );
+        assert!(!result, "Channel should not match when status filter doesn't match");
+    }
+
+    #[tokio::test]
+    async fn test_matches_channel_filters_no_filters() {
+        let channel = Channel {
+            concrete_channel_id: "abc123".to_string(),
+            source: 1,
+            destination: 2,
+            balance: TokenValueString("100 wxHOPR".to_string()),
+            status: blokli_api_types::ChannelStatus::Open,
+            epoch: 0,
+            ticket_index: UInt64(0),
+            closure_time: None,
+        };
+
+        let result = matches_channel_filters(&channel, None, None, None, None);
+        assert!(result, "Channel should match when no filters are provided");
+    }
+
+    #[tokio::test]
     async fn test_safe_deployed_subscription_ignores_other_events() {
         let db = BlokliDb::new_in_memory().await.unwrap();
         let indexer_state = IndexerState::new(10, 100);
@@ -1957,5 +2395,168 @@ mod tests {
 
         // Should timeout because non-SafeDeployed events are ignored
         assert!(timeout_result.is_err(), "Stream should ignore non-SafeDeployed events");
+    }
+
+    /// Helper to collect Phase 1 items from a subscription stream.
+    ///
+    /// Collects exactly `count` items, with a timeout to avoid hanging.
+    /// Each item's data is converted to a serde_json::Value for easy field access.
+    async fn collect_phase1_items(
+        stream: &mut (impl futures::Stream<Item = async_graphql::Response> + Unpin),
+        count: usize,
+    ) -> Vec<serde_json::Value> {
+        let mut items = Vec::with_capacity(count);
+        for _ in 0..count {
+            let response = tokio::time::timeout(Duration::from_secs(5), stream.next())
+                .await
+                .expect("timeout waiting for Phase 1 item")
+                .expect("stream ended early");
+            let data = response.into_result().expect("response error").data;
+            items.push(serde_json::to_value(data).expect("failed to convert to JSON"));
+        }
+        items
+    }
+
+    #[tokio::test]
+    async fn test_channel_updated_phase1_shuffles_entries() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let conn = db.conn(blokli_db::TargetDb::Index);
+
+        // Initialize chain_info watermark at block 100
+        init_chain_info(conn, 100, 0, 0).await.unwrap();
+
+        // Create 10 channels (enough for shuffle to be observable)
+        for i in 0..10u8 {
+            let src = create_test_account(conn, vec![i * 2 + 1; 20], &format!("src{i}"))
+                .await
+                .unwrap();
+            let dst = create_test_account(conn, vec![i * 2 + 2; 20], &format!("dst{i}"))
+                .await
+                .unwrap();
+            let ch = create_test_channel(conn, src, dst, &format!("ch{i:02}")).await.unwrap();
+            insert_channel_state(conn, ch, 50, 0, i as i64, vec![0; 12], 1)
+                .await
+                .unwrap();
+        }
+
+        let query = "subscription { channelUpdated { concreteChannelId } }";
+
+        // Run the subscription 5 times via the GraphQL schema, collect Phase 1 orderings
+        let mut orderings: Vec<Vec<String>> = Vec::new();
+        for _ in 0..5 {
+            let indexer_state = IndexerState::new(10, 100);
+            let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
+                .data(conn.clone())
+                .data(indexer_state)
+                .finish();
+
+            let mut stream = schema.execute_stream(query).boxed();
+            let items = collect_phase1_items(&mut stream, 10).await;
+            let ids: Vec<String> = items
+                .iter()
+                .map(|v| v["channelUpdated"]["concreteChannelId"].as_str().unwrap().to_string())
+                .collect();
+            orderings.push(ids);
+        }
+
+        // At least 2 of the 5 orderings should differ
+        let first = &orderings[0];
+        let seen_different = orderings.iter().skip(1).any(|o| o != first);
+        assert!(
+            seen_different,
+            "5 subscription runs of 10 channels should produce at least one different Phase 1 ordering"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_opened_channel_graph_phase1_shuffles_entries() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let conn = db.conn(blokli_db::TargetDb::Index);
+
+        // Initialize chain_info watermark at block 100
+        init_chain_info(conn, 100, 0, 0).await.unwrap();
+
+        for i in 0..10u8 {
+            let src = create_test_account(conn, vec![i * 2 + 1; 20], &format!("src{i}"))
+                .await
+                .unwrap();
+            let dst = create_test_account(conn, vec![i * 2 + 2; 20], &format!("dst{i}"))
+                .await
+                .unwrap();
+            let ch = create_test_channel(conn, src, dst, &format!("ch{i:02}")).await.unwrap();
+            insert_channel_state(conn, ch, 50, 0, i as i64, vec![0; 12], 1)
+                .await
+                .unwrap();
+        }
+
+        let query = "subscription { openedChannelGraphUpdated { channel { concreteChannelId } } }";
+
+        let mut orderings: Vec<Vec<String>> = Vec::new();
+        for _ in 0..5 {
+            let indexer_state = IndexerState::new(10, 100);
+            let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
+                .data(conn.clone())
+                .data(indexer_state)
+                .finish();
+
+            let mut stream = schema.execute_stream(query).boxed();
+            let items = collect_phase1_items(&mut stream, 10).await;
+            let ids: Vec<String> = items
+                .iter()
+                .map(|v| {
+                    v["openedChannelGraphUpdated"]["channel"]["concreteChannelId"]
+                        .as_str()
+                        .unwrap()
+                        .to_string()
+                })
+                .collect();
+            orderings.push(ids);
+        }
+
+        let first = &orderings[0];
+        let seen_different = orderings.iter().skip(1).any(|o| o != first);
+        assert!(
+            seen_different,
+            "5 subscription runs of 10 channels should produce at least one different Phase 1 ordering"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_account_updated_phase1_shuffles_entries() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let conn = db.conn(blokli_db::TargetDb::Index);
+
+        // Create 10 accounts
+        for i in 0..10u8 {
+            create_test_account(conn, vec![i + 1; 20], &format!("peer{i}"))
+                .await
+                .unwrap();
+        }
+
+        let query = "subscription { accountUpdated { keyid } }";
+
+        let mut orderings: Vec<Vec<i64>> = Vec::new();
+        for _ in 0..5 {
+            let indexer_state = IndexerState::new(10, 100);
+            let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
+                .data(conn.clone())
+                .data(indexer_state)
+                .finish();
+
+            let mut stream = schema.execute_stream(query).boxed();
+            let items = collect_phase1_items(&mut stream, 10).await;
+            let ids: Vec<i64> = items
+                .iter()
+                .map(|v| v["accountUpdated"]["keyid"].as_i64().unwrap())
+                .collect();
+            orderings.push(ids);
+        }
+
+        let first = &orderings[0];
+        let seen_different = orderings.iter().skip(1).any(|o| o != first);
+        assert!(
+            seen_different,
+            "5 subscription runs of 10 accounts should produce at least one different Phase 1 ordering"
+        );
     }
 }
