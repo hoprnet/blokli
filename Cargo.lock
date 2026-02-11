@@ -1718,7 +1718,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api"
-version = "0.15.0"
+version = "0.15.1"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1823,7 +1823,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-indexer"
-version = "0.14.1"
+version = "0.14.2"
 dependencies = [
  "anyhow",
  "async-broadcast",

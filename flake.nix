@@ -321,9 +321,11 @@
             docker-blokli-upload-x86_64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-x86_64-linux;
             docker-blokli-dev-upload-x86_64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-x86_64-linux-dev;
             docker-blokli-profile-upload-x86_64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-x86_64-linux-profile;
+            docker-blokli-anvil-upload-x86_64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-anvil-x86_64-linux;
             docker-blokli-upload-aarch64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-aarch64-linux;
             docker-blokli-dev-upload-aarch64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-aarch64-linux-dev;
             docker-blokli-profile-upload-aarch64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-aarch64-linux-profile;
+            docker-blokli-anvil-upload-aarch64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-anvil-aarch64-linux;
           };
 
           utilityApps = {
