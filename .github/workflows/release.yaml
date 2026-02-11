@@ -16,46 +16,6 @@ concurrency:
   group: release
   cancel-in-progress: false
 jobs:
-  build-docker:
-    name: Docker ${{ matrix.architecture }}
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker-image.yaml@build-docker-image-v1
-    strategy:
-      matrix:
-        include:
-          - architecture: x86_64-linux
-            command: nix run -L .#docker-blokli-x86_64-linux
-    permissions:
-      contents: read
-      security-events: write
-      id-token: write
-    with:
-      source_branch: ${{ github.ref }}
-      version_type: "release"
-      architecture: ${{ matrix.architecture }}
-      cachix_cache_name: "blokli"
-      build_file: "bloklid/Cargo.toml"
-      build_command: ${{ matrix.command }}
-      docker_image_name: "bloklid"
-    secrets:
-      gcp_service_account: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY}}
-      cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
-      docker_hub_token: ${{ secrets.DOCKER_HUB_TOKEN }}
-  build-docker-manifest:
-    name: Docker manifest
-    needs: build-docker
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker-manifest.yaml@build-docker-manifest-v1
-    permissions:
-      contents: read
-    with:
-      version_type: "release"
-      docker_image_name: "bloklid"
-      docker_build_version: ${{ needs.build-docker.outputs.docker_build_version }}
-      docker_debug_version: ${{ needs.build-docker.outputs.docker_debug_version }}
-    secrets:
-      gcp_service_account: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY}}
-      docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
-      docker_hub_token: ${{ secrets.DOCKER_HUB_TOKEN }}
   build-binaries:
     name: Binary ${{ matrix.architecture }}
     strategy:
@@ -65,7 +25,7 @@ jobs:
           - architecture: x86_64-linux
             runner: self-hosted-hoprnet-bigger
             build_command: nix build -L .#binary-blokli-x86_64-linux
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v1
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@ausias/workflows-v2 # build-binaries-v2
     permissions:
       contents: read
     with:
@@ -81,10 +41,40 @@ jobs:
       gcp_service_account: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY}}
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       gpg_private_key: ${{ secrets.GPG_HOPRNET_PRIVATE_KEY }}
+  build-docker:
+    name: Docker
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@ausias/workflows-v2  # build-docker-v1
+    needs: build-binaries
+    permissions:
+      contents: read
+      security-events: write
+      id-token: write
+    with:
+      source_branch: ${{ github.ref }}
+      version_type: "release"
+      build_matrix: >-
+        [
+          {
+            "runner": "self-hosted-hoprnet-bigger",
+            "architecture": "x86_64-linux",
+            "build_command": "nix run -L .#docker-blokli-x86_64-linux",
+            "smoke_test_command": "nix develop -c just smoke-test"
+          }
+        ]
+      cachix_cache_name: "blokli"
+      build_file: "bloklid/Cargo.toml"
+      docker_image_name: "bloklid"
+      deployment_namespace: blokli
+      deployment_label_selector: app.kubernetes.io/name=blokli
+    secrets:
+      gcp_service_account: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY}}
+      cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
+      docker_hub_token: ${{ secrets.DOCKER_HUB_TOKEN }}
   release:
     name: Close release
     needs:
-      - build-docker-manifest
+      - build-docker
       - build-binaries
     runs-on: self-hosted-hoprnet-small
     permissions:
