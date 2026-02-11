@@ -16,7 +16,7 @@ jobs:
       matrix:
         include:
           - architecture: x86_64-linux
-            command: nix run -L .#docker-blokli-upload-x86_64-linux
+            command: nix run -L .#docker-blokli-x86_64-linux
     permissions:
       contents: read
       security-events: write

@@ -35,7 +35,7 @@
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # HOPR Nix Library (provides flake-utils and reusable build functions)
-    nix-lib.url = "github:hoprnet/nix-lib";
+    nix-lib.url = "github:hoprnet/nix-lib/ausias/export-docker-image";
 
     # Rust build system
     crane.url = "github:ipetkov/crane";
@@ -313,13 +313,13 @@
             };
           };
 
-          dockerUploadApps = {
-            docker-blokli-upload-x86_64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-x86_64-linux;
-            docker-blokli-dev-upload-x86_64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-x86_64-linux-dev;
-            docker-blokli-profile-upload-x86_64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-x86_64-linux-profile;
-            docker-blokli-upload-aarch64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-aarch64-linux;
-            docker-blokli-dev-upload-aarch64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-aarch64-linux-dev;
-            docker-blokli-profile-upload-aarch64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-aarch64-linux-profile;
+          dockerBuildApps = {
+            docker-blokli-x86_64-linux = nixLib.mkDockerBuildApp bloklidDocker.docker-blokli-x86_64-linux;
+            docker-blokli-dev-x86_64-linux = nixLib.mkDockerBuildApp bloklidDocker.docker-blokli-x86_64-linux-dev;
+            docker-blokli-profile-x86_64-linux = nixLib.mkDockerBuildApp bloklidDocker.docker-blokli-x86_64-linux-profile;
+            docker-blokli-aarch64-linux = nixLib.mkDockerBuildApp bloklidDocker.docker-blokli-aarch64-linux;
+            docker-blokli-dev-aarch64-linux = nixLib.mkDockerBuildApp bloklidDocker.docker-blokli-aarch64-linux-dev;
+            docker-blokli-profile-aarch64-linux = nixLib.mkDockerBuildApp bloklidDocker.docker-blokli-aarch64-linux-profile;
           };
 
           utilityApps = {
@@ -539,7 +539,7 @@
           inherit checks;
 
           # Export applications using nix-lib
-          apps = dockerUploadApps // utilityApps;
+          apps = dockerBuildApps // utilityApps;
 
           # Export packages
           packages = packages // {
