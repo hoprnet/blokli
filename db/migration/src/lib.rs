@@ -53,10 +53,8 @@ pub enum BackendType {
 pub enum SafeDataOrigin {
     /// Do not import any v3 Safe data.
     NoData = 0,
-    /// Import v3 Rotsee Safe data.
-    Rotsee = 1,
-    /// Import v3 Dufour Safe data.
-    Dufour = 2,
+    /// Import v3 Jura Safe data.
+    Jura = 1,
 }
 
 /// Contains all migration for non-Sqlite databases, such as Postgres.
@@ -111,24 +109,15 @@ impl MigratorTrait for Migrator<{ SafeDataOrigin::NoData as u8 }> {
 }
 
 #[async_trait::async_trait]
-impl MigratorTrait for Migrator<{ SafeDataOrigin::Rotsee as u8 }> {
+impl MigratorTrait for Migrator<{ SafeDataOrigin::Jura as u8 }> {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         let mut migrations = Self::base_migrations();
         // m030 inserts CSV data into the temporal schema (hopr_safe_contract_state)
-        migrations.push(Box::new(m030_migrate_v3_safes::Migration(SafeDataOrigin::Rotsee)));
+        migrations.push(Box::new(m030_migrate_v3_safes::Migration(SafeDataOrigin::Jura)));
         migrations
     }
 }
 
-#[async_trait::async_trait]
-impl MigratorTrait for Migrator<{ SafeDataOrigin::Dufour as u8 }> {
-    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        let mut migrations = Self::base_migrations();
-        // m030 inserts CSV data into the temporal schema (hopr_safe_contract_state)
-        migrations.push(Box::new(m030_migrate_v3_safes::Migration(SafeDataOrigin::Dufour)));
-        migrations
-    }
-}
 
 /// SQLite does not allow writing lock tables only, and the write lock
 /// will apply to the entire database file. It is therefore beneficial
@@ -181,21 +170,11 @@ impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::NoData as u8 }> {
 }
 
 #[async_trait::async_trait]
-impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::Rotsee as u8 }> {
+impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::Jura as u8 }> {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
         let mut migrations = Self::base_migrations();
         // m030 inserts CSV data into the temporal schema (hopr_safe_contract_state)
-        migrations.push(Box::new(m030_migrate_v3_safes::Migration(SafeDataOrigin::Rotsee)));
-        migrations
-    }
-}
-
-#[async_trait::async_trait]
-impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::Dufour as u8 }> {
-    fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        let mut migrations = Self::base_migrations();
-        // m030 inserts CSV data into the temporal schema (hopr_safe_contract_state)
-        migrations.push(Box::new(m030_migrate_v3_safes::Migration(SafeDataOrigin::Dufour)));
+        migrations.push(Box::new(m030_migrate_v3_safes::Migration(SafeDataOrigin::Jura)));
         migrations
     }
 }

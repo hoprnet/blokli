@@ -91,8 +91,8 @@ fn parse_csv_entry(line: &str, line_number: usize) -> Result<Option<SafeCsvEntry
 fn preseeded_csv_for_network(network_name: &str) -> Option<&'static str> {
     if network_name.eq_ignore_ascii_case("rotsee") {
         Some(include_str!("../../migration/src/data/safe-v3-rotsee.csv"))
-    } else if network_name.eq_ignore_ascii_case("dufour") {
-        Some(include_str!("../../migration/src/data/safe-v3-dufour.csv"))
+    } else if network_name.eq_ignore_ascii_case("jura") {
+        Some(include_str!("../../migration/src/data/safe-v3-jura.csv"))
     } else {
         None
     }
@@ -692,9 +692,9 @@ mod tests {
     #[test]
     fn test_preseeded_csv_for_network() {
         assert!(preseeded_csv_for_network("rotsee").is_some());
-        assert!(preseeded_csv_for_network("dufour").is_some());
         assert!(preseeded_csv_for_network("ROTSEE").is_some());
         assert!(preseeded_csv_for_network("unknown").is_none());
+        assert!(preseeded_csv_for_network("jURA").is_some());
     }
 
     #[tokio::test]

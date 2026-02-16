@@ -2,7 +2,7 @@
 # This configuration is used when running bloklid in Docker with PostgreSQL
 
 # Network identifier (change this based on your target network)
-network = "rotsee"
+network = "jura"
 
 # Maximum number of RPC requests per second (0 for unlimited)
 max_rpc_requests_per_sec = 0

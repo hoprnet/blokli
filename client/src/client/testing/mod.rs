@@ -90,7 +90,7 @@ impl Default for BlokliTestState {
                 key_binding_fee: TokenValueString("0.01 wxHOPR".into()),
                 safe_registry_dst: Some("0000000000000000000000000000000000000000000000000000000000000000".into()),
                 ticket_price: TokenValueString("1 wxHOPR".into()),
-                network: "rotsee".into(),
+                network: "jura".into(),
                 contract_addresses: ContractAddressMap(
                     r#"
                 {
