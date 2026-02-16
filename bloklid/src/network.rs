@@ -98,8 +98,8 @@ impl Network {
     pub fn max_block_range(&self) -> u32 {
         match self {
             Network::AnvilLocalhost => 10000,
-            Network::Rotsee => 10000,
-            Network::Jura => 10000,
+            Network::Rotsee => 100_000,
+            Network::Jura => 100_000,
         }
     }
 
