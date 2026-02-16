@@ -8,7 +8,7 @@
 helm install my-blokli ./charts/blokli \
   --set database.host=postgresql.default.svc.cluster.local \
   --set database.password=secretpassword \
-  --set config.network=dufour \
+  --set config.network=jura \
   --set config.rpcUrl=https://rpc.gnosischain.com
 ```
 
@@ -129,7 +129,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | `database.logs_path`                                 | Sqlite logs database file path (used only if database.type is "sqlite")                                       | `""`                |
 | `database.existingSecret`                            | Name of existing secret containing database credentials                                                       | `""`                |
 | `database.maxConnections`                            | Maximum number of database connections                                                                        | `10`                |
-| `config.network`                                     | HOPR network to index (e.g., rotsee, jura)                                                                  | `dufour`            |
+| `config.network`                                     | HOPR network to index (e.g., rotsee, jura)                                                                    | `jura`              |
 | `config.rpcUrl`                                      | Blockchain RPC URL                                                                                            | `""`                |
 | `config.maxRpcRequestsPerSec`                        | Maximum RPC requests per second (0 = unlimited)                                                               | `0`                 |
 | `config.dataDirectory`                               | Data directory path (should match persistence mount path)                                                     | `/data`             |
