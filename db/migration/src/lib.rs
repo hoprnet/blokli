@@ -118,7 +118,6 @@ impl MigratorTrait for Migrator<{ SafeDataOrigin::Jura as u8 }> {
     }
 }
 
-
 /// SQLite does not allow writing lock tables only, and the write lock
 /// will apply to the entire database file. It is therefore beneficial
 /// to separate the exclusive concurrently accessing components into
