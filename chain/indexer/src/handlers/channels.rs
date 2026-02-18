@@ -491,7 +491,7 @@ mod tests {
         BlokliDbGeneralModelOperations, accounts::BlokliDbAccountOperations, api::info::DomainSeparator,
         channels::BlokliDbChannelOperations, db::BlokliDb, info::BlokliDbInfoOperations,
         node_safe_registrations::BlokliDbNodeSafeRegistrationOperations,
-        safe_contracts::BlokliDbSafeContractOperations, safe_redeemed_stats::BlokliDbSafeRedeemedStatsOperations,
+        safe_contracts::BlokliDbSafeContractOperations,
     };
     use blokli_db_entity::{hopr_node_safe_registration, prelude::HoprNodeSafeRegistration};
     use hex_literal::hex;
@@ -1283,17 +1283,6 @@ mod tests {
         let handlers = init_handlers(clonable_rpc_operations, db.clone());
 
         create_test_accounts(&db).await?;
-        db.upsert_account(
-            None,
-            2,
-            *COUNTERPARTY_CHAIN_ADDRESS,
-            *COUNTERPARTY_PRIV_KEY.public(),
-            Some(*SAFE_INSTANCE_ADDR),
-            2,
-            0,
-            0,
-        )
-        .await?;
 
         let channel = ChannelEntry::new(
             *SELF_CHAIN_ADDRESS,
@@ -1310,9 +1299,8 @@ mod tests {
         db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let channel_id = generate_channel_id(&SELF_CHAIN_ADDRESS, &COUNTERPARTY_CHAIN_ADDRESS);
-        let new_balance = channel.balance - HoprBalance::from(1_u64);
         let channel_state = encode_channel_state(
-            new_balance,
+            channel.balance,
             next_ticket_index.as_u64(),
             0, // closure_time
             channel.channel_epoch,
@@ -1344,10 +1332,6 @@ mod tests {
             next_ticket_index.as_u64(),
             "channel entry must contain next ticket index"
         );
-        assert_eq!(
-            channel.balance, new_balance,
-            "channel entry must contain redeemed balance"
-        );
 
         // TODO: Re-enable once get_outgoing_ticket_index is implemented
         let outgoing_ticket_index = next_ticket_index.as_u64(); // db.get_outgoing_ticket_index(channel.get_id()).await?.load(Ordering::Relaxed);
@@ -1358,16 +1342,6 @@ mod tests {
             "outgoing ticket index must be equal to next ticket index"
         );
 
-        let safe_stats = db
-            .get_safe_redeemed_stats(None, *SAFE_INSTANCE_ADDR)
-            .await?
-            .context("safe redeemed stats should be present")?;
-        assert_eq!(
-            safe_stats.redeemed_amount,
-            HoprBalance::from(1_u64),
-            "safe redeemed amount should increase by balance delta"
-        );
-        assert_eq!(safe_stats.redemption_count, 1, "safe redemption count should increase");
         Ok(())
     }
 

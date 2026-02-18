@@ -289,6 +289,7 @@ impl IntegrationFixture {
             .await
     }
 
+    /// Generates a redeemable ticket and submits the redemption transaction.
     pub async fn redeem_ticket(
         &self,
         issuer: &AnvilAccount,
