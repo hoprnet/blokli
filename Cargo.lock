@@ -1917,6 +1917,26 @@ version = "0.18.0"
 source = "git+https://github.com/hoprnet/blokli#c9e67d3cf8baeb2cd994461efb07683bfa553fed"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "cynic",
+ "cynic-codegen",
+ "eventsource-client",
+ "futures",
+ "futures-time",
+ "hex",
+ "reqwest",
+ "serde_json",
+ "smart-default",
+ "thiserror 2.0.18",
+ "tracing",
+ "url",
+]
+
+[[package]]
+name = "blokli-client"
+version = "0.18.1"
+dependencies = [
+ "anyhow",
  "async-broadcast",
  "async-trait",
  "chrono",
@@ -1938,26 +1958,6 @@ dependencies = [
  "smart-default",
  "thiserror 2.0.18",
  "tokio",
- "tracing",
- "url",
-]
-
-[[package]]
-name = "blokli-client"
-version = "0.18.1"
-dependencies = [
- "anyhow",
- "async-trait",
- "cynic",
- "cynic-codegen",
- "eventsource-client",
- "futures",
- "futures-time",
- "hex",
- "reqwest",
- "serde_json",
- "smart-default",
- "thiserror 2.0.18",
  "tracing",
  "url",
 ]
