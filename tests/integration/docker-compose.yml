@@ -45,7 +45,7 @@ services:
       - "--block-time"
       - "1"
       - "--accounts"
-      - "30"
+      - "8"
       - "--balance"
       - "10000"
       - "--mnemonic"
