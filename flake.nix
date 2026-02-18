@@ -226,7 +226,11 @@
             inherit overlays;
           };
 
-          blokliAnvilEntrypoint = pkgs.writeShellScriptBin "blokli-anvil-entrypoint" (
+          blokliAnvilEntrypointX86_64 = pkgsLinux.writeShellScriptBin "blokli-anvil-entrypoint" (
+            builtins.readFile ./docker/blokli-anvil-entrypoint.sh
+          );
+
+          blokliAnvilEntrypointAarch64 = pkgsLinuxAarch64.writeShellScriptBin "blokli-anvil-entrypoint" (
             builtins.readFile ./docker/blokli-anvil-entrypoint.sh
           );
 
@@ -259,7 +263,7 @@
             };
             docker-blokli-anvil-x86_64-linux = nixLib.mkDockerImage {
               name = "bloklid-anvil";
-              Entrypoint = [ "${blokliAnvilEntrypoint}/bin/blokli-anvil-entrypoint" ];
+              Entrypoint = [ "${blokliAnvilEntrypointX86_64}/bin/blokli-anvil-entrypoint" ];
               pkgsLinux = pkgsLinux;
               env = [
                 "SSL_CERT_FILE=${pkgsLinux.cacert}/etc/ssl/certs/ca-bundle.crt"
@@ -268,7 +272,7 @@
                 bloklidPackages.binary-blokli-x86_64-linux
                 pkgsLinux.curl
                 pkgsLinux.foundry
-                blokliAnvilEntrypoint
+                blokliAnvilEntrypointX86_64
               ];
             };
 
@@ -299,7 +303,7 @@
             };
             docker-blokli-anvil-aarch64-linux = nixLib.mkDockerImage {
               name = "bloklid-anvil";
-              Entrypoint = [ "${blokliAnvilEntrypoint}/bin/blokli-anvil-entrypoint" ];
+              Entrypoint = [ "${blokliAnvilEntrypointAarch64}/bin/blokli-anvil-entrypoint" ];
               pkgsLinux = pkgsLinuxAarch64;
               env = [
                 "SSL_CERT_FILE=${pkgsLinuxAarch64.cacert}/etc/ssl/certs/ca-bundle.crt"
@@ -308,7 +312,7 @@
                 bloklidPackages.binary-blokli-aarch64-linux
                 pkgsLinuxAarch64.curl
                 pkgsLinuxAarch64.foundry
-                blokliAnvilEntrypoint
+                blokliAnvilEntrypointAarch64
               ];
             };
           };
@@ -317,9 +321,11 @@
             docker-blokli-upload-x86_64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-x86_64-linux;
             docker-blokli-dev-upload-x86_64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-x86_64-linux-dev;
             docker-blokli-profile-upload-x86_64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-x86_64-linux-profile;
+            docker-blokli-anvil-upload-x86_64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-anvil-x86_64-linux;
             docker-blokli-upload-aarch64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-aarch64-linux;
             docker-blokli-dev-upload-aarch64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-aarch64-linux-dev;
             docker-blokli-profile-upload-aarch64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-aarch64-linux-profile;
+            docker-blokli-anvil-upload-aarch64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-anvil-aarch64-linux;
           };
 
           utilityApps = {

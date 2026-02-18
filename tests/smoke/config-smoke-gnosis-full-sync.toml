@@ -7,7 +7,7 @@
 data_directory = "/data"
 
 # Network identifier - using production Gnosis network
-network = "rotsee"
+network = "jura"
 
 # RPC endpoint URL - connects to real Gnosis Chain
 rpc_url = "https://rpc.gnosischain.com"

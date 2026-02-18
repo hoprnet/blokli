@@ -417,22 +417,12 @@ fn convert_transaction_status(status: StoreTransactionStatus) -> GqlTransactionS
 
 /// Builds SeaORM condition for filtering channel_state by watermark
 ///
-/// Creates a condition that matches all channel states published at or before
-/// the given watermark position (block, tx_index, log_index).
+/// Creates a condition that matches all channel states published in blocks up to
+/// and including the watermark block. The indexer processes blocks atomically —
+/// all events from a block are committed before the watermark is advanced — so
+/// block-level granularity is sufficient.
 fn watermark_condition(watermark: &Watermark) -> Condition {
-    Condition::any()
-        .add(channel_state::Column::PublishedBlock.lt(watermark.block))
-        .add(
-            Condition::all()
-                .add(channel_state::Column::PublishedBlock.eq(watermark.block))
-                .add(channel_state::Column::PublishedTxIndex.lt(watermark.tx_index)),
-        )
-        .add(
-            Condition::all()
-                .add(channel_state::Column::PublishedBlock.eq(watermark.block))
-                .add(channel_state::Column::PublishedTxIndex.eq(watermark.tx_index))
-                .add(channel_state::Column::PublishedLogIndex.lte(watermark.log_index)),
-        )
+    Condition::all().add(channel_state::Column::PublishedBlock.lte(watermark.block))
 }
 
 /// fetch_channel_update is no longer needed - events now contain complete data

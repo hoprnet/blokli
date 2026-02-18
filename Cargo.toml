@@ -60,9 +60,9 @@ futures-timer = "3.0.3"
 futures-util = "0.3.31"
 hex = "0.4.3"
 hex-literal = "1.1.0"
-hopli = { git = "https://github.com/hoprnet/hopli", branch = "main", version = "0.14.1" }
+hopli = { git = "https://github.com/hoprnet/hopli", branch = "main", version = "0.15.0" }
 hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
-hopr-bindings = { git = "https://github.com/hoprnet/contracts", branch = "main" }
+hopr-bindings = { git = "https://github.com/hoprnet/contracts", branch = "main", version = "4.7.0" }
 hopr-chain-connector = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
 hopr-chain-types = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
 hopr-crypto-packet = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
