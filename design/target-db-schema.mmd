@@ -122,6 +122,16 @@ erDiagram
         binary(8) deployed_log_index "log index (original u64 stored in bytes to preserve precision, NOT NULL)"
     }
 
+    hopr_safe_redeemed_stats {
+        int id PK "Primary key"
+        binary(20) safe_address UK "Safe contract address (40-character hex string in bytes, NOT NULL)"
+        binary(32) redeemed_amount "Total redeemed amount (original u256 stored in bytes, NOT NULL)"
+        bigint redemption_count "Number of TicketRedeemed events (NOT NULL)"
+        bigint last_redeemed_block "Last redeemed block (NOT NULL)"
+        bigint last_redeemed_tx_index "Last redeemed tx index (NOT NULL)"
+        bigint last_redeemed_log_index "Last redeemed log index (NOT NULL)"
+    }
+
     %% ========================================
     %% RELATIONSHIPS
     %% ========================================
@@ -133,6 +143,7 @@ erDiagram
     account ||--o{ channel : "source of many"
     account ||--o{ channel : "destination of many"
     account ||--o| hopr_safe_contract : "has 0 or 1"
+    hopr_safe_contract ||--o| hopr_safe_redeemed_stats : "has 0 or 1"
     channel ||--o{ channel_state : "has version history"
     log ||--o| log_status : "has 0 or 1"
 

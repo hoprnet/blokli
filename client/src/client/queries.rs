@@ -46,6 +46,15 @@ impl GraphQlQueries {
         })
     }
 
+    /// `SafeRedeemedStats` GraphQL query.
+    pub fn query_safe_redeemed_stats(
+        address: &ChainAddress,
+    ) -> cynic::Operation<QuerySafeRedeemedStats, BalanceVariables> {
+        QuerySafeRedeemedStats::build(BalanceVariables {
+            address: address.encode_hex(),
+        })
+    }
+
     /// `Safe` GraphQL query.
     pub fn query_safe_by_address(address: &ChainAddress) -> cynic::Operation<QuerySafeByAddress, SafeVariables> {
         QuerySafeByAddress::build(SafeVariables {
@@ -159,6 +168,15 @@ impl BlokliQueryClient for BlokliClient {
         let resp = self.build_query(GraphQlQueries::query_safe_allowance(address))?.await?;
 
         response_to_data(resp)?.safe_hopr_allowance.into()
+    }
+
+    #[tracing::instrument(level = "debug", skip(self), fields(address = hex::encode(address)))]
+    async fn query_safe_redeemed_stats(&self, address: &ChainAddress) -> Result<SafeRedeemedStats> {
+        let resp = self
+            .build_query(GraphQlQueries::query_safe_redeemed_stats(address))?
+            .await?;
+
+        response_to_data(resp)?.safe_redeemed_stats.into()
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]

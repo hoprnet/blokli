@@ -6,7 +6,7 @@ use async_graphql::{Context, ID, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
     Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelsList, ChannelsResult,
     ContractAddressMap, CountResult, HoprBalance, InvalidAddressError, ModuleAddress, NativeBalance, QueryFailedError,
-    Safe, SafeHoprAllowance, TokenValueString, Transaction, TransactionCount, UInt64,
+    Safe, SafeHoprAllowance, SafeRedeemedStats, TokenValueString, Transaction, TransactionCount, UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
@@ -14,7 +14,7 @@ use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::{
     account, chain_info,
     conversions::{account_aggregation::fetch_accounts_with_filters, channel_aggregation::fetch_channels_with_state},
-    hopr_node_safe_registration,
+    hopr_node_safe_registration, hopr_safe_redeemed_stats,
     views::channel_current,
 };
 use hopr_crypto_types::prelude::Hash;
@@ -51,6 +51,14 @@ pub enum NativeBalanceResult {
 #[derive(Union)]
 pub enum SafeHoprAllowanceResult {
     Allowance(SafeHoprAllowance),
+    InvalidAddress(InvalidAddressError),
+    QueryFailed(QueryFailedError),
+}
+
+/// Result type for safe redeemed statistics queries
+#[derive(Union)]
+pub enum SafeRedeemedStatsResult {
+    SafeRedeemedStats(SafeRedeemedStats),
     InvalidAddress(InvalidAddressError),
     QueryFailed(QueryFailedError),
 }
@@ -611,6 +619,94 @@ impl QueryRoot {
                 e,
             ))),
         }
+    }
+
+    /// Retrieve aggregated redeemed ticket statistics for a specific Safe address.
+    ///
+    /// Returns the total redeemed amount and total number of TicketRedeemed events attributed
+    /// to the Safe. A Safe with no matching redeems returns zero values.
+    #[graphql(name = "safeRedeemedStats")]
+    async fn safe_redeemed_stats(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Safe contract address to query (hexadecimal format)")] address: String,
+    ) -> Result<SafeRedeemedStatsResult> {
+        if let Err(e) = validate_eth_address(&address) {
+            return Ok(SafeRedeemedStatsResult::InvalidAddress(
+                errors::invalid_address_from_message(address, e.message),
+            ));
+        }
+
+        let safe_address =
+            Address::from_hex(&address).map_err(|e| async_graphql::Error::new(format!("Invalid address: {}", e)))?;
+        let db = ctx.data::<DatabaseConnection>()?;
+        let safe_address_bytes = safe_address.as_ref().to_vec();
+
+        match fetch_safe_by_address(db, safe_address_bytes.clone()).await {
+            Ok(Some(_)) => {}
+            Ok(None) => {
+                return Ok(SafeRedeemedStatsResult::QueryFailed(errors::not_found(
+                    "safe",
+                    safe_address.to_hex(),
+                )));
+            }
+            Err(e) => {
+                return Ok(SafeRedeemedStatsResult::QueryFailed(errors::query_failed(
+                    "fetch safe for redeemed stats",
+                    e,
+                )));
+            }
+        }
+
+        let stats_row = match hopr_safe_redeemed_stats::Entity::find()
+            .filter(hopr_safe_redeemed_stats::Column::SafeAddress.eq(safe_address_bytes))
+            .one(db)
+            .await
+        {
+            Ok(row) => row,
+            Err(e) => {
+                return Ok(SafeRedeemedStatsResult::QueryFailed(errors::query_failed(
+                    "fetch safe redeemed stats",
+                    e,
+                )));
+            }
+        };
+
+        let (redeemed_amount, redemption_count) = match stats_row {
+            Some(row) => {
+                let amount_bytes: [u8; 32] = match row.redeemed_amount.as_slice().try_into() {
+                    Ok(bytes) => bytes,
+                    Err(_) => {
+                        return Ok(SafeRedeemedStatsResult::QueryFailed(errors::invalid_db_data(
+                            "redeemed_amount",
+                            "must be 32 bytes",
+                        )));
+                    }
+                };
+                let count = match u64::try_from(row.redemption_count) {
+                    Ok(value) => value,
+                    Err(_) => {
+                        return Ok(SafeRedeemedStatsResult::QueryFailed(errors::conversion_error(
+                            "i64",
+                            "u64",
+                            row.redemption_count.to_string(),
+                        )));
+                    }
+                };
+
+                (
+                    TokenValueString(PrimitiveHoprBalance::from_be_bytes(amount_bytes).to_string()),
+                    UInt64(count),
+                )
+            }
+            None => (TokenValueString(PrimitiveHoprBalance::zero().to_string()), UInt64(0)),
+        };
+
+        Ok(SafeRedeemedStatsResult::SafeRedeemedStats(SafeRedeemedStats {
+            address: safe_address.to_hex(),
+            redeemed_amount,
+            redemption_count,
+        }))
     }
 
     /// Fetches the transaction count for any Ethereum address (EOA or contract).

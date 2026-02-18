@@ -1,4 +1,4 @@
-use super::{InvalidAddressError, QueryFailedError, schema};
+use super::{InvalidAddressError, QueryFailedError, Uint64, schema};
 use crate::{api::types::TokenValueString, errors::BlokliClientError};
 
 #[derive(cynic::QueryVariables)]
@@ -104,6 +104,42 @@ impl From<SafeHoprAllowanceResult> for Result<SafeHoprAllowance, BlokliClientErr
             SafeHoprAllowanceResult::InvalidAddressError(e) => Err(e.into()),
             SafeHoprAllowanceResult::QueryFailedError(e) => Err(e.into()),
             SafeHoprAllowanceResult::Unknown => Err(crate::errors::ErrorKind::NoData.into()),
+        }
+    }
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct SafeRedeemedStats {
+    pub __typename: String,
+    pub address: String,
+    pub redeemed_amount: TokenValueString,
+    pub redemption_count: Uint64,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "QueryRoot", variables = "BalanceVariables")]
+pub struct QuerySafeRedeemedStats {
+    #[arguments(address: $address)]
+    pub safe_redeemed_stats: SafeRedeemedStatsResult,
+}
+
+#[derive(cynic::InlineFragments, Debug)]
+pub enum SafeRedeemedStatsResult {
+    SafeRedeemedStats(SafeRedeemedStats),
+    InvalidAddressError(InvalidAddressError),
+    QueryFailedError(QueryFailedError),
+    #[cynic(fallback)]
+    Unknown,
+}
+
+impl From<SafeRedeemedStatsResult> for Result<SafeRedeemedStats, BlokliClientError> {
+    fn from(value: SafeRedeemedStatsResult) -> Self {
+        match value {
+            SafeRedeemedStatsResult::SafeRedeemedStats(stats) => Ok(stats),
+            SafeRedeemedStatsResult::InvalidAddressError(e) => Err(e.into()),
+            SafeRedeemedStatsResult::QueryFailedError(e) => Err(e.into()),
+            SafeRedeemedStatsResult::Unknown => Err(crate::errors::ErrorKind::NoData.into()),
         }
     }
 }

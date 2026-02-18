@@ -1718,7 +1718,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1771,7 +1771,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api-types"
-version = "0.7.0"
+version = "0.8.0"
 dependencies = [
  "async-graphql",
  "blokli-chain-types",
@@ -1823,7 +1823,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-indexer"
-version = "0.14.2"
+version = "0.15.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1948,7 +1948,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-client"
-version = "0.18.0"
+version = "0.19.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1978,7 +1978,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db"
-version = "0.12.1"
+version = "0.13.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -2044,7 +2044,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db-migration"
-version = "0.9.1"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "csv",
@@ -2074,7 +2074,7 @@ name = "blokli-inspector"
 version = "0.7.0"
 dependencies = [
  "anyhow",
- "blokli-client 0.18.0",
+ "blokli-client 0.19.0",
  "clap",
  "futures",
  "hex",
@@ -2090,10 +2090,10 @@ dependencies = [
 
 [[package]]
 name = "blokli-integration-tests"
-version = "0.1.1"
+version = "0.1.2"
 dependencies = [
  "anyhow",
- "blokli-client 0.18.0",
+ "blokli-client 0.19.0",
  "chrono",
  "clap",
  "eventsource-client",

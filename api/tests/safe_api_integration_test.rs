@@ -3,9 +3,15 @@ use blokli_api::{
     schema::{ChainId, NetworkName},
 };
 use blokli_chain_types::ContractAddresses;
-use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations};
+use blokli_db::{
+    BlokliDbGeneralModelOperations, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations,
+    safe_redeemed_stats::BlokliDbSafeRedeemedStatsOperations,
+};
 use blokli_db_entity::hopr_safe_contract::{Column as SafeColumn, Entity as SafeEntity};
-use hopr_primitive_types::{prelude::Address, traits::ToHex};
+use hopr_primitive_types::{
+    prelude::{Address, HoprBalance},
+    traits::ToHex,
+};
 use rand::RngCore;
 use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
@@ -27,6 +33,10 @@ async fn test_safe_queries() -> anyhow::Result<()> {
     let chain_key = random_address();
 
     db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+        .await?;
+    db.record_safe_ticket_redeemed(None, safe_address, HoprBalance::from(7_u64), 110, 1, 0)
+        .await?;
+    db.record_safe_ticket_redeemed(None, safe_address, HoprBalance::from(5_u64), 120, 1, 1)
         .await?;
 
     // Verify DB has the record
@@ -132,6 +142,35 @@ async fn test_safe_queries() -> anyhow::Result<()> {
     assert!(!safes_list.is_empty());
     assert!(safes_list.iter().any(|s| s["address"] == safe_address.to_hex()));
 
+    // Test safeRedeemedStats(address) query
+    let query = format!(
+        r#"
+        query {{
+            safeRedeemedStats(address: "{}") {{
+                ... on SafeRedeemedStats {{
+                    address
+                    redeemedAmount
+                    redemptionCount
+                }}
+                ... on QueryFailedError {{
+                    code
+                    message
+                }}
+            }}
+        }}
+        "#,
+        safe_address.to_hex()
+    );
+
+    let response = schema.execute(query).await;
+    assert!(response.errors.is_empty(), "Errors: {:?}", response.errors);
+
+    let data = response.data.into_json().unwrap();
+    let stats_data = data["safeRedeemedStats"].as_object().unwrap();
+    assert_eq!(stats_data["address"], safe_address.to_hex());
+    assert_eq!(stats_data["redeemedAmount"], "0.000000000000000012 wxHOPR");
+    assert_eq!(stats_data["redemptionCount"], "2");
+
     Ok(())
 }
 
@@ -194,6 +233,26 @@ async fn test_safe_query_invalid_address() -> anyhow::Result<()> {
     let safe_data = data["safe"].as_object().unwrap();
     assert_eq!(safe_data["code"], "INVALID_ADDRESS");
 
+    let query = r#"
+        query {
+            safeRedeemedStats(address: "0x123") {
+                ... on SafeRedeemedStats {
+                    address
+                }
+                ... on InvalidAddressError {
+                    code
+                    message
+                }
+            }
+        }
+    "#;
+
+    let response = schema.execute(query).await;
+    assert!(response.errors.is_empty());
+    let data = response.data.into_json().unwrap();
+    let error = data["safeRedeemedStats"].as_object().unwrap();
+    assert_eq!(error["code"], "INVALID_ADDRESS");
+
     Ok(())
 }
 
@@ -238,6 +297,32 @@ async fn test_safe_query_not_found() -> anyhow::Result<()> {
     let data = response.data.into_json().unwrap();
     // When safe is not found, the query returns null (GraphQL null for Option<SafeResult>)
     assert!(data["safe"].is_null(), "Safe should be null when not found");
+
+    let query = format!(
+        r#"
+        query {{
+            safeRedeemedStats(address: "{}") {{
+                ... on SafeRedeemedStats {{
+                    address
+                    redeemedAmount
+                    redemptionCount
+                }}
+                ... on QueryFailedError {{
+                    code
+                    message
+                }}
+            }}
+        }}
+        "#,
+        nonexistent_address
+    );
+
+    let response = schema.execute(query).await;
+    assert!(response.errors.is_empty());
+
+    let data = response.data.into_json().unwrap();
+    let error = data["safeRedeemedStats"].as_object().unwrap();
+    assert_eq!(error["code"], "NOT_FOUND");
 
     Ok(())
 }

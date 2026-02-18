@@ -1,6 +1,6 @@
 use blokli_db_entity::prelude::{
     Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, HoprBalance, HoprNodeSafeRegistration,
-    HoprSafeContract, HoprSafeContractState, Log, LogStatus, LogTopicInfo, NativeBalance,
+    HoprSafeContract, HoprSafeContractState, HoprSafeRedeemedStats, Log, LogStatus, LogTopicInfo, NativeBalance,
 };
 use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, Statement};
 use tracing::{info, warn};
@@ -22,7 +22,8 @@ use crate::errors::{DbSqlError, Result};
 /// - 9: Fix handling of node safe deregister events
 /// - 10: Convert hopr_safe_contract to temporal table with separate state table
 /// - 11: Reset safe contract data and move pre-seeded loading to startup
-pub const CURRENT_SCHEMA_VERSION: i64 = 11;
+/// - 12: Add safe redeemed ticket aggregate stats table
+pub const CURRENT_SCHEMA_VERSION: i64 = 12;
 
 /// The singleton ID used for the schema_version table
 const SCHEMA_VERSION_TABLE_ID: i64 = 1;
@@ -168,6 +169,7 @@ async fn clear_index_data(db: &DatabaseConnection) -> Result<()> {
     NativeBalance::delete_many().exec(db).await?;
 
     HoprSafeContractState::delete_many().exec(db).await?;
+    HoprSafeRedeemedStats::delete_many().exec(db).await?;
     HoprSafeContract::delete_many().exec(db).await?;
 
     // NodeSafeRegistrations table

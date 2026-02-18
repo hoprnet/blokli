@@ -159,6 +159,16 @@ async fn query_token_balance_and_allowance_of_safe(#[future(awt)] fixture: Integ
         .parse()
         .expect("failed to parse retrieved allowance amount");
 
+    let redeemed_stats = fixture
+        .client()
+        .query_safe_redeemed_stats(safe_address.as_ref())
+        .await?;
+    assert_eq!(
+        redeemed_stats.redeemed_amount.0.parse::<HoprBalance>()?,
+        HoprBalance::zero()
+    );
+    assert_eq!(redeemed_stats.redemption_count.0.parse::<u64>()?, 0);
+
     Ok(())
 }
 
