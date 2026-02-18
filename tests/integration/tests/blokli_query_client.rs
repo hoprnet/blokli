@@ -173,7 +173,7 @@ async fn query_safe_redeemed_stats_after_ticket_redeem(#[future(awt)] fixture: I
     let expected_id = generate_channel_id(&src.address, &dst.address);
     let channel_selector = ChannelSelector {
         filter: Some(ChannelFilter::ChannelId(expected_id.into())),
-        status: None,
+        status: Some(ChannelStatus::Open),
     };
 
     let src_safe = fixture.deploy_safe_and_announce(src, parsed_safe_balance()).await?;
@@ -224,6 +224,10 @@ async fn query_safe_redeemed_stats_after_ticket_redeem(#[future(awt)] fixture: I
             safe_address: Some(dst_safe_address.into()),
             node_address: None,
         })
+        .await?;
+
+    fixture
+        .initiate_outgoing_channel_closure(src, dst, &src_safe.module_address)
         .await?;
 
     assert_eq!(
@@ -290,11 +294,9 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
 
     let channel_selector = ChannelSelector {
         filter: Some(ChannelFilter::ChannelId(expected_id.into())),
-        status: None, /* fails otherwise as it's not allowed for now: "Channel status filtering during schema
-                       * migration is not yet implemented" */
+        status: Some(ChannelStatus::Open),
     };
 
-    let before_count = fixture.client().count_channels(channel_selector.clone()).await?;
     let amount: HoprBalance = "1 wei wxHOPR".parse().expect("failed to parse amount");
 
     // Deploy safes for both parties
@@ -315,21 +317,16 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
 
     let after_count = fixture.client().count_channels(channel_selector.clone()).await?;
 
-    assert_eq!(after_count, before_count + 1);
+    assert_eq!(after_count, 1);
 
     fixture
         .initiate_outgoing_channel_closure(&src, &dst, &src_safe.module_address)
         .await?;
     sleep(Duration::from_secs(8)).await;
 
-    let channels = fixture.client().query_channels(channel_selector).await?;
+    let count_after_closure = fixture.client().count_channels(channel_selector).await?;
 
-    // count channels that are in Open state
-    let count = channels
-        .iter()
-        .filter(|channel| channel.status == ChannelStatus::Open)
-        .count();
-    assert_eq!(count, 0);
+    assert_eq!(count_after_closure, 0);
 
     Ok(())
 }
