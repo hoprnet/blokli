@@ -475,17 +475,26 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
             .ok_or_else(|| ErrorKind::NoData.into())
     }
 
-    async fn query_safe_redeemed_stats(&self, address: &ChainAddress) -> Result<SafeRedeemedStats> {
-        let address = hex::encode(address);
-        let prefixed_address = format!("0x{}", address);
+    async fn query_redeemed_stats(&self, selector: RedeemedStatsSelector) -> Result<RedeemedStats> {
         let state = self.state.read();
-        if !state.deployed_safes.contains_key(&address) {
-            return Err(ErrorKind::NoData.into());
+
+        if let Some(safe_address) = selector.safe_address {
+            let safe_address_hex = hex::encode(safe_address);
+            if !state.deployed_safes.contains_key(&safe_address_hex) {
+                return Err(ErrorKind::NoData.into());
+            }
         }
 
-        Ok(SafeRedeemedStats {
-            __typename: "SafeRedeemedStats".to_string(),
-            address: prefixed_address,
+        Ok(RedeemedStats {
+            __typename: "RedeemedStats".to_string(),
+            safe_address: selector
+                .safe_address
+                .map(hex::encode)
+                .map(|address| format!("0x{address}")),
+            node_address: selector
+                .node_address
+                .map(hex::encode)
+                .map(|address| format!("0x{address}")),
             redeemed_amount: TokenValueString("0 wxHOPR".to_string()),
             redemption_count: Uint64("0".to_string()),
         })

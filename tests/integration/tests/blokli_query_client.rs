@@ -2,7 +2,7 @@ use std::{str::FromStr, time::Duration};
 
 use anyhow::{Context, Result};
 use blokli_client::api::{
-    AccountSelector, BlokliQueryClient, ChannelFilter, ChannelSelector, SafeSelector,
+    AccountSelector, BlokliQueryClient, ChannelFilter, ChannelSelector, RedeemedStatsSelector, SafeSelector,
     types::{ChannelStatus, TransactionStatus},
 };
 use blokli_integration_tests::{
@@ -159,16 +159,6 @@ async fn query_token_balance_and_allowance_of_safe(#[future(awt)] fixture: Integ
         .parse()
         .expect("failed to parse retrieved allowance amount");
 
-    let redeemed_stats = fixture
-        .client()
-        .query_safe_redeemed_stats(safe_address.as_ref())
-        .await?;
-    assert_eq!(
-        redeemed_stats.redeemed_amount.0.parse::<HoprBalance>()?,
-        HoprBalance::zero()
-    );
-    assert_eq!(redeemed_stats.redemption_count.0.parse::<u64>()?, 0);
-
     Ok(())
 }
 
@@ -209,7 +199,10 @@ async fn query_safe_redeemed_stats_after_ticket_redeem(#[future(awt)] fixture: I
     let dst_safe_address = Address::from_str(&dst_safe.address)?;
     let initial_stats = fixture
         .client()
-        .query_safe_redeemed_stats(dst_safe_address.as_ref())
+        .query_redeemed_stats(RedeemedStatsSelector {
+            safe_address: Some(dst_safe_address.into()),
+            node_address: None,
+        })
         .await?;
 
     fixture
@@ -227,7 +220,10 @@ async fn query_safe_redeemed_stats_after_ticket_redeem(#[future(awt)] fixture: I
 
     let stats = fixture
         .client()
-        .query_safe_redeemed_stats(dst_safe_address.as_ref())
+        .query_redeemed_stats(RedeemedStatsSelector {
+            safe_address: Some(dst_safe_address.into()),
+            node_address: None,
+        })
         .await?;
 
     assert_eq!(

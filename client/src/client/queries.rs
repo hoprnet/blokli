@@ -46,12 +46,13 @@ impl GraphQlQueries {
         })
     }
 
-    /// `SafeRedeemedStats` GraphQL query.
-    pub fn query_safe_redeemed_stats(
-        address: &ChainAddress,
-    ) -> cynic::Operation<QuerySafeRedeemedStats, BalanceVariables> {
-        QuerySafeRedeemedStats::build(BalanceVariables {
-            address: address.encode_hex(),
+    /// `RedeemedStats` GraphQL query.
+    pub fn query_redeemed_stats(
+        selector: RedeemedStatsSelector,
+    ) -> cynic::Operation<QueryRedeemedStats, RedeemedStatsVariables> {
+        QueryRedeemedStats::build(RedeemedStatsVariables {
+            safe_address: selector.safe_address.map(|address| address.encode_hex()),
+            node_address: selector.node_address.map(|address| address.encode_hex()),
         })
     }
 
@@ -170,13 +171,13 @@ impl BlokliQueryClient for BlokliClient {
         response_to_data(resp)?.safe_hopr_allowance.into()
     }
 
-    #[tracing::instrument(level = "debug", skip(self), fields(address = hex::encode(address)))]
-    async fn query_safe_redeemed_stats(&self, address: &ChainAddress) -> Result<SafeRedeemedStats> {
+    #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
+    async fn query_redeemed_stats(&self, selector: RedeemedStatsSelector) -> Result<RedeemedStats> {
         let resp = self
-            .build_query(GraphQlQueries::query_safe_redeemed_stats(address))?
+            .build_query(GraphQlQueries::query_redeemed_stats(selector))?
             .await?;
 
-        response_to_data(resp)?.safe_redeemed_stats.into()
+        response_to_data(resp)?.redeemed_stats.into()
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
