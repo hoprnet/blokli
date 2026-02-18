@@ -89,8 +89,8 @@ impl Network {
     pub fn confirmations(&self) -> u16 {
         match self {
             Network::AnvilLocalhost => 1,
-            Network::Rotsee => 8,
-            Network::Jura => 8,
+            Network::Rotsee => 3,
+            Network::Jura => 3,
         }
     }
 

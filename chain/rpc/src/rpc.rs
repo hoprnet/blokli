@@ -203,9 +203,9 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
     /// confirmed_block = provider.get_block_number() - finality
     /// ```
     ///
-    /// For example, with `finality=8`:
-    /// - If RPC reports block 1000, this returns 992
-    /// - Ensures all operations work with blocks that have 8 confirmations
+    /// For example, with `finality=3`:
+    /// - If RPC reports block 1000, this returns 997
+    /// - Ensures all operations work with blocks that have 3 confirmations
     ///
     /// # Impact on Readiness Checks
     ///

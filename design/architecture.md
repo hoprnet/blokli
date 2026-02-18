@@ -1359,7 +1359,7 @@ Health check configuration:
 The readiness check automatically accounts for blockchain finality to prevent false-positive "ready" states:
 
 **Block Number Finality Adjustment**:
-RPC block heights are treated as confirmed by subtracting the configured finality depth. For example, with a finality depth of 8, a chain head at block 1000 yields a confirmed height of 992, so only blocks with 8+ confirmations count as confirmed.
+RPC block heights are treated as confirmed by subtracting the configured finality depth. For example, with a finality depth of 3, a chain head at block 1000 yields a confirmed height of 992, so only blocks with 3+ confirmations count as confirmed.
 
 **Readiness Calculation**:
 Readiness compares the confirmed height with the indexer watermark. If the lag in confirmed blocks is within `max_indexer_lag`, readiness passes.
@@ -1369,14 +1369,14 @@ Because readiness uses confirmed height (not chain head), the indexer can be up 
 
 **Example (Gnosis Chain)**:
 
-- Configuration: `max_indexer_lag=10`, `finality=8`
+- Configuration: `max_indexer_lag=10`, `finality=3`
 - Latest RPC block: 1000
-- Confirmed RPC block: 992
-- Indexed block: 982
+- Confirmed RPC block: 997
+- Indexed block: 987
 - Calculated lag: 10 blocks
 - Result: READY
 
-The indexer is actually 18 blocks behind the RPC chain head (1000 - 982), but only 10 blocks behind confirmed blocks—within the acceptable threshold.
+The indexer is actually 18 blocks behind the RPC chain head (1000 - 987), but only 10 blocks behind confirmed blocks—within the acceptable threshold.
 
 **Configuration Flow**:
 Finality is defined by the selected network, propagated through runtime configuration into the RPC layer, and reused by the readiness checks.
