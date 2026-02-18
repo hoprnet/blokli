@@ -94,9 +94,9 @@ pub struct RpcOperationsConfig {
     /// that the logs will be buffered for before being considered
     /// successfully joined to the chain.
     ///
-    /// Defaults to 8
+    /// Defaults to 3
     #[validate(range(min = 1, max = 100))]
-    #[default = 8]
+    #[default = 3]
     pub finality: u32,
     /// URL to the gas price oracle.
     ///
