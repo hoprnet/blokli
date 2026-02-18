@@ -25,6 +25,11 @@ impl MigrationTrait for Migration {
                             .unique_key(),
                     )
                     .col(
+                        ColumnDef::new(HoprSafeRedeemedStats::NodeAddress)
+                            .binary_len(20)
+                            .not_null(),
+                    )
+                    .col(
                         ColumnDef::new(HoprSafeRedeemedStats::RedeemedAmount)
                             .binary_len(32)
                             .not_null()
@@ -71,6 +76,7 @@ enum HoprSafeRedeemedStats {
     Table,
     Id,
     SafeAddress,
+    NodeAddress,
     RedeemedAmount,
     RedemptionCount,
     LastRedeemedBlock,

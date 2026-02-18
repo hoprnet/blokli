@@ -440,6 +440,21 @@ type QueryRoot {
     address: String!
   ): NativeBalanceResult!
   """
+  Retrieve aggregated TicketRedeemed statistics with optional safe/node filters
+  
+  At least one filter must be provided: safeAddress, nodeAddress, or both.
+  Returns Error with code MISSING_FILTER if no filter is provided.
+  Returns Error with code INVALID_ADDRESS if any provided address format is invalid.
+  Returns Error with code NOT_FOUND if safeAddress is provided but the safe does not exist.
+  Returns Error with code QUERY_FAILED if query fails.
+  """
+  redeemedStats(
+    "Optional destination node address filter (hexadecimal format)"
+    nodeAddress: String
+    "Optional safe contract address filter (hexadecimal format)"
+    safeAddress: String
+  ): RedeemedStatsResult!
+  """
   Retrieve safe by contract address
   
   Returns Error with code INVALID_ADDRESS if address format is invalid.
@@ -543,6 +558,21 @@ type QueryRoot {
   """
   version: String!
 }
+
+"""Aggregated redeemed ticket statistics with optional safe/node filters"""
+type RedeemedStats {
+  "Node address filter that was applied, if any"
+  nodeAddress: String
+  "Total redeemed amount from matching TicketRedeemed events"
+  redeemedAmount: TokenValueString!
+  "Total number of matching TicketRedeemed events"
+  redemptionCount: UInt64!
+  "Safe contract address filter that was applied, if any"
+  safeAddress: String
+}
+
+"""Result type for redeemed statistics queries with filters"""
+union RedeemedStatsResult = RedeemedStats | MissingFilterError | InvalidAddressError | QueryFailedError
 
 """RPC or blockchain error during transaction submission"""
 type RpcError {

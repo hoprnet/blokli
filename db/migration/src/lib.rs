@@ -478,9 +478,9 @@ mod tests {
         let insert_result = db
             .execute_raw(Statement::from_string(
                 DbBackend::Sqlite,
-                "INSERT INTO hopr_safe_redeemed_stats (safe_address, redeemed_amount, redemption_count, \
+                "INSERT INTO hopr_safe_redeemed_stats (safe_address, node_address, redeemed_amount, redemption_count, \
                  last_redeemed_block, last_redeemed_tx_index, last_redeemed_log_index) VALUES \
-                 (X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', \
+                 (X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', X'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', \
                  X'0000000000000000000000000000000000000000000000000000000000000001', 1, 100, 2, 3)"
                     .to_string(),
             ))

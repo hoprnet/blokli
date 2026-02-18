@@ -15,6 +15,7 @@ use crate::{
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SafeRedeemedStatsEntry {
     pub safe_address: Address,
+    pub node_address: Address,
     pub redeemed_amount: HoprBalance,
     pub redemption_count: u64,
     pub last_redeemed_block: u64,
@@ -24,10 +25,12 @@ pub struct SafeRedeemedStatsEntry {
 
 fn model_to_entry(model: hopr_safe_redeemed_stats::Model) -> Result<SafeRedeemedStatsEntry> {
     let safe_address: Address = Address::try_from(model.safe_address.as_slice())?;
+    let node_address: Address = Address::try_from(model.node_address.as_slice())?;
     let redeemed_amount: HoprBalance = HoprBalance::from_be_bytes(model.redeemed_amount.as_slice());
 
     Ok(SafeRedeemedStatsEntry {
         safe_address,
+        node_address,
         redeemed_amount,
         redemption_count: u64::try_from(model.redemption_count).map_err(|_| DbSqlError::DecodingError)?,
         last_redeemed_block: u64::try_from(model.last_redeemed_block).map_err(|_| DbSqlError::DecodingError)?,
@@ -43,6 +46,7 @@ pub trait BlokliDbSafeRedeemedStatsOperations {
         &'a self,
         tx: OptTx<'a>,
         safe_address: Address,
+        destination_node_address: Address,
         redeemed_amount: HoprBalance,
         block: u32,
         tx_index: u32,
@@ -62,6 +66,7 @@ impl BlokliDbSafeRedeemedStatsOperations for BlokliDb {
         &'a self,
         tx: OptTx<'a>,
         safe_address: Address,
+        destination_node_address: Address,
         redeemed_amount: HoprBalance,
         block: u32,
         tx_index: u32,
@@ -72,6 +77,7 @@ impl BlokliDbSafeRedeemedStatsOperations for BlokliDb {
             .perform(|tx| {
                 Box::pin(async move {
                     let safe_address_bytes = safe_address.as_ref().to_vec();
+                    let node_address_bytes = destination_node_address.as_ref().to_vec();
 
                     let existing = HoprSafeRedeemedStats::find()
                         .filter(hopr_safe_redeemed_stats::Column::SafeAddress.eq(safe_address_bytes.clone()))
@@ -89,6 +95,7 @@ impl BlokliDbSafeRedeemedStatsOperations for BlokliDb {
                             let mut active: hopr_safe_redeemed_stats::ActiveModel = model.into();
                             active.redeemed_amount = Set(next_amount.to_be_bytes().to_vec());
                             active.redemption_count = Set(next_count);
+                            active.node_address = Set(node_address_bytes.clone());
                             active.last_redeemed_block = Set(i64::from(block));
                             active.last_redeemed_tx_index = Set(i64::from(tx_index));
                             active.last_redeemed_log_index = Set(i64::from(log_index));
@@ -97,6 +104,7 @@ impl BlokliDbSafeRedeemedStatsOperations for BlokliDb {
                         None => {
                             let active = hopr_safe_redeemed_stats::ActiveModel {
                                 safe_address: Set(safe_address_bytes),
+                                node_address: Set(node_address_bytes),
                                 redeemed_amount: Set(redeemed_amount.to_be_bytes().to_vec()),
                                 redemption_count: Set(1),
                                 last_redeemed_block: Set(i64::from(block)),
@@ -152,18 +160,21 @@ mod tests {
     async fn test_record_and_get_safe_redeemed_stats() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let safe_address = random_address();
+        let node_address = random_address();
 
         let first = db
-            .record_safe_ticket_redeemed(None, safe_address, HoprBalance::from(10_u64), 100, 1, 1)
+            .record_safe_ticket_redeemed(None, safe_address, node_address, HoprBalance::from(10_u64), 100, 1, 1)
             .await?;
         assert_eq!(first.redeemed_amount, HoprBalance::from(10_u64));
         assert_eq!(first.redemption_count, 1);
+        assert_eq!(first.node_address, node_address);
 
         let second = db
-            .record_safe_ticket_redeemed(None, safe_address, HoprBalance::from(5_u64), 110, 2, 3)
+            .record_safe_ticket_redeemed(None, safe_address, node_address, HoprBalance::from(5_u64), 110, 2, 3)
             .await?;
         assert_eq!(second.redeemed_amount, HoprBalance::from(15_u64));
         assert_eq!(second.redemption_count, 2);
+        assert_eq!(second.node_address, node_address);
         assert_eq!(second.last_redeemed_block, 110);
         assert_eq!(second.last_redeemed_tx_index, 2);
         assert_eq!(second.last_redeemed_log_index, 3);

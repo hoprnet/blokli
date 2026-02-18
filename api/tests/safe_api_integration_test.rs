@@ -31,13 +31,36 @@ async fn test_safe_queries() -> anyhow::Result<()> {
     let safe_address = random_address();
     let module_address = random_address();
     let chain_key = random_address();
+    let second_safe_address = random_address();
+    let second_module_address = random_address();
+    let second_chain_key = random_address();
 
     db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
         .await?;
-    db.record_safe_ticket_redeemed(None, safe_address, HoprBalance::from(7_u64), 110, 1, 0)
+    db.create_safe_contract(
+        None,
+        second_safe_address,
+        second_module_address,
+        second_chain_key,
+        100,
+        0,
+        1,
+    )
+    .await?;
+    db.record_safe_ticket_redeemed(None, safe_address, chain_key, HoprBalance::from(7_u64), 110, 1, 0)
         .await?;
-    db.record_safe_ticket_redeemed(None, safe_address, HoprBalance::from(5_u64), 120, 1, 1)
+    db.record_safe_ticket_redeemed(None, safe_address, chain_key, HoprBalance::from(5_u64), 120, 1, 1)
         .await?;
+    db.record_safe_ticket_redeemed(
+        None,
+        second_safe_address,
+        chain_key,
+        HoprBalance::from(3_u64),
+        130,
+        2,
+        0,
+    )
+    .await?;
 
     // Verify DB has the record
     let count = SafeEntity::find()
@@ -171,6 +194,82 @@ async fn test_safe_queries() -> anyhow::Result<()> {
     assert_eq!(stats_data["redeemedAmount"], "0.000000000000000012 wxHOPR");
     assert_eq!(stats_data["redemptionCount"], "2");
 
+    let query = format!(
+        r#"
+        query {{
+            redeemedStats(safeAddress: "{}") {{
+                ... on RedeemedStats {{
+                    safeAddress
+                    nodeAddress
+                    redeemedAmount
+                    redemptionCount
+                }}
+            }}
+        }}
+        "#,
+        safe_address.to_hex()
+    );
+
+    let response = schema.execute(query).await;
+    assert!(response.errors.is_empty(), "Errors: {:?}", response.errors);
+    let data = response.data.into_json().unwrap();
+    let stats_data = data["redeemedStats"].as_object().unwrap();
+    assert_eq!(stats_data["safeAddress"], safe_address.to_hex());
+    assert_eq!(stats_data["nodeAddress"], serde_json::Value::Null);
+    assert_eq!(stats_data["redeemedAmount"], "0.000000000000000012 wxHOPR");
+    assert_eq!(stats_data["redemptionCount"], "2");
+
+    let query = format!(
+        r#"
+        query {{
+            redeemedStats(nodeAddress: "{}") {{
+                ... on RedeemedStats {{
+                    safeAddress
+                    nodeAddress
+                    redeemedAmount
+                    redemptionCount
+                }}
+            }}
+        }}
+        "#,
+        chain_key.to_hex()
+    );
+
+    let response = schema.execute(query).await;
+    assert!(response.errors.is_empty(), "Errors: {:?}", response.errors);
+    let data = response.data.into_json().unwrap();
+    let stats_data = data["redeemedStats"].as_object().unwrap();
+    assert_eq!(stats_data["safeAddress"], serde_json::Value::Null);
+    assert_eq!(stats_data["nodeAddress"], chain_key.to_hex());
+    assert_eq!(stats_data["redeemedAmount"], "0.000000000000000015 wxHOPR");
+    assert_eq!(stats_data["redemptionCount"], "3");
+
+    let query = format!(
+        r#"
+        query {{
+            redeemedStats(safeAddress: "{}", nodeAddress: "{}") {{
+                ... on RedeemedStats {{
+                    safeAddress
+                    nodeAddress
+                    redeemedAmount
+                    redemptionCount
+                }}
+            }}
+        }}
+        "#,
+        safe_address.to_hex(),
+        chain_key.to_hex()
+    );
+
+    let response = schema.execute(query).await;
+    assert!(response.errors.is_empty(), "Errors: {:?}", response.errors);
+    let data = response.data.into_json().unwrap();
+    let stats_data = data["redeemedStats"].as_object().unwrap();
+    assert_eq!(stats_data["safeAddress"], safe_address.to_hex());
+    assert_eq!(stats_data["nodeAddress"], chain_key.to_hex());
+    assert_eq!(stats_data["redeemedAmount"], "0.000000000000000012 wxHOPR");
+    assert_eq!(stats_data["redemptionCount"], "2");
+
     Ok(())
 }
 
@@ -253,6 +352,44 @@ async fn test_safe_query_invalid_address() -> anyhow::Result<()> {
     let error = data["safeRedeemedStats"].as_object().unwrap();
     assert_eq!(error["code"], "INVALID_ADDRESS");
 
+    let query = r#"
+        query {
+            redeemedStats {
+                ... on RedeemedStats {
+                    redeemedAmount
+                }
+                ... on MissingFilterError {
+                    code
+                }
+            }
+        }
+    "#;
+
+    let response = schema.execute(query).await;
+    assert!(response.errors.is_empty());
+    let data = response.data.into_json().unwrap();
+    let error = data["redeemedStats"].as_object().unwrap();
+    assert_eq!(error["code"], "MISSING_FILTER");
+
+    let query = r#"
+        query {
+            redeemedStats(nodeAddress: "0x123") {
+                ... on RedeemedStats {
+                    redeemedAmount
+                }
+                ... on InvalidAddressError {
+                    code
+                }
+            }
+        }
+    "#;
+
+    let response = schema.execute(query).await;
+    assert!(response.errors.is_empty());
+    let data = response.data.into_json().unwrap();
+    let error = data["redeemedStats"].as_object().unwrap();
+    assert_eq!(error["code"], "INVALID_ADDRESS");
+
     Ok(())
 }
 
@@ -322,6 +459,28 @@ async fn test_safe_query_not_found() -> anyhow::Result<()> {
 
     let data = response.data.into_json().unwrap();
     let error = data["safeRedeemedStats"].as_object().unwrap();
+    assert_eq!(error["code"], "NOT_FOUND");
+
+    let query = format!(
+        r#"
+        query {{
+            redeemedStats(safeAddress: "{}") {{
+                ... on RedeemedStats {{
+                    redeemedAmount
+                }}
+                ... on QueryFailedError {{
+                    code
+                }}
+            }}
+        }}
+        "#,
+        nonexistent_address
+    );
+
+    let response = schema.execute(query).await;
+    assert!(response.errors.is_empty());
+    let data = response.data.into_json().unwrap();
+    let error = data["redeemedStats"].as_object().unwrap();
     assert_eq!(error["code"], "NOT_FOUND");
 
     Ok(())
