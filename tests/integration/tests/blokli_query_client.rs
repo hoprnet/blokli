@@ -1,6 +1,6 @@
 use std::{str::FromStr, time::Duration};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use blokli_client::api::{
     AccountSelector, BlokliQueryClient, ChannelFilter, ChannelSelector, SafeSelector,
     types::{ChannelStatus, TransactionStatus},
@@ -168,6 +168,76 @@ async fn query_token_balance_and_allowance_of_safe(#[future(awt)] fixture: Integ
         HoprBalance::zero()
     );
     assert_eq!(redeemed_stats.redemption_count.0.parse::<u64>()?, 0);
+
+    Ok(())
+}
+
+#[rstest]
+#[test_log::test(tokio::test)]
+#[serial]
+async fn query_safe_redeemed_stats_after_ticket_redeem(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    let channel_amount: HoprBalance = "5 wei wxHOPR".parse().expect("failed to parse channel amount");
+    let ticket_amount: HoprBalance = "1 wei wxHOPR".parse().expect("failed to parse ticket amount");
+
+    let [src, dst] = fixture.sample_accounts::<2>();
+    let expected_id = generate_channel_id(&src.address, &dst.address);
+    let channel_selector = ChannelSelector {
+        filter: Some(ChannelFilter::ChannelId(expected_id.into())),
+        status: None,
+    };
+
+    let src_safe = fixture.deploy_safe_and_announce(src, parsed_safe_balance()).await?;
+    let dst_safe = fixture.deploy_safe_and_announce(dst, parsed_safe_balance()).await?;
+
+    fixture.approve(src, channel_amount, &src_safe.module_address).await?;
+    sleep(Duration::from_secs(8)).await;
+
+    fixture
+        .open_channel(src, dst, channel_amount, &src_safe.module_address)
+        .await?;
+
+    sleep(Duration::from_secs(8)).await;
+
+    let channels = fixture.client().query_channels(channel_selector.clone()).await?;
+    let channel = channels
+        .first()
+        .context("opened channel not found after opening channel")?;
+
+    let ticket_index: u64 = channel.ticket_index.0.parse()?;
+    let channel_epoch = u32::try_from(channel.epoch).context("channel epoch is negative or invalid")?;
+
+    let dst_safe_address = Address::from_str(&dst_safe.address)?;
+    let initial_stats = fixture
+        .client()
+        .query_safe_redeemed_stats(dst_safe_address.as_ref())
+        .await?;
+
+    fixture
+        .redeem_ticket(
+            src,
+            dst,
+            ticket_amount,
+            &dst_safe.module_address,
+            ticket_index,
+            channel_epoch,
+        )
+        .await?;
+
+    sleep(Duration::from_secs(8)).await;
+
+    let stats = fixture
+        .client()
+        .query_safe_redeemed_stats(dst_safe_address.as_ref())
+        .await?;
+
+    assert_eq!(
+        initial_stats.redemption_count.0.parse::<u64>()? + 1,
+        stats.redemption_count.0.parse::<u64>()?
+    );
+    assert_eq!(
+        initial_stats.redeemed_amount.0.parse::<HoprBalance>()? + ticket_amount,
+        stats.redeemed_amount.0.parse::<HoprBalance>()?
+    );
 
     Ok(())
 }

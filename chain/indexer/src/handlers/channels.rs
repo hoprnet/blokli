@@ -3,7 +3,7 @@ use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator};
 use hopr_bindings::hopr_channels::HoprChannels::HoprChannelsEvents;
 use hopr_internal_types::channels::{ChannelEntry, ChannelStatus, generate_channel_id};
-use hopr_primitive_types::prelude::{Address, HoprBalance};
+use hopr_primitive_types::prelude::Address;
 use tracing::{error, trace, warn};
 
 use super::{ContractEventHandlers, channel_utils::decode_channel, helpers::construct_channel_update};
@@ -77,6 +77,14 @@ where
                     diff = %diff,
                     "ChannelBalanceDecreased: decoded channel state"
                 );
+
+                let destination_account = self.db.get_account(tx.into(), existing_channel.destination).await?;
+
+                if let Some(safe_address) = destination_account.and_then(|account| account.safe_address) {
+                    self.db
+                        .record_safe_ticket_redeemed(tx.into(), safe_address, diff, block, tx_index, log_index)
+                        .await?;
+                }
 
                 // Create updated channel entry with new state
                 let updated_channel = ChannelEntry::new(
@@ -357,32 +365,6 @@ where
                     new_ticket_index = decoded.ticket_index,
                     "TicketRedeemed: decoded channel state"
                 );
-
-                let redeemed_amount = if existing_channel.balance.amount() >= decoded.balance.amount() {
-                    existing_channel.balance - decoded.balance
-                } else {
-                    warn!(
-                        %channel_id,
-                        previous_balance = %existing_channel.balance,
-                        new_balance = %decoded.balance,
-                        "TicketRedeemed balance increased unexpectedly; recording zero redeemed amount"
-                    );
-                    HoprBalance::zero()
-                };
-
-                let destination_account = self.db.get_account(tx.into(), existing_channel.destination).await?;
-                if let Some(safe_address) = destination_account.and_then(|account| account.safe_address) {
-                    self.db
-                        .record_safe_ticket_redeemed(
-                            tx.into(),
-                            safe_address,
-                            redeemed_amount,
-                            block,
-                            tx_index,
-                            log_index,
-                        )
-                        .await?;
-                }
 
                 // Create updated channel entry with new balance and ticket index
                 let updated_channel = ChannelEntry::new(

@@ -26,8 +26,11 @@ use hopr_bindings::{
 };
 use hopr_chain_connector::{BasicPayloadGenerator, PayloadGenerator, SafePayloadGenerator};
 use hopr_chain_types::{ContractAddresses, prelude::SignableTransaction};
-use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
-use hopr_internal_types::{Multiaddr, announcement::AnnouncementData};
+use hopr_crypto_types::{
+    keypairs::{ChainKeypair, Keypair},
+    types::{HalfKey, Hash, Response},
+};
+use hopr_internal_types::{Multiaddr, announcement::AnnouncementData, tickets::TicketBuilder};
 use hopr_primitive_types::{
     prelude::{Address as HoprAddress, HoprBalance},
     traits::IntoEndian,
@@ -285,6 +288,58 @@ impl IntegrationFixture {
         self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
             .await
     }
+
+    pub async fn redeem_ticket(
+        &self,
+        issuer: &AnvilAccount,
+        redeemer: &AnvilAccount,
+        amount: HoprBalance,
+        module: &str,
+        ticket_index: u64,
+        channel_epoch: u32,
+    ) -> Result<[u8; 32]> {
+        let nonce = self.rpc().transaction_count(&redeemer.address).await?;
+
+        let domain_separator = self
+            .client()
+            .query_chain_info()
+            .await?
+            .channel_dst
+            .context("missing channel domain separator in chain info")?;
+        let domain_separator =
+            Hash::from_str(&domain_separator).context("failed to parse channel domain separator from chain info")?;
+
+        let issuer_half_key =
+            HalfKey::try_from(issuer.keypair.secret().as_ref()).context("failed to derive issuer half key")?;
+        let redeemer_half_key =
+            HalfKey::try_from(redeemer.keypair.secret().as_ref()).context("failed to derive redeemer half key")?;
+        let response = Response::from_half_keys(&issuer_half_key, &redeemer_half_key)?;
+
+        let ticket = TicketBuilder::default()
+            .counterparty(redeemer.address)
+            .balance(amount)
+            .index(ticket_index)
+            .channel_epoch(channel_epoch)
+            .challenge(response.to_challenge()?)
+            .build_signed(&issuer.keypair, &domain_separator)?
+            .into_acknowledged(response)
+            .into_redeemable(&redeemer.keypair, &domain_separator)?;
+
+        let payload_generator = SafePayloadGenerator::new(
+            &redeemer.keypair,
+            *self.contract_addresses(),
+            HoprAddress::from_str(module)?,
+        );
+
+        let payload = payload_generator.redeem_ticket(ticket)?;
+
+        let payload_bytes = payload
+            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &redeemer.keypair)
+            .await?;
+
+        self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
+            .await
+    }
 }
 
 // Token related helpers
@@ -453,7 +508,7 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
     let total_transferred_amount = transfer_or_mint_tokens(
         hopr_token,
         all_addresses,
-        vec![U256::from(100_000_000_000_000_000_000_000u128); accounts.len()],
+        vec![U256::from(1_000_000_000_000_000_000_000u128); accounts.len()],
     )
     .await?;
 
