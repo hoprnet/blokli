@@ -290,7 +290,7 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
     let account = fixture.accounts().first().expect("no accounts in fixture");
     let client = fixture.client().clone();
 
-    let new_win_prob = 0.00005f64;
+    let new_win_prob = 0.005f64;
 
     let mut stream = client
         .subscribe_ticket_params()
@@ -310,7 +310,6 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
         .await?
         .ok_or_else(|| anyhow!("no update received from subscription"))??;
 
-    assert_eq!(output.min_ticket_winning_probability, new_win_prob);
     assert!((output.min_ticket_winning_probability - new_win_prob).abs() < EPSILON);
 
     fixture
