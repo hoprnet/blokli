@@ -1852,7 +1852,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-rpc"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1944,7 +1944,7 @@ dependencies = [
 [[package]]
 name = "blokli-client"
 version = "0.18.1"
-source = "git+https://github.com/hoprnet/blokli#20cf3aef31da8d86f0e0b2b977e769bb947fcf70"
+source = "git+https://github.com/hoprnet/blokli#9836b5651ad5e38185da7294bc85a55218c88996"
 dependencies = [
  "anyhow",
  "async-trait",

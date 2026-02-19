@@ -598,7 +598,7 @@ async fn test_chain_info_query() -> Result<()> {
     .data(ChainId(100))
     .data(NetworkName("anvil-localhost".to_string()))
     .data(ExpectedBlockTime(1))
-    .data(Finality(8))
+    .data(Finality(3))
     .finish();
 
     let query = r#"
@@ -731,7 +731,7 @@ async fn test_chain_info_query_missing_data_returns_error() -> Result<()> {
     .data(ChainId(100))
     .data(NetworkName("anvil-localhost".to_string()))
     .data(ExpectedBlockTime(1))
-    .data(Finality(8))
+    .data(Finality(3))
     .finish();
 
     let query = r#"
@@ -799,7 +799,7 @@ async fn test_chain_info_query_with_null_optional_fields() -> Result<()> {
     .data(ChainId(200))
     .data(NetworkName("test-network".to_string()))
     .data(ExpectedBlockTime(5))
-    .data(Finality(8))
+    .data(Finality(3))
     .finish();
 
     let query = r#"

@@ -123,9 +123,9 @@ text = "keep-alive"
 # This limit is compared against finality-adjusted blocks from the RPC:
 #   lag = (rpc_block - finality) - indexed_block
 #
-# For Rotsee (Gnosis), finality=8 blocks. So with max_indexer_lag=10:
-# - The indexer can be up to 18 blocks behind the RPC chain head
-# - But must be within 10 blocks of confirmed blocks (with 8 confirmations)
+# For Rotsee (Gnosis), finality=3 blocks. So with max_indexer_lag=10:
+# - The indexer can be up to 13 blocks behind the RPC chain head
+# - But must be within 10 blocks of confirmed blocks (with 3 confirmations)
 #
 # This ensures the server doesn't report "ready" when caught up to
 # unconfirmed blocks that might be reorganized.

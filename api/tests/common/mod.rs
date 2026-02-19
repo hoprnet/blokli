@@ -227,7 +227,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
         "test-network".to_string(),
         contract_addrs,
         config.expected_block_time.as_secs(),
-        8, // Test finality value
+        3, // Test finality value
         indexer_state,
         transaction_executor.clone(),
         transaction_store.clone(),
@@ -328,7 +328,7 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
         "test-network".to_string(),
         api_config,
         expected_block_time,
-        8, // Test finality value
+        3, // Test finality value
         indexer_state,
         ctx.transaction_executor.clone(),
         ctx.transaction_store.clone(),
