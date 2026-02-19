@@ -28,54 +28,30 @@ async fn test_safe_queries() -> anyhow::Result<()> {
     let db = BlokliDb::new_in_memory().await?;
 
     // Create test data
-    let safe_address = random_address();
-    let module_address = random_address();
-    let chain_key = random_address();
-    let second_node_for_same_safe = random_address();
-    let second_safe_address = random_address();
-    let second_module_address = random_address();
-    let second_chain_key = random_address();
+    let safe_address_0 = random_address();
+    let module_address_0 = random_address();
+    let chain_key_0 = random_address();
 
-    db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+    let safe_address_1 = random_address();
+    let module_address_1 = random_address();
+    let chain_key_1 = random_address();
+
+    db.create_safe_contract(None, safe_address_0, module_address_0, chain_key_0, 100, 0, 0)
         .await?;
-    db.create_safe_contract(
-        None,
-        second_safe_address,
-        second_module_address,
-        second_chain_key,
-        100,
-        0,
-        1,
-    )
-    .await?;
-    db.record_safe_ticket_redeemed(None, safe_address, chain_key, HoprBalance::from(7_u64), 110, 1, 0)
+    db.create_safe_contract(None, safe_address_1, module_address_1, chain_key_1, 100, 0, 1)
         .await?;
-    db.record_safe_ticket_redeemed(None, safe_address, chain_key, HoprBalance::from(5_u64), 120, 1, 1)
+    db.record_safe_ticket_redeemed(None, safe_address_0, chain_key_0, HoprBalance::from(7_u64), 110, 1, 0)
         .await?;
-    db.record_safe_ticket_redeemed(
-        None,
-        safe_address,
-        second_node_for_same_safe,
-        HoprBalance::from(11_u64),
-        121,
-        1,
-        2,
-    )
-    .await?;
-    db.record_safe_ticket_redeemed(
-        None,
-        second_safe_address,
-        chain_key,
-        HoprBalance::from(3_u64),
-        130,
-        2,
-        0,
-    )
-    .await?;
+    db.record_safe_ticket_redeemed(None, safe_address_0, chain_key_0, HoprBalance::from(5_u64), 120, 1, 1)
+        .await?;
+    db.record_safe_ticket_redeemed(None, safe_address_0, chain_key_1, HoprBalance::from(11_u64), 121, 1, 2)
+        .await?;
+    db.record_safe_ticket_redeemed(None, safe_address_1, chain_key_0, HoprBalance::from(3_u64), 130, 2, 0)
+        .await?;
 
     // Verify DB has the record
     let count = SafeEntity::find()
-        .filter(SafeColumn::Address.eq(safe_address.as_ref().to_vec()))
+        .filter(SafeColumn::Address.eq(safe_address_0.as_ref().to_vec()))
         .count(db.conn(blokli_db::TargetDb::Index))
         .await?;
     assert_eq!(count, 1, "DB should have 1 safe contract");
@@ -85,7 +61,7 @@ async fn test_safe_queries() -> anyhow::Result<()> {
         .await?
         .unwrap();
     println!("Stored safe: {:?}", stored_safe);
-    println!("Safe address hex: {}", safe_address.to_hex());
+    println!("Safe address hex: {}", safe_address_0.to_hex());
 
     // We don't need RPC for safe queries, so we don't inject it.
     let schema = async_graphql::Schema::build(
@@ -118,7 +94,7 @@ async fn test_safe_queries() -> anyhow::Result<()> {
             }}
         }}
         "#,
-        safe_address.to_hex()
+        safe_address_0.to_hex()
     );
 
     let response = schema.execute(query).await;
@@ -126,9 +102,9 @@ async fn test_safe_queries() -> anyhow::Result<()> {
 
     let data = response.data.into_json().unwrap();
     let safe_data = data["safe"].as_object().unwrap();
-    assert_eq!(safe_data["address"], safe_address.to_hex());
-    assert_eq!(safe_data["moduleAddress"], module_address.to_hex());
-    assert_eq!(safe_data["chainKey"], chain_key.to_hex());
+    assert_eq!(safe_data["address"], safe_address_0.to_hex());
+    assert_eq!(safe_data["moduleAddress"], module_address_0.to_hex());
+    assert_eq!(safe_data["chainKey"], chain_key_0.to_hex());
 
     // Test safeByChainKey(chainKey) query
     let query = format!(
@@ -143,7 +119,7 @@ async fn test_safe_queries() -> anyhow::Result<()> {
             }}
         }}
         "#,
-        chain_key.to_hex()
+        chain_key_0.to_hex()
     );
 
     let response = schema.execute(query).await;
@@ -151,9 +127,9 @@ async fn test_safe_queries() -> anyhow::Result<()> {
 
     let data = response.data.into_json().unwrap();
     let safe_data = data["safeByChainKey"].as_object().unwrap();
-    assert_eq!(safe_data["address"], safe_address.to_hex());
-    assert_eq!(safe_data["moduleAddress"], module_address.to_hex());
-    assert_eq!(safe_data["chainKey"], chain_key.to_hex());
+    assert_eq!(safe_data["address"], safe_address_0.to_hex());
+    assert_eq!(safe_data["moduleAddress"], module_address_0.to_hex());
+    assert_eq!(safe_data["chainKey"], chain_key_0.to_hex());
 
     // Test safes() list query
     let query = r#"
@@ -174,36 +150,7 @@ async fn test_safe_queries() -> anyhow::Result<()> {
     let data = response.data.into_json().unwrap();
     let safes_list = data["safes"]["safes"].as_array().unwrap();
     assert!(!safes_list.is_empty());
-    assert!(safes_list.iter().any(|s| s["address"] == safe_address.to_hex()));
-
-    // Test safeRedeemedStats(address) query
-    let query = format!(
-        r#"
-        query {{
-            safeRedeemedStats(address: "{}") {{
-                ... on SafeRedeemedStats {{
-                    address
-                    redeemedAmount
-                    redemptionCount
-                }}
-                ... on QueryFailedError {{
-                    code
-                    message
-                }}
-            }}
-        }}
-        "#,
-        safe_address.to_hex()
-    );
-
-    let response = schema.execute(query).await;
-    assert!(response.errors.is_empty(), "Errors: {:?}", response.errors);
-
-    let data = response.data.into_json().unwrap();
-    let stats_data = data["safeRedeemedStats"].as_object().unwrap();
-    assert_eq!(stats_data["address"], safe_address.to_hex());
-    assert_eq!(stats_data["redeemedAmount"], "0.000000000000000023 wxHOPR");
-    assert_eq!(stats_data["redemptionCount"], "3");
+    assert!(safes_list.iter().any(|s| s["address"] == safe_address_0.to_hex()));
 
     let query = format!(
         r#"
@@ -218,14 +165,14 @@ async fn test_safe_queries() -> anyhow::Result<()> {
             }}
         }}
         "#,
-        safe_address.to_hex()
+        safe_address_0.to_hex()
     );
 
     let response = schema.execute(query).await;
     assert!(response.errors.is_empty(), "Errors: {:?}", response.errors);
     let data = response.data.into_json().unwrap();
     let stats_data = data["redeemedStats"].as_object().unwrap();
-    assert_eq!(stats_data["safeAddress"], safe_address.to_hex());
+    assert_eq!(stats_data["safeAddress"], safe_address_0.to_hex());
     assert_eq!(stats_data["nodeAddress"], serde_json::Value::Null);
     assert_eq!(stats_data["redeemedAmount"], "0.000000000000000023 wxHOPR");
     assert_eq!(stats_data["redemptionCount"], "3");
@@ -243,7 +190,7 @@ async fn test_safe_queries() -> anyhow::Result<()> {
             }}
         }}
         "#,
-        chain_key.to_hex()
+        chain_key_0.to_hex()
     );
 
     let response = schema.execute(query).await;
@@ -251,7 +198,7 @@ async fn test_safe_queries() -> anyhow::Result<()> {
     let data = response.data.into_json().unwrap();
     let stats_data = data["redeemedStats"].as_object().unwrap();
     assert_eq!(stats_data["safeAddress"], serde_json::Value::Null);
-    assert_eq!(stats_data["nodeAddress"], chain_key.to_hex());
+    assert_eq!(stats_data["nodeAddress"], chain_key_0.to_hex());
     assert_eq!(stats_data["redeemedAmount"], "0.000000000000000015 wxHOPR");
     assert_eq!(stats_data["redemptionCount"], "3");
 
@@ -268,16 +215,16 @@ async fn test_safe_queries() -> anyhow::Result<()> {
             }}
         }}
         "#,
-        safe_address.to_hex(),
-        chain_key.to_hex()
+        safe_address_0.to_hex(),
+        chain_key_0.to_hex()
     );
 
     let response = schema.execute(query).await;
     assert!(response.errors.is_empty(), "Errors: {:?}", response.errors);
     let data = response.data.into_json().unwrap();
     let stats_data = data["redeemedStats"].as_object().unwrap();
-    assert_eq!(stats_data["safeAddress"], safe_address.to_hex());
-    assert_eq!(stats_data["nodeAddress"], chain_key.to_hex());
+    assert_eq!(stats_data["safeAddress"], safe_address_0.to_hex());
+    assert_eq!(stats_data["nodeAddress"], chain_key_0.to_hex());
     assert_eq!(stats_data["redeemedAmount"], "0.000000000000000012 wxHOPR");
     assert_eq!(stats_data["redemptionCount"], "2");
 
@@ -294,16 +241,16 @@ async fn test_safe_queries() -> anyhow::Result<()> {
             }}
         }}
         "#,
-        safe_address.to_hex(),
-        second_node_for_same_safe.to_hex()
+        safe_address_0.to_hex(),
+        chain_key_1.to_hex()
     );
 
     let response = schema.execute(query).await;
     assert!(response.errors.is_empty(), "Errors: {:?}", response.errors);
     let data = response.data.into_json().unwrap();
     let stats_data = data["redeemedStats"].as_object().unwrap();
-    assert_eq!(stats_data["safeAddress"], safe_address.to_hex());
-    assert_eq!(stats_data["nodeAddress"], second_node_for_same_safe.to_hex());
+    assert_eq!(stats_data["safeAddress"], safe_address_0.to_hex());
+    assert_eq!(stats_data["nodeAddress"], chain_key_1.to_hex());
     assert_eq!(stats_data["redeemedAmount"], "0.000000000000000011 wxHOPR");
     assert_eq!(stats_data["redemptionCount"], "1");
 
