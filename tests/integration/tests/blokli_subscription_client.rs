@@ -310,6 +310,7 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
         .await?
         .ok_or_else(|| anyhow!("no update received from subscription"))??;
 
+    assert_eq!(output.min_ticket_winning_probability, new_win_prob);
     assert!((output.min_ticket_winning_probability - new_win_prob).abs() < EPSILON);
 
     fixture
