@@ -52,12 +52,6 @@ pub trait BlokliDbSafeRedeemedStatsOperations {
         tx_index: u32,
         log_index: u32,
     ) -> Result<SafeRedeemedStatsEntry>;
-
-    async fn get_safe_redeemed_stats<'a>(
-        &'a self,
-        tx: OptTx<'a>,
-        safe_address: Address,
-    ) -> Result<Option<SafeRedeemedStatsEntry>>;
 }
 
 #[async_trait]
@@ -66,7 +60,7 @@ impl BlokliDbSafeRedeemedStatsOperations for BlokliDb {
         &'a self,
         tx: OptTx<'a>,
         safe_address: Address,
-        destination_node_address: Address,
+        node_address: Address,
         redeemed_amount: HoprBalance,
         block: u32,
         tx_index: u32,
@@ -77,10 +71,11 @@ impl BlokliDbSafeRedeemedStatsOperations for BlokliDb {
             .perform(|tx| {
                 Box::pin(async move {
                     let safe_address_bytes = safe_address.as_ref().to_vec();
-                    let node_address_bytes = destination_node_address.as_ref().to_vec();
+                    let node_address_bytes = node_address.as_ref().to_vec();
 
                     let existing = HoprSafeRedeemedStats::find()
                         .filter(hopr_safe_redeemed_stats::Column::SafeAddress.eq(safe_address_bytes.clone()))
+                        .filter(hopr_safe_redeemed_stats::Column::NodeAddress.eq(node_address_bytes.clone()))
                         .one(tx.as_ref())
                         .await?;
 
@@ -95,7 +90,6 @@ impl BlokliDbSafeRedeemedStatsOperations for BlokliDb {
                             let mut active: hopr_safe_redeemed_stats::ActiveModel = model.into();
                             active.redeemed_amount = Set(next_amount.to_be_bytes().to_vec());
                             active.redemption_count = Set(next_count);
-                            active.node_address = Set(node_address_bytes.clone());
                             active.last_redeemed_block = Set(i64::from(block));
                             active.last_redeemed_tx_index = Set(i64::from(tx_index));
                             active.last_redeemed_log_index = Set(i64::from(log_index));
@@ -121,33 +115,15 @@ impl BlokliDbSafeRedeemedStatsOperations for BlokliDb {
             })
             .await
     }
-
-    async fn get_safe_redeemed_stats<'a>(
-        &'a self,
-        tx: OptTx<'a>,
-        safe_address: Address,
-    ) -> Result<Option<SafeRedeemedStatsEntry>> {
-        self.nest_transaction(tx)
-            .await?
-            .perform(|tx| {
-                Box::pin(async move {
-                    let model = HoprSafeRedeemedStats::find()
-                        .filter(hopr_safe_redeemed_stats::Column::SafeAddress.eq(safe_address.as_ref().to_vec()))
-                        .one(tx.as_ref())
-                        .await?;
-
-                    model.map(model_to_entry).transpose()
-                })
-            })
-            .await
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use rand::RngCore;
+    use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
     use super::*;
+    use crate::TargetDb;
 
     fn random_address() -> Address {
         let mut rng = rand::rng();
@@ -179,9 +155,13 @@ mod tests {
         assert_eq!(second.last_redeemed_tx_index, 2);
         assert_eq!(second.last_redeemed_log_index, 3);
 
-        let loaded = db
-            .get_safe_redeemed_stats(None, safe_address)
+        let loaded = HoprSafeRedeemedStats::find()
+            .filter(hopr_safe_redeemed_stats::Column::SafeAddress.eq(safe_address.as_ref().to_vec()))
+            .filter(hopr_safe_redeemed_stats::Column::NodeAddress.eq(node_address.as_ref().to_vec()))
+            .one(db.conn(TargetDb::Index))
             .await?
+            .map(model_to_entry)
+            .transpose()?
             .expect("stats should exist");
         assert_eq!(loaded, second);
 
@@ -192,9 +172,66 @@ mod tests {
     async fn test_get_safe_redeemed_stats_missing() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let safe_address = random_address();
+        let node_address = random_address();
 
-        let loaded = db.get_safe_redeemed_stats(None, safe_address).await?;
+        let loaded = HoprSafeRedeemedStats::find()
+            .filter(hopr_safe_redeemed_stats::Column::SafeAddress.eq(safe_address.as_ref().to_vec()))
+            .filter(hopr_safe_redeemed_stats::Column::NodeAddress.eq(node_address.as_ref().to_vec()))
+            .one(db.conn(TargetDb::Index))
+            .await?
+            .map(model_to_entry)
+            .transpose()?;
         assert!(loaded.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_record_is_partitioned_by_safe_and_node() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = random_address();
+        let first_node = random_address();
+        let second_node = random_address();
+
+        let first = db
+            .record_safe_ticket_redeemed(None, safe_address, first_node, HoprBalance::from(10_u64), 100, 1, 1)
+            .await?;
+        assert_eq!(first.redeemed_amount, HoprBalance::from(10_u64));
+        assert_eq!(first.redemption_count, 1);
+
+        let second = db
+            .record_safe_ticket_redeemed(None, safe_address, second_node, HoprBalance::from(3_u64), 101, 1, 2)
+            .await?;
+        assert_eq!(second.redeemed_amount, HoprBalance::from(3_u64));
+        assert_eq!(second.redemption_count, 1);
+
+        let first_updated = db
+            .record_safe_ticket_redeemed(None, safe_address, first_node, HoprBalance::from(5_u64), 102, 2, 0)
+            .await?;
+        assert_eq!(first_updated.redeemed_amount, HoprBalance::from(15_u64));
+        assert_eq!(first_updated.redemption_count, 2);
+
+        let loaded_first = HoprSafeRedeemedStats::find()
+            .filter(hopr_safe_redeemed_stats::Column::SafeAddress.eq(safe_address.as_ref().to_vec()))
+            .filter(hopr_safe_redeemed_stats::Column::NodeAddress.eq(first_node.as_ref().to_vec()))
+            .one(db.conn(TargetDb::Index))
+            .await?
+            .map(model_to_entry)
+            .transpose()?
+            .expect("first node stats should exist");
+        let loaded_second = HoprSafeRedeemedStats::find()
+            .filter(hopr_safe_redeemed_stats::Column::SafeAddress.eq(safe_address.as_ref().to_vec()))
+            .filter(hopr_safe_redeemed_stats::Column::NodeAddress.eq(second_node.as_ref().to_vec()))
+            .one(db.conn(TargetDb::Index))
+            .await?
+            .map(model_to_entry)
+            .transpose()?
+            .expect("second node stats should exist");
+
+        assert_eq!(loaded_first.redeemed_amount, HoprBalance::from(15_u64));
+        assert_eq!(loaded_first.redemption_count, 2);
+        assert_eq!(loaded_second.redeemed_amount, HoprBalance::from(3_u64));
+        assert_eq!(loaded_second.redemption_count, 1);
 
         Ok(())
     }

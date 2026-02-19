@@ -815,9 +815,13 @@ Clients can query Safe contracts through three methods:
 1. **By Safe Address**: `safe(address: "0x...")` - Direct lookup by Safe contract address
 2. **By Chain Key**: `safeByChainKey(chainKey: "0x...")` - Find Safe by owner's address
 3. **List All**: `safes()` - Retrieve all indexed Safe contracts
-4. **Redeemed Ticket Aggregates**: `safeRedeemedStats(address: "0x...")` - Retrieve total redeemed amount and redemption count derived from `TicketRedeemed` events
+4. **Redeemed Ticket Aggregates**: `safeRedeemedStats(address: "0x...")` and `redeemedStats(safeAddress, nodeAddress)` - Retrieve total redeemed amount and redemption count derived from `TicketRedeemed` events
 
-`TicketRedeemed` processing updates a dedicated aggregate table keyed by safe address. Attribution uses the destination account of the redeemed channel and resolves the account's current `safe_address` when the event is processed.
+`TicketRedeemed` processing updates a dedicated aggregate table keyed by `(safe_address, node_address)`. Attribution uses the destination account of the redeemed channel and resolves the account's current `safe_address` when the event is processed. Query behavior is:
+
+- safe-only filter aggregates all rows for that safe
+- node-only filter aggregates all rows for that node
+- safe+node filter returns the single matching pair row
 
 **Idempotency Guarantee**:
 

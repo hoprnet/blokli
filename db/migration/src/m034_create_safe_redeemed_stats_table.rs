@@ -21,8 +21,7 @@ impl MigrationTrait for Migration {
                     .col(
                         ColumnDef::new(HoprSafeRedeemedStats::SafeAddress)
                             .binary_len(20)
-                            .not_null()
-                            .unique_key(),
+                            .not_null(),
                     )
                     .col(
                         ColumnDef::new(HoprSafeRedeemedStats::NodeAddress)
@@ -61,7 +60,41 @@ impl MigrationTrait for Migration {
                     )
                     .to_owned(),
             )
-            .await
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .table(HoprSafeRedeemedStats::Table)
+                    .name("idx_hopr_safe_redeemed_stats_safe_node_unique")
+                    .col(HoprSafeRedeemedStats::SafeAddress)
+                    .col(HoprSafeRedeemedStats::NodeAddress)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .table(HoprSafeRedeemedStats::Table)
+                    .name("idx_hopr_safe_redeemed_stats_safe")
+                    .col(HoprSafeRedeemedStats::SafeAddress)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .table(HoprSafeRedeemedStats::Table)
+                    .name("idx_hopr_safe_redeemed_stats_node")
+                    .col(HoprSafeRedeemedStats::NodeAddress)
+                    .to_owned(),
+            )
+            .await?;
+
+        Ok(())
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {

@@ -5,7 +5,7 @@ pub mod types {
     pub use super::graphql::{
         ChannelStatus, DateTime, Hex32, TokenValueString, Uint64,
         accounts::Account,
-        balances::{HoprBalance, NativeBalance, RedeemedStats, SafeHoprAllowance, SafeRedeemedStats},
+        balances::{HoprBalance, NativeBalance, RedeemedStats, SafeHoprAllowance},
         channels::Channel,
         graph::OpenedChannelsGraphEntry,
         info::{ChainInfo, ContractAddressMap, TicketParameters},

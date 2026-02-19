@@ -493,6 +493,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_safe_redeemed_stats_safe_node_composite_uniqueness() {
+        let db = setup_test_db().await;
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+            .await
+            .unwrap();
+
+        db.execute_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO hopr_safe_redeemed_stats (safe_address, node_address, redeemed_amount, redemption_count, \
+             last_redeemed_block, last_redeemed_tx_index, last_redeemed_log_index) VALUES \
+             (X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', X'1111111111111111111111111111111111111111', \
+             X'0000000000000000000000000000000000000000000000000000000000000001', 1, 100, 0, 0)"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        let second_node_insert = db
+            .execute_raw(Statement::from_string(
+                DbBackend::Sqlite,
+                "INSERT INTO hopr_safe_redeemed_stats (safe_address, node_address, redeemed_amount, redemption_count, \
+                 last_redeemed_block, last_redeemed_tx_index, last_redeemed_log_index) VALUES \
+                 (X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', X'2222222222222222222222222222222222222222', \
+                 X'0000000000000000000000000000000000000000000000000000000000000002', 1, 101, 0, 1)"
+                    .to_string(),
+            ))
+            .await;
+        assert!(
+            second_node_insert.is_ok(),
+            "Same safe with different node should be allowed"
+        );
+
+        let duplicate_pair_insert = db
+            .execute_raw(Statement::from_string(
+                DbBackend::Sqlite,
+                "INSERT INTO hopr_safe_redeemed_stats (safe_address, node_address, redeemed_amount, redemption_count, \
+                 last_redeemed_block, last_redeemed_tx_index, last_redeemed_log_index) VALUES \
+                 (X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', X'1111111111111111111111111111111111111111', \
+                 X'0000000000000000000000000000000000000000000000000000000000000003', 1, 102, 0, 2)"
+                    .to_string(),
+            ))
+            .await;
+        assert!(
+            duplicate_pair_insert.is_err(),
+            "Duplicate safe/node pair should be rejected"
+        );
+    }
+
+    #[tokio::test]
     async fn test_channel_state_performance_indices_created() {
         let db = setup_test_db().await;
         Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)

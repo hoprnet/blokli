@@ -443,6 +443,9 @@ type QueryRoot {
   Retrieve aggregated TicketRedeemed statistics with optional safe/node filters
   
   At least one filter must be provided: safeAddress, nodeAddress, or both.
+  If only safeAddress is provided, all rows for that safe are aggregated.
+  If only nodeAddress is provided, all rows for that node are aggregated.
+  If both are provided, the single matching safe/node pair row is returned.
   Returns Error with code MISSING_FILTER if no filter is provided.
   Returns Error with code INVALID_ADDRESS if any provided address format is invalid.
   Returns Error with code NOT_FOUND if safeAddress is provided but the safe does not exist.
