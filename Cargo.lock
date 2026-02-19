@@ -1824,7 +1824,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-rpc"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -2068,7 +2068,7 @@ dependencies = [
 
 [[package]]
 name = "bloklid"
-version = "0.8.0"
+version = "0.8.1"
 dependencies = [
  "anyhow",
  "async-channel 2.5.0",

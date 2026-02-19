@@ -226,11 +226,11 @@ type MutationRoot {
   Submit a transaction synchronously
   
   Validates the pre-signed raw transaction data, submits it to the chain, and waits for
-  the specified number of confirmations (default: 8 blocks) before returning.
+  the specified number of confirmations (default: 3 blocks) before returning.
   Transaction can be queried later.
   """
   sendTransactionSync(
-    "Number of block confirmations to wait for (default: 8, max: 64)"
+    "Number of block confirmations to wait for (default: 3, max: 64)"
     confirmations: Int
     "Transaction data to submit"
     input: TransactionInput!
