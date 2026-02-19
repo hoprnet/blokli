@@ -183,7 +183,7 @@ async fn query_safe_redeemed_stats_after_ticket_redeem(#[future(awt)] fixture: I
     sleep(Duration::from_secs(8)).await;
 
     fixture
-        .open_channel(src, dst, channel_amount, &src_safe.module_address)
+        .open_channel(src, dst, channel_amount, &src_safe.module_address, None)
         .await?;
 
     sleep(Duration::from_secs(8)).await;
