@@ -446,9 +446,9 @@ type QueryRoot {
   If only safeAddress is provided, all rows for that safe are aggregated.
   If only nodeAddress is provided, all rows for that node are aggregated.
   If both are provided, the single matching safe/node pair row is returned.
+  If filters match no rows, zero totals are returned.
   Returns Error with code MISSING_FILTER if no filter is provided.
   Returns Error with code INVALID_ADDRESS if any provided address format is invalid.
-  Returns Error with code NOT_FOUND if safeAddress is provided but the safe does not exist.
   Returns Error with code QUERY_FAILED if query fails.
   """
   redeemedStats(
@@ -505,19 +505,6 @@ type QueryRoot {
     "Safe contract address to query (hexadecimal format)"
     address: String!
   ): SafeHoprAllowanceResult!
-  """
-  Retrieve aggregated TicketRedeemed statistics for a specific Safe
-  
-  Returns the total redeemed amount and number of redemption events attributed
-  to the Safe address. If the Safe exists but has no redemptions, zero values are returned.
-  Returns Error with code INVALID_ADDRESS if address format is invalid.
-  Returns Error with code NOT_FOUND if safe is not found.
-  Returns Error with code QUERY_FAILED if query fails.
-  """
-  safeRedeemedStats(
-    "Safe contract address to query (hexadecimal format)"
-    address: String!
-  ): SafeRedeemedStatsResult!
   """
   Retrieve all safes
   
@@ -607,19 +594,6 @@ type SafeHoprAllowance {
 
 """Result type for Safe HOPR allowance queries"""
 union SafeHoprAllowanceResult = SafeHoprAllowance | InvalidAddressError | QueryFailedError
-
-"""Aggregated redeemed ticket statistics for a specific Safe"""
-type SafeRedeemedStats {
-  "Safe contract address"
-  address: String!
-  "Total redeemed amount from TicketRedeemed events"
-  redeemedAmount: TokenValueString!
-  "Total number of TicketRedeemed events attributed to this safe"
-  redemptionCount: UInt64!
-}
-
-"""Result type for safe redeemed statistics queries"""
-union SafeRedeemedStatsResult = SafeRedeemedStats | InvalidAddressError | QueryFailedError
 
 """Result type for single safe queries"""
 union SafeResult = Safe | InvalidAddressError | QueryFailedError

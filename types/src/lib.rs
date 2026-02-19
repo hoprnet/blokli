@@ -590,19 +590,6 @@ pub struct SafeHoprAllowance {
     pub allowance: TokenValueString,
 }
 
-/// Aggregated redeemed ticket statistics for a specific Safe address
-#[derive(SimpleObject, Clone, Debug)]
-pub struct SafeRedeemedStats {
-    /// Safe contract address
-    pub address: String,
-    /// Total amount redeemed from TicketRedeemed events
-    #[graphql(name = "redeemedAmount")]
-    pub redeemed_amount: TokenValueString,
-    /// Number of TicketRedeemed events attributed to this safe
-    #[graphql(name = "redemptionCount")]
-    pub redemption_count: UInt64,
-}
-
 /// Aggregated redeemed ticket statistics with optional safe and node filters
 #[derive(SimpleObject, Clone, Debug)]
 pub struct RedeemedStats {
