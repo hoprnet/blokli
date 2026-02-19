@@ -92,6 +92,7 @@ impl Args {
             ("BLOKLI_NETWORK", "network"),
             ("BLOKLI_RPC_URL", "rpc_url"),
             ("BLOKLI_MAX_RPC_REQUESTS_PER_SEC", "max_rpc_requests_per_sec"),
+            ("BLOKLI_MAX_BLOCK_RANGE", "max_block_range"),
             // Database - Canonical
             ("DATABASE_URL", "database.url"),
             ("PGHOST", "database.host"),
@@ -221,7 +222,7 @@ impl Args {
             chain_id: network_config.chain_id,
             tx_polling_interval: config.network.tx_polling_interval(),
             confirmations: config.network.confirmations(),
-            max_block_range: config.network.max_block_range(),
+            max_block_range: config.max_block_range,
             channel_contract_deploy_block: network_config.indexer_start_block_number,
             max_requests_per_sec: max_rpc_req,
             expected_block_time: config.network.expected_block_time(),
@@ -1180,6 +1181,98 @@ mod tests {
             assert_eq!(
                 config.api.health.max_indexer_lag, 20,
                 "Non-boolean numeric config should parse as u64"
+            );
+        });
+    }
+
+    #[test]
+    fn test_max_block_range_default() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_var("BLOKLI_MAX_BLOCK_RANGE", None::<&str>, || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
+
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(config.max_block_range, 10000, "max_block_range should default to 10000");
+        });
+    }
+
+    #[test]
+    fn test_max_block_range_from_config_file() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://localhost:8545"
+            max_block_range = 5000
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_var("BLOKLI_MAX_BLOCK_RANGE", None::<&str>, || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
+
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(
+                config.max_block_range, 5000,
+                "max_block_range should be parsed from config file"
+            );
+        });
+    }
+
+    #[test]
+    fn test_max_block_range_env_override() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://localhost:8545"
+            max_block_range = 5000
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_var("BLOKLI_MAX_BLOCK_RANGE", Some("2500"), || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
+
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(
+                config.max_block_range, 2500,
+                "BLOKLI_MAX_BLOCK_RANGE env var should override config file"
             );
         });
     }

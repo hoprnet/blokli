@@ -94,15 +94,6 @@ impl Network {
         }
     }
 
-    /// Returns the maximum block range for RPC queries.
-    pub fn max_block_range(&self) -> u32 {
-        match self {
-            Network::AnvilLocalhost => 10000,
-            Network::Rotsee => 100_000,
-            Network::Jura => 100_000,
-        }
-    }
-
     /// Returns the expected block time in seconds.
     pub fn expected_block_time(&self) -> u64 {
         match self {
