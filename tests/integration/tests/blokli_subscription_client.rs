@@ -64,7 +64,7 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
     });
 
     fixture
-        .open_channel(&src, &dst, amount, &src_safe.module_address)
+        .open_channel(&src, &dst, amount, &src_safe.module_address, None)
         .await?;
 
     let channel = handle
@@ -175,7 +175,7 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
     });
 
     fixture
-        .open_channel(&src, &dst, amount, &src_safe.module_address)
+        .open_channel(&src, &dst, amount, &src_safe.module_address, None)
         .await?;
 
     let graph_entry = handle
@@ -209,7 +209,7 @@ async fn subscribe_graph_channel_update_on_closure(#[future(awt)] fixture: Integ
     fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
     fixture.approve(&src, initial_amount, &src_safe.module_address).await?;
     fixture
-        .open_channel(&src, &dst, initial_amount, &src_safe.module_address)
+        .open_channel(&src, &dst, initial_amount, &src_safe.module_address, None)
         .await?;
 
     // Wait for indexing so the channel is in the database
@@ -239,7 +239,7 @@ async fn subscribe_graph_channel_update_on_closure(#[future(awt)] fixture: Integ
     // This runs AFTER the initial state was received and asserted above.
     fixture.approve(&src, fund_amount, &src_safe.module_address).await?;
     fixture
-        .open_channel(&src, &dst, fund_amount, &src_safe.module_address)
+        .open_channel(&src, &dst, fund_amount, &src_safe.module_address, None)
         .await?;
 
     // Receive balance increase event - can only arrive after the fund action above
@@ -290,7 +290,7 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
     let account = fixture.accounts().first().expect("no accounts in fixture");
     let client = fixture.client().clone();
 
-    let new_win_prob = 0.00005f64;
+    let new_win_prob = 0.005f64;
 
     let mut stream = client
         .subscribe_ticket_params()
@@ -441,7 +441,7 @@ async fn subscribe_channels_no_duplicate_initial_state(#[future(awt)] fixture: I
 
     fixture.approve(&src, amount, &src_safe.module_address).await?;
     fixture
-        .open_channel(&src, &dst, amount, &src_safe.module_address)
+        .open_channel(&src, &dst, amount, &src_safe.module_address, None)
         .await?;
 
     // 3. Wait for indexing to complete
