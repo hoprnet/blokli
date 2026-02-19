@@ -232,7 +232,7 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
 
     // Create the channel
     fixture
-        .open_channel(&src, &dst, amount, &src_safe.module_address)
+        .open_channel(&src, &dst, amount, &src_safe.module_address, None)
         .await?;
 
     sleep(Duration::from_secs(8)).await;
