@@ -385,8 +385,13 @@ impl IntegrationFixture {
         to: &AnvilAccount,
         amount: HoprBalance,
         module: &str,
+        nonce: Option<u64>,
     ) -> Result<[u8; 32]> {
-        let nonce = self.rpc().transaction_count(&from.address).await?;
+        let nonce = self
+            .rpc()
+            .transaction_count(&from.address)
+            .await?
+            .max(nonce.unwrap_or(0));
 
         let payload_generator = SafePayloadGenerator::new(
             &from.keypair,
@@ -529,7 +534,7 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
         }),
     };
 
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(15)).await;
 
     register_shutdown_hook();
 
