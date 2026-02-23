@@ -107,6 +107,12 @@ bind_address = "0.0.0.0:8080"
 # Enable GraphQL Playground for development and testing (default: true)
 playground_enabled = true
 
+# Multiplier applied to EIP-1559 gas estimates exposed by chainInfo
+# A value of 1.0 keeps RPC values unchanged; 1.5 increases maxFeePerGas and
+# maxPriorityFeePerGas by 50% (rounded up to the nearest wei).
+# Must be greater than or equal to 1.
+gas_multiplier = 1.0
+
 # SSE keepalive configuration
 [api.sse_keepalive]
 # Enable keepalive comments to prevent idle timeouts (default: true)

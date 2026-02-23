@@ -120,6 +120,53 @@ fn parse_safe_address(address: String) -> Result<Vec<u8>, SafeResult> {
         .map_err(|e| SafeResult::InvalidAddress(errors::invalid_address_error(address, e)))
 }
 
+fn scale_wei_by_multiplier(value: u128, multiplier: f64) -> u128 {
+    let mut multiplier_string = format!("{multiplier:.12}");
+    while multiplier_string.ends_with('0') {
+        multiplier_string.pop();
+    }
+    if multiplier_string.ends_with('.') {
+        multiplier_string.pop();
+    }
+
+    let (whole_part, fractional_part) = match multiplier_string.split_once('.') {
+        Some(parts) => parts,
+        None => (multiplier_string.as_str(), ""),
+    };
+
+    let whole = match whole_part.parse::<u128>() {
+        Ok(parsed) => parsed,
+        Err(_) => return u128::MAX,
+    };
+
+    let fractional = if fractional_part.is_empty() {
+        0
+    } else {
+        match fractional_part.parse::<u128>() {
+            Ok(parsed) => parsed,
+            Err(_) => return u128::MAX,
+        }
+    };
+
+    let mut denominator = 1u128;
+    for _ in 0..fractional_part.len() {
+        denominator = denominator.saturating_mul(10);
+    }
+
+    let numerator = match whole
+        .checked_mul(denominator)
+        .and_then(|scaled_whole| scaled_whole.checked_add(fractional))
+    {
+        Some(parsed) => parsed,
+        None => return u128::MAX,
+    };
+
+    value
+        .saturating_mul(numerator)
+        .saturating_add(denominator.saturating_sub(1))
+        / denominator
+}
+
 struct SafeContractCurrentRow {
     address: Vec<u8>,
     module_address: Vec<u8>,
@@ -1061,6 +1108,7 @@ impl QueryRoot {
     /// The returned `ChainInfo` contains the last indexed block number, the configured chain ID
     /// and network name, human-readable token values for ticket price and key binding fee,
     /// live gas fee estimates from RPC (`gasPrice`, `maxFeePerGas`, `maxPriorityFeePerGas`) in wei,
+    /// where `maxFeePerGas` and `maxPriorityFeePerGas` are scaled by `api.gas_multiplier`,
     /// minimum incoming ticket winning probability, optional 32-byte domain separator hashes
     /// for channels/ledger/safe registry as `Hex32`, a map of contract addresses, and an optional
     /// channel closure grace period in seconds.
@@ -1109,6 +1157,12 @@ impl QueryRoot {
             Ok(f) => f,
             Err(e) => {
                 return ChainInfoResult::QueryFailed(errors::context_error("finality", format!("{:?}", e)));
+            }
+        };
+        let gas_multiplier = match ctx.data::<crate::schema::GasMultiplier>() {
+            Ok(multiplier) => multiplier,
+            Err(e) => {
+                return ChainInfoResult::QueryFailed(errors::context_error("gas multiplier", format!("{:?}", e)));
             }
         };
 
@@ -1178,8 +1232,9 @@ impl QueryRoot {
 
             match eip1559_result {
                 Ok(fees) => {
-                    max_fee_per_gas = Some(fees.max_fee_per_gas.to_string());
-                    max_priority_fee_per_gas = Some(fees.max_priority_fee_per_gas.to_string());
+                    max_fee_per_gas = Some(scale_wei_by_multiplier(fees.max_fee_per_gas, gas_multiplier.0).to_string());
+                    max_priority_fee_per_gas =
+                        Some(scale_wei_by_multiplier(fees.max_priority_fee_per_gas, gas_multiplier.0).to_string());
                 }
                 Err(e) => {
                     warn!(error = %e, "failed to fetch eip1559 fee estimate for chain_info");
@@ -1370,6 +1425,18 @@ impl QueryRoot {
 
 #[cfg(test)]
 mod tests {
+    use super::scale_wei_by_multiplier;
+
+    #[test]
+    fn test_scale_wei_by_multiplier_identity() {
+        assert_eq!(scale_wei_by_multiplier(1_000_000_000, 1.0), 1_000_000_000);
+    }
+
+    #[test]
+    fn test_scale_wei_by_multiplier_rounds_up() {
+        assert_eq!(scale_wei_by_multiplier(3, 1.5), 5);
+    }
+
     #[test]
     fn test_accounts_filter_validation_logic() {
         let keyid: Option<i32> = None;
