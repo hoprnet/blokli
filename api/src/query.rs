@@ -9,7 +9,7 @@ use blokli_api_types::{
     Safe, SafeHoprAllowance, TokenValueString, Transaction, TransactionCount, UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
-use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
+use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations};
 use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::{
     account, chain_info,
@@ -17,7 +17,6 @@ use blokli_db_entity::{
     hopr_node_safe_registration,
     views::channel_current,
 };
-use hopr_bindings::exports::alloy::providers::Provider;
 use hopr_crypto_types::prelude::Hash;
 use hopr_primitive_types::{
     prelude::HoprBalance as PrimitiveHoprBalance,
@@ -1163,7 +1162,12 @@ impl QueryRoot {
         let mut max_priority_fee_per_gas: Option<String> = None;
 
         if let Ok(rpc) = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>() {
-            match rpc.provider.get_gas_price().await {
+            let (gas_price_result, eip1559_result) = tokio::join!(
+                HoprRpcOperations::get_gas_price(&**rpc),
+                HoprRpcOperations::estimate_eip1559_fees(&**rpc)
+            );
+
+            match gas_price_result {
                 Ok(estimated_gas_price) => {
                     gas_price = Some(estimated_gas_price.to_string());
                 }
@@ -1172,7 +1176,7 @@ impl QueryRoot {
                 }
             }
 
-            match rpc.provider.estimate_eip1559_fees().await {
+            match eip1559_result {
                 Ok(fees) => {
                     max_fee_per_gas = Some(fees.max_fee_per_gas.to_string());
                     max_priority_fee_per_gas = Some(fees.max_priority_fee_per_gas.to_string());
