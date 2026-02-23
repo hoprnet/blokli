@@ -911,9 +911,8 @@ impl Query {
 
 Local builds for all architectures remain fully functional:
 
-- `nix build .#docker-blokli-x86_64-linux` - Build `linux-amd64` docker image
-- `nix build .#docker-blokli-aarch64-linux` - Build `linux-arm64` docker image
-- `nix run .#docker-blokli-x86_64-linux` - Build and publishes `linux-amd64` docker image
+- `nix run -L .#docker-blokli-x86_64-linux` - Build `linux-amd64` docker image
+- `nix run .#docker-blokli-aarch64-linux` - Build `linux-arm64` docker image
 
 ### Overview
 

@@ -549,22 +549,6 @@
 
           # Export packages
           packages = packages // {
-            # Docker images - x86_64-linux
-            inherit (bloklidDocker)
-              docker-blokli-x86_64-linux
-              docker-blokli-x86_64-linux-dev
-              docker-blokli-x86_64-linux-profile
-              docker-blokli-anvil-x86_64-linux
-              ;
-
-            # Docker images - aarch64-linux
-            inherit (bloklidDocker)
-              docker-blokli-aarch64-linux
-              docker-blokli-aarch64-linux-dev
-              docker-blokli-aarch64-linux-profile
-              docker-blokli-anvil-aarch64-linux
-              ;
-
             # Set default package
             default = bloklidPackages.bloklid;
           };
