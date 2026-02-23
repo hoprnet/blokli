@@ -1737,7 +1737,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api-types"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-graphql",
  "blokli-chain-types",
@@ -1824,7 +1824,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-rpc"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1886,7 +1886,7 @@ dependencies = [
 [[package]]
 name = "blokli-client"
 version = "0.18.1"
-source = "git+https://github.com/hoprnet/blokli#ade0d8c8fd1c795dbaa344fce604c96e927f0add"
+source = "git+https://github.com/hoprnet/blokli#9836b5651ad5e38185da7294bc85a55218c88996"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -2034,7 +2034,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-integration-tests"
-version = "0.1.2"
+version = "0.1.3"
 dependencies = [
  "anyhow",
  "blokli-client 0.19.0",
