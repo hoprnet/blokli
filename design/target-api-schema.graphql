@@ -52,10 +52,16 @@ type ChainInfo {
   expectedBlockTime: UInt64!
   "Number of block confirmations required for finality"
   finality: UInt64!
+  "Estimated legacy gas price in wei from RPC"
+  gasPrice: String
   "Current key binding fee"
   keyBindingFee: TokenValueString!
   "Ledger smart contract domain separator (hex string)"
   ledgerDst: String
+  "Estimated EIP-1559 max fee per gas in wei from RPC"
+  maxFeePerGas: String
+  "Estimated EIP-1559 max priority fee per gas in wei from RPC"
+  maxPriorityFeePerGas: String
   "Current minimum ticket winning probability (decimal value between 0.0 and 1.0)"
   minTicketWinningProbability: Float!
   "Network name (e.g., 'rotsee', 'jura')"
