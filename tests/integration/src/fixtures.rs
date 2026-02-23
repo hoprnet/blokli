@@ -36,7 +36,7 @@ use libc::atexit;
 use rand::seq::IndexedRandom;
 use rstest::fixture;
 use tokio::{sync::OnceCell, time::sleep};
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::{
     anvil::AnvilAccount, config::TestConfig, constants::STACK_STARTUP_WAIT, docker::DockerEnvironment, rpc::RpcClient,
@@ -55,6 +55,27 @@ struct IntegrationFixtureInner {
     rpc: RpcClient,
     docker: Mutex<Option<DockerEnvironment>>,
     contract_addrs: ContractAddresses,
+}
+
+const DEFAULT_MAX_FEE_PER_GAS: u128 = 2_000_000_000;
+const DEFAULT_MAX_PRIORITY_FEE_PER_GAS: u128 = 1_000_000_000;
+const DEFAULT_GAS_LIMIT: u64 = 10_000_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Eip1559GasParameters {
+    pub max_fee_per_gas: u128,
+    pub max_priority_fee_per_gas: u128,
+    pub gas_limit: u64,
+}
+
+impl Default for Eip1559GasParameters {
+    fn default() -> Self {
+        Self {
+            max_fee_per_gas: DEFAULT_MAX_FEE_PER_GAS,
+            max_priority_fee_per_gas: DEFAULT_MAX_PRIORITY_FEE_PER_GAS,
+            gas_limit: DEFAULT_GAS_LIMIT,
+        }
+    }
 }
 
 // Accessor methods
@@ -99,6 +120,18 @@ impl IntegrationFixture {
         recipient: &AnvilAccount,
         nonce: u64,
     ) -> Result<String> {
+        self.build_raw_tx_with_gas(value, sender, recipient, nonce, None).await
+    }
+
+    pub async fn build_raw_tx_with_gas(
+        &self,
+        value: U256,
+        sender: &AnvilAccount,
+        recipient: &AnvilAccount,
+        nonce: u64,
+        gas: Option<Eip1559GasParameters>,
+    ) -> Result<String> {
+        let gas = self.resolve_eip1559_gas_parameters(gas).await;
         let tx_builder = TestTransactionBuilder::new(&sender.keypair)?;
         tx_builder
             .build_eip1559_transaction_hex(
@@ -106,11 +139,49 @@ impl IntegrationFixture {
                 nonce,
                 &recipient.address.to_string(),
                 value,
-                self.config().max_fee_per_gas,
-                self.config().max_priority_fee_per_gas,
-                self.config().gas_limit,
+                gas.max_fee_per_gas,
+                gas.max_priority_fee_per_gas,
+                gas.gas_limit,
             )
             .await
+    }
+
+    async fn resolve_eip1559_gas_parameters(&self, gas: Option<Eip1559GasParameters>) -> Eip1559GasParameters {
+        if let Some(gas) = gas {
+            return gas;
+        }
+
+        let chain_info = match self.client().query_chain_info().await {
+            Ok(chain_info) => chain_info,
+            Err(error) => {
+                warn!(
+                    %error,
+                    "failed to fetch chainInfo gas parameters, using integration defaults"
+                );
+                return Eip1559GasParameters::default();
+            }
+        };
+
+        let max_fee_per_gas = chain_info
+            .max_fee_per_gas
+            .as_deref()
+            .and_then(|value| value.parse::<u128>().ok());
+        let max_priority_fee_per_gas = chain_info
+            .max_priority_fee_per_gas
+            .as_deref()
+            .and_then(|value| value.parse::<u128>().ok());
+
+        match (max_fee_per_gas, max_priority_fee_per_gas) {
+            (Some(max_fee_per_gas), Some(max_priority_fee_per_gas)) => Eip1559GasParameters {
+                max_fee_per_gas,
+                max_priority_fee_per_gas,
+                ..Eip1559GasParameters::default()
+            },
+            _ => {
+                warn!("chainInfo gas parameters unavailable, using integration defaults");
+                Eip1559GasParameters::default()
+            }
+        }
     }
 
     /// Submits the signed transaction blindly.
@@ -329,8 +400,13 @@ impl IntegrationFixture {
         to: &AnvilAccount,
         amount: HoprBalance,
         module: &str,
+        nonce: Option<u64>,
     ) -> Result<[u8; 32]> {
-        let nonce = self.rpc().transaction_count(&from.address).await?;
+        let nonce = self
+            .rpc()
+            .transaction_count(&from.address)
+            .await?
+            .max(nonce.unwrap_or(0));
 
         let payload_generator = SafePayloadGenerator::new(
             &from.keypair,
@@ -473,7 +549,7 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
         }),
     };
 
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    tokio::time::sleep(Duration::from_secs(15)).await;
 
     register_shutdown_hook();
 

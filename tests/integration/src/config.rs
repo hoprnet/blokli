@@ -50,19 +50,6 @@ pub struct TestConfig {
     )]
     pub http_timeout: Duration,
 
-    #[arg(long, env = "BLOKLI_TEST_MAX_FEE_PER_GAS", default_value_t = 2_000_000_000u128)]
-    pub max_fee_per_gas: u128,
-
-    #[arg(
-        long,
-        env = "BLOKLI_TEST_MAX_PRIORITY_FEE_PER_GAS",
-        default_value_t = 1_000_000_000u128
-    )]
-    pub max_priority_fee_per_gas: u128,
-
-    #[arg(long, env = "BLOKLI_TEST_GAS_LIMIT", default_value_t = 10_000_000)]
-    pub gas_limit: u64,
-
     #[arg(long, env = "BLOKLI_TEST_CONFIRMATIONS", default_value_t = 1)]
     pub tx_confirmations: usize,
 

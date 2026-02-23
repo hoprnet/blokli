@@ -89,17 +89,8 @@ impl Network {
     pub fn confirmations(&self) -> u16 {
         match self {
             Network::AnvilLocalhost => 1,
-            Network::Rotsee => 8,
-            Network::Jura => 8,
-        }
-    }
-
-    /// Returns the maximum block range for RPC queries.
-    pub fn max_block_range(&self) -> u32 {
-        match self {
-            Network::AnvilLocalhost => 10000,
-            Network::Rotsee => 10000,
-            Network::Jura => 10000,
+            Network::Rotsee => 3,
+            Network::Jura => 3,
         }
     }
 

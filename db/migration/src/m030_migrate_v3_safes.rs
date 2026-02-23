@@ -28,8 +28,7 @@ impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let csv_data = match self.0 {
             SafeDataOrigin::NoData => return Ok(()),
-            SafeDataOrigin::Rotsee => VecDeque::from(include_bytes!("data/safe-v3-rotsee.csv").to_vec()),
-            SafeDataOrigin::Dufour => VecDeque::from(include_bytes!("data/safe-v3-dufour.csv").to_vec()),
+            SafeDataOrigin::Jura => VecDeque::from(include_bytes!("data/safe-v3-jura.csv").to_vec()),
         };
 
         manager
@@ -80,8 +79,7 @@ impl MigrationTrait for Migration {
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         let csv_data = match self.0 {
             SafeDataOrigin::NoData => return Ok(()),
-            SafeDataOrigin::Rotsee => VecDeque::from(include_bytes!("data/safe-v3-rotsee.csv").to_vec()),
-            SafeDataOrigin::Dufour => VecDeque::from(include_bytes!("data/safe-v3-dufour.csv").to_vec()),
+            SafeDataOrigin::Jura => VecDeque::from(include_bytes!("data/safe-v3-jura.csv").to_vec()),
         };
 
         manager

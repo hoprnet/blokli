@@ -85,12 +85,15 @@ impl Default for BlokliTestState {
                 channel_dst: Some("0000000000000000000000000000000000000000000000000000000000000000".into()),
                 block_number: 1,
                 chain_id: 100,
+                gas_price: Some("1000000000".into()),
                 ledger_dst: Some("0000000000000000000000000000000000000000000000000000000000000000".into()),
+                max_fee_per_gas: Some("3000000000".into()),
+                max_priority_fee_per_gas: Some("100000000".into()),
                 min_ticket_winning_probability: 1.0,
                 key_binding_fee: TokenValueString("0.01 wxHOPR".into()),
                 safe_registry_dst: Some("0000000000000000000000000000000000000000000000000000000000000000".into()),
                 ticket_price: TokenValueString("1 wxHOPR".into()),
-                network: "rotsee".into(),
+                network: "jura".into(),
                 contract_addresses: ContractAddressMap(
                     r#"
                 {
@@ -107,8 +110,9 @@ impl Default for BlokliTestState {
                     .into(),
                 ),
                 expected_block_time: Uint64("5".into()),
-                finality: Uint64("8".into()),
+                finality: Uint64("3".into()),
             },
+
             version: "1".to_string(),
             health: "OK".to_string(),
             active_txs: Default::default(),

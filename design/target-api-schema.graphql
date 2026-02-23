@@ -52,13 +52,19 @@ type ChainInfo {
   expectedBlockTime: UInt64!
   "Number of block confirmations required for finality"
   finality: UInt64!
+  "Estimated legacy gas price in wei from RPC"
+  gasPrice: String
   "Current key binding fee"
   keyBindingFee: TokenValueString!
   "Ledger smart contract domain separator (hex string)"
   ledgerDst: String
+  "Estimated EIP-1559 max fee per gas in wei from RPC"
+  maxFeePerGas: String
+  "Estimated EIP-1559 max priority fee per gas in wei from RPC"
+  maxPriorityFeePerGas: String
   "Current minimum ticket winning probability (decimal value between 0.0 and 1.0)"
   minTicketWinningProbability: Float!
-  "Network name (e.g., 'dufour', 'rotsee', 'jura')"
+  "Network name (e.g., 'rotsee', 'jura')"
   network: String!
   "Safe Registry smart contract domain separator (hex string)"
   safeRegistryDst: String
@@ -226,11 +232,11 @@ type MutationRoot {
   Submit a transaction synchronously
   
   Validates the pre-signed raw transaction data, submits it to the chain, and waits for
-  the specified number of confirmations (default: 8 blocks) before returning.
+  the specified number of confirmations (default: 3 blocks) before returning.
   Transaction can be queried later.
   """
   sendTransactionSync(
-    "Number of block confirmations to wait for (default: 8, max: 64)"
+    "Number of block confirmations to wait for (default: 3, max: 64)"
     confirmations: Int
     "Transaction data to submit"
     input: TransactionInput!

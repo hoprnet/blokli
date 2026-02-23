@@ -28,7 +28,7 @@ async fn test_channel_closure_grace_period_always_non_null() {
     .data(ChainId(100))
     .data(NetworkName("test-network".to_string()))
     .data(ExpectedBlockTime(1))
-    .data(Finality(8))
+    .data(Finality(3))
     .finish();
 
     let query = r#"
@@ -101,7 +101,7 @@ async fn test_channel_closure_grace_period_with_custom_value() {
     .data(ChainId(100))
     .data(NetworkName("test-network".to_string()))
     .data(ExpectedBlockTime(1))
-    .data(Finality(8))
+    .data(Finality(3))
     .finish();
 
     let query = r#"

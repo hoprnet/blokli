@@ -28,7 +28,7 @@ use validator::Validate;
 
 // use crate::middleware::GnosisScan;
 use crate::{
-    HoprRpcOperations,
+    Eip1559FeeEstimation, HoprRpcOperations,
     client::GasOracleFiller,
     errors::{Result, RpcError},
     transport::HttpRequestor,
@@ -94,9 +94,9 @@ pub struct RpcOperationsConfig {
     /// that the logs will be buffered for before being considered
     /// successfully joined to the chain.
     ///
-    /// Defaults to 8
+    /// Defaults to 3
     #[validate(range(min = 1, max = 100))]
-    #[default = 8]
+    #[default = 3]
     pub finality: u32,
     /// URL to the gas price oracle.
     ///
@@ -203,9 +203,9 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
     /// confirmed_block = provider.get_block_number() - finality
     /// ```
     ///
-    /// For example, with `finality=8`:
-    /// - If RPC reports block 1000, this returns 992
-    /// - Ensures all operations work with blocks that have 8 confirmations
+    /// For example, with `finality=3`:
+    /// - If RPC reports block 1000, this returns 997
+    /// - Ensures all operations work with blocks that have 3 confirmations
     ///
     /// # Impact on Readiness Checks
     ///
@@ -427,6 +427,18 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
             Ok(returned_result) => Ok(returned_result.to_hopr_address()),
             Err(e) => Err(e.into()),
         }
+    }
+
+    async fn get_gas_price(&self) -> Result<u128> {
+        Ok(self.provider.get_gas_price().await?)
+    }
+
+    async fn estimate_eip1559_fees(&self) -> Result<Eip1559FeeEstimation> {
+        let estimate = self.provider.estimate_eip1559_fees().await?;
+        Ok(Eip1559FeeEstimation {
+            max_fee_per_gas: estimate.max_fee_per_gas,
+            max_priority_fee_per_gas: estimate.max_priority_fee_per_gas,
+        })
     }
 
     //     // Check on-chain status of, node, safe, and module
