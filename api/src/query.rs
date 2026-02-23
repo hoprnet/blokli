@@ -1160,7 +1160,7 @@ impl QueryRoot {
             }
         };
         let gas_multiplier = match ctx.data::<crate::schema::GasMultiplier>() {
-            Ok(multiplier) => multiplier,
+            Ok(multiplier) => multiplier.0,
             Err(e) => {
                 return ChainInfoResult::QueryFailed(errors::context_error("gas multiplier", format!("{:?}", e)));
             }
@@ -1232,9 +1232,9 @@ impl QueryRoot {
 
             match eip1559_result {
                 Ok(fees) => {
-                    max_fee_per_gas = Some(scale_wei_by_multiplier(fees.max_fee_per_gas, gas_multiplier.0).to_string());
+                    max_fee_per_gas = Some(scale_wei_by_multiplier(fees.max_fee_per_gas, gas_multiplier).to_string());
                     max_priority_fee_per_gas =
-                        Some(scale_wei_by_multiplier(fees.max_priority_fee_per_gas, gas_multiplier.0).to_string());
+                        Some(scale_wei_by_multiplier(fees.max_priority_fee_per_gas, gas_multiplier).to_string());
                 }
                 Err(e) => {
                     warn!(error = %e, "failed to fetch eip1559 fee estimate for chain_info");

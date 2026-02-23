@@ -53,6 +53,7 @@ async fn test_safe_queries() -> anyhow::Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100)) // chain_id
     .data(NetworkName("test".to_string())) // network
+    .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
     // Test safe(address) query
@@ -148,6 +149,7 @@ async fn test_safe_query_invalid_address() -> anyhow::Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100)) // chain_id
     .data(NetworkName("test".to_string())) // network
+    .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
     // Test with invalid hex format (not 0x prefixed)
@@ -210,6 +212,7 @@ async fn test_safe_query_not_found() -> anyhow::Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100)) // chain_id
     .data(NetworkName("test".to_string())) // network
+    .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
     // Query for a valid address that doesn't exist in DB
@@ -255,6 +258,7 @@ async fn test_safe_by_chain_key_invalid_address() -> anyhow::Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100)) // chain_id
     .data(NetworkName("test".to_string())) // network
+    .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
     // Test with invalid chain key format
@@ -297,6 +301,7 @@ async fn test_safe_by_chain_key_not_found() -> anyhow::Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100)) // chain_id
     .data(NetworkName("test".to_string())) // network
+    .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
     // Query with valid address but not in DB
