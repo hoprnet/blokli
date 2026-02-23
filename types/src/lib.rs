@@ -226,6 +226,15 @@ pub struct ChainInfo {
     /// Current key binding fee
     #[graphql(name = "keyBindingFee")]
     pub key_binding_fee: TokenValueString,
+    /// Estimated legacy gas price in wei from RPC
+    #[graphql(name = "gasPrice")]
+    pub gas_price: Option<String>,
+    /// Estimated EIP-1559 max fee per gas in wei from RPC
+    #[graphql(name = "maxFeePerGas")]
+    pub max_fee_per_gas: Option<String>,
+    /// Estimated EIP-1559 max priority fee per gas in wei from RPC
+    #[graphql(name = "maxPriorityFeePerGas")]
+    pub max_priority_fee_per_gas: Option<String>,
     /// Current minimum ticket winning probability (decimal value between 0.0 and 1.0)
     #[graphql(name = "minTicketWinningProbability")]
     pub min_ticket_winning_probability: f64,
@@ -256,7 +265,7 @@ pub struct ChainInfo {
 #[derive(Union, Clone, Debug)]
 pub enum ChainInfoResult {
     /// Successful chain info
-    ChainInfo(ChainInfo),
+    ChainInfo(Box<ChainInfo>),
     /// Query failed
     QueryFailed(QueryFailedError),
 }

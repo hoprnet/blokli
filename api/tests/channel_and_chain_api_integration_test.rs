@@ -611,6 +611,9 @@ async fn test_chain_info_query() -> Result<()> {
                     network
                     ticketPrice
                     keyBindingFee
+                    gasPrice
+                    maxFeePerGas
+                    maxPriorityFeePerGas
                     minTicketWinningProbability
                     channelDst
                     ledgerDst
@@ -646,6 +649,9 @@ async fn test_chain_info_query() -> Result<()> {
     // Verify token values (0 balance represented as "0 wxHOPR")
     assert_eq!(chain_info["ticketPrice"].as_str().unwrap(), "0 wxHOPR");
     assert_eq!(chain_info["keyBindingFee"].as_str().unwrap(), "0 wxHOPR");
+    assert!(chain_info["gasPrice"].is_null());
+    assert!(chain_info["maxFeePerGas"].is_null());
+    assert!(chain_info["maxPriorityFeePerGas"].is_null());
 
     // Verify domain separators are non-null hex strings
     assert!(!chain_info["channelDst"].is_null());

@@ -17,6 +17,7 @@ use blokli_db_entity::{
     hopr_node_safe_registration,
     views::channel_current,
 };
+use hopr_bindings::exports::alloy::providers::Provider;
 use hopr_crypto_types::prelude::Hash;
 use hopr_primitive_types::{
     prelude::HoprBalance as PrimitiveHoprBalance,
@@ -1060,6 +1061,7 @@ impl QueryRoot {
     ///
     /// The returned `ChainInfo` contains the last indexed block number, the configured chain ID
     /// and network name, human-readable token values for ticket price and key binding fee,
+    /// live gas fee estimates from RPC (`gasPrice`, `maxFeePerGas`, `maxPriorityFeePerGas`) in wei,
     /// minimum incoming ticket winning probability, optional 32-byte domain separator hashes
     /// for channels/ledger/safe registry as `Hex32`, a map of contract addresses, and an optional
     /// channel closure grace period in seconds.
@@ -1156,6 +1158,31 @@ impl QueryRoot {
             }
         };
 
+        let mut gas_price: Option<String> = None;
+        let mut max_fee_per_gas: Option<String> = None;
+        let mut max_priority_fee_per_gas: Option<String> = None;
+
+        if let Ok(rpc) = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>() {
+            match rpc.provider.get_gas_price().await {
+                Ok(estimated_gas_price) => {
+                    gas_price = Some(estimated_gas_price.to_string());
+                }
+                Err(e) => {
+                    warn!(error = %e, "failed to fetch gas price estimate for chain_info");
+                }
+            }
+
+            match rpc.provider.estimate_eip1559_fees().await {
+                Ok(fees) => {
+                    max_fee_per_gas = Some(fees.max_fee_per_gas.to_string());
+                    max_priority_fee_per_gas = Some(fees.max_priority_fee_per_gas.to_string());
+                }
+                Err(e) => {
+                    warn!(error = %e, "failed to fetch eip1559 fee estimate for chain_info");
+                }
+            }
+        }
+
         // f32 -> f64 is widening, always safe
         #[allow(clippy::cast_lossless)]
         let min_ticket_winning_probability = chain_info.min_incoming_ticket_win_prob as f64;
@@ -1219,12 +1246,15 @@ impl QueryRoot {
             None => UInt64(300), // Default grace period: 300 seconds (5 minutes)
         };
 
-        ChainInfoResult::ChainInfo(ChainInfo {
+        ChainInfoResult::ChainInfo(Box::new(ChainInfo {
             block_number,
             chain_id: chain_id_i32,
             network: network.clone(),
             ticket_price,
             key_binding_fee,
+            gas_price,
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
             min_ticket_winning_probability,
             channel_dst,
             contract_addresses: ContractAddressMap::from(contract_addresses),
@@ -1233,7 +1263,7 @@ impl QueryRoot {
             channel_closure_grace_period,
             expected_block_time: UInt64(expected_block_time.0),
             finality: UInt64(finality.0 as u64),
-        })
+        }))
     }
 
     /// Health check endpoint
