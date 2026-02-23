@@ -18,6 +18,7 @@ use blokli_db_entity::{
     hopr_node_safe_registration, hopr_safe_redeemed_stats,
     views::channel_current,
 };
+use futures::TryStreamExt;
 use hopr_crypto_types::prelude::Hash;
 use hopr_primitive_types::{
     prelude::HoprBalance as PrimitiveHoprBalance,
@@ -223,38 +224,23 @@ async fn fetch_safe_by_chain_key(
     }))
 }
 
-fn aggregate_redeemed_stats_rows(
-    rows: &[hopr_safe_redeemed_stats::Model],
+fn aggregate_redeemed_stats_row(
+    row: &hopr_safe_redeemed_stats::Model,
 ) -> std::result::Result<(PrimitiveHoprBalance, u64), QueryFailedError> {
-    let mut redeemed_amount = PrimitiveHoprBalance::zero();
-    let mut redemption_count: u64 = 0;
+    let amount_bytes: [u8; 32] = match row.redeemed_amount.as_slice().try_into() {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return Err(errors::invalid_db_data("redeemed_amount", "must be 32 bytes"));
+        }
+    };
+    let redeemed_amount = PrimitiveHoprBalance::from_be_bytes(amount_bytes);
 
-    for row in rows {
-        let amount_bytes: [u8; 32] = match row.redeemed_amount.as_slice().try_into() {
-            Ok(bytes) => bytes,
-            Err(_) => {
-                return Err(errors::invalid_db_data("redeemed_amount", "must be 32 bytes"));
-            }
-        };
-        redeemed_amount += PrimitiveHoprBalance::from_be_bytes(amount_bytes);
-
-        let row_count = match u64::try_from(row.redemption_count) {
-            Ok(value) => value,
-            Err(_) => {
-                return Err(errors::conversion_error("i64", "u64", row.redemption_count.to_string()));
-            }
-        };
-
-        redemption_count = match redemption_count.checked_add(row_count) {
-            Some(value) => value,
-            None => {
-                return Err(errors::overflow_error(
-                    "redeemed stats count",
-                    format!("{} + {}", redemption_count, row_count),
-                ));
-            }
-        };
-    }
+    let redemption_count = match u64::try_from(row.redemption_count) {
+        Ok(value) => value,
+        Err(_) => {
+            return Err(errors::conversion_error("i64", "u64", row.redemption_count.to_string()));
+        }
+    };
 
     Ok((redeemed_amount, redemption_count))
 }
@@ -728,7 +714,7 @@ impl QueryRoot {
                 query.filter(hopr_safe_redeemed_stats::Column::NodeAddress.eq(node_address_filter.as_ref().to_vec()));
         }
 
-        let rows = match query.all(db).await {
+        let mut rows = match query.stream(db).await {
             Ok(rows) => rows,
             Err(e) => {
                 return Ok(RedeemedStatsResult::QueryFailed(errors::query_failed(
@@ -738,19 +724,45 @@ impl QueryRoot {
             }
         };
 
-        if safe_address.is_some() && node_address.is_some() && rows.len() > 1 {
-            return Ok(RedeemedStatsResult::QueryFailed(errors::invalid_db_data(
-                "safe_address,node_address",
-                "expected at most one row for a specific safe/node pair",
-            )));
-        }
+        let mut row_count: usize = 0;
+        let mut redeemed_amount = PrimitiveHoprBalance::zero();
+        let mut redemption_count: u64 = 0;
 
-        let (redeemed_amount, redemption_count) = match aggregate_redeemed_stats_rows(&rows) {
-            Ok(values) => values,
+        while let Some(row) = match rows.try_next().await {
+            Ok(row) => row,
             Err(e) => {
-                return Ok(RedeemedStatsResult::QueryFailed(e));
+                return Ok(RedeemedStatsResult::QueryFailed(errors::query_failed(
+                    "fetch redeemed stats with filters",
+                    e,
+                )));
             }
-        };
+        } {
+            row_count += 1;
+
+            if safe_address.is_some() && node_address.is_some() && row_count > 1 {
+                return Ok(RedeemedStatsResult::QueryFailed(errors::invalid_db_data(
+                    "safe_address,node_address",
+                    "expected at most one row for a specific safe/node pair",
+                )));
+            }
+
+            let (row_redeemed_amount, row_redemption_count) = match aggregate_redeemed_stats_row(&row) {
+                Ok(values) => values,
+                Err(e) => {
+                    return Ok(RedeemedStatsResult::QueryFailed(e));
+                }
+            };
+            redeemed_amount += row_redeemed_amount;
+            redemption_count = match redemption_count.checked_add(row_redemption_count) {
+                Some(value) => value,
+                None => {
+                    return Ok(RedeemedStatsResult::QueryFailed(errors::overflow_error(
+                        "redeemed stats count",
+                        format!("{} + {}", redemption_count, row_redemption_count),
+                    )));
+                }
+            };
+        }
 
         Ok(RedeemedStatsResult::RedeemedStats(RedeemedStats {
             safe_address: safe_address.as_ref().map(|address| address.to_hex()),
