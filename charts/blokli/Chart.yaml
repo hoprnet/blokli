@@ -3,7 +3,7 @@ name: blokli
 description: Helm chart for Blokli - HOPR on-chain indexer with GraphQL API
 type: application
 icon: "https://hoprnet.org/assets/icons/logo.svg"
-version: 0.1.1
+version: 0.1.2
 appVersion: "0.1.0"
 keywords:
   - blokli
