@@ -69,7 +69,7 @@ fn redact_url(url: &str) -> String {
 }
 
 /// Start the API server
-pub async fn start_server(network: String, config: ApiConfig) -> ApiResult<()> {
+pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> ApiResult<()> {
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(
@@ -144,6 +144,7 @@ pub async fn start_server(network: String, config: ApiConfig) -> ApiResult<()> {
         network,
         config.clone(),
         config.expected_block_time,
+        finality,
         indexer_state,
         transaction_executor,
         transaction_store,

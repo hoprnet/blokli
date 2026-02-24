@@ -5,7 +5,7 @@ This repository contains `Blokli`: On-chain Indexer of HOPR smart contracts and 
 ## Components
 
 - `bloklid`: Daemon that indexes on-chain events and submits transactions
-- `blokli-api`: GraphQL server for querying indexed data and streaming updates
+- `blokli-api`: GraphQL server for querying indexed data and streaming updates over SSE with keep-alive support
 - `db`: Database abstractions, entities, and migrations
 
 ## Development
@@ -256,12 +256,16 @@ You can override any configuration setting using environment variables.
 | `api.enabled`                         | `BLOKLI_API_ENABLED`                         |
 | `api.bind_address`                    | `BLOKLI_API_BIND_ADDRESS`                    |
 | `api.playground_enabled`              | `BLOKLI_API_PLAYGROUND_ENABLED`              |
+| `api.gas_multiplier`                  | `BLOKLI_API_GAS_MULTIPLIER`                  |
 | `api.sse_keepalive.enabled`           | `BLOKLI_API_SSE_KEEPALIVE_ENABLED`           |
 | `api.sse_keepalive.interval`          | `BLOKLI_API_SSE_KEEPALIVE_INTERVAL`          |
 | `api.sse_keepalive.text`              | `BLOKLI_API_SSE_KEEPALIVE_TEXT`              |
 | `api.health.max_indexer_lag`          | `BLOKLI_API_HEALTH_MAX_INDEXER_LAG`          |
 | `api.health.timeout`                  | `BLOKLI_API_HEALTH_TIMEOUT`                  |
 | `api.health.readiness_check_interval` | `BLOKLI_API_HEALTH_READINESS_CHECK_INTERVAL` |
+
+GraphQL subscriptions stream over SSE and send periodic keep-alive events to prevent idle connection timeouts. Keep-alive is enabled by default with a 15s interval and `keep-alive` payload, and can be customized via the `api.sse_keepalive.*` settings.
+`api.gas_multiplier` (default `1.0`, minimum `1.0`) scales `chainInfo.maxFeePerGas` and `chainInfo.maxPriorityFeePerGas` (rounded up to whole wei). `chainInfo.gasPrice` is not scaled.
 
 ### Contract Address Overrides
 

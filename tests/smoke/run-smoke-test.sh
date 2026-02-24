@@ -158,9 +158,9 @@ detect_arch() {
   local os
   os=$(uname -s)
 
-  # On macOS (Darwin), always use amd64 for now
+  # On macOS (Darwin), always use x86_64 for now
   if [ "$os" = "Darwin" ]; then
-    echo "amd64"
+    echo "x86_64"
     return
   fi
 
@@ -168,7 +168,7 @@ detect_arch() {
   arch=$(uname -m)
   case "$arch" in
   x86_64)
-    echo "amd64"
+    echo "x86_64"
     ;;
   aarch64 | arm64)
     echo "aarch64"
@@ -284,7 +284,7 @@ prepare_image() {
     log_info "Detected architecture: ${arch}"
 
     # Build the Docker image for the correct architecture
-    (cd "${PROJECT_ROOT}" && nix build .#bloklid-docker-${arch})
+    (cd "${PROJECT_ROOT}" && nix build .#docker-blokli-${arch}-linux)
 
     # Load the image
     docker load <"${PROJECT_ROOT}/result"

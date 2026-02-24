@@ -9,12 +9,13 @@ use blokli_api_types::{
     Safe, SafeHoprAllowance, TokenValueString, Transaction, TransactionCount, UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
-use blokli_chain_rpc::{HoprIndexerRpcOperations, rpc::RpcOperations};
+use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations};
 use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::{
-    account, chain_info, channel,
+    account, chain_info,
     conversions::{account_aggregation::fetch_accounts_with_filters, channel_aggregation::fetch_channels_with_state},
     hopr_node_safe_registration,
+    views::channel_current,
 };
 use hopr_crypto_types::prelude::Hash;
 use hopr_primitive_types::{
@@ -117,6 +118,53 @@ fn parse_safe_address(address: String) -> Result<Vec<u8>, SafeResult> {
     Address::from_hex(&address)
         .map(|addr| addr.as_ref().to_vec())
         .map_err(|e| SafeResult::InvalidAddress(errors::invalid_address_error(address, e)))
+}
+
+fn scale_wei_by_multiplier(value: u128, multiplier: f64) -> u128 {
+    let mut multiplier_string = format!("{multiplier:.12}");
+    while multiplier_string.ends_with('0') {
+        multiplier_string.pop();
+    }
+    if multiplier_string.ends_with('.') {
+        multiplier_string.pop();
+    }
+
+    let (whole_part, fractional_part) = match multiplier_string.split_once('.') {
+        Some(parts) => parts,
+        None => (multiplier_string.as_str(), ""),
+    };
+
+    let whole = match whole_part.parse::<u128>() {
+        Ok(parsed) => parsed,
+        Err(_) => return u128::MAX,
+    };
+
+    let fractional = if fractional_part.is_empty() {
+        0
+    } else {
+        match fractional_part.parse::<u128>() {
+            Ok(parsed) => parsed,
+            Err(_) => return u128::MAX,
+        }
+    };
+
+    let mut denominator = 1u128;
+    for _ in 0..fractional_part.len() {
+        denominator = denominator.saturating_mul(10);
+    }
+
+    let numerator = match whole
+        .checked_mul(denominator)
+        .and_then(|scaled_whole| scaled_whole.checked_add(fractional))
+    {
+        Some(parsed) => parsed,
+        None => return u128::MAX,
+    };
+
+    value
+        .saturating_mul(numerator)
+        .saturating_add(denominator.saturating_sub(1))
+        / denominator
 }
 
 struct SafeContractCurrentRow {
@@ -366,28 +414,26 @@ impl QueryRoot {
             }
         };
 
-        let mut query = channel::Entity::find();
+        let mut query = channel_current::Entity::find();
 
         if let Some(src_keyid) = source_key_id {
-            query = query.filter(channel::Column::Source.eq(src_keyid));
+            query = query.filter(channel_current::Column::Source.eq(src_keyid));
         }
 
         if let Some(dst_keyid) = destination_key_id {
-            query = query.filter(channel::Column::Destination.eq(dst_keyid));
+            query = query.filter(channel_current::Column::Destination.eq(dst_keyid));
         }
 
         if let Some(channel_id) = concrete_channel_id {
             query = query.filter(
-                channel::Column::ConcreteChannelId.eq(channel_id.strip_prefix("0x").unwrap_or(&channel_id).to_string()),
+                channel_current::Column::ConcreteChannelId
+                    .eq(channel_id.strip_prefix("0x").unwrap_or(&channel_id).to_string()),
             );
         }
 
-        // TODO(Phase 2-3): Status filtering requires querying channel_state table
-        // Status column has been moved to channel_state table
-        if let Some(_status_filter) = status {
-            return CountResult::QueryFailed(errors::not_implemented(
-                "Channel status filtering during schema migration",
-            ));
+        if let Some(status_filter) = status {
+            let status_i16: i16 = status_filter.into();
+            query = query.filter(channel_current::Column::Status.eq(status_i16));
         }
 
         let count_u64 = match query.count(db).await {
@@ -442,11 +488,7 @@ impl QueryRoot {
         };
 
         // Convert GraphQL ChannelStatus to database i16 representation if status filter is provided
-        let status_i16 = status.map(|s| match s {
-            blokli_api_types::ChannelStatus::Closed => 0,
-            blokli_api_types::ChannelStatus::Open => 1,
-            blokli_api_types::ChannelStatus::PendingToClose => 2,
-        });
+        let status_i16: Option<i16> = status.map(|s| s.into());
 
         // Fetch channels with state using optimized batch loading (2 queries total)
         let aggregated_channels =
@@ -464,15 +506,7 @@ impl QueryRoot {
             .into_iter()
             .filter_map(|agg| {
                 // Convert status from i16 to ChannelStatus enum
-                let status = match agg.status {
-                    0 => blokli_api_types::ChannelStatus::Closed,
-                    1 => blokli_api_types::ChannelStatus::Open,
-                    2 => blokli_api_types::ChannelStatus::PendingToClose,
-                    _ => {
-                        // Skip invalid status values
-                        return None;
-                    }
-                };
+                let status: blokli_api_types::ChannelStatus = agg.status.into();
 
                 // Convert epoch from i64 to i32 with validation
                 let epoch = match i32::try_from(agg.epoch) {
@@ -1073,6 +1107,8 @@ impl QueryRoot {
     ///
     /// The returned `ChainInfo` contains the last indexed block number, the configured chain ID
     /// and network name, human-readable token values for ticket price and key binding fee,
+    /// live gas fee estimates from RPC (`gasPrice`, `maxFeePerGas`, `maxPriorityFeePerGas`) in wei,
+    /// where `maxFeePerGas` and `maxPriorityFeePerGas` are scaled by `api.gas_multiplier`,
     /// minimum incoming ticket winning probability, optional 32-byte domain separator hashes
     /// for channels/ledger/safe registry as `Hex32`, a map of contract addresses, and an optional
     /// channel closure grace period in seconds.
@@ -1093,14 +1129,14 @@ impl QueryRoot {
                 return ChainInfoResult::QueryFailed(errors::db_connection_error(format!("{:?}", e)));
             }
         };
-        let chain_id = match ctx.data::<u64>() {
-            Ok(id) => id,
+        let chain_id = match ctx.data::<crate::schema::ChainId>() {
+            Ok(id) => id.0,
             Err(e) => {
                 return ChainInfoResult::QueryFailed(errors::context_error("chain ID", format!("{:?}", e)));
             }
         };
-        let network = match ctx.data::<String>() {
-            Ok(net) => net,
+        let network = match ctx.data::<crate::schema::NetworkName>() {
+            Ok(net) => &net.0,
             Err(e) => {
                 return ChainInfoResult::QueryFailed(errors::context_error("network name", format!("{:?}", e)));
             }
@@ -1115,6 +1151,18 @@ impl QueryRoot {
             Ok(time) => time,
             Err(e) => {
                 return ChainInfoResult::QueryFailed(errors::context_error("expected block time", format!("{:?}", e)));
+            }
+        };
+        let finality = match ctx.data::<crate::schema::Finality>() {
+            Ok(f) => f,
+            Err(e) => {
+                return ChainInfoResult::QueryFailed(errors::context_error("finality", format!("{:?}", e)));
+            }
+        };
+        let gas_multiplier = match ctx.data::<crate::schema::GasMultiplier>() {
+            Ok(multiplier) => multiplier.0,
+            Err(e) => {
+                return ChainInfoResult::QueryFailed(errors::context_error("gas multiplier", format!("{:?}", e)));
             }
         };
 
@@ -1156,12 +1204,43 @@ impl QueryRoot {
         };
 
         // Convert chain_id from u64 to i32 with validation
-        let chain_id_i32 = match i32::try_from(*chain_id) {
+        let chain_id_i32 = match i32::try_from(chain_id) {
             Ok(id) => id,
             Err(_) => {
                 return ChainInfoResult::QueryFailed(errors::conversion_error("u64", "i32", chain_id.to_string()));
             }
         };
+
+        let mut gas_price: Option<String> = None;
+        let mut max_fee_per_gas: Option<String> = None;
+        let mut max_priority_fee_per_gas: Option<String> = None;
+
+        if let Ok(rpc) = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>() {
+            let (gas_price_result, eip1559_result) = tokio::join!(
+                HoprRpcOperations::get_gas_price(&**rpc),
+                HoprRpcOperations::estimate_eip1559_fees(&**rpc)
+            );
+
+            match gas_price_result {
+                Ok(estimated_gas_price) => {
+                    gas_price = Some(estimated_gas_price.to_string());
+                }
+                Err(e) => {
+                    warn!(error = %e, "failed to fetch gas price estimate for chain_info");
+                }
+            }
+
+            match eip1559_result {
+                Ok(fees) => {
+                    max_fee_per_gas = Some(scale_wei_by_multiplier(fees.max_fee_per_gas, gas_multiplier).to_string());
+                    max_priority_fee_per_gas =
+                        Some(scale_wei_by_multiplier(fees.max_priority_fee_per_gas, gas_multiplier).to_string());
+                }
+                Err(e) => {
+                    warn!(error = %e, "failed to fetch eip1559 fee estimate for chain_info");
+                }
+            }
+        }
 
         // f32 -> f64 is widening, always safe
         #[allow(clippy::cast_lossless)]
@@ -1226,12 +1305,15 @@ impl QueryRoot {
             None => UInt64(300), // Default grace period: 300 seconds (5 minutes)
         };
 
-        ChainInfoResult::ChainInfo(ChainInfo {
+        ChainInfoResult::ChainInfo(Box::new(ChainInfo {
             block_number,
             chain_id: chain_id_i32,
             network: network.clone(),
             ticket_price,
             key_binding_fee,
+            gas_price,
+            max_fee_per_gas,
+            max_priority_fee_per_gas,
             min_ticket_winning_probability,
             channel_dst,
             contract_addresses: ContractAddressMap::from(contract_addresses),
@@ -1239,7 +1321,8 @@ impl QueryRoot {
             safe_registry_dst,
             channel_closure_grace_period,
             expected_block_time: UInt64(expected_block_time.0),
-        })
+            finality: UInt64(finality.0 as u64),
+        }))
     }
 
     /// Health check endpoint
@@ -1342,6 +1425,18 @@ impl QueryRoot {
 
 #[cfg(test)]
 mod tests {
+    use super::scale_wei_by_multiplier;
+
+    #[test]
+    fn test_scale_wei_by_multiplier_identity() {
+        assert_eq!(scale_wei_by_multiplier(1_000_000_000, 1.0), 1_000_000_000);
+    }
+
+    #[test]
+    fn test_scale_wei_by_multiplier_rounds_up() {
+        assert_eq!(scale_wei_by_multiplier(3, 1.5), 5);
+    }
+
     #[test]
     fn test_accounts_filter_validation_logic() {
         let keyid: Option<i32> = None;

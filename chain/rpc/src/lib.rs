@@ -255,6 +255,13 @@ impl NodeSafeModuleStatus {
     }
 }
 
+/// EIP-1559 gas fee estimates in wei.
+#[derive(Clone, Debug, Copy, PartialEq, Eq)]
+pub struct Eip1559FeeEstimation {
+    pub max_fee_per_gas: u128,
+    pub max_priority_fee_per_gas: u128,
+}
+
 /// Trait defining a general set of operations an RPC provider
 /// must provide to the HOPR node.
 #[async_trait]
@@ -287,6 +294,12 @@ pub trait HoprRpcOperations {
 
     /// Retrieves the safe address of the given node address from the registry.
     async fn get_safe_from_node_safe_registry(&self, node: Address) -> Result<Address>;
+
+    /// Retrieves the current network gas price estimate (wei) for legacy transactions.
+    async fn get_gas_price(&self) -> Result<u128>;
+
+    /// Retrieves EIP-1559 gas fee estimates (wei).
+    async fn estimate_eip1559_fees(&self) -> Result<Eip1559FeeEstimation>;
 
     /// Sends transaction to the RPC provider, does not await confirmation.
     async fn send_transaction(&self, tx: TransactionRequest) -> Result<PendingTransaction>;

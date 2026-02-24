@@ -13,6 +13,7 @@ members = [
   "db/core",
   "db/entity",
   "db/migration",
+  "helper",
   "inspector",
   "tests/integration",
   "types",
@@ -59,9 +60,9 @@ futures-timer = "3.0.3"
 futures-util = "0.3.31"
 hex = "0.4.3"
 hex-literal = "1.1.0"
-hopli = { git = "https://github.com/hoprnet/hopli", branch = "main", version = "0.14.1" }
+hopli = { git = "https://github.com/hoprnet/hopli", branch = "main", version = "0.16.0" }
 hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
-hopr-bindings = { git = "https://github.com/hoprnet/contracts", branch = "main" }
+hopr-bindings = { git = "https://github.com/hoprnet/contracts", branch = "main", version = "4.7.0" }
 hopr-chain-connector = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
 hopr-chain-types = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
 hopr-crypto-packet = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
@@ -98,6 +99,7 @@ num_enum = "0.7.4"
 parking_lot = "0.12.5"
 primitive-types = { version = "0.14.0", features = ["serde"] }
 rand = "0.9.2" # ignored in renovate, cannot be updated, dependencies reference old ones
+regex = "1.11.1"
 reqwest = { version = "0.12.23", features = ["json"] }
 ringbuffer = "0.16.0"
 rstest = "0.26.1"

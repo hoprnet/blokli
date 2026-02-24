@@ -6,6 +6,7 @@
 
 use std::sync::Arc;
 
+use async_broadcast::{Receiver, Sender, broadcast};
 use chrono::{DateTime, Utc};
 use dashmap::{DashMap, mapref::entry::Entry};
 use hopr_crypto_types::types::Hash;
@@ -40,6 +41,23 @@ pub enum TransactionStatus {
     SubmissionFailed,
 }
 
+/// Event type for transaction status updates
+///
+/// Represents transaction status changes that should be broadcast to subscribers.
+/// Uses delta fields to keep copied data minimal.
+#[derive(Clone, Debug)]
+pub enum TransactionEvent {
+    /// Transaction status was updated
+    ///
+    /// Contains only the changed fields (delta) instead of the full record
+    StatusUpdated {
+        id: Uuid,
+        status: TransactionStatus,
+        error_message: Option<String>,
+        confirmed_at: Option<DateTime<Utc>>,
+    },
+}
+
 /// Record of a submitted transaction
 #[derive(Debug, Clone)]
 pub struct TransactionRecord {
@@ -60,16 +78,56 @@ pub struct TransactionRecord {
 }
 
 /// Thread-safe in-memory store for transaction records
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct TransactionStore {
     transactions: Arc<DashMap<Uuid, TransactionRecord>>,
+    /// Event bus sender for broadcasting transaction status updates
+    event_bus: Sender<TransactionEvent>,
+    /// Initial receiver kept alive to maintain channel state
+    ///
+    /// This receiver is never used but must be kept alive to prevent the
+    /// async_broadcast channel from entering a closed state.
+    _event_bus_rx: Arc<Receiver<TransactionEvent>>,
+}
+
+impl std::fmt::Debug for TransactionStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransactionStore")
+            .field("transactions", &self.transactions)
+            .field("event_bus", &"Sender<TransactionEvent>")
+            .field("_event_bus_rx", &"Arc<Receiver<TransactionEvent>>")
+            .finish()
+    }
 }
 
 impl TransactionStore {
     /// Create a new empty transaction store
+    ///
+    /// Creates a transaction store with an event bus capacity of 100 events.
     pub fn new() -> Self {
+        Self::with_capacity(100)
+    }
+
+    /// Create a new transaction store with specified event bus capacity
+    ///
+    /// # Arguments
+    ///
+    /// * `event_bus_capacity` - Capacity of the event bus channel
+    ///
+    /// # Returns
+    ///
+    /// A new TransactionStore instance ready for use
+    pub fn with_capacity(event_bus_capacity: usize) -> Self {
+        // Create broadcast channel, keeping the initial receiver alive
+        let (mut event_bus, event_bus_rx) = broadcast(event_bus_capacity);
+
+        // Set overflow behavior to allow new receivers to miss old messages if they can't keep up
+        event_bus.set_overflow(true);
+
         Self {
             transactions: Arc::new(DashMap::new()),
+            event_bus,
+            _event_bus_rx: Arc::new(event_bus_rx),
         }
     }
 
@@ -114,6 +172,9 @@ impl TransactionStore {
 
     /// Update the status of a transaction
     ///
+    /// Publishes a `TransactionEvent::StatusUpdated` event to all subscribers
+    /// after the status is successfully updated.
+    ///
     /// # Errors
     /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
     pub fn update_status(
@@ -122,19 +183,34 @@ impl TransactionStore {
         status: TransactionStatus,
         error_message: Option<String>,
     ) -> Result<(), TransactionStoreError> {
-        self.transactions
+        // Update the transaction and extract delta fields for event
+        let (confirmed_at, error_msg) = self
+            .transactions
             .get_mut(&id)
             .map(|mut entry| {
                 let record = entry.value_mut();
                 record.status = status;
-                record.error_message = error_message;
+                record.error_message = error_message.clone();
 
                 // Set confirmed_at timestamp if status is Confirmed
                 if status == TransactionStatus::Confirmed && record.confirmed_at.is_none() {
                     record.confirmed_at = Some(Utc::now());
                 }
+
+                // Extract only fields needed for event (no cloning raw_transaction)
+                (record.confirmed_at, record.error_message.clone())
             })
-            .ok_or(TransactionStoreError::NotFound(id))
+            .ok_or(TransactionStoreError::NotFound(id))?;
+
+        // Publish event to subscribers with delta fields only
+        let _ = self.event_bus.try_broadcast(TransactionEvent::StatusUpdated {
+            id,
+            status,
+            error_message: error_msg,
+            confirmed_at,
+        });
+
+        Ok(())
     }
 
     /// List all transactions with a specific status
@@ -149,6 +225,20 @@ impl TransactionStore {
     /// Get the total count of transactions in the store
     pub fn count(&self) -> usize {
         self.transactions.len()
+    }
+
+    /// Subscribe to transaction status update events
+    ///
+    /// Creates a new receiver that will receive all future transaction status updates.
+    /// Each status update will broadcast a `TransactionEvent::StatusUpdated` event
+    /// containing the transaction ID and the complete updated record.
+    ///
+    /// # Returns
+    ///
+    /// A receiver for transaction events
+    pub fn subscribe(&self) -> Receiver<TransactionEvent> {
+        // Get a fresh receiver from the sender to avoid inheriting backlog
+        self.event_bus.new_receiver()
     }
 }
 
@@ -369,5 +459,163 @@ mod tests {
         assert_eq!(retrieved.status, TransactionStatus::Confirmed);
         assert_eq!(retrieved.transaction_hash, Hash::default());
         assert!(retrieved.confirmed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_event_publishing_on_status_update() {
+        let store = TransactionStore::new();
+
+        // Subscribe before inserting transaction
+        let mut receiver = store.subscribe();
+
+        // Insert a transaction
+        let record = TransactionRecord {
+            id: Uuid::new_v4(),
+            raw_transaction: vec![0x01, 0x02, 0x03],
+            transaction_hash: Hash::default(),
+            status: TransactionStatus::Pending,
+            submitted_at: Utc::now(),
+            confirmed_at: None,
+            error_message: None,
+        };
+
+        let id = record.id;
+        store.insert(record).unwrap();
+
+        // Update status to Submitted
+        store.update_status(id, TransactionStatus::Submitted, None).unwrap();
+
+        // Verify event was published
+        let event = receiver.recv().await.unwrap();
+        match event {
+            TransactionEvent::StatusUpdated {
+                id: event_id,
+                status: event_status,
+                error_message,
+                confirmed_at,
+            } => {
+                assert_eq!(event_id, id);
+                assert_eq!(event_status, TransactionStatus::Submitted);
+                assert_eq!(error_message, None);
+                assert_eq!(confirmed_at, None);
+            }
+        }
+
+        // Update status to Confirmed
+        store.update_status(id, TransactionStatus::Confirmed, None).unwrap();
+
+        // Verify second event was published
+        let event = receiver.recv().await.unwrap();
+        match event {
+            TransactionEvent::StatusUpdated {
+                id: event_id,
+                status: event_status,
+                error_message,
+                confirmed_at,
+            } => {
+                assert_eq!(event_id, id);
+                assert_eq!(event_status, TransactionStatus::Confirmed);
+                assert_eq!(error_message, None);
+                assert!(confirmed_at.is_some());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_multiple_subscribers_receive_events() {
+        let store = TransactionStore::new();
+
+        // Create multiple subscribers
+        let mut receiver1 = store.subscribe();
+        let mut receiver2 = store.subscribe();
+
+        // Insert a transaction
+        let record = TransactionRecord {
+            id: Uuid::new_v4(),
+            raw_transaction: vec![0x01, 0x02, 0x03],
+            transaction_hash: Hash::default(),
+            status: TransactionStatus::Pending,
+            submitted_at: Utc::now(),
+            confirmed_at: None,
+            error_message: None,
+        };
+
+        let id = record.id;
+        store.insert(record).unwrap();
+
+        // Update status
+        store.update_status(id, TransactionStatus::Confirmed, None).unwrap();
+
+        // Verify both receivers got the event
+        let event1 = receiver1.recv().await.unwrap();
+        let event2 = receiver2.recv().await.unwrap();
+
+        match (event1, event2) {
+            (
+                TransactionEvent::StatusUpdated {
+                    id: id1,
+                    status: status1,
+                    error_message: error1,
+                    confirmed_at: confirmed1,
+                },
+                TransactionEvent::StatusUpdated {
+                    id: id2,
+                    status: status2,
+                    error_message: error2,
+                    confirmed_at: confirmed2,
+                },
+            ) => {
+                assert_eq!(id1, id);
+                assert_eq!(id2, id);
+                assert_eq!(status1, TransactionStatus::Confirmed);
+                assert_eq!(status2, TransactionStatus::Confirmed);
+                assert_eq!(error1, None);
+                assert_eq!(error2, None);
+                assert!(confirmed1.is_some());
+                assert!(confirmed2.is_some());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_subscribe_after_updates_only_receives_future_events() {
+        let store = TransactionStore::new();
+
+        // Insert and update a transaction before subscribing
+        let record = TransactionRecord {
+            id: Uuid::new_v4(),
+            raw_transaction: vec![0x01, 0x02, 0x03],
+            transaction_hash: Hash::default(),
+            status: TransactionStatus::Pending,
+            submitted_at: Utc::now(),
+            confirmed_at: None,
+            error_message: None,
+        };
+
+        let id = record.id;
+        store.insert(record).unwrap();
+        store.update_status(id, TransactionStatus::Submitted, None).unwrap();
+
+        // Subscribe after the update
+        let mut receiver = store.subscribe();
+
+        // Update status again
+        store.update_status(id, TransactionStatus::Confirmed, None).unwrap();
+
+        // Should only receive the Confirmed event, not the Submitted one
+        let event = receiver.recv().await.unwrap();
+        match event {
+            TransactionEvent::StatusUpdated {
+                id: event_id,
+                status: event_status,
+                error_message,
+                confirmed_at,
+            } => {
+                assert_eq!(event_id, id);
+                assert_eq!(event_status, TransactionStatus::Confirmed);
+                assert_eq!(error_message, None);
+                assert!(confirmed_at.is_some());
+            }
+        }
     }
 }

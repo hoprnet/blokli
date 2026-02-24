@@ -92,6 +92,7 @@ impl Args {
             ("BLOKLI_NETWORK", "network"),
             ("BLOKLI_RPC_URL", "rpc_url"),
             ("BLOKLI_MAX_RPC_REQUESTS_PER_SEC", "max_rpc_requests_per_sec"),
+            ("BLOKLI_MAX_BLOCK_RANGE", "max_block_range"),
             // Database - Canonical
             ("DATABASE_URL", "database.url"),
             ("PGHOST", "database.host"),
@@ -136,6 +137,7 @@ impl Args {
             ("BLOKLI_API_ENABLED", "api.enabled"),
             ("BLOKLI_API_BIND_ADDRESS", "api.bind_address"),
             ("BLOKLI_API_PLAYGROUND_ENABLED", "api.playground_enabled"),
+            ("BLOKLI_API_GAS_MULTIPLIER", "api.gas_multiplier"),
             ("BLOKLI_API_SSE_KEEPALIVE_ENABLED", "api.sse_keepalive.enabled"),
             ("BLOKLI_API_SSE_KEEPALIVE_INTERVAL", "api.sse_keepalive.interval"),
             ("BLOKLI_API_SSE_KEEPALIVE_TEXT", "api.sse_keepalive.text"),
@@ -177,6 +179,8 @@ impl Args {
                     // For non-boolean keys, try numeric first, then bool, then string
                     if let Ok(num) = val.parse::<u64>() {
                         num.into()
+                    } else if let Ok(num) = val.parse::<f64>() {
+                        num.into()
                     } else if let Ok(flag) = val.parse::<bool>() {
                         flag.into()
                     } else {
@@ -193,6 +197,13 @@ impl Args {
         let mut config: Config = config_rs_config
             .try_deserialize()
             .map_err(|e| ConfigError::Parse(e.to_string()))?;
+
+        if !config.api.gas_multiplier.is_finite() || config.api.gas_multiplier < 1.0 {
+            return Err(ConfigError::Parse(
+                "api.gas_multiplier must be a finite number greater than or equal to 1".to_string(),
+            )
+            .into());
+        }
 
         // Validate that database configuration is provided either in config file or environment variables
         if config.database.is_none() {
@@ -221,7 +232,7 @@ impl Args {
             chain_id: network_config.chain_id,
             tx_polling_interval: config.network.tx_polling_interval(),
             confirmations: config.network.confirmations(),
-            max_block_range: config.network.max_block_range(),
+            max_block_range: config.max_block_range,
             channel_contract_deploy_block: network_config.indexer_start_block_number,
             max_requests_per_sec: max_rpc_req,
             expected_block_time: config.network.expected_block_time(),
@@ -499,11 +510,16 @@ async fn run(args: Args) -> errors::Result<()> {
 
             // Construct blokli-api ApiConfig from bloklid config
             // We need to get rpc_url and contracts from the original config
-            let (rpc_url_for_api, _contracts_for_api, expected_block_time) = {
+            let (rpc_url_for_api, _contracts_for_api, expected_block_time, finality) = {
                 let cfg = config
                     .read()
                     .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
-                (cfg.rpc_url.clone(), cfg.contracts, cfg.network.expected_block_time())
+                (
+                    cfg.rpc_url.clone(),
+                    cfg.contracts,
+                    cfg.network.expected_block_time(),
+                    cfg.network.confirmations(),
+                )
             };
 
             let blokli_api_config = blokli_api::config::ApiConfig {
@@ -516,6 +532,7 @@ async fn run(args: Args) -> errors::Result<()> {
                 rpc_url: rpc_url_for_api,
                 contract_addresses: contracts,
                 expected_block_time,
+                gas_multiplier: api_config.gas_multiplier,
                 sse_keepalive: blokli_api::config::SseKeepAliveConfig {
                     enabled: api_config.sse_keepalive.enabled,
                     interval: api_config.sse_keepalive.interval,
@@ -537,6 +554,7 @@ async fn run(args: Args) -> errors::Result<()> {
                 network.clone(),
                 blokli_api_config,
                 expected_block_time,
+                finality,
                 indexer_state,
                 blokli_chain.transaction_executor(),
                 blokli_chain.transaction_store(),
@@ -1174,6 +1192,165 @@ mod tests {
             assert_eq!(
                 config.api.health.max_indexer_lag, 20,
                 "Non-boolean numeric config should parse as u64"
+            );
+        });
+    }
+
+    #[test]
+    fn test_float_env_var_parsed_as_f64() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [api]
+            gas_multiplier = 1.0
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_var("BLOKLI_API_GAS_MULTIPLIER", Some("1.5"), || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
+
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(
+                config.api.gas_multiplier, 1.5,
+                "BLOKLI_API_GAS_MULTIPLIER should be parsed as f64"
+            );
+        });
+    }
+
+    #[test]
+    fn test_invalid_gas_multiplier_rejected() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [api]
+            gas_multiplier = 0.5
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        let args = Args {
+            verbose: 0,
+            config: Some(path),
+            command: None,
+        };
+        let error = args
+            .load_config(false)
+            .expect_err("gas multiplier 0.0 should be invalid");
+        assert!(
+            error
+                .to_string()
+                .contains("api.gas_multiplier must be a finite number greater than or equal to 1"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[test]
+    fn test_max_block_range_default() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_var("BLOKLI_MAX_BLOCK_RANGE", None::<&str>, || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
+
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(config.max_block_range, 10000, "max_block_range should default to 10000");
+        });
+    }
+
+    #[test]
+    fn test_max_block_range_from_config_file() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://localhost:8545"
+            max_block_range = 5000
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_var("BLOKLI_MAX_BLOCK_RANGE", None::<&str>, || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
+
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(
+                config.max_block_range, 5000,
+                "max_block_range should be parsed from config file"
+            );
+        });
+    }
+
+    #[test]
+    fn test_max_block_range_env_override() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://localhost:8545"
+            max_block_range = 5000
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_var("BLOKLI_MAX_BLOCK_RANGE", Some("2500"), || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
+
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(
+                config.max_block_range, 2500,
+                "BLOKLI_MAX_BLOCK_RANGE env var should override config file"
             );
         });
     }

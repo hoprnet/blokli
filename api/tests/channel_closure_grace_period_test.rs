@@ -1,4 +1,7 @@
-use blokli_api::{query::QueryRoot, schema::ExpectedBlockTime};
+use blokli_api::{
+    query::QueryRoot,
+    schema::{ChainId, ExpectedBlockTime, Finality, NetworkName},
+};
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, info::BlokliDbInfoOperations};
 
@@ -22,9 +25,11 @@ async fn test_channel_closure_grace_period_always_non_null() {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test-network".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test-network".to_string()))
     .data(ExpectedBlockTime(1))
+    .data(Finality(3))
+    .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -50,7 +55,7 @@ async fn test_channel_closure_grace_period_always_non_null() {
     let chain_info_result = &data["chainInfo"];
 
     // Verify we got ChainInfo (not error)
-    let type_name = chain_info_result.get("__typename").map(|v| v.as_str()).flatten();
+    let type_name = chain_info_result.get("__typename").and_then(|v| v.as_str());
     assert_eq!(
         type_name,
         Some("ChainInfo"),
@@ -94,9 +99,11 @@ async fn test_channel_closure_grace_period_with_custom_value() {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test-network".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test-network".to_string()))
     .data(ExpectedBlockTime(1))
+    .data(Finality(3))
+    .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -138,9 +145,10 @@ async fn test_channel_closure_grace_period_schema_non_nullable() {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test-network".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test-network".to_string()))
     .data(ExpectedBlockTime(1))
+    .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
     let sdl = schema.sdl();

@@ -46,6 +46,10 @@ pub struct ApiConfig {
     #[serde(default = "default_expected_block_time")]
     pub expected_block_time: u64,
 
+    /// Multiplier applied to EIP-1559 gas estimates exposed by chainInfo
+    #[serde(default = "default_gas_multiplier")]
+    pub gas_multiplier: f64,
+
     #[serde(default)]
     pub sse_keepalive: SseKeepAliveConfig,
 
@@ -151,6 +155,7 @@ impl Default for ApiConfig {
             rpc_url: default_rpc_url(),
             contract_addresses: default_contract_addresses(),
             expected_block_time: default_expected_block_time(),
+            gas_multiplier: default_gas_multiplier(),
             sse_keepalive: SseKeepAliveConfig::default(),
             health: HealthConfig::default(),
         }
@@ -201,6 +206,10 @@ fn default_expected_block_time() -> u64 {
     5
 }
 
+fn default_gas_multiplier() -> f64 {
+    1.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -211,6 +220,7 @@ mod tests {
         assert!(config.sse_keepalive.enabled);
         assert_eq!(config.sse_keepalive.interval, Duration::from_secs(15));
         assert_eq!(config.sse_keepalive.text, "keep-alive");
+        assert_eq!(config.gas_multiplier, 1.0);
     }
 
     #[test]

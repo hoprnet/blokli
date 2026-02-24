@@ -19,6 +19,11 @@ rpc_url = "http://localhost:8545"
 # If not specified, uses the network's default rate limit
 max_rpc_requests_per_sec = 0
 
+# Maximum block range for RPC queries when fetching logs (default: 10000)
+# Must be greater than 0. Lower values may be needed for some RPC providers
+# that impose limits on the number of blocks per query
+max_block_range = 10000
+
 # Optional contract address overrides
 # Defaults are resolved from hopr-bindings for the selected network
 # Use this when running against a local chain with freshly deployed contracts
@@ -102,6 +107,12 @@ bind_address = "0.0.0.0:8080"
 # Enable GraphQL Playground for development and testing (default: true)
 playground_enabled = true
 
+# Multiplier applied to EIP-1559 gas estimates exposed by chainInfo
+# A value of 1.0 keeps RPC values unchanged; 1.5 increases maxFeePerGas and
+# maxPriorityFeePerGas by 50% (rounded up to the nearest wei).
+# Must be greater than or equal to 1.
+gas_multiplier = 1.0
+
 # SSE keepalive configuration
 [api.sse_keepalive]
 # Enable keepalive comments to prevent idle timeouts (default: true)
@@ -118,9 +129,9 @@ text = "keep-alive"
 # This limit is compared against finality-adjusted blocks from the RPC:
 #   lag = (rpc_block - finality) - indexed_block
 #
-# For Rotsee (Gnosis), finality=8 blocks. So with max_indexer_lag=10:
-# - The indexer can be up to 18 blocks behind the RPC chain head
-# - But must be within 10 blocks of confirmed blocks (with 8 confirmations)
+# For Rotsee (Gnosis), finality=3 blocks. So with max_indexer_lag=10:
+# - The indexer can be up to 13 blocks behind the RPC chain head
+# - But must be within 10 blocks of confirmed blocks (with 3 confirmations)
 #
 # This ensures the server doesn't report "ready" when caught up to
 # unconfirmed blocks that might be reorganized.

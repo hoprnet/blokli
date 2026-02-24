@@ -8,7 +8,7 @@
 helm install my-blokli ./charts/blokli \
   --set database.host=postgresql.default.svc.cluster.local \
   --set database.password=secretpassword \
-  --set config.network=dufour \
+  --set config.network=jura \
   --set config.rpcUrl=https://rpc.gnosischain.com
 ```
 
@@ -129,7 +129,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | `database.logs_path`                                 | Sqlite logs database file path (used only if database.type is "sqlite")                                       | `""`                |
 | `database.existingSecret`                            | Name of existing secret containing database credentials                                                       | `""`                |
 | `database.maxConnections`                            | Maximum number of database connections                                                                        | `10`                |
-| `config.network`                                     | HOPR network to index (e.g., dufour, rotsee, jura)                                                                  | `dufour`            |
+| `config.network`                                     | HOPR network to index (e.g., dufour, rotsee, jura)                                                            | `dufour`            |
 | `config.rpcUrl`                                      | Blockchain RPC URL                                                                                            | `""`                |
 | `config.maxRpcRequestsPerSec`                        | Maximum RPC requests per second (0 = unlimited)                                                               | `0`                 |
 | `config.dataDirectory`                               | Data directory path (should match persistence mount path)                                                     | `/data`             |
@@ -142,6 +142,7 @@ The command removes all the Kubernetes components associated with the chart and 
 | `config.api.enabled`                                 | Enable or disable the GraphQL API server                                                                      | `true`              |
 | `config.api.bindAddress`                             | Address and port for the API server to bind to                                                                | `0.0.0.0:8080`      |
 | `config.api.playgroundEnabled`                       | Enable GraphQL Playground for development and testing. Recommended to set to false for production deployments | `false`             |
+| `config.api.gasMultiplier`                           | Multiplier for gas estimation to provide a safety margin (e.g., 1.2 for 20% extra)                            | `1.2`               |
 | `config.api.health.maxIndexerLag`                    | Maximum indexer lag (blocks) before readiness fails                                                           | `10`                |
 | `config.api.health.timeout`                          | Timeout for health check operations                                                                           | `5s`                |
 | `config.api.health.readinessCheckInterval`           | Interval for periodic readiness checks                                                                        | `60s`               |

@@ -13,7 +13,10 @@ use std::{
 };
 
 use anyhow::Result;
-use blokli_api::{query::QueryRoot, schema::ExpectedBlockTime};
+use blokli_api::{
+    query::QueryRoot,
+    schema::{ChainId, ExpectedBlockTime, Finality, GasMultiplier, NetworkName},
+};
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{
     BlokliDbGeneralModelOperations, TargetDb, accounts::BlokliDbAccountOperations, channels::BlokliDbChannelOperations,
@@ -162,8 +165,9 @@ async fn test_channels_query_by_source_keyid() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
+    .data(GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -239,8 +243,9 @@ async fn test_channels_query_by_destination_keyid() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
+    .data(GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -323,8 +328,9 @@ async fn test_channels_query_with_status_filter() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
+    .data(GasMultiplier(1.0))
     .finish();
 
     // Query for OPEN channels
@@ -407,8 +413,9 @@ async fn test_channels_query_missing_filter_returns_error() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
+    .data(GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -487,8 +494,9 @@ async fn test_channel_count_with_filters() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
+    .data(GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -547,8 +555,9 @@ async fn test_channel_count_all_channels() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
+    .data(GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -592,10 +601,11 @@ async fn test_chain_info_query() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data(100u64)
-    .data("anvil-localhost".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("anvil-localhost".to_string()))
     .data(ExpectedBlockTime(1))
+    .data(Finality(3))
+    .data(GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -608,6 +618,9 @@ async fn test_chain_info_query() -> Result<()> {
                     network
                     ticketPrice
                     keyBindingFee
+                    gasPrice
+                    maxFeePerGas
+                    maxPriorityFeePerGas
                     minTicketWinningProbability
                     channelDst
                     ledgerDst
@@ -643,6 +656,9 @@ async fn test_chain_info_query() -> Result<()> {
     // Verify token values (0 balance represented as "0 wxHOPR")
     assert_eq!(chain_info["ticketPrice"].as_str().unwrap(), "0 wxHOPR");
     assert_eq!(chain_info["keyBindingFee"].as_str().unwrap(), "0 wxHOPR");
+    assert!(chain_info["gasPrice"].is_null());
+    assert!(chain_info["maxFeePerGas"].is_null());
+    assert!(chain_info["maxPriorityFeePerGas"].is_null());
 
     // Verify domain separators are non-null hex strings
     assert!(!chain_info["channelDst"].is_null());
@@ -725,10 +741,11 @@ async fn test_chain_info_query_missing_data_returns_error() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data(100u64)
-    .data("anvil-localhost".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("anvil-localhost".to_string()))
     .data(ExpectedBlockTime(1))
+    .data(Finality(3))
+    .data(GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -793,10 +810,11 @@ async fn test_chain_info_query_with_null_optional_fields() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(200u64)
-    .data(200u64)
-    .data("test-network".to_string())
+    .data(ChainId(200))
+    .data(NetworkName("test-network".to_string()))
     .data(ExpectedBlockTime(5))
+    .data(Finality(3))
+    .data(GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -875,8 +893,9 @@ async fn test_channels_query_no_results() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
+    .data(GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -949,21 +968,18 @@ async fn test_channel_count_with_status_filter() -> Result<()> {
     )
     .data(db.conn(TargetDb::Index).clone())
     .data(ContractAddresses::default())
-    .data(100u64)
-    .data("test".to_string())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
+    .data(GasMultiplier(1.0))
     .finish();
 
-    // Count OPEN channels (currently not implemented - expect error)
+    // Count OPEN channels — should return 1
     let query = r#"
         query {
             channelCount(status: OPEN) {
                 __typename
                 ... on Count {
                     count
-                }
-                ... on MissingFilterError {
-                    code
-                    message
                 }
                 ... on QueryFailedError {
                     code
@@ -977,22 +993,16 @@ async fn test_channel_count_with_status_filter() -> Result<()> {
     assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
 
     let data = response.data.into_json()?;
+    assert_eq!(data["channelCount"]["__typename"], "Count");
+    assert_eq!(data["channelCount"]["count"], 1);
 
-    // Status filtering is not yet implemented, expect QueryFailedError
-    assert_eq!(data["channelCount"]["__typename"], "QueryFailedError");
-    assert_eq!(data["channelCount"]["code"], "NOT_IMPLEMENTED");
-
-    // Count CLOSED channels (currently not implemented - expect error)
+    // Count CLOSED channels — should return 1
     let query2 = r#"
         query {
             channelCount(status: CLOSED) {
                 __typename
                 ... on Count {
                     count
-                }
-                ... on MissingFilterError {
-                    code
-                    message
                 }
                 ... on QueryFailedError {
                     code
@@ -1006,10 +1016,54 @@ async fn test_channel_count_with_status_filter() -> Result<()> {
     assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
 
     let data = response.data.into_json()?;
+    assert_eq!(data["channelCount"]["__typename"], "Count");
+    assert_eq!(data["channelCount"]["count"], 1);
 
-    // Status filtering is not yet implemented, expect QueryFailedError
-    assert_eq!(data["channelCount"]["__typename"], "QueryFailedError");
-    assert_eq!(data["channelCount"]["code"], "NOT_IMPLEMENTED");
+    // Combined filter: sourceKeyId=1, status=OPEN — should return 1 (channel1: addr1→addr2, open)
+    let query3 = r#"
+        query {
+            channelCount(sourceKeyId: 1, status: OPEN) {
+                __typename
+                ... on Count {
+                    count
+                }
+                ... on QueryFailedError {
+                    code
+                    message
+                }
+            }
+        }
+    "#;
+
+    let response = execute_graphql_query(&schema, query3).await;
+    assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
+
+    let data = response.data.into_json()?;
+    assert_eq!(data["channelCount"]["__typename"], "Count");
+    assert_eq!(data["channelCount"]["count"], 1);
+
+    // Combined filter: sourceKeyId=1, status=PENDINGTOCLOSE — should return 0
+    let query4 = r#"
+        query {
+            channelCount(sourceKeyId: 1, status: PENDINGTOCLOSE) {
+                __typename
+                ... on Count {
+                    count
+                }
+                ... on QueryFailedError {
+                    code
+                    message
+                }
+            }
+        }
+    "#;
+
+    let response = execute_graphql_query(&schema, query4).await;
+    assert!(response.errors.is_empty(), "GraphQL errors: {:?}", response.errors);
+
+    let data = response.data.into_json()?;
+    assert_eq!(data["channelCount"]["__typename"], "Count");
+    assert_eq!(data["channelCount"]["count"], 0);
 
     Ok(())
 }

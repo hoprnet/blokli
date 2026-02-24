@@ -18,6 +18,22 @@ use crate::{mutation::MutationRoot, query::QueryRoot, subscription::Subscription
 #[derive(Debug, Clone, Copy)]
 pub struct ExpectedBlockTime(pub u64);
 
+/// Wrapper type for finality (block confirmations) to avoid type confusion in context
+#[derive(Debug, Clone, Copy)]
+pub struct Finality(pub u16);
+
+/// Wrapper type for gas multiplier to avoid type confusion in context
+#[derive(Debug, Clone, Copy)]
+pub struct GasMultiplier(pub f64);
+
+/// Wrapper type for chain ID to avoid type confusion in context
+#[derive(Debug, Clone, Copy)]
+pub struct ChainId(pub u64);
+
+/// Wrapper type for network name to avoid type confusion in context
+#[derive(Debug, Clone)]
+pub struct NetworkName(pub String);
+
 /// Build the async-graphql schema with database connection, chain ID, network, indexer state, and transaction
 /// components
 ///
@@ -32,6 +48,7 @@ pub struct ExpectedBlockTime(pub u64);
 /// - Network name injected as context data
 /// - Contract addresses injected as context data
 /// - Expected block time injected as context data
+/// - Finality (block confirmations) injected as context data
 /// - IndexerState injected as context data (for subscription coordination)
 /// - Transaction executor and store injected as context data (for mutations and transaction queries)
 /// - RPC operations injected as context data (for passthrough balance queries)
@@ -44,6 +61,8 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
     network: String,
     contract_addresses: ContractAddresses,
     expected_block_time: u64,
+    finality: u16,
+    gas_multiplier: f64,
     indexer_state: IndexerState,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
@@ -53,10 +72,12 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
         .limit_depth(10)
         .limit_complexity(100)
         .data(db)
-        .data(chain_id)
-        .data(network)
+        .data(ChainId(chain_id))
+        .data(NetworkName(network))
         .data(contract_addresses)
         .data(ExpectedBlockTime(expected_block_time))
+        .data(Finality(finality))
+        .data(GasMultiplier(gas_multiplier))
         .data(indexer_state)
         .data(transaction_executor)
         .data(transaction_store)
@@ -83,7 +104,9 @@ pub fn export_schema_sdl<R: HttpRequestor + 'static + Clone>(
         chain_id,
         "PLACEHOLDER".to_string(),
         contract_addresses,
-        5, // Placeholder expected block time
+        5,   // Placeholder expected block time
+        8,   // Placeholder finality
+        1.0, // Placeholder gas multiplier
         indexer_state,
         transaction_executor,
         transaction_store,

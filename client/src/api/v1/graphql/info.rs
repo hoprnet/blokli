@@ -13,7 +13,10 @@ pub struct ChainInfo {
     pub channel_dst: Option<String>,
     pub block_number: i32,
     pub chain_id: i32,
+    pub gas_price: Option<String>,
     pub ledger_dst: Option<String>,
+    pub max_fee_per_gas: Option<String>,
+    pub max_priority_fee_per_gas: Option<String>,
     pub min_ticket_winning_probability: f64,
     pub key_binding_fee: TokenValueString,
     pub safe_registry_dst: Option<String>,
@@ -21,6 +24,7 @@ pub struct ChainInfo {
     pub network: String,
     pub contract_addresses: ContractAddressMap,
     pub expected_block_time: Uint64,
+    pub finality: Uint64,
 }
 
 #[derive(cynic::Scalar, Debug, Clone, PartialEq, Eq)]
@@ -28,7 +32,7 @@ pub struct ContractAddressMap(pub String);
 
 #[derive(cynic::InlineFragments, Debug)]
 pub enum ChainInfoResult {
-    ChainInfo(ChainInfo),
+    ChainInfo(Box<ChainInfo>),
     QueryFailedError(QueryFailedError),
     #[cynic(fallback)]
     Unknown,
@@ -37,7 +41,7 @@ pub enum ChainInfoResult {
 impl From<ChainInfoResult> for Result<ChainInfo, crate::errors::BlokliClientError> {
     fn from(value: ChainInfoResult) -> Self {
         match value {
-            ChainInfoResult::ChainInfo(info) => Ok(info),
+            ChainInfoResult::ChainInfo(info) => Ok(*info),
             ChainInfoResult::QueryFailedError(e) => Err(e.into()),
             ChainInfoResult::Unknown => Err(crate::errors::ErrorKind::NoData.into()),
         }

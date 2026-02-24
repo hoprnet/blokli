@@ -30,7 +30,7 @@ The architecture follows an event-driven model with clear separation between dat
 
 ## High-Level Component Diagram
 
-```
+```text
 ┌─────────────────────────────────────────────────────────────────┐
 │                           bloklid                                │
 │  ┌────────────────────────────────────────────────────────────┐ │
@@ -79,7 +79,7 @@ The configuration layer aggregates settings from multiple sources (Env > File > 
 
 **Lifecycle Flow**:
 
-```
+```text
 Startup → Load Config → Validate Network → Initialize Database
     → Create BlokliChain → Start Processes → Signal Loop → Graceful Shutdown
 ```
@@ -94,7 +94,7 @@ Startup → Load Config → Validate Network → Initialize Database
 
 **Architecture**:
 
-```
+```text
 BlokliChain
 ├── Indexer (reads blockchain events)
 │   ├── Block/Log fetching from RPC
@@ -127,7 +127,7 @@ BlokliChain
 
 **Event Processing Pipeline**:
 
-```
+```text
 RPC Endpoint
      │
      ▼
@@ -211,6 +211,15 @@ The database implements an event sourcing pattern with temporal versioning:
 - **log_status**: Processing status and checksums for each log
 - **log_topic_info**: Event signature tracking for filter generation
 
+**Database Views** (for efficient current-state access):
+
+- **account_current**: Returns one row per account with the latest `account_state`, using `ROW_NUMBER()` window function partitioned by account ID and ordered by position tuple descending
+- **channel_current**: Returns one row per channel with the latest `channel_state`, using the same window function pattern
+
+These views shift the "latest state" selection logic into the database engine, replacing application-level `ORDER BY ... LIMIT 1` subqueries. They simplify query code and enable the database to optimize current-state retrieval internally.
+
+View models can be converted into corresponding `*_state::Model` types via `From` trait implementations, allowing seamless reuse of existing state-handling code paths.
+
 **Database Architecture Modes**:
 
 The system supports two database configurations:
@@ -240,10 +249,11 @@ The database layer uses SeaORM for type-safe database access with auto-generated
 - Support real-time updates via Server-Sent Events (SSE) subscriptions
 - Handle transaction submission in three distinct modes
 - Provide health checks and optional GraphQL Playground
+- Maintain SSE subscriptions with periodic keep-alive events to prevent idle timeouts
 
 **API Architecture**:
 
-```
+```text
 ┌─────────────────────────────────────────────────┐
 │              Axum HTTP Server                    │
 │  ┌─────────────────────────────────────────┐   │
@@ -359,7 +369,7 @@ Background process continuously monitoring pending transactions. Queries blockch
 
 **Transaction Lifecycle States**:
 
-```
+```text
 PENDING → Initial state after validation
 SUBMITTED → Transaction sent to blockchain
 CONFIRMED → Transaction included and confirmed
@@ -399,13 +409,81 @@ When a GraphQL subscription starts, it acquires read lock. While holding lock, i
 **Event Types**:
 The event bus carries four event types: AccountUpdated (with account keyid), ChannelUpdated (with channel id), BalanceUpdated (with address bytes), and SafeDeployed (with Safe contract address). Subscribers filter events based on their query parameters.
 
+### 9. Transaction Store Architecture
+
+**Purpose**:
+
+The transaction store provides in-memory tracking of blockchain transactions submitted through the GraphQL API, enabling real-time status monitoring via subscriptions.
+
+**Design Principles**:
+
+1. **Ephemeral State**: Transaction records exist only during server runtime
+2. **Event-Driven**: Status updates broadcast to subscribers immediately
+3. **Zero Polling**: Subscriptions use event bus instead of database polling
+4. **Thread-Safe**: Lock-free concurrent access using `DashMap`
+
+**Data Flow**:
+
+```text
+GraphQL Mutation (send_transaction)
+  ↓
+Insert into TransactionStore
+  ↓
+Broadcast to RPC Provider
+  ↓
+Wait for Receipt (async/sync modes)
+  ↓
+Update Status in Store
+  ↓
+Broadcast StatusUpdated Event
+  ↓
+GraphQL Subscription Receives Update
+```
+
+**Event Bus Architecture**:
+
+- **Channel**: `async_broadcast` with configurable capacity (default: 100)
+- **Overflow Strategy**: Set to `true` - slow subscribers miss old events
+- **Event Types**: `TransactionEvent::StatusUpdated` with delta fields
+- **Subscriber Pattern**: Fresh receivers avoid backlog
+
+**Transaction Lifecycle**:
+
+1. **Pending**: Transaction created, awaiting submission
+2. **Submitted**: Sent to blockchain, awaiting confirmation
+3. **Confirmed**: Receipt received with success status
+4. **Reverted**: Receipt received with failure status
+5. **Timeout**: No receipt within configured window
+6. **ValidationFailed**: Pre-submission validation failed
+7. **SubmissionFailed**: RPC submission failed
+
+**Memory Considerations**:
+
+- **Raw Transaction Data**: Stored as `Vec<u8>` (not cloned in events)
+- **Event Payload**: Only delta fields (status, error_message, timestamps)
+- **Capacity**: Unbounded `DashMap` - grows with active transactions
+- **Cleanup**: Manual cleanup required (no automatic expiration)
+
+**Limitations**:
+
+- No persistence across restarts
+- No historical query support beyond current session
+- Requires manual cleanup of old transactions
+- Event overflow may cause subscribers to miss updates
+
+**Future Considerations**:
+
+- Add configurable event bus capacity in settings
+- Implement automatic transaction cleanup (TTL)
+- Consider WAL for crash recovery if persistence becomes required
+
 ## User Flows
 
 ### Flow 1: Query Account Information
 
 This flow demonstrates a synchronous database query for account data with related entities:
 
-```
+```text
 Client sends GraphQL query request
     ↓
 API validates filter parameters (requires at least one identity filter)
@@ -414,7 +492,7 @@ API validates address format if chain_key provided
     ↓
 Database executes optimized join query:
     - Fetch account identity from account table
-    - Join latest account_state for Safe address
+    - Look up latest account state via account_current view
     - Join hopr_balance and native_balance tables
     - Join announcement table for multiaddresses
     ↓
@@ -423,7 +501,7 @@ API assembles GraphQL Account response
 Client receives structured account data with all related entities
 ```
 
-**Query Optimization Strategy**: The account query uses batch loading pattern with four separate database queries to avoid N+1 problems while maintaining flexibility. Temporal join fetches only the latest state using position-based ordering.
+**Query Optimization Strategy**: The account query uses batch loading pattern with database queries to avoid N+1 problems while maintaining flexibility. Current state is retrieved via the `account_current` view, which encapsulates the "latest by position" logic in the database layer.
 
 **Required Filters**: To prevent exposing entire account database, at least one identity filter (keyid, packet_key, or chain_key) must be provided. This protects against excessive data exposure.
 
@@ -431,7 +509,7 @@ Client receives structured account data with all related entities
 
 This flow demonstrates the two-phase subscription model with watermark synchronization:
 
-```
+```text
 Client sends subscription request with Accept: text/event-stream header
     ↓
 API recognizes subscription request (starts with "subscription" keyword)
@@ -450,7 +528,7 @@ API queries all matching channels at watermark position
     ↓
 For each historical channel:
     - Load source and destination account details
-    - Stream as SSE event to client
+    - Stream as SSE event to client (order is randomized)
     ↓
 PHASE 2: Real-time Updates
     ↓
@@ -466,13 +544,15 @@ Process continues until client disconnects or shutdown signal
 
 **Two-Phase Guarantee**: Phase 1 delivers all historical data at watermark. Phase 2 delivers all changes after watermark. The watermark synchronization prevents gaps or duplicates between phases.
 
-**SSE Streaming**: Server-Sent Events provide one-way streaming from server to client over HTTP. Each event is a JSON-encoded GraphQL response. Connection stays open indefinitely.
+**Phase 1 Ordering**: The historical snapshot emits entries in randomized order. Clients must not rely on any specific ordering of Phase 1 results. Reconnecting clients will receive entries in a different order each time.
+
+**SSE Streaming**: Server-Sent Events provide one-way streaming from server to client over HTTP. Each event is a JSON-encoded GraphQL response. Periodic keep-alive events keep idle connections from timing out while the stream stays open.
 
 ### Flow 3: Submit Transaction (Async Mode)
 
 This flow demonstrates asynchronous transaction submission with background monitoring:
 
-```
+```text
 Client sends mutation with raw signed transaction (hex encoded)
     ↓
 API decodes hex transaction to bytes
@@ -515,7 +595,7 @@ Subscribed clients receive transactionUpdated events via SSE
 
 This flow demonstrates streaming network topology for routing decisions:
 
-```
+```text
 Client subscribes to openedChannelGraphUpdated
     ↓
 API executes watermark synchronization (acquire read lock)
@@ -528,7 +608,7 @@ For each open channel:
     - Load source account details
     - Load destination account details
     - Create OpenedChannelsGraphEntry (directed edge)
-    - Stream as SSE event
+    - Stream as SSE event (order is randomized)
     ↓
 PHASE 2: Stream Topology Changes
     ↓
@@ -556,7 +636,7 @@ Client accumulates entries to build directed graph
 
 This diagram illustrates the complete data flow from blockchain to clients:
 
-```
+```text
 Blockchain RPC
       │
       │ RPC calls: eth_getLogs, eth_getBlockByNumber
@@ -618,12 +698,13 @@ Blockchain RPC
 - **Event Sourcing**: Historical state preserved through version history
 - **Position Tracking**: Every state change tagged with (block, tx_index, log_index)
 - **Fan-out Pattern**: Single database update triggers multiple subscription notifications
+- **Batch Loading**: Account lookups for channels use batch-fetch with HashMap to avoid N+1 query patterns
 
 ### Transaction Submission Flow
 
 This diagram illustrates outbound transaction flow from clients to blockchain:
 
-```
+```text
 Client
   │
   │ Raw signed transaction (hex encoded)
@@ -698,7 +779,7 @@ Subscribed Clients
 
 This flow demonstrates how Safe contract deployments are indexed with module and owner information:
 
-```
+```text
 Blockchain emits NewHoprNodeStakeModuleForSafe event
     ↓
 Indexer receives log from RPC provider
@@ -745,7 +826,7 @@ Blokli provides real-time GraphQL subscriptions using an in-memory event bus arc
 
 **Event Bus Architecture**:
 
-```
+```text
 Indexer Handler
     ↓
 Process blockchain log
@@ -777,7 +858,7 @@ Indexer handlers publish structured events containing complete data to avoid N+1
 
 All event bus subscriptions follow a consistent pattern to prevent data loss:
 
-```
+```text
 Client subscribes
     ↓
 Phase 1: Capture watermark and subscribe to event bus
@@ -840,7 +921,7 @@ When a blockchain reorganization is detected:
 
 Single process running both indexer and API server:
 
-```
+```text
 ┌─────────────────────────────────────┐
 │           bloklid Process            │
 │  ┌──────────────┐  ┌──────────────┐ │
@@ -890,7 +971,7 @@ Single process running both indexer and API server:
 
 Independent processes for indexer and API with horizontal scaling capability:
 
-```
+```text
 ┌─────────────────┐        ┌─────────────────┐
 │  bloklid        │        │  blokli-api     │ (multiple instances)
 │  (indexer only) │        │  (standalone)   │
@@ -956,7 +1037,7 @@ Independent processes for indexer and API with horizontal scaling capability:
 
 Lightweight deployment using SQLite with separated databases:
 
-```
+```text
 ┌─────────────────────────────────────┐
 │           bloklid Process            │
 │  ┌──────────────┐  ┌──────────────┐ │
@@ -1278,7 +1359,7 @@ Health check configuration:
 The readiness check automatically accounts for blockchain finality to prevent false-positive "ready" states:
 
 **Block Number Finality Adjustment**:
-RPC block heights are treated as confirmed by subtracting the configured finality depth. For example, with a finality depth of 8, a chain head at block 1000 yields a confirmed height of 992, so only blocks with 8+ confirmations count as confirmed.
+RPC block heights are treated as confirmed by subtracting the configured finality depth. For example, with a finality depth of 3, a chain head at block 1000 yields a confirmed height of 997, so only blocks with 3+ confirmations count as confirmed.
 
 **Readiness Calculation**:
 Readiness compares the confirmed height with the indexer watermark. If the lag in confirmed blocks is within `max_indexer_lag`, readiness passes.
@@ -1288,14 +1369,14 @@ Because readiness uses confirmed height (not chain head), the indexer can be up 
 
 **Example (Gnosis Chain)**:
 
-- Configuration: `max_indexer_lag=10`, `finality=8`
+- Configuration: `max_indexer_lag=10`, `finality=3`
 - Latest RPC block: 1000
-- Confirmed RPC block: 992
-- Indexed block: 982
+- Confirmed RPC block: 997
+- Indexed block: 987
 - Calculated lag: 10 blocks
 - Result: READY
 
-The indexer is actually 18 blocks behind the RPC chain head (1000 - 982), but only 10 blocks behind confirmed blocks—within the acceptable threshold.
+The indexer is actually 13 blocks behind the RPC chain head (1000 - 987), but only 10 blocks behind confirmed blocks—within the acceptable threshold.
 
 **Configuration Flow**:
 Finality is defined by the selected network, propagated through runtime configuration into the RPC layer, and reused by the readiness checks.

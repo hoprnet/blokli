@@ -312,5 +312,13 @@ smoke-test-gnosis-full-sync-up:
 smoke-test-gnosis-full-sync-down:
     docker compose -f tests/smoke/docker-compose.yml down -v
 
+# ============================================================================
+# Helper Commands
+# ============================================================================
+
+# Decode a packed channel state bytes32 hex string
+decode-channel hex:
+    cargo run --bin blokli-helper -- decode-channel {{ hex }}
+
 # Build Docker image and run all smoke tests (Anvil + Gnosis Chain connectivity + Gnosis Chain full sync) - all include checkpoint resume validation
 smoke-test-full: smoke-test smoke-test-gnosis smoke-test-gnosis-full-sync

@@ -63,8 +63,8 @@ pub struct RawTransactionExecutorConfig {
 impl Default for RawTransactionExecutorConfig {
     fn default() -> Self {
         Self {
-            default_confirmations: 8,
-            confirmation_timeout: Duration::from_secs(150),
+            default_confirmations: 3,
+            confirmation_timeout: Duration::from_secs(60),
         }
     }
 }

@@ -82,6 +82,8 @@ fn create_test_schema(db: &BlokliDb) -> (Schema<QueryRoot, MutationRoot, Subscri
         "test-network".to_string(),
         ContractAddresses::default(),
         1,
+        3, // Test finality value
+        1.0,
         indexer_state.clone(),
         transaction_executor,
         transaction_store,

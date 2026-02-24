@@ -110,6 +110,7 @@
 use blokli_db_entity::{
     account_state, channel_state,
     prelude::{AccountState, ChannelState},
+    views::{account_current, channel_current},
 };
 use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder, sea_query::Condition};
 
@@ -131,17 +132,12 @@ pub async fn get_current_channel_state(
     db: &DatabaseConnection,
     channel_id: i64,
 ) -> Result<Option<blokli_db_entity::channel_state::Model>> {
-    // TODO(Phase 2-3): Query from channel_current view instead of direct table query
-    // For now, manually get the latest state
-    let state = ChannelState::find()
-        .filter(channel_state::Column::ChannelId.eq(channel_id))
-        .order_by_desc(channel_state::Column::PublishedBlock)
-        .order_by_desc(channel_state::Column::PublishedTxIndex)
-        .order_by_desc(channel_state::Column::PublishedLogIndex)
+    let view_row = channel_current::Entity::find()
+        .filter(channel_current::Column::ChannelId.eq(channel_id))
         .one(db)
         .await?;
 
-    Ok(state)
+    Ok(view_row.map(channel_state::Model::from))
 }
 
 /// Get channel state at a specific point in time
@@ -270,17 +266,12 @@ pub async fn get_current_account_state(
     db: &DatabaseConnection,
     account_id: i64,
 ) -> Result<Option<blokli_db_entity::account_state::Model>> {
-    // TODO(Phase 2-3): Query from account_current view instead of direct table query
-    // For now, manually get the latest state
-    let state = AccountState::find()
-        .filter(account_state::Column::AccountId.eq(account_id))
-        .order_by_desc(account_state::Column::PublishedBlock)
-        .order_by_desc(account_state::Column::PublishedTxIndex)
-        .order_by_desc(account_state::Column::PublishedLogIndex)
+    let view_row = account_current::Entity::find()
+        .filter(account_current::Column::AccountId.eq(account_id))
         .one(db)
         .await?;
 
-    Ok(state)
+    Ok(view_row.map(account_state::Model::from))
 }
 
 /// Get account state at a specific point in time

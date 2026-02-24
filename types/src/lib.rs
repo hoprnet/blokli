@@ -218,7 +218,7 @@ pub struct ChainInfo {
     /// Chain ID of the connected blockchain network
     #[graphql(name = "chainId")]
     pub chain_id: i32,
-    /// Network name (e.g., 'dufour', 'rotsee', 'jura')
+    /// Network name (e.g., 'rotsee', 'jura')
     pub network: String,
     /// Current HOPR token price
     #[graphql(name = "ticketPrice")]
@@ -226,6 +226,15 @@ pub struct ChainInfo {
     /// Current key binding fee
     #[graphql(name = "keyBindingFee")]
     pub key_binding_fee: TokenValueString,
+    /// Estimated legacy gas price in wei from RPC
+    #[graphql(name = "gasPrice")]
+    pub gas_price: Option<String>,
+    /// Estimated EIP-1559 max fee per gas in wei from RPC, scaled by api.gas_multiplier
+    #[graphql(name = "maxFeePerGas")]
+    pub max_fee_per_gas: Option<String>,
+    /// Estimated EIP-1559 max priority fee per gas in wei from RPC, scaled by api.gas_multiplier
+    #[graphql(name = "maxPriorityFeePerGas")]
+    pub max_priority_fee_per_gas: Option<String>,
     /// Current minimum ticket winning probability (decimal value between 0.0 and 1.0)
     #[graphql(name = "minTicketWinningProbability")]
     pub min_ticket_winning_probability: f64,
@@ -247,13 +256,16 @@ pub struct ChainInfo {
     /// Expected block time in seconds
     #[graphql(name = "expectedBlockTime")]
     pub expected_block_time: UInt64,
+    /// Number of block confirmations required for finality
+    #[graphql(name = "finality")]
+    pub finality: UInt64,
 }
 
 /// Result type for chain info queries
 #[derive(Union, Clone, Debug)]
 pub enum ChainInfoResult {
     /// Successful chain info
-    ChainInfo(ChainInfo),
+    ChainInfo(Box<ChainInfo>),
     /// Query failed
     QueryFailed(QueryFailedError),
 }

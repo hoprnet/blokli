@@ -120,7 +120,7 @@ impl MutationRoot {
     /// Submit a transaction synchronously
     ///
     /// Validates the pre-signed raw transaction data, submits it to the chain, and waits for
-    /// the specified number of confirmations (default: 8 blocks) before returning.
+    /// the specified number of confirmations (default: 3 blocks) before returning.
     /// Transaction is persisted to store and can be queried later.
     #[graphql(name = "sendTransactionSync")]
     async fn send_transaction_sync(
@@ -140,7 +140,7 @@ impl MutationRoot {
         let confirmations = match confirmations {
             Some(c) if c < 0 => {
                 return Err(async_graphql::Error::new(format!(
-                    "Invalid confirmations value: {}. Must be non-negative (default: 8, max: 64)",
+                    "Invalid confirmations value: {}. Must be non-negative (default: 3, max: 64)",
                     c
                 )));
             }

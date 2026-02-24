@@ -52,6 +52,10 @@ fn default_network() -> Network {
     Network::default()
 }
 
+fn default_max_block_range() -> u32 {
+    10000
+}
+
 /// PostgreSQL database configuration
 ///
 /// Supports two formats:
@@ -273,6 +277,11 @@ pub struct Config {
     #[serde(default)]
     pub max_rpc_requests_per_sec: u32,
 
+    #[validate(range(min = 1))]
+    #[default(10000)]
+    #[serde(default = "default_max_block_range")]
+    pub max_block_range: u32,
+
     #[serde(default)]
     pub indexer: IndexerConfig,
 
@@ -303,6 +312,7 @@ impl Config {
             "  max_rpc_requests_per_sec: {}\n",
             self.max_rpc_requests_per_sec
         ));
+        output.push_str(&format!("  max_block_range: {}\n", self.max_block_range));
 
         if let Some(db_config) = &self.database {
             output.push_str(&format!("  database: {}\n", db_config.display_redacted()));
@@ -323,6 +333,7 @@ impl Config {
         output.push_str(&format!("  api.enabled: {}\n", self.api.enabled));
         output.push_str(&format!("  api.bind_address: {}\n", self.api.bind_address));
         output.push_str(&format!("  api.playground_enabled: {}\n", self.api.playground_enabled));
+        output.push_str(&format!("  api.gas_multiplier: {}\n", self.api.gas_multiplier));
         output.push_str(&format!(
             "  api.sse_keepalive.enabled: {}\n",
             self.api.sse_keepalive.enabled
@@ -404,6 +415,10 @@ pub struct ApiConfig {
     #[serde(default = "default_true")]
     pub playground_enabled: bool,
 
+    #[default(1.0)]
+    #[serde(default = "default_api_gas_multiplier")]
+    pub gas_multiplier: f64,
+
     #[serde(default)]
     pub sse_keepalive: SseKeepAliveConfig,
 
@@ -473,6 +488,10 @@ fn default_batch_size() -> usize {
 
 fn default_sse_keepalive_enabled() -> bool {
     true
+}
+
+fn default_api_gas_multiplier() -> f64 {
+    1.0
 }
 
 fn default_sse_keepalive_interval() -> Duration {
@@ -697,6 +716,7 @@ mod tests {
         // Check API config
         assert!(config.api.enabled);
         assert_eq!(config.api.bind_address.to_string(), "0.0.0.0:8080");
+        assert_eq!(config.api.gas_multiplier, 1.0);
     }
 
     #[test]
@@ -738,9 +758,24 @@ mod tests {
         assert!(!cfg.api.enabled);
         assert!(cfg.api.playground_enabled); // Default
         assert_eq!(cfg.api.bind_address.to_string(), "0.0.0.0:8080"); // Default
+        assert_eq!(cfg.api.gas_multiplier, 1.0); // Default
         assert_eq!(cfg.api.health.max_indexer_lag, 10); // Default
         assert_eq!(cfg.api.health.timeout, Duration::from_millis(5000)); // Default
         assert!(cfg.database.is_some()); // Database was provided
+    }
+
+    #[test]
+    fn test_api_gas_multiplier_override() {
+        let config = r#"
+         [api]
+         gas_multiplier = 1.5
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let cfg: Config = toml::from_str(config).expect("Failed to parse config");
+        assert_eq!(cfg.api.gas_multiplier, 1.5);
     }
 
     #[test]
