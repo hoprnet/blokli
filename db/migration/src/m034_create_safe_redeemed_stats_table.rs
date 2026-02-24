@@ -99,6 +99,36 @@ impl MigrationTrait for Migration {
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
+            .drop_index(
+                Index::drop()
+                    .table(HoprSafeRedeemedStats::Table)
+                    .name("idx_hopr_safe_redeemed_stats_safe_node_unique")
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .drop_index(
+                Index::drop()
+                    .table(HoprSafeRedeemedStats::Table)
+                    .name("idx_hopr_safe_redeemed_stats_safe")
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .drop_index(
+                Index::drop()
+                    .table(HoprSafeRedeemedStats::Table)
+                    .name("idx_hopr_safe_redeemed_stats_node")
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
             .drop_table(Table::drop().table(HoprSafeRedeemedStats::Table).to_owned())
             .await
     }
