@@ -126,6 +126,7 @@ async fn test_accounts_query_with_filters() -> anyhow::Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100)) // chain_id
     .data(NetworkName("test".to_string())) // network
+    .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
     // Test 1: Query by keyid
@@ -256,6 +257,7 @@ async fn test_accounts_query_requires_filter() -> anyhow::Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100))
     .data(NetworkName("test".to_string()))
+    .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
     // Test: Query without any filters should return MissingFilterError variant
@@ -311,6 +313,7 @@ async fn test_accounts_query_invalid_chain_key() -> anyhow::Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100))
     .data(NetworkName("test".to_string()))
+    .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
     // Test: Query with invalid chain key should return QueryFailedError
@@ -370,6 +373,7 @@ async fn test_accounts_query_combined_filters() -> anyhow::Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100))
     .data(NetworkName("test".to_string()))
+    .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
     // Test: Query with multiple filters (keyid + chainKey)
@@ -432,6 +436,7 @@ async fn test_accounts_query_with_multiaddresses() -> anyhow::Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100))
     .data(NetworkName("test".to_string()))
+    .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
     // Test: Query should include multiaddresses
@@ -490,6 +495,7 @@ async fn test_account_count_no_filters() -> anyhow::Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100))
     .data(NetworkName("test".to_string()))
+    .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
     // Test: Count all accounts without filters
@@ -551,6 +557,7 @@ async fn test_account_count_with_filters() -> anyhow::Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100))
     .data(NetworkName("test".to_string()))
+    .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
     // Test 1: Count by keyid
@@ -662,6 +669,7 @@ async fn test_account_count_invalid_chain_key() -> anyhow::Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100))
     .data(NetworkName("test".to_string()))
+    .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
     // Test: Count with invalid chain key
@@ -713,6 +721,7 @@ async fn test_account_count_nonexistent_account() -> anyhow::Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100))
     .data(NetworkName("test".to_string()))
+    .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
     // Test: Count for non-existent keyid
@@ -773,6 +782,7 @@ async fn test_accounts_query_with_union_result_types() -> anyhow::Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100))
     .data(NetworkName("test".to_string()))
+    .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
     // Test: Query with union result types as defined in target schema

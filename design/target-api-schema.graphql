@@ -58,9 +58,9 @@ type ChainInfo {
   keyBindingFee: TokenValueString!
   "Ledger smart contract domain separator (hex string)"
   ledgerDst: String
-  "Estimated EIP-1559 max fee per gas in wei from RPC"
+  "Estimated EIP-1559 max fee per gas in wei from RPC, scaled by api.gas_multiplier"
   maxFeePerGas: String
-  "Estimated EIP-1559 max priority fee per gas in wei from RPC"
+  "Estimated EIP-1559 max priority fee per gas in wei from RPC, scaled by api.gas_multiplier"
   maxPriorityFeePerGas: String
   "Current minimum ticket winning probability (decimal value between 0.0 and 1.0)"
   minTicketWinningProbability: Float!

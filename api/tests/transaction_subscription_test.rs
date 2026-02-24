@@ -74,6 +74,7 @@ async fn setup_test_environment() -> Result<TestContext> {
         .data(ContractAddresses::default())
         .data(tx_ctx.executor.clone())
         .data(tx_ctx.store.clone())
+        .data(blokli_api::schema::GasMultiplier(1.0))
         .finish();
 
     Ok(TestContext {
