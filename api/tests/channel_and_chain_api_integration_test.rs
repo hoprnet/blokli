@@ -15,7 +15,7 @@ use std::{
 use anyhow::Result;
 use blokli_api::{
     query::QueryRoot,
-    schema::{ChainId, ExpectedBlockTime, Finality, NetworkName},
+    schema::{ChainId, ExpectedBlockTime, Finality, GasMultiplier, NetworkName},
 };
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{
@@ -167,6 +167,7 @@ async fn test_channels_query_by_source_keyid() -> Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100))
     .data(NetworkName("test".to_string()))
+    .data(GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -244,6 +245,7 @@ async fn test_channels_query_by_destination_keyid() -> Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100))
     .data(NetworkName("test".to_string()))
+    .data(GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -328,6 +330,7 @@ async fn test_channels_query_with_status_filter() -> Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100))
     .data(NetworkName("test".to_string()))
+    .data(GasMultiplier(1.0))
     .finish();
 
     // Query for OPEN channels
@@ -412,6 +415,7 @@ async fn test_channels_query_missing_filter_returns_error() -> Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100))
     .data(NetworkName("test".to_string()))
+    .data(GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -492,6 +496,7 @@ async fn test_channel_count_with_filters() -> Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100))
     .data(NetworkName("test".to_string()))
+    .data(GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -552,6 +557,7 @@ async fn test_channel_count_all_channels() -> Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100))
     .data(NetworkName("test".to_string()))
+    .data(GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -599,6 +605,7 @@ async fn test_chain_info_query() -> Result<()> {
     .data(NetworkName("anvil-localhost".to_string()))
     .data(ExpectedBlockTime(1))
     .data(Finality(3))
+    .data(GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -738,6 +745,7 @@ async fn test_chain_info_query_missing_data_returns_error() -> Result<()> {
     .data(NetworkName("anvil-localhost".to_string()))
     .data(ExpectedBlockTime(1))
     .data(Finality(3))
+    .data(GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -806,6 +814,7 @@ async fn test_chain_info_query_with_null_optional_fields() -> Result<()> {
     .data(NetworkName("test-network".to_string()))
     .data(ExpectedBlockTime(5))
     .data(Finality(3))
+    .data(GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -886,6 +895,7 @@ async fn test_channels_query_no_results() -> Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100))
     .data(NetworkName("test".to_string()))
+    .data(GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -960,6 +970,7 @@ async fn test_channel_count_with_status_filter() -> Result<()> {
     .data(ContractAddresses::default())
     .data(ChainId(100))
     .data(NetworkName("test".to_string()))
+    .data(GasMultiplier(1.0))
     .finish();
 
     // Count OPEN channels — should return 1
