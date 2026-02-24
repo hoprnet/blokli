@@ -22,6 +22,10 @@ pub struct ExpectedBlockTime(pub u64);
 #[derive(Debug, Clone, Copy)]
 pub struct Finality(pub u16);
 
+/// Wrapper type for gas multiplier to avoid type confusion in context
+#[derive(Debug, Clone, Copy)]
+pub struct GasMultiplier(pub f64);
+
 /// Wrapper type for chain ID to avoid type confusion in context
 #[derive(Debug, Clone, Copy)]
 pub struct ChainId(pub u64);
@@ -58,6 +62,7 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
     contract_addresses: ContractAddresses,
     expected_block_time: u64,
     finality: u16,
+    gas_multiplier: f64,
     indexer_state: IndexerState,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
@@ -72,6 +77,7 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
         .data(contract_addresses)
         .data(ExpectedBlockTime(expected_block_time))
         .data(Finality(finality))
+        .data(GasMultiplier(gas_multiplier))
         .data(indexer_state)
         .data(transaction_executor)
         .data(transaction_store)
@@ -98,8 +104,9 @@ pub fn export_schema_sdl<R: HttpRequestor + 'static + Clone>(
         chain_id,
         "PLACEHOLDER".to_string(),
         contract_addresses,
-        5, // Placeholder expected block time
-        8, // Placeholder finality
+        5,   // Placeholder expected block time
+        8,   // Placeholder finality
+        1.0, // Placeholder gas multiplier
         indexer_state,
         transaction_executor,
         transaction_store,

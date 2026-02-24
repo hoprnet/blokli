@@ -29,6 +29,7 @@ async fn test_channel_closure_grace_period_always_non_null() {
     .data(NetworkName("test-network".to_string()))
     .data(ExpectedBlockTime(1))
     .data(Finality(3))
+    .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -102,6 +103,7 @@ async fn test_channel_closure_grace_period_with_custom_value() {
     .data(NetworkName("test-network".to_string()))
     .data(ExpectedBlockTime(1))
     .data(Finality(3))
+    .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
     let query = r#"
@@ -146,6 +148,7 @@ async fn test_channel_closure_grace_period_schema_non_nullable() {
     .data(ChainId(100))
     .data(NetworkName("test-network".to_string()))
     .data(ExpectedBlockTime(1))
+    .data(blokli_api::schema::GasMultiplier(1.0))
     .finish();
 
     let sdl = schema.sdl();

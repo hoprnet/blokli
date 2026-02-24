@@ -228,6 +228,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
         contract_addrs,
         config.expected_block_time.as_secs(),
         3, // Test finality value
+        1.0,
         indexer_state,
         transaction_executor.clone(),
         transaction_store.clone(),

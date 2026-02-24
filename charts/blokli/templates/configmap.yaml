@@ -44,6 +44,8 @@ data:
     enabled = {{ .Values.config.api.enabled }}
     bind_address = "{{ .Values.config.api.bindAddress }}"
     playground_enabled = {{ .Values.config.api.playgroundEnabled }}
+    {{- $gm := .Values.config.api.gasMultiplier | toString }}
+    gas_multiplier = {{ if contains "." $gm }}{{ $gm }}{{ else }}{{ $gm }}.0{{ end }}
 
     # Health check configuration
     [api.health]

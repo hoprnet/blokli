@@ -194,6 +194,7 @@ pub async fn build_app(
         config.contract_addresses,
         expected_block_time,
         finality,
+        config.gas_multiplier,
         indexer_state,
         transaction_executor,
         transaction_store,

@@ -137,6 +137,7 @@ impl Args {
             ("BLOKLI_API_ENABLED", "api.enabled"),
             ("BLOKLI_API_BIND_ADDRESS", "api.bind_address"),
             ("BLOKLI_API_PLAYGROUND_ENABLED", "api.playground_enabled"),
+            ("BLOKLI_API_GAS_MULTIPLIER", "api.gas_multiplier"),
             ("BLOKLI_API_SSE_KEEPALIVE_ENABLED", "api.sse_keepalive.enabled"),
             ("BLOKLI_API_SSE_KEEPALIVE_INTERVAL", "api.sse_keepalive.interval"),
             ("BLOKLI_API_SSE_KEEPALIVE_TEXT", "api.sse_keepalive.text"),
@@ -178,6 +179,8 @@ impl Args {
                     // For non-boolean keys, try numeric first, then bool, then string
                     if let Ok(num) = val.parse::<u64>() {
                         num.into()
+                    } else if let Ok(num) = val.parse::<f64>() {
+                        num.into()
                     } else if let Ok(flag) = val.parse::<bool>() {
                         flag.into()
                     } else {
@@ -194,6 +197,13 @@ impl Args {
         let mut config: Config = config_rs_config
             .try_deserialize()
             .map_err(|e| ConfigError::Parse(e.to_string()))?;
+
+        if !config.api.gas_multiplier.is_finite() || config.api.gas_multiplier < 1.0 {
+            return Err(ConfigError::Parse(
+                "api.gas_multiplier must be a finite number greater than or equal to 1".to_string(),
+            )
+            .into());
+        }
 
         // Validate that database configuration is provided either in config file or environment variables
         if config.database.is_none() {
@@ -522,6 +532,7 @@ async fn run(args: Args) -> errors::Result<()> {
                 rpc_url: rpc_url_for_api,
                 contract_addresses: contracts,
                 expected_block_time,
+                gas_multiplier: api_config.gas_multiplier,
                 sse_keepalive: blokli_api::config::SseKeepAliveConfig {
                     enabled: api_config.sse_keepalive.enabled,
                     interval: api_config.sse_keepalive.interval,
@@ -1183,6 +1194,73 @@ mod tests {
                 "Non-boolean numeric config should parse as u64"
             );
         });
+    }
+
+    #[test]
+    fn test_float_env_var_parsed_as_f64() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [api]
+            gas_multiplier = 1.0
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_var("BLOKLI_API_GAS_MULTIPLIER", Some("1.5"), || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
+
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(
+                config.api.gas_multiplier, 1.5,
+                "BLOKLI_API_GAS_MULTIPLIER should be parsed as f64"
+            );
+        });
+    }
+
+    #[test]
+    fn test_invalid_gas_multiplier_rejected() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [api]
+            gas_multiplier = 0.5
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        let args = Args {
+            verbose: 0,
+            config: Some(path),
+            command: None,
+        };
+        let error = args
+            .load_config(false)
+            .expect_err("gas multiplier 0.0 should be invalid");
+        assert!(
+            error
+                .to_string()
+                .contains("api.gas_multiplier must be a finite number greater than or equal to 1"),
+            "unexpected error: {error}"
+        );
     }
 
     #[test]

@@ -34,6 +34,7 @@ async fn test_safe_deployed_subscription() -> anyhow::Result<()> {
     let schema = Schema::build(QueryRoot, async_graphql::EmptyMutation, SubscriptionRoot)
         .data(db.conn(blokli_db::TargetDb::Index).clone())
         .data(indexer_state.clone())
+        .data(blokli_api::schema::GasMultiplier(1.0))
         .finish();
 
     // Start subscription

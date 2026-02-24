@@ -1361,6 +1361,7 @@ mod tests {
     use sea_orm::{ActiveModelTrait, Set};
 
     use super::*;
+    use crate::schema::GasMultiplier;
 
     // Dummy Query root
     #[derive(Default)]
@@ -1940,6 +1941,7 @@ mod tests {
         let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
             .data(db.conn(blokli_db::TargetDb::Index).clone())
             .data(indexer_state.clone())
+            .data(GasMultiplier(1.0))
             .finish();
 
         let query = "subscription { keyBindingFeeUpdated }";
@@ -2007,6 +2009,7 @@ mod tests {
         let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
             .data(db.conn(blokli_db::TargetDb::Index).clone())
             .data(indexer_state.clone())
+            .data(GasMultiplier(1.0))
             .finish();
 
         let query = "subscription { safeDeployed { address moduleAddress chainKey } }";
@@ -2060,6 +2063,7 @@ mod tests {
         let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
             .data(db.conn(blokli_db::TargetDb::Index).clone())
             .data(indexer_state.clone())
+            .data(GasMultiplier(1.0))
             .finish();
 
         let query = "subscription { safeDeployed { address } }";
@@ -2091,6 +2095,7 @@ mod tests {
         let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
             .data(db.conn(blokli_db::TargetDb::Index).clone())
             .data(indexer_state.clone())
+            .data(GasMultiplier(1.0))
             .finish();
 
         let query = "subscription { safeDeployed { address } }";
@@ -2179,6 +2184,7 @@ mod tests {
         let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
             .data(db.conn(blokli_db::TargetDb::Index).clone())
             .data(indexer_state.clone())
+            .data(GasMultiplier(1.0))
             .finish();
 
         let query = "subscription { safeDeployed { address } }";
@@ -2377,6 +2383,7 @@ mod tests {
         let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
             .data(db.conn(blokli_db::TargetDb::Index).clone())
             .data(indexer_state.clone())
+            .data(GasMultiplier(1.0))
             .finish();
 
         let query = "subscription { safeDeployed { address } }";
@@ -2448,6 +2455,7 @@ mod tests {
             let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
                 .data(conn.clone())
                 .data(indexer_state)
+                .data(GasMultiplier(1.0))
                 .finish();
 
             let mut stream = schema.execute_stream(query).boxed();
@@ -2497,6 +2505,7 @@ mod tests {
             let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
                 .data(conn.clone())
                 .data(indexer_state)
+                .data(GasMultiplier(1.0))
                 .finish();
 
             let mut stream = schema.execute_stream(query).boxed();
@@ -2541,6 +2550,7 @@ mod tests {
             let schema = Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
                 .data(conn.clone())
                 .data(indexer_state)
+                .data(GasMultiplier(1.0))
                 .finish();
 
             let mut stream = schema.execute_stream(query).boxed();
