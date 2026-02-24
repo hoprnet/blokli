@@ -61,17 +61,21 @@ use std::path::PathBuf;
 let config = ApiConfig {
     bind_address: "0.0.0.0:8080".parse().unwrap(),
     playground_enabled: true,
+    gas_multiplier: 1.0,
     tls: None,
+    ..Default::default()
 };
 
 // With TLS 1.3
 let config = ApiConfig {
     bind_address: "0.0.0.0:8443".parse().unwrap(),
     playground_enabled: true,
+    gas_multiplier: 1.0,
     tls: Some(TlsConfig {
         cert_path: PathBuf::from("/path/to/cert.pem"),
         key_path: PathBuf::from("/path/to/key.pem"),
     }),
+    ..Default::default()
 };
 ```
 

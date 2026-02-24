@@ -333,6 +333,7 @@ impl Config {
         output.push_str(&format!("  api.enabled: {}\n", self.api.enabled));
         output.push_str(&format!("  api.bind_address: {}\n", self.api.bind_address));
         output.push_str(&format!("  api.playground_enabled: {}\n", self.api.playground_enabled));
+        output.push_str(&format!("  api.gas_multiplier: {}\n", self.api.gas_multiplier));
         output.push_str(&format!(
             "  api.sse_keepalive.enabled: {}\n",
             self.api.sse_keepalive.enabled
@@ -414,6 +415,10 @@ pub struct ApiConfig {
     #[serde(default = "default_true")]
     pub playground_enabled: bool,
 
+    #[default(1.0)]
+    #[serde(default = "default_api_gas_multiplier")]
+    pub gas_multiplier: f64,
+
     #[serde(default)]
     pub sse_keepalive: SseKeepAliveConfig,
 
@@ -483,6 +488,10 @@ fn default_batch_size() -> usize {
 
 fn default_sse_keepalive_enabled() -> bool {
     true
+}
+
+fn default_api_gas_multiplier() -> f64 {
+    1.0
 }
 
 fn default_sse_keepalive_interval() -> Duration {
@@ -707,6 +716,7 @@ mod tests {
         // Check API config
         assert!(config.api.enabled);
         assert_eq!(config.api.bind_address.to_string(), "0.0.0.0:8080");
+        assert_eq!(config.api.gas_multiplier, 1.0);
     }
 
     #[test]
@@ -748,9 +758,24 @@ mod tests {
         assert!(!cfg.api.enabled);
         assert!(cfg.api.playground_enabled); // Default
         assert_eq!(cfg.api.bind_address.to_string(), "0.0.0.0:8080"); // Default
+        assert_eq!(cfg.api.gas_multiplier, 1.0); // Default
         assert_eq!(cfg.api.health.max_indexer_lag, 10); // Default
         assert_eq!(cfg.api.health.timeout, Duration::from_millis(5000)); // Default
         assert!(cfg.database.is_some()); // Database was provided
+    }
+
+    #[test]
+    fn test_api_gas_multiplier_override() {
+        let config = r#"
+         [api]
+         gas_multiplier = 1.5
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let cfg: Config = toml::from_str(config).expect("Failed to parse config");
+        assert_eq!(cfg.api.gas_multiplier, 1.5);
     }
 
     #[test]

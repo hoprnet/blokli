@@ -69,6 +69,7 @@ fn create_test_schema(db: &BlokliDb, indexer_state: IndexerState) -> Schema<Quer
         ContractAddresses::default(),
         1,
         3, // Test finality value
+        1.0,
         indexer_state,
         transaction_executor,
         transaction_store,
