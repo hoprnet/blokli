@@ -318,6 +318,9 @@ config:
     ## @param config.api.playgroundEnabled Enable GraphQL Playground for development and testing. Recommended to set to false for production deployments
     ##
     playgroundEnabled: false
+    ## @param config.api.gasMultiplier Multiplier for gas estimation to provide a safety margin (e.g., 1.2 for 20% extra)
+    ##
+    gasMultiplier: 1.2
     # Health check configuration
     health:
       ## @param config.api.health.maxIndexerLag Maximum indexer lag (blocks) before readiness fails
