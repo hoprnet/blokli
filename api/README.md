@@ -135,8 +135,7 @@ subscription {
 
 ## Development
 
-The API is designed to be extended with additional GraphQL types and resolvers. The schema is defined in
-`src/schema.rs`.
+The API is designed to be extended with additional GraphQL types and resolvers. The schema is defined in `src/schema.rs`.
 
 ## License
 

@@ -1,7 +1,7 @@
 # Testing Guide
 
-This document provides comprehensive guidance for testing the Blokli indexer and API, with special focus on temporal
-queries, blockchain reorganization handling, and edge cases.
+This document provides comprehensive guidance for testing the Blokli indexer and API, with special focus on temporal queries, blockchain
+reorganization handling, and edge cases.
 
 ## Table of Contents
 
