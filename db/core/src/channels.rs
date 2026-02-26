@@ -19,7 +19,7 @@ use hopr_primitive_types::{
     prelude::{Address, HoprBalance},
     traits::{IntoEndian, ToHex},
 };
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, TryInsertResult};
 use tracing::instrument;
 
 use crate::{
@@ -194,6 +194,23 @@ fn reconstruct_channel_entry_from_view(
     ))
 }
 
+async fn find_channel_state_by_position(
+    tx: &sea_orm::DatabaseTransaction,
+    channel_id: i64,
+    block: i64,
+    tx_index: i64,
+    log_index: i64,
+) -> Result<Option<blokli_db_entity::channel_state::Model>> {
+    ChannelState::find()
+        .filter(channel_state::Column::ChannelId.eq(channel_id))
+        .filter(channel_state::Column::PublishedBlock.eq(block))
+        .filter(channel_state::Column::PublishedTxIndex.eq(tx_index))
+        .filter(channel_state::Column::PublishedLogIndex.eq(log_index))
+        .one(tx)
+        .await
+        .map_err(Into::into)
+}
+
 /// Helper function to insert a channel state record and emit event
 ///
 /// This creates a new version record in channel_state table and broadcasts the change event.
@@ -251,7 +268,39 @@ async fn insert_channel_state_and_emit(
     };
 
     tracing::debug!(?state_model, "About to insert channel_state");
-    let inserted = state_model.insert(tx).await?;
+    let inserted = match ChannelState::insert(state_model)
+        .on_conflict_do_nothing_on([
+            channel_state::Column::ChannelId,
+            channel_state::Column::PublishedBlock,
+            channel_state::Column::PublishedTxIndex,
+            channel_state::Column::PublishedLogIndex,
+        ])
+        .exec(tx)
+        .await
+    {
+        Ok(TryInsertResult::Inserted(insert_result)) => ChannelState::find_by_id(insert_result.last_insert_id)
+            .one(tx)
+            .await?
+            .ok_or_else(|| {
+                DbSqlError::LogicalError(format!(
+                    "channel_state not found after insert for channel_id={channel_id}, block={block}, tx_index={tx_index}, log_index={log_index}",
+                ))
+            })?,
+        Ok(TryInsertResult::Conflicted) => {
+            return find_channel_state_by_position(tx, channel_id, block, tx_index, log_index)
+                .await?
+                .ok_or_else(|| {
+                    DbSqlError::LogicalError(format!(
+                        "channel_state not found after duplicate insert for channel_id={channel_id}, block={block}, tx_index={tx_index}, log_index={log_index}",
+                    ))
+                });
+        }
+        Ok(TryInsertResult::Empty) => {
+            return Err(DbSqlError::LogicalError("Unexpected empty channel_state insert".into()).into());
+        }
+        Err(e) => return Err(e.into()),
+    };
+
     tracing::debug!("Successfully inserted channel_state with id: {}", inserted.id);
 
     // Emit state change event (fire and forget - don't block on event delivery)
@@ -273,7 +322,6 @@ async fn insert_channel_state_and_emit(
 
     Ok(inserted)
 }
-
 /// Defines DB API for accessing information about HOPR payment channels.
 #[async_trait]
 pub trait BlokliDbChannelOperations {
@@ -1109,6 +1157,38 @@ mod tests {
             "first state should have initial balance"
         );
         assert_eq!(new_balance, history[1].balance, "second state should have new balance");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upsert_channel_is_idempotent_for_same_position() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let addr_1 = Address::from(random_bytes());
+        let addr_2 = Address::from(random_bytes());
+
+        let packet_key_addr_1 = *OffchainKeypair::random().public();
+        db.upsert_account(None, 1, addr_1, packet_key_addr_1, None, 1, 0, 0)
+            .await?;
+        let packet_key_addr_2 = *OffchainKeypair::random().public();
+        db.upsert_account(None, 2, addr_2, packet_key_addr_2, None, 1, 0, 0)
+            .await?;
+
+        let ce = ChannelEntry::new(
+            addr_1,
+            addr_2,
+            HoprBalance::from(1000u32),
+            0_u32.into(),
+            ChannelStatus::Open,
+            1_u32.into(),
+        );
+
+        db.upsert_channel(None, ce, 100, 0, 0).await?;
+        db.upsert_channel(None, ce, 100, 0, 0).await?;
+
+        let history = db.get_channel_history(None, &ce.get_id()).await?;
+        assert_eq!(1, history.len(), "duplicate position should be ignored");
 
         Ok(())
     }
