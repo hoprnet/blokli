@@ -11,6 +11,7 @@ jobs:
     name: Integration Tests
     runs-on: self-hosted-hoprnet-bigger
     timeout-minutes: 20
+    if: github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Checkout repository
         uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0

@@ -1,0 +1,48 @@
+[advisories]
+# All exceptions tracked under blokli-dependencies tracking ID
+# Owner: blokli-team
+# Review cycle: Quarterly (next review by dates listed)
+
+ignore = [
+  # RUSTSEC-2023-0071: Marvin Attack in RSA (Medium severity 5.9)
+  # Crate: rsa 0.9.10
+  # Transitive: sqlx-mysql -> sqlx -> sea-orm
+  # Status: No fixed upstream version available. Would require coordinated migration across sqlx/sea-orm ecosystem.
+  # Review by: 2026-12-31
+  "RUSTSEC-2023-0071",
+
+  # RUSTSEC-2025-0052: async-std unmaintained
+  # Crate: async-std 1.13.2
+  # Transitive: async-tar
+  # Status: Critical for archive operations. No alternative meets requirements.
+  # Review by: 2026-06-30
+  "RUSTSEC-2025-0052",
+
+  # RUSTSEC-2025-0141: bincode unmaintained
+  # Crate: bincode 2.0.1
+  # Direct dependency used for binary serialization
+  # Status: No suitable drop-in replacement. Track for future migration.
+  # Review by: 2026-06-30
+  "RUSTSEC-2025-0141",
+
+  # RUSTSEC-2024-0388: derivative unmaintained
+  # Crate: derivative 2.2.0
+  # Transitive: ark-ff -> alloy/hopr-bindings
+  # Status: Macro library for cryptographic operations. No suitable alternative.
+  # Review by: 2026-06-30
+  "RUSTSEC-2024-0388",
+
+  # RUSTSEC-2024-0436: paste unmaintained
+  # Crate: paste 1.0.15
+  # Transitive: syn-solidity -> alloy
+  # Status: Macro library for Solidity type generation. No runtime impact.
+  # Review by: 2026-06-30
+  "RUSTSEC-2024-0436",
+
+  # RUSTSEC-2025-0134: rustls-pemfile unmaintained
+  # Crate: rustls-pemfile 1.0.4 and 2.2.0
+  # Transitive: hyper-rustls -> axum/eventsource-client, rustls-native-certs
+  # Status: Critical for production TLS support. No suitable replacement.
+  # Review by: 2026-06-30
+  "RUSTSEC-2025-0134",
+]

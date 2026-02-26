@@ -1,6 +1,7 @@
 # GitHub Copilot Instructions for HOPR Blokli
 
-For comprehensive project guidelines, code style, architecture patterns, and development workflows, see [AGENTS.md](../AGENTS.md) in the repository root.
+For comprehensive project guidelines, code style, architecture patterns, and development workflows, see
+[AGENTS.md](../AGENTS.md) in the repository root.
 
 ## Key Points
 
