@@ -19,9 +19,7 @@ use hopr_primitive_types::{
     prelude::{Address, HoprBalance},
     traits::{IntoEndian, ToHex},
 };
-use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DbErr, EntityTrait, QueryFilter, QueryOrder, sea_query::OnConflict,
-};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder, TryInsertResult};
 use tracing::instrument;
 
 use crate::{
@@ -196,6 +194,23 @@ fn reconstruct_channel_entry_from_view(
     ))
 }
 
+async fn find_channel_state_by_position(
+    tx: &sea_orm::DatabaseTransaction,
+    channel_id: i64,
+    block: i64,
+    tx_index: i64,
+    log_index: i64,
+) -> Result<Option<blokli_db_entity::channel_state::Model>> {
+    ChannelState::find()
+        .filter(channel_state::Column::ChannelId.eq(channel_id))
+        .filter(channel_state::Column::PublishedBlock.eq(block))
+        .filter(channel_state::Column::PublishedTxIndex.eq(tx_index))
+        .filter(channel_state::Column::PublishedLogIndex.eq(log_index))
+        .one(tx)
+        .await
+        .map_err(Into::into)
+}
+
 /// Helper function to insert a channel state record and emit event
 ///
 /// This creates a new version record in channel_state table and broadcasts the change event.
@@ -253,76 +268,60 @@ async fn insert_channel_state_and_emit(
     };
 
     tracing::debug!(?state_model, "About to insert channel_state");
-    let (inserted, is_new_insert) = match ChannelState::insert(state_model)
-        .on_conflict(
-            OnConflict::columns([
-                channel_state::Column::ChannelId,
-                channel_state::Column::PublishedBlock,
-                channel_state::Column::PublishedTxIndex,
-                channel_state::Column::PublishedLogIndex,
-            ])
-            .do_nothing()
-            .to_owned(),
-        )
+    let inserted = match ChannelState::insert(state_model)
+        .on_conflict_do_nothing_on([
+            channel_state::Column::ChannelId,
+            channel_state::Column::PublishedBlock,
+            channel_state::Column::PublishedTxIndex,
+            channel_state::Column::PublishedLogIndex,
+        ])
         .exec(tx)
         .await
     {
-        Ok(_) => (
-            ChannelState::find()
-                .filter(channel_state::Column::ChannelId.eq(channel_id))
-                .filter(channel_state::Column::PublishedBlock.eq(block))
-                .filter(channel_state::Column::PublishedTxIndex.eq(tx_index))
-                .filter(channel_state::Column::PublishedLogIndex.eq(log_index))
-                .one(tx)
-                .await?
-                .ok_or_else(|| {
-                    DbSqlError::LogicalError(format!(
-                        "channel_state not found after insert for channel_id={channel_id}, block={block}, tx_index={tx_index}, log_index={log_index}",
-                    ))
-                })?,
-            true,
-        ),
-        Err(DbErr::RecordNotInserted) => (
-            ChannelState::find()
-                .filter(channel_state::Column::ChannelId.eq(channel_id))
-                .filter(channel_state::Column::PublishedBlock.eq(block))
-                .filter(channel_state::Column::PublishedTxIndex.eq(tx_index))
-                .filter(channel_state::Column::PublishedLogIndex.eq(log_index))
-                .one(tx)
+        Ok(TryInsertResult::Inserted(insert_result)) => ChannelState::find_by_id(insert_result.last_insert_id)
+            .one(tx)
+            .await?
+            .ok_or_else(|| {
+                DbSqlError::LogicalError(format!(
+                    "channel_state not found after insert for channel_id={channel_id}, block={block}, tx_index={tx_index}, log_index={log_index}",
+                ))
+            })?,
+        Ok(TryInsertResult::Conflicted) => {
+            return find_channel_state_by_position(tx, channel_id, block, tx_index, log_index)
                 .await?
                 .ok_or_else(|| {
                     DbSqlError::LogicalError(format!(
                         "channel_state not found after duplicate insert for channel_id={channel_id}, block={block}, tx_index={tx_index}, log_index={log_index}",
                     ))
-                })?,
-            false,
-        ),
+                });
+        }
+        Ok(TryInsertResult::Empty) => {
+            return Err(DbSqlError::LogicalError("Unexpected empty channel_state insert".into()).into());
+        }
         Err(e) => return Err(e.into()),
     };
+
     tracing::debug!("Successfully inserted channel_state with id: {}", inserted.id);
 
-    if is_new_insert {
-        // Emit state change event (fire and forget - don't block on event delivery)
-        let event = StateChange::ChannelState(ChannelStateChange {
-            channel_id,
-            state_id: inserted.id,
-            published_block: block,
-            published_tx_index: tx_index,
-            published_log_index: log_index,
-        });
+    // Emit state change event (fire and forget - don't block on event delivery)
+    let event = StateChange::ChannelState(ChannelStateChange {
+        channel_id,
+        state_id: inserted.id,
+        published_block: block,
+        published_tx_index: tx_index,
+        published_log_index: log_index,
+    });
 
-        // Spawn event emission as a background task to avoid blocking
-        let event_bus = db.event_bus.clone();
-        tokio::spawn(async move {
-            if let Err(e) = event_bus.publish(event).await {
-                tracing::warn!("Failed to publish channel state change event: {}", e);
-            }
-        });
-    }
+    // Spawn event emission as a background task to avoid blocking
+    let event_bus = db.event_bus.clone();
+    tokio::spawn(async move {
+        if let Err(e) = event_bus.publish(event).await {
+            tracing::warn!("Failed to publish channel state change event: {}", e);
+        }
+    });
 
     Ok(inserted)
 }
-
 /// Defines DB API for accessing information about HOPR payment channels.
 #[async_trait]
 pub trait BlokliDbChannelOperations {
