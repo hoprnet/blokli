@@ -26,6 +26,7 @@ target
 /.cargo/.crates.toml
 /.cargo/.crates2.json
 !/.cargo/config.toml
+!/.cargo/audit.toml
 
 # make sure anything which is vendored is copied
 !/vendor/**/*

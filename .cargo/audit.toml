@@ -1,0 +1,37 @@
+# Cargo audit configuration
+# This file suppresses known advisories that are either:
+# 1. Not applicable to our use case
+# 2. Part of transitive dependencies from external packages we rely on
+# 3. Have no available fixes and are being tracked separately
+
+[advisories]
+# Advisory: RUSTSEC-2023-0071 (Marvin Attack in RSA)
+# Crate: rsa 0.9.10
+# Severity: medium (5.9)
+# Status: No fixed version available. This is a transitive dependency from
+# sqlx-mysql which is used by sea-orm. The vulnerability is in the RSA
+# implementation and would require coordinated upstream upgrades.
+ignore = [
+  "RUSTSEC-2023-0071",
+  # Advisory: RUSTSEC-2025-0052 (async-std unmaintained)
+  # Crate: async-std 1.13.2
+  # Status: Unmaintained. This is a transitive dependency from async-tar which
+  # is used for archive operations in the chain indexer.
+  "RUSTSEC-2025-0052",
+  # Advisory: RUSTSEC-2025-0141 (bincode unmaintained)
+  # Crate: bincode 2.0.1
+  # Status: Unmaintained. Direct dependency used for serialization.
+  "RUSTSEC-2025-0141",
+  # Advisory: RUSTSEC-2024-0388 (derivative unmaintained)
+  # Crate: derivative 2.2.0
+  # Status: Unmaintained. Transitive dependency from cryptographic libraries.
+  "RUSTSEC-2024-0388",
+  # Advisory: RUSTSEC-2024-0436 (paste unmaintained)
+  # Crate: paste 1.0.15
+  # Status: Unmaintained. Transitive dependency from macro libraries.
+  "RUSTSEC-2024-0436",
+  # Advisory: RUSTSEC-2025-0134 (rustls-pemfile unmaintained)
+  # Crate: rustls-pemfile (1.0.4 and 2.2.0)
+  # Status: Unmaintained. Transitive dependency from rustls/TLS libraries.
+  "RUSTSEC-2025-0134",
+]
