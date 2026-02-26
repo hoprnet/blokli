@@ -292,7 +292,23 @@ impl BlokliDbAccountOperations for BlokliDb {
                         ..Default::default()
                     };
 
-                    AccountState::insert(state_model).exec(tx.as_ref()).await?;
+                    match AccountState::insert(state_model)
+                        .on_conflict(
+                            OnConflict::columns([
+                                account_state::Column::AccountId,
+                                account_state::Column::PublishedBlock,
+                                account_state::Column::PublishedTxIndex,
+                                account_state::Column::PublishedLogIndex,
+                            ])
+                            .do_nothing()
+                            .to_owned(),
+                        )
+                        .exec(tx.as_ref())
+                        .await
+                    {
+                        Ok(_) | Err(DbErr::RecordNotInserted) => {}
+                        Err(e) => return Err(e.into()),
+                    }
 
                     Ok::<_, DbSqlError>(())
                 })
@@ -1238,6 +1254,25 @@ mod tests {
         // Verify full history contains both states
         let history = db.get_account_history(None, chain_key).await?;
         assert_eq!(2, history.len(), "should have 2 state records");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upsert_account_is_idempotent_for_same_position() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let chain_key = ChainKeypair::random().public().to_address();
+        let packet_key = *OffchainKeypair::random().public();
+        let safe_addr = Address::from(hopr_crypto_random::random_bytes());
+
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr), 100, 0, 0)
+            .await?;
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr), 100, 0, 0)
+            .await?;
+
+        let history = db.get_account_history(None, chain_key).await?;
+        assert_eq!(1, history.len(), "duplicate position should be ignored");
 
         Ok(())
     }

@@ -19,7 +19,9 @@ use hopr_primitive_types::{
     prelude::{Address, HoprBalance},
     traits::{IntoEndian, ToHex},
 };
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, DbErr, EntityTrait, QueryFilter, QueryOrder, sea_query::OnConflict,
+};
 use tracing::instrument;
 
 use crate::{
@@ -251,25 +253,72 @@ async fn insert_channel_state_and_emit(
     };
 
     tracing::debug!(?state_model, "About to insert channel_state");
-    let inserted = state_model.insert(tx).await?;
+    let (inserted, is_new_insert) = match ChannelState::insert(state_model)
+        .on_conflict(
+            OnConflict::columns([
+                channel_state::Column::ChannelId,
+                channel_state::Column::PublishedBlock,
+                channel_state::Column::PublishedTxIndex,
+                channel_state::Column::PublishedLogIndex,
+            ])
+            .do_nothing()
+            .to_owned(),
+        )
+        .exec(tx)
+        .await
+    {
+        Ok(_) => (
+            ChannelState::find()
+                .filter(channel_state::Column::ChannelId.eq(channel_id))
+                .filter(channel_state::Column::PublishedBlock.eq(block))
+                .filter(channel_state::Column::PublishedTxIndex.eq(tx_index))
+                .filter(channel_state::Column::PublishedLogIndex.eq(log_index))
+                .one(tx)
+                .await?
+                .ok_or_else(|| {
+                    DbSqlError::LogicalError(format!(
+                        "channel_state not found after insert for channel_id={channel_id}, block={block}, tx_index={tx_index}, log_index={log_index}",
+                    ))
+                })?,
+            true,
+        ),
+        Err(DbErr::RecordNotInserted) => (
+            ChannelState::find()
+                .filter(channel_state::Column::ChannelId.eq(channel_id))
+                .filter(channel_state::Column::PublishedBlock.eq(block))
+                .filter(channel_state::Column::PublishedTxIndex.eq(tx_index))
+                .filter(channel_state::Column::PublishedLogIndex.eq(log_index))
+                .one(tx)
+                .await?
+                .ok_or_else(|| {
+                    DbSqlError::LogicalError(format!(
+                        "channel_state not found after duplicate insert for channel_id={channel_id}, block={block}, tx_index={tx_index}, log_index={log_index}",
+                    ))
+                })?,
+            false,
+        ),
+        Err(e) => return Err(e.into()),
+    };
     tracing::debug!("Successfully inserted channel_state with id: {}", inserted.id);
 
-    // Emit state change event (fire and forget - don't block on event delivery)
-    let event = StateChange::ChannelState(ChannelStateChange {
-        channel_id,
-        state_id: inserted.id,
-        published_block: block,
-        published_tx_index: tx_index,
-        published_log_index: log_index,
-    });
+    if is_new_insert {
+        // Emit state change event (fire and forget - don't block on event delivery)
+        let event = StateChange::ChannelState(ChannelStateChange {
+            channel_id,
+            state_id: inserted.id,
+            published_block: block,
+            published_tx_index: tx_index,
+            published_log_index: log_index,
+        });
 
-    // Spawn event emission as a background task to avoid blocking
-    let event_bus = db.event_bus.clone();
-    tokio::spawn(async move {
-        if let Err(e) = event_bus.publish(event).await {
-            tracing::warn!("Failed to publish channel state change event: {}", e);
-        }
-    });
+        // Spawn event emission as a background task to avoid blocking
+        let event_bus = db.event_bus.clone();
+        tokio::spawn(async move {
+            if let Err(e) = event_bus.publish(event).await {
+                tracing::warn!("Failed to publish channel state change event: {}", e);
+            }
+        });
+    }
 
     Ok(inserted)
 }
@@ -1109,6 +1158,38 @@ mod tests {
             "first state should have initial balance"
         );
         assert_eq!(new_balance, history[1].balance, "second state should have new balance");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upsert_channel_is_idempotent_for_same_position() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let addr_1 = Address::from(random_bytes());
+        let addr_2 = Address::from(random_bytes());
+
+        let packet_key_addr_1 = *OffchainKeypair::random().public();
+        db.upsert_account(None, 1, addr_1, packet_key_addr_1, None, 1, 0, 0)
+            .await?;
+        let packet_key_addr_2 = *OffchainKeypair::random().public();
+        db.upsert_account(None, 2, addr_2, packet_key_addr_2, None, 1, 0, 0)
+            .await?;
+
+        let ce = ChannelEntry::new(
+            addr_1,
+            addr_2,
+            HoprBalance::from(1000u32),
+            0_u32.into(),
+            ChannelStatus::Open,
+            1_u32.into(),
+        );
+
+        db.upsert_channel(None, ce, 100, 0, 0).await?;
+        db.upsert_channel(None, ce, 100, 0, 0).await?;
+
+        let history = db.get_channel_history(None, &ce.get_id()).await?;
+        assert_eq!(1, history.len(), "duplicate position should be ignored");
 
         Ok(())
     }
