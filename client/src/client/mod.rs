@@ -70,7 +70,11 @@ impl HttpTransport for ReqwestTransport {
         let service = self.service.clone();
         Box::pin(async move {
             let (parts, body) = request.into_parts();
-            let request = http::Request::from_parts(parts, body.map(reqwest::Body::from).unwrap_or_default());
+            let body = match body {
+                Some(body) => reqwest::Body::from(body),
+                None => reqwest::Body::default(),
+            };
+            let request = http::Request::from_parts(parts, body);
             let response = service.oneshot(request).await.map_err(TransportError::new)?;
             let (parts, body) = response.into_parts();
             let body: ByteStream = Box::pin(body.into_data_stream().map_err(TransportError::new));
