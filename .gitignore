@@ -20,13 +20,9 @@ target
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-/.cargo/
-/.cargo/bin
-/.cargo/.package-cache
-/.cargo/.crates.toml
-/.cargo/.crates2.json
 !/.cargo/config.toml
 !/.cargo/audit.toml
+/.cargo/
 
 # make sure anything which is vendored is copied
 !/vendor/**/*

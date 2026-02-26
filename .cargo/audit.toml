@@ -1,16 +1,4 @@
-# Cargo audit configuration
-# This file suppresses known advisories that are either:
-# 1. Not applicable to our use case
-# 2. Part of transitive dependencies from external packages we rely on
-# 3. Have no available fixes and are being tracked separately
-
 [advisories]
-# Advisory: RUSTSEC-2023-0071 (Marvin Attack in RSA)
-# Crate: rsa 0.9.10
-# Severity: medium (5.9)
-# Status: No fixed version available. This is a transitive dependency from
-# sqlx-mysql which is used by sea-orm. The vulnerability is in the RSA
-# implementation and would require coordinated upstream upgrades.
 ignore = [
   "RUSTSEC-2023-0071",
   # Advisory: RUSTSEC-2025-0052 (async-std unmaintained)
