@@ -73,7 +73,8 @@ The `runtime-tokio` feature flag is required and automatically included in `just
 
 ### Type Annotations
 
-Always use explicit type hints for function parameters and return types to improve code clarity and enable better static analysis:
+Always use explicit type hints for function parameters and return types to improve code clarity and enable better static
+analysis:
 
 ```rust
 // Good: Explicit type annotations
@@ -106,7 +107,8 @@ pub async fn fetch_block(block_number: u64, db: &DatabaseConnection) {
 
 ### Import Organization
 
-**IMPORTANT**: All imports must be declared at the top of the module, never inside functions, impl blocks, or other nested scopes.
+**IMPORTANT**: All imports must be declared at the top of the module, never inside functions, impl blocks, or other
+nested scopes.
 
 Group imports in this order:
 
@@ -116,7 +118,8 @@ Group imports in this order:
 
 **DO NOT** use wildcard imports (`use module::*;`)
 
-**Exception:** Migration files (`db/migration/src/*.rs`) may use wildcard imports for `sea_orm` and `sea_query` as these libraries are designed for this pattern in database migrations.
+**Exception:** Migration files (`db/migration/src/*.rs`) may use wildcard imports for `sea_orm` and `sea_query` as these
+libraries are designed for this pattern in database migrations.
 
 **Avoid inline fully-qualified paths** - Use imports instead to keep code clean and readable:
 
@@ -181,7 +184,8 @@ pub enum IndexerError {
 
 #### GraphQL API Error Management
 
-The GraphQL API uses a **centralized error management system** for consistent, maintainable error handling across all resolvers, mutations, and subscriptions.
+The GraphQL API uses a **centralized error management system** for consistent, maintainable error handling across all
+resolvers, mutations, and subscriptions.
 
 **Key Module:**
 
@@ -364,7 +368,9 @@ pub async fn index_range(from_block: u64, to_block: u64) -> Result<usize, Indexe
 
 ### HOPR Foundation Types
 
-The HOPR project provides three foundational crates with well-tested types that should be used whenever possible instead of creating new types from scratch. These crates are defined in the workspace `Cargo.toml` and are available to all workspace members.
+The HOPR project provides three foundational crates with well-tested types that should be used whenever possible instead
+of creating new types from scratch. These crates are defined in the workspace `Cargo.toml` and are available to all
+workspace members.
 
 #### hopr-primitive-types
 
@@ -473,7 +479,9 @@ Provides smart contract bindings and encoding/decoding utilities for HOPR on-cha
 
 **Purpose:**
 
-For any contract encoding/decoding or event encoding/decoding work, use the existing `hopr-bindings` crate and its modules. This crate contains generated bindings for HOPR smart contracts and provides type-safe interfaces for interacting with blockchain events and contract calls.
+For any contract encoding/decoding or event encoding/decoding work, use the existing `hopr-bindings` crate and its
+modules. This crate contains generated bindings for HOPR smart contracts and provides type-safe interfaces for
+interacting with blockchain events and contract calls.
 
 **Getting Started:**
 
@@ -506,10 +514,13 @@ cargo doc --package hopr-bindings --open
 
 #### Best Practices
 
-1. **Always prefer HOPR types** - Before creating a new type for addresses, balances, channels, or accounts, check if a suitable type exists in these crates
-2. **Use the prelude modules** - Import commonly used types from `hopr_primitive_types::prelude` and `hopr_crypto_types::prelude`
+1. **Always prefer HOPR types** - Before creating a new type for addresses, balances, channels, or accounts, check if a
+   suitable type exists in these crates
+2. **Use the prelude modules** - Import commonly used types from `hopr_primitive_types::prelude` and
+   `hopr_crypto_types::prelude`
 3. **Leverage conversion traits** - Use `ToHex`, `IntoEndian`, and other provided traits for consistent serialization
-4. **Implement conversions** - When mapping between database models and HOPR types, implement `From`/`TryFrom` traits (see `db/entity/src/conversions/`)
+4. **Implement conversions** - When mapping between database models and HOPR types, implement `From`/`TryFrom` traits
+   (see `db/entity/src/conversions/`)
 
 ## Design
 
@@ -524,9 +535,11 @@ cargo doc --package hopr-bindings --open
 
 #### GraphQL Context Type Safety
 
-**CRITICAL RULE:** All GraphQL schema context data MUST use wrapper types (newtypes) for scalar values to prevent type ambiguity. Never register raw primitives (`u64`, `String`, `u16`, etc.) directly in schema context.
+**CRITICAL RULE:** All GraphQL schema context data MUST use wrapper types (newtypes) for scalar values to prevent type
+ambiguity. Never register raw primitives (`u64`, `String`, `u16`, etc.) directly in schema context.
 
-**Why:** Multiple resolvers accessing context could retrieve the wrong value if multiple instances of the same primitive type exist. Wrapper types provide compile-time safety.
+**Why:** Multiple resolvers accessing context could retrieve the wrong value if multiple instances of the same primitive
+type exist. Wrapper types provide compile-time safety.
 
 **Pattern:**
 
@@ -602,7 +615,8 @@ The project maintains two key configuration files:
 - `bloklid/src/config.rs` - Rust configuration struct definitions with defaults and validation
 - `bloklid/example-config.toml` - Example configuration file showing all available options
 
-**IMPORTANT**: These files must be kept in sync. The example configuration serves as both user documentation and a working example of all available configuration options.
+**IMPORTANT**: These files must be kept in sync. The example configuration serves as both user documentation and a
+working example of all available configuration options.
 
 #### Agent Responsibilities for Configuration Changes
 
@@ -642,7 +656,8 @@ When adding or modifying configuration options, ensure:
 - **Type is obvious**: The value format should make the expected type clear (string, number, boolean, etc.)
 - **Validation rules**: If there are constraints (e.g., "must be > 0"), document them
 - **Related options**: If options affect each other, note this in comments
-- **Database type handling**: Remember that `protocols` section is auto-generated and should NOT be in the example config
+- **Database type handling**: Remember that `protocols` section is auto-generated and should NOT be in the example
+  config
 
 #### Example Config Best Practices
 
@@ -658,7 +673,8 @@ When adding or modifying configuration options, ensure:
 
 Before committing configuration changes, verify:
 
-- [ ] All fields in `Config`, `IndexerConfig`, `ApiConfig`, `SubscriptionConfig`, `DatabaseConfig` structs are represented in `example-config.toml` (except `#[serde(skip)]` fields)
+- [ ] All fields in `Config`, `IndexerConfig`, `ApiConfig`, `SubscriptionConfig`, `DatabaseConfig` structs are
+      represented in `example-config.toml` (except `#[serde(skip)]` fields)
 - [ ] Default values in the example config match the `#[default(...)]` attributes in the code
 - [ ] All sections and subsections are properly documented with comments
 - [ ] The TOML file is valid (can be parsed by a TOML parser)
@@ -680,9 +696,11 @@ Before committing configuration changes, verify:
 
 **Agent Responsibilities**:
 
-1. **Read the Architecture Document**: Before making significant changes to the system, read `design/architecture.md` to understand how components interact and the design principles behind the current architecture.
+1. **Read the Architecture Document**: Before making significant changes to the system, read `design/architecture.md` to
+   understand how components interact and the design principles behind the current architecture.
 
-2. **Update Architecture Documentation**: When making changes that affect the architecture, update `design/architecture.md` to reflect the new design. This includes:
+2. **Update Architecture Documentation**: When making changes that affect the architecture, update
+   `design/architecture.md` to reflect the new design. This includes:
    - Adding new components or services
    - Changing component interactions or data flows
    - Modifying database schema or queries patterns
@@ -696,11 +714,13 @@ Before committing configuration changes, verify:
    - API schema documentation (`design/target-api-schema.graphql`)
    - Database schema documentation (`design/target-db-schema.mmd`)
 
-**Note**: The architecture document focuses on high-level design and should NOT contain code examples, CLI commands, or configuration snippets. Keep it conceptual and architectural.
+**Note**: The architecture document focuses on high-level design and should NOT contain code examples, CLI commands, or
+configuration snippets. Keep it conceptual and architectural.
 
 ### Transaction Store
 
-The transaction store (`chain/api/src/transaction_store.rs`) is an in-memory tracking system for submitted transactions. It provides:
+The transaction store (`chain/api/src/transaction_store.rs`) is an in-memory tracking system for submitted transactions.
+It provides:
 
 - Thread-safe storage using `DashMap`
 - Event-driven status updates via `async_broadcast`
@@ -810,7 +830,8 @@ let blocks = Block::find()
 
 ### Current State via Database Views
 
-For retrieving the latest state of accounts or channels, use the `*_current` database views instead of manual `ORDER BY published_* DESC LIMIT 1` queries:
+For retrieving the latest state of accounts or channels, use the `*_current` database views instead of manual
+`ORDER BY published_* DESC LIMIT 1` queries:
 
 ````rust
 use blokli_db_entity::views::{account_current, channel_current};
@@ -869,7 +890,8 @@ impl Query {
 - Wildcard imports (`use module::*;`)
 - Imports inside functions, impl blocks, or other nested scopes
 - Inline fully-qualified type paths instead of imports (e.g., `std::collections::HashMap::new()`)
-- Creating custom types when HOPR foundation types exist (`hopr_primitive_types`, `hopr_crypto_types`, `hopr_internal_types`)
+- Creating custom types when HOPR foundation types exist (`hopr_primitive_types`, `hopr_crypto_types`,
+  `hopr_internal_types`)
 - Creating custom contract encoding/decoding logic when `hopr-bindings` provides the necessary types and utilities
 - Missing type annotations on public function parameters and return types
 - Unwrap/expect in production code (use proper error handling)
@@ -907,7 +929,9 @@ impl Query {
 
 ## Docker Images
 
-**Current Limitation:** ARM64 (aarch64) builds are temporarily disabled in CI due to GitHub runner limitations. Only AMD64 images are currently built and deployed via CI. The multi-arch manifest structure is maintained for easy re-enablement.
+**Current Limitation:** ARM64 (aarch64) builds are temporarily disabled in CI due to GitHub runner limitations. Only
+AMD64 images are currently built and deployed via CI. The multi-arch manifest structure is maintained for easy
+re-enablement.
 
 Local builds for all architectures remain fully functional:
 
@@ -917,7 +941,9 @@ Local builds for all architectures remain fully functional:
 
 ### Overview
 
-The project uses Nix with nix-lib helpers to build reproducible Docker images for the `bloklid` daemon. Images are built for multiple architectures, scanned for security vulnerabilities, and pushed to Google Artifact Registry with automatic multi-arch manifest creation.
+The project uses Nix with nix-lib helpers to build reproducible Docker images for the `bloklid` daemon. Images are built
+for multiple architectures, scanned for security vulnerabilities, and pushed to Google Artifact Registry with automatic
+multi-arch manifest creation.
 
 ### Supported Architectures
 
@@ -1035,7 +1061,8 @@ Automated security scanning in CI using `aquasecurity/trivy-action`:
 | PR           | `version-pr.number`   | `1.0.0-pr.42-linux-amd64`         | `1.0.0-pr.42`         | Pre-merge validation  |
 | Release      | `version`             | `1.0.0-linux-amd64`               | `1.0.0`               | Production deployment |
 
-**Note:** Currently only AMD64 images are available. ARM64 will be re-enabled when GitHub runner supports aarch64. The manifest tag (without architecture suffix) points to the amd64 image.
+**Note:** Currently only AMD64 images are available. ARM64 will be re-enabled when GitHub runner supports aarch64. The
+manifest tag (without architecture suffix) points to the amd64 image.
 
 ## Additional Resources
 
