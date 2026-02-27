@@ -10,7 +10,8 @@ This repository contains `Blokli`: On-chain Indexer of HOPR smart contracts and 
 
 ## Development
 
-This project uses [just](https://github.com/casey/just) as a command runner and [Nix Flake](https://nix.dev/manual/nix/2.30/command-ref/new-cli/nix3-flake.html#description) as the build system.
+This project uses [just](https://github.com/casey/just) as a command runner and
+[Nix Flake](https://nix.dev/manual/nix/2.30/command-ref/new-cli/nix3-flake.html#description) as the build system.
 
 ### Quick Start
 
@@ -56,8 +57,8 @@ just run-api
 
 ### Blokli + Anvil (single container)
 
-This image runs `anvil` with a 1s block time, deploys contracts, and starts `bloklid` against the local chain.
-Only the GraphQL API port is exposed.
+This image runs `anvil` with a 1s block time, deploys contracts, and starts `bloklid` against the local chain. Only the GraphQL API port is
+exposed.
 
 ```bash
 # Build the image
@@ -109,7 +110,8 @@ just test-indexer
 
 ### Smoke Tests
 
-Smoke tests verify that `bloklid` can start and connect to external dependencies. Logs are automatically saved to local files for inspection after each test run.
+Smoke tests verify that `bloklid` can start and connect to external dependencies. Logs are automatically saved to local files for inspection
+after each test run.
 
 ```bash
 # Test with local Anvil (fast, 30s timeout, no external deps)
@@ -138,7 +140,8 @@ SMOKE_CONFIG=config-smoke-gnosis.toml ./run-smoke-test.sh
 SMOKE_CONFIG=config-smoke-gnosis-full-sync.toml ./run-smoke-test.sh
 ```
 
-**Log Files**: After each test run, logs are saved as `blokli-smoke-{config}-{timestamp}.log` in the `tests/smoke/` directory for debugging failed tests.
+**Log Files**: After each test run, logs are saved as `blokli-smoke-{config}-{timestamp}.log` in the `tests/smoke/` directory for debugging
+failed tests.
 
 ### Testing Guide
 
@@ -264,13 +267,15 @@ You can override any configuration setting using environment variables.
 | `api.health.timeout`                  | `BLOKLI_API_HEALTH_TIMEOUT`                  |
 | `api.health.readiness_check_interval` | `BLOKLI_API_HEALTH_READINESS_CHECK_INTERVAL` |
 
-GraphQL subscriptions stream over SSE and send periodic keep-alive events to prevent idle connection timeouts. Keep-alive is enabled by default with a 15s interval and `keep-alive` payload, and can be customized via the `api.sse_keepalive.*` settings.
-`api.gas_multiplier` (default `1.0`, minimum `1.0`) scales `chainInfo.maxFeePerGas` and `chainInfo.maxPriorityFeePerGas` (rounded up to whole wei). `chainInfo.gasPrice` is not scaled.
+GraphQL subscriptions stream over SSE and send periodic keep-alive events to prevent idle connection timeouts. Keep-alive is enabled by
+default with a 15s interval and `keep-alive` payload, and can be customized via the `api.sse_keepalive.*` settings. `api.gas_multiplier`
+(default `1.0`, minimum `1.0`) scales `chainInfo.maxFeePerGas` and `chainInfo.maxPriorityFeePerGas` (rounded up to whole wei).
+`chainInfo.gasPrice` is not scaled.
 
 ### Contract Address Overrides
 
-You can override contract addresses via the configuration file. By default, addresses are resolved
-from hopr-bindings based on the selected network.
+You can override contract addresses via the configuration file. By default, addresses are resolved from hopr-bindings based on the selected
+network.
 
 ```toml
 [contracts]
