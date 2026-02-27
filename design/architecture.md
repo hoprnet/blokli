@@ -2,7 +2,9 @@
 
 ## Document Scope
 
-This document describes the conceptual architecture, component responsibilities, and data flows for Blokli. It intentionally avoids code-level details and configuration snippets. For schema references, see `design/target-api-schema.graphql` and `design/target-db-schema.mmd`.
+This document describes the conceptual architecture, component responsibilities, and data flows for Blokli. It intentionally avoids
+code-level details and configuration snippets. For schema references, see `design/target-api-schema.graphql` and
+`design/target-db-schema.mmd`.
 
 ## Table of Contents
 
@@ -21,12 +23,14 @@ This document describes the conceptual architecture, component responsibilities,
 
 ## System Overview
 
-Blokli is an on-chain indexer and operations provider for HOPR smart contracts. The system consists of two main components that can run together or separately:
+Blokli is an on-chain indexer and operations provider for HOPR smart contracts. The system consists of two main components that can run
+together or separately:
 
 1. **bloklid**: A daemon that indexes blockchain events and provides transaction submission capabilities
 2. **blokli-api**: A GraphQL API server that exposes indexed data and transaction operations
 
-The architecture follows an event-driven model with clear separation between data ingestion (indexer), storage (database), and exposure (GraphQL API).
+The architecture follows an event-driven model with clear separation between data ingestion (indexer), storage (database), and exposure
+(GraphQL API).
 
 ## High-Level Component Diagram
 
@@ -67,8 +71,9 @@ The architecture follows an event-driven model with clear separation between dat
 - Orchestration of BlokliChain and API server components
 - Process lifecycle management
 
-**Configuration Layer**:
-The configuration layer aggregates settings from multiple sources (Env > File > Defaults). It supports canonical environment variables (e.g. `DATABASE_URL`, `PGHOST`) alongside application-specific variables (`BLOKLI_HOST`, `BLOKLI_INDEXER_FAST_SYNC`) for flexible deployment in containerized environments.
+**Configuration Layer**: The configuration layer aggregates settings from multiple sources (Env > File > Defaults). It supports canonical
+environment variables (e.g. `DATABASE_URL`, `PGHOST`) alongside application-specific variables (`BLOKLI_HOST`, `BLOKLI_INDEXER_FAST_SYNC`)
+for flexible deployment in containerized environments.
 
 **Key Features**:
 
@@ -189,7 +194,8 @@ RPC Endpoint
 
 **Database Schema Architecture**:
 
-The target database schema reference lives in `design/target-db-schema.mmd` and should remain consistent with the implemented entities and migrations.
+The target database schema reference lives in `design/target-db-schema.mmd` and should remain consistent with the implemented entities and
+migrations.
 
 The database implements an event sourcing pattern with temporal versioning:
 
@@ -213,22 +219,25 @@ The database implements an event sourcing pattern with temporal versioning:
 
 **Database Views** (for efficient current-state access):
 
-- **account_current**: Returns one row per account with the latest `account_state`, using `ROW_NUMBER()` window function partitioned by account ID and ordered by position tuple descending
+- **account_current**: Returns one row per account with the latest `account_state`, using `ROW_NUMBER()` window function partitioned by
+  account ID and ordered by position tuple descending
 - **channel_current**: Returns one row per channel with the latest `channel_state`, using the same window function pattern
 
-These views shift the "latest state" selection logic into the database engine, replacing application-level `ORDER BY ... LIMIT 1` subqueries. They simplify query code and enable the database to optimize current-state retrieval internally.
+These views shift the "latest state" selection logic into the database engine, replacing application-level `ORDER BY ... LIMIT 1`
+subqueries. They simplify query code and enable the database to optimize current-state retrieval internally.
 
-View models can be converted into corresponding `*_state::Model` types via `From` trait implementations, allowing seamless reuse of existing state-handling code paths.
+View models can be converted into corresponding `*_state::Model` types via `From` trait implementations, allowing seamless reuse of existing
+state-handling code paths.
 
 **Database Architecture Modes**:
 
 The system supports two database configurations:
 
-**Single Database (PostgreSQL)**:
-All tables reside in a single PostgreSQL database. This provides simpler management, better transaction support across tables, and MVCC-based concurrency control for high read/write throughput.
+**Single Database (PostgreSQL)**: All tables reside in a single PostgreSQL database. This provides simpler management, better transaction
+support across tables, and MVCC-based concurrency control for high read/write throughput.
 
-**Dual Database (SQLite)**:
-Splits into Index DB (accounts, channels, balances) and Logs DB (raw blockchain logs). The Logs DB can be atomically replaced during fast sync, and separation reduces write lock contention in SQLite's locking model.
+**Dual Database (SQLite)**: Splits into Index DB (accounts, channels, balances) and Logs DB (raw blockchain logs). The Logs DB can be
+atomically replaced during fast sync, and separation reduces write lock contention in SQLite's locking model.
 
 **Key Design Patterns**:
 
@@ -238,8 +247,8 @@ Splits into Index DB (accounts, channels, balances) and Logs DB (raw blockchain 
 - **Binary Storage**: Large integers stored as binary to preserve full precision across language boundaries
 - **Watermark Pattern**: Tracks exact last processed position for reliable resume after restarts
 
-**SeaORM Integration**:
-The database layer uses SeaORM for type-safe database access with auto-generated entity models, migration management, and connection pooling. The trait-based design allows transaction-agnostic APIs.
+**SeaORM Integration**: The database layer uses SeaORM for type-safe database access with auto-generated entity models, migration
+management, and connection pooling. The trait-based design allows transaction-agnostic APIs.
 
 ### 5. GraphQL API Server
 
@@ -296,8 +305,7 @@ The schema is organized into three root types following GraphQL best practices:
 - Transaction status queries by UUID
 - Health check and version endpoints
 
-**Mutation Operations**:
-Three transaction submission modes with different guarantees:
+**Mutation Operations**: Three transaction submission modes with different guarantees:
 
 - Fire-and-forget: Returns transaction hash immediately, no tracking
 - Async: Returns UUID for status tracking, background monitoring
@@ -311,11 +319,10 @@ Three transaction submission modes with different guarantees:
 - Network topology: Opened channel graph updates for routing decisions
 - Transaction updates: Status changes for submitted transactions
 
-**Error Handling**:
-Uses GraphQL union types to return domain-specific error types (InvalidAddressError, ContractNotAllowedError, etc.) alongside success types, providing structured error responses with codes and context.
+**Error Handling**: Uses GraphQL union types to return domain-specific error types (InvalidAddressError, ContractNotAllowedError, etc.)
+alongside success types, providing structured error responses with codes and context.
 
-**Compression Strategy**:
-Applies Zstandard compression selectively:
+**Compression Strategy**: Applies Zstandard compression selectively:
 
 - Only for responses exceeding 1KB to avoid overhead on small payloads
 - Excludes Server-Sent Events to preserve real-time streaming characteristics
@@ -333,39 +340,45 @@ Applies Zstandard compression selectively:
 
 **Key Traits**:
 
-- **HoprIndexerRpcOperations**: Indexer-specific operations including log streaming, block fetching with configurable ranges, filter management, and transaction sender retrieval for chain key extraction
+- **HoprIndexerRpcOperations**: Indexer-specific operations including log streaming, block fetching with configurable ranges, filter
+  management, and transaction sender retrieval for chain key extraction
 - **HoprRpcOperations**: General HOPR contract operations including balance queries, allowance checks, and network parameter reads
 
-**Transaction Sender Retrieval**:
-The `get_transaction_sender()` operation retrieves the sender address (chain key) from a transaction hash. This is used during Safe deployment tracking to identify the owner's chain key. The operation is cryptographically secure because transaction signatures are verified by Ethereum consensus—only successfully mined transactions can be queried, and the sender address is recovered from the transaction's ECDSA signature by the blockchain itself.
+**Transaction Sender Retrieval**: The `get_transaction_sender()` operation retrieves the sender address (chain key) from a transaction hash.
+This is used during Safe deployment tracking to identify the owner's chain key. The operation is cryptographically secure because
+transaction signatures are verified by Ethereum consensus—only successfully mined transactions can be queried, and the sender address is
+recovered from the transaction's ECDSA signature by the blockchain itself.
 
-**Configuration Parameters**:
-The RPC layer is configured with network-specific parameters including chain ID, contract addresses, expected block time for polling intervals, transaction polling configuration, finality depth, and maximum block range for batch fetching.
+**Configuration Parameters**: The RPC layer is configured with network-specific parameters including chain ID, contract addresses, expected
+block time for polling intervals, transaction polling configuration, finality depth, and maximum block range for batch fetching.
 
-**Retry Strategy**:
-Implements exponential backoff with jitter for transient failures, distinguishes between retryable errors (network, rate limit) and non-retryable errors (invalid transaction), and respects rate limits through request throttling.
+**Retry Strategy**: Implements exponential backoff with jitter for transient failures, distinguishes between retryable errors (network, rate
+limit) and non-retryable errors (invalid transaction), and respects rate limits through request throttling.
 
 ### 7. Transaction Submission System
 
 **Components**:
 
-**TransactionValidator**:
-Validates raw transaction format and structure, checks target contract against allowlist, and validates function selectors against permitted operations. Prevents submission of malicious or unintended transactions.
+**TransactionValidator**: Validates raw transaction format and structure, checks target contract against allowlist, and validates function
+selectors against permitted operations. Prevents submission of malicious or unintended transactions.
 
-**TransactionExecutor**:
-Provides three submission modes with different guarantees:
+**TransactionExecutor**: Provides three submission modes with different guarantees:
 
-1. **Fire-and-forget Mode**: Submits transaction and returns hash immediately. No tracking or confirmation monitoring. Lowest latency, suitable for non-critical operations.
+1. **Fire-and-forget Mode**: Submits transaction and returns hash immediately. No tracking or confirmation monitoring. Lowest latency,
+   suitable for non-critical operations.
 
-2. **Async Mode**: Submits transaction, stores record with generated UUID, returns immediately. Background monitor tracks confirmation. Suitable for most applications needing status tracking.
+2. **Async Mode**: Submits transaction, stores record with generated UUID, returns immediately. Background monitor tracks confirmation.
+   Suitable for most applications needing status tracking.
 
-3. **Sync Mode**: Submits transaction and waits for specified number of confirmations before returning. Highest certainty, suitable for critical operations requiring immediate confirmation.
+3. **Sync Mode**: Submits transaction and waits for specified number of confirmations before returning. Highest certainty, suitable for
+   critical operations requiring immediate confirmation.
 
-**TransactionStore**:
-In-memory storage using concurrent hash map (DashMap) for thread-safe access. Tracks transaction records with UUID identifiers, maintains status lifecycle, and provides query interface for GraphQL resolvers.
+**TransactionStore**: In-memory storage using concurrent hash map (DashMap) for thread-safe access. Tracks transaction records with UUID
+identifiers, maintains status lifecycle, and provides query interface for GraphQL resolvers.
 
-**TransactionMonitor**:
-Background process continuously monitoring pending transactions. Queries blockchain for transaction receipts, updates transaction status based on confirmation depth, handles timeouts and reverted transactions, and publishes status updates to event bus for subscriptions.
+**TransactionMonitor**: Background process continuously monitoring pending transactions. Queries blockchain for transaction receipts,
+updates transaction status based on confirmation depth, handles timeouts and reverted transactions, and publishes status updates to event
+bus for subscriptions.
 
 **Transaction Lifecycle States**:
 
@@ -398,22 +411,27 @@ SUBMISSION_FAILED → RPC submission failed
 
 The IndexerState implements a critical synchronization mechanism preventing race conditions in the subscription model:
 
-**Block Processing Phase** (write lock):
-The indexer acquires write lock before processing any block. While holding lock, it processes all events in the block, updates database with new state, and broadcasts events to event_bus. The write lock ensures no subscriptions can be created during this window.
+**Block Processing Phase** (write lock): The indexer acquires write lock before processing any block. While holding lock, it processes all
+events in the block, updates database with new state, and broadcasts events to event_bus. The write lock ensures no subscriptions can be
+created during this window.
 
-**Subscription Setup Phase** (read lock):
-When a GraphQL subscription starts, it acquires read lock. While holding lock, it reads current watermark from database and subscribes to event_bus. The read lock allows multiple concurrent subscriptions but blocks block processing, guaranteeing no events are emitted between reading watermark and subscribing.
+**Subscription Setup Phase** (read lock): When a GraphQL subscription starts, it acquires read lock. While holding lock, it reads current
+watermark from database and subscribes to event_bus. The read lock allows multiple concurrent subscriptions but blocks block processing,
+guaranteeing no events are emitted between reading watermark and subscribing.
 
-**Guarantee**: No events can be missed between reading the watermark and subscribing to the event bus, ensuring complete event delivery to all subscriptions.
+**Guarantee**: No events can be missed between reading the watermark and subscribing to the event bus, ensuring complete event delivery to
+all subscriptions.
 
-**Event Types**:
-The event bus carries four event types: AccountUpdated (with account keyid), ChannelUpdated (with channel id), BalanceUpdated (with address bytes), and SafeDeployed (with Safe contract address). Subscribers filter events based on their query parameters.
+**Event Types**: The event bus carries four event types: AccountUpdated (with account keyid), ChannelUpdated (with channel id),
+BalanceUpdated (with address bytes), and SafeDeployed (with Safe contract address). Subscribers filter events based on their query
+parameters.
 
 ### 9. Transaction Store Architecture
 
 **Purpose**:
 
-The transaction store provides in-memory tracking of blockchain transactions submitted through the GraphQL API, enabling real-time status monitoring via subscriptions.
+The transaction store provides in-memory tracking of blockchain transactions submitted through the GraphQL API, enabling real-time status
+monitoring via subscriptions.
 
 **Design Principles**:
 
@@ -501,9 +519,12 @@ API assembles GraphQL Account response
 Client receives structured account data with all related entities
 ```
 
-**Query Optimization Strategy**: The account query uses batch loading pattern with database queries to avoid N+1 problems while maintaining flexibility. Current state is retrieved via the `account_current` view, which encapsulates the "latest by position" logic in the database layer.
+**Query Optimization Strategy**: The account query uses batch loading pattern with database queries to avoid N+1 problems while maintaining
+flexibility. Current state is retrieved via the `account_current` view, which encapsulates the "latest by position" logic in the database
+layer.
 
-**Required Filters**: To prevent exposing entire account database, at least one identity filter (keyid, packet_key, or chain_key) must be provided. This protects against excessive data exposure.
+**Required Filters**: To prevent exposing entire account database, at least one identity filter (keyid, packet_key, or chain_key) must be
+provided. This protects against excessive data exposure.
 
 ### Flow 2: Subscribe to Channel Updates
 
@@ -542,11 +563,14 @@ On each event:
 Process continues until client disconnects or shutdown signal
 ```
 
-**Two-Phase Guarantee**: Phase 1 delivers all historical data at watermark. Phase 2 delivers all changes after watermark. The watermark synchronization prevents gaps or duplicates between phases.
+**Two-Phase Guarantee**: Phase 1 delivers all historical data at watermark. Phase 2 delivers all changes after watermark. The watermark
+synchronization prevents gaps or duplicates between phases.
 
-**Phase 1 Ordering**: The historical snapshot emits entries in randomized order. Clients must not rely on any specific ordering of Phase 1 results. Reconnecting clients will receive entries in a different order each time.
+**Phase 1 Ordering**: The historical snapshot emits entries in randomized order. Clients must not rely on any specific ordering of Phase 1
+results. Reconnecting clients will receive entries in a different order each time.
 
-**SSE Streaming**: Server-Sent Events provide one-way streaming from server to client over HTTP. Each event is a JSON-encoded GraphQL response. Periodic keep-alive events keep idle connections from timing out while the stream stays open.
+**SSE Streaming**: Server-Sent Events provide one-way streaming from server to client over HTTP. Each event is a JSON-encoded GraphQL
+response. Periodic keep-alive events keep idle connections from timing out while the stream stays open.
 
 ### Flow 3: Submit Transaction (Async Mode)
 
@@ -587,9 +611,11 @@ For each transaction:
 Subscribed clients receive transactionUpdated events via SSE
 ```
 
-**Async Benefits**: Client receives immediate response without waiting for blockchain confirmation. Transaction monitoring happens in background. Status can be queried or streamed via subscription.
+**Async Benefits**: Client receives immediate response without waiting for blockchain confirmation. Transaction monitoring happens in
+background. Status can be queried or streamed via subscription.
 
-**Monitoring Strategy**: Background loop polls blockchain at configured interval (typically matching block time). Tracks confirmation depth by comparing block numbers. Handles reverted transactions by checking receipt status.
+**Monitoring Strategy**: Background loop polls blockchain at configured interval (typically matching block time). Tracks confirmation depth
+by comparing block numbers. Handles reverted transactions by checking receipt status.
 
 ### Flow 4: Real-time Network Topology
 
@@ -626,9 +652,11 @@ On each event:
 Client accumulates entries to build directed graph
 ```
 
-**Graph Structure**: Each entry represents one directed edge (source → destination). Bidirectional channels require two separate entries (A→B and B→A). Clients must accumulate entries to build complete topology.
+**Graph Structure**: Each entry represents one directed edge (source → destination). Bidirectional channels require two separate entries
+(A→B and B→A). Clients must accumulate entries to build complete topology.
 
-**Update Semantics**: Entry emitted when channel opens or its properties change (balance, status). Entry no longer emitted when channel closes. Client is responsible for graph maintenance logic.
+**Update Semantics**: Entry emitted when channel opens or its properties change (balance, status). Entry no longer emitted when channel
+closes. Client is responsible for graph maintenance logic.
 
 ## Data Flow Architecture
 
@@ -818,11 +846,13 @@ Clients can query Safe contracts through three methods:
 
 **Idempotency Guarantee**:
 
-The unique constraint on `(deployed_block, deployed_tx_index, deployed_log_index)` ensures that processing the same event multiple times (due to retries or reorgs) will not create duplicate Safe entries.
+The unique constraint on `(deployed_block, deployed_tx_index, deployed_log_index)` ensures that processing the same event multiple times
+(due to retries or reorgs) will not create duplicate Safe entries.
 
 ### Subscription Event Bus
 
-Blokli provides real-time GraphQL subscriptions using an in-memory event bus architecture. All subscriptions use the same unified mechanism for consistency and simplicity.
+Blokli provides real-time GraphQL subscriptions using an in-memory event bus architecture. All subscriptions use the same unified mechanism
+for consistency and simplicity.
 
 **Event Bus Architecture**:
 
@@ -889,7 +919,8 @@ The IndexerState uses an RwLock to ensure no events are missed between the snaps
 
 **Overflow Handling**:
 
-Event channels use `async-broadcast` with bounded capacity. Slow subscribers that can't keep up will receive `RecvError::Lagged(n)` and skip old messages. This prevents fast producers from being blocked by slow consumers.
+Event channels use `async-broadcast` with bounded capacity. Slow subscribers that can't keep up will receive `RecvError::Lagged(n)` and skip
+old messages. This prevents fast producers from being blocked by slow consumers.
 
 **Reorg Safety**:
 
@@ -1112,8 +1143,8 @@ Lightweight deployment using SQLite with separated databases:
 - **Async Event Processing**: Pipeline stages run concurrently where possible
 - **Position-based Deduplication**: Prevents reprocessing same events after restart
 
-**Typical Performance**:
-Initial sync speed depends heavily on RPC endpoint performance. Fast sync can reduce multi-hour syncs to under 30 minutes. Real-time indexing typically processes blocks within seconds of finality threshold.
+**Typical Performance**: Initial sync speed depends heavily on RPC endpoint performance. Fast sync can reduce multi-hour syncs to under 30
+minutes. Real-time indexing typically processes blocks within seconds of finality threshold.
 
 ### GraphQL API Performance
 
@@ -1133,16 +1164,15 @@ Initial sync speed depends heavily on RPC endpoint performance. Fast sync can re
 - Zstandard compression reduces bandwidth for large payloads
 - Subscribers filter events client-side reducing database queries
 
-**Compression Strategy**:
-Selective compression balances bandwidth savings with latency:
+**Compression Strategy**: Selective compression balances bandwidth savings with latency:
 
 - Only responses exceeding 1KB threshold to avoid overhead on small payloads
 - Excludes SSE responses to preserve real-time characteristics
 - Balanced compression level optimizes CPU usage vs. compression ratio
 - Significantly reduces bandwidth for large result sets (accounts with many announcements)
 
-**Scalability Characteristics**:
-API servers are stateless and horizontally scalable. Subscription memory usage grows linearly with active subscriber count. Database becomes bottleneck at high read volume (consider read replicas).
+**Scalability Characteristics**: API servers are stateless and horizontally scalable. Subscription memory usage grows linearly with active
+subscriber count. Database becomes bottleneck at high read volume (consider read replicas).
 
 ### Database Scaling
 
@@ -1191,8 +1221,7 @@ The transaction submission system implements defense-in-depth with multiple vali
 - **Async**: Background monitoring provides visibility but requires trusted monitoring process
 - **Sync**: Waits for confirmations providing highest certainty at cost of latency
 
-**Rate Limiting Considerations**:
-Current implementation lacks rate limiting per client. Future enhancement should implement:
+**Rate Limiting Considerations**: Current implementation lacks rate limiting per client. Future enhancement should implement:
 
 - Per-IP rate limiting for transaction submission
 - Per-address rate limiting to prevent griefing
@@ -1233,50 +1262,47 @@ Current implementation lacks rate limiting per client. Future enhancement should
 - **Position Constraints**: Unique constraints prevent duplicate event processing
 - **Atomic Snapshot Import**: Logs database replacement is atomic operation
 
-**Precision Preservation**:
-Large integers stored as binary to preserve full precision across language boundaries. GraphQL uses String type for UInt64 values to avoid JavaScript Number precision loss.
+**Precision Preservation**: Large integers stored as binary to preserve full precision across language boundaries. GraphQL uses String type
+for UInt64 values to avoid JavaScript Number precision loss.
 
-**Backup and Recovery**:
-Event sourcing pattern enables point-in-time recovery. Complete state can be reconstructed from logs table. Regular database backups essential for disaster recovery.
+**Backup and Recovery**: Event sourcing pattern enables point-in-time recovery. Complete state can be reconstructed from logs table. Regular
+database backups essential for disaster recovery.
 
 ## Error Handling Strategy
 
 ### Indexer Error Handling
 
-**Recoverable Errors**:
-These errors trigger retry logic without halting the indexer:
+**Recoverable Errors**: These errors trigger retry logic without halting the indexer:
 
 - RPC connection failures trigger exponential backoff retry
 - Temporary database errors cause transaction rollback and retry
 - Rate limit errors pause and retry after configured interval
 - Log parsing errors skip event and log warning without halting
 
-**Non-recoverable Errors**:
-These errors halt the indexer requiring operator intervention:
+**Non-recoverable Errors**: These errors halt the indexer requiring operator intervention:
 
 - Invalid chain configuration indicates misconfiguration requiring fix
 - Database schema mismatch indicates migration needed
 - Corrupted state beyond repair requires investigation
 - Missing required contract addresses prevents operation
 
-**Error Recovery Strategy**:
-Indexer maintains watermark position enabling exact resume after restart. Skipped events due to parsing errors are logged for later analysis. Database transactions ensure partial processing never corrupts state.
+**Error Recovery Strategy**: Indexer maintains watermark position enabling exact resume after restart. Skipped events due to parsing errors
+are logged for later analysis. Database transactions ensure partial processing never corrupts state.
 
 ### API Error Handling
 
-**GraphQL Error Pattern**:
-Uses union types for expected errors providing structured error responses:
+**GraphQL Error Pattern**: Uses union types for expected errors providing structured error responses:
 
 - Domain-specific error types (InvalidAddressError, ContractNotAllowedError)
 - Consistent error code strings for programmatic handling
 - Human-readable error messages for debugging
 - Contextual information (invalid address value, contract address, etc.)
 
-**Error Response Structure**:
-GraphQL union types allow returning either success type or specific error type. Clients use GraphQL fragments to handle different response types. Errors include code field for programmatic handling and message field for display.
+**Error Response Structure**: GraphQL union types allow returning either success type or specific error type. Clients use GraphQL fragments
+to handle different response types. Errors include code field for programmatic handling and message field for display.
 
-**Unexpected Error Handling**:
-Internal errors return generic GraphQL error without exposing implementation details. Errors are logged server-side with full stack trace for debugging. Client receives safe error message without sensitive information.
+**Unexpected Error Handling**: Internal errors return generic GraphQL error without exposing implementation details. Errors are logged
+server-side with full stack trace for debugging. Client receives safe error message without sensitive information.
 
 ## Future Architecture Considerations
 
@@ -1315,8 +1341,7 @@ Internal errors return generic GraphQL error without exposing implementation det
 
 ### Monitoring and Observability
 
-**Metrics** (Prometheus integration):
-Key metrics for operational visibility:
+**Metrics** (Prometheus integration): Key metrics for operational visibility:
 
 - Indexer current block height and sync progress percentage
 - Event processing counters by contract type
@@ -1324,24 +1349,21 @@ Key metrics for operational visibility:
 - Database query performance and connection pool utilization
 - Subscription count and event fan-out rate
 
-**Distributed Tracing**:
-Implement distributed tracing to track requests across components:
+**Distributed Tracing**: Implement distributed tracing to track requests across components:
 
 - Request ID propagation from API through database queries
 - Trace indexer pipeline from RPC fetch through event broadcast
 - Identify performance bottlenecks in complex operations
 - Correlate errors across component boundaries
 
-**Structured Logging**:
-Enhanced logging for operational insights:
+**Structured Logging**: Enhanced logging for operational insights:
 
 - JSON-formatted logs for machine parsing
 - Consistent log levels across components (trace, debug, info, warn, error)
 - Error aggregation and alerting
 - Query performance logging with execution plans
 
-**Health Checks**:
-Kubernetes-compatible health endpoints for operational monitoring:
+**Health Checks**: Kubernetes-compatible health endpoints for operational monitoring:
 
 - `/healthz` - Liveness probe: minimal check that process is alive, returns version and status
 - `/readyz` - Readiness probe: comprehensive check for service readiness with:
@@ -1358,14 +1380,15 @@ Health check configuration:
 
 The readiness check automatically accounts for blockchain finality to prevent false-positive "ready" states:
 
-**Block Number Finality Adjustment**:
-RPC block heights are treated as confirmed by subtracting the configured finality depth. For example, with a finality depth of 3, a chain head at block 1000 yields a confirmed height of 997, so only blocks with 3+ confirmations count as confirmed.
+**Block Number Finality Adjustment**: RPC block heights are treated as confirmed by subtracting the configured finality depth. For example,
+with a finality depth of 3, a chain head at block 1000 yields a confirmed height of 997, so only blocks with 3+ confirmations count as
+confirmed.
 
-**Readiness Calculation**:
-Readiness compares the confirmed height with the indexer watermark. If the lag in confirmed blocks is within `max_indexer_lag`, readiness passes.
+**Readiness Calculation**: Readiness compares the confirmed height with the indexer watermark. If the lag in confirmed blocks is within
+`max_indexer_lag`, readiness passes.
 
-**Effective Threshold**:
-Because readiness uses confirmed height (not chain head), the indexer can be up to `max_indexer_lag + finality` behind the tip while still reporting ready.
+**Effective Threshold**: Because readiness uses confirmed height (not chain head), the indexer can be up to `max_indexer_lag + finality`
+behind the tip while still reporting ready.
 
 **Example (Gnosis Chain)**:
 
@@ -1376,24 +1399,28 @@ Because readiness uses confirmed height (not chain head), the indexer can be up 
 - Calculated lag: 10 blocks
 - Result: READY
 
-The indexer is actually 13 blocks behind the RPC chain head (1000 - 987), but only 10 blocks behind confirmed blocks—within the acceptable threshold.
+The indexer is actually 13 blocks behind the RPC chain head (1000 - 987), but only 10 blocks behind confirmed blocks—within the acceptable
+threshold.
 
-**Configuration Flow**:
-Finality is defined by the selected network, propagated through runtime configuration into the RPC layer, and reused by the readiness checks.
+**Configuration Flow**: Finality is defined by the selected network, propagated through runtime configuration into the RPC layer, and reused
+by the readiness checks.
 
 ## Design Principles and Patterns
 
 ### Event Sourcing
 
-The database implements event sourcing pattern where state changes are stored as immutable events with position tracking. Benefits include complete audit trail, point-in-time queries, and ability to reconstruct state from events.
+The database implements event sourcing pattern where state changes are stored as immutable events with position tracking. Benefits include
+complete audit trail, point-in-time queries, and ability to reconstruct state from events.
 
 ### Watermark Pattern
 
-The system maintains a watermark (block, tx_index, log_index) representing the last fully processed position. This enables exact resume after restart, provides synchronization point for subscriptions, and prevents duplicate processing.
+The system maintains a watermark (block, tx_index, log_index) representing the last fully processed position. This enables exact resume
+after restart, provides synchronization point for subscriptions, and prevents duplicate processing.
 
 ### Two-Phase Subscription
 
-Subscriptions use two-phase model: Phase 1 delivers historical snapshot at watermark, Phase 2 streams real-time updates. Watermark synchronization ensures no gaps or duplicates between phases.
+Subscriptions use two-phase model: Phase 1 delivers historical snapshot at watermark, Phase 2 streams real-time updates. Watermark
+synchronization ensures no gaps or duplicates between phases.
 
 ### Separation of Concerns
 
@@ -1452,4 +1479,5 @@ Blokli architecture is designed with these priorities:
 - Comprehensive error handling
 - Type-safe database access
 
-This architecture supports development environments (single process, SQLite) through production deployments (separated components, PostgreSQL) while maintaining consistent behavior and programming model across all configurations.
+This architecture supports development environments (single process, SQLite) through production deployments (separated components,
+PostgreSQL) while maintaining consistent behavior and programming model across all configurations.
