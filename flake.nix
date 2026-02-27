@@ -194,26 +194,6 @@
               ;
           };
 
-          # Combine all packages
-          packages =
-            bloklidPackages
-            // blokliClientPackages
-            // {
-              # Additional standalone packages
-
-              # Pre-commit hooks check
-              pre-commit-check = pkgs.callPackage ./nix/packages/pre-commit-check.nix {
-                inherit pre-commit system config;
-              };
-
-              # Man pages
-              bloklid-man = nixLib.mkManPage {
-                pname = "bloklid";
-                binary = bloklidPackages.bloklid-dev;
-                description = "BLOKLID node executable";
-              };
-            };
-
           # Import Docker configurations
           # Docker images need Linux packages, even when building on macOS
           pkgsLinux = import nixpkgs {
@@ -317,16 +297,26 @@
             };
           };
 
-          dockerBuildApps = {
-            docker-blokli-x86_64-linux = nixLib.mkDockerBuildApp bloklidDocker.docker-blokli-x86_64-linux;
-            docker-blokli-dev-x86_64-linux = nixLib.mkDockerBuildApp bloklidDocker.docker-blokli-x86_64-linux-dev;
-            docker-blokli-profile-x86_64-linux = nixLib.mkDockerBuildApp bloklidDocker.docker-blokli-x86_64-linux-profile;
-            docker-blokli-anvil-x86_64-linux = nixLib.mkDockerBuildApp bloklidDocker.docker-blokli-anvil-x86_64-linux;
-            docker-blokli-aarch64-linux = nixLib.mkDockerBuildApp bloklidDocker.docker-blokli-aarch64-linux;
-            docker-blokli-dev-aarch64-linux = nixLib.mkDockerBuildApp bloklidDocker.docker-blokli-aarch64-linux-dev;
-            docker-blokli-profile-aarch64-linux = nixLib.mkDockerBuildApp bloklidDocker.docker-blokli-aarch64-linux-profile;
-            docker-blokli-anvil-aarch64-linux = nixLib.mkDockerBuildApp bloklidDocker.docker-blokli-anvil-aarch64-linux;
-          };
+          # Combine all packages
+          packages =
+            bloklidPackages
+            // blokliClientPackages
+            // bloklidDocker
+            // {
+              # Additional standalone packages
+
+              # Pre-commit hooks check
+              pre-commit-check = pkgs.callPackage ./nix/packages/pre-commit-check.nix {
+                inherit pre-commit system config;
+              };
+
+              # Man pages
+              bloklid-man = nixLib.mkManPage {
+                pname = "bloklid";
+                binary = bloklidPackages.bloklid-dev;
+                description = "BLOKLID node executable";
+              };
+            };
 
           utilityApps = {
             update-github-labels = nixLib.mkUpdateGithubLabelsApp;
@@ -545,7 +535,7 @@
           inherit checks;
 
           # Export applications using nix-lib
-          apps = dockerBuildApps // utilityApps;
+          apps = utilityApps;
 
           # Export packages
           packages = packages // {

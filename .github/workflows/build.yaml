@@ -48,7 +48,7 @@ jobs:
     needs: build-binaries
     permissions:
       contents: read
-      security-events: write
+      pull-requests: write
       id-token: write
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
@@ -58,7 +58,7 @@ jobs:
           {
             "runner": "self-hosted-hoprnet-bigger",
             "architecture": "x86_64-linux",
-            "build_command": "nix run -L .#docker-blokli-x86_64-linux",
+            "build_command": "nix build -L .#docker-blokli-x86_64-linux",
             "smoke_test_command": "nix develop -c just smoke-test"
           }
         ]

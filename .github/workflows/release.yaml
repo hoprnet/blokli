@@ -47,7 +47,6 @@ jobs:
     needs: build-binaries
     permissions:
       contents: read
-      security-events: write
       id-token: write
     with:
       source_branch: ${{ github.ref }}
@@ -57,7 +56,7 @@ jobs:
           {
             "runner": "self-hosted-hoprnet-bigger",
             "architecture": "x86_64-linux",
-            "build_command": "nix run -L .#docker-blokli-x86_64-linux",
+            "build_command": "nix build -L .#docker-blokli-x86_64-linux",
             "smoke_test_command": "nix develop -c just smoke-test"
           }
         ]
@@ -81,11 +80,14 @@ jobs:
       contents: write
     steps:
       - name: Release version
-        uses: hoprnet/hopr-workflows/actions/release-version@dc45f200b11bbc192a8a0766f22d1e6ba680e8b1 # release-version-v1
+        uses: hoprnet/hopr-workflows/actions/release-version@27fb7c9ad22da3361b1fb783c61ce06aa39dd62a # release-version-v2
         with:
           source_branch: ${{ github.ref_name }}
           file: bloklid/Cargo.toml
           release_type: "${{ inputs.release_type }}"
+          package_name: bloklid
+          cachix_cache_name: "blokli"
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
           zulip_api_key: ${{ secrets.ZULIP_API_KEY }}
           zulip_email: ${{ secrets.ZULIP_EMAIL }}
           zulip_channel: "Blokli"
