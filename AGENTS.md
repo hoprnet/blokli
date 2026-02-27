@@ -927,9 +927,8 @@ currently built and deployed via CI. The multi-arch manifest structure is mainta
 
 Local builds for all architectures remain fully functional:
 
-- `nix build .#docker-blokli-x86_64-linux` - Build `linux-amd64` docker image
-- `nix build .#docker-blokli-aarch64-linux` - Build `linux-arm64` docker image
-- `nix run .#docker-blokli-upload-x86_64-linux` - Build and publishes `linux-amd64` docker image
+- `nix run -L .#docker-blokli-x86_64-linux` - Build `linux-amd64` docker image
+- `nix run .#docker-blokli-aarch64-linux` - Build `linux-arm64` docker image
 
 ### Overview
 
@@ -951,46 +950,20 @@ Three image variants are available for each architecture:
 
 ### CI/CD Workflows
 
-#### Automated Docker Builds
+There are 3 main events controlled by CI
 
-Docker images are automatically built in GitHub Actions for:
+- Build: A build process occurs on every PR commit. It produces a binary and its corresponding docker image.
+- PR merged: A build process occurs on every PR merge agains the `main` branch. It produces a binary and its corresponding docker image.
+- Close release: Manual workflow to cut the release.
 
-- **Pull Requests** - Commit-tagged images (e.g., `1.0.0-commit.abc123`)
-- **Merged PRs** - PR-tagged images (e.g., `1.0.0-pr.42`)
-- **Releases** - Version-tagged images (e.g., `1.0.0`)
 
-The build workflow follows a three-stage process:
+| Version Type | Format                | Platform Image                    | Manifest              | Use Case              |
+| ------------ | --------------------- | --------------------------------- | --------------------- | --------------------- |
+| Commit       | `version-commit.hash` | `1.0.0-commit.abc123-linux-amd64` | `1.0.0-commit.abc123` | Development testing   |
+| PR           | `version-pr.number`   | `1.0.0-pr.42-linux-amd64`         | `1.0.0-pr.42`         | Pre-merge validation  |
+| Release      | `version`             | `1.0.0-linux-amd64`               | `1.0.0`               | Production deployment |
 
-##### Stage 1: Build Images
-
-- Builds Docker image for amd64 architecture (arm64 disabled until runner supports it)
-- Uses Nix to ensure reproducible builds
-- Stores built image as artifact
-
-##### Stage 2: Upload Manifest (Sequential)
-
-- Uses nix-lib multi-arch helper to build OCI manifest
-- Uploads platform-specific image with suffix (`-linux-amd64`)
-- Creates and pushes manifest list (currently single-platform)
-
-##### Stage 3: Security Scanning
-
-- Runs Trivy vulnerability scan for amd64
-- Generates SBOM in SPDX and CycloneDX formats
-- Performs smoke test on uploaded image
-- Uploads results to GitHub Security
-
-#### Multi-Architecture Manifest
-
-The CI/CD system creates Docker manifests for platform selection (currently amd64 only):
-
-```bash
-# Pulls the image (currently amd64 only)
-docker pull <registry>/bloklid:1.0.0
-
-# Explicitly pull amd64 image
-docker pull <registry>/bloklid:1.0.0-linux-amd64
-```
+**Note:** Currently only AMD64 images are available. ARM64 will be re-enabled when GitHub runner supports aarch64. The manifest tag (without architecture suffix) points to the amd64 image.
 
 ### Security Scanning
 
@@ -1036,24 +1009,6 @@ Automated security scanning in CI using `aquasecurity/trivy-action`:
   - Generates CycloneDX JSON format
   - Stored as workflow artifacts (90-day retention)
   - Available for supply chain security analysis
-
-### Workflow Files
-
-- `.github/workflows/build-docker.yaml` - Multi-arch Docker build with integrated security scanning and SBOM generation
-- `.github/workflows/build.yaml` - PR validation (Docker + code quality checks)
-- `.github/workflows/merge.yaml` - Post-merge Docker builds
-- `.github/workflows/release.yaml` - Release workflow with Docker builds
-
-### Image Tagging Strategy
-
-| Version Type | Format                | Platform Image                    | Manifest              | Use Case              |
-| ------------ | --------------------- | --------------------------------- | --------------------- | --------------------- |
-| Commit       | `version-commit.hash` | `1.0.0-commit.abc123-linux-amd64` | `1.0.0-commit.abc123` | Development testing   |
-| PR           | `version-pr.number`   | `1.0.0-pr.42-linux-amd64`         | `1.0.0-pr.42`         | Pre-merge validation  |
-| Release      | `version`             | `1.0.0-linux-amd64`               | `1.0.0`               | Production deployment |
-
-**Note:** Currently only AMD64 images are available. ARM64 will be re-enabled when GitHub runner supports aarch64. The manifest tag (without
-architecture suffix) points to the amd64 image.
 
 ## Additional Resources
 

@@ -35,7 +35,7 @@
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # HOPR Nix Library (provides flake-utils and reusable build functions)
-    nix-lib.url = "github:hoprnet/nix-lib";
+    nix-lib.url = "github:hoprnet/nix-lib/ausias/export-docker-image";
 
     # Rust build system
     crane.url = "github:ipetkov/crane";
@@ -194,26 +194,6 @@
               ;
           };
 
-          # Combine all packages
-          packages =
-            bloklidPackages
-            // blokliClientPackages
-            // {
-              # Additional standalone packages
-
-              # Pre-commit hooks check
-              pre-commit-check = pkgs.callPackage ./nix/packages/pre-commit-check.nix {
-                inherit pre-commit system config;
-              };
-
-              # Man pages
-              bloklid-man = nixLib.mkManPage {
-                pname = "bloklid";
-                binary = bloklidPackages.bloklid-dev;
-                description = "BLOKLID node executable";
-              };
-            };
-
           # Import Docker configurations
           # Docker images need Linux packages, even when building on macOS
           pkgsLinux = import nixpkgs {
@@ -317,16 +297,26 @@
             };
           };
 
-          dockerUploadApps = {
-            docker-blokli-upload-x86_64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-x86_64-linux;
-            docker-blokli-dev-upload-x86_64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-x86_64-linux-dev;
-            docker-blokli-profile-upload-x86_64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-x86_64-linux-profile;
-            docker-blokli-anvil-upload-x86_64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-anvil-x86_64-linux;
-            docker-blokli-upload-aarch64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-aarch64-linux;
-            docker-blokli-dev-upload-aarch64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-aarch64-linux-dev;
-            docker-blokli-profile-upload-aarch64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-aarch64-linux-profile;
-            docker-blokli-anvil-upload-aarch64-linux = nixLib.mkDockerUploadApp bloklidDocker.docker-blokli-anvil-aarch64-linux;
-          };
+          # Combine all packages
+          packages =
+            bloklidPackages
+            // blokliClientPackages
+            // bloklidDocker
+            // {
+              # Additional standalone packages
+
+              # Pre-commit hooks check
+              pre-commit-check = pkgs.callPackage ./nix/packages/pre-commit-check.nix {
+                inherit pre-commit system config;
+              };
+
+              # Man pages
+              bloklid-man = nixLib.mkManPage {
+                pname = "bloklid";
+                binary = bloklidPackages.bloklid-dev;
+                description = "BLOKLID node executable";
+              };
+            };
 
           utilityApps = {
             update-github-labels = nixLib.mkUpdateGithubLabelsApp;
@@ -545,26 +535,10 @@
           inherit checks;
 
           # Export applications using nix-lib
-          apps = dockerUploadApps // utilityApps;
+          apps = utilityApps;
 
           # Export packages
           packages = packages // {
-            # Docker images - x86_64-linux
-            inherit (bloklidDocker)
-              docker-blokli-x86_64-linux
-              docker-blokli-x86_64-linux-dev
-              docker-blokli-x86_64-linux-profile
-              docker-blokli-anvil-x86_64-linux
-              ;
-
-            # Docker images - aarch64-linux
-            inherit (bloklidDocker)
-              docker-blokli-aarch64-linux
-              docker-blokli-aarch64-linux-dev
-              docker-blokli-aarch64-linux-profile
-              docker-blokli-anvil-aarch64-linux
-              ;
-
             # Set default package
             default = bloklidPackages.bloklid;
           };
