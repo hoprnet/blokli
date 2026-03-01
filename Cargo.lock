@@ -1920,7 +1920,7 @@ dependencies = [
  "async-trait",
  "cynic",
  "cynic-codegen",
- "eventsource-client",
+ "eventsource-client 0.16.2",
  "futures",
  "futures-time",
  "hex",
@@ -1939,16 +1939,20 @@ dependencies = [
  "anyhow",
  "async-broadcast",
  "async-trait",
+ "bytes",
  "chrono",
  "cynic",
  "cynic-codegen",
- "eventsource-client",
+ "eventsource-client 0.17.0",
  "futures",
  "futures-time",
  "hex",
  "hopr-crypto-types",
+ "http 1.4.0",
+ "http-body-util",
  "indexmap 2.13.0",
  "insta",
+ "launchdarkly-sdk-transport",
  "mockito",
  "parking_lot",
  "rand 0.9.2",
@@ -1958,6 +1962,8 @@ dependencies = [
  "smart-default",
  "thiserror 2.0.18",
  "tokio",
+ "tower",
+ "tower-reqwest",
  "tracing",
  "url",
 ]
@@ -2082,7 +2088,7 @@ dependencies = [
  "blokli-client 0.20.0",
  "chrono",
  "clap",
- "eventsource-client",
+ "eventsource-client 0.16.2",
  "futures",
  "futures-time",
  "hex",
@@ -3370,6 +3376,23 @@ dependencies = [
  "hyper 0.14.32",
  "hyper-rustls 0.24.2",
  "hyper-timeout",
+ "log",
+ "pin-project",
+ "rand 0.8.5",
+ "tokio",
+]
+
+[[package]]
+name = "eventsource-client"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32b2527ff9a53a109807c6b3ed2edf3e37466dd5d2096b4597a520b6a99bb983"
+dependencies = [
+ "base64 0.22.1",
+ "bytes",
+ "futures",
+ "http 1.4.0",
+ "launchdarkly-sdk-transport",
  "log",
  "pin-project",
  "rand 0.8.5",
@@ -4760,6 +4783,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "include-utils"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "431d3c09de1082802cc229e78a515e4f46be80c7ac31eda029afa32e1518cebf"
+dependencies = [
+ "include-utils-macro",
+]
+
+[[package]]
+name = "include-utils-macro"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0a2c76d2506581ed9ead2afacb6b8164e4cac323427fd67102b59225d35b49cb"
+dependencies = [
+ "itertools 0.13.0",
+ "manyhow",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.116",
+]
+
+[[package]]
 name = "include_dir"
 version = "0.7.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5019,6 +5064,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "launchdarkly-sdk-transport"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1115eaf714fcb053bf0c2b8f3d517914bbacf6e6cbf2b1f5dec2e4c07c2c866a"
+dependencies = [
+ "bytes",
+ "futures",
+ "http 1.4.0",
+ "log",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5188,6 +5245,29 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.116",
+]
+
+[[package]]
+name = "manyhow"
+version = "0.11.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b33efb3ca6d3b07393750d4030418d594ab1139cee518f0dc88db70fec873587"
+dependencies = [
+ "manyhow-macros",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.116",
+]
+
+[[package]]
+name = "manyhow-macros"
+version = "0.11.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "46fce34d199b78b6e6073abf984c9cf5fd3e9330145a93ee0738a7443e371495"
+dependencies = [
+ "proc-macro-utils",
+ "proc-macro2",
+ "quote",
 ]
 
 [[package]]
@@ -6134,6 +6214,17 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.116",
+]
+
+[[package]]
+name = "proc-macro-utils"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eeaf08a13de400bc215877b5bdc088f241b12eb42f0a548d3390dc1c56bb7071"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "smallvec 1.15.1",
 ]
 
 [[package]]
@@ -8468,6 +8559,25 @@ name = "tower-layer"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "121c2a6cda46980bb0fcd1647ffaf6cd3fc79a013de288782836f6df9c48780e"
+
+[[package]]
+name = "tower-reqwest"
+version = "0.6.0-alpha.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48e4cfd90bf8ef131f2d61df3e0418fa9749f8e0ac3d667b1e33318dfc92a116"
+dependencies = [
+ "bytes",
+ "futures-util",
+ "http 1.4.0",
+ "http-body 1.0.1",
+ "http-body-util",
+ "include-utils",
+ "pin-project",
+ "reqwest",
+ "thiserror 2.0.18",
+ "tower-layer",
+ "tower-service",
+]
 
 [[package]]
 name = "tower-service"

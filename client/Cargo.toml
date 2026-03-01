@@ -13,10 +13,14 @@ async-broadcast = { workspace = true, optional = true }
 async-trait = { workspace = true }
 chrono = { workspace = true, optional = true }
 cynic = { workspace = true, features = ["http-reqwest"] }
-eventsource-client = { workspace = true }
+bytes = "1"
+# Use custom reqwest transport (no built-in hyper transport).
+eventsource-client = { version = "0.17.0", default-features = false }
 futures = { workspace = true }
 futures-time = { workspace = true }
 hex = { workspace = true }
+http = { workspace = true }
+http-body-util = "0.1"
 indexmap = { workspace = true, optional = true }
 parking_lot = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
@@ -27,11 +31,15 @@ reqwest = { workspace = true, features = [
   "json",
   "zstd",
 ] }
+launchdarkly-sdk-transport = "0.1.0"
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true }
 smart-default = { workspace = true }
 thiserror = { workspace = true }
+# Required adapter crate for reqwest -> tower Service used by ESS transport.
+tower-reqwest = "0.6.0-alpha.1"
 tracing = { workspace = true, features = ["release_max_level_debug"] }
+tower = { workspace = true }
 url = { workspace = true }
 
 hopr-crypto-types = { workspace = true, optional = true }

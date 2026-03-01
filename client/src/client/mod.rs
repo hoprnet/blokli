@@ -9,7 +9,11 @@ use std::{fmt::Debug, future::Future, time::Duration};
 use cynic::GraphQlResponse;
 use eventsource_client::{Client, ReconnectOptionsBuilder};
 use futures::{StreamExt, TryFutureExt, TryStreamExt};
+use http_body_util::BodyExt;
+use launchdarkly_sdk_transport::{ByteStream, HttpTransport, ResponseFuture, TransportError};
 use reqwest::redirect::Policy as RedirectPolicy;
+use tower::ServiceExt;
+use tower_reqwest::HttpClientService;
 #[cfg(feature = "testing")]
 pub use testing::{
     BlokliTestClient, BlokliTestState, BlokliTestStateMutator, BlokliTestStateSnapshot, NopStateMutator,
@@ -47,6 +51,37 @@ const REDIRECT_LIMIT: usize = 3;
 
 /// Contains all GraphQL queries used by the Blokli client.
 pub struct GraphQlQueries;
+
+#[derive(Clone, Debug)]
+struct ReqwestTransport {
+    service: HttpClientService<reqwest::Client>,
+}
+
+impl ReqwestTransport {
+    fn new(client: reqwest::Client) -> Self {
+        Self {
+            service: HttpClientService::new(client),
+        }
+    }
+}
+
+impl HttpTransport for ReqwestTransport {
+    fn request(&self, request: http::Request<Option<bytes::Bytes>>) -> ResponseFuture {
+        let service = self.service.clone();
+        Box::pin(async move {
+            let (parts, body) = request.into_parts();
+            let body = match body {
+                Some(body) => reqwest::Body::from(body),
+                None => reqwest::Body::default(),
+            };
+            let request = http::Request::from_parts(parts, body);
+            let response = service.oneshot(request).await.map_err(TransportError::new)?;
+            let (parts, body) = response.into_parts();
+            let body: ByteStream = Box::pin(body.into_data_stream().map_err(TransportError::new));
+            Ok(http::Response::from_parts(parts, body))
+        })
+    }
+}
 
 impl BlokliClient {
     /// Creates a new instance given Blokli base URL and configuration.
@@ -98,7 +133,6 @@ impl BlokliClient {
 
         let client = eventsource_client::ClientBuilder::for_url(self.graphql_url()?.as_str())
             .map_err(ErrorKind::from)?
-            .connect_timeout(self.cfg.timeout)
             .header("Accept", "text/event-stream")
             .map_err(ErrorKind::from)?
             .header("Content-Type", "application/json")
@@ -114,7 +148,7 @@ impl BlokliClient {
                     .delay_max(self.cfg.stream_reconnect_timeout)
                     .build(),
             )
-            .build();
+            .build_with_transport(ReqwestTransport::new(self.build_reqwest_client()?));
 
         Ok(client
             .stream()
@@ -194,5 +228,45 @@ pub(crate) fn response_to_data<Q>(response: GraphQlResponse<Q>) -> crate::api::R
             .unwrap_or(ErrorKind::NoData)
             .into()),
         (None, None) => Err(ErrorKind::NoData.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ReqwestTransport;
+
+    use futures::TryStreamExt;
+    use launchdarkly_sdk_transport::HttpTransport;
+
+    #[tokio::test]
+    async fn reqwest_transport_returns_streaming_response_body() {
+        let mut server = mockito::Server::new_async().await;
+        let _mock = server
+            .mock("GET", "/sse")
+            .with_status(200)
+            .with_header("Content-Type", "text/event-stream")
+            .with_body("data: hello\n\n")
+            .create_async()
+            .await;
+
+        let transport = ReqwestTransport::new(reqwest::Client::new());
+        let request = launchdarkly_sdk_transport::Request::builder()
+            .method("GET")
+            .uri(format!("{}/sse", server.url()))
+            .body(None)
+            .expect("failed to build request");
+
+        let response = transport.request(request).await.expect("request should succeed");
+        let body_chunks: Vec<bytes::Bytes> = response
+            .into_body()
+            .try_collect()
+            .await
+            .expect("failed to collect response body");
+
+        let body = body_chunks.into_iter().fold(Vec::new(), |mut acc, chunk| {
+            acc.extend_from_slice(&chunk);
+            acc
+        });
+        assert_eq!(body, b"data: hello\n\n");
     }
 }
