@@ -499,13 +499,13 @@
                 };
                 includes = [ "design/*.graphql" ];
               };
-              # Markdown linter
-              settings.formatter.rumdl = {
+              # Markdown formatter
+              settings.formatter.deno = {
                 command = pkgs.writeShellApplication {
-                  name = "rumdl";
-                  runtimeInputs = [ pkgs.uv ];
+                  name = "deno-fmt";
+                  runtimeInputs = [ pkgs.deno ];
                   text = ''
-                    uv tool run rumdl fmt "$@"
+                    deno fmt --config deno.json "$@"
                   '';
                 };
                 includes = [

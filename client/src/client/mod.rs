@@ -49,8 +49,19 @@ const REDIRECT_LIMIT: usize = 3;
 pub struct GraphQlQueries;
 
 impl BlokliClient {
+    /// Creates a new instance given Blokli base URL and configuration.
     pub fn new(base_url: url::Url, cfg: BlokliClientConfig) -> Self {
         Self { base_url, cfg }
+    }
+
+    /// Returns the client's base Blokli URL.
+    pub fn base_url(&self) -> &url::Url {
+        &self.base_url
+    }
+
+    /// Returns the client's configuration.
+    pub fn config(&self) -> &BlokliClientConfig {
+        &self.cfg
     }
 
     fn graphql_url(&self) -> Result<url::Url, BlokliClientError> {
