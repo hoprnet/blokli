@@ -34,6 +34,7 @@ mod m030_migrate_v3_safes;
 mod m031_remove_ticket_params_notify_trigger;
 mod m032_safe_contract_temporal_schema;
 mod m033_update_current_state_views;
+mod m034_create_safe_redeemed_stats_table;
 
 /// This is a special block ID that even pre-dates the v3 contract deployment on Gnosis chain,
 /// and therefore could be safely used to mark data added via the migration.
@@ -95,6 +96,7 @@ impl<const NETWORK: u8> Migrator<NETWORK> {
             Box::new(m031_remove_ticket_params_notify_trigger::Migration),
             Box::new(m032_safe_contract_temporal_schema::Migration),
             Box::new(m033_update_current_state_views::Migration),
+            Box::new(m034_create_safe_redeemed_stats_table::Migration),
             // Note: m030 (safe CSV data) is added by network-specific impls AFTER m033
             // because m030 now uses the temporal schema (hopr_safe_contract_state)
         ]
@@ -155,6 +157,7 @@ impl<const NETWORK: u8> MigratorIndex<NETWORK> {
             Box::new(m031_remove_ticket_params_notify_trigger::Migration),
             Box::new(m032_safe_contract_temporal_schema::Migration),
             Box::new(m033_update_current_state_views::Migration),
+            Box::new(m034_create_safe_redeemed_stats_table::Migration),
             // Note: m030 (safe CSV data) is added by network-specific impls AFTER m033
             // because m030 now uses the temporal schema (hopr_safe_contract_state)
         ]
@@ -457,6 +460,84 @@ mod tests {
         assert!(
             duplicate_result.is_err(),
             "Duplicate position should be rejected by unique constraint"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_safe_redeemed_stats_table_created() {
+        let db = setup_test_db().await;
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+            .await
+            .unwrap();
+
+        assert!(
+            table_exists(&db, "hopr_safe_redeemed_stats").await,
+            "hopr_safe_redeemed_stats table should exist"
+        );
+
+        let insert_result = db
+            .execute_raw(Statement::from_string(
+                DbBackend::Sqlite,
+                "INSERT INTO hopr_safe_redeemed_stats (safe_address, node_address, redeemed_amount, redemption_count, \
+                 last_redeemed_block, last_redeemed_tx_index, last_redeemed_log_index) VALUES \
+                 (X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', X'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', \
+                 X'0000000000000000000000000000000000000000000000000000000000000001', 1, 100, 2, 3)"
+                    .to_string(),
+            ))
+            .await;
+
+        assert!(
+            insert_result.is_ok(),
+            "Should be able to insert into hopr_safe_redeemed_stats"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_safe_redeemed_stats_safe_node_composite_uniqueness() {
+        let db = setup_test_db().await;
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+            .await
+            .unwrap();
+
+        db.execute_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO hopr_safe_redeemed_stats (safe_address, node_address, redeemed_amount, redemption_count, \
+             last_redeemed_block, last_redeemed_tx_index, last_redeemed_log_index) VALUES \
+             (X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', X'1111111111111111111111111111111111111111', \
+             X'0000000000000000000000000000000000000000000000000000000000000001', 1, 100, 0, 0)"
+                .to_string(),
+        ))
+        .await
+        .unwrap();
+
+        let second_node_insert = db
+            .execute_raw(Statement::from_string(
+                DbBackend::Sqlite,
+                "INSERT INTO hopr_safe_redeemed_stats (safe_address, node_address, redeemed_amount, redemption_count, \
+                 last_redeemed_block, last_redeemed_tx_index, last_redeemed_log_index) VALUES \
+                 (X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', X'2222222222222222222222222222222222222222', \
+                 X'0000000000000000000000000000000000000000000000000000000000000002', 1, 101, 0, 1)"
+                    .to_string(),
+            ))
+            .await;
+        assert!(
+            second_node_insert.is_ok(),
+            "Same safe with different node should be allowed"
+        );
+
+        let duplicate_pair_insert = db
+            .execute_raw(Statement::from_string(
+                DbBackend::Sqlite,
+                "INSERT INTO hopr_safe_redeemed_stats (safe_address, node_address, redeemed_amount, redemption_count, \
+                 last_redeemed_block, last_redeemed_tx_index, last_redeemed_log_index) VALUES \
+                 (X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', X'1111111111111111111111111111111111111111', \
+                 X'0000000000000000000000000000000000000000000000000000000000000003', 1, 102, 0, 2)"
+                    .to_string(),
+            ))
+            .await;
+        assert!(
+            duplicate_pair_insert.is_err(),
+            "Duplicate safe/node pair should be rejected"
         );
     }
 

@@ -78,6 +78,24 @@ where
                     "ChannelBalanceDecreased: decoded channel state"
                 );
 
+                let destination_account = self.db.get_account(tx.into(), existing_channel.destination).await?;
+
+                if let Some(destination_account) = destination_account {
+                    if let Some(safe_address) = destination_account.safe_address {
+                        self.db
+                            .record_safe_ticket_redeemed(
+                                tx.into(),
+                                safe_address,
+                                destination_account.chain_addr,
+                                diff,
+                                block,
+                                tx_index,
+                                log_index,
+                            )
+                            .await?;
+                    }
+                }
+
                 // Create updated channel entry with new state
                 let updated_channel = ChannelEntry::new(
                     existing_channel.source,
@@ -1333,6 +1351,7 @@ mod tests {
             next_ticket_index.as_u64(),
             "outgoing ticket index must be equal to next ticket index"
         );
+
         Ok(())
     }
 

@@ -5,7 +5,7 @@ pub mod types {
     pub use super::graphql::{
         ChannelStatus, DateTime, Hex32, TokenValueString, Uint64,
         accounts::Account,
-        balances::{HoprBalance, NativeBalance, SafeHoprAllowance},
+        balances::{HoprBalance, NativeBalance, RedeemedStats, SafeHoprAllowance},
         channels::Channel,
         graph::OpenedChannelsGraphEntry,
         info::{ChainInfo, ContractAddressMap, TicketParameters},
@@ -19,7 +19,10 @@ pub(crate) mod internal {
         accounts::{
             AccountVariables, QueryAccountCount, QueryAccounts, QueryTxCount, SubscribeAccounts, TxCountVariables,
         },
-        balances::{BalanceVariables, QueryHoprBalance, QueryNativeBalance, QuerySafeAllowance},
+        balances::{
+            BalanceVariables, QueryHoprBalance, QueryNativeBalance, QueryRedeemedStats, QuerySafeAllowance,
+            RedeemedStatsVariables,
+        },
         channels::{ChannelsVariables, QueryChannelCount, QueryChannels, SubscribeChannels},
         graph::SubscribeGraph,
         info::{QueryChainInfo, QueryHealth, QueryVersion, SubscribeTicketParams},
@@ -130,6 +133,15 @@ impl std::fmt::Debug for SafeSelector {
     }
 }
 
+/// Allows querying redeemed ticket aggregates by safe and/or node.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RedeemedStatsSelector {
+    /// Optional safe address filter.
+    pub safe_address: Option<ChainAddress>,
+    /// Optional destination node address filter.
+    pub node_address: Option<ChainAddress>,
+}
+
 /// Input for the [`query_module_address_prediction`] query.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ModulePredictionInput {
@@ -168,6 +180,8 @@ pub trait BlokliQueryClient {
     async fn query_transaction_count(&self, address: &ChainAddress) -> Result<u64>;
     /// Queries the safe allowance of the given account.
     async fn query_safe_allowance(&self, address: &ChainAddress) -> Result<types::SafeHoprAllowance>;
+    /// Queries redeemed ticket stats filtered by safe, node, or both.
+    async fn query_redeemed_stats(&self, selector: RedeemedStatsSelector) -> Result<types::RedeemedStats>;
     /// Queries the deployed Safe by the given [`selector`](SafeSelector).
     async fn query_safe(&self, selector: SafeSelector) -> Result<Option<types::Safe>>;
     /// Queries the module address prediction of the given [Safe deployment data](ModulePredictionInput).

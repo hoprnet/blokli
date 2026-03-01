@@ -5,8 +5,9 @@ use std::{collections::HashMap, sync::Arc};
 use async_graphql::{Context, ID, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
     Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelsList, ChannelsResult,
-    ContractAddressMap, CountResult, HoprBalance, InvalidAddressError, ModuleAddress, NativeBalance, QueryFailedError,
-    Safe, SafeHoprAllowance, TokenValueString, Transaction, TransactionCount, UInt64,
+    ContractAddressMap, CountResult, HoprBalance, InvalidAddressError, MissingFilterError, ModuleAddress,
+    NativeBalance, QueryFailedError, RedeemedStats, Safe, SafeHoprAllowance, TokenValueString, Transaction,
+    TransactionCount, UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations};
@@ -14,9 +15,10 @@ use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::{
     account, chain_info,
     conversions::{account_aggregation::fetch_accounts_with_filters, channel_aggregation::fetch_channels_with_state},
-    hopr_node_safe_registration,
+    hopr_node_safe_registration, hopr_safe_redeemed_stats,
     views::channel_current,
 };
+use futures::TryStreamExt;
 use hopr_crypto_types::prelude::Hash;
 use hopr_primitive_types::{
     prelude::HoprBalance as PrimitiveHoprBalance,
@@ -51,6 +53,15 @@ pub enum NativeBalanceResult {
 #[derive(Union)]
 pub enum SafeHoprAllowanceResult {
     Allowance(SafeHoprAllowance),
+    InvalidAddress(InvalidAddressError),
+    QueryFailed(QueryFailedError),
+}
+
+/// Result type for redeemed statistics queries with safe/node filters
+#[derive(Union)]
+pub enum RedeemedStatsResult {
+    RedeemedStats(RedeemedStats),
+    MissingFilter(MissingFilterError),
     InvalidAddress(InvalidAddressError),
     QueryFailed(QueryFailedError),
 }
@@ -258,6 +269,27 @@ async fn fetch_safe_by_chain_key(
         module_address: row.try_get("", "module_address")?,
         chain_key: row.try_get("", "chain_key")?,
     }))
+}
+
+fn aggregate_redeemed_stats_row(
+    row: &hopr_safe_redeemed_stats::Model,
+) -> std::result::Result<(PrimitiveHoprBalance, u64), QueryFailedError> {
+    let amount_bytes: [u8; 32] = match row.redeemed_amount.as_slice().try_into() {
+        Ok(bytes) => bytes,
+        Err(_) => {
+            return Err(errors::invalid_db_data("redeemed_amount", "must be 32 bytes"));
+        }
+    };
+    let redeemed_amount = PrimitiveHoprBalance::from_be_bytes(amount_bytes);
+
+    let redemption_count = match u64::try_from(row.redemption_count) {
+        Ok(value) => value,
+        Err(_) => {
+            return Err(errors::conversion_error("i64", "u64", row.redemption_count.to_string()));
+        }
+    };
+
+    Ok((redeemed_amount, redemption_count))
 }
 
 /// Root query type providing read-only access to indexed blockchain data
@@ -658,6 +690,133 @@ impl QueryRoot {
                 e,
             ))),
         }
+    }
+
+    /// Retrieve aggregated TicketRedeemed statistics filtered by safe, node, or both.
+    ///
+    /// At least one filter must be provided. If both are provided, both filters are applied.
+    #[graphql(name = "redeemedStats")]
+    async fn redeemed_stats(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Safe address filter (hexadecimal format)")] safe_address: Option<String>,
+        #[graphql(desc = "Node address filter (hexadecimal format)")] node_address: Option<String>,
+    ) -> Result<RedeemedStatsResult> {
+        if safe_address.is_none() && node_address.is_none() {
+            return Ok(RedeemedStatsResult::MissingFilter(errors::missing_filter_error(
+                "safeAddress or nodeAddress",
+                "redeemedStats query",
+            )));
+        }
+
+        let safe_address = match safe_address {
+            Some(address) => {
+                if let Err(e) = validate_eth_address(&address) {
+                    return Ok(RedeemedStatsResult::InvalidAddress(
+                        errors::invalid_address_from_message(address, e.message),
+                    ));
+                }
+
+                match Address::from_hex(&address) {
+                    Ok(parsed) => Some(parsed),
+                    Err(e) => {
+                        return Ok(RedeemedStatsResult::InvalidAddress(errors::invalid_address_error(
+                            address, e,
+                        )));
+                    }
+                }
+            }
+            None => None,
+        };
+
+        let node_address = match node_address {
+            Some(address) => {
+                if let Err(e) = validate_eth_address(&address) {
+                    return Ok(RedeemedStatsResult::InvalidAddress(
+                        errors::invalid_address_from_message(address, e.message),
+                    ));
+                }
+
+                match Address::from_hex(&address) {
+                    Ok(parsed) => Some(parsed),
+                    Err(e) => {
+                        return Ok(RedeemedStatsResult::InvalidAddress(errors::invalid_address_error(
+                            address, e,
+                        )));
+                    }
+                }
+            }
+            None => None,
+        };
+
+        let db = ctx.data::<DatabaseConnection>()?;
+
+        let mut query = hopr_safe_redeemed_stats::Entity::find();
+        if let Some(safe_address_filter) = safe_address.as_ref() {
+            query =
+                query.filter(hopr_safe_redeemed_stats::Column::SafeAddress.eq(safe_address_filter.as_ref().to_vec()));
+        }
+        if let Some(node_address_filter) = node_address.as_ref() {
+            query =
+                query.filter(hopr_safe_redeemed_stats::Column::NodeAddress.eq(node_address_filter.as_ref().to_vec()));
+        }
+
+        let mut rows = match query.stream(db).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                return Ok(RedeemedStatsResult::QueryFailed(errors::query_failed(
+                    "fetch redeemed stats with filters",
+                    e,
+                )));
+            }
+        };
+
+        let mut row_count: usize = 0;
+        let mut redeemed_amount = PrimitiveHoprBalance::zero();
+        let mut redemption_count: u64 = 0;
+
+        while let Some(row) = match rows.try_next().await {
+            Ok(row) => row,
+            Err(e) => {
+                return Ok(RedeemedStatsResult::QueryFailed(errors::query_failed(
+                    "fetch redeemed stats with filters",
+                    e,
+                )));
+            }
+        } {
+            row_count += 1;
+
+            if safe_address.is_some() && node_address.is_some() && row_count > 1 {
+                return Ok(RedeemedStatsResult::QueryFailed(errors::invalid_db_data(
+                    "safe_address,node_address",
+                    "expected at most one row for a specific safe/node pair",
+                )));
+            }
+
+            let (row_redeemed_amount, row_redemption_count) = match aggregate_redeemed_stats_row(&row) {
+                Ok(values) => values,
+                Err(e) => {
+                    return Ok(RedeemedStatsResult::QueryFailed(e));
+                }
+            };
+            redeemed_amount += row_redeemed_amount;
+            redemption_count = match redemption_count.checked_add(row_redemption_count) {
+                Some(value) => value,
+                None => {
+                    return Ok(RedeemedStatsResult::QueryFailed(errors::overflow_error(
+                        "redeemed stats count",
+                        format!("{} + {}", redemption_count, row_redemption_count),
+                    )));
+                }
+            };
+        }
+
+        Ok(RedeemedStatsResult::RedeemedStats(RedeemedStats {
+            safe_address: safe_address.as_ref().map(|address| address.to_hex()),
+            node_address: node_address.as_ref().map(|address| address.to_hex()),
+            redeemed_amount: TokenValueString(redeemed_amount.to_string()),
+            redemption_count: UInt64(redemption_count),
+        }))
     }
 
     /// Fetches the transaction count for any Ethereum address (EOA or contract).

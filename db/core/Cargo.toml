@@ -5,7 +5,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-db"
 repository  = "https://github.com/hoprnet/blokli"
-version     = "0.12.1"
+version     = "0.13.0"
 
 [lints]
 workspace = true
@@ -23,20 +23,12 @@ traits = []
 
 [dependencies]
 async-broadcast = { workspace = true }
-async-lock = { workspace = true }
-async-stream = { workspace = true }
 async-trait = { workspace = true }
-bincode = { workspace = true }
 chrono = { workspace = true }
-dashmap = { workspace = true }
 futures = { workspace = true }
 hex = { workspace = true }
 lazy_static = { workspace = true, optional = true }
-libp2p-identity = { workspace = true }
-moka = { workspace = true, features = ["sync"] }
 multiaddr = { workspace = true }
-num_enum = { workspace = true }
-ringbuffer = { workspace = true }
 sea-orm = { workspace = true }
 sea-query = { workspace = true, default-features = false, features = [
   "attr",
@@ -45,7 +37,6 @@ sea-query = { workspace = true, default-features = false, features = [
 ] }
 smart-default = { workspace = true }
 sqlx = { workspace = true }
-strum = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
@@ -53,14 +44,9 @@ validator = { workspace = true }
 
 blokli-db-entity     = { workspace = true }
 blokli-db-migration  = { workspace = true }
-hopr-async-runtime   = { workspace = true }
-hopr-crypto-packet   = { workspace = true }
 hopr-crypto-types    = { workspace = true }
 hopr-internal-types  = { workspace = true }
 hopr-metrics         = { workspace = true, optional = true }
-hopr-network-types   = { workspace = true }
-hopr-parallelize     = { workspace = true, features = ["rayon"] }
-hopr-platform        = { workspace = true }
 hopr-primitive-types = { workspace = true }
 
 [dev-dependencies]

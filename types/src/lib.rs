@@ -599,6 +599,23 @@ pub struct SafeHoprAllowance {
     pub allowance: TokenValueString,
 }
 
+/// Aggregated redeemed ticket statistics with optional safe and node filters
+#[derive(SimpleObject, Clone, Debug)]
+pub struct RedeemedStats {
+    /// Safe contract address filter that was applied, if any
+    #[graphql(name = "safeAddress")]
+    pub safe_address: Option<String>,
+    /// Node address filter that was applied, if any
+    #[graphql(name = "nodeAddress")]
+    pub node_address: Option<String>,
+    /// Total amount redeemed from matching TicketRedeemed events
+    #[graphql(name = "redeemedAmount")]
+    pub redeemed_amount: TokenValueString,
+    /// Total number of matching TicketRedeemed events
+    #[graphql(name = "redemptionCount")]
+    pub redemption_count: UInt64,
+}
+
 /// Transaction count information for any Ethereum address
 ///
 /// For EOAs (Externally Owned Accounts): Returns the transaction count via eth_getTransactionCount

@@ -16,6 +16,7 @@ pub mod info;
 pub mod logs;
 pub mod node_safe_registrations;
 pub mod safe_contracts;
+pub mod safe_redeemed_stats;
 pub mod state_queries;
 pub mod version;
 
@@ -36,6 +37,7 @@ use crate::{
     info::BlokliDbInfoOperations,
     node_safe_registrations::BlokliDbNodeSafeRegistrationOperations,
     safe_contracts::BlokliDbSafeContractOperations,
+    safe_redeemed_stats::BlokliDbSafeRedeemedStatsOperations,
 };
 
 /// Primary key used in tables that contain only a single row.
@@ -274,6 +276,7 @@ pub trait BlokliDbAllOperations:
     + BlokliDbInfoOperations
     + BlokliDbLogOperations
     + BlokliDbNodeSafeRegistrationOperations
+    + BlokliDbSafeRedeemedStatsOperations
     + BlokliDbSafeContractOperations
 {
 }
@@ -291,6 +294,7 @@ pub mod prelude {
         events::*,
         info::*,
         safe_contracts::*,
+        safe_redeemed_stats::*,
         state_queries::*,
     };
 }
