@@ -108,7 +108,7 @@ impl BlokliClient {
             .redirect_limit(REDIRECT_LIMIT as u32)
             .reconnect(
                 ReconnectOptionsBuilder::new(true)
-                    .retry_initial(false)
+                    .retry_initial(true)
                     .delay(Duration::from_secs(2))
                     .backoff_factor(2)
                     .delay_max(self.cfg.stream_reconnect_timeout)
