@@ -50,7 +50,7 @@ jobs:
       id-token: write
     with:
       source_branch: ${{ github.ref }}
-      version_type: "release"
+      version_type: release
       build_matrix: >-
         [
           {
@@ -60,9 +60,10 @@ jobs:
             "smoke_test_command": "nix develop -c just smoke-test"
           }
         ]
-      cachix_cache_name: "blokli"
-      build_file: "bloklid/Cargo.toml"
-      docker_image_name: "bloklid"
+      cachix_cache_name: blokli
+      build_file: bloklid/Cargo.toml
+      docker_image_name: bloklid
+      docker_image_format: skopeo
       deployment_namespace: blokli
       deployment_label_selector: app.kubernetes.io/name=blokli
     secrets:
