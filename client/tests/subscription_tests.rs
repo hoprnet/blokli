@@ -7,12 +7,12 @@ use tokio::{io::AsyncWriteExt, net::TcpListener};
 use url::Url;
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
-struct TicketParamsSnapshot {
+struct TicketParams {
     ticket_price: String,
     min_ticket_winning_probability: f64,
 }
 
-impl TicketParamsSnapshot {
+impl TicketParams {
     fn format_event(&self) -> String {
         let payload = serde_json::json!({
             "data": {
@@ -29,15 +29,15 @@ impl TicketParamsSnapshot {
 #[tokio::test]
 async fn subscribe_ticket_params_recreates_stream_without_loss_or_duplication() -> Result<()> {
     let expected_ticket_params = vec![
-        TicketParamsSnapshot {
+        TicketParams {
             ticket_price: "0.0010 wxHOPR".to_string(),
             min_ticket_winning_probability: 0.25,
         },
-        TicketParamsSnapshot {
+        TicketParams {
             ticket_price: "0.0020 wxHOPR".to_string(),
             min_ticket_winning_probability: 0.5,
         },
-        TicketParamsSnapshot {
+        TicketParams {
             ticket_price: "0.0030 wxHOPR".to_string(),
             min_ticket_winning_probability: 0.75,
         },
@@ -64,7 +64,7 @@ async fn subscribe_ticket_params_recreates_stream_without_loss_or_duplication() 
             .context("timed out waiting for ticket params update")?
             .context("subscription stream ended unexpectedly")??;
 
-        updates.push(TicketParamsSnapshot {
+        updates.push(TicketParams {
             ticket_price: update.ticket_price.0,
             min_ticket_winning_probability: update.min_ticket_winning_probability,
         });
@@ -77,7 +77,7 @@ async fn subscribe_ticket_params_recreates_stream_without_loss_or_duplication() 
 }
 
 async fn spawn_reconnecting_server(
-    event_batches: Vec<Vec<TicketParamsSnapshot>>,
+    event_batches: Vec<Vec<TicketParams>>,
 ) -> Result<(Url, tokio::task::JoinHandle<Result<()>>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let base_url = Url::parse(&format!("http://{}", listener.local_addr()?))?;
@@ -99,7 +99,7 @@ async fn spawn_reconnecting_server(
     Ok((base_url, server))
 }
 
-fn format_ticket_params_events(events: &[TicketParamsSnapshot]) -> String {
+fn format_ticket_params_events(events: &[TicketParams]) -> String {
     events
         .iter()
         .map(|event| event.format_event())
