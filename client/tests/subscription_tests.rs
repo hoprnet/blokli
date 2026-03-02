@@ -1,93 +1,97 @@
 use std::time::Duration;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use blokli_client::{BlokliClient, BlokliClientConfig, api::BlokliSubscriptionClient};
 use futures::StreamExt;
-use tokio::{
-    io::{AsyncReadExt, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
-};
+use tokio::{io::AsyncWriteExt, net::TcpListener};
 use url::Url;
 
-const MINIMUM_TICKET_PRICE: &str = "0.0005 wxHOPR";
-const MINIMUM_WINNING_PROBABILITY: f64 = 0.01;
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+struct TicketParamsSnapshot {
+    ticket_price: String,
+    min_ticket_winning_probability: f64,
+}
+
+impl TicketParamsSnapshot {
+    fn format_event(&self) -> String {
+        let payload = serde_json::json!({
+            "data": {
+                "ticketParametersUpdated": {
+                    "minTicketWinningProbability": self.min_ticket_winning_probability,
+                    "ticketPrice": self.ticket_price,
+                }
+            }
+        });
+        format!("event: next\ndata: {payload}\n\n")
+    }
+}
 
 #[tokio::test]
-/// Tests that the `subscribe_ticket_params` method can recover from a transient disconnect in the subscription stream.
-/// It pawns a local TCP server that simulates a flaky SSE endpoint for the `ticketParametersUpdated` subscription. The
-/// server first accepts a connection and immediately closes it, simulating a transient disconnect. It then accepts a
-/// second connection and sends a valid SSE response with ticket parameters.
-async fn subscribe_ticket_params_recovers_after_transient_disconnect() -> Result<()> {
-    let (base_url, server) = spawn_flaky_ticket_params_server().await?;
+async fn subscribe_ticket_params_recreates_stream_without_loss_or_duplication() -> Result<()> {
+    let expected_ticket_params = vec![
+        TicketParamsSnapshot {
+            ticket_price: "0.0010 wxHOPR".to_string(),
+            min_ticket_winning_probability: 0.25,
+        },
+        TicketParamsSnapshot {
+            ticket_price: "0.0020 wxHOPR".to_string(),
+            min_ticket_winning_probability: 0.5,
+        },
+        TicketParamsSnapshot {
+            ticket_price: "0.0030 wxHOPR".to_string(),
+            min_ticket_winning_probability: 0.75,
+        },
+    ];
+    let stream_batches = vec![
+        expected_ticket_params[..2].to_vec(),
+        expected_ticket_params[2..].to_vec(),
+    ];
+    let (base_url, server) = spawn_reconnecting_server(stream_batches).await?;
     let client = BlokliClient::new(
         base_url,
         BlokliClientConfig {
             timeout: Duration::from_secs(2),
             stream_reconnect_timeout: Duration::from_secs(2),
-            subscription_stream_restart_delay: Duration::from_millis(200),
+            subscription_stream_restart_delay: Duration::from_millis(100),
         },
     );
 
     let mut stream = client.subscribe_ticket_params()?;
-    let update = tokio::time::timeout(Duration::from_secs(10), stream.next())
-        .await
-        .context("timed out waiting for ticket params update")?
-        .context("subscription stream ended unexpectedly")??;
+    let mut updates = Vec::new();
+    while updates.len() < 3 {
+        let update = tokio::time::timeout(Duration::from_secs(10), stream.next())
+            .await
+            .context("timed out waiting for ticket params update")?
+            .context("subscription stream ended unexpectedly")??;
 
-    assert_eq!(update.ticket_price.0, MINIMUM_TICKET_PRICE);
-    assert_eq!(update.min_ticket_winning_probability, MINIMUM_WINNING_PROBABILITY);
+        updates.push(TicketParamsSnapshot {
+            ticket_price: update.ticket_price.0,
+            min_ticket_winning_probability: update.min_ticket_winning_probability,
+        });
+    }
+
+    assert_eq!(updates, expected_ticket_params);
 
     server.await??;
     Ok(())
 }
 
-async fn spawn_flaky_ticket_params_server() -> Result<(Url, tokio::task::JoinHandle<Result<()>>)> {
+async fn spawn_reconnecting_server(
+    event_batches: Vec<Vec<TicketParamsSnapshot>>,
+) -> Result<(Url, tokio::task::JoinHandle<Result<()>>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
-    let addr = listener.local_addr()?;
-    let base_url = Url::parse(&format!("http://{addr}"))?;
+    let base_url = Url::parse(&format!("http://{}", listener.local_addr()?))?;
 
     let server = tokio::spawn(async move {
-        let first_response = concat!(
-            "HTTP/1.1 200 OK\r\n",
-            "content-type: text/event-stream\r\n",
-            "cache-control: no-cache\r\n",
-            "connection: close\r\n",
-            "content-length: 0\r\n",
-            "\r\n",
-        );
+        let responses = event_batches
+            .iter()
+            .map(|events| format_sse_response(&format_ticket_params_events(events)));
 
-        let second_payload = serde_json::json!({
-            "data": {
-                "ticketParametersUpdated": {
-                    "minTicketWinningProbability": MINIMUM_WINNING_PROBABILITY,
-                    "ticketPrice": MINIMUM_TICKET_PRICE,
-                },
-            },
-        });
-        let second_body = format!("event: next\ndata: {second_payload}\n\n");
-        let second_response = format!(
-            concat!(
-                "HTTP/1.1 200 OK\r\n",
-                "content-type: text/event-stream\r\n",
-                "cache-control: no-cache\r\n",
-                "connection: close\r\n",
-                "content-length: {}\r\n",
-                "\r\n",
-                "{}",
-            ),
-            second_body.len(),
-            second_body,
-        );
-
-        let (mut first_conn, _) = listener.accept().await?;
-        read_request_headers(&mut first_conn).await?;
-        first_conn.write_all(first_response.as_bytes()).await?;
-        first_conn.shutdown().await?;
-
-        let (mut second_conn, _) = listener.accept().await?;
-        read_request_headers(&mut second_conn).await?;
-        second_conn.write_all(second_response.as_bytes()).await?;
-        second_conn.shutdown().await?;
+        for response in responses {
+            let (mut conn, _) = listener.accept().await?;
+            conn.write_all(response.as_bytes()).await?;
+            conn.shutdown().await?;
+        }
 
         Ok(())
     });
@@ -95,18 +99,26 @@ async fn spawn_flaky_ticket_params_server() -> Result<(Url, tokio::task::JoinHan
     Ok((base_url, server))
 }
 
-async fn read_request_headers(stream: &mut TcpStream) -> Result<()> {
-    let mut data = Vec::new();
-    let mut chunk = [0u8; 1024];
+fn format_ticket_params_events(events: &[TicketParamsSnapshot]) -> String {
+    events
+        .iter()
+        .map(|event| event.format_event())
+        .collect::<Vec<String>>()
+        .join("")
+}
 
-    loop {
-        let bytes = stream.read(&mut chunk).await?;
-        if bytes == 0 {
-            return Err(anyhow!("connection closed before complete request headers"));
-        }
-        data.extend_from_slice(&chunk[..bytes]);
-        if data.windows(4).any(|window| window == b"\r\n\r\n") {
-            return Ok(());
-        }
-    }
+fn format_sse_response(body: &str) -> String {
+    format!(
+        concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "content-type: text/event-stream\r\n",
+            "cache-control: no-cache\r\n",
+            "connection: close\r\n",
+            "content-length: {}\r\n",
+            "\r\n",
+            "{}",
+        ),
+        body.len(),
+        body,
+    )
 }
