@@ -205,6 +205,11 @@ impl BlokliClient {
                         None => {
                             if self.cfg.recreate_stream_on_close {
                                 stream_state.restart_stream().await?;
+                            } else {
+                                tracing::warn!(
+                                    "SSE stream closed, not recreating subscription stream due to configuration"
+                                );
+                                return Ok(None);
                             }
                         }
                     }
