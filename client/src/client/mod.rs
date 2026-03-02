@@ -149,11 +149,10 @@ impl BlokliClient {
         let query = serde_json::to_string(&op).map_err(ErrorKind::from)?;
         tracing::debug!(query, "sending SSE query");
         let graphql_url = self.graphql_url()?;
-        let stream_state = SubscriptionStreamState::new(graphql_url, query, self.cfg.clone())?;
 
         Ok(futures::stream::try_unfold(
-            stream_state,
-            move |mut stream_state: SubscriptionStreamState| async move {
+            SubscriptionStreamState::new(graphql_url, query, self.cfg.clone())?,
+            move |mut stream_state| async move {
                 loop {
                     if let Some(stream) = &mut stream_state.stream {
                         match stream.next().await {
