@@ -29,21 +29,16 @@ pub struct BlokliClientConfig {
     /// Reconnection timeout for SSE streams.
     #[default(Duration::from_secs(30))]
     pub stream_reconnect_timeout: Duration,
-    /// Delay before recreating a completed SSE stream.
-    #[default(Duration::from_secs(1))]
-    pub subscription_stream_restart_delay: Duration,
-    /// Recreate the subscription stream if closed
-    #[default(true)]
-    pub recreate_stream_on_close: bool,
+    /// Delay before recreating a completed SSE stream. If `None`, completed streams will not be recreated.
+    #[default(Some(Duration::from_secs(1)))]
+    pub subscription_stream_restart_delay: Option<Duration>,
 }
 
 /// Internal state for managing GraphQL subscription streams.
 struct SubscriptionStreamState {
     graphql_url: url::Url,
     query: String,
-    timeout: Duration,
-    stream_reconnect_timeout: Duration,
-    stream_restart_delay: Duration,
+    cfg: BlokliClientConfig,
     stream: eventsource_client::BoxStream<eventsource_client::Result<SSE>>,
 }
 
@@ -59,9 +54,7 @@ impl SubscriptionStreamState {
         Ok(Self {
             graphql_url,
             query,
-            timeout: config.timeout,
-            stream_reconnect_timeout: config.stream_reconnect_timeout,
-            stream_restart_delay: config.subscription_stream_restart_delay,
+            cfg: config,
             stream,
         })
     }
@@ -101,16 +94,22 @@ impl SubscriptionStreamState {
         Self::build_eventsource_stream_with_config(
             &self.graphql_url,
             &self.query,
-            self.timeout,
-            self.stream_reconnect_timeout,
+            self.cfg.timeout,
+            self.cfg.stream_reconnect_timeout,
         )
     }
 
-    async fn restart_stream(&mut self) -> Result<(), BlokliClientError> {
-        tracing::warn!("SSE stream closed, recreating subscription stream");
-        futures_time::task::sleep(self.stream_restart_delay.into()).await;
-        self.stream = self.build_eventsource_stream()?;
-        Ok(())
+    /// Restarts the stream if a delay is configured, returning whether a new stream was created.
+    async fn restart_stream(&mut self) -> Result<bool, BlokliClientError> {
+        if let Some(delay) = self.cfg.subscription_stream_restart_delay {
+            tracing::warn!("SSE stream closed, recreating subscription stream");
+            futures_time::task::sleep(delay.into()).await;
+            self.stream = self.build_eventsource_stream()?;
+            Ok(true)
+        } else {
+            tracing::warn!("SSE stream closed, not recreating subscription stream due to configuration");
+            Ok(false)
+        }
     }
 }
 
@@ -203,12 +202,7 @@ impl BlokliClient {
                             tracing::warn!(%error, "SSE transport issue detected, continuing subscription");
                         }
                         None => {
-                            if self.cfg.recreate_stream_on_close {
-                                stream_state.restart_stream().await?;
-                            } else {
-                                tracing::warn!(
-                                    "SSE stream closed, not recreating subscription stream due to configuration"
-                                );
+                            if !stream_state.restart_stream().await? {
                                 return Ok(None);
                             }
                         }
