@@ -20,6 +20,8 @@ use crate::{
     errors::{BlokliClientError, ErrorKind},
 };
 
+const MIN_RECONNECTION_DELAY: Duration = Duration::from_millis(1);
+
 /// Configuration for the [`BlokliClient`].
 #[derive(Clone, Debug, PartialEq, Eq, smart_default::SmartDefault)]
 pub struct BlokliClientConfig {
@@ -39,77 +41,46 @@ struct SubscriptionStreamState {
     graphql_url: url::Url,
     query: String,
     cfg: BlokliClientConfig,
-    stream: eventsource_client::BoxStream<eventsource_client::Result<SSE>>,
+    stream: Option<eventsource_client::BoxStream<eventsource_client::Result<SSE>>>,
 }
 
 impl SubscriptionStreamState {
     fn new(graphql_url: url::Url, query: String, config: BlokliClientConfig) -> Result<Self, BlokliClientError> {
-        let stream = Self::build_eventsource_stream_with_config(
-            &graphql_url,
-            &query,
-            config.timeout,
-            config.stream_reconnect_timeout,
-        )?;
-
-        Ok(Self {
+        let mut instance = Self {
             graphql_url,
             query,
             cfg: config,
-            stream,
-        })
+            stream: None,
+        };
+
+        instance.start_stream()?;
+
+        Ok(instance)
     }
 
-    fn build_eventsource_stream_with_config(
-        graphql_url: &url::Url,
-        query: &str,
-        timeout: Duration,
-        stream_reconnect_timeout: Duration,
-    ) -> Result<eventsource_client::BoxStream<eventsource_client::Result<SSE>>, BlokliClientError> {
-        let client = eventsource_client::ClientBuilder::for_url(graphql_url.as_str())
+    fn start_stream(&mut self) -> Result<(), BlokliClientError> {
+        let client = eventsource_client::ClientBuilder::for_url(self.graphql_url.as_str())
             .map_err(ErrorKind::from)?
-            .connect_timeout(timeout)
+            .connect_timeout(self.cfg.timeout)
             .header("Accept", "text/event-stream")
             .map_err(ErrorKind::from)?
             .header("Content-Type", "application/json")
             .map_err(ErrorKind::from)?
             .method("POST".into())
-            .body(query.to_owned())
+            .body(self.query.clone())
             .redirect_limit(REDIRECT_LIMIT as u32)
             .reconnect(
                 ReconnectOptionsBuilder::new(true)
                     .retry_initial(true)
                     .delay(Duration::from_secs(2))
                     .backoff_factor(2)
-                    .delay_max(stream_reconnect_timeout)
+                    .delay_max(self.cfg.stream_reconnect_timeout)
                     .build(),
             )
             .build();
 
-        Ok(client.stream())
-    }
-
-    fn build_eventsource_stream(
-        &self,
-    ) -> Result<eventsource_client::BoxStream<eventsource_client::Result<SSE>>, BlokliClientError> {
-        Self::build_eventsource_stream_with_config(
-            &self.graphql_url,
-            &self.query,
-            self.cfg.timeout,
-            self.cfg.stream_reconnect_timeout,
-        )
-    }
-
-    /// Restarts the stream if a delay is configured, returning whether a new stream was created.
-    async fn restart_stream(&mut self) -> Result<bool, BlokliClientError> {
-        if let Some(delay) = self.cfg.subscription_stream_restart_delay {
-            tracing::warn!("SSE stream closed, recreating subscription stream");
-            futures_time::task::sleep(delay.into()).await;
-            self.stream = self.build_eventsource_stream()?;
-            Ok(true)
-        } else {
-            tracing::warn!("SSE stream closed, not recreating subscription stream due to configuration");
-            Ok(false)
-        }
+        self.stream = Some(client.stream());
+        Ok(())
     }
 }
 
@@ -184,28 +155,47 @@ impl BlokliClient {
             stream_state,
             move |mut stream_state: SubscriptionStreamState| async move {
                 loop {
-                    match stream_state.stream.next().await {
-                        Some(Ok(SSE::Event(event))) => {
-                            tracing::debug!(?event, "SSE event");
-                            let response = serde_json::from_str::<GraphQlResponse<Q>>(&event.data)
-                                .map_err(BlokliClientError::from)
-                                .and_then(response_to_data)?;
-                            return Ok(Some((response, stream_state)));
-                        }
-                        Some(Ok(SSE::Comment(comment))) => {
-                            tracing::debug!(comment, "SSE comment");
-                        }
-                        Some(Ok(SSE::Connected(details))) => {
-                            tracing::debug!(?details, "SSE connection details");
-                        }
-                        Some(Err(error)) => {
-                            tracing::warn!(%error, "SSE transport issue detected, continuing subscription");
-                        }
-                        None => {
-                            if !stream_state.restart_stream().await? {
-                                return Ok(None);
+                    if let Some(stream) = &mut stream_state.stream {
+                        match stream.next().await {
+                            Some(Ok(SSE::Event(event))) => {
+                                tracing::debug!(?event, "SSE event");
+                                let response = serde_json::from_str::<GraphQlResponse<Q>>(&event.data)
+                                    .map_err(BlokliClientError::from)
+                                    .and_then(response_to_data)?;
+                                return Ok(Some((response, stream_state)));
+                            }
+                            Some(Ok(SSE::Comment(comment))) => {
+                                tracing::debug!(comment, "SSE comment");
+                            }
+                            Some(Ok(SSE::Connected(details))) => {
+                                tracing::debug!(?details, "SSE connection details");
+                            }
+                            Some(Err(error)) => {
+                                tracing::warn!(%error, "SSE transport issue detected, continuing subscription");
+                            }
+                            None => {
+                                if let Some(delay) = stream_state.cfg.subscription_stream_restart_delay {
+                                    let actual_delay = delay.max(MIN_RECONNECTION_DELAY);
+                                    tracing::warn!(
+                                        ?actual_delay,
+                                        "SSE stream ended, sleeping before attempting to restart"
+                                    );
+                                    futures_time::task::sleep(actual_delay.into()).await;
+                                    if let Err(error) = stream_state.start_stream() {
+                                        tracing::error!(%error, "Failed to restart SSE stream, stopping subscription");
+                                        return Ok(None);
+                                    }
+                                } else {
+                                    tracing::warn!(
+                                        "SSE stream ended and no restart delay configured, stopping subscription"
+                                    );
+                                    return Ok(None);
+                                }
                             }
                         }
+                    } else {
+                        tracing::warn!("SSE stream missing, stopping subscription");
+                        return Ok(None);
                     }
                 }
             },

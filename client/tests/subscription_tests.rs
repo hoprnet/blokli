@@ -52,8 +52,7 @@ async fn subscribe_ticket_params_recreates_stream_without_loss_or_duplication() 
         BlokliClientConfig {
             timeout: Duration::from_secs(2),
             stream_reconnect_timeout: Duration::from_secs(2),
-            subscription_stream_restart_delay: Duration::from_millis(100),
-            ..Default::default()
+            subscription_stream_restart_delay: Some(Duration::from_millis(100)),
         },
     );
 
