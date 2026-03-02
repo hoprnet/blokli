@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use blokli_client::{BlokliClient, BlokliClientConfig, api::BlokliSubscriptionClient};
 use futures::StreamExt;
 use tokio::{io::AsyncWriteExt, net::TcpListener};
@@ -53,22 +53,30 @@ async fn subscribe_ticket_params_recreates_stream_without_loss_or_duplication() 
             timeout: Duration::from_secs(2),
             stream_reconnect_timeout: Duration::from_secs(2),
             subscription_stream_restart_delay: Duration::from_millis(100),
+            ..Default::default()
         },
     );
 
-    let mut stream = client.subscribe_ticket_params()?;
-    let mut updates = Vec::new();
-    while updates.len() < 3 {
-        let update = tokio::time::timeout(Duration::from_secs(10), stream.next())
-            .await
-            .context("timed out waiting for ticket params update")?
-            .context("subscription stream ended unexpectedly")??;
-
-        updates.push(TicketParams {
-            ticket_price: update.ticket_price.0,
-            min_ticket_winning_probability: update.min_ticket_winning_probability,
-        });
-    }
+    let stream = client.subscribe_ticket_params()?;
+    let updates = futures::stream::unfold(stream, |mut stream| async move {
+        let update_result = tokio::time::timeout(Duration::from_secs(2), stream.next()).await;
+        match update_result {
+            Ok(Some(Ok(update))) => Some((
+                Ok(TicketParams {
+                    ticket_price: update.ticket_price.0,
+                    min_ticket_winning_probability: update.min_ticket_winning_probability,
+                }),
+                stream,
+            )),
+            Ok(Some(Err(error))) => Some((Err(error.into()), stream)),
+            Ok(None) | Err(_) => None,
+        }
+    })
+    .take(10)
+    .collect::<Vec<Result<TicketParams>>>()
+    .await
+    .into_iter()
+    .collect::<Result<Vec<TicketParams>>>()?;
 
     assert_eq!(updates, expected_ticket_params);
 

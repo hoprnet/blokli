@@ -32,6 +32,9 @@ pub struct BlokliClientConfig {
     /// Delay before recreating a completed SSE stream.
     #[default(Duration::from_secs(1))]
     pub subscription_stream_restart_delay: Duration,
+    /// Recreate the subscription stream if closed
+    #[default(true)]
+    pub recreate_stream_on_close: bool,
 }
 
 /// Internal state for managing GraphQL subscription streams.
@@ -45,22 +48,20 @@ struct SubscriptionStreamState {
 }
 
 impl SubscriptionStreamState {
-    fn new(
-        graphql_url: url::Url,
-        query: String,
-        timeout: Duration,
-        stream_reconnect_timeout: Duration,
-        stream_restart_delay: Duration,
-    ) -> Result<Self, BlokliClientError> {
-        let stream =
-            Self::build_eventsource_stream_with_config(&graphql_url, &query, timeout, stream_reconnect_timeout)?;
+    fn new(graphql_url: url::Url, query: String, config: BlokliClientConfig) -> Result<Self, BlokliClientError> {
+        let stream = Self::build_eventsource_stream_with_config(
+            &graphql_url,
+            &query,
+            config.timeout,
+            config.stream_reconnect_timeout,
+        )?;
 
         Ok(Self {
             graphql_url,
             query,
-            timeout,
-            stream_reconnect_timeout,
-            stream_restart_delay,
+            timeout: config.timeout,
+            stream_reconnect_timeout: config.stream_reconnect_timeout,
+            stream_restart_delay: config.subscription_stream_restart_delay,
             stream,
         })
     }
@@ -178,13 +179,7 @@ impl BlokliClient {
         let query = serde_json::to_string(&op).map_err(ErrorKind::from)?;
         tracing::debug!(query, "sending SSE query");
         let graphql_url = self.graphql_url()?;
-        let stream_state = SubscriptionStreamState::new(
-            graphql_url,
-            query,
-            self.cfg.timeout,
-            self.cfg.stream_reconnect_timeout,
-            self.cfg.subscription_stream_restart_delay,
-        )?;
+        let stream_state = SubscriptionStreamState::new(graphql_url, query, self.cfg.clone())?;
 
         Ok(futures::stream::try_unfold(
             stream_state,
@@ -208,7 +203,9 @@ impl BlokliClient {
                             tracing::warn!(%error, "SSE transport issue detected, continuing subscription");
                         }
                         None => {
-                            stream_state.restart_stream().await?;
+                            if self.cfg.recreate_stream_on_close {
+                                stream_state.restart_stream().await?;
+                            }
                         }
                     }
                 }
