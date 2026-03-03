@@ -8,13 +8,12 @@ repository  = "https://github.com/hoprnet/blokli"
 version     = "0.1.0"
 
 [dependencies]
-anyhow               = { workspace = true }
-blokli-chain-types   = { workspace = true }
-clap                 = { workspace = true }
-hex                  = { workspace = true }
-hopr-bindings        = { workspace = true }
-hopr-internal-types  = { workspace = true }
-hopr-primitive-types = { workspace = true }
+anyhow              = { workspace = true }
+blokli-chain-types  = { workspace = true }
+clap                = { workspace = true }
+hex                 = { workspace = true }
+hopr-bindings       = { workspace = true }
+hopr-internal-types = { workspace = true }
 
 [lints]
 workspace = true
