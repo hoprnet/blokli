@@ -24,9 +24,12 @@ use hopr_bindings::{
     },
     hopr_token::HoprToken::HoprTokenInstance,
 };
-use hopr_chain_connector::{BasicPayloadGenerator, PayloadGenerator, SafePayloadGenerator};
 use hopr_types::{
-    chain::{ContractAddresses, prelude::SignableTransaction},
+    chain::{
+        ContractAddresses,
+        payload::{BasicPayloadGenerator, PayloadGenerator, SafePayloadGenerator},
+        prelude::SignableTransaction,
+    },
     crypto::keypairs::{ChainKeypair, Keypair},
     internal::{Multiaddr, announcement::AnnouncementData},
     primitive::{

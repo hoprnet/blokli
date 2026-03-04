@@ -15,7 +15,6 @@ futures-time = { workspace = true }
 hex = { workspace = true }
 hopli = { workspace = true }
 hopr-bindings = { workspace = true }
-hopr-chain-connector = { workspace = true, features = ["runtime-tokio"] }
 hopr-types = { workspace = true, features = [
   "chain",
   "crypto",

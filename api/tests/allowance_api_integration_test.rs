@@ -16,8 +16,10 @@ use async_graphql::Schema;
 use blokli_api::{mutation::MutationRoot, query::QueryRoot, subscription::SubscriptionRoot};
 use blokli_chain_types::AlloyAddressExt;
 use hopr_bindings::exports::alloy::primitives::{Address as AlloyAddress, U256};
-use hopr_types::crypto::keypairs::Keypair;
-use hopr_types::primitive::{prelude::HoprBalance, traits::ToHex};
+use hopr_types::{
+    crypto::keypairs::Keypair,
+    primitive::{prelude::HoprBalance, traits::ToHex},
+};
 
 /// Execute a GraphQL query against the schema and return the response
 async fn execute_graphql_query(
