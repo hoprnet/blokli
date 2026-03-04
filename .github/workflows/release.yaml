@@ -102,6 +102,9 @@ jobs:
       - build-binaries
       - build-docker
       - release
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Setup GCP
         id: gcp
@@ -111,7 +114,7 @@ jobs:
           service_account: ${{ vars.WIF_SERVICE_ACCOUNT_STAGING }}
           install_sdk: "true"
       - name: Deploy to Cloud Run
-        uses: google-github-actions/deploy-cloudrun@v2
+        uses: google-github-actions/deploy-cloudrun@2028e2d7d30a78c6910e0632e48dd561b064884d # v3
         with:
           service: blokli
           region: europe-west1
