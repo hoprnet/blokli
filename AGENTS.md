@@ -927,8 +927,8 @@ currently built and deployed via CI. The multi-arch manifest structure is mainta
 
 Local builds for all architectures remain fully functional:
 
-- `nix run -L .#docker-blokli-x86_64-linux` - Build `linux-amd64` docker image
-- `nix run .#docker-blokli-aarch64-linux` - Build `linux-arm64` docker image
+- `nix build -L .#docker-blokli-x86_64-linux` - Build `linux-amd64` docker image
+- `nix build -L .#docker-blokli-aarch64-linux` - Build `linux-arm64` docker image
 
 ### Overview
 

@@ -69,6 +69,7 @@ jobs:
     name: Docker anvil
     if: github.event.pull_request.merged == true
     uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@build-docker-v1
+    needs: build-binaries
     permissions:
       contents: read
       security-events: write
@@ -81,7 +82,7 @@ jobs:
           {
             "runner": "self-hosted-hoprnet-bigger",
             "architecture": "x86_64-linux",
-            "build_command": "nix run -L .#docker-blokli-anvil-x86_64-linux",
+            "build_command": "nix build -L .#docker-blokli-anvil-x86_64-linux",
             "smoke_test_command": "nix develop -c just smoke-test"
           }
         ]
