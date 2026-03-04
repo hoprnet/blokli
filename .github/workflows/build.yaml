@@ -31,10 +31,10 @@ jobs:
       contents: read
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
-      version_type: "commit"
+      version_type: commit
       architecture: ${{ matrix.architecture }}
-      cachix_cache_name: "blokli"
-      build_file: "bloklid/Cargo.toml"
+      cachix_cache_name: blokli
+      build_file: bloklid/Cargo.toml
       build_command: ${{ matrix.build_command }}
       binary: bloklid
       runner: ${{ matrix.runner }}
