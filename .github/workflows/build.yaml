@@ -95,8 +95,8 @@ jobs:
       image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid:${{ needs.build-docker.outputs.docker_build_version }}
     secrets: inherit
 
-  deploy-rotsee:
-    name: Deploy Gnosis rotsee
+  deploy-dev:
+    name: Deploy Gnosis Dev
     runs-on: self-hosted-hoprnet-small
     needs: build-docker
     steps:

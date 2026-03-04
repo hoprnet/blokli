@@ -94,8 +94,8 @@ jobs:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
       docker_hub_token: ${{ secrets.DOCKER_HUB_TOKEN }}
-  deploy-rotsee:
-    name: Deploy Gnosis rotsee
+  deploy-dev:
+    name: Deploy Gnosis Dev
     runs-on: self-hosted-hoprnet-small
     needs: build-docker
     steps:
@@ -121,7 +121,7 @@ jobs:
       - build-binaries
       - build-docker
       - build-docker-with-anvil
-      - deploy-rotsee
+      - deploy-dev
     if: ${{ failure() }}
     runs-on: ubuntu-latest
     steps:

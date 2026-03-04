@@ -95,8 +95,8 @@ jobs:
           zulip_topic: Releases
           gcp_service_account: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
           github_token: ${{ secrets.GH_RUNNER_TOKEN }}
-  deploy-jura:
-    name: Deploy Gnosis Jura
+  deploy-staging:
+    name: Deploy Gnosis Staging
     runs-on: self-hosted-hoprnet-small
     needs:
       - build-binaries
