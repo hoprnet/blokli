@@ -29,7 +29,7 @@ use hopr_bindings::exports::alloy::{
     primitives::{Address as AlloyAddress, TxKind, U256},
     signers::{SignerSync, local::PrivateKeySigner},
 };
-use hopr_crypto_types::{
+use hopr_types::crypto::{
     keypairs::{ChainKeypair, Keypair},
     types::Hash,
 };

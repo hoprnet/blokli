@@ -45,7 +45,7 @@ use hopr_bindings::exports::alloy::{
     rpc::client::ClientBuilder,
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
-use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
+use hopr_types::crypto::keypairs::{ChainKeypair, Keypair};
 use migration::{Migrator, MigratorTrait, SafeDataOrigin};
 use sea_orm::DatabaseConnection;
 use tokio::task::AbortHandle;

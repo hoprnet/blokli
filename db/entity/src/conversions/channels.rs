@@ -3,7 +3,7 @@
 // - ticket_index is uint48 (max 281,474,976,710,655)
 #![allow(clippy::cast_possible_wrap)]
 
-use hopr_internal_types::{channels::ChannelStatus, prelude::ChannelEntry};
+use hopr_types::internal::{channels::ChannelStatus, prelude::ChannelEntry};
 use sea_orm::Set;
 
 use crate::{channel, errors::DbEntityError};

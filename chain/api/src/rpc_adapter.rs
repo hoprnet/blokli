@@ -12,7 +12,7 @@ use hopr_bindings::exports::alloy::{
     primitives::{B256, Bytes},
     providers::Provider,
 };
-use hopr_crypto_types::types::Hash;
+use hopr_types::crypto::types::Hash;
 use tracing::{debug, error};
 
 use crate::{transaction_executor::RpcClient, transaction_monitor::ReceiptProvider};

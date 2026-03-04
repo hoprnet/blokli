@@ -28,7 +28,7 @@ use hopr_bindings::{
     hopr_channels_events::HoprChannelsEvents::{ChannelBalanceIncreased, ChannelOpened},
     hopr_token::HoprToken::{Approval, Transfer},
 };
-use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
+use hopr_types::crypto::keypairs::{ChainKeypair, Keypair};
 use tokio::time::timeout;
 use tracing::debug;
 

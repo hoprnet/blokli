@@ -6,7 +6,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-api-types"
 repository  = "https://github.com/hoprnet/hoprnet"
-version     = "0.9.1"
+version     = "0.9.2"
 
 [dependencies]
 # GraphQL
@@ -23,6 +23,6 @@ serde_json = { workspace = true }
 hex = { workspace = true }
 
 # Internal dependencies
-blokli-chain-types   = { workspace = true }
-hopr-crypto-types    = { workspace = true }
-hopr-primitive-types = { workspace = true }
+blokli-chain-types = { workspace = true }
+
+hopr-types = { workspace = true, features = ["crypto", "primitive"] }

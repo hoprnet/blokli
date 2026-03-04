@@ -35,11 +35,13 @@ use blokli_db_entity::{
 use chrono::Utc;
 use futures::StreamExt;
 use hopr_bindings::exports::alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
-use hopr_crypto_types::prelude::{ChainKeypair, Keypair, OffchainKeypair};
-use hopr_internal_types::channels::{ChannelEntry, ChannelStatus};
-use hopr_primitive_types::{
-    prelude::{Balance as PrimitiveBalance, HoprBalance, ToHex, WxHOPR},
-    traits::IntoEndian,
+use hopr_types::{
+    crypto::prelude::{ChainKeypair, Keypair, OffchainKeypair},
+    internal::channels::{ChannelEntry, ChannelStatus},
+    primitive::{
+        prelude::{Balance as PrimitiveBalance, HoprBalance, ToHex, WxHOPR},
+        traits::IntoEndian,
+    },
 };
 use sea_orm::{ColumnTrait, EntityTrait, QueryFilter, QueryOrder, Set, sea_query::OnConflict};
 
