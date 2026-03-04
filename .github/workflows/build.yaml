@@ -94,3 +94,24 @@ jobs:
     with:
       image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid:${{ needs.build-docker.outputs.docker_build_version }}
     secrets: inherit
+
+  deploy-rotsee:
+    name: Deploy Gnosis rotsee
+    runs-on: self-hosted-hoprnet-small
+    needs: build-docker
+    steps:
+      - name: Setup GCP
+        id: gcp
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@setup-gcp-v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER_DEVELOPMENT }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT_DEVELOPMENT }}
+          install_sdk: "true"
+      - name: Deploy to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@v2
+        with:
+          service: blokli
+          region: europe-west1
+          image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid:${{ needs.build-docker.outputs.docker_build_version }}
+          suffix: "${{ needs.build-docker.outputs.docker_build_version }}"
+          flags: "--timeout=600s"
