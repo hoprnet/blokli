@@ -106,6 +106,12 @@ jobs:
       contents: read
       id-token: write
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+      - name: Compute revision suffix
+        id: revision
+        run: echo "suffix=v$(echo '${{ needs.build-docker.outputs.docker_build_version }}' | tr '.' '-')" | tee -a $GITHUB_OUTPUT
+
       - name: Setup GCP
         id: gcp
         uses: hoprnet/hopr-workflows/actions/setup-gcp@setup-gcp-v2
@@ -119,5 +125,5 @@ jobs:
           service: blokli
           region: europe-west1
           image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid:${{ needs.build-docker.outputs.docker_build_version }}
-          suffix: "${{ needs.build-docker.outputs.docker_build_version }}"
-          flags: "--timeout=600s"
+          suffix: ${{ steps.revision.outputs.suffix }}
+          flags: --timeout=600s
