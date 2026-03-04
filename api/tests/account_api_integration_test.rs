@@ -12,8 +12,10 @@ use blokli_api::{
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, accounts::BlokliDbAccountOperations, db::BlokliDb};
 use blokli_db_entity::prelude::Account as AccountEntity;
-use hopr_crypto_types::prelude::{ChainKeypair, Keypair, OffchainKeypair};
-use hopr_primitive_types::{prelude::Address, traits::ToHex};
+use hopr_types::{
+    crypto::prelude::{ChainKeypair, Keypair, OffchainKeypair},
+    primitive::{prelude::Address, traits::ToHex},
+};
 use multiaddr::Multiaddr;
 use sea_orm::{EntityTrait, PaginatorTrait};
 

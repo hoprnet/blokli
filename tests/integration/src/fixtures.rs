@@ -24,13 +24,18 @@ use hopr_bindings::{
     },
     hopr_token::HoprToken::HoprTokenInstance,
 };
-use hopr_chain_connector::{BasicPayloadGenerator, PayloadGenerator, SafePayloadGenerator};
-use hopr_chain_types::{ContractAddresses, prelude::SignableTransaction};
-use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
-use hopr_internal_types::{Multiaddr, announcement::AnnouncementData};
-use hopr_primitive_types::{
-    prelude::{Address as HoprAddress, HoprBalance},
-    traits::IntoEndian,
+use hopr_types::{
+    chain::{
+        ContractAddresses,
+        payload::{BasicPayloadGenerator, PayloadGenerator, SafePayloadGenerator},
+        prelude::SignableTransaction,
+    },
+    crypto::keypairs::{ChainKeypair, Keypair},
+    internal::{Multiaddr, announcement::AnnouncementData},
+    primitive::{
+        prelude::{Address as HoprAddress, HoprBalance},
+        traits::IntoEndian,
+    },
 };
 use libc::atexit;
 use rand::seq::IndexedRandom;

@@ -18,8 +18,10 @@ use hopr_bindings::exports::alloy::{
     signers::local::PrivateKeySigner,
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
-use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
-use hopr_primitive_types::prelude::Address;
+use hopr_types::{
+    crypto::keypairs::{ChainKeypair, Keypair},
+    primitive::prelude::Address,
+};
 use tempfile::NamedTempFile;
 
 #[tokio::test]

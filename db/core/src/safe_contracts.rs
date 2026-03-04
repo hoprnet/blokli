@@ -3,7 +3,7 @@ use blokli_db_entity::{
     hopr_safe_contract, hopr_safe_contract_state,
     prelude::{HoprSafeContract, HoprSafeContractState},
 };
-use hopr_primitive_types::prelude::Address;
+use hopr_types::primitive::prelude::Address;
 use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter, QueryOrder, Set, Statement};
 use sea_query::OnConflict;
 
@@ -678,7 +678,7 @@ impl BlokliDbSafeContractOperations for BlokliDb {
 
 #[cfg(test)]
 mod tests {
-    use hopr_primitive_types::prelude::ToHex;
+    use hopr_types::primitive::prelude::ToHex;
     use sea_orm::PaginatorTrait;
 
     use super::*;
@@ -686,7 +686,7 @@ mod tests {
 
     /// Generates a new random `Address` from cryptographically secure random bytes.
     fn random_address() -> Address {
-        Address::from(hopr_crypto_random::random_bytes())
+        Address::from(hopr_types::crypto_random::random_bytes())
     }
 
     #[test]

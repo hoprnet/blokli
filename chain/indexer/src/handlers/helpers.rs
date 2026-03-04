@@ -4,8 +4,10 @@ use blokli_api_types::{Account, Channel, ChannelUpdate, TokenValueString, UInt64
 use blokli_db_entity::{account, conversions::account_aggregation, views::channel_current};
 use chrono::Utc;
 use hopr_bindings::exports::alloy::hex;
-use hopr_crypto_types::prelude::Hash;
-use hopr_primitive_types::prelude::{Address, HoprBalance, IntoEndian, ToHex};
+use hopr_types::{
+    crypto::prelude::Hash,
+    primitive::prelude::{Address, HoprBalance, IntoEndian, ToHex},
+};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
 
 use crate::errors::{CoreEthereumIndexerError, Result};

@@ -1,6 +1,4 @@
-use hopr_crypto_types::prelude::Hash;
-use hopr_internal_types::prelude::WinningProbability;
-use hopr_primitive_types::prelude::HoprBalance;
+use hopr_types::{crypto::prelude::Hash, internal::prelude::WinningProbability, primitive::prelude::HoprBalance};
 
 /// Contains various on-chain information collected by Indexer,
 /// such as domain separators, ticket price, ...etc.

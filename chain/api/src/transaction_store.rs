@@ -9,7 +9,7 @@ use std::sync::Arc;
 use async_broadcast::{Receiver, Sender, broadcast};
 use chrono::{DateTime, Utc};
 use dashmap::{DashMap, mapref::entry::Entry};
-use hopr_crypto_types::types::Hash;
+use hopr_types::crypto::types::Hash;
 use thiserror::Error;
 use uuid::Uuid;
 

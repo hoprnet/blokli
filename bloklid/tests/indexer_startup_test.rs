@@ -6,8 +6,7 @@ use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{api::logs::BlokliDbLogOperations, db::BlokliDb, info::BlokliDbInfoOperations};
 use futures::stream::{self, StreamExt};
-use hopr_crypto_types::types::Hash;
-use hopr_primitive_types::prelude::*;
+use hopr_types::{crypto::types::Hash, primitive::prelude::*};
 use tempfile::TempDir;
 use tokio::sync::Mutex;
 

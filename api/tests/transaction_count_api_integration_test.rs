@@ -36,8 +36,7 @@ use std::{sync::Arc, time::Duration};
 use async_graphql::Schema;
 use blokli_api::{mutation::MutationRoot, query::QueryRoot, subscription::SubscriptionRoot};
 use hopr_bindings::exports::alloy::{primitives::U256, sol};
-use hopr_crypto_types::keypairs::Keypair;
-use hopr_primitive_types::traits::ToHex;
+use hopr_types::{crypto::keypairs::Keypair, primitive::traits::ToHex};
 
 // Mock Safe contract for testing transaction count queries
 // This minimal implementation includes nonce() and getThreshold() functions needed for API testing

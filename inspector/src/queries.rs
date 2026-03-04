@@ -3,7 +3,7 @@ use blokli_client::{
     api::{BlokliQueryClient, ModulePredictionInput, SafeSelector},
 };
 use clap::Subcommand;
-use hopr_primitive_types::prelude::Address;
+use hopr_types::primitive::prelude::Address;
 
 use crate::{AccountArgs, AltAccount, ChannelArgs, Formats};
 

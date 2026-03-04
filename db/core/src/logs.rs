@@ -8,8 +8,10 @@ use blokli_db_entity::{
     prelude::{Log, LogStatus, LogTopicInfo},
 };
 use futures::{StreamExt, stream};
-use hopr_crypto_types::prelude::Hash;
-use hopr_primitive_types::prelude::{Address, DateTime, SerializableLog, ToHex, Utc};
+use hopr_types::{
+    crypto::prelude::Hash,
+    primitive::prelude::{Address, DateTime, SerializableLog, ToHex, Utc},
+};
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, FromQueryResult, IntoActiveModel, PaginatorTrait, QueryFilter,
     QueryOrder, QuerySelect,
@@ -524,7 +526,7 @@ fn create_log(raw_log: log::Model, status: log_status::Model) -> crate::errors::
 
 #[cfg(test)]
 mod tests {
-    use hopr_crypto_types::prelude::Hash;
+    use hopr_types::crypto::prelude::Hash;
 
     use super::*;
 

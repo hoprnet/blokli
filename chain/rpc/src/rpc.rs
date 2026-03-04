@@ -18,9 +18,11 @@ use hopr_bindings::exports::alloy::{
     },
     sol,
 };
-use hopr_crypto_types::prelude::Hash;
-use hopr_internal_types::prelude::{EncodedWinProb, WinningProbability};
-use hopr_primitive_types::prelude::*;
+use hopr_types::{
+    crypto::prelude::Hash,
+    internal::prelude::{EncodedWinProb, WinningProbability},
+    primitive::prelude::*,
+};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 use url::Url;
