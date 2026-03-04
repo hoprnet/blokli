@@ -6,7 +6,7 @@ license     = "GPL-3.0-only"
 name        = "blokli-db-migration"
 publish     = false
 repository  = "https://github.com/hoprnet/blokli"
-version     = "0.9.2"
+version     = "0.9.3"
 
 [features]
 default = ["sqlite"]
@@ -27,7 +27,7 @@ serde             = { workspace = true }
 serde-hex         = { workspace = true }
 tokio             = { workspace = true }
 
-hopr-internal-types = { workspace = true }
+hopr-types = { workspace = true, features = ["internal"] }
 
 [dev-dependencies]
 anyhow  = { workspace = true }

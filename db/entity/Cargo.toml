@@ -5,7 +5,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-db-entity"
 repository  = "https://github.com/hoprnet/blokli"
-version     = "0.3.0"
+version     = "0.3.1"
 
 [lints]
 workspace = true
@@ -37,6 +37,8 @@ hex       = { workspace = true }
 sea-orm   = { workspace = true }
 thiserror = { workspace = true }
 
-hopr-crypto-types    = { workspace = true }
-hopr-internal-types  = { workspace = true }
-hopr-primitive-types = { workspace = true }
+hopr-types = { workspace = true, features = [
+  "crypto",
+  "internal",
+  "primitive",
+] }

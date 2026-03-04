@@ -7,8 +7,10 @@ use hopr_bindings::{
     exports::alloy::{providers::ProviderBuilder, rpc::client::ClientBuilder, signers::local::PrivateKeySigner},
     hopr_node_stake_factory::HoprNodeStakeFactory::HoprNetwork,
 };
-use hopr_chain_types::ContractAddresses;
-use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
+use hopr_types::{
+    chain::ContractAddresses,
+    crypto::keypairs::{ChainKeypair, Keypair},
+};
 use serde::Serialize;
 use url::Url;
 

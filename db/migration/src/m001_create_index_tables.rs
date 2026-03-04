@@ -1,3 +1,4 @@
+use hopr_types::internal::prelude::DEFAULT_MINIMUM_INCOMING_TICKET_WIN_PROB;
 use sea_orm_migration::prelude::*;
 
 #[derive(DeriveMigrationName)]
@@ -199,7 +200,7 @@ impl MigrationTrait for Migration {
                         ColumnDef::new(ChainInfo::MinIncomingTicketWinProb)
                             .float()
                             .not_null()
-                            .default(hopr_internal_types::protocol::DEFAULT_MINIMUM_INCOMING_TICKET_WIN_PROB),
+                            .default(DEFAULT_MINIMUM_INCOMING_TICKET_WIN_PROB),
                     )
                     .to_owned(),
             )

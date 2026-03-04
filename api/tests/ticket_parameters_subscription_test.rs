@@ -21,7 +21,7 @@ use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 use blokli_db_entity::chain_info::{ActiveModel as ChainInfoActiveModel, Entity as ChainInfoEntity};
 use futures::StreamExt;
 use hopr_bindings::exports::alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
-use hopr_primitive_types::{prelude::HoprBalance, traits::IntoEndian};
+use hopr_types::primitive::{prelude::HoprBalance, traits::IntoEndian};
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 
 /// Initialize chain_info with ticket parameters

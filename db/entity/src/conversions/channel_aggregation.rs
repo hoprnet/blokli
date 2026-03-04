@@ -1,7 +1,7 @@
 //! Channel aggregation utilities using the `channel_current` database view
 
 use chrono::{DateTime, Utc};
-use hopr_primitive_types::prelude::{HoprBalance, IntoEndian};
+use hopr_types::primitive::prelude::{HoprBalance, IntoEndian};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
 
 use crate::views::channel_current;

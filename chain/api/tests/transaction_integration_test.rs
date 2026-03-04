@@ -31,11 +31,13 @@ use hopr_bindings::exports::alloy::{
     signers::{Signer, local::PrivateKeySigner},
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
-use hopr_crypto_types::{
-    keypairs::{ChainKeypair, Keypair},
-    types::Hash,
+use hopr_types::{
+    crypto::{
+        keypairs::{ChainKeypair, Keypair},
+        types::Hash,
+    },
+    primitive::primitives::Address,
 };
-use hopr_primitive_types::primitives::Address;
 use tokio::task::AbortHandle;
 
 /// Test context containing all components needed for integration tests

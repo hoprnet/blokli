@@ -46,7 +46,7 @@ use hopr_bindings::exports::alloy::{
         layers::RetryPolicy,
     },
 };
-use hopr_crypto_types::keypairs::Keypair;
+use hopr_types::crypto::keypairs::Keypair;
 use moka::future::Cache;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
@@ -884,7 +884,7 @@ pub type AnvilRpcClient = FillProvider<
 #[cfg(not(target_arch = "wasm32"))]
 pub fn create_rpc_client_to_anvil(
     anvil: &AnvilInstance,
-    signer: &hopr_crypto_types::keypairs::ChainKeypair,
+    signer: &hopr_types::crypto::keypairs::ChainKeypair,
 ) -> Arc<AnvilRpcClient> {
     let wallet = PrivateKeySigner::from_slice(signer.secret().as_ref()).expect("failed to construct wallet");
 

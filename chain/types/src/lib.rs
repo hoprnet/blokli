@@ -18,8 +18,10 @@ use hopr_bindings::{
     hopr_token::HoprToken::{self, HoprTokenInstance},
     hopr_winning_probability_oracle::HoprWinningProbabilityOracle::{self, HoprWinningProbabilityOracleInstance},
 };
-use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
-use hopr_primitive_types::primitives::Address;
+use hopr_types::{
+    crypto::keypairs::{ChainKeypair, Keypair},
+    primitive::primitives::Address,
+};
 use serde::{Deserialize, Serialize};
 
 pub mod actions;
@@ -33,7 +35,7 @@ pub mod utils;
 /// Extension trait for converting between alloy and HOPR address types.
 ///
 /// This trait provides convenient methods for converting between `hopr_bindings::exports::alloy::primitives::Address`
-/// and `hopr_primitive_types::primitives::Address` types, eliminating verbose conversion boilerplate.
+/// and `hopr_types::primitive::primitives::Address` types, eliminating verbose conversion boilerplate.
 ///
 /// # Examples
 ///
@@ -45,7 +47,7 @@ pub mod utils;
 /// let hopr_addr = alloy_addr.to_hopr_address();
 ///
 /// // Convert HOPR Address to alloy Address
-/// let hopr_addr: hopr_primitive_types::primitives::Address = /* ... */;
+/// let hopr_addr: hopr_types::primitive::primitives::Address = /* ... */;
 /// let alloy_addr = hopr_bindings::exports::alloy::primitives::Address::from_hopr_address(hopr_addr);
 /// ```
 pub trait AlloyAddressExt {

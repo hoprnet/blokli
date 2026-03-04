@@ -4,7 +4,7 @@ description = "Implements the main HOPR chain interface"
 edition     = "2021"
 license     = "GPL-3.0-only"
 name        = "blokli-chain-api"
-version     = "0.6.0"
+version     = "0.6.1"
 
 [lib]
 crate-type = ["rlib"]
@@ -43,14 +43,17 @@ uuid            = { workspace = true }
 validator       = { workspace = true }
 
 blokli-chain-indexer = { workspace = true }
-blokli-chain-rpc     = { workspace = true }
-blokli-chain-types   = { workspace = true }
-blokli-db            = { workspace = true }
-hopr-async-runtime   = { workspace = true }
-hopr-bindings        = { workspace = true }
-hopr-crypto-types    = { workspace = true }
-hopr-internal-types  = { workspace = true }
-hopr-primitive-types = { workspace = true }
+blokli-chain-rpc = { workspace = true }
+blokli-chain-types = { workspace = true }
+blokli-db = { workspace = true }
+hopr-async-runtime = { workspace = true }
+hopr-bindings = { workspace = true }
+hopr-types = { workspace = true, features = [
+  "crypto",
+  "internal",
+  "primitive",
+] }
+
 
 [dev-dependencies]
 anyhow             = { workspace = true }

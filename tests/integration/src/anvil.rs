@@ -1,10 +1,11 @@
 use std::str::FromStr;
 
 use hopr_bindings::exports::alloy::primitives::Address as AlloyAddress;
-use hopr_chain_connector::ChainKeypair;
-use hopr_crypto_types::keypairs::{Keypair, OffchainKeypair};
-use hopr_internal_types::announcement::KeyBinding;
-use hopr_primitive_types::prelude::Address;
+use hopr_types::{
+    crypto::keypairs::{ChainKeypair, Keypair, OffchainKeypair},
+    internal::announcement::KeyBinding,
+    primitive::prelude::Address,
+};
 
 #[derive(Clone, Debug)]
 pub struct AnvilAccount {

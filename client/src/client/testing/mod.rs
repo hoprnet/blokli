@@ -6,7 +6,7 @@ use std::{
 
 use async_broadcast::TrySendError;
 use futures::{Stream, StreamExt};
-use hopr_crypto_types::types::Hash;
+use hopr_types::crypto::types::Hash;
 use indexmap::IndexMap;
 
 use crate::{

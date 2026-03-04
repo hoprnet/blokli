@@ -21,7 +21,7 @@ use hopr_bindings::exports::alloy::{
     rpc::client::ClientBuilder,
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
-use hopr_primitive_types::primitives::Address;
+use hopr_types::primitive::primitives::Address;
 use sea_orm::Database;
 
 /// blokli-api: GraphQL API server for HOPR blokli indexer

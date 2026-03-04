@@ -98,13 +98,15 @@ mod integration_tests {
             ChannelBalanceDecreased, ChannelBalanceIncreased, ChannelClosed, ChannelOpened,
         },
     };
-    use hopr_crypto_types::prelude::{ChainKeypair, Hash, OffchainKeypair};
-    use hopr_internal_types::{
-        account::{AccountEntry, AccountType},
-        announcement::KeyBinding,
-        channels::{ChannelStatus, generate_channel_id},
+    use hopr_types::{
+        crypto::prelude::{ChainKeypair, Hash, OffchainKeypair},
+        internal::{
+            account::{AccountEntry, AccountType},
+            announcement::KeyBinding,
+            channels::{ChannelStatus, generate_channel_id},
+        },
+        primitive::prelude::{Address, HoprBalance, SerializableLog, XDaiBalance},
     };
-    use hopr_primitive_types::prelude::{Address, HoprBalance, SerializableLog, XDaiBalance};
     use multiaddr::Multiaddr;
 
     // Test constants

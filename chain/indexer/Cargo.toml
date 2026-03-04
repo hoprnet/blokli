@@ -6,7 +6,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0"
 name        = "blokli-chain-indexer"
 repository  = "https://github.com/hoprnet/hoprnet"
-version     = "0.14.2"
+version     = "0.14.3"
 
 [lib]
 crate-type = ["rlib"]
@@ -49,17 +49,19 @@ tokio = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 
-blokli-api-types     = { workspace = true }
-blokli-chain-rpc     = { workspace = true }
-blokli-chain-types   = { workspace = true }
-blokli-db            = { workspace = true }
-blokli-db-entity     = { workspace = true }
-hopr-async-runtime   = { workspace = true }
-hopr-bindings        = { workspace = true }
-hopr-crypto-types    = { workspace = true }
-hopr-internal-types  = { workspace = true }
-hopr-metrics         = { workspace = true, optional = true }
-hopr-primitive-types = { workspace = true }
+blokli-api-types = { workspace = true }
+blokli-chain-rpc = { workspace = true }
+blokli-chain-types = { workspace = true }
+blokli-db = { workspace = true }
+blokli-db-entity = { workspace = true }
+hopr-async-runtime = { workspace = true }
+hopr-bindings = { workspace = true }
+hopr-metrics = { workspace = true, optional = true }
+hopr-types = { workspace = true, features = [
+  "crypto",
+  "internal",
+  "primitive",
+] }
 
 [dev-dependencies]
 anyhow          = { workspace = true }
@@ -69,6 +71,11 @@ primitive-types = { workspace = true }
 test-log        = { workspace = true }
 tokio           = { workspace = true }
 
-blokli-chain-rpc   = { workspace = true, features = ["runtime-tokio"] }
-blokli-db          = { workspace = true, features = ["runtime-tokio"] }
-hopr-crypto-random = { workspace = true }
+blokli-chain-rpc = { workspace = true, features = ["runtime-tokio"] }
+blokli-db = { workspace = true, features = ["runtime-tokio"] }
+hopr-types = { workspace = true, features = [
+  "crypto",
+  "internal",
+  "primitive",
+  "random",
+] }

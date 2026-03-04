@@ -14,8 +14,10 @@ use hopr_bindings::exports::alloy::{
     rpc::client::ClientBuilder,
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
-use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
-use hopr_primitive_types::prelude::{Address, HoprBalance};
+use hopr_types::{
+    crypto::keypairs::{ChainKeypair, Keypair},
+    primitive::prelude::{Address, HoprBalance},
+};
 
 #[tokio::test]
 async fn test_get_minimum_network_winning_probability() -> anyhow::Result<()> {

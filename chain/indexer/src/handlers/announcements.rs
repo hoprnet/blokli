@@ -3,11 +3,13 @@ use blokli_chain_rpc::HoprIndexerRpcOperations;
 use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator, errors::DbSqlError};
 use hopr_bindings::hopr_announcements::HoprAnnouncements::HoprAnnouncementsEvents;
-use hopr_crypto_types::prelude::OffchainSignature;
-use hopr_internal_types::announcement::KeyBinding;
-use hopr_primitive_types::{
-    prelude::{Address, HoprBalance},
-    traits::IntoEndian,
+use hopr_types::{
+    crypto::prelude::OffchainSignature,
+    internal::announcement::KeyBinding,
+    primitive::{
+        prelude::{Address, HoprBalance},
+        traits::IntoEndian,
+    },
 };
 use tracing::{debug, error, warn};
 
@@ -255,12 +257,14 @@ mod tests {
             KeyBinding as KeyBindingEvent, KeyBindingFeeUpdate as KeyBindingFeeUpdateEvent,
         },
     };
-    use hopr_crypto_types::keypairs::Keypair;
-    use hopr_internal_types::{
-        account::{AccountEntry, AccountType},
-        announcement::KeyBinding,
+    use hopr_types::{
+        crypto::keypairs::Keypair,
+        internal::{
+            account::{AccountEntry, AccountType},
+            announcement::KeyBinding,
+        },
+        primitive::prelude::{SerializableLog, U256},
     };
-    use hopr_primitive_types::prelude::{SerializableLog, U256};
     use multiaddr::Multiaddr;
 
     use super::*;
