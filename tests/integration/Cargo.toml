@@ -6,7 +6,7 @@ version = "0.1.3"
 
 [dependencies]
 anyhow = { workspace = true }
-blokli-client = { path = "../../client" }
+blokli-client = { workspace = true }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 eventsource-client = { workspace = true }
