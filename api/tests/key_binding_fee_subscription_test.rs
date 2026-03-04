@@ -26,7 +26,7 @@ use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 use futures::StreamExt;
 use hopr_bindings::exports::alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
-use hopr_primitive_types::{prelude::HoprBalance, primitives::Address, traits::IntoEndian};
+use hopr_types::primitive::{prelude::HoprBalance, primitives::Address, traits::IntoEndian};
 use sea_orm::{ActiveModelTrait, Set};
 
 /// Create a minimal GraphQL schema for testing subscriptions

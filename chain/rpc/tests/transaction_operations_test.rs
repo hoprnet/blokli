@@ -19,8 +19,10 @@ use hopr_bindings::exports::alloy::{
     rpc::client::ClientBuilder,
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
-use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
-use hopr_primitive_types::prelude::{Address, XDaiBalance};
+use hopr_types::{
+    crypto::keypairs::{ChainKeypair, Keypair},
+    primitive::prelude::{Address, XDaiBalance},
+};
 use lazy_static::lazy_static;
 
 lazy_static! {

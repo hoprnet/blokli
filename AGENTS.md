@@ -390,7 +390,7 @@ Provides foundational blockchain types and conversion utilities:
 **Usage Example:**
 
 ```rust
-use hopr_primitive_types::prelude::{Address, HoprBalance, ToHex};
+use hopr_types::primitive::prelude::{Address, HoprBalance, ToHex};
 
 pub fn format_account(address: Address, balance: HoprBalance) -> String {
     format!("Account {} has balance {}", address.to_hex(), balance)
@@ -412,7 +412,7 @@ Provides cryptographic primitives and key management:
 **Usage Example:**
 
 ```rust
-use hopr_crypto_types::prelude::{Hash, OffchainPublicKey};
+use hopr_types::crypto::prelude::{Hash, OffchainPublicKey};
 
 pub fn verify_announcement(
     peer_id: OffchainPublicKey,
@@ -448,8 +448,8 @@ Provides HOPR protocol-specific structures and abstractions:
 **Usage Example:**
 
 ```rust
-use hopr_internal_types::channels::{ChannelEntry, ChannelStatus};
-use hopr_primitive_types::prelude::Address;
+use hopr_types::internal::channels::{ChannelEntry, ChannelStatus};
+use hopr_types::primitive::prelude::Address;
 
 pub async fn process_channel(
     channel: ChannelEntry,
@@ -513,7 +513,7 @@ cargo doc --package hopr-bindings --open
 
 1. **Always prefer HOPR types** - Before creating a new type for addresses, balances, channels, or accounts, check if a suitable type exists
    in these crates
-2. **Use the prelude modules** - Import commonly used types from `hopr_primitive_types::prelude` and `hopr_crypto_types::prelude`
+2. **Use the prelude modules** - Import commonly used types from `hopr_types::primitive::prelude` and `hopr_types::crypto::prelude`
 3. **Leverage conversion traits** - Use `ToHex`, `IntoEndian`, and other provided traits for consistent serialization
 4. **Implement conversions** - When mapping between database models and HOPR types, implement `From`/`TryFrom` traits (see
    `db/entity/src/conversions/`)

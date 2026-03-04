@@ -17,7 +17,7 @@ use hopr_bindings::exports::alloy::{
     signers::local::PrivateKeySigner,
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
-use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
+use hopr_types::crypto::keypairs::{ChainKeypair, Keypair};
 
 #[tokio::test]
 async fn test_get_timestamp() -> anyhow::Result<()> {

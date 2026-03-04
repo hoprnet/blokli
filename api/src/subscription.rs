@@ -22,7 +22,7 @@ use blokli_db_entity::{
 };
 use chrono::Utc;
 use futures::Stream;
-use hopr_primitive_types::{
+use hopr_types::primitive::{
     prelude::HoprBalance as PrimitiveHoprBalance,
     primitives::Address,
     traits::{IntoEndian, ToHex},

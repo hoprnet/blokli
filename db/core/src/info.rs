@@ -10,9 +10,11 @@ use blokli_db_entity::{
     },
 };
 use futures::TryFutureExt;
-use hopr_crypto_types::prelude::Hash;
-use hopr_internal_types::prelude::WinningProbability;
-use hopr_primitive_types::prelude::{HoprBalance, IntoEndian};
+use hopr_types::{
+    crypto::prelude::Hash,
+    internal::prelude::WinningProbability,
+    primitive::prelude::{HoprBalance, IntoEndian},
+};
 use sea_orm::{ActiveModelTrait, EntityTrait, IntoActiveModel, Set};
 use tracing::trace;
 
@@ -417,7 +419,7 @@ impl BlokliDbInfoOperations for BlokliDb {
 #[cfg(test)]
 mod tests {
     use hex_literal::hex;
-    use hopr_primitive_types::{balance::HoprBalance, prelude::Address};
+    use hopr_types::primitive::{balance::HoprBalance, prelude::Address};
 
     use crate::{db::BlokliDb, info::BlokliDbInfoOperations};
 

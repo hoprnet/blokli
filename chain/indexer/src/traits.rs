@@ -3,7 +3,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use blokli_chain_types::ContractAddresses;
 use hopr_bindings::exports::alloy::primitives::B256;
-use hopr_primitive_types::prelude::*;
+use hopr_types::primitive::prelude::*;
 
 use crate::errors::Result;
 

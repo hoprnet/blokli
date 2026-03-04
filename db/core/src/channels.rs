@@ -13,11 +13,13 @@ use blokli_db_entity::{
 };
 use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
-use hopr_crypto_types::types::Hash;
-use hopr_internal_types::channels::{ChannelDirection, ChannelEntry, ChannelStatus};
-use hopr_primitive_types::{
-    prelude::{Address, HoprBalance},
-    traits::{IntoEndian, ToHex},
+use hopr_types::{
+    crypto::types::Hash,
+    internal::channels::{ChannelDirection, ChannelEntry, ChannelStatus},
+    primitive::{
+        prelude::{Address, HoprBalance},
+        traits::{IntoEndian, ToHex},
+    },
 };
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
 use tracing::instrument;
@@ -816,16 +818,18 @@ mod tests {
     use std::time::{Duration, SystemTime};
 
     use anyhow::Context;
-    use hopr_crypto_random::random_bytes;
-    use hopr_crypto_types::{
-        keypairs::{ChainKeypair, OffchainKeypair},
-        prelude::Keypair,
+    use hopr_types::{
+        crypto::{
+            keypairs::{ChainKeypair, OffchainKeypair},
+            prelude::Keypair,
+        },
+        crypto_random::random_bytes,
+        internal::{
+            channels::ChannelStatus,
+            prelude::{ChannelDirection, ChannelEntry},
+        },
+        primitive::prelude::{Address, HoprBalance},
     };
-    use hopr_internal_types::{
-        channels::ChannelStatus,
-        prelude::{ChannelDirection, ChannelEntry},
-    };
-    use hopr_primitive_types::prelude::{Address, HoprBalance};
 
     use crate::{
         BlokliDbGeneralModelOperations, accounts::BlokliDbAccountOperations, channels::BlokliDbChannelOperations,

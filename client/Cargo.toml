@@ -34,14 +34,14 @@ thiserror = { workspace = true }
 tracing = { workspace = true, features = ["release_max_level_debug"] }
 url = { workspace = true }
 
-hopr-crypto-types = { workspace = true, optional = true }
+hopr-types = { workspace = true, features = ["crypto"], optional = true }
 
 [features]
 serde = ["dep:serde", "indexmap/serde"]
 testing = [
   "dep:async-broadcast",
   "dep:chrono",
-  "dep:hopr-crypto-types",
+  "dep:hopr-types",
   "dep:indexmap",
   "dep:parking_lot",
   "dep:rand",

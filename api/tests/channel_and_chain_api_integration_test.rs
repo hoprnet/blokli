@@ -23,9 +23,11 @@ use blokli_db::{
     db::BlokliDb,
 };
 use blokli_db_entity::chain_info;
-use hopr_crypto_types::prelude::{ChainKeypair, Keypair, OffchainKeypair};
-use hopr_internal_types::channels::{ChannelEntry, ChannelStatus};
-use hopr_primitive_types::prelude::HoprBalance;
+use hopr_types::{
+    crypto::prelude::{ChainKeypair, Keypair, OffchainKeypair},
+    internal::channels::{ChannelEntry, ChannelStatus},
+    primitive::prelude::HoprBalance,
+};
 use sea_orm::{ActiveModelTrait, EntityTrait, ModelTrait, Set};
 
 /// Helper to extract channels from union result

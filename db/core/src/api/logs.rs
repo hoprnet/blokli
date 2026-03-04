@@ -1,6 +1,8 @@
 use async_trait::async_trait;
-use hopr_crypto_types::prelude::Hash;
-use hopr_primitive_types::prelude::{Address, SerializableLog};
+use hopr_types::{
+    crypto::prelude::Hash,
+    primitive::prelude::{Address, SerializableLog},
+};
 
 use super::errors::Result;
 

@@ -35,7 +35,7 @@ use hopr_bindings::exports::alloy::{
     providers::{Provider, ProviderBuilder},
     signers::{SignerSync, local::PrivateKeySigner},
 };
-use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
+use hopr_types::crypto::keypairs::{ChainKeypair, Keypair};
 
 /// Test context containing all components needed for GraphQL mutation tests
 struct TestContext {

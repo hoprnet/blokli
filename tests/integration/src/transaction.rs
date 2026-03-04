@@ -7,7 +7,7 @@ use hopr_bindings::exports::alloy::{
     primitives::{Address as AlloyAddress, TxKind, U256},
     signers::{Signer, local::PrivateKeySigner},
 };
-use hopr_crypto_types::keypairs::{ChainKeypair, Keypair};
+use hopr_types::crypto::keypairs::{ChainKeypair, Keypair};
 
 pub struct TransactionBuilder {
     signer: PrivateKeySigner,

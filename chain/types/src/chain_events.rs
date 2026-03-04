@@ -5,9 +5,11 @@
 //! See `chain-actions` and `chain-indexer` crates for details.
 use std::fmt::{Display, Formatter};
 
-use hopr_crypto_types::types::Hash;
-use hopr_internal_types::{channels::ChannelEntry, tickets::AcknowledgedTicket};
-use hopr_primitive_types::prelude::{Address, HoprBalance};
+use hopr_types::{
+    crypto::types::Hash,
+    internal::{channels::ChannelEntry, tickets::AcknowledgedTicket},
+    primitive::prelude::{Address, HoprBalance},
+};
 use libp2p_identity::PeerId;
 use multiaddr::Multiaddr;
 

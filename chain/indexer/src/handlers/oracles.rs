@@ -5,8 +5,10 @@ use hopr_bindings::{
     hopr_ticket_price_oracle::HoprTicketPriceOracle::HoprTicketPriceOracleEvents,
     hopr_winning_probability_oracle::HoprWinningProbabilityOracle::HoprWinningProbabilityOracleEvents,
 };
-use hopr_internal_types::tickets::WinningProbability;
-use hopr_primitive_types::{prelude::HoprBalance, traits::IntoEndian};
+use hopr_types::{
+    internal::tickets::WinningProbability,
+    primitive::{prelude::HoprBalance, traits::IntoEndian},
+};
 use tracing::{debug, info, trace};
 
 use super::ContractEventHandlers;
@@ -143,8 +145,7 @@ mod tests {
         primitives::U256,
         sol_types::{SolEvent, SolValue},
     };
-    use hopr_internal_types::tickets::WinningProbability;
-    use hopr_primitive_types::prelude::SerializableLog;
+    use hopr_types::{internal::tickets::WinningProbability, primitive::prelude::SerializableLog};
 
     use crate::handlers::test_utils::test_helpers::*;
 

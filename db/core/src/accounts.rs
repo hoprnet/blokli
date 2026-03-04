@@ -8,9 +8,11 @@ use blokli_db_entity::{
     views::account_current,
 };
 use futures::TryFutureExt;
-use hopr_crypto_types::prelude::OffchainPublicKey;
-use hopr_internal_types::{account::AccountType, prelude::AccountEntry};
-use hopr_primitive_types::{errors::GeneralError, prelude::Address, traits::ToHex};
+use hopr_types::{
+    crypto::prelude::OffchainPublicKey,
+    internal::{account::AccountType, prelude::AccountEntry},
+    primitive::{errors::GeneralError, prelude::Address, traits::ToHex},
+};
 use multiaddr::Multiaddr;
 use sea_orm::{
     ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, IntoActiveModel, ModelTrait, QueryFilter, QueryOrder, Set,
@@ -705,8 +707,10 @@ impl BlokliDbAccountOperations for BlokliDb {
 #[cfg(test)]
 mod tests {
     use anyhow::Context;
-    use hopr_crypto_types::prelude::{ChainKeypair, Keypair, OffchainKeypair};
-    use hopr_internal_types::prelude::AccountType;
+    use hopr_types::{
+        crypto::prelude::{ChainKeypair, Keypair, OffchainKeypair},
+        internal::prelude::AccountType,
+    };
 
     use super::*;
     use crate::{
@@ -1191,7 +1195,7 @@ mod tests {
 
         let chain_key = ChainKeypair::random().public().to_address();
         let packet_key = *OffchainKeypair::random().public();
-        let safe_addr = Address::from(hopr_crypto_random::random_bytes());
+        let safe_addr = Address::from(hopr_types::crypto_random::random_bytes());
 
         // Create account with upsert at block 100
         db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr), 100, 0, 0)
@@ -1212,8 +1216,8 @@ mod tests {
 
         let chain_key = ChainKeypair::random().public().to_address();
         let packet_key = *OffchainKeypair::random().public();
-        let safe_addr_1 = Address::from(hopr_crypto_random::random_bytes());
-        let safe_addr_2 = Address::from(hopr_crypto_random::random_bytes());
+        let safe_addr_1 = Address::from(hopr_types::crypto_random::random_bytes());
+        let safe_addr_2 = Address::from(hopr_types::crypto_random::random_bytes());
 
         // Create account with initial state at block 100
         db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr_1), 100, 0, 0)
@@ -1254,12 +1258,12 @@ mod tests {
             .await?;
 
         // State 2: Add safe address at block 200
-        let safe_addr = Address::from(hopr_crypto_random::random_bytes());
+        let safe_addr = Address::from(hopr_types::crypto_random::random_bytes());
         db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr), 200, 0, 0)
             .await?;
 
         // State 3: Change safe address at block 300
-        let safe_addr_2 = Address::from(hopr_crypto_random::random_bytes());
+        let safe_addr_2 = Address::from(hopr_types::crypto_random::random_bytes());
         db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr_2), 300, 0, 0)
             .await?;
 
@@ -1281,11 +1285,11 @@ mod tests {
         db.upsert_account(None, 1, chain_key, packet_key, None, 100, 0, 0)
             .await?;
 
-        let safe_addr_1 = Address::from(hopr_crypto_random::random_bytes());
+        let safe_addr_1 = Address::from(hopr_types::crypto_random::random_bytes());
         db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr_1), 200, 0, 0)
             .await?;
 
-        let safe_addr_2 = Address::from(hopr_crypto_random::random_bytes());
+        let safe_addr_2 = Address::from(hopr_types::crypto_random::random_bytes());
         db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr_2), 300, 0, 0)
             .await?;
 
@@ -1324,7 +1328,7 @@ mod tests {
         // Create 5 state changes across different blocks
         for i in 0..5 {
             let safe_addr = if i % 2 == 0 {
-                Some(Address::from(hopr_crypto_random::random_bytes()))
+                Some(Address::from(hopr_types::crypto_random::random_bytes()))
             } else {
                 None
             };
@@ -1358,7 +1362,7 @@ mod tests {
             .await?;
         db.upsert_account(None, 1, chain_key, packet_key, None, 200, 0, 0)
             .await?;
-        let latest_safe = Address::from(hopr_crypto_random::random_bytes());
+        let latest_safe = Address::from(hopr_types::crypto_random::random_bytes());
         db.upsert_account(None, 1, chain_key, packet_key, Some(latest_safe), 300, 0, 0)
             .await?;
 
@@ -1416,7 +1420,7 @@ mod tests {
             let db_clone = db.clone();
             let handle = tokio::spawn(async move {
                 let safe = if i % 2 == 0 {
-                    Some(Address::from(hopr_crypto_random::random_bytes()))
+                    Some(Address::from(hopr_types::crypto_random::random_bytes()))
                 } else {
                     None
                 };
@@ -1485,8 +1489,8 @@ mod tests {
 
         let chain_key = ChainKeypair::random().public().to_address();
         let packet_key = *OffchainKeypair::random().public();
-        let safe_addr_1 = Address::from(hopr_crypto_random::random_bytes());
-        let safe_addr_2 = Address::from(hopr_crypto_random::random_bytes());
+        let safe_addr_1 = Address::from(hopr_types::crypto_random::random_bytes());
+        let safe_addr_2 = Address::from(hopr_types::crypto_random::random_bytes());
 
         // State 1: Create account with first safe address at block 100
         db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr_1), 100, 0, 0)

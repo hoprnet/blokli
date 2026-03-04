@@ -1,6 +1,6 @@
 use blokli_chain_rpc::HoprIndexerRpcOperations;
 use blokli_db::{BlokliDbAllOperations, safe_contracts::PRESEEDED_BLOCK};
-use hopr_primitive_types::prelude::{Address, ToHex};
+use hopr_types::primitive::prelude::{Address, ToHex};
 use tracing::{info, warn};
 
 use crate::errors::{CoreEthereumIndexerError, Result};
@@ -67,13 +67,15 @@ mod tests {
     use blokli_chain_rpc::{BlockWithLogs, FilterSet, errors::RpcError};
     use blokli_db::{db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations};
     use futures::Stream;
-    use hopr_crypto_types::types::Hash;
-    use hopr_primitive_types::prelude::{Address, HoprBalance, XDaiBalance};
+    use hopr_types::{
+        crypto::types::Hash,
+        primitive::prelude::{Address, HoprBalance, XDaiBalance},
+    };
 
     use super::*;
 
     fn random_address() -> Address {
-        Address::from(hopr_crypto_random::random_bytes())
+        Address::from(hopr_types::crypto_random::random_bytes())
     }
 
     struct TestRpc {

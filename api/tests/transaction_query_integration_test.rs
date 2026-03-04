@@ -21,7 +21,7 @@ use blokli_api::{
 use blokli_chain_api::transaction_store::{TransactionRecord, TransactionStatus, TransactionStore};
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
-use hopr_crypto_types::types::Hash;
+use hopr_types::crypto::types::Hash;
 use tokio::task::AbortHandle;
 
 /// Test context for transaction query tests
