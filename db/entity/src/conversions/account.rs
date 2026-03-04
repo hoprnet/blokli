@@ -1,5 +1,7 @@
-use hopr_crypto_types::types::OffchainPublicKey;
-use hopr_primitive_types::{primitives::Address, traits::ToHex};
+use hopr_types::{
+    crypto::types::OffchainPublicKey,
+    primitive::{primitives::Address, traits::ToHex},
+};
 
 impl TryFrom<crate::codegen::account::Model> for Address {
     type Error = crate::errors::DbEntityError;

@@ -27,13 +27,13 @@ use hopr_bindings::exports::alloy::{
         layers::RetryBackoffLayer,
     },
 };
-pub use hopr_internal_types::channels::ChannelEntry;
-use hopr_internal_types::{
+pub use hopr_types::internal::channels::ChannelEntry;
+use hopr_types::internal::{
     account::AccountEntry, // channels::CorruptedChannelEntry,
     prelude::ChannelDirection,
     tickets::WinningProbability,
 };
-use hopr_primitive_types::{
+use hopr_types::primitive::{
     prelude::{Address, Balance, Currency, HoprBalance, U256, WxHOPR, XDai},
     traits::IntoEndian,
 };

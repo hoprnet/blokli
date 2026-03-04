@@ -4,7 +4,7 @@ use blokli_db::{
     BlokliDbAllOperations, OpenTransaction, accounts::ChainOrPacketKey, api::info::DomainSeparator, errors::DbSqlError,
 };
 use hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::HoprNodeSafeRegistryEvents;
-use hopr_primitive_types::prelude::{Address, ToHex};
+use hopr_types::primitive::prelude::{Address, ToHex};
 use tracing::{debug, info, warn};
 
 use super::{ContractEventHandlers, helpers::construct_account_update};
@@ -308,8 +308,10 @@ mod tests {
         exports::alloy::sol_types::{SolEvent, SolValue},
         hopr_node_safe_registry::HoprNodeSafeRegistry,
     };
-    use hopr_crypto_types::keypairs::Keypair;
-    use hopr_primitive_types::prelude::{Address, SerializableLog};
+    use hopr_types::{
+        crypto::keypairs::Keypair,
+        primitive::prelude::{Address, SerializableLog},
+    };
     use primitive_types::H256;
     use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
@@ -659,7 +661,7 @@ mod tests {
         db.create_safe_contract(
             None,
             safe_address,
-            Address::from(hopr_crypto_random::random_bytes()),
+            Address::from(hopr_types::crypto_random::random_bytes()),
             node_address,
             10,
             0,

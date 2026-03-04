@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use blokli_db_entity::{hopr_node_safe_registration, prelude::HoprNodeSafeRegistration};
-use hopr_primitive_types::prelude::Address;
+use hopr_types::primitive::prelude::Address;
 use sea_orm::{ColumnTrait, DbErr, EntityTrait, ModelTrait, QueryFilter, Set};
 use sea_query::OnConflict;
 
@@ -286,7 +286,7 @@ impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
 
 #[cfg(test)]
 mod tests {
-    use hopr_crypto_random::random_bytes;
+    use hopr_types::crypto_random::random_bytes;
     use sea_orm::PaginatorTrait;
 
     use super::*;

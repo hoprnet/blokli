@@ -27,8 +27,10 @@ use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, accounts::BlokliDbAccountOperations, db::BlokliDb};
 use futures::StreamExt;
 use hopr_bindings::exports::alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
-use hopr_crypto_types::prelude::{ChainKeypair, Keypair, OffchainKeypair};
-use hopr_primitive_types::{prelude::Address, traits::ToHex};
+use hopr_types::{
+    crypto::prelude::{ChainKeypair, Keypair, OffchainKeypair},
+    primitive::{prelude::Address, traits::ToHex},
+};
 use multiaddr::Multiaddr;
 
 /// Helper to generate random keypair for testing

@@ -18,10 +18,12 @@ use hopr_bindings::{
     exports::alloy::{primitives::Address as AlloyAddress, rpc::types::Filter, sol_types::SolEvent},
     hopr_token::HoprToken::{Approval, Transfer},
 };
-use hopr_crypto_types::types::Hash;
 #[cfg(all(feature = "prometheus", not(test)))]
-use hopr_primitive_types::prelude::U256;
-use hopr_primitive_types::prelude::{Address, SerializableLog};
+use hopr_types::primitive::prelude::U256;
+use hopr_types::{
+    crypto::types::Hash,
+    primitive::prelude::{Address, SerializableLog},
+};
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder};
 use tracing::{debug, error, info, trace, warn};
 
@@ -1128,12 +1130,14 @@ mod tests {
         dyn_abi::DynSolValue,
         primitives::{Address as AlloyAddress, B256},
     };
-    use hopr_crypto_types::{
-        keypairs::{Keypair, OffchainKeypair},
-        prelude::ChainKeypair,
+    use hopr_types::{
+        crypto::{
+            keypairs::{Keypair, OffchainKeypair},
+            prelude::ChainKeypair,
+        },
+        internal::account::{AccountEntry, AccountType},
+        primitive::prelude::*,
     };
-    use hopr_internal_types::account::{AccountEntry, AccountType};
-    use hopr_primitive_types::prelude::*;
     use mockall::mock;
     use multiaddr::Multiaddr;
 
@@ -1195,7 +1199,7 @@ mod tests {
         #[async_trait]
         impl HoprIndexerRpcOperations for HoprIndexerOps {
             async fn block_number(&self) -> blokli_chain_rpc::errors::Result<u64>;
-            async fn get_transaction_sender(&self, tx_hash: hopr_crypto_types::types::Hash) -> blokli_chain_rpc::errors::Result<Address>;
+            async fn get_transaction_sender(&self, tx_hash: hopr_types::crypto::types::Hash) -> blokli_chain_rpc::errors::Result<Address>;
 
             fn try_stream_logs<'a>(
                 &'a self,

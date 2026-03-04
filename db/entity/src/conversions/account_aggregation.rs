@@ -2,7 +2,7 @@
 
 use std::collections::HashMap;
 
-use hopr_primitive_types::{primitives::Address, traits::ToHex};
+use hopr_types::primitive::{primitives::Address, traits::ToHex};
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
 
 use crate::{codegen::announcement, views::account_current};

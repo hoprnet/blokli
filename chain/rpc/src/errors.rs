@@ -5,7 +5,7 @@ use hopr_bindings::exports::alloy::{
     signers::Error as AlloySignerError,
     transports::{RpcError as AlloyRpcError, TransportErrorKind},
 };
-use hopr_crypto_types::prelude::Hash;
+use hopr_types::crypto::prelude::Hash;
 /// Errors produced by this crate and other error-related types.
 use thiserror::Error;
 

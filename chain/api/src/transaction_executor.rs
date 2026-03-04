@@ -10,7 +10,7 @@ use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
 use chrono::Utc;
-use hopr_crypto_types::types::Hash;
+use hopr_types::crypto::types::Hash;
 use thiserror::Error;
 use uuid::Uuid;
 

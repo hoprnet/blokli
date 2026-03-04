@@ -21,8 +21,7 @@ use hopr_bindings::{
     hopr_channels::HoprChannels::HoprChannelsInstance,
     hopr_token::HoprToken::{self, HoprTokenInstance},
 };
-use hopr_crypto_types::prelude::*;
-use hopr_primitive_types::primitives::Address;
+use hopr_types::{crypto::prelude::*, primitive::primitives::Address};
 
 use crate::{AlloyAddressExt, errors::Result as ChainTypesResult};
 

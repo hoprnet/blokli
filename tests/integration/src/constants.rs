@@ -1,7 +1,7 @@
 use std::time::Duration as StdDuration;
 
 use futures_time::time::Duration;
-use hopr_primitive_types::prelude::HoprBalance;
+use hopr_types::primitive::prelude::HoprBalance;
 
 const INITIAL_SAFE_BALANCE: &str = "0.5 wxHOPR";
 const SUBSCRIPTION_TIMEOUT_SECS: u64 = 60;
