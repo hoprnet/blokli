@@ -29,7 +29,7 @@ async fn init_chain_info_with_params(
     db: &sea_orm::DatabaseConnection,
     block: i64,
     ticket_price: HoprBalance,
-    min_win_prob: f32,
+    min_win_prob: f64,
 ) -> Result<(), sea_orm::DbErr> {
     // Delete any existing entry first
     ChainInfoEntity::delete_many().exec(db).await?;
@@ -113,7 +113,7 @@ async fn test_ticket_parameters_subscription_emits_initial_values() {
 
     // Initialize chain_info with ticket parameters
     let ticket_price = HoprBalance::from(1000_u64); // 1000 wei
-    let min_win_prob = 0.75_f32;
+    let min_win_prob = 0.0000125_f64;
 
     init_chain_info_with_params(db.conn(TargetDb::Index), 100, ticket_price, min_win_prob)
         .await
@@ -156,7 +156,7 @@ async fn test_ticket_parameters_subscription_emits_initial_values() {
 
     // Verify winning probability
     let prob = params["minTicketWinningProbability"].as_f64().unwrap();
-    assert!((prob - 0.75).abs() < 0.001);
+    assert!((prob - 0.0000125).abs() < 1e-17);
 }
 
 #[tokio::test]
