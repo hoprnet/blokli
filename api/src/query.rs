@@ -19,11 +19,13 @@ use blokli_db_entity::{
     views::channel_current,
 };
 use futures::TryStreamExt;
-use hopr_crypto_types::prelude::Hash;
-use hopr_primitive_types::{
-    prelude::HoprBalance as PrimitiveHoprBalance,
-    primitives::Address,
-    traits::{IntoEndian, ToHex},
+use hopr_types::{
+    crypto::prelude::Hash,
+    primitive::{
+        prelude::HoprBalance as PrimitiveHoprBalance,
+        primitives::Address,
+        traits::{IntoEndian, ToHex},
+    },
 };
 use sea_orm::{
     ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,

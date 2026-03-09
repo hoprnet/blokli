@@ -2,8 +2,10 @@ use blokli_chain_rpc::HoprIndexerRpcOperations;
 use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction};
 use hopr_bindings::hopr_node_stake_factory::HoprNodeStakeFactory::HoprNodeStakeFactoryEvents;
-use hopr_crypto_types::types::Hash;
-use hopr_primitive_types::prelude::{SerializableLog, ToHex};
+use hopr_types::{
+    crypto::types::Hash,
+    primitive::prelude::{SerializableLog, ToHex},
+};
 use tracing::{error, info};
 
 use super::ContractEventHandlers;
@@ -116,8 +118,10 @@ mod tests {
         exports::alloy::{primitives::Address as AlloyAddress, sol_types::SolEvent},
         hopr_node_stake_factory::HoprNodeStakeFactory,
     };
-    use hopr_crypto_types::types::Hash;
-    use hopr_primitive_types::prelude::{Address, SerializableLog};
+    use hopr_types::{
+        crypto::types::Hash,
+        primitive::prelude::{Address, SerializableLog},
+    };
     use mockall::predicate::*;
     use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
@@ -131,7 +135,7 @@ mod tests {
     /// let _addr = random_address();
     /// ```
     fn random_address() -> Address {
-        Address::from(hopr_crypto_random::random_bytes())
+        Address::from(hopr_types::crypto_random::random_bytes())
     }
 
     /// Generates a cryptographically secure random `Hash`.
@@ -143,7 +147,7 @@ mod tests {
     /// let _ = h;
     /// ```
     fn random_hash() -> Hash {
-        Hash::from(hopr_crypto_random::random_bytes())
+        Hash::from(hopr_types::crypto_random::random_bytes())
     }
 
     #[tokio::test]

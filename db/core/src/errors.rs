@@ -1,8 +1,7 @@
 use std::sync::Arc;
 
 use blokli_db_entity::errors::DbEntityError;
-use hopr_crypto_types::{prelude::CryptoError, types::Hash};
-use hopr_internal_types::errors::CoreTypesError;
+use hopr_types::crypto::types::Hash;
 use sea_orm::TransactionError;
 use thiserror::Error;
 
@@ -57,10 +56,10 @@ pub enum DbSqlError {
     BackendError(#[from] sea_orm::DbErr),
 
     #[error(transparent)]
-    CoreTypesError(#[from] CoreTypesError),
+    CoreTypesError(#[from] hopr_types::internal::errors::CoreTypesError),
 
     #[error(transparent)]
-    CryptoError(#[from] CryptoError),
+    CryptoError(#[from] hopr_types::crypto::errors::CryptoError),
 
     #[error(transparent)]
     EntityError(#[from] DbEntityError),
@@ -69,7 +68,7 @@ pub enum DbSqlError {
     CacheError(#[from] Arc<Self>),
 
     #[error(transparent)]
-    NonSpecificError(#[from] hopr_primitive_types::errors::GeneralError),
+    NonSpecificError(#[from] hopr_types::primitive::errors::GeneralError),
 
     #[error(transparent)]
     ApiError(#[from] crate::api::errors::DbError),

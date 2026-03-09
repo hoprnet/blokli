@@ -8,8 +8,7 @@ use std::collections::HashMap;
 mod tests;
 
 use async_graphql::{Enum, ID, InputObject, InputValueError, Scalar, ScalarType, SimpleObject, Union, Value};
-use hopr_crypto_types::types::Hash;
-use hopr_primitive_types::prelude::ToHex;
+use hopr_types::{crypto::types::Hash, primitive::prelude::ToHex};
 
 /// Token value represented as a string to maintain precision
 ///
@@ -72,7 +71,7 @@ impl From<&[u8; 32]> for Hex32 {
     }
 }
 
-impl From<hopr_crypto_types::types::Hash> for Hex32 {
+impl From<hopr_types::crypto::types::Hash> for Hex32 {
     fn from(hash: Hash) -> Self {
         Hex32(hash.to_hex())
     }

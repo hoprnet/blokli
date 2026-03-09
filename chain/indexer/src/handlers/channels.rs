@@ -2,8 +2,10 @@ use blokli_chain_rpc::HoprIndexerRpcOperations;
 use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator};
 use hopr_bindings::hopr_channels::HoprChannels::HoprChannelsEvents;
-use hopr_internal_types::channels::{ChannelEntry, ChannelStatus, generate_channel_id};
-use hopr_primitive_types::prelude::Address;
+use hopr_types::{
+    internal::channels::{ChannelEntry, ChannelStatus, generate_channel_id},
+    primitive::prelude::Address,
+};
 use tracing::{error, trace, warn};
 
 use super::{ContractEventHandlers, channel_utils::decode_channel, helpers::construct_channel_update};
@@ -517,14 +519,16 @@ mod tests {
         },
         hopr_node_safe_registry::HoprNodeSafeRegistry,
     };
-    use hopr_crypto_types::{
-        keypairs::Keypair,
-        prelude::{Hash, OffchainKeypair},
-    };
-    use hopr_internal_types::channels::{ChannelEntry, ChannelStatus, generate_channel_id};
-    use hopr_primitive_types::{
-        prelude::{Address, HoprBalance, SerializableLog},
-        traits::{AsUnixTimestamp, IntoEndian},
+    use hopr_types::{
+        crypto::{
+            keypairs::Keypair,
+            prelude::{Hash, OffchainKeypair},
+        },
+        internal::channels::{ChannelEntry, ChannelStatus, generate_channel_id},
+        primitive::{
+            prelude::{Address, HoprBalance, SerializableLog},
+            traits::{AsUnixTimestamp, IntoEndian},
+        },
     };
     use primitive_types::H256;
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
@@ -599,7 +603,7 @@ mod tests {
         };
         let handlers = init_handlers(clonable_rpc_operations, db.clone());
 
-        let separator = Hash::from(hopr_crypto_random::random_bytes());
+        let separator = Hash::from(hopr_types::crypto_random::random_bytes());
 
         let encoded_data = ().abi_encode();
 
@@ -1433,12 +1437,12 @@ mod tests {
         let handlers = init_handlers(clonable_rpc_operations, db.clone());
 
         // Generate foreign addresses and create accounts before channel operations
-        let foreign_addr1 = Address::from(hopr_crypto_random::random_bytes());
-        let foreign_addr2 = Address::from(hopr_crypto_random::random_bytes());
+        let foreign_addr1 = Address::from(hopr_types::crypto_random::random_bytes());
+        let foreign_addr2 = Address::from(hopr_types::crypto_random::random_bytes());
         let foreign_key1 =
-            OffchainKeypair::from_secret(&hopr_crypto_random::random_bytes::<32>()).expect("valid keypair");
+            OffchainKeypair::from_secret(&hopr_types::crypto_random::random_bytes::<32>()).expect("valid keypair");
         let foreign_key2 =
-            OffchainKeypair::from_secret(&hopr_crypto_random::random_bytes::<32>()).expect("valid keypair");
+            OffchainKeypair::from_secret(&hopr_types::crypto_random::random_bytes::<32>()).expect("valid keypair");
 
         db.upsert_account(None, 1, foreign_addr1, *foreign_key1.public(), None, 1, 0, 0)
             .await?;

@@ -1,4 +1,4 @@
-use hopr_crypto_types::prelude::Hash;
+use hopr_types::crypto::prelude::Hash;
 use thiserror::Error;
 
 #[derive(Debug, Error)]

@@ -7,14 +7,16 @@ pub(super) mod test_helpers {
     use blokli_db::{BlokliDbAllOperations, accounts::BlokliDbAccountOperations, db::BlokliDb};
     use hex_literal::hex;
     use hopr_bindings::exports::alloy::{primitives::B256, sol_types::private::IntoLogData};
-    use hopr_crypto_types::{
-        keypairs::Keypair,
-        prelude::{ChainKeypair, OffchainKeypair},
-    };
-    use hopr_internal_types::channels::ChannelStatus;
-    use hopr_primitive_types::{
-        prelude::{Address, HoprBalance, SerializableLog, XDaiBalance},
-        traits::IntoEndian,
+    use hopr_types::{
+        crypto::{
+            keypairs::Keypair,
+            prelude::{ChainKeypair, OffchainKeypair},
+        },
+        internal::channels::ChannelStatus,
+        primitive::{
+            prelude::{Address, HoprBalance, SerializableLog, XDaiBalance},
+            traits::IntoEndian,
+        },
     };
 
     use super::super::ContractEventHandlers;
@@ -42,7 +44,7 @@ pub(super) mod test_helpers {
         #[async_trait::async_trait]
         impl HoprIndexerRpcOperations for IndexerRpcOperations {
             async fn block_number(&self) -> blokli_chain_rpc::errors::Result<u64>;
-            async fn get_transaction_sender(&self, tx_hash: hopr_crypto_types::types::Hash) -> blokli_chain_rpc::errors::Result<Address>;
+            async fn get_transaction_sender(&self, tx_hash: hopr_types::crypto::types::Hash) -> blokli_chain_rpc::errors::Result<Address>;
 
             fn try_stream_logs<'a>(
                 &'a self,
@@ -73,7 +75,7 @@ pub(super) mod test_helpers {
 
         async fn get_transaction_sender(
             &self,
-            tx_hash: hopr_crypto_types::types::Hash,
+            tx_hash: hopr_types::crypto::types::Hash,
         ) -> blokli_chain_rpc::errors::Result<Address> {
             self.inner.get_transaction_sender(tx_hash).await
         }

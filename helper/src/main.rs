@@ -2,7 +2,7 @@ use anyhow::{Context, bail};
 use blokli_chain_types::channel::decode_channel;
 use clap::{Parser, Subcommand};
 use hopr_bindings::exports::alloy::primitives::B256;
-use hopr_internal_types::channels::ChannelStatus;
+use hopr_types::internal::channels::ChannelStatus;
 
 #[derive(Parser)]
 #[command(name = "blokli-helper", version, about = "CLI helper utilities for HOPR Blokli")]

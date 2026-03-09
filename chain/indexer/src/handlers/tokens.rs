@@ -2,7 +2,7 @@ use blokli_chain_rpc::HoprIndexerRpcOperations;
 use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction};
 use hopr_bindings::hopr_token::HoprToken::HoprTokenEvents;
-use hopr_primitive_types::prelude::Address;
+use hopr_types::primitive::prelude::Address;
 use tracing::{debug, trace};
 
 use super::ContractEventHandlers;

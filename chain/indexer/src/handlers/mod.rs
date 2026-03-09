@@ -21,8 +21,10 @@ use hopr_bindings::{
     hopr_token::HoprToken::HoprTokenEvents,
     hopr_winning_probability_oracle::HoprWinningProbabilityOracle::HoprWinningProbabilityOracleEvents,
 };
-use hopr_crypto_types::prelude::Hash;
-use hopr_primitive_types::prelude::{Address, SerializableLog};
+use hopr_types::{
+    crypto::prelude::Hash,
+    primitive::prelude::{Address, SerializableLog},
+};
 use tracing::{debug, error, trace};
 
 use crate::{
@@ -356,10 +358,12 @@ mod tests {
         exports::alloy::sol_types::{SolEvent, SolValue},
         hopr_node_safe_registry::HoprNodeSafeRegistry,
     };
-    use hopr_crypto_types::keypairs::Keypair;
-    use hopr_primitive_types::{
-        prelude::{Address, SerializableLog},
-        traits::ToHex,
+    use hopr_types::{
+        crypto::keypairs::Keypair,
+        primitive::{
+            prelude::{Address, SerializableLog},
+            traits::ToHex,
+        },
     };
     use primitive_types::H256;
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};

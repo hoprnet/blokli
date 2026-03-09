@@ -27,9 +27,7 @@ use hopr_bindings::exports::alloy::{
     providers::PendingTransaction,
     rpc::types::{Filter, Log as AlloyLog, RawLog, TransactionRequest},
 };
-use hopr_crypto_types::types::Hash;
-use hopr_internal_types::prelude::WinningProbability;
-use hopr_primitive_types::prelude::*;
+use hopr_types::{crypto::types::Hash, internal::prelude::WinningProbability, primitive::prelude::*};
 use serde::{Deserialize, Serialize};
 
 use crate::{RetryAction::NoRetry, errors::Result};

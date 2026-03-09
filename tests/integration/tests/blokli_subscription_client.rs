@@ -14,9 +14,11 @@ use futures::stream::StreamExt;
 use futures_time::{future::FutureExt as FutureTimeoutExt, time::Duration as FuturesDuration};
 use hex::{FromHex, ToHex};
 use hopr_bindings::exports::alloy::primitives::U256;
-use hopr_crypto_types::{keypairs::Keypair, types::Hash};
-use hopr_internal_types::channels::generate_channel_id;
-use hopr_primitive_types::prelude::HoprBalance;
+use hopr_types::{
+    crypto::{keypairs::Keypair, types::Hash},
+    internal::channels::generate_channel_id,
+    primitive::prelude::HoprBalance,
+};
 use rstest::*;
 use serde_json::json;
 use serial_test::serial;

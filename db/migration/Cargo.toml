@@ -27,7 +27,7 @@ serde             = { workspace = true }
 serde-hex         = { workspace = true }
 tokio             = { workspace = true }
 
-hopr-internal-types = { workspace = true }
+hopr-types = { workspace = true, features = ["internal"] }
 
 [dev-dependencies]
 anyhow  = { workspace = true }

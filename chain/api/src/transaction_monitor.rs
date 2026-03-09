@@ -6,7 +6,7 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use hopr_crypto_types::types::Hash;
+use hopr_types::crypto::types::Hash;
 use tokio::time::sleep;
 use tracing::{debug, error, info};
 

@@ -12,8 +12,10 @@ use blokli_client::{
 };
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use futures::{StreamExt, TryFuture, TryFutureExt, future::Either, pin_mut};
-use hopr_crypto_types::types::OffchainPublicKey;
-use hopr_primitive_types::prelude::{Address, ToHex};
+use hopr_types::{
+    crypto::types::OffchainPublicKey,
+    primitive::prelude::{Address, ToHex},
+};
 use queries::QueryTarget;
 use tokio::io::AsyncReadExt;
 use tracing_subscriber::{EnvFilter, fmt};
