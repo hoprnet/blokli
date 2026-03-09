@@ -198,7 +198,7 @@ impl MigrationTrait for Migration {
                     .col(ColumnDef::new(ChainInfo::SafeRegistryDST).binary_len(32).null())
                     .col(
                         ColumnDef::new(ChainInfo::MinIncomingTicketWinProb)
-                            .float()
+                            .double()
                             .not_null()
                             .default(DEFAULT_MINIMUM_INCOMING_TICKET_WIN_PROB),
                     )
