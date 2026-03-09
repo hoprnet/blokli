@@ -30,8 +30,8 @@ use hopr_types::{
         payload::{BasicPayloadGenerator, PayloadGenerator, SafePayloadGenerator},
         prelude::SignableTransaction,
     },
-    crypto::keypairs::{ChainKeypair, Keypair},
-    internal::{Multiaddr, announcement::AnnouncementData},
+    crypto::{keypairs::{ChainKeypair, Keypair}, types::{HalfKey, Hash, Response}},
+    internal::{Multiaddr, announcement::AnnouncementData, tickets::TicketBuilder},
     primitive::{
         prelude::{Address as HoprAddress, HoprBalance},
         traits::IntoEndian,

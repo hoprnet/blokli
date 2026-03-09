@@ -1,6 +1,6 @@
 use async_trait::async_trait;
 use blokli_db_entity::{hopr_safe_redeemed_stats, prelude::HoprSafeRedeemedStats};
-use hopr_primitive_types::{
+use hopr_types::primitive::{
     prelude::{Address, HoprBalance},
     traits::IntoEndian,
 };
