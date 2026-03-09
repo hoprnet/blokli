@@ -61,7 +61,6 @@ hopr-platform = { workspace = true }
 hopr-types = { workspace = true, features = [
   "crypto",
   "internal",
-  "parallelize",
   "primitive",
 ] }
 
