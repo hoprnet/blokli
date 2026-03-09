@@ -2150,7 +2150,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db-migration"
-version = "0.9.3"
+version = "0.9.4"
 dependencies = [
  "anyhow",
  "csv",
