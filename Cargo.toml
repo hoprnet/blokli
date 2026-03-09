@@ -60,20 +60,20 @@ futures-timer = "3.0.3"
 futures-util = "0.3.31"
 hex = "0.4.3"
 hex-literal = "1.1.0"
-hopli = { git = "https://github.com/hoprnet/hopli", branch = "main", version = "0.17.0" }
-hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
-hopr-bindings = { git = "https://github.com/hoprnet/contracts", branch = "main", version = "4.7.0" }
-hopr-types = { git = "https://github.com/hoprnet/hopr-types", branch = "main", features = [
+hopli = { git = "https://github.com/hoprnet/hopli" }
+hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet" }
+hopr-bindings = { git = "https://github.com/hoprnet/contracts" }
+hopr-types = { git = "https://github.com/hoprnet/hopr-types", features = [
   "serde",
 ] }
 
-hopr-crypto-packet = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
-hopr-metrics = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
-hopr-network-types = { git = "https://github.com/hoprnet/hoprnet", branch = "master", features = [
+hopr-crypto-packet = { git = "https://github.com/hoprnet/hoprnet" }
+hopr-metrics = { git = "https://github.com/hoprnet/hoprnet" }
+hopr-network-types = { git = "https://github.com/hoprnet/hoprnet", features = [
   "serde",
 ] }
 
-hopr-platform = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-platform = { git = "https://github.com/hoprnet/hoprnet" }
 
 http = "1.3.1"
 humantime-serde = "1.1"

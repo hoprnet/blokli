@@ -8,7 +8,7 @@ use blokli_db::{
     safe_redeemed_stats::BlokliDbSafeRedeemedStatsOperations,
 };
 use blokli_db_entity::hopr_safe_contract::{Column as SafeColumn, Entity as SafeEntity};
-use hopr_types::primitive::{prelude::Address, traits::ToHex};
+use hopr_types::primitive::{Balance, currency_types::WxHOPR, prelude::Address, traits::ToHex};
 use rand::RngCore;
 use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
@@ -37,14 +37,46 @@ async fn test_safe_queries() -> anyhow::Result<()> {
         .await?;
     db.create_safe_contract(None, safe_address_1, module_address_1, chain_key_1, 100, 0, 1)
         .await?;
-    db.record_safe_ticket_redeemed(None, safe_address_0, chain_key_0, HoprBalance::from(7_u64), 110, 1, 0)
-        .await?;
-    db.record_safe_ticket_redeemed(None, safe_address_0, chain_key_0, HoprBalance::from(5_u64), 120, 1, 1)
-        .await?;
-    db.record_safe_ticket_redeemed(None, safe_address_0, chain_key_1, HoprBalance::from(11_u64), 121, 1, 2)
-        .await?;
-    db.record_safe_ticket_redeemed(None, safe_address_1, chain_key_0, HoprBalance::from(3_u64), 130, 2, 0)
-        .await?;
+    db.record_safe_ticket_redeemed(
+        None,
+        safe_address_0,
+        chain_key_0,
+        Balance::<WxHOPR>::from(7_u64),
+        110,
+        1,
+        0,
+    )
+    .await?;
+    db.record_safe_ticket_redeemed(
+        None,
+        safe_address_0,
+        chain_key_0,
+        Balance::<WxHOPR>::from(5_u64),
+        120,
+        1,
+        1,
+    )
+    .await?;
+    db.record_safe_ticket_redeemed(
+        None,
+        safe_address_0,
+        chain_key_1,
+        Balance::<WxHOPR>::from(11_u64),
+        121,
+        1,
+        2,
+    )
+    .await?;
+    db.record_safe_ticket_redeemed(
+        None,
+        safe_address_1,
+        chain_key_0,
+        Balance::<WxHOPR>::from(3_u64),
+        130,
+        2,
+        0,
+    )
+    .await?;
 
     // Verify DB has the record
     let count = SafeEntity::find()
