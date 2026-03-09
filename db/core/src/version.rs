@@ -2,7 +2,7 @@ use blokli_db_entity::prelude::{
     Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, HoprBalance, HoprNodeSafeRegistration,
     HoprSafeContract, HoprSafeContractState, Log, LogStatus, LogTopicInfo, NativeBalance,
 };
-use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, Statement};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, Statement};
 use tracing::{info, warn};
 
 use crate::errors::{DbSqlError, Result};
@@ -135,10 +135,11 @@ async fn clear_all_data(db: &DatabaseConnection, logs_db: Option<&DatabaseConnec
     // Clear logs database data (if separate)
     if let Some(logs_conn) = logs_db {
         clear_logs_data(logs_conn).await?;
-    } else {
+    } else if db.get_database_backend() != DbBackend::Sqlite {
         // PostgreSQL: logs are in the same database
         clear_logs_data(db).await?;
     }
+    // For SQLite without a separate logs database, log tables don't exist — skip
 
     Ok(())
 }
