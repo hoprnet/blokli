@@ -239,8 +239,8 @@ mod tests {
         let chain_info_update = chain_info::ActiveModel {
             id: Set(1),
             last_indexed_block: Set(100),
-            last_indexed_tx_index: Set(Some(5)),
-            last_indexed_log_index: Set(Some(10)),
+            last_indexed_tx_index: Set(5),
+            last_indexed_log_index: Set(10),
             ..Default::default()
         };
         chain_info_update.update(db.conn(crate::TargetDb::Index)).await?;
@@ -282,8 +282,8 @@ mod tests {
             chain_info_after.last_indexed_block, 0,
             "Data should be reset to default"
         );
-        assert_eq!(chain_info_after.last_indexed_tx_index, None);
-        assert_eq!(chain_info_after.last_indexed_log_index, None);
+        assert_eq!(chain_info_after.last_indexed_tx_index, 0);
+        assert_eq!(chain_info_after.last_indexed_log_index, 0);
 
         Ok(())
     }
@@ -334,8 +334,8 @@ mod tests {
         let chain_info_update = chain_info::ActiveModel {
             id: Set(1),
             last_indexed_block: Set(42),
-            last_indexed_tx_index: Set(Some(7)),
-            last_indexed_log_index: Set(Some(3)),
+            last_indexed_tx_index: Set(7),
+            last_indexed_log_index: Set(3),
             ..Default::default()
         };
         chain_info_update.update(db.conn(crate::TargetDb::Index)).await?;
@@ -354,8 +354,8 @@ mod tests {
             .await?
             .unwrap();
         assert_eq!(chain_info_after.last_indexed_block, 42, "Data should be preserved");
-        assert_eq!(chain_info_after.last_indexed_tx_index, Some(7));
-        assert_eq!(chain_info_after.last_indexed_log_index, Some(3));
+        assert_eq!(chain_info_after.last_indexed_tx_index, 7);
+        assert_eq!(chain_info_after.last_indexed_log_index, 3);
 
         Ok(())
     }
