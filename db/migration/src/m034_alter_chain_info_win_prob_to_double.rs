@@ -56,6 +56,24 @@ FROM chain_info_old;
 DROP TABLE chain_info_old;
 ";
 
+const POSTGRES_UP_WATERMARK_INDEX_NORMALIZATION: &str = "
+UPDATE chain_info
+SET
+    last_indexed_tx_index = COALESCE(last_indexed_tx_index, 0),
+    last_indexed_log_index = COALESCE(last_indexed_log_index, 0);
+ALTER TABLE chain_info ALTER COLUMN last_indexed_tx_index SET DEFAULT 0;
+ALTER TABLE chain_info ALTER COLUMN last_indexed_log_index SET DEFAULT 0;
+ALTER TABLE chain_info ALTER COLUMN last_indexed_tx_index SET NOT NULL;
+ALTER TABLE chain_info ALTER COLUMN last_indexed_log_index SET NOT NULL;
+";
+
+const POSTGRES_DOWN_WATERMARK_INDEX_NORMALIZATION: &str = "
+ALTER TABLE chain_info ALTER COLUMN last_indexed_tx_index DROP NOT NULL;
+ALTER TABLE chain_info ALTER COLUMN last_indexed_log_index DROP NOT NULL;
+ALTER TABLE chain_info ALTER COLUMN last_indexed_tx_index DROP DEFAULT;
+ALTER TABLE chain_info ALTER COLUMN last_indexed_log_index DROP DEFAULT;
+";
+
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
@@ -127,6 +145,14 @@ impl MigrationTrait for Migration {
                 .await?;
         }
 
+        for statement in POSTGRES_UP_WATERMARK_INDEX_NORMALIZATION
+            .trim()
+            .split(';')
+            .filter(|s| !s.trim().is_empty())
+        {
+            db.execute_unprepared(statement.trim()).await?;
+        }
+
         Ok(())
     }
 
@@ -195,6 +221,14 @@ impl MigrationTrait for Migration {
                         .to_owned(),
                 )
                 .await?;
+        }
+
+        for statement in POSTGRES_DOWN_WATERMARK_INDEX_NORMALIZATION
+            .trim()
+            .split(';')
+            .filter(|s| !s.trim().is_empty())
+        {
+            db.execute_unprepared(statement.trim()).await?;
         }
 
         Ok(())
