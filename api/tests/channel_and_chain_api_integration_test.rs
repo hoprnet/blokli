@@ -122,11 +122,11 @@ async fn setup_chain_info(db: &BlokliDb) -> Result<()> {
     let chain_info = blokli_db_entity::chain_info::ActiveModel {
         id: Set(1),
         last_indexed_block: Set(1000),
-        last_indexed_tx_index: Set(Some(0)),
-        last_indexed_log_index: Set(Some(0)),
+        last_indexed_tx_index: Set(0),
+        last_indexed_log_index: Set(0),
         ticket_price: Set(Some(vec![0u8; 12])),
         key_binding_fee: Set(Some(vec![0u8; 12])),
-        min_incoming_ticket_win_prob: Set(0.5_f32),
+        min_incoming_ticket_win_prob: Set(0.5_f64),
         channels_dst: Set(Some(vec![1u8; 32])),
         ledger_dst: Set(Some(vec![2u8; 32])),
         safe_registry_dst: Set(Some(vec![3u8; 32])),
@@ -793,11 +793,11 @@ async fn test_chain_info_query_with_null_optional_fields() -> Result<()> {
     let chain_info = blokli_db_entity::chain_info::ActiveModel {
         id: Set(1),
         last_indexed_block: Set(500),
-        last_indexed_tx_index: Set(Some(0)),
-        last_indexed_log_index: Set(Some(0)),
+        last_indexed_tx_index: Set(0),
+        last_indexed_log_index: Set(0),
         ticket_price: Set(None),                    // NULL
         key_binding_fee: Set(None),                 // NULL
-        min_incoming_ticket_win_prob: Set(0.0_f32), // Zero value
+        min_incoming_ticket_win_prob: Set(0.0_f64), // Zero value
         channels_dst: Set(None),                    // NULL
         ledger_dst: Set(None),                      // NULL
         safe_registry_dst: Set(None),               // NULL

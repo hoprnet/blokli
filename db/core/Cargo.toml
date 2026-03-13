@@ -5,7 +5,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-db"
 repository  = "https://github.com/hoprnet/blokli"
-version     = "0.12.2"
+version     = "0.12.3"
 
 [lints]
 workspace = true
@@ -61,7 +61,6 @@ hopr-platform = { workspace = true }
 hopr-types = { workspace = true, features = [
   "crypto",
   "internal",
-  "parallelize",
   "primitive",
 ] }
 

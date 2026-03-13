@@ -34,6 +34,7 @@ mod m030_migrate_v3_safes;
 mod m031_remove_ticket_params_notify_trigger;
 mod m032_safe_contract_temporal_schema;
 mod m033_update_current_state_views;
+mod m034_alter_chain_info_win_prob_to_double;
 
 /// This is a special block ID that even pre-dates the v3 contract deployment on Gnosis chain,
 /// and therefore could be safely used to mark data added via the migration.
@@ -95,7 +96,8 @@ impl<const NETWORK: u8> Migrator<NETWORK> {
             Box::new(m031_remove_ticket_params_notify_trigger::Migration),
             Box::new(m032_safe_contract_temporal_schema::Migration),
             Box::new(m033_update_current_state_views::Migration),
-            // Note: m030 (safe CSV data) is added by network-specific impls AFTER m033
+            Box::new(m034_alter_chain_info_win_prob_to_double::Migration),
+            // Note: m030 (safe CSV data) is added by network-specific impls AFTER m034
             // because m030 now uses the temporal schema (hopr_safe_contract_state)
         ]
     }
@@ -155,7 +157,8 @@ impl<const NETWORK: u8> MigratorIndex<NETWORK> {
             Box::new(m031_remove_ticket_params_notify_trigger::Migration),
             Box::new(m032_safe_contract_temporal_schema::Migration),
             Box::new(m033_update_current_state_views::Migration),
-            // Note: m030 (safe CSV data) is added by network-specific impls AFTER m033
+            Box::new(m034_alter_chain_info_win_prob_to_double::Migration),
+            // Note: m030 (safe CSV data) is added by network-specific impls AFTER m034
             // because m030 now uses the temporal schema (hopr_safe_contract_state)
         ]
     }
@@ -787,6 +790,42 @@ mod tests {
             insert_result.is_ok(),
             "Should be able to insert into chain_info with watermark fields"
         );
+    }
+
+    #[tokio::test]
+    async fn test_chain_info_watermark_indices_default_to_zero() {
+        let db = setup_test_db().await;
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+            .await
+            .unwrap();
+
+        db.execute_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "DELETE FROM chain_info".to_string(),
+        ))
+        .await
+        .unwrap();
+
+        db.execute_raw(Statement::from_string(
+            DbBackend::Sqlite,
+            "INSERT INTO chain_info (id) VALUES (1)".to_string(),
+        ))
+        .await
+        .unwrap();
+
+        let row = db
+            .query_one_raw(Statement::from_string(
+                DbBackend::Sqlite,
+                "SELECT last_indexed_tx_index, last_indexed_log_index FROM chain_info WHERE id = 1".to_string(),
+            ))
+            .await
+            .unwrap()
+            .unwrap();
+
+        let tx_index: i64 = row.try_get("", "last_indexed_tx_index").unwrap();
+        let log_index: i64 = row.try_get("", "last_indexed_log_index").unwrap();
+        assert_eq!(tx_index, 0, "last_indexed_tx_index should default to 0");
+        assert_eq!(log_index, 0, "last_indexed_log_index should default to 0");
     }
 
     #[tokio::test]

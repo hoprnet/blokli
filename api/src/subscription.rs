@@ -110,8 +110,8 @@ async fn capture_watermark_synchronized(
 
     let watermark = Watermark {
         block: chain_info.last_indexed_block,
-        tx_index: chain_info.last_indexed_tx_index.unwrap_or(0),
-        log_index: chain_info.last_indexed_log_index.unwrap_or(0),
+        tx_index: chain_info.last_indexed_tx_index,
+        log_index: chain_info.last_indexed_log_index,
     };
 
     // Subscribe to event bus and shutdown signal while still holding the lock
@@ -1227,7 +1227,7 @@ impl SubscriptionRoot {
             };
 
             TicketParameters {
-                min_ticket_winning_probability: info.min_incoming_ticket_win_prob as f64,
+                min_ticket_winning_probability: info.min_incoming_ticket_win_prob,
                 ticket_price: TokenValueString(ticket_price),
             }
         }))
@@ -1456,8 +1456,8 @@ mod tests {
         let chain_info = chain_info::ActiveModel {
             id: Set(1),
             last_indexed_block: Set(block),
-            last_indexed_tx_index: Set(Some(tx_index)),
-            last_indexed_log_index: Set(Some(log_index)),
+            last_indexed_tx_index: Set(tx_index),
+            last_indexed_log_index: Set(log_index),
             ticket_price: Set(None),
             key_binding_fee: Set(None),
             channels_dst: Set(None),
@@ -1925,8 +1925,8 @@ mod tests {
         let chain_info = chain_info::ActiveModel {
             id: Set(1),
             last_indexed_block: Set(100),
-            last_indexed_tx_index: Set(Some(0)),
-            last_indexed_log_index: Set(Some(0)),
+            last_indexed_tx_index: Set(0),
+            last_indexed_log_index: Set(0),
             ticket_price: Set(None),
             key_binding_fee: Set(Some(starting_fee.to_be_bytes().into())),
             channels_dst: Set(None),

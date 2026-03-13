@@ -2,7 +2,7 @@ use blokli_db_entity::prelude::{
     Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, HoprBalance, HoprNodeSafeRegistration,
     HoprSafeContract, HoprSafeContractState, Log, LogStatus, LogTopicInfo, NativeBalance,
 };
-use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, Statement};
+use sea_orm::{ConnectionTrait, DatabaseConnection, DbBackend, EntityTrait, Statement};
 use tracing::{info, warn};
 
 use crate::errors::{DbSqlError, Result};
@@ -135,10 +135,11 @@ async fn clear_all_data(db: &DatabaseConnection, logs_db: Option<&DatabaseConnec
     // Clear logs database data (if separate)
     if let Some(logs_conn) = logs_db {
         clear_logs_data(logs_conn).await?;
-    } else {
+    } else if db.get_database_backend() != DbBackend::Sqlite {
         // PostgreSQL: logs are in the same database
         clear_logs_data(db).await?;
     }
+    // For SQLite without a separate logs database, log tables don't exist — skip
 
     Ok(())
 }
@@ -238,8 +239,8 @@ mod tests {
         let chain_info_update = chain_info::ActiveModel {
             id: Set(1),
             last_indexed_block: Set(100),
-            last_indexed_tx_index: Set(Some(5)),
-            last_indexed_log_index: Set(Some(10)),
+            last_indexed_tx_index: Set(5),
+            last_indexed_log_index: Set(10),
             ..Default::default()
         };
         chain_info_update.update(db.conn(crate::TargetDb::Index)).await?;
@@ -281,8 +282,8 @@ mod tests {
             chain_info_after.last_indexed_block, 0,
             "Data should be reset to default"
         );
-        assert_eq!(chain_info_after.last_indexed_tx_index, None);
-        assert_eq!(chain_info_after.last_indexed_log_index, None);
+        assert_eq!(chain_info_after.last_indexed_tx_index, 0);
+        assert_eq!(chain_info_after.last_indexed_log_index, 0);
 
         Ok(())
     }
@@ -333,8 +334,8 @@ mod tests {
         let chain_info_update = chain_info::ActiveModel {
             id: Set(1),
             last_indexed_block: Set(42),
-            last_indexed_tx_index: Set(Some(7)),
-            last_indexed_log_index: Set(Some(3)),
+            last_indexed_tx_index: Set(7),
+            last_indexed_log_index: Set(3),
             ..Default::default()
         };
         chain_info_update.update(db.conn(crate::TargetDb::Index)).await?;
@@ -353,8 +354,8 @@ mod tests {
             .await?
             .unwrap();
         assert_eq!(chain_info_after.last_indexed_block, 42, "Data should be preserved");
-        assert_eq!(chain_info_after.last_indexed_tx_index, Some(7));
-        assert_eq!(chain_info_after.last_indexed_log_index, Some(3));
+        assert_eq!(chain_info_after.last_indexed_tx_index, 7);
+        assert_eq!(chain_info_after.last_indexed_log_index, 3);
 
         Ok(())
     }

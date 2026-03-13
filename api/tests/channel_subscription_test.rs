@@ -119,8 +119,8 @@ async fn update_watermark(db: &BlokliDb, block: i64, tx_index: i64, log_index: i
     let chain_info_model = chain_info::ActiveModel {
         id: Set(1),
         last_indexed_block: Set(block),
-        last_indexed_tx_index: Set(Some(tx_index)),
-        last_indexed_log_index: Set(Some(log_index)),
+        last_indexed_tx_index: Set(tx_index),
+        last_indexed_log_index: Set(log_index),
         ticket_price: Set(None),
         min_incoming_ticket_win_prob: Set(0.0),
         channels_dst: Set(None),

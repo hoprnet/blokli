@@ -1,4 +1,4 @@
-// Allow casts for u32 block numbers and f64→f32 precision loss (acceptable for probabilities)
+// Allow casts for u32 block numbers
 #![allow(clippy::cast_possible_wrap, clippy::cast_possible_truncation)]
 
 use async_trait::async_trait;
@@ -215,8 +215,7 @@ impl BlokliDbInfoOperations for BlokliDb {
                             channels_dst,
                             ticket_price: model.ticket_price.map(HoprBalance::from_be_bytes),
                             key_binding_fee: model.key_binding_fee.map(HoprBalance::from_be_bytes),
-                            minimum_incoming_ticket_winning_prob: (model.min_incoming_ticket_win_prob as f64)
-                                .try_into()?,
+                            minimum_incoming_ticket_winning_prob: model.min_incoming_ticket_win_prob.try_into()?,
                             channel_closure_grace_period: model
                                 .channel_closure_grace_period
                                 .and_then(|p| u64::try_from(p).ok()),
@@ -271,7 +270,7 @@ impl BlokliDbInfoOperations for BlokliDb {
                 Box::pin(async move {
                     chain_info::ActiveModel {
                         id: Set(SINGULAR_TABLE_FIXED_ID),
-                        min_incoming_ticket_win_prob: Set(win_prob.as_f64() as f32),
+                        min_incoming_ticket_win_prob: Set(win_prob.as_f64()),
                         ..Default::default()
                     }
                     .update(tx.as_ref())

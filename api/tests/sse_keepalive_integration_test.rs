@@ -22,8 +22,8 @@ async fn test_sse_keepalive_comments_emitted() -> anyhow::Result<()> {
     let chain_info = chain_info::ActiveModel {
         id: Set(1),
         last_indexed_block: Set(block_number),
-        last_indexed_tx_index: Set(Some(0)),
-        last_indexed_log_index: Set(Some(0)),
+        last_indexed_tx_index: Set(0),
+        last_indexed_log_index: Set(0),
         min_incoming_ticket_win_prob: Set(0.0),
         ..Default::default()
     };
@@ -89,8 +89,8 @@ async fn test_sse_keepalive_uuid_identifier_format() -> anyhow::Result<()> {
     let chain_info = chain_info::ActiveModel {
         id: Set(1),
         last_indexed_block: Set(block_number),
-        last_indexed_tx_index: Set(Some(0)),
-        last_indexed_log_index: Set(Some(0)),
+        last_indexed_tx_index: Set(0),
+        last_indexed_log_index: Set(0),
         min_incoming_ticket_win_prob: Set(0.0),
         ..Default::default()
     };
@@ -164,8 +164,8 @@ async fn test_sse_identifier_uniqueness() -> anyhow::Result<()> {
     let chain_info = chain_info::ActiveModel {
         id: Set(1),
         last_indexed_block: Set(block_number),
-        last_indexed_tx_index: Set(Some(0)),
-        last_indexed_log_index: Set(Some(0)),
+        last_indexed_tx_index: Set(0),
+        last_indexed_log_index: Set(0),
         min_incoming_ticket_win_prob: Set(0.0),
         ..Default::default()
     };
@@ -222,8 +222,8 @@ async fn test_sse_identifier_uniqueness() -> anyhow::Result<()> {
     let chain_info1 = chain_info::ActiveModel {
         id: Set(1),
         last_indexed_block: Set(block_number1),
-        last_indexed_tx_index: Set(Some(0)),
-        last_indexed_log_index: Set(Some(0)),
+        last_indexed_tx_index: Set(0),
+        last_indexed_log_index: Set(0),
         min_incoming_ticket_win_prob: Set(0.0),
         ..Default::default()
     };
@@ -233,8 +233,8 @@ async fn test_sse_identifier_uniqueness() -> anyhow::Result<()> {
     let chain_info2 = chain_info::ActiveModel {
         id: Set(1),
         last_indexed_block: Set(block_number2),
-        last_indexed_tx_index: Set(Some(0)),
-        last_indexed_log_index: Set(Some(0)),
+        last_indexed_tx_index: Set(0),
+        last_indexed_log_index: Set(0),
         min_incoming_ticket_win_prob: Set(0.0),
         ..Default::default()
     };

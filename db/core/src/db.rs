@@ -188,19 +188,17 @@ impl BlokliDb {
         };
 
         // Apply migrations based on database backend
-        if is_sqlite && logs_db.is_some() {
+        if is_sqlite {
             // For SQLite with dual databases: run separate migrations on each database
             MigratorIndex::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
                 .await
                 .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
 
-            MigratorChainLogs::up(logs_db.as_ref().unwrap(), None)
-                .await
-                .map_err(|e| DbSqlError::Construction(format!("cannot apply logs migrations: {e}")))?;
-        } else if is_sqlite {
-            Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-                .await
-                .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
+            if let Some(ref logs_database) = logs_db {
+                MigratorChainLogs::up(logs_database, None)
+                    .await
+                    .map_err(|e| DbSqlError::Construction(format!("cannot apply logs migrations: {e}")))?;
+            }
         } else {
             Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
                 .await
@@ -276,7 +274,10 @@ impl BlokliDb {
     /// For SQLite with dual databases, returns the logs database connection.
     /// For PostgreSQL or single-database mode, returns the primary database connection.
     pub(crate) fn logs_db(&self) -> &sea_orm::DatabaseConnection {
-        self.logs_db.as_ref().unwrap_or(&self.db)
+        match self.logs_db.as_ref() {
+            Some(logs_db) => logs_db,
+            None => &self.db,
+        }
     }
 
     /// Initialize ChainInfo singleton entry if it doesn't exist.
