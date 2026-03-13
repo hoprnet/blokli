@@ -8,7 +8,10 @@ use blokli_db::{
     safe_redeemed_stats::BlokliDbSafeRedeemedStatsOperations,
 };
 use blokli_db_entity::hopr_safe_contract::{Column as SafeColumn, Entity as SafeEntity};
-use hopr_types::primitive::{Balance, currency_types::WxHOPR, prelude::Address, traits::ToHex};
+use hopr_types::primitive::{
+    prelude::{Address, Balance, WxHOPR},
+    traits::ToHex,
+};
 use rand::RngCore;
 use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
