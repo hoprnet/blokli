@@ -102,25 +102,24 @@ rstest-log = "0.2.0"
 rust-stream-ext-concurrent = "1.0.0"
 rustls = { version = "0.23", default-features = false, features = ["std"] }
 rustls-pemfile = "2.1"
-sea-orm = { version = "2.0.0-rc.9", default-features = false, features = [
+sea-orm = { version = "2.0.0-rc.37", default-features = false, features = [
   "debug-print",
   "macros",
   "runtime-tokio-rustls",
   "sqlx-postgres",
   "with-chrono",
 ] }
-sea-orm-cli = { version = "2.0.0-rc.9", default-features = false, features = [
+sea-orm-cli = { version = "2.0.0-rc.37", default-features = false, features = [
   "codegen",
   "runtime-tokio-rustls",
 ] }
-sea-orm-migration = { version = "2.0.0-rc.9", default-features = false, features = [
+sea-orm-migration = { version = "2.0.0-rc.37", default-features = false, features = [
   "cli",
   "sqlx-postgres",
   "with-chrono",
 ] }
-sea-query = { version = "1.0.0-rc.14", default-features = false }
-# Removed: sea-query-binder is incompatible with sea-query 1.0.0-rc.14
-# SeaORM 2.0.0-rc.9 uses its own internal sea-query-sqlx for database integration
+sea-query = { version = "1.0.0-rc.31", default-features = false }
+# Keep sea-query aligned with SeaORM RC line to avoid resolver drift.
 seaography = { version = "2.0.0-rc.2", features = ["with-chrono"] }
 semver = "1.0.26"
 serde = { version = "1.0", features = ["derive"] }
