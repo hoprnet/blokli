@@ -188,19 +188,21 @@ impl BlokliDb {
         };
 
         // Apply migrations based on database backend
-        if is_sqlite && logs_db.is_some() {
-            // For SQLite with dual databases: run separate migrations on each database
-            MigratorIndex::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-                .await
-                .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
+        if is_sqlite {
+            if let Some(logs_db) = &logs_db {
+                // For SQLite with dual databases: run separate migrations on each database
+                MigratorIndex::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+                    .await
+                    .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
 
-            MigratorChainLogs::up(logs_db.as_ref().unwrap(), None)
-                .await
-                .map_err(|e| DbSqlError::Construction(format!("cannot apply logs migrations: {e}")))?;
-        } else if is_sqlite {
-            Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-                .await
-                .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
+                MigratorChainLogs::up(logs_db, None)
+                    .await
+                    .map_err(|e| DbSqlError::Construction(format!("cannot apply logs migrations: {e}")))?;
+            } else {
+                Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+                    .await
+                    .map_err(|e| DbSqlError::Construction(format!("cannot apply migrations: {e}")))?;
+            }
         } else {
             Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
                 .await
