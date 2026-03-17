@@ -6,6 +6,7 @@
 pub mod config;
 pub mod conversions;
 pub mod errors;
+pub mod metrics;
 pub mod mutation;
 pub mod query;
 pub mod readiness;

@@ -10,6 +10,9 @@ version     = "0.8.4"
 
 [features]
 default = ["runtime-tokio"]
+prometheus = [
+  "blokli-api/prometheus",
+]
 runtime-tokio = [
   "blokli-chain-api/runtime-tokio",
   "blokli-chain-indexer/runtime-tokio",

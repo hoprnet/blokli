@@ -21,6 +21,7 @@ use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
 use crate::config::HealthConfig;
+use crate::metrics;
 
 /// Readiness state of the API server
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -63,19 +64,22 @@ impl ReadinessChecker {
     /// Perform a full readiness check and update the cached state
     /// This is used by /readyz endpoint and indexer completion signals
     pub async fn check_and_update(&self) {
-        let new_state = self.check_readiness().await;
+        let (new_state, health_status) = self.check_readiness().await;
         let mut cached = self.cached_state.write().await;
         let old_state = *cached;
         *cached = new_state;
+
+        // Update health metric with current status
+        metrics::set_health_status(health_status);
 
         // Log state transitions
         if old_state != new_state {
             match new_state {
                 ReadinessState::Ready => {
-                    info!("Readiness state transitioned to READY");
+                    info!("Readiness state transitioned to READY (status: {})", health_status);
                 }
                 ReadinessState::NotReady => {
-                    info!("Readiness state transitioned to NOT_READY");
+                    info!("Readiness state transitioned to NOT_READY (status: {})", health_status);
                 }
             }
         }
@@ -100,17 +104,20 @@ impl ReadinessChecker {
     }
 
     /// Check if the server is ready
-    async fn check_readiness(&self) -> ReadinessState {
+    ///
+    /// Returns a tuple of (`ReadinessState`, health status label) where the
+    /// health status label is one of the `metrics::HEALTH_STATUS_*` constants.
+    async fn check_readiness(&self) -> (ReadinessState, &'static str) {
         // 1. Check database connectivity by querying chain_info
         let indexed_block = match ChainInfo::find().one(&self.db).await {
             Ok(Some(info)) => Some(info.last_indexed_block),
             Ok(None) => {
                 // No chain info yet - indexer hasn't started
-                return ReadinessState::NotReady;
+                return (ReadinessState::NotReady, metrics::HEALTH_STATUS_UNSYNCHED);
             }
             Err(e) => {
                 error!("Database check failed: {}", e);
-                return ReadinessState::NotReady;
+                return (ReadinessState::NotReady, metrics::HEALTH_STATUS_CORRUPTED);
             }
         };
 
@@ -121,7 +128,7 @@ impl ReadinessChecker {
             Ok(block) => Some(block),
             Err(e) => {
                 error!("RPC check failed: {}", e);
-                return ReadinessState::NotReady;
+                return (ReadinessState::NotReady, metrics::HEALTH_STATUS_TIMEOUT);
             }
         };
 
@@ -138,7 +145,7 @@ impl ReadinessChecker {
                     max_lag = self.health_config.max_indexer_lag,
                     "Indexer lag exceeds threshold (lag compared against finality-adjusted RPC block)"
                 );
-                return ReadinessState::NotReady;
+                return (ReadinessState::NotReady, metrics::HEALTH_STATUS_UNSYNCHED);
             }
 
             // Log successful readiness check
@@ -149,9 +156,9 @@ impl ReadinessChecker {
                 "Indexer within acceptable lag of confirmed blocks"
             );
         } else {
-            return ReadinessState::NotReady;
+            return (ReadinessState::NotReady, metrics::HEALTH_STATUS_UNSYNCHED);
         }
 
-        ReadinessState::Ready
+        (ReadinessState::Ready, metrics::HEALTH_STATUS_OK)
     }
 }
