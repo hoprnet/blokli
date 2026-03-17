@@ -5,7 +5,7 @@ use blokli_client::{
 use clap::Subcommand;
 use hopr_types::primitive::prelude::Address;
 
-use crate::{AccountArgs, AltAccount, ChannelArgs, Formats};
+use crate::{AccountArgs, AltAccount, ChannelArgs, Formats, RedemptionsArgs};
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum QueryTarget {
@@ -62,6 +62,8 @@ pub(crate) enum QueryTarget {
     CountChannels(ChannelArgs),
     /// Gets information about channels.
     Channel(ChannelArgs),
+    /// Gets information about redemptions
+    Redemptions(RedemptionsArgs),
 }
 
 impl QueryTarget {
@@ -127,6 +129,7 @@ impl QueryTarget {
             }
             QueryTarget::CountAccounts(sel) => format.serialize(client.count_accounts(sel.try_into()?).await?),
             QueryTarget::CountChannels(sel) => format.serialize(client.count_channels(sel.try_into()?).await?),
+            QueryTarget::Redemptions(sel) => format.serialize(client.query_redeemed_stats(sel.try_into()?).await?),
         }
     }
 }

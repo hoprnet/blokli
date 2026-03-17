@@ -6,7 +6,7 @@ use std::{str::FromStr, time::Duration};
 use blokli_client::{
     BlokliClient, BlokliClientConfig,
     api::{
-        AccountSelector, BlokliTransactionClient, ChannelFilter, ChannelSelector,
+        AccountSelector, BlokliTransactionClient, ChainAddress, ChannelFilter, ChannelSelector, RedeemedStatsSelector,
         types::{Account, ChannelStatus},
     },
 };
@@ -82,6 +82,39 @@ enum Commands {
         #[arg(short, long, group = "tx")]
         track: bool,
     },
+}
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct RedemptionsArgs {
+    /// Optional safe address filter.
+    #[arg(short, long, value_parser = clap::value_parser!(String))]
+    safe_address: Option<String>,
+    /// Optional destination node address filter.
+    #[arg(short, long, value_parser = clap::value_parser!(String))]
+    node_address: Option<String>,
+}
+
+impl TryFrom<RedemptionsArgs> for RedeemedStatsSelector {
+    type Error = anyhow::Error;
+
+    fn try_from(value: RedemptionsArgs) -> Result<Self, Self::Error> {
+        let RedemptionsArgs {
+            safe_address,
+            node_address,
+        } = value;
+        Ok(RedeemedStatsSelector {
+            safe_address: if let Some(addr) = safe_address {
+                Some(ChainAddress::from(addr.parse::<Address>()?))
+            } else {
+                None
+            },
+            node_address: if let Some(addr) = node_address {
+                Some(ChainAddress::from(addr.parse::<Address>()?))
+            } else {
+                None
+            },
+        })
+    }
 }
 
 #[derive(Debug, Clone, Args)]
