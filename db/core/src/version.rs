@@ -138,6 +138,10 @@ async fn clear_all_data(db: &DatabaseConnection, logs_db: Option<&DatabaseConnec
     } else if db.get_database_backend() != DbBackend::Sqlite {
         // PostgreSQL: logs are in the same database
         clear_logs_data(db).await?;
+    } else {
+        tracing::warn!(
+            "Database is SQLite without separate logs database, skipping logs data clear. Should not happen"
+        );
     }
     // For SQLite without a separate logs database, log tables don't exist — skip
 
