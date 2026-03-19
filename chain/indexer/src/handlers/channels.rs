@@ -95,7 +95,19 @@ where
                                 log_index,
                             )
                             .await?;
+                    } else {
+                        warn!(
+                            %channel_id,
+                            node = %destination_account.chain_addr,
+                            "ChannelBalanceDecreased: destination account has no safe address, skipping redeemed stats recording"
+                        );
                     }
+                } else {
+                    warn!(
+                        %channel_id,
+                        destination = %existing_channel.destination,
+                        "ChannelBalanceDecreased: destination account not found, skipping redeemed stats recording"
+                    );
                 }
 
                 // Create updated channel entry with new state

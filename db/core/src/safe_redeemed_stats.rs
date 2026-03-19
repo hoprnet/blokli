@@ -1,5 +1,9 @@
 use async_trait::async_trait;
-use blokli_db_entity::{hopr_safe_redeemed_stats, prelude::HoprSafeRedeemedStats};
+pub use blokli_db_entity::conversions::redemptions_aggregation::AggregatedRedeemedStats;
+use blokli_db_entity::{
+    conversions::redemptions_aggregation::fetch_aggregated_redeemed_stats, hopr_safe_redeemed_stats,
+    prelude::HoprSafeRedeemedStats,
+};
 use hopr_types::primitive::{
     prelude::{Address, HoprBalance},
     traits::IntoEndian,
@@ -7,7 +11,7 @@ use hopr_types::primitive::{
 use sea_orm::{ActiveModelTrait, ColumnTrait, EntityTrait, QueryFilter, Set};
 
 use crate::{
-    BlokliDbGeneralModelOperations, OptTx,
+    BlokliDbGeneralModelOperations, OptTx, TargetDb,
     db::BlokliDb,
     errors::{DbSqlError, Result},
 };
@@ -52,6 +56,18 @@ pub trait BlokliDbSafeRedeemedStatsOperations {
         tx_index: u32,
         log_index: u32,
     ) -> Result<SafeRedeemedStatsEntry>;
+
+    /// Returns aggregated redeemed ticket statistics matching the provided optional filters.
+    ///
+    /// When both filters are `None`, aggregates across all rows.
+    /// When only `safe_address` is provided, aggregates all rows for that safe.
+    /// When only `node_address` is provided, aggregates all rows for that node.
+    /// When both are provided, returns the single matching safe/node pair row.
+    async fn get_aggregated_redeemed_stats(
+        &self,
+        safe_address: Option<Address>,
+        node_address: Option<Address>,
+    ) -> Result<AggregatedRedeemedStats>;
 }
 
 #[async_trait]
@@ -114,6 +130,14 @@ impl BlokliDbSafeRedeemedStatsOperations for BlokliDb {
                 })
             })
             .await
+    }
+
+    async fn get_aggregated_redeemed_stats(
+        &self,
+        safe_address: Option<Address>,
+        node_address: Option<Address>,
+    ) -> Result<AggregatedRedeemedStats> {
+        Ok(fetch_aggregated_redeemed_stats(self.conn(TargetDb::Index), safe_address, node_address).await?)
     }
 }
 

@@ -21,7 +21,7 @@ pub(crate) mod internal {
         },
         balances::{
             BalanceVariables, QueryHoprBalance, QueryNativeBalance, QueryRedeemedStats, QuerySafeAllowance,
-            RedeemedStatsVariables,
+            RedeemedStatsFilter, RedeemedStatsVariables,
         },
         channels::{ChannelsVariables, QueryChannelCount, QueryChannels, SubscribeChannels},
         graph::SubscribeGraph,
@@ -133,13 +133,38 @@ impl std::fmt::Debug for SafeSelector {
     }
 }
 
-/// Allows querying redeemed ticket aggregates by safe and/or node.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct RedeemedStatsSelector {
-    /// Optional safe address filter.
-    pub safe_address: Option<ChainAddress>,
-    /// Optional destination node address filter.
-    pub node_address: Option<ChainAddress>,
+/// Allows querying redeemed ticket aggregates by safe address, node address, or both.
+#[derive(Clone, Copy)]
+pub enum RedeemedStatsSelector {
+    /// Aggregate all rows for the given safe address.
+    SafeOnly(ChainAddress),
+    /// Aggregate all rows for the given node address.
+    NodeOnly(ChainAddress),
+    /// Return the single row matching the given safe/node pair.
+    Both {
+        /// Safe contract address.
+        safe_address: ChainAddress,
+        /// Node address.
+        node_address: ChainAddress,
+    },
+}
+
+impl std::fmt::Debug for RedeemedStatsSelector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SafeOnly(safe) => write!(f, "SafeOnly({})", hex::encode(safe)),
+            Self::NodeOnly(node) => write!(f, "NodeOnly({})", hex::encode(node)),
+            Self::Both {
+                safe_address,
+                node_address,
+            } => write!(
+                f,
+                "Both(safe={}, node={})",
+                hex::encode(safe_address),
+                hex::encode(node_address)
+            ),
+        }
+    }
 }
 
 /// Input for the [`query_module_address_prediction`] query.

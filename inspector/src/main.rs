@@ -102,18 +102,21 @@ impl TryFrom<RedemptionsArgs> for RedeemedStatsSelector {
             safe_address,
             node_address,
         } = value;
-        Ok(RedeemedStatsSelector {
-            safe_address: if let Some(addr) = safe_address {
-                Some(ChainAddress::from(addr.parse::<Address>()?))
-            } else {
-                None
-            },
-            node_address: if let Some(addr) = node_address {
-                Some(ChainAddress::from(addr.parse::<Address>()?))
-            } else {
-                None
-            },
-        })
+        match (safe_address, node_address) {
+            (Some(safe), None) => Ok(RedeemedStatsSelector::SafeOnly(ChainAddress::from(
+                safe.parse::<Address>()?,
+            ))),
+            (None, Some(node)) => Ok(RedeemedStatsSelector::NodeOnly(ChainAddress::from(
+                node.parse::<Address>()?,
+            ))),
+            (Some(safe), Some(node)) => Ok(RedeemedStatsSelector::Both {
+                safe_address: ChainAddress::from(safe.parse::<Address>()?),
+                node_address: ChainAddress::from(node.parse::<Address>()?),
+            }),
+            (None, None) => Err(anyhow::anyhow!(
+                "At least one of --safe-address or --node-address must be specified."
+            )),
+        }
     }
 }
 

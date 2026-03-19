@@ -6,10 +6,18 @@ pub struct BalanceVariables {
     pub address: String,
 }
 
+#[derive(cynic::InputObject, Debug, Default, Clone)]
+#[cynic(graphql_type = "RedeemedStatsFilter")]
+pub struct RedeemedStatsFilter {
+    #[cynic(rename = "safeAddress")]
+    pub safe_address: Option<String>,
+    #[cynic(rename = "nodeAddress")]
+    pub node_address: Option<String>,
+}
+
 #[derive(cynic::QueryVariables, Default)]
 pub struct RedeemedStatsVariables {
-    pub safe_address: Option<String>,
-    pub node_address: Option<String>,
+    pub filter: RedeemedStatsFilter,
 }
 
 #[derive(cynic::QueryFragment, Debug)]
@@ -118,8 +126,6 @@ impl From<SafeHoprAllowanceResult> for Result<SafeHoprAllowance, BlokliClientErr
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct RedeemedStats {
     pub __typename: String,
-    pub safe_address: Option<String>,
-    pub node_address: Option<String>,
     pub redeemed_amount: TokenValueString,
     pub redemption_count: Uint64,
 }
@@ -127,8 +133,9 @@ pub struct RedeemedStats {
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "QueryRoot", variables = "RedeemedStatsVariables")]
 pub struct QueryRedeemedStats {
-    #[arguments(safeAddress: $safe_address, nodeAddress: $node_address)]
-    pub redeemed_stats: RedeemedStatsResult,
+    #[arguments(filter: $filter)]
+    #[cynic(rename = "ticketRedemptionStats")]
+    pub ticket_redemption_stats: RedeemedStatsResult,
 }
 
 #[derive(cynic::InlineFragments, Debug)]

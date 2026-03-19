@@ -46,13 +46,28 @@ impl GraphQlQueries {
         })
     }
 
-    /// `RedeemedStats` GraphQL query.
+    /// `TicketRedemptionStats` GraphQL query.
     pub fn query_redeemed_stats(
         selector: RedeemedStatsSelector,
     ) -> cynic::Operation<QueryRedeemedStats, RedeemedStatsVariables> {
         QueryRedeemedStats::build(RedeemedStatsVariables {
-            safe_address: selector.safe_address.map(|address| address.encode_hex()),
-            node_address: selector.node_address.map(|address| address.encode_hex()),
+            filter: match selector {
+                RedeemedStatsSelector::SafeOnly(safe) => RedeemedStatsFilter {
+                    safe_address: Some(safe.encode_hex()),
+                    node_address: None,
+                },
+                RedeemedStatsSelector::NodeOnly(node) => RedeemedStatsFilter {
+                    safe_address: None,
+                    node_address: Some(node.encode_hex()),
+                },
+                RedeemedStatsSelector::Both {
+                    safe_address,
+                    node_address,
+                } => RedeemedStatsFilter {
+                    safe_address: Some(safe_address.encode_hex()),
+                    node_address: Some(node_address.encode_hex()),
+                },
+            },
         })
     }
 
@@ -177,7 +192,7 @@ impl BlokliQueryClient for BlokliClient {
             .build_query(GraphQlQueries::query_redeemed_stats(selector))?
             .await?;
 
-        response_to_data(resp)?.redeemed_stats.into()
+        response_to_data(resp)?.ticket_redemption_stats.into()
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]

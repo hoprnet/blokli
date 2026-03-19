@@ -94,10 +94,38 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
+        // Foreign key to hopr_safe_contract is only enforced on PostgreSQL;
+        // SQLite does not support adding foreign keys to existing tables and
+        // the `hopr_safe_contract` table is created in a separate migration.
+        if manager.get_database_backend() == sea_orm::DatabaseBackend::Postgres {
+            manager
+                .create_foreign_key(
+                    ForeignKey::create()
+                        .name("fk_hopr_safe_redeemed_stats_safe_address")
+                        .from(HoprSafeRedeemedStats::Table, HoprSafeRedeemedStats::SafeAddress)
+                        .to(HoprSafeContract::Table, HoprSafeContract::Address)
+                        .on_delete(ForeignKeyAction::Cascade)
+                        .on_update(ForeignKeyAction::Cascade)
+                        .to_owned(),
+                )
+                .await?;
+        }
+
         Ok(())
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        if manager.get_database_backend() == sea_orm::DatabaseBackend::Postgres {
+            manager
+                .drop_foreign_key(
+                    ForeignKey::drop()
+                        .name("fk_hopr_safe_redeemed_stats_safe_address")
+                        .table(HoprSafeRedeemedStats::Table)
+                        .to_owned(),
+                )
+                .await?;
+        }
+
         manager
             .drop_index(
                 Index::drop()
@@ -145,4 +173,10 @@ enum HoprSafeRedeemedStats {
     LastRedeemedBlock,
     LastRedeemedTxIndex,
     LastRedeemedLogIndex,
+}
+
+#[derive(DeriveIden)]
+enum HoprSafeContract {
+    Table,
+    Address,
 }

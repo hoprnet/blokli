@@ -446,22 +446,20 @@ type QueryRoot {
     address: String!
   ): NativeBalanceResult!
   """
-  Retrieve aggregated TicketRedeemed statistics with optional safe/node filters
+  Retrieve aggregated TicketRedeemed statistics filtered by safe and/or node address
   
-  At least one filter must be provided: safeAddress, nodeAddress, or both.
+  At least one filter field must be provided: safeAddress, nodeAddress, or both.
   If only safeAddress is provided, all rows for that safe are aggregated.
   If only nodeAddress is provided, all rows for that node are aggregated.
   If both are provided, the single matching safe/node pair row is returned.
   If filters match no rows, zero totals are returned.
-  Returns Error with code MISSING_FILTER if no filter is provided.
+  Returns Error with code MISSING_FILTER if no filter field is provided.
   Returns Error with code INVALID_ADDRESS if any provided address format is invalid.
   Returns Error with code QUERY_FAILED if query fails.
   """
-  redeemedStats(
-    "Optional destination node address filter (hexadecimal format)"
-    nodeAddress: String
-    "Optional safe contract address filter (hexadecimal format)"
-    safeAddress: String
+  ticketRedemptionStats(
+    "Filter specifying which safe/node combination to aggregate"
+    filter: RedeemedStatsFilter!
   ): RedeemedStatsResult!
   """
   Retrieve safe by contract address
@@ -555,15 +553,25 @@ type QueryRoot {
   version: String!
 }
 
-"""Aggregated redeemed ticket statistics with optional safe/node filters"""
+"""Aggregated redeemed ticket statistics"""
 type RedeemedStats {
-  "Node address filter that was applied, if any"
-  nodeAddress: String
   "Total redeemed amount from matching TicketRedeemed events"
   redeemedAmount: TokenValueString!
   "Total number of matching TicketRedeemed events"
   redemptionCount: UInt64!
-  "Safe contract address filter that was applied, if any"
+}
+
+"""
+Filter for ticket redemption stats queries.
+
+At least one field must be provided. Providing both fields restricts the result
+to the single matching safe/node pair; providing only one aggregates all rows
+for that address.
+"""
+input RedeemedStatsFilter {
+  "Destination node address to filter by (hexadecimal format)"
+  nodeAddress: String
+  "Safe contract address to filter by (hexadecimal format)"
   safeAddress: String
 }
 

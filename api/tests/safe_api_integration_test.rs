@@ -188,10 +188,8 @@ async fn test_safe_queries() -> anyhow::Result<()> {
     let query = format!(
         r#"
         query {{
-            redeemedStats(safeAddress: "{}") {{
+            ticketRedemptionStats(filter: {{ safeAddress: "{}" }}) {{
                 ... on RedeemedStats {{
-                    safeAddress
-                    nodeAddress
                     redeemedAmount
                     redemptionCount
                 }}
@@ -204,19 +202,15 @@ async fn test_safe_queries() -> anyhow::Result<()> {
     let response = schema.execute(query).await;
     assert!(response.errors.is_empty(), "Errors: {:?}", response.errors);
     let data = response.data.into_json().unwrap();
-    let stats_data = data["redeemedStats"].as_object().unwrap();
-    assert_eq!(stats_data["safeAddress"], safe_address_0.to_hex());
-    assert_eq!(stats_data["nodeAddress"], serde_json::Value::Null);
+    let stats_data = data["ticketRedemptionStats"].as_object().unwrap();
     assert_eq!(stats_data["redeemedAmount"], "0.000000000000000023 wxHOPR");
     assert_eq!(stats_data["redemptionCount"], "3");
 
     let query = format!(
         r#"
         query {{
-            redeemedStats(nodeAddress: "{}") {{
+            ticketRedemptionStats(filter: {{ nodeAddress: "{}" }}) {{
                 ... on RedeemedStats {{
-                    safeAddress
-                    nodeAddress
                     redeemedAmount
                     redemptionCount
                 }}
@@ -229,19 +223,15 @@ async fn test_safe_queries() -> anyhow::Result<()> {
     let response = schema.execute(query).await;
     assert!(response.errors.is_empty(), "Errors: {:?}", response.errors);
     let data = response.data.into_json().unwrap();
-    let stats_data = data["redeemedStats"].as_object().unwrap();
-    assert_eq!(stats_data["safeAddress"], serde_json::Value::Null);
-    assert_eq!(stats_data["nodeAddress"], chain_key_0.to_hex());
+    let stats_data = data["ticketRedemptionStats"].as_object().unwrap();
     assert_eq!(stats_data["redeemedAmount"], "0.000000000000000015 wxHOPR");
     assert_eq!(stats_data["redemptionCount"], "3");
 
     let query = format!(
         r#"
         query {{
-            redeemedStats(safeAddress: "{}", nodeAddress: "{}") {{
+            ticketRedemptionStats(filter: {{ safeAddress: "{}", nodeAddress: "{}" }}) {{
                 ... on RedeemedStats {{
-                    safeAddress
-                    nodeAddress
                     redeemedAmount
                     redemptionCount
                 }}
@@ -255,19 +245,15 @@ async fn test_safe_queries() -> anyhow::Result<()> {
     let response = schema.execute(query).await;
     assert!(response.errors.is_empty(), "Errors: {:?}", response.errors);
     let data = response.data.into_json().unwrap();
-    let stats_data = data["redeemedStats"].as_object().unwrap();
-    assert_eq!(stats_data["safeAddress"], safe_address_0.to_hex());
-    assert_eq!(stats_data["nodeAddress"], chain_key_0.to_hex());
+    let stats_data = data["ticketRedemptionStats"].as_object().unwrap();
     assert_eq!(stats_data["redeemedAmount"], "0.000000000000000012 wxHOPR");
     assert_eq!(stats_data["redemptionCount"], "2");
 
     let query = format!(
         r#"
         query {{
-            redeemedStats(safeAddress: "{}", nodeAddress: "{}") {{
+            ticketRedemptionStats(filter: {{ safeAddress: "{}", nodeAddress: "{}" }}) {{
                 ... on RedeemedStats {{
-                    safeAddress
-                    nodeAddress
                     redeemedAmount
                     redemptionCount
                 }}
@@ -281,9 +267,7 @@ async fn test_safe_queries() -> anyhow::Result<()> {
     let response = schema.execute(query).await;
     assert!(response.errors.is_empty(), "Errors: {:?}", response.errors);
     let data = response.data.into_json().unwrap();
-    let stats_data = data["redeemedStats"].as_object().unwrap();
-    assert_eq!(stats_data["safeAddress"], safe_address_0.to_hex());
-    assert_eq!(stats_data["nodeAddress"], chain_key_1.to_hex());
+    let stats_data = data["ticketRedemptionStats"].as_object().unwrap();
     assert_eq!(stats_data["redeemedAmount"], "0.000000000000000011 wxHOPR");
     assert_eq!(stats_data["redemptionCount"], "1");
 
@@ -352,7 +336,7 @@ async fn test_safe_query_invalid_address() -> anyhow::Result<()> {
 
     let query = r#"
         query {
-            redeemedStats {
+            ticketRedemptionStats(filter: {}) {
                 ... on RedeemedStats {
                     redeemedAmount
                 }
@@ -366,12 +350,12 @@ async fn test_safe_query_invalid_address() -> anyhow::Result<()> {
     let response = schema.execute(query).await;
     assert!(response.errors.is_empty());
     let data = response.data.into_json().unwrap();
-    let error = data["redeemedStats"].as_object().unwrap();
+    let error = data["ticketRedemptionStats"].as_object().unwrap();
     assert_eq!(error["code"], "MISSING_FILTER");
 
     let query = r#"
         query {
-            redeemedStats(nodeAddress: "0x123") {
+            ticketRedemptionStats(filter: { nodeAddress: "0x123" }) {
                 ... on RedeemedStats {
                     redeemedAmount
                 }
@@ -385,7 +369,7 @@ async fn test_safe_query_invalid_address() -> anyhow::Result<()> {
     let response = schema.execute(query).await;
     assert!(response.errors.is_empty());
     let data = response.data.into_json().unwrap();
-    let error = data["redeemedStats"].as_object().unwrap();
+    let error = data["ticketRedemptionStats"].as_object().unwrap();
     assert_eq!(error["code"], "INVALID_ADDRESS");
 
     Ok(())
@@ -437,10 +421,8 @@ async fn test_safe_query_not_found() -> anyhow::Result<()> {
     let query = format!(
         r#"
         query {{
-            redeemedStats(safeAddress: "{}") {{
+            ticketRedemptionStats(filter: {{ safeAddress: "{}" }}) {{
                 ... on RedeemedStats {{
-                    safeAddress
-                    nodeAddress
                     redeemedAmount
                     redemptionCount
                 }}
@@ -456,9 +438,7 @@ async fn test_safe_query_not_found() -> anyhow::Result<()> {
     let response = schema.execute(query).await;
     assert!(response.errors.is_empty());
     let data = response.data.into_json().unwrap();
-    let stats = data["redeemedStats"].as_object().unwrap();
-    assert_eq!(stats["safeAddress"], nonexistent_address);
-    assert_eq!(stats["nodeAddress"], serde_json::Value::Null);
+    let stats = data["ticketRedemptionStats"].as_object().unwrap();
     assert_eq!(stats["redeemedAmount"], "0 wxHOPR");
     assert_eq!(stats["redemptionCount"], "0");
 
