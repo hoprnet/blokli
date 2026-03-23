@@ -137,11 +137,11 @@ impl std::fmt::Debug for SafeSelector {
 #[derive(Clone, Copy)]
 pub enum RedeemedStatsSelector {
     /// Aggregate all rows for the given safe address.
-    SafeOnly(ChainAddress),
+    SafeAddress(ChainAddress),
     /// Aggregate all rows for the given node address.
-    NodeOnly(ChainAddress),
+    NodeAddress(ChainAddress),
     /// Return the single row matching the given safe/node pair.
-    Both {
+    SafeAndNodeAddress {
         /// Safe contract address.
         safe_address: ChainAddress,
         /// Node address.
@@ -152,14 +152,14 @@ pub enum RedeemedStatsSelector {
 impl std::fmt::Debug for RedeemedStatsSelector {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::SafeOnly(safe) => write!(f, "SafeOnly({})", hex::encode(safe)),
-            Self::NodeOnly(node) => write!(f, "NodeOnly({})", hex::encode(node)),
-            Self::Both {
+            Self::SafeAddress(safe) => write!(f, "SafeAddress({})", hex::encode(safe)),
+            Self::NodeAddress(node) => write!(f, "NodeAddress({})", hex::encode(node)),
+            Self::SafeAndNodeAddress {
                 safe_address,
                 node_address,
             } => write!(
                 f,
-                "Both(safe={}, node={})",
+                "SafeAndNodeAddress(safe={}, node={})",
                 hex::encode(safe_address),
                 hex::encode(node_address)
             ),

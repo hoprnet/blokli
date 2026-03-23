@@ -446,22 +446,6 @@ type QueryRoot {
     address: String!
   ): NativeBalanceResult!
   """
-  Retrieve aggregated TicketRedeemed statistics filtered by safe and/or node address
-  
-  At least one filter field must be provided: safeAddress, nodeAddress, or both.
-  If only safeAddress is provided, all rows for that safe are aggregated.
-  If only nodeAddress is provided, all rows for that node are aggregated.
-  If both are provided, the single matching safe/node pair row is returned.
-  If filters match no rows, zero totals are returned.
-  Returns Error with code MISSING_FILTER if no filter field is provided.
-  Returns Error with code INVALID_ADDRESS if any provided address format is invalid.
-  Returns Error with code QUERY_FAILED if query fails.
-  """
-  ticketRedemptionStats(
-    "Filter specifying which safe/node combination to aggregate"
-    filter: RedeemedStatsFilter!
-  ): RedeemedStatsResult!
-  """
   Retrieve safe by contract address
   
   Returns Error with code INVALID_ADDRESS if address format is invalid.
@@ -516,6 +500,22 @@ type QueryRoot {
   Returns Error with code QUERY_FAILED if query fails.
   """
   safes: SafesResult!
+  """
+  Retrieve aggregated TicketRedeemed statistics filtered by safe and/or node address
+  
+  At least one filter field must be provided: safeAddress, nodeAddress, or both.
+  If only safeAddress is provided, all rows for that safe are aggregated.
+  If only nodeAddress is provided, all rows for that node are aggregated.
+  If both are provided, the single matching safe/node pair row is returned.
+  If filters match no rows, zero totals are returned.
+  Returns Error with code MISSING_FILTER if no filter field is provided.
+  Returns Error with code INVALID_ADDRESS if any provided address format is invalid.
+  Returns Error with code QUERY_FAILED if query fails.
+  """
+  ticketRedemptionStats(
+    "Filter specifying which safe/node combination to aggregate"
+    filter: RedeemedStatsFilter!
+  ): RedeemedStatsResult!
   """
   Retrieve transaction status by ID
   

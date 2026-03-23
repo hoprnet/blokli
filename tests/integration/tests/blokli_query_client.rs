@@ -201,10 +201,7 @@ async fn query_safe_redeemed_stats_after_ticket_redeem(#[future(awt)] fixture: I
     let dst_safe_address = Address::from_str(&dst_safe.address)?;
     let initial_stats = fixture
         .client()
-        .query_redeemed_stats(RedeemedStatsSelector {
-            safe_address: Some(dst_safe_address.into()),
-            node_address: None,
-        })
+        .query_redeemed_stats(RedeemedStatsSelector::SafeAddress(dst_safe_address.into()))
         .await?;
 
     fixture
@@ -222,10 +219,7 @@ async fn query_safe_redeemed_stats_after_ticket_redeem(#[future(awt)] fixture: I
 
     let stats = fixture
         .client()
-        .query_redeemed_stats(RedeemedStatsSelector {
-            safe_address: Some(dst_safe_address.into()),
-            node_address: None,
-        })
+        .query_redeemed_stats(RedeemedStatsSelector::SafeAddress(dst_safe_address.into()))
         .await?;
 
     fixture

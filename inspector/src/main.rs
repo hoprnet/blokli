@@ -103,13 +103,13 @@ impl TryFrom<RedemptionsArgs> for RedeemedStatsSelector {
             node_address,
         } = value;
         match (safe_address, node_address) {
-            (Some(safe), None) => Ok(RedeemedStatsSelector::SafeOnly(ChainAddress::from(
+            (Some(safe), None) => Ok(RedeemedStatsSelector::SafeAddress(ChainAddress::from(
                 safe.parse::<Address>()?,
             ))),
-            (None, Some(node)) => Ok(RedeemedStatsSelector::NodeOnly(ChainAddress::from(
+            (None, Some(node)) => Ok(RedeemedStatsSelector::NodeAddress(ChainAddress::from(
                 node.parse::<Address>()?,
             ))),
-            (Some(safe), Some(node)) => Ok(RedeemedStatsSelector::Both {
+            (Some(safe), Some(node)) => Ok(RedeemedStatsSelector::SafeAndNodeAddress {
                 safe_address: ChainAddress::from(safe.parse::<Address>()?),
                 node_address: ChainAddress::from(node.parse::<Address>()?),
             }),

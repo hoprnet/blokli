@@ -52,15 +52,15 @@ impl GraphQlQueries {
     ) -> cynic::Operation<QueryRedeemedStats, RedeemedStatsVariables> {
         QueryRedeemedStats::build(RedeemedStatsVariables {
             filter: match selector {
-                RedeemedStatsSelector::SafeOnly(safe) => RedeemedStatsFilter {
+                RedeemedStatsSelector::SafeAddress(safe) => RedeemedStatsFilter {
                     safe_address: Some(safe.encode_hex()),
                     node_address: None,
                 },
-                RedeemedStatsSelector::NodeOnly(node) => RedeemedStatsFilter {
+                RedeemedStatsSelector::NodeAddress(node) => RedeemedStatsFilter {
                     safe_address: None,
                     node_address: Some(node.encode_hex()),
                 },
-                RedeemedStatsSelector::Both {
+                RedeemedStatsSelector::SafeAndNodeAddress {
                     safe_address,
                     node_address,
                 } => RedeemedStatsFilter {
