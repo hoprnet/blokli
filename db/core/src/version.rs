@@ -11,19 +11,8 @@ use crate::errors::{DbSqlError, Result};
 /// Bump this constant when making schema changes that require data reset.
 ///
 /// Version history:
-/// - 1: Initial schema with INTEGER id columns
-/// - 2: Changed to BIGINT id columns (m023, m024)
-/// - 3: Added module_address and chain_key to hopr_safe_contract (m026)
-/// - 4: Change contracts addresses
-/// - 5: NodeSafeRegistered events are now also possible safe creation events
-/// - 6: Changed channel status representation to smallint
-/// - 7: Update account indexing to include safe address once deployed
-/// - 8: Add v3 Safe deployment data
-/// - 9: Fix handling of node safe deregister events
-/// - 10: Convert hopr_safe_contract to temporal table with separate state table
-/// - 11: Reset safe contract data and move pre-seeded loading to startup
-/// - 12: Add safe redeemed ticket aggregate stats table
-pub const CURRENT_SCHEMA_VERSION: i64 = 12;
+/// - 1: Initial schema (consolidated from prior migration stack)
+pub const CURRENT_SCHEMA_VERSION: i64 = 1;
 
 /// The singleton ID used for the schema_version table
 const SCHEMA_VERSION_TABLE_ID: i64 = 1;

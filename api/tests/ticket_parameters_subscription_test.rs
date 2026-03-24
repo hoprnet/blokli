@@ -29,7 +29,7 @@ async fn init_chain_info_with_params(
     db: &sea_orm::DatabaseConnection,
     block: i64,
     ticket_price: HoprBalance,
-    min_win_prob: f32,
+    min_win_prob: f64,
 ) -> Result<(), sea_orm::DbErr> {
     // Delete any existing entry first
     ChainInfoEntity::delete_many().exec(db).await?;
@@ -113,7 +113,7 @@ async fn test_ticket_parameters_subscription_emits_initial_values() {
 
     // Initialize chain_info with ticket parameters
     let ticket_price = HoprBalance::from(1000_u64); // 1000 wei
-    let min_win_prob = 0.75_f32;
+    let min_win_prob = 0.00000125_f64;
 
     init_chain_info_with_params(db.conn(TargetDb::Index), 100, ticket_price, min_win_prob)
         .await
@@ -156,7 +156,7 @@ async fn test_ticket_parameters_subscription_emits_initial_values() {
 
     // Verify winning probability
     let prob = params["minTicketWinningProbability"].as_f64().unwrap();
-    assert!((prob - 0.75).abs() < 0.001);
+    assert_eq!(prob, min_win_prob);
 }
 
 #[tokio::test]
@@ -213,7 +213,7 @@ async fn test_ticket_parameters_subscription_handles_missing_ticket_price() {
     // Default to "0 wxHOPR" when ticket_price is None
     assert_eq!(params["ticketPrice"].as_str().unwrap(), "0 wxHOPR");
     let prob = params["minTicketWinningProbability"].as_f64().unwrap();
-    assert!((prob - 0.5).abs() < 0.001);
+    assert_eq!(prob, 0.5);
 }
 
 #[tokio::test]
@@ -253,7 +253,7 @@ async fn test_ticket_parameters_subscription_handles_zero_values() {
 
     assert_eq!(params["ticketPrice"].as_str().unwrap(), "0 wxHOPR");
     let prob = params["minTicketWinningProbability"].as_f64().unwrap();
-    assert!((prob - 0.0).abs() < 0.001);
+    assert_eq!(prob, 0.0);
 }
 
 #[tokio::test]
@@ -294,7 +294,7 @@ async fn test_ticket_parameters_subscription_handles_max_values() {
     // Max u64 value with token identifier
     assert_eq!(params["ticketPrice"].as_str().unwrap(), "18.446744073709551615 wxHOPR");
     let prob = params["minTicketWinningProbability"].as_f64().unwrap();
-    assert!((prob - 1.0).abs() < 0.001);
+    assert_eq!(prob, 1.0);
 }
 
 #[tokio::test]
@@ -428,7 +428,7 @@ async fn test_subscription_receives_winning_probability_update() {
     let prob = updated_data["ticketParametersUpdated"]["minTicketWinningProbability"]
         .as_f64()
         .unwrap();
-    assert!((prob - 0.9).abs() < 0.01, "Expected ~0.9, got {}", prob);
+    assert_eq!(prob, 0.9);
     assert_eq!(
         updated_data["ticketParametersUpdated"]["ticketPrice"].as_str().unwrap(),
         "0.000000000000001 wxHOPR"
@@ -491,7 +491,7 @@ async fn test_subscription_receives_both_parameters_update() {
     let prob = updated_data["ticketParametersUpdated"]["minTicketWinningProbability"]
         .as_f64()
         .unwrap();
-    assert!((prob - 0.95).abs() < 0.01, "Expected ~0.95, got {}", prob);
+    assert_eq!(prob, 0.95);
 }
 
 #[tokio::test]
