@@ -141,7 +141,7 @@ jobs:
       - build-docker
       - build-docker-with-anvil
       - deploy-dev
-    if: ${{ failure() }}
+    if: ${{ always() && failure() }}
     runs-on: ubuntu-latest
     steps:
       - name: Notify failed merge pipeline

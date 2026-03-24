@@ -953,7 +953,7 @@ Three image variants are available for each architecture:
 There are 3 main events controlled by CI
 
 - Build: A build process occurs on every PR commit. It produces a binary and its corresponding docker image.
-- PR merged: A build process occurs on every PR merge agains the `main` branch. It produces a binary and its corresponding docker image.
+- PR merged: A build process occurs on every PR merge against the `main` branch. It produces a binary and its corresponding docker image.
 - Close release: Manual workflow to cut the release.
 
 
@@ -962,8 +962,6 @@ There are 3 main events controlled by CI
 | Commit       | `version-commit.hash` | `1.0.0-commit.abc123-linux-amd64` | `1.0.0-commit.abc123` | Development testing   |
 | PR           | `version-pr.number`   | `1.0.0-pr.42-linux-amd64`         | `1.0.0-pr.42`         | Pre-merge validation  |
 | Release      | `version`             | `1.0.0-linux-amd64`               | `1.0.0`               | Production deployment |
-
-**Note:** Currently only AMD64 images are available. ARM64 will be re-enabled when GitHub runner supports aarch64. The manifest tag (without architecture suffix) points to the amd64 image.
 
 ### Security Scanning
 
