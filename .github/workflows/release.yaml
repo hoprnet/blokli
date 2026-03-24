@@ -74,8 +74,8 @@ jobs:
   release:
     name: Close release
     needs:
-      - build-docker
       - build-binaries
+      - build-docker
     runs-on: self-hosted-hoprnet-small
     permissions:
       contents: write
@@ -95,3 +95,34 @@ jobs:
           zulip_topic: Releases
           gcp_service_account: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
           github_token: ${{ secrets.GH_RUNNER_TOKEN }}
+  deploy-staging:
+    name: Deploy Gnosis Staging
+    runs-on: self-hosted-hoprnet-small
+    needs:
+      - build-binaries
+      - build-docker
+      - release
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+      - name: Compute revision suffix
+        id: revision
+        run: echo "suffix=v$(echo '${{ needs.build-docker.outputs.docker_build_version }}' | tr '.' '-')" | tee -a "$GITHUB_OUTPUT"
+      - name: Setup GCP
+        id: gcp
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@setup-gcp-v2
+        with:
+          workload_identity_provider: ${{ vars.WIF_PROVIDER_STAGING }}
+          service_account: ${{ vars.WIF_SERVICE_ACCOUNT_STAGING }}
+          install_sdk: "true"
+      - name: Deploy to Cloud Run
+        uses: google-github-actions/deploy-cloudrun@2028e2d7d30a78c6910e0632e48dd561b064884d # v3
+        with:
+          service: blokli
+          region: europe-west1
+          image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid:${{ needs.build-docker.outputs.docker_build_version }}
+          suffix: ${{ steps.revision.outputs.suffix }}
+          flags: --timeout=600s
