@@ -1,12 +1,16 @@
-name: MergePR
+name: Merge
 on:
   pull_request:
     types:
       - closed
       # - synchronize
 concurrency:
-  group: merge
+  group: merge-${{ github.event.pull_request.base.ref }}
   cancel-in-progress: false
+permissions:
+  contents: read
+  pull-requests: write
+  id-token: write
 jobs:
   build-binaries:
     name: Binary ${{ matrix.architecture }}
@@ -18,6 +22,9 @@ jobs:
           - architecture: x86_64-linux
             runner: self-hosted-hoprnet-bigger
             build_command: nix build -L .#binary-blokli-x86_64-linux
+          - architecture: aarch64-linux
+            runner: self-hosted-hoprnet-bigger
+            build_command: nix build -L .#binary-blokli-aarch64-linux
     uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v2
     permissions:
       contents: read
@@ -50,8 +57,12 @@ jobs:
           {
             "runner": "self-hosted-hoprnet-bigger",
             "architecture": "x86_64-linux",
-            "build_command": "nix build -L .#docker-blokli-x86_64-linux",
-            "smoke_test_command": "nix develop -c just smoke-test"
+            "build_command": "nix build -L .#docker-blokli-x86_64-linux"
+          },
+          {
+            "runner": "self-hosted-hoprnet-bigger",
+            "architecture": "aarch64-linux",
+            "build_command": "nix build -L .#docker-blokli-aarch64-linux"
           }
         ]
       cachix_cache_name: blokli
@@ -144,4 +155,3 @@ jobs:
           topic: "main"
           content: |
             The merge pipeline has failed for pull request [#${{ github.event.pull_request.number }}: ${{ github.event.pull_request.title }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})
-

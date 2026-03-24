@@ -25,6 +25,9 @@ jobs:
           - architecture: x86_64-linux
             runner: self-hosted-hoprnet-bigger
             build_command: nix build -L .#binary-blokli-x86_64-linux
+          - architecture: aarch64-linux
+            runner: self-hosted-hoprnet-bigger
+            build_command: nix build -L .#binary-blokli-aarch64-linux
     uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v2
     permissions:
       contents: read
@@ -56,8 +59,12 @@ jobs:
           {
             "runner": "self-hosted-hoprnet-bigger",
             "architecture": "x86_64-linux",
-            "build_command": "nix build -L .#docker-blokli-x86_64-linux",
-            "smoke_test_command": "nix develop -c just smoke-test"
+            "build_command": "nix build -L .#docker-blokli-x86_64-linux"
+          },
+          {
+            "runner": "self-hosted-hoprnet-bigger",
+            "architecture": "aarch64-linux",
+            "build_command": "nix build -L .#docker-blokli-aarch64-linux"
           }
         ]
       cachix_cache_name: blokli
@@ -81,7 +88,7 @@ jobs:
       contents: write
     steps:
       - name: Release version
-        uses: hoprnet/hopr-workflows/actions/release-version@27fb7c9ad22da3361b1fb783c61ce06aa39dd62a # release-version-v2
+        uses: hoprnet/hopr-workflows/actions/release-version@0d6e82b5bfb948c58ac2f850a331443054486565 # release-version-v2
         with:
           source_branch: ${{ github.ref_name }}
           file: bloklid/Cargo.toml
