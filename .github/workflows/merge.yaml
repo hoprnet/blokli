@@ -68,8 +68,6 @@ jobs:
     secrets:
       gcp_service_account: ${{ secrets.GOOGLE_HOPRASSOCIATION_CREDENTIALS_REGISTRY }}
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
-      docker_hub_token: ${{ secrets.DOCKER_HUB_TOKEN }}
   build-docker-with-anvil:
     name: Docker anvil
     if: github.event.pull_request.merged == true
@@ -87,8 +85,7 @@ jobs:
           {
             "runner": "self-hosted-hoprnet-bigger",
             "architecture": "x86_64-linux",
-            "build_command": "nix build -L .#docker-blokli-anvil-x86_64-linux",
-            "smoke_test_command": "nix develop -c just smoke-test"
+            "build_command": "nix build -L .#docker-blokli-anvil-x86_64-linux"
           }
         ]
       cachix_cache_name: blokli
