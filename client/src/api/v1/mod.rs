@@ -5,7 +5,7 @@ pub mod types {
     pub use super::graphql::{
         ChannelStatus, DateTime, Hex32, TokenValueString, Uint64,
         accounts::Account,
-        balances::{HoprBalance, NativeBalance, SafeHoprAllowance},
+        balances::{HoprBalance, NativeBalance, RedeemedStats, SafeHoprAllowance},
         channels::Channel,
         graph::OpenedChannelsGraphEntry,
         info::{ChainInfo, ContractAddressMap, TicketParameters},
@@ -19,7 +19,10 @@ pub(crate) mod internal {
         accounts::{
             AccountVariables, QueryAccountCount, QueryAccounts, QueryTxCount, SubscribeAccounts, TxCountVariables,
         },
-        balances::{BalanceVariables, QueryHoprBalance, QueryNativeBalance, QuerySafeAllowance},
+        balances::{
+            BalanceVariables, QueryHoprBalance, QueryNativeBalance, QueryRedeemedStats, QuerySafeAllowance,
+            RedeemedStatsFilter, RedeemedStatsVariables,
+        },
         channels::{ChannelsVariables, QueryChannelCount, QueryChannels, SubscribeChannels},
         graph::SubscribeGraph,
         info::{QueryChainInfo, QueryHealth, QueryVersion, SubscribeTicketParams},
@@ -130,6 +133,40 @@ impl std::fmt::Debug for SafeSelector {
     }
 }
 
+/// Allows querying redeemed ticket aggregates by safe address, node address, or both.
+#[derive(Clone, Copy)]
+pub enum RedeemedStatsSelector {
+    /// Aggregate all rows for the given safe address.
+    SafeAddress(ChainAddress),
+    /// Aggregate all rows for the given node address.
+    NodeAddress(ChainAddress),
+    /// Return the single row matching the given safe/node pair.
+    SafeAndNodeAddress {
+        /// Safe contract address.
+        safe_address: ChainAddress,
+        /// Node address.
+        node_address: ChainAddress,
+    },
+}
+
+impl std::fmt::Debug for RedeemedStatsSelector {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::SafeAddress(safe) => write!(f, "SafeAddress({})", hex::encode(safe)),
+            Self::NodeAddress(node) => write!(f, "NodeAddress({})", hex::encode(node)),
+            Self::SafeAndNodeAddress {
+                safe_address,
+                node_address,
+            } => write!(
+                f,
+                "SafeAndNodeAddress(safe={}, node={})",
+                hex::encode(safe_address),
+                hex::encode(node_address)
+            ),
+        }
+    }
+}
+
 /// Input for the [`query_module_address_prediction`] query.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ModulePredictionInput {
@@ -168,6 +205,8 @@ pub trait BlokliQueryClient {
     async fn query_transaction_count(&self, address: &ChainAddress) -> Result<u64>;
     /// Queries the safe allowance of the given account.
     async fn query_safe_allowance(&self, address: &ChainAddress) -> Result<types::SafeHoprAllowance>;
+    /// Queries redeemed ticket stats filtered by safe, node, or both.
+    async fn query_redeemed_stats(&self, selector: RedeemedStatsSelector) -> Result<types::RedeemedStats>;
     /// Queries the deployed Safe by the given [`selector`](SafeSelector).
     async fn query_safe(&self, selector: SafeSelector) -> Result<Option<types::Safe>>;
     /// Queries the module address prediction of the given [Safe deployment data](ModulePredictionInput).

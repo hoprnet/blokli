@@ -598,6 +598,32 @@ pub struct SafeHoprAllowance {
     pub allowance: TokenValueString,
 }
 
+/// Filter for ticket redemption stats queries.
+///
+/// At least one field must be provided. Providing both fields restricts the result
+/// to the single matching safe/node pair; providing only one aggregates all rows
+/// for that address.
+#[derive(InputObject, Clone, Debug, Default)]
+pub struct RedeemedStatsFilter {
+    /// Safe contract address to filter by (hexadecimal format)
+    #[graphql(name = "safeAddress")]
+    pub safe_address: Option<String>,
+    /// Destination node address to filter by (hexadecimal format)
+    #[graphql(name = "nodeAddress")]
+    pub node_address: Option<String>,
+}
+
+/// Aggregated redeemed ticket statistics
+#[derive(SimpleObject, Clone, Debug)]
+pub struct RedeemedStats {
+    /// Total amount redeemed from matching TicketRedeemed events
+    #[graphql(name = "redeemedAmount")]
+    pub redeemed_amount: TokenValueString,
+    /// Total number of matching TicketRedeemed events
+    #[graphql(name = "redemptionCount")]
+    pub redemption_count: UInt64,
+}
+
 /// Transaction count information for any Ethereum address
 ///
 /// For EOAs (Externally Owned Accounts): Returns the transaction count via eth_getTransactionCount

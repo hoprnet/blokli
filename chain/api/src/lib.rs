@@ -86,11 +86,11 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         indexer_cfg: IndexerConfig,
         rpc_url: String,
     ) -> Result<Self> {
-        // TODO: extract this from the global config type
-        let mut rpc_http_config = blokli_chain_rpc::HttpPostRequestorConfig::default();
-        if let Some(max_rpc_req) = chain_config.max_requests_per_sec {
-            rpc_http_config.max_requests_per_sec = Some(max_rpc_req); // override the default if set
-        }
+        // TODO: extract this from the global config type, and use the configured values for the http client
+        // let mut rpc_http_config = blokli_chain_rpc::HttpPostRequestorConfig::default();
+        // if let Some(max_rpc_req) = chain_config.max_requests_per_sec {
+        //     rpc_http_config.max_requests_per_sec = Some(max_rpc_req); // override the default if set
+        // }
 
         // TODO(#7140): replace this DefaultRetryPolicy with a custom one that computes backoff with the number of
         // retries
