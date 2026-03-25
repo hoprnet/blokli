@@ -268,7 +268,7 @@ impl<R: ReceiptProvider> TransactionMonitor<R> {
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
+    use chrono::{DateTime, Utc};
     use dashmap::DashMap;
     use hopr_bindings::exports::alloy::{
         consensus::{SignableTransaction, TxLegacy},
@@ -280,6 +280,14 @@ mod tests {
 
     use super::*;
     use crate::transaction_store::TransactionRecord;
+
+    const TEST_UUID: Uuid = Uuid::from_bytes([
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+    ]);
+
+    fn test_timestamp() -> DateTime<Utc> {
+        DateTime::from_timestamp(1_700_000_000, 0).unwrap()
+    }
 
     // Mock receipt provider for testing with configurable statuses and logs
     struct MockReceiptProvider {
@@ -428,11 +436,11 @@ mod tests {
 
         let tx_hash = Hash::default();
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: vec![0x01],
             transaction_hash: tx_hash,
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: chrono::Utc::now(),
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
@@ -449,7 +457,10 @@ mod tests {
 
         // Verify status was updated
         let updated = store.get(id).unwrap();
-        insta::assert_yaml_snapshot!(updated);
+        insta::assert_yaml_snapshot!(updated, {
+            ".submitted_at" => "[timestamp]",
+            ".confirmed_at" => "[timestamp]",
+        });
     }
 
     #[tokio::test]
@@ -459,11 +470,11 @@ mod tests {
 
         let tx_hash = Hash::default();
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: vec![0x01],
             transaction_hash: tx_hash,
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: chrono::Utc::now(),
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
@@ -480,7 +491,9 @@ mod tests {
 
         // Verify status was updated
         let updated = store.get(id).unwrap();
-        insta::assert_yaml_snapshot!(updated);
+        insta::assert_yaml_snapshot!(updated, {
+            ".submitted_at" => "[timestamp]",
+        });
     }
 
     #[tokio::test]
@@ -490,11 +503,11 @@ mod tests {
 
         let tx_hash = Hash::default();
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: vec![0x01],
             transaction_hash: tx_hash,
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: chrono::Utc::now(),
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
@@ -509,7 +522,9 @@ mod tests {
 
         // Verify status unchanged
         let updated = store.get(id).unwrap();
-        insta::assert_yaml_snapshot!(updated);
+        insta::assert_yaml_snapshot!(updated, {
+            ".submitted_at" => "[timestamp]",
+        });
     }
 
     #[tokio::test]
@@ -520,11 +535,11 @@ mod tests {
         let tx_hash = Hash::default();
         // Create record with old timestamp (will be timed out)
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: vec![0x01],
             transaction_hash: tx_hash,
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now() - chrono::Duration::try_seconds(400).unwrap(), // 400 seconds ago
+            submitted_at: chrono::Utc::now() - chrono::Duration::try_seconds(400).unwrap(), // 400 seconds ago
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
@@ -552,22 +567,22 @@ mod tests {
         let tx_hash2 = Hash::from([2u8; 32]);
 
         let record1 = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: Uuid::from_u128(1),
             raw_transaction: vec![0x01],
             transaction_hash: tx_hash1,
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: chrono::Utc::now(),
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
         };
 
         let record2 = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: Uuid::from_u128(2),
             raw_transaction: vec![0x02],
             transaction_hash: tx_hash2,
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: chrono::Utc::now(),
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
@@ -625,11 +640,11 @@ mod tests {
         safe_checker.add_safe(safe_address);
 
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: raw_tx,
             transaction_hash: tx_hash,
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: test_timestamp(),
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
@@ -659,11 +674,11 @@ mod tests {
         safe_checker.add_safe(safe_address);
 
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: raw_tx,
             transaction_hash: tx_hash,
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: test_timestamp(),
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
@@ -690,11 +705,11 @@ mod tests {
         let safe_checker = MockSafeAddressChecker::new();
 
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: raw_tx,
             transaction_hash: tx_hash,
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: test_timestamp(),
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
@@ -714,11 +729,11 @@ mod tests {
         let provider = MockReceiptProvider::new();
 
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: vec![0x01],
             transaction_hash: Hash::default(),
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: test_timestamp(),
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
@@ -762,11 +777,11 @@ mod tests {
         safe_checker.add_safe(safe_address);
 
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: raw_tx,
             transaction_hash: tx_hash,
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: chrono::Utc::now(),
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
@@ -780,7 +795,11 @@ mod tests {
 
         // Both status and safe_execution should be set atomically
         let updated = store.get(id).unwrap();
-        insta::assert_yaml_snapshot!(updated);
+        insta::assert_yaml_snapshot!(updated, {
+            ".submitted_at" => "[timestamp]",
+            ".confirmed_at" => "[timestamp]",
+            ".raw_transaction" => "[raw_tx]",
+        });
     }
 
     #[tokio::test]
@@ -813,11 +832,11 @@ mod tests {
         safe_checker.add_module(module_address, safe_address);
 
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: raw_tx,
             transaction_hash: tx_hash,
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: test_timestamp(),
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
@@ -865,11 +884,11 @@ mod tests {
         safe_checker.add_safe(safe_address);
 
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: raw_tx,
             transaction_hash: tx_hash,
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: test_timestamp(),
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
@@ -912,11 +931,11 @@ mod tests {
         safe_checker.add_safe(safe_address);
 
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: raw_tx,
             transaction_hash: tx_hash,
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: test_timestamp(),
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
@@ -959,11 +978,11 @@ mod tests {
         safe_checker.add_safe(safe_address);
 
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: raw_tx,
             transaction_hash: tx_hash,
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: test_timestamp(),
             confirmed_at: None,
             error_message: None,
             safe_execution: None,
@@ -1007,11 +1026,11 @@ mod tests {
         safe_checker.add_safe(safe_address);
 
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: raw_tx,
             transaction_hash: tx_hash,
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: test_timestamp(),
             confirmed_at: None,
             error_message: None,
             safe_execution: None,

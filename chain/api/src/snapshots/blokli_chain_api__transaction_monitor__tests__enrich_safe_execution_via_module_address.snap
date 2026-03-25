@@ -1,6 +1,6 @@
 ---
 source: chain/api/src/transaction_monitor.rs
-expression: snap(&result)
+expression: "&result"
 ---
 success: true
 safe_tx_hash: ~

@@ -8,9 +8,9 @@ raw_transaction:
 transaction_hash: "0x0000000000000000000000000000000000000000000000000000000000000000"
 status: Confirmed
 submitted_at: "2023-11-14T22:13:20Z"
-confirmed_at: "[timestamp]"
+confirmed_at: "2023-11-14T22:13:20Z"
 error_message: ~
 safe_execution:
-  success: false
-  safe_tx_hash: "0xabababababababababababababababababababababababababababababababab"
-  revert_reason: revert reason
+  success: true
+  safe_tx_hash: "0x4242424242424242424242424242424242424242424242424242424242424242"
+  revert_reason: ~

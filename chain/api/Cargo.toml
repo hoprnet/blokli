@@ -54,7 +54,7 @@ blokli-chain-types = { workspace = true }
 blokli-db          = { workspace = true, features = ["runtime-tokio"] }
 env_logger         = { workspace = true }
 hex-literal        = { workspace = true }
-insta              = { workspace = true }
+insta              = { workspace = true, features = ["yaml", "redactions"] }
 rand               = { workspace = true }
 tempfile           = { workspace = true }
 tokio              = { workspace = true }
