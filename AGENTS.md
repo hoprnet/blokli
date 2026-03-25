@@ -940,6 +940,9 @@ architectures, scanned for security vulnerabilities, and pushed to Google Artifa
 - **amd64** (x86_64-linux) - Intel/AMD 64-bit processors ✅ Available in CI
 - **arm64** (aarch64-linux) - ARM 64-bit processors (AWS Graviton, Apple Silicon servers) 🔄 Local builds only
 
+**Note:** Currently only AMD64 images are available. ARM64 will be re-enabled when GitHub runner supports aarch64. The manifest tag (without
+architecture suffix) points to the amd64 image.
+
 ### Image Variants
 
 Three image variants are available for each architecture:
