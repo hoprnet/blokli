@@ -1,9 +1,23 @@
-use super::{InvalidAddressError, QueryFailedError, schema};
+use super::{InvalidAddressError, MissingFilterError, QueryFailedError, Uint64, schema};
 use crate::{api::types::TokenValueString, errors::BlokliClientError};
 
 #[derive(cynic::QueryVariables)]
 pub struct BalanceVariables {
     pub address: String,
+}
+
+#[derive(cynic::InputObject, Debug, Default, Clone)]
+#[cynic(graphql_type = "RedeemedStatsFilter")]
+pub struct RedeemedStatsFilter {
+    #[cynic(rename = "safeAddress")]
+    pub safe_address: Option<String>,
+    #[cynic(rename = "nodeAddress")]
+    pub node_address: Option<String>,
+}
+
+#[derive(cynic::QueryVariables, Default)]
+pub struct RedeemedStatsVariables {
+    pub filter: RedeemedStatsFilter,
 }
 
 #[derive(cynic::QueryFragment, Debug)]
@@ -104,6 +118,44 @@ impl From<SafeHoprAllowanceResult> for Result<SafeHoprAllowance, BlokliClientErr
             SafeHoprAllowanceResult::InvalidAddressError(e) => Err(e.into()),
             SafeHoprAllowanceResult::QueryFailedError(e) => Err(e.into()),
             SafeHoprAllowanceResult::Unknown => Err(crate::errors::ErrorKind::NoData.into()),
+        }
+    }
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct RedeemedStats {
+    pub __typename: String,
+    pub redeemed_amount: TokenValueString,
+    pub redemption_count: Uint64,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "QueryRoot", variables = "RedeemedStatsVariables")]
+pub struct QueryRedeemedStats {
+    #[arguments(filter: $filter)]
+    #[cynic(rename = "ticketRedemptionStats")]
+    pub ticket_redemption_stats: RedeemedStatsResult,
+}
+
+#[derive(cynic::InlineFragments, Debug)]
+pub enum RedeemedStatsResult {
+    RedeemedStats(RedeemedStats),
+    MissingFilterError(MissingFilterError),
+    InvalidAddressError(InvalidAddressError),
+    QueryFailedError(QueryFailedError),
+    #[cynic(fallback)]
+    Unknown,
+}
+
+impl From<RedeemedStatsResult> for Result<RedeemedStats, BlokliClientError> {
+    fn from(value: RedeemedStatsResult) -> Self {
+        match value {
+            RedeemedStatsResult::RedeemedStats(stats) => Ok(stats),
+            RedeemedStatsResult::MissingFilterError(e) => Err(e.into()),
+            RedeemedStatsResult::InvalidAddressError(e) => Err(e.into()),
+            RedeemedStatsResult::QueryFailedError(e) => Err(e.into()),
+            RedeemedStatsResult::Unknown => Err(crate::errors::ErrorKind::NoData.into()),
         }
     }
 }

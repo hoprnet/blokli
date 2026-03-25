@@ -6,7 +6,7 @@ use std::{str::FromStr, time::Duration};
 use blokli_client::{
     BlokliClient, BlokliClientConfig,
     api::{
-        AccountSelector, BlokliTransactionClient, ChannelFilter, ChannelSelector,
+        AccountSelector, BlokliTransactionClient, ChainAddress, ChannelFilter, ChannelSelector, RedeemedStatsSelector,
         types::{Account, ChannelStatus},
     },
 };
@@ -82,6 +82,42 @@ enum Commands {
         #[arg(short, long, group = "tx")]
         track: bool,
     },
+}
+
+#[derive(Debug, Clone, Args)]
+pub(crate) struct RedemptionsArgs {
+    /// Optional safe address filter.
+    #[arg(short, long, value_parser = clap::value_parser!(String))]
+    safe_address: Option<String>,
+    /// Optional destination node address filter.
+    #[arg(short, long, value_parser = clap::value_parser!(String))]
+    node_address: Option<String>,
+}
+
+impl TryFrom<RedemptionsArgs> for RedeemedStatsSelector {
+    type Error = anyhow::Error;
+
+    fn try_from(value: RedemptionsArgs) -> Result<Self, Self::Error> {
+        let RedemptionsArgs {
+            safe_address,
+            node_address,
+        } = value;
+        match (safe_address, node_address) {
+            (Some(safe), None) => Ok(RedeemedStatsSelector::SafeAddress(ChainAddress::from(
+                safe.parse::<Address>()?,
+            ))),
+            (None, Some(node)) => Ok(RedeemedStatsSelector::NodeAddress(ChainAddress::from(
+                node.parse::<Address>()?,
+            ))),
+            (Some(safe), Some(node)) => Ok(RedeemedStatsSelector::SafeAndNodeAddress {
+                safe_address: ChainAddress::from(safe.parse::<Address>()?),
+                node_address: ChainAddress::from(node.parse::<Address>()?),
+            }),
+            (None, None) => Err(anyhow::anyhow!(
+                "At least one of --safe-address or --node-address must be specified."
+            )),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Args)]
