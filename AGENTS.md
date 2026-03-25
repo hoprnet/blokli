@@ -959,7 +959,6 @@ There are 3 main events controlled by CI
 - PR merged: A build process occurs on every PR merge against the `main` branch. It produces a binary and its corresponding docker image.
 - Close release: Manual workflow to cut the release.
 
-
 | Version Type | Format                | Platform Image                    | Manifest              | Use Case              |
 | ------------ | --------------------- | --------------------------------- | --------------------- | --------------------- |
 | Commit       | `version-commit.hash` | `1.0.0-commit.abc123-linux-amd64` | `1.0.0-commit.abc123` | Development testing   |

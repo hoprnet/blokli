@@ -396,6 +396,7 @@
               yq
               uv
               sqlite
+              pgformatter
             ];
           };
           shells = {
