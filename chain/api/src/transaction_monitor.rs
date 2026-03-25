@@ -449,8 +449,7 @@ mod tests {
 
         // Verify status was updated
         let updated = store.get(id).unwrap();
-        assert_eq!(updated.status, TransactionStatus::Confirmed);
-        assert!(updated.confirmed_at.is_some());
+        insta::assert_yaml_snapshot!(updated);
     }
 
     #[tokio::test]
@@ -481,8 +480,7 @@ mod tests {
 
         // Verify status was updated
         let updated = store.get(id).unwrap();
-        assert_eq!(updated.status, TransactionStatus::Reverted);
-        assert!(updated.error_message.is_some());
+        insta::assert_yaml_snapshot!(updated);
     }
 
     #[tokio::test]
@@ -511,7 +509,7 @@ mod tests {
 
         // Verify status unchanged
         let updated = store.get(id).unwrap();
-        assert_eq!(updated.status, TransactionStatus::Submitted);
+        insta::assert_yaml_snapshot!(updated);
     }
 
     #[tokio::test]
@@ -782,10 +780,7 @@ mod tests {
 
         // Both status and safe_execution should be set atomically
         let updated = store.get(id).unwrap();
-        assert_eq!(updated.status, TransactionStatus::Confirmed);
-        assert!(updated.confirmed_at.is_some());
-
-        insta::assert_yaml_snapshot!(&updated.safe_execution);
+        insta::assert_yaml_snapshot!(updated);
     }
 
     #[tokio::test]

@@ -1,0 +1,9 @@
+---
+source: api/tests/safe_api_integration_test.rs
+expression: response
+---
+data:
+  safeByChainKey:
+    code: INVALID_ADDRESS
+    message: "Invalid address: must be 40 hex characters (20 bytes), got 11 characters"
+    address: invalid_key
