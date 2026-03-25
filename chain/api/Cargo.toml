@@ -23,7 +23,6 @@ runtime-tokio = [
 ]
 
 [dependencies]
-<<<<<<< HEAD
 async-broadcast = { workspace = true }
 async-trait     = { workspace = true }
 chrono          = { workspace = true }
