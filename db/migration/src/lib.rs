@@ -3,7 +3,6 @@ pub use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
 mod m001_initial_schema;
 mod m002_initial_log_schema;
-mod m003_migrate_v3_safes;
 
 /// This is a special block ID that even pre-dates the v3 contract deployment on Gnosis chain,
 /// and therefore could be safely used to mark data added via the migration.
@@ -50,9 +49,7 @@ impl MigratorTrait for Migrator<{ SafeDataOrigin::NoData as u8 }> {
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator<{ SafeDataOrigin::Jura as u8 }> {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        let mut migrations = Self::base_migrations();
-        migrations.push(Box::new(m003_migrate_v3_safes::Migration(SafeDataOrigin::Jura)));
-        migrations
+        Self::base_migrations()
     }
 }
 
@@ -79,9 +76,7 @@ impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::NoData as u8 }> {
 #[async_trait::async_trait]
 impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::Jura as u8 }> {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        let mut migrations = Self::base_migrations();
-        migrations.push(Box::new(m003_migrate_v3_safes::Migration(SafeDataOrigin::Jura)));
-        migrations
+        Self::base_migrations()
     }
 }
 

@@ -54,6 +54,7 @@ jobs:
       version_type: release
       build_matrix: >-
         [
+
           {
             "runner": "self-hosted-hoprnet-bigger",
             "architecture": "x86_64-linux",
