@@ -55,8 +55,8 @@ impl MigratorTrait for Migrator<{ SafeDataOrigin::Jura as u8 }> {
 
 /// SQLite does not allow writing lock tables only, and the write lock
 /// will apply to the entire database file. It is therefore beneficial
-/// to separate the exclusively concurrently accessing components into
-/// separate database files to benefit from multiple write locks over
+/// to place components that need concurrent exclusive write access into
+/// separate database files so that multiple write locks can be used over
 /// different parts of the database.
 pub struct MigratorIndex<const NETWORK: u8>;
 

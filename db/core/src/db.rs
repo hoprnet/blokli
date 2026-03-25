@@ -188,8 +188,8 @@ impl BlokliDb {
             (db, logs_db)
         };
 
-        // If the stored major version is less than MAJOR_VERSION, wipe all data and the
-        // seaql_migrations table so the migration stack can run from scratch.
+        // If the stored schema major version is less than the major component of SCHEMA_VERSION,
+        // wipe all data and the seaql_migrations table so the migration stack can run from scratch.
         version::check_major_version_and_reset(&db, logs_db.as_ref()).await?;
 
         // Apply migrations based on database backend
