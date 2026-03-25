@@ -10,11 +10,11 @@ default:
 # Quick Workflows
 # ============================================================================
 
-# Quick check - format, clippy, and check
-quick: fmt clippy check
+# Quick check - format, clippy, check and update the db schema
+quick: fmt clippy check export-db-schema
 
 # Development build and test cycle - format, check, and test
-dev: fmt check test
+dev: fmt check test 
 
 # Watch for changes and run checks continuously
 watch:
@@ -39,6 +39,7 @@ check:
 # Clean all build artifacts
 clean:
     cargo clean
+
 
 # ============================================================================
 # Test Commands
@@ -152,6 +153,19 @@ export-schema-sqlite output="schema.graphql":
     # Export the GraphQL schema
     cargo run --bin blokli-api -- export-schema -d "sqlite://data/bloklid-index.db" -o {{ output }}
     echo "GraphQL schema exported to {{ output }}"
+
+
+# Export database schema (DDL) using SQLite for tracking schema changes
+export-db-schema output="design/db-schema.sql":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tmp_db=$(mktemp /tmp/blokli_schema_export.XXXXXX.db)
+    trap 'rm -f "$tmp_db"' EXIT
+    # Run migrations on a temporary SQLite database
+    cargo run --bin migration -- up -u "sqlite://${tmp_db}?mode=rwc"
+    # Dump the schema (CREATE TABLE, VIEW, INDEX statements), excluding SeaORM internal table
+    sqlite3 "$tmp_db" ".schema" | grep -v 'seaql_migrations' > {{ output }}
+    echo "Database schema exported to {{ output }}"
 
 # ============================================================================
 # Documentation
