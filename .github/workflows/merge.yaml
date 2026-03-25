@@ -52,6 +52,7 @@ jobs:
       version_type: pr
       build_matrix: >-
         [
+
           {
             "runner": "self-hosted-hoprnet-bigger",
             "architecture": "x86_64-linux",
@@ -84,6 +85,7 @@ jobs:
       version_type: pr
       build_matrix: >-
         [
+
           {
             "runner": "self-hosted-hoprnet-bigger",
             "architecture": "x86_64-linux",
@@ -129,7 +131,6 @@ jobs:
           image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid:${{ needs.build-docker.outputs.docker_build_version }}
           suffix: ${{ steps.revision.outputs.suffix }}
           flags: --timeout=600s
-
   notify:
     name: Notify failure
     needs:

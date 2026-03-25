@@ -395,6 +395,8 @@
               kubernetes-helm
               yq
               uv
+              sqlite
+              pgformatter
             ];
           };
           shells = {
