@@ -10,8 +10,8 @@ default:
 # Quick Workflows
 # ============================================================================
 
-# Quick check - format, clippy, check and update the db schema
-quick: fmt clippy check export-db-schema
+# Quick check - format, clippy, and check
+quick: fmt clippy check
 
 # Development build and test cycle - format, check, and test
 dev: fmt check test 
