@@ -61,6 +61,7 @@ jobs:
       version_type: commit
       build_matrix: >-
         [
+
           {
             "runner": "self-hosted-hoprnet-bigger",
             "architecture": "x86_64-linux",
