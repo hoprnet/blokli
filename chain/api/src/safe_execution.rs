@@ -228,16 +228,7 @@ mod tests {
         }];
 
         let result = inspect_safe_execution_logs(&safe_address, &logs);
-        assert!(result.is_some());
-
-        let result = result.unwrap();
-        assert!(result.success);
-        assert!(result.revert_reason.is_none());
-
-        let safe_tx_hash = result.safe_tx_hash.expect("safe_tx_hash should be present");
-        let hash_bytes: &[u8] = safe_tx_hash.as_ref();
-        assert_eq!(hash_bytes[0], 0x42);
-        assert_eq!(hash_bytes[31], 0xFF);
+        insta::assert_yaml_snapshot!(&result);
     }
 
     #[test]
@@ -252,11 +243,7 @@ mod tests {
         }];
 
         let result = inspect_safe_execution_logs(&safe_address, &logs);
-        assert!(result.is_some());
-
-        let result = result.unwrap();
-        assert!(!result.success);
-        assert!(result.revert_reason.is_none());
+        insta::assert_yaml_snapshot!(&result);
     }
 
     #[test]
@@ -270,12 +257,8 @@ mod tests {
             data: vec![0u8; 32], // payment only (no txHash in data)
         }];
 
-        let result = inspect_safe_execution_logs(&safe_address, &logs).unwrap();
-        assert!(result.success);
-
-        let safe_tx_hash = result.safe_tx_hash.expect("safe_tx_hash should be present");
-        let hash_bytes: &[u8] = safe_tx_hash.as_ref();
-        assert_eq!(hash_bytes, &indexed_hash);
+        let result = inspect_safe_execution_logs(&safe_address, &logs);
+        insta::assert_yaml_snapshot!(&result);
     }
 
     #[test]
@@ -319,12 +302,8 @@ mod tests {
             data: vec![0u8; 10], // Too short to contain txHash
         }];
 
-        let result = inspect_safe_execution_logs(&safe_address, &logs).unwrap();
-        assert!(result.success);
-        assert!(
-            result.safe_tx_hash.is_none(),
-            "safe_tx_hash should be None for short data"
-        );
+        let result = inspect_safe_execution_logs(&safe_address, &logs);
+        insta::assert_yaml_snapshot!(&result);
     }
 
     #[test]
@@ -351,15 +330,7 @@ mod tests {
         }];
 
         let result = inspect_safe_execution_logs(&safe_address, &logs);
-        assert!(result.is_some());
-
-        let result = result.unwrap();
-        assert!(result.success);
-        assert!(
-            result.safe_tx_hash.is_none(),
-            "module execution events have no safe_tx_hash"
-        );
-        assert!(result.revert_reason.is_none());
+        insta::assert_yaml_snapshot!(&result);
     }
 
     #[test]
@@ -374,15 +345,7 @@ mod tests {
         }];
 
         let result = inspect_safe_execution_logs(&safe_address, &logs);
-        assert!(result.is_some());
-
-        let result = result.unwrap();
-        assert!(!result.success);
-        assert!(
-            result.safe_tx_hash.is_none(),
-            "module execution events have no safe_tx_hash"
-        );
-        assert!(result.revert_reason.is_none());
+        insta::assert_yaml_snapshot!(&result);
     }
 
     #[test]

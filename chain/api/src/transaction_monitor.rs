@@ -642,9 +642,7 @@ mod tests {
         let monitor = create_monitor_with_safe_checker(store, provider, safe_checker);
         let result = monitor.try_enrich_safe_execution(&record).await;
 
-        let exec = result.expect("enrichment should return a result");
-        assert!(exec.success);
-        assert!(exec.safe_tx_hash.is_some());
+        insta::assert_yaml_snapshot!(&result);
     }
 
     #[tokio::test]
@@ -787,10 +785,7 @@ mod tests {
         assert_eq!(updated.status, TransactionStatus::Confirmed);
         assert!(updated.confirmed_at.is_some());
 
-        let exec = updated
-            .safe_execution
-            .expect("safe_execution should be set alongside confirmed status");
-        assert!(exec.success);
+        insta::assert_yaml_snapshot!(&updated.safe_execution);
     }
 
     #[tokio::test]
@@ -838,12 +833,7 @@ mod tests {
         let monitor = create_monitor_with_safe_checker(store, provider, safe_checker);
         let result = monitor.try_enrich_safe_execution(&record).await;
 
-        let exec = result.expect("enrichment should return a result for module transactions");
-        assert!(exec.success);
-        assert!(
-            exec.safe_tx_hash.is_none(),
-            "module execution events have no safe_tx_hash"
-        );
+        insta::assert_yaml_snapshot!(&result);
     }
 
     // =========================================================================
@@ -895,9 +885,7 @@ mod tests {
         let monitor = create_monitor_with_safe_checker(store, provider, safe_checker);
         let result = monitor.try_enrich_safe_execution(&record).await;
 
-        let exec = result.expect("enrichment should return a result");
-        assert!(!exec.success);
-        assert_eq!(exec.revert_reason, Some("insufficient funds".to_string()));
+        insta::assert_yaml_snapshot!(&result);
     }
 
     #[tokio::test]
@@ -944,12 +932,7 @@ mod tests {
         let monitor = create_monitor_with_safe_checker(store, provider, safe_checker);
         let result = monitor.try_enrich_safe_execution(&record).await;
 
-        let exec = result.expect("enrichment should return a result");
-        assert!(!exec.success);
-        assert!(
-            exec.revert_reason.is_none(),
-            "revert_reason should be None when get_revert_reason returns Err"
-        );
+        insta::assert_yaml_snapshot!(&result);
     }
 
     #[tokio::test]
@@ -996,9 +979,7 @@ mod tests {
         let monitor = create_monitor_with_safe_checker(store, provider, safe_checker);
         let result = monitor.try_enrich_safe_execution(&record).await;
 
-        let exec = result.expect("enrichment should return a result");
-        assert!(!exec.success);
-        assert!(exec.revert_reason.is_none());
+        insta::assert_yaml_snapshot!(&result);
     }
 
     #[tokio::test]

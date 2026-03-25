@@ -1,0 +1,7 @@
+---
+source: chain/api/src/transaction_store.rs
+expression: "&retrieved.safe_execution"
+---
+success: false
+safe_tx_hash: "0xabababababababababababababababababababababababababababababababab"
+revert_reason: revert reason

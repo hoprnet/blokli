@@ -207,24 +207,22 @@ mod tests {
 
     #[test]
     fn test_decode_panic_codes() {
-        let test_cases = [
-            (0x01u8, "Panic(0x01): assertion failure"),
-            (0x11, "Panic(0x11): arithmetic overflow"),
-            (0x12, "Panic(0x12): division by zero"),
-            (0x32, "Panic(0x32): array index out of bounds"),
-        ];
+        let codes: Vec<u8> = vec![0x01, 0x11, 0x12, 0x32];
+        let results: Vec<Option<String>> = codes
+            .iter()
+            .map(|&code| {
+                let mut data = Vec::new();
+                data.extend_from_slice(&PANIC_SELECTOR);
 
-        for (code, expected) in test_cases {
-            let mut data = Vec::new();
-            data.extend_from_slice(&PANIC_SELECTOR);
+                let mut code_bytes = [0u8; 32];
+                code_bytes[31] = code;
+                data.extend_from_slice(&code_bytes);
 
-            let mut code_bytes = [0u8; 32];
-            code_bytes[31] = code;
-            data.extend_from_slice(&code_bytes);
+                decode_revert_reason(&data)
+            })
+            .collect();
 
-            let result = decode_revert_reason(&data);
-            assert_eq!(result, Some(expected.to_string()), "Failed for panic code 0x{code:02x}");
-        }
+        insta::assert_yaml_snapshot!(results);
     }
 
     #[test]

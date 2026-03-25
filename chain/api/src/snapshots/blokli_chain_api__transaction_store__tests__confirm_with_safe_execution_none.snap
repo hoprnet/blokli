@@ -1,0 +1,5 @@
+---
+source: chain/api/src/transaction_store.rs
+expression: snap(&retrieved.safe_execution)
+---
+~

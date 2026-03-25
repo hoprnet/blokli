@@ -10,7 +10,7 @@ use async_broadcast::{Receiver, Sender, broadcast};
 use blokli_api_types::{Hex32, ID, SafeExecution, Transaction, TransactionStatus as GqlTransactionStatus};
 use chrono::{DateTime, Utc};
 use dashmap::{DashMap, mapref::entry::Entry};
-use hopr_types::crypto::types::Hash;
+use hopr_types::{crypto::types::Hash, primitive::traits::ToHex};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -27,15 +27,23 @@ pub enum TransactionStoreError {
 ///
 /// Populated after a transaction targeting a Safe contract is confirmed on-chain.
 /// Extracted from ExecutionSuccess/ExecutionFailure events in the receipt logs.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SafeExecutionResult {
     /// Whether the internal Safe transaction succeeded
     pub success: bool,
     /// Safe internal transaction hash (bytes32 from event).
     /// `None` if the event data was malformed and the hash could not be extracted.
+    #[serde(serialize_with = "serialize_optional_hash")]
     pub safe_tx_hash: Option<Hash>,
     /// Revert reason string (if execution failed and reason is decodable)
     pub revert_reason: Option<String>,
+}
+
+fn serialize_optional_hash<S: serde::Serializer>(hash: &Option<Hash>, s: S) -> Result<S::Ok, S::Error> {
+    match hash {
+        Some(h) => s.serialize_some(&h.to_hex()),
+        None => s.serialize_none(),
+    }
 }
 
 /// Status of a submitted transaction
@@ -806,9 +814,7 @@ mod tests {
         assert_eq!(retrieved.status, TransactionStatus::Confirmed);
         assert!(retrieved.confirmed_at.is_some());
 
-        let exec = retrieved.safe_execution.expect("safe_execution should be set");
-        assert!(!exec.success);
-        assert_eq!(exec.revert_reason.as_deref(), Some("revert reason"));
+        insta::assert_yaml_snapshot!(&retrieved.safe_execution);
     }
 
     #[test]
@@ -835,7 +841,7 @@ mod tests {
         let retrieved = store.get(id).unwrap();
         assert_eq!(retrieved.status, TransactionStatus::Confirmed);
         assert!(retrieved.confirmed_at.is_some());
-        assert!(retrieved.safe_execution.is_none());
+        insta::assert_yaml_snapshot!(&retrieved.safe_execution);
     }
 
     #[test]

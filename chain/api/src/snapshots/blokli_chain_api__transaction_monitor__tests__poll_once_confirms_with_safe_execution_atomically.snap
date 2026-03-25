@@ -1,0 +1,7 @@
+---
+source: chain/api/src/transaction_monitor.rs
+expression: "&updated.safe_execution"
+---
+success: true
+safe_tx_hash: "0xee00000000000000000000000000000000000000000000000000000000000000"
+revert_reason: ~
