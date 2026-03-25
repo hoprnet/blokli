@@ -395,6 +395,7 @@
               kubernetes-helm
               yq
               uv
+              sqlite
             ];
           };
           shells = {

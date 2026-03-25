@@ -164,7 +164,7 @@ export-db-schema output="design/db-schema.sql":
     # Run migrations on a temporary SQLite database
     cargo run --bin migration -- up -u "sqlite://${tmp_db}?mode=rwc"
     # Dump the schema (CREATE TABLE, VIEW, INDEX statements), excluding SeaORM internal table
-    sqlite3 "$tmp_db" ".schema" | grep -v 'seaql_migrations' > {{ output }}
+    sqlite3 "$tmp_db" ".schema" | grep -Ev 'seaql_migrations|^CREATE TABLE sqlite_sequence' > {{ output }}
     echo "Database schema exported to {{ output }}"
 
 # ============================================================================
