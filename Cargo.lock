@@ -1933,7 +1933,6 @@ dependencies = [
  "anyhow",
  "async-broadcast",
  "async-channel 2.5.0",
- "async-graphql",
  "async-trait",
  "blokli-api-types",
  "blokli-chain-indexer",

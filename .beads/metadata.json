@@ -1,4 +1,8 @@
 {
   "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_database": "blokli",
+  "project_id": "dce79d4c-ec64-4699-9a17-b77be0fe6cff",
   "last_bd_version": "0.24.3"
 }
