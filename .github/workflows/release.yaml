@@ -25,9 +25,6 @@ jobs:
           - architecture: x86_64-linux
             runner: self-hosted-hoprnet-bigger
             build_command: nix build -L .#binary-blokli-x86_64-linux
-          - architecture: aarch64-linux
-            runner: self-hosted-hoprnet-bigger
-            build_command: nix build -L .#binary-blokli-aarch64-linux
     uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v2
     permissions:
       contents: read
@@ -61,11 +58,6 @@ jobs:
             "runner": "self-hosted-hoprnet-bigger",
             "architecture": "x86_64-linux",
             "build_command": "nix build -L .#docker-blokli-x86_64-linux"
-          },
-          {
-            "runner": "self-hosted-hoprnet-bigger",
-            "architecture": "aarch64-linux",
-            "build_command": "nix build -L .#docker-blokli-aarch64-linux"
           }
         ]
       cachix_cache_name: blokli
