@@ -11,8 +11,7 @@ use hopr_bindings::exports::alloy::{
     consensus::{Transaction, TxEnvelope},
     eips::eip2718::Decodable2718,
 };
-use hopr_crypto_types::types::Hash;
-use hopr_primitive_types::prelude::Address;
+use hopr_types::{crypto::types::Hash, primitive::prelude::Address};
 use tracing::warn;
 
 use crate::{

@@ -7,7 +7,8 @@ use std::collections::HashMap;
 
 mod tests;
 
-use async_graphql::{Enum, ID, InputObject, InputValueError, Scalar, ScalarType, SimpleObject, Union, Value};
+pub use async_graphql::ID;
+use async_graphql::{Enum, InputObject, InputValueError, Scalar, ScalarType, SimpleObject, Union, Value};
 use hopr_types::{crypto::types::Hash, primitive::prelude::ToHex};
 
 /// Token value represented as a string to maintain precision

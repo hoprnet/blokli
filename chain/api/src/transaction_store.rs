@@ -7,8 +7,7 @@
 use std::sync::Arc;
 
 use async_broadcast::{Receiver, Sender, broadcast};
-use async_graphql::ID;
-use blokli_api_types::{Hex32, SafeExecution, Transaction, TransactionStatus as GqlTransactionStatus};
+use blokli_api_types::{Hex32, ID, SafeExecution, Transaction, TransactionStatus as GqlTransactionStatus};
 use chrono::{DateTime, Utc};
 use dashmap::{DashMap, mapref::entry::Entry};
 use hopr_types::crypto::types::Hash;
@@ -579,6 +578,7 @@ mod tests {
             submitted_at: Utc::now(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id = record.id;
@@ -640,6 +640,7 @@ mod tests {
             submitted_at: Utc::now(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id = record.id;
@@ -692,6 +693,7 @@ mod tests {
             submitted_at: Utc::now(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id = record.id;

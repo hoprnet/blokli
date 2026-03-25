@@ -85,16 +85,15 @@ See `api/src/errors.rs` for available builders and codes. When a pattern repeats
 
 **Always prefer these over creating new types** for addresses, balances, channels, accounts, and crypto primitives:
 
-| Crate | Key Types |
-|-------|-----------|
+| Crate                  | Key Types                                                                                               |
+| ---------------------- | ------------------------------------------------------------------------------------------------------- |
 | `hopr-primitive-types` | `Address`, `Balance<C>`, `HoprBalance`, `XDaiBalance`, `U256`, `SerializableLog`, `ToHex`, `IntoEndian` |
-| `hopr-crypto-types` | `Hash`, `OffchainPublicKey`, `ChainKeypair`, `OffchainKeypair` |
-| `hopr-internal-types` | `ChannelEntry`, `ChannelStatus`, `AccountEntry`, `AccountType`, `AcknowledgedTicket` |
-| `hopr-bindings` | Smart contract bindings and event encoding/decoding |
+| `hopr-crypto-types`    | `Hash`, `OffchainPublicKey`, `ChainKeypair`, `OffchainKeypair`                                          |
+| `hopr-internal-types`  | `ChannelEntry`, `ChannelStatus`, `AccountEntry`, `AccountType`, `AcknowledgedTicket`                    |
+| `hopr-bindings`        | Smart contract bindings and event encoding/decoding                                                     |
 
-Use prelude modules: `hopr_types::primitive::prelude`, `hopr_types::crypto::prelude`.
-Implement `From`/`TryFrom` for DB model conversions (see `db/entity/src/conversions/`).
-Run `cargo doc --package <crate-name> --open` to explore the full API.
+Use prelude modules: `hopr_types::primitive::prelude`, `hopr_types::crypto::prelude`. Implement `From`/`TryFrom` for DB model conversions
+(see `db/entity/src/conversions/`). Run `cargo doc --package <crate-name> --open` to explore the full API.
 
 ## Design
 
@@ -105,7 +104,8 @@ Run `cargo doc --package <crate-name> --open` to explore the full API.
 - Use DataLoader pattern for N+1 prevention
 - Subscriptions via SSE with keep-alive
 
-**Context type safety:** All schema context data MUST use newtype wrappers — never raw primitives. Existing wrappers in `api/src/schema.rs`: `ChainId(u64)`, `NetworkName(String)`, `ExpectedBlockTime(u64)`, `Finality(u16)`.
+**Context type safety:** All schema context data MUST use newtype wrappers — never raw primitives. Existing wrappers in `api/src/schema.rs`:
+`ChainId(u64)`, `NetworkName(String)`, `ExpectedBlockTime(u64)`, `Finality(u16)`.
 
 ### Database
 
@@ -117,23 +117,29 @@ Run `cargo doc --package <crate-name> --open` to explore the full API.
 
 ### Real-Time Subscriptions
 
-GraphQL subscriptions use an in-memory `async_broadcast` event bus via `IndexerState` (`chain/indexer/src/state.rs`). Subscriptions follow a 2-phase model: (1) atomically capture a watermark and subscribe to the event bus under a coordination lock, (2) stream matching events to the client. See `api/src/subscription.rs` for implementation.
+GraphQL subscriptions use an in-memory `async_broadcast` event bus via `IndexerState` (`chain/indexer/src/state.rs`). Subscriptions follow a
+2-phase model: (1) atomically capture a watermark and subscribe to the event bus under a coordination lock, (2) stream matching events to
+the client. See `api/src/subscription.rs` for implementation.
 
-To add a new subscription event: publish a new `IndexerEvent` variant from the indexer handlers, then filter for it in the subscription resolver.
+To add a new subscription event: publish a new `IndexerEvent` variant from the indexer handlers, then filter for it in the subscription
+resolver.
 
 ### Configuration
 
 Config files: `bloklid/src/config.rs` (structs) and `bloklid/example-config.toml` (documentation).
 
-**These must stay in sync.** When modifying config code, update the example config to match — add/remove/rename fields, update defaults, document new sections. Exclude `#[serde(skip)]` fields and auto-generated sections like `protocols`.
+**These must stay in sync.** When modifying config code, update the example config to match — add/remove/rename fields, update defaults,
+document new sections. Exclude `#[serde(skip)]` fields and auto-generated sections like `protocols`.
 
 ### Architecture Documentation
 
-Read `design/architecture.md` before significant changes. Update it when adding components, changing data flows, modifying schema, or altering deployment models. Keep it conceptual — no code, CLI commands, or config snippets.
+Read `design/architecture.md` before significant changes. Update it when adding components, changing data flows, modifying schema, or
+altering deployment models. Keep it conceptual — no code, CLI commands, or config snippets.
 
 ### Transaction Store
 
-`chain/api/src/transaction_store.rs` — in-memory only, by design. Lost on restart. Only tracks `async`/`sync` mode transactions. Use on-chain confirmation for permanent records.
+`chain/api/src/transaction_store.rs` — in-memory only, by design. Lost on restart. Only tracks `async`/`sync` mode transactions. Use
+on-chain confirmation for permanent records.
 
 ## Testing
 
@@ -167,7 +173,9 @@ async fn test_my_feature(#[future(awt)] fixture: IntegrationFixture) -> Result<(
 }
 ```
 
-See `tests/integration/` for fixture API (`IntegrationFixture`, `RpcClient`), Docker stack config, and environment variables. Tests are organized by client trait in `tests/blokli_query_client.rs`, `tests/blokli_subscription_client.rs`, and `tests/blokli_transaction_client.rs`.
+See `tests/integration/` for fixture API (`IntegrationFixture`, `RpcClient`), Docker stack config, and environment variables. Tests are
+organized by client trait in `tests/blokli_query_client.rs`, `tests/blokli_subscription_client.rs`, and
+`tests/blokli_transaction_client.rs`.
 
 For Safe module transactions in tests, use `SafePayloadGenerator` from `hopr-chain-connector`.
 
@@ -207,13 +215,16 @@ nix build -L .#docker-blokli-x86_64-linux    # amd64
 nix build -L .#docker-blokli-aarch64-linux   # arm64 (local only, CI disabled)
 ```
 
-CI builds on every PR commit and merge. Trivy scans for vulnerabilities. Version formats: `version-commit.hash`, `version-pr.number`, `version` (release).
+CI builds on every PR commit and merge. Trivy scans for vulnerabilities. Version formats: `version-commit.hash`, `version-pr.number`,
+`version` (release).
 
 ## Additional Resources
 
-- [SeaORM](https://www.sea-ql.org/SeaORM/) · [async-graphql](https://async-graphql.github.io/async-graphql/) · [Axum](https://docs.rs/axum/) · [Alloy](https://alloy.rs/)
+- [SeaORM](https://www.sea-ql.org/SeaORM/) · [async-graphql](https://async-graphql.github.io/async-graphql/) · [Axum](https://docs.rs/axum/)
+  · [Alloy](https://alloy.rs/)
 
 <!-- BEGIN BEADS INTEGRATION v:1 profile:minimal hash:ca08a54f -->
+
 ## Beads Issue Tracker
 
 This project uses **bd (beads)** for issue tracking. Run `bd prime` to see full workflow context and commands.
@@ -254,8 +265,10 @@ bd close <id>         # Complete work
 7. **Hand off** - Provide context for next session
 
 **CRITICAL RULES:**
+
 - Work is NOT complete until `git push` succeeds
 - NEVER stop before pushing - that leaves work stranded locally
 - NEVER say "ready to push when you are" - YOU must push
 - If push fails, resolve and retry until it succeeds
+
 <!-- END BEADS INTEGRATION -->

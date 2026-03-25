@@ -6,11 +6,11 @@ use async_broadcast::Receiver;
 use async_graphql::{Context, ID, Result, Subscription};
 use async_stream::stream;
 use blokli_api_types::{
-    Account, Channel, ChannelUpdate, OpenedChannelsGraphEntry, Safe, TicketParameters, TokenValueString, Transaction,
-    UInt64,
+    Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, Safe, SafeExecution, TicketParameters,
+    TokenValueString, Transaction, TransactionStatus as GqlTransactionStatus, UInt64,
 };
 use blokli_chain_api::transaction_store::{
-    TransactionEvent, TransactionStatus as StoreTransactionStatus, TransactionStore,
+    SafeExecutionResult, TransactionEvent, TransactionStatus as StoreTransactionStatus, TransactionStore,
 };
 use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
 use blokli_db_entity::{
@@ -397,6 +397,15 @@ async fn query_channels_at_watermark_with_filters(
     }
 
     Ok(results)
+}
+
+/// Convert an optional [`SafeExecutionResult`] to the GraphQL [`SafeExecution`] type.
+fn convert_safe_execution(result: Option<SafeExecutionResult>) -> Option<SafeExecution> {
+    result.map(|r| SafeExecution {
+        success: r.success,
+        safe_tx_hash: r.safe_tx_hash.map(|h| Hex32(h.to_hex())),
+        revert_reason: r.revert_reason,
+    })
 }
 
 /// Convert StoreTransactionStatus to GraphQL TransactionStatus
@@ -1165,6 +1174,7 @@ impl SubscriptionRoot {
                     status: convert_transaction_status(record.status),
                     submitted_at: record.submitted_at,
                     transaction_hash: Hex32(record.transaction_hash.to_hex()),
+                    safe_execution: convert_safe_execution(record.safe_execution),
                 };
             }
 
@@ -1183,6 +1193,7 @@ impl SubscriptionRoot {
                                 status: convert_transaction_status(status),
                                 submitted_at: record.submitted_at,
                                 transaction_hash: Hex32(record.transaction_hash.to_hex()),
+                                safe_execution: convert_safe_execution(record.safe_execution),
                             };
                         }
                     }

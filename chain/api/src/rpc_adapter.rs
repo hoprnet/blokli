@@ -13,7 +13,7 @@ use hopr_bindings::exports::alloy::{
     providers::Provider,
 };
 use hopr_types::crypto::types::Hash;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::{
     transaction_executor::RpcClient,

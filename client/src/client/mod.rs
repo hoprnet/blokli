@@ -59,13 +59,14 @@ impl SubscriptionStreamState {
     }
 
     fn start_stream(&mut self) -> Result<(), BlokliClientError> {
+        let sse_err = |e| ErrorKind::Subscription(Box::new(e));
         let client = eventsource_client::ClientBuilder::for_url(self.graphql_url.as_str())
-            .map_err(ErrorKind::from)?
+            .map_err(sse_err)?
             .connect_timeout(self.cfg.timeout)
             .header("Accept", "text/event-stream")
-            .map_err(ErrorKind::from)?
+            .map_err(sse_err)?
             .header("Content-Type", "application/json")
-            .map_err(ErrorKind::from)?
+            .map_err(sse_err)?
             .method("POST".into())
             .body(self.query.clone())
             .redirect_limit(REDIRECT_LIMIT as u32)

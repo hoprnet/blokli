@@ -34,7 +34,7 @@ tracing         = { workspace = true }
 url             = { workspace = true }
 uuid            = { workspace = true }
 
-blokli-api-types     = { workspace = true }
+blokli-api-types = { workspace = true }
 blokli-chain-indexer = { workspace = true }
 blokli-chain-rpc = { workspace = true }
 blokli-chain-types = { workspace = true }
