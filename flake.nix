@@ -380,12 +380,6 @@
               echo "Running pre-commit checks..."
               ${packages.pre-commit-check.shellHook}
 
-              # Use a local npm directory
-              export NPM_CONFIG_PREFIX=.npm
-              export PATH=$NPM_CONFIG_PREFIX/bin:$PATH
-
-              echo "Install helm-chart readme-generator"
-              bun install -g @bitnami/readme-generator-for-helm@2.7.2
             '';
             extraPackages = with pkgs; [
               bun
