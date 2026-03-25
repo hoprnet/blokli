@@ -2,6 +2,7 @@ use blokli_db_entity::prelude::{
     Account, AccountState, Announcement, ChainInfo, Channel, ChannelState, HoprBalance, HoprNodeSafeRegistration,
     HoprSafeContract, HoprSafeContractState, HoprSafeRedeemedStats, Log, LogStatus, LogTopicInfo, NativeBalance,
 };
+use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait, SafeDataOrigin};
 use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, Statement};
 use tracing::{info, warn};
 
@@ -103,8 +104,8 @@ pub(crate) async fn set_schema_version(db: &DatabaseConnection, version: &str) -
 ///
 /// Must be called **before** running migrations. If the stored major version
 /// is lower than the major component of [`SCHEMA_VERSION`], the entire database
-/// is wiped — including `seaql_migrations` and the `schema_version` row — so
-/// that all migrations execute from scratch on the next startup.
+/// is wiped — including `seaql_migrations` and the `schema_version` row — and
+/// migrations are re-applied from scratch.
 ///
 /// An unparseable stored value (e.g. a bare integer from an old schema) is treated
 /// as version `(0, 0)`, which always triggers the wipe.
@@ -130,25 +131,10 @@ pub async fn check_major_version_and_reset(
     if stored_major < code_major {
         warn!(
             stored_major,
-            code_major, "Major schema version changed; wiping all data and migration history for a full re-sync"
+            code_major, "Major schema version changed; resetting database schema for a full re-sync"
         );
 
-        // Clear seaql_migrations on all connections so migrations run from scratch.
-        let _ = db.execute_unprepared("DELETE FROM seaql_migrations").await;
-        if let Some(logs) = logs_db {
-            let _ = logs.execute_unprepared("DELETE FROM seaql_migrations").await;
-        }
-
-        // Remove the schema_version row so m001_initial_schema can re-insert it
-        // with the correct "MAJOR.MINOR" text value without hitting a PK conflict.
-        let _ = db
-            .execute_unprepared(&format!(
-                "DELETE FROM schema_version WHERE id = {SCHEMA_VERSION_TABLE_ID}"
-            ))
-            .await;
-
-        // Wipe all application data.
-        clear_all_data(db, logs_db).await?;
+        reset_database_schema_and_migrations(db, logs_db).await?;
 
         info!("Full database wipe complete; migrations will run fresh");
         Ok(true)
@@ -160,6 +146,22 @@ pub async fn check_major_version_and_reset(
     } else {
         Ok(false) // Major version matches; no full wipe needed.
     }
+}
+
+async fn reset_database_schema_and_migrations(
+    db: &DatabaseConnection,
+    logs_db: Option<&DatabaseConnection>,
+) -> Result<()> {
+    if matches!(db.get_database_backend(), sea_orm::DbBackend::Sqlite) {
+        if let Some(logs_conn) = logs_db {
+            MigratorIndex::<{ SafeDataOrigin::NoData as u8 }>::fresh(db).await?;
+            MigratorChainLogs::fresh(logs_conn).await?;
+            return Ok(());
+        }
+    }
+
+    Migrator::<{ SafeDataOrigin::NoData as u8 }>::fresh(db).await?;
+    Ok(())
 }
 
 /// Check the stored **schema** version and clear data if it changed.
@@ -280,7 +282,7 @@ async fn clear_logs_data(db: &DatabaseConnection) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use blokli_db_entity::{chain_info, log, prelude::HoprSafeContract};
-    use sea_orm::{ActiveModelTrait, EntityTrait, PaginatorTrait, Set};
+    use sea_orm::{ActiveModelTrait, DbBackend, EntityTrait, PaginatorTrait, Set, Statement};
 
     use super::*;
     use crate::{BlokliDbGeneralModelOperations, db::BlokliDb};
@@ -306,6 +308,54 @@ mod tests {
         assert_eq!(parse_version("2.5"), Some((2, 5)));
         assert_eq!(parse_version("12"), None); // old bare-integer format
         assert_eq!(parse_version(""), None);
+    }
+
+    async fn sqlite_object_exists(
+        db: &DatabaseConnection,
+        object_type: &str,
+        object_name: &str,
+    ) -> anyhow::Result<bool> {
+        let escaped_name = object_name.replace('\'', "''");
+        let stmt = Statement::from_string(
+            DbBackend::Sqlite,
+            format!("SELECT name FROM sqlite_master WHERE type = '{object_type}' AND name = '{escaped_name}' LIMIT 1"),
+        );
+        Ok(db.query_one_raw(stmt).await?.is_some())
+    }
+
+    #[tokio::test]
+    async fn test_major_version_upgrade_resets_schema() -> anyhow::Result<()> {
+        let temp_dir = tempfile::tempdir()?;
+        let db_url = format!(
+            "sqlite://{}?mode=rwc",
+            temp_dir.path().join("test_major_reset.db").display()
+        );
+
+        let db = BlokliDb::new(&db_url, None, Default::default()).await?;
+        db.ensure_singletons().await?;
+
+        db.conn(crate::TargetDb::Index)
+            .execute_unprepared("CREATE TABLE legacy_artifact (id INTEGER PRIMARY KEY)")
+            .await?;
+
+        assert!(sqlite_object_exists(db.conn(crate::TargetDb::Index), "table", "account").await?);
+        assert!(sqlite_object_exists(db.conn(crate::TargetDb::Index), "table", "legacy_artifact").await?);
+
+        let (_, code_minor) = code_version();
+        set_schema_version(db.conn(crate::TargetDb::Index), &format!("0.{code_minor}")).await?;
+
+        let did_reset = check_major_version_and_reset(db.conn(crate::TargetDb::Index), None).await?;
+        assert!(did_reset, "Major version upgrade should trigger a schema reset");
+
+        assert!(!sqlite_object_exists(db.conn(crate::TargetDb::Index), "table", "legacy_artifact").await?);
+        assert!(sqlite_object_exists(db.conn(crate::TargetDb::Index), "table", "account").await?);
+        assert!(sqlite_object_exists(db.conn(crate::TargetDb::Index), "table", "seaql_migrations").await?);
+        assert_eq!(
+            get_stored_version(db.conn(crate::TargetDb::Index)).await?,
+            code_version()
+        );
+
+        Ok(())
     }
 
     /// Test that a schema version increase clears all data.
