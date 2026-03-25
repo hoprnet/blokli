@@ -86,7 +86,7 @@ clap = { workspace = true }
 blokli-db-migration = { path = "../db/migration" }
 env_logger          = { workspace = true }
 hopr-types          = { workspace = true, features = ["internal"] }
-insta = { workspace = true, features = ["yaml", "redactions"]}
+insta               = { workspace = true, features = ["redactions", "yaml"] }
 mockall             = { workspace = true }
 multiaddr           = { workspace = true }
 rand                = { workspace = true }

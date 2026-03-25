@@ -5,7 +5,7 @@ expression: updated
 id: 01020304-0506-0708-090a-0b0c0d0e0f10
 raw_transaction:
   - 1
-transaction_hash: "0x0000000000000000000000000000000000000000000000000000000000000000"
+transaction_hash: "0xabababababababababababababababababababababababababababababababab"
 status: Submitted
 submitted_at: "[timestamp]"
 confirmed_at: ~

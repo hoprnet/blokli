@@ -289,6 +289,10 @@ mod tests {
         DateTime::from_timestamp(1_700_000_000, 0).unwrap()
     }
 
+    fn test_tx_hash() -> Hash {
+        Hash::from([0xABu8; 32])
+    }
+
     // Mock receipt provider for testing with configurable statuses and logs
     struct MockReceiptProvider {
         // Map from tx_hash to status (Some(true) = confirmed, Some(false) = reverted, None = pending)
@@ -434,7 +438,7 @@ mod tests {
         let store = Arc::new(TransactionStore::new());
         let provider = MockReceiptProvider::new();
 
-        let tx_hash = Hash::default();
+        let tx_hash = test_tx_hash();
         let record = TransactionRecord {
             id: TEST_UUID,
             raw_transaction: vec![0x01],
@@ -468,7 +472,7 @@ mod tests {
         let store = Arc::new(TransactionStore::new());
         let provider = MockReceiptProvider::new();
 
-        let tx_hash = Hash::default();
+        let tx_hash = test_tx_hash();
         let record = TransactionRecord {
             id: TEST_UUID,
             raw_transaction: vec![0x01],
@@ -501,7 +505,7 @@ mod tests {
         let store = Arc::new(TransactionStore::new());
         let provider = MockReceiptProvider::new();
 
-        let tx_hash = Hash::default();
+        let tx_hash = test_tx_hash();
         let record = TransactionRecord {
             id: TEST_UUID,
             raw_transaction: vec![0x01],
@@ -532,7 +536,7 @@ mod tests {
         let store = Arc::new(TransactionStore::new());
         let provider = MockReceiptProvider::new();
 
-        let tx_hash = Hash::default();
+        let tx_hash = test_tx_hash();
         // Create record with old timestamp (will be timed out)
         let record = TransactionRecord {
             id: TEST_UUID,
@@ -731,7 +735,7 @@ mod tests {
         let record = TransactionRecord {
             id: TEST_UUID,
             raw_transaction: vec![0x01],
-            transaction_hash: Hash::default(),
+            transaction_hash: test_tx_hash(),
             status: TransactionStatus::Submitted,
             submitted_at: test_timestamp(),
             confirmed_at: None,

@@ -228,6 +228,10 @@ mod tests {
 
     use super::*;
 
+    fn test_tx_hash() -> Hash {
+        Hash::from([0xABu8; 32])
+    }
+
     // Mock RPC client for testing
     struct MockRpcClient {
         should_fail: bool,
@@ -275,7 +279,7 @@ mod tests {
                 return Err("RPC error: transaction failed".to_string());
             }
 
-            Ok(Hash::default())
+            Ok(test_tx_hash())
         }
 
         async fn send_raw_transaction_with_confirm(
@@ -294,7 +298,7 @@ mod tests {
                 return Err("RPC error: timeout waiting for confirmation".to_string());
             }
 
-            Ok(Hash::default())
+            Ok(test_tx_hash())
         }
     }
 
@@ -314,7 +318,7 @@ mod tests {
 
         let result = executor.send_raw_transaction(raw_tx).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), Hash::default());
+        assert_eq!(result.unwrap(), test_tx_hash());
     }
 
     #[tokio::test]
@@ -360,7 +364,7 @@ mod tests {
         let record = executor.transaction_store().get(uuid).unwrap();
         assert_eq!(record.id, uuid);
         assert_eq!(record.status, TransactionStatus::Submitted);
-        assert_eq!(record.transaction_hash, Hash::default());
+        assert_eq!(record.transaction_hash, test_tx_hash());
     }
 
     #[tokio::test]
@@ -385,7 +389,7 @@ mod tests {
 
         let record = result.unwrap();
         assert_eq!(record.status, TransactionStatus::Confirmed);
-        assert_eq!(record.transaction_hash, Hash::default());
+        assert_eq!(record.transaction_hash, test_tx_hash());
         assert!(record.confirmed_at.is_some());
     }
 

@@ -364,6 +364,10 @@ mod tests {
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
     ]);
 
+    fn test_tx_hash() -> Hash {
+        Hash::from([0xABu8; 32])
+    }
+
     fn test_timestamp() -> DateTime<Utc> {
         DateTime::from_timestamp(1_700_000_000, 0).unwrap()
     }
@@ -375,7 +379,7 @@ mod tests {
         let record = TransactionRecord {
             id: TEST_UUID,
             raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: Hash::default(),
+            transaction_hash: test_tx_hash(),
             status: TransactionStatus::Submitted,
             submitted_at: test_timestamp(),
             confirmed_at: None,
@@ -400,7 +404,7 @@ mod tests {
         let record = TransactionRecord {
             id,
             raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: Hash::default(),
+            transaction_hash: test_tx_hash(),
             status: TransactionStatus::Submitted,
             submitted_at: test_timestamp(),
             confirmed_at: None,
@@ -431,7 +435,7 @@ mod tests {
         let record = TransactionRecord {
             id: TEST_UUID,
             raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: Hash::default(),
+            transaction_hash: test_tx_hash(),
             status: TransactionStatus::Submitted,
             submitted_at: test_timestamp(),
             confirmed_at: None,
@@ -479,7 +483,7 @@ mod tests {
             let record = TransactionRecord {
                 id: Uuid::from_u128(i + 1),
                 raw_transaction: vec![i as u8],
-                transaction_hash: Hash::default(),
+                transaction_hash: test_tx_hash(),
                 status,
                 submitted_at: test_timestamp(),
                 confirmed_at: None,
@@ -509,7 +513,7 @@ mod tests {
                 let record = TransactionRecord {
                     id: Uuid::from_u128(i + 1),
                     raw_transaction: vec![i as u8],
-                    transaction_hash: Hash::default(),
+                    transaction_hash: test_tx_hash(),
                     status: TransactionStatus::Submitted,
                     submitted_at: test_timestamp(),
                     confirmed_at: None,
@@ -526,7 +530,7 @@ mod tests {
                 let record = TransactionRecord {
                     id: Uuid::from_u128(i + 1),
                     raw_transaction: vec![i as u8],
-                    transaction_hash: Hash::default(),
+                    transaction_hash: test_tx_hash(),
                     status: TransactionStatus::Submitted,
                     submitted_at: test_timestamp(),
                     confirmed_at: None,
@@ -551,7 +555,7 @@ mod tests {
         let record = TransactionRecord {
             id: TEST_UUID,
             raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: Hash::default(),
+            transaction_hash: test_tx_hash(),
             status: TransactionStatus::Submitted,
             submitted_at: test_timestamp(),
             confirmed_at: None,
@@ -566,7 +570,7 @@ mod tests {
         let updated_record = TransactionRecord {
             id,
             raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: Hash::default(),
+            transaction_hash: test_tx_hash(),
             status: TransactionStatus::Confirmed,
             submitted_at: test_timestamp(),
             confirmed_at: Some(test_timestamp()),
@@ -591,7 +595,7 @@ mod tests {
         let record = TransactionRecord {
             id: TEST_UUID,
             raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: Hash::default(),
+            transaction_hash: test_tx_hash(),
             status: TransactionStatus::Pending,
             submitted_at: test_timestamp(),
             confirmed_at: None,
@@ -607,7 +611,12 @@ mod tests {
 
         // Verify event was published
         let event = receiver.recv().await.unwrap();
-        let TransactionEvent::StatusUpdated { id: event_id, status, error_message, confirmed_at } = event;
+        let TransactionEvent::StatusUpdated {
+            id: event_id,
+            status,
+            error_message,
+            confirmed_at,
+        } = event;
         assert_eq!(event_id, id);
         assert_eq!(status, TransactionStatus::Submitted);
         assert!(error_message.is_none());
@@ -618,7 +627,12 @@ mod tests {
 
         // Verify second event was published
         let event = receiver.recv().await.unwrap();
-        let TransactionEvent::StatusUpdated { id: event_id, status, error_message, confirmed_at } = event;
+        let TransactionEvent::StatusUpdated {
+            id: event_id,
+            status,
+            error_message,
+            confirmed_at,
+        } = event;
         assert_eq!(event_id, id);
         assert_eq!(status, TransactionStatus::Confirmed);
         assert!(error_message.is_none());
@@ -637,7 +651,7 @@ mod tests {
         let record = TransactionRecord {
             id: TEST_UUID,
             raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: Hash::default(),
+            transaction_hash: test_tx_hash(),
             status: TransactionStatus::Pending,
             submitted_at: test_timestamp(),
             confirmed_at: None,
@@ -655,11 +669,15 @@ mod tests {
         let event1 = receiver1.recv().await.unwrap();
         let event2 = receiver2.recv().await.unwrap();
 
-        let TransactionEvent::StatusUpdated { id: event_id, status, .. } = event1;
+        let TransactionEvent::StatusUpdated {
+            id: event_id, status, ..
+        } = event1;
         assert_eq!(event_id, id);
         assert_eq!(status, TransactionStatus::Confirmed);
 
-        let TransactionEvent::StatusUpdated { id: event_id, status, .. } = event2;
+        let TransactionEvent::StatusUpdated {
+            id: event_id, status, ..
+        } = event2;
         assert_eq!(event_id, id);
         assert_eq!(status, TransactionStatus::Confirmed);
     }
@@ -672,7 +690,7 @@ mod tests {
         let record = TransactionRecord {
             id: TEST_UUID,
             raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: Hash::default(),
+            transaction_hash: test_tx_hash(),
             status: TransactionStatus::Pending,
             submitted_at: test_timestamp(),
             confirmed_at: None,
@@ -692,7 +710,9 @@ mod tests {
 
         // Should only receive the Confirmed event, not the Submitted one
         let event = receiver.recv().await.unwrap();
-        let TransactionEvent::StatusUpdated { id: event_id, status, .. } = event;
+        let TransactionEvent::StatusUpdated {
+            id: event_id, status, ..
+        } = event;
         assert_eq!(event_id, id);
         assert_eq!(status, TransactionStatus::Confirmed);
     }
@@ -704,7 +724,7 @@ mod tests {
         let record = TransactionRecord {
             id: TEST_UUID,
             raw_transaction: vec![0x01],
-            transaction_hash: Hash::default(),
+            transaction_hash: test_tx_hash(),
             status: TransactionStatus::Confirmed,
             submitted_at: test_timestamp(),
             confirmed_at: Some(test_timestamp()),
@@ -754,7 +774,7 @@ mod tests {
         let record = TransactionRecord {
             id: TEST_UUID,
             raw_transaction: vec![0x01],
-            transaction_hash: Hash::default(),
+            transaction_hash: test_tx_hash(),
             status: TransactionStatus::Submitted,
             submitted_at: test_timestamp(),
             confirmed_at: None,
@@ -787,7 +807,7 @@ mod tests {
         let record = TransactionRecord {
             id: TEST_UUID,
             raw_transaction: vec![0x01],
-            transaction_hash: Hash::default(),
+            transaction_hash: test_tx_hash(),
             status: TransactionStatus::Submitted,
             submitted_at: test_timestamp(),
             confirmed_at: None,
