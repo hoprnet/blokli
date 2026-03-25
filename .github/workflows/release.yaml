@@ -50,6 +50,7 @@ jobs:
     needs: build-binaries
     permissions:
       contents: read
+      pull-requests: write
       id-token: write
     with:
       source_branch: ${{ github.ref_name }}
