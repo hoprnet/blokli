@@ -727,7 +727,7 @@ impl MigrationTrait for Migration {
                     .table(SchemaVersion::Table)
                     .if_not_exists()
                     .col(ColumnDef::new(SchemaVersion::Id).big_integer().not_null().primary_key())
-                    .col(ColumnDef::new(SchemaVersion::Version).big_integer().not_null())
+                    .col(ColumnDef::new(SchemaVersion::Version).text().not_null())
                     .col(
                         ColumnDef::new(SchemaVersion::UpdatedAt)
                             .timestamp()
@@ -743,7 +743,7 @@ impl MigrationTrait for Migration {
                 Query::insert()
                     .into_table(SchemaVersion::Table)
                     .columns([SchemaVersion::Id, SchemaVersion::Version])
-                    .values_panic([1.into(), 1.into()])
+                    .values_panic([1.into(), "1.1".into()])
                     .to_owned(),
             )
             .await?;
