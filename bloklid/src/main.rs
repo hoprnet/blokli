@@ -1247,20 +1247,22 @@ mod tests {
         .unwrap();
         let path = file.path().to_path_buf();
 
-        let args = Args {
-            verbose: 0,
-            config: Some(path),
-            command: None,
-        };
-        let error = args
-            .load_config(false)
-            .expect_err("gas multiplier 0.0 should be invalid");
-        assert!(
-            error
-                .to_string()
-                .contains("api.gas_multiplier must be a finite number greater than or equal to 1"),
-            "unexpected error: {error}"
-        );
+        temp_env::with_var("BLOKLI_API_GAS_MULTIPLIER", None::<&str>, || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
+            let error = args
+                .load_config(false)
+                .expect_err("gas multiplier 0.0 should be invalid");
+            assert!(
+                error
+                    .to_string()
+                    .contains("api.gas_multiplier must be a finite number greater than or equal to 1"),
+                "unexpected error: {error}"
+            );
+        });
     }
 
     #[test]
