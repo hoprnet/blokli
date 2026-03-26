@@ -4,11 +4,12 @@ use blokli_db_entity::prelude::{
 };
 use migration::{Migrator, MigratorChainLogs, MigratorIndex, MigratorTrait, SafeDataOrigin};
 use sea_orm::{ConnectionTrait, DatabaseConnection, EntityTrait, Statement};
-use tracing::{info, warn};
+use semver::Version;
+use tracing::info;
 
 use crate::errors::{DbSqlError, Result};
 
-/// Current schema version in `"MAJOR.MINOR"` format. This single constant is
+/// Current schema version in SemVer `"MAJOR.MINOR.PATCH"` format. This single constant is
 /// the only value a developer needs to update when changing the schema.
 ///
 /// **MAJOR** component — bump when the migration stack is structurally rewritten
@@ -22,40 +23,31 @@ use crate::errors::{DbSqlError, Result};
 /// data is cleared; `seaql_migrations` is left intact and new migrations run
 /// incrementally. This check runs **after** migrations.
 ///
+/// **PATCH** component — reserved for future use; currently always `0`.
+///
 /// Version history:
-/// - `"1.1"`: Initial schema (consolidated from prior migration stack)
-pub const SCHEMA_VERSION: &str = "1.1";
+/// - `"1.1.0"`: Initial schema (consolidated from prior migration stack)
+pub const SCHEMA_VERSION: &str = "1.1.0";
 
 /// The singleton ID used for the schema_version table.
 const SCHEMA_VERSION_TABLE_ID: i64 = 1;
 
-/// Parse a `"MAJOR.MINOR"` version string into `(major, minor)`.
-///
-/// Returns `None` for any unexpected format (e.g. old bare integers like `"12"`).
-fn parse_version(s: &str) -> Option<(i64, i64)> {
-    let (major_str, minor_str) = s.split_once('.')?;
-    let major = major_str.trim().parse().ok()?;
-    let minor = minor_str.trim().parse().ok()?;
-    Some((major, minor))
-}
-
-/// Return the current code version parsed from [`SCHEMA_VERSION`] as `(major, minor)`.
+/// Return the current code version parsed from [`SCHEMA_VERSION`].
 ///
 /// # Panics
 ///
-/// Panics if [`SCHEMA_VERSION`] is not in `"MAJOR.MINOR"` format — this is a
-/// developer error caught at startup.
-fn code_version() -> (i64, i64) {
-    parse_version(SCHEMA_VERSION)
-        .unwrap_or_else(|| panic!("SCHEMA_VERSION constant '{SCHEMA_VERSION}' is not in 'MAJOR.MINOR' format"))
+/// Panics if [`SCHEMA_VERSION`] is not valid SemVer — this is a developer error caught at startup.
+fn code_version() -> Version {
+    Version::parse(SCHEMA_VERSION)
+        .unwrap_or_else(|_| panic!("SCHEMA_VERSION constant '{SCHEMA_VERSION}' is not valid semver"))
 }
 
 /// Attempt to read the stored version from the database.
 ///
 /// Returns `None` when the table or row does not exist (fresh install).
-/// Any value that cannot be parsed as `"MAJOR.MINOR"` (e.g. a bare integer from
-/// an old schema) is treated as `(0, 0)`, which will trigger a full wipe.
-async fn try_get_stored_version(db: &DatabaseConnection) -> Result<Option<(i64, i64)>> {
+/// Any value that cannot be parsed as SemVer is treated as `0.0.0`, which
+/// always triggers a full wipe on the next startup.
+async fn try_get_stored_version(db: &DatabaseConnection) -> Result<Option<Version>> {
     let stmt = Statement::from_string(
         db.get_database_backend(),
         format!("SELECT version FROM schema_version WHERE id = {SCHEMA_VERSION_TABLE_ID}"),
@@ -68,9 +60,8 @@ async fn try_get_stored_version(db: &DatabaseConnection) -> Result<Option<(i64, 
     };
 
     let version_str: String = row.try_get("", "version").unwrap_or_default();
-    // Unparseable values (e.g. legacy bare integers like "12") fall back to (0, 0)
-    // so they always trigger a full wipe on the next startup.
-    Ok(Some(parse_version(&version_str).unwrap_or((0, 0))))
+    let version = Version::parse(&version_str).unwrap_or_else(|_| Version::new(0, 0, 0));
+    Ok(Some(version))
 }
 
 /// Read the stored version (expects the table to exist; called after migrations).
@@ -78,7 +69,7 @@ async fn try_get_stored_version(db: &DatabaseConnection) -> Result<Option<(i64, 
 /// # Errors
 ///
 /// Returns an error if the table is empty or the query fails.
-async fn get_stored_version(db: &DatabaseConnection) -> Result<(i64, i64)> {
+async fn get_stored_version(db: &DatabaseConnection) -> Result<Version> {
     try_get_stored_version(db)
         .await?
         .ok_or_else(|| DbSqlError::Construction("schema_version table is empty".to_string()))
@@ -108,7 +99,7 @@ pub(crate) async fn set_schema_version(db: &DatabaseConnection, version: &str) -
 /// migrations are re-applied from scratch.
 ///
 /// An unparseable stored value (e.g. a bare integer from an old schema) is treated
-/// as version `(0, 0)`, which always triggers the wipe.
+/// as version `0.0.0`, which always triggers the wipe.
 ///
 /// Returns `Ok(true)` if a full wipe was performed, `Ok(false)` if no action was
 /// needed (fresh install or major version already matches).
@@ -121,27 +112,28 @@ pub async fn check_major_version_and_reset(
     db: &DatabaseConnection,
     logs_db: Option<&DatabaseConnection>,
 ) -> Result<bool> {
-    let (stored_major, _) = match try_get_stored_version(db).await? {
+    let stored = match try_get_stored_version(db).await? {
         None => return Ok(false), // Fresh install; nothing to wipe.
         Some(v) => v,
     };
 
-    let (code_major, _) = code_version();
+    let code = code_version();
 
-    if stored_major < code_major {
-        warn!(
-            stored_major,
-            code_major, "Major schema version changed; resetting database schema for a full re-sync"
+    if stored.major < code.major {
+        info!(
+            stored_major = stored.major,
+            code_major = code.major,
+            "Major schema version changed; resetting database schema for a full re-sync"
         );
 
         reset_database_schema_and_migrations(db, logs_db).await?;
 
         info!("Full database wipe complete; migrations will run fresh");
         Ok(true)
-    } else if stored_major > code_major {
+    } else if stored.major > code.major {
         Err(DbSqlError::Construction(format!(
-            "Database major version {stored_major} is newer than code major version {code_major}. Please upgrade the \
-             code."
+            "Database major version {} is newer than code major version {}. Please upgrade the code.",
+            stored.major, code.major
         )))
     } else {
         Ok(false) // Major version matches; no full wipe needed.
@@ -186,14 +178,15 @@ async fn reset_database_schema_and_migrations(
 /// Returns an error if the stored minor version is higher than the code minor
 /// version (database is from a newer release) or if database operations fail.
 pub async fn check_and_reset_if_needed(db: &DatabaseConnection, logs_db: Option<&DatabaseConnection>) -> Result<bool> {
-    let (_, stored_minor) = get_stored_version(db).await?;
-    let (_, code_minor) = code_version();
+    let stored = get_stored_version(db).await?;
+    let code = code_version();
 
-    if stored_minor < code_minor {
+    if stored.minor < code.minor {
         // Version upgrade: clear all data and update version
-        warn!(
-            stored_minor,
-            code_minor, "Schema version increased; clearing data for re-sync"
+        info!(
+            stored_minor = stored.minor,
+            code_minor = code.minor,
+            "Schema version increased; clearing data for re-sync"
         );
 
         clear_all_data(db, logs_db).await?;
@@ -202,14 +195,14 @@ pub async fn check_and_reset_if_needed(db: &DatabaseConnection, logs_db: Option<
         info!(new_version = SCHEMA_VERSION, "Schema version updated and data cleared");
 
         Ok(true)
-    } else if stored_minor > code_minor {
+    } else if stored.minor > code.minor {
         // Version downgrade: reject (code is too old for this database)
         Err(DbSqlError::Construction(format!(
-            "Database schema version {stored_minor} is newer than code version {code_minor}. Please upgrade the code \
-             to match the database schema."
+            "Database schema version {} is newer than code version {}. Please upgrade the code to match the database \
+             schema.",
+            stored.minor, code.minor
         )))
     } else {
-        // Same version: no action needed
         Ok(false)
     }
 }
@@ -288,26 +281,11 @@ mod tests {
     use crate::{BlokliDbGeneralModelOperations, db::BlokliDb};
 
     #[test]
-    fn test_schema_version_constant_is_valid() {
-        let (major, minor) = code_version(); // panics if SCHEMA_VERSION is malformed
-        assert!(major > 0, "Major schema version must be positive");
-        assert!(minor > 0, "Schema version must be positive");
-    }
-
-    #[test]
     fn test_schema_version_table_id_is_valid() {
         assert_eq!(
             SCHEMA_VERSION_TABLE_ID, 1,
             "Schema version table should use singleton ID 1"
         );
-    }
-
-    #[test]
-    fn test_parse_version() {
-        assert_eq!(parse_version("1.1"), Some((1, 1)));
-        assert_eq!(parse_version("2.5"), Some((2, 5)));
-        assert_eq!(parse_version("12"), None); // old bare-integer format
-        assert_eq!(parse_version(""), None);
     }
 
     async fn sqlite_object_exists(
@@ -341,8 +319,8 @@ mod tests {
         assert!(sqlite_object_exists(db.conn(crate::TargetDb::Index), "table", "account").await?);
         assert!(sqlite_object_exists(db.conn(crate::TargetDb::Index), "table", "legacy_artifact").await?);
 
-        let (_, code_minor) = code_version();
-        set_schema_version(db.conn(crate::TargetDb::Index), &format!("0.{code_minor}")).await?;
+        let code = code_version();
+        set_schema_version(db.conn(crate::TargetDb::Index), &format!("0.{}.0", code.minor)).await?;
 
         let did_reset = check_major_version_and_reset(db.conn(crate::TargetDb::Index), None).await?;
         assert!(did_reset, "Major version upgrade should trigger a schema reset");
@@ -392,18 +370,15 @@ mod tests {
             .unwrap();
         assert_eq!(chain_info_before.last_indexed_block, 100);
 
-        let (code_major, code_minor) = code_version();
+        let code = code_version();
 
         // Verify the stored version matches the current code version after init.
-        assert_eq!(
-            get_stored_version(db.conn(crate::TargetDb::Index)).await?,
-            (code_major, code_minor)
-        );
+        assert_eq!(get_stored_version(db.conn(crate::TargetDb::Index)).await?, code);
 
         // Simulate an older minor version to trigger a resync.
         set_schema_version(
             db.conn(crate::TargetDb::Index),
-            &format!("{code_major}.{}", code_minor - 1),
+            &format!("{}.{}.0", code.major, code.minor - 1),
         )
         .await?;
 
@@ -415,11 +390,7 @@ mod tests {
         db.ensure_singletons().await?;
 
         // Verify version was updated
-        assert_eq!(
-            get_stored_version(db.conn(crate::TargetDb::Index)).await?,
-            (code_major, code_minor)
-        );
-
+        assert_eq!(get_stored_version(db.conn(crate::TargetDb::Index)).await?, code);
         // Verify data was cleared (chain_info should be reset to defaults)
         let chain_info_after = ChainInfo::find_by_id(1)
             .one(db.conn(crate::TargetDb::Index))
@@ -448,12 +419,12 @@ mod tests {
         // Create database and run migrations
         let db = BlokliDb::new(&db_url, None, Default::default()).await?;
 
-        let (code_major, code_minor) = code_version();
+        let code = code_version();
 
         // Set version higher than current
         set_schema_version(
             db.conn(crate::TargetDb::Index),
-            &format!("{code_major}.{}", code_minor + 1),
+            &format!("{}.{}.0", code.major, code.minor + 1),
         )
         .await?;
 
@@ -559,10 +530,10 @@ mod tests {
         .await?;
 
         // Simulate an older minor version to trigger a resync across both databases.
-        let (code_major, code_minor) = code_version();
+        let code = code_version();
         set_schema_version(
             db.conn(crate::TargetDb::Index),
-            &format!("{code_major}.{}", code_minor - 1),
+            &format!("{}.{}.0", code.major, code.minor - 1),
         )
         .await?;
 
