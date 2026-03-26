@@ -8,9 +8,13 @@ use blokli_integration_tests::{
 };
 use hex::FromHex;
 use hopr_bindings::exports::alloy::primitives::U256;
-use hopr_chain_connector::{PayloadGenerator, SafePayloadGenerator};
-use hopr_chain_types::prelude::SignableTransaction;
-use hopr_primitive_types::prelude::Address as HoprAddress;
+use hopr_types::{
+    chain::{
+        payload::{PayloadGenerator, SafePayloadGenerator},
+        prelude::SignableTransaction,
+    },
+    primitive::prelude::Address as HoprAddress,
+};
 use rstest::*;
 use serial_test::serial;
 use tokio::time::sleep;

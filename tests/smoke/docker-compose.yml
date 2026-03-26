@@ -57,6 +57,26 @@ services:
       retries: 10
     networks:
       - smoke-test
+  # One-shot service that sends a seed transaction on Anvil so that
+  # bloklid's verify_rpc_capabilities() can find a tx to trace.
+  seed-tx:
+    image: ghcr.io/foundry-rs/foundry:latest
+    container_name: blokli-smoke-seed-tx
+    entrypoint: ["cast"]
+    command:
+      - "send"
+      - "--rpc-url"
+      - "http://anvil:8545"
+      - "--private-key"
+      - "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+      - "0x70997970C51812dc3A010C7d01b50e0d17dc79C8"
+      - "--value"
+      - "1"
+    depends_on:
+      anvil:
+        condition: service_healthy
+    networks:
+      - smoke-test
   bloklid:
     image: ${BLOKLID_IMAGE:-localhost:5000/bloklid:smoke-test}
     container_name: blokli-smoke-bloklid
@@ -65,8 +85,8 @@ services:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      anvil:
-        condition: service_healthy
+      seed-tx:
+        condition: service_completed_successfully
     environment:
       RUST_LOG: trace
     volumes:
