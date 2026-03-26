@@ -56,6 +56,7 @@ jobs:
         [
 
 
+
           {
             "runner": "self-hosted-hoprnet-bigger",
             "architecture": "x86_64-linux",

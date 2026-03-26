@@ -289,7 +289,8 @@ impl TransactionStore {
         id: Uuid,
         safe_execution: Option<SafeExecutionResult>,
     ) -> Result<(), TransactionStoreError> {
-        self.transactions
+        let confirmed_at = self
+            .transactions
             .get_mut(&id)
             .map(|mut entry| {
                 let record = entry.value_mut();
@@ -298,8 +299,19 @@ impl TransactionStore {
                     record.confirmed_at = Some(Utc::now());
                 }
                 record.safe_execution = safe_execution;
+                record.confirmed_at
             })
-            .ok_or(TransactionStoreError::NotFound(id))
+            .ok_or(TransactionStoreError::NotFound(id))?;
+
+        // Broadcast event so subscribers are notified of the confirmation
+        let _ = self.event_bus.try_broadcast(TransactionEvent::StatusUpdated {
+            id,
+            status: TransactionStatus::Confirmed,
+            error_message: None,
+            confirmed_at,
+        });
+
+        Ok(())
     }
 
     /// Update the Safe execution result for a transaction

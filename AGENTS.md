@@ -147,6 +147,20 @@ on-chain confirmation for permanent records.
 - Test error paths and happy paths
 - Mock external dependencies (RPC, database)
 
+### Assertion Strategy
+
+- Use `insta` with YAML snapshots for asserting complex objects (structs, vectors, nested data):
+  ```rust
+  let result = build_channel_entry(&log);
+  insta::assert_yaml_snapshot!(result);
+  ```
+- Prefer `insta` over multiple `assert_eq` calls on different fields of the same object — a single snapshot captures the entire value
+- Use simple `assert`/`assert_eq` only for simple values (a single string, integer, boolean, or error variant):
+  ```rust
+  assert_eq!(channel.status, ChannelStatus::Open);
+  assert!(result.is_err());
+  ```
+
 ### Integration Tests
 
 Full-stack tests against real blockchain (Anvil) + PostgreSQL in Docker.

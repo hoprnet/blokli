@@ -67,7 +67,6 @@ hopr-types = { git = "https://github.com/hoprnet/hopr-types", branch = "main", f
   "serde",
 ] }
 
-hopr-crypto-packet = { git = "https://github.com/hoprnet/hoprnet" }
 hopr-metrics = { git = "https://github.com/hoprnet/hoprnet" }
 hopr-network-types = { git = "https://github.com/hoprnet/hoprnet", features = [
   "serde",

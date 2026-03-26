@@ -46,7 +46,6 @@ validator = { workspace = true }
 blokli-db-entity = { workspace = true }
 blokli-db-migration = { workspace = true }
 hopr-async-runtime = { workspace = true }
-hopr-crypto-packet = { workspace = true }
 hopr-metrics = { workspace = true, optional = true }
 hopr-network-types = { workspace = true }
 hopr-platform = { workspace = true }

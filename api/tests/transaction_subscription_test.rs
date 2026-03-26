@@ -19,7 +19,9 @@ use blokli_api::{
     schema::{ChainId, NetworkName},
     subscription::SubscriptionRoot,
 };
-use blokli_chain_api::transaction_store::{TransactionRecord, TransactionStatus, TransactionStore};
+use blokli_chain_api::transaction_store::{
+    SafeExecutionResult, TransactionRecord, TransactionStatus, TransactionStore,
+};
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 use futures::StreamExt;
@@ -448,6 +450,84 @@ async fn test_transaction_updated_handles_all_status_types() -> Result<()> {
             store_status
         );
     }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_transaction_updated_includes_safe_execution() -> Result<()> {
+    let ctx = setup_test_environment().await?;
+
+    // Insert a transaction in SUBMITTED state (no safe_execution yet)
+    let tx_id = uuid::Uuid::new_v4();
+    let record = TransactionRecord {
+        id: tx_id,
+        raw_transaction: vec![0x01, 0x02, 0x03],
+        transaction_hash: Hash::default(),
+        status: TransactionStatus::Submitted,
+        submitted_at: chrono::Utc::now(),
+        confirmed_at: None,
+        error_message: None,
+        safe_execution: None,
+    };
+    ctx.store.insert(record)?;
+
+    let query = format!(
+        r#"subscription {{
+            transactionUpdated(id: "{}") {{
+                id
+                status
+                safeExecution {{
+                    success
+                    safeTxHash
+                    revertReason
+                }}
+            }}
+        }}"#,
+        tx_id
+    );
+
+    let mut stream = ctx.schema.execute_stream(&query).boxed();
+
+    // Receive initial SUBMITTED state — safeExecution should be null
+    let response1 = tokio::time::timeout(Duration::from_secs(1), stream.next())
+        .await
+        .expect("Timeout waiting for initial state")
+        .expect("Stream should produce a value");
+    let data1 = serde_json::to_value(response1).expect("Failed to serialize response");
+    assert_eq!(data1["data"]["transactionUpdated"]["status"], "SUBMITTED");
+    assert!(
+        data1["data"]["transactionUpdated"]["safeExecution"].is_null(),
+        "safeExecution should be null before confirmation"
+    );
+
+    // Confirm with Safe execution data atomically
+    ctx.store
+        .confirm_with_safe_execution(
+            tx_id,
+            Some(SafeExecutionResult {
+                success: true,
+                safe_tx_hash: Some(Hash::default()),
+                revert_reason: None,
+            }),
+        )
+        .expect("confirm_with_safe_execution should succeed");
+
+    // Receive the CONFIRMED update — safeExecution should now be populated
+    let response2 = tokio::time::timeout(Duration::from_secs(1), stream.next())
+        .await
+        .expect("Timeout waiting for status update")
+        .expect("Stream should produce a value");
+    let data2 = serde_json::to_value(response2).expect("Failed to serialize response");
+    assert_eq!(data2["data"]["transactionUpdated"]["status"], "CONFIRMED");
+
+    let safe_exec = &data2["data"]["transactionUpdated"]["safeExecution"];
+    assert_eq!(safe_exec["success"], true);
+    assert!(safe_exec["safeTxHash"].is_string(), "safeTxHash should be present");
+    assert!(
+        safe_exec["revertReason"].is_null(),
+        "revertReason should be null on success"
+    );
 
     Ok(())
 }
