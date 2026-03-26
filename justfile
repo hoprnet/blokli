@@ -163,9 +163,8 @@ export-db-schema output="design/db-schema.sql":
     trap 'rm -f "$tmp_db"' EXIT
     # Run migrations on a temporary SQLite database
     cargo run --bin migration -- up -u "sqlite://${tmp_db}?mode=rwc"
-    # Dump the schema (CREATE TABLE, VIEW, INDEX statements), excluding SeaORM internal table
-    # Pretty print with pg_format for readable, consistent formatting
-    sqlite3 "$tmp_db" ".schema" | grep -Ev 'seaql_migrations|^CREATE TABLE sqlite_sequence' | pg_format > {{ output }}
+    # Query sqlite_schema directly. Sort order: tables (0) → views (1) → indexes (2), then by name.
+    sqlite3 "$tmp_db" "SELECT sql || ';' || CHAR(10) FROM sqlite_schema WHERE type IN ('table', 'view', 'index') AND name NOT GLOB 'seaql*' AND name NOT GLOB 'sqlite_*' AND sql IS NOT NULL ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'view' THEN 1 WHEN 'index' THEN 2 ELSE 3 END, name;" > {{ output }}
     echo "Database schema exported to {{ output }}"
 
 # ============================================================================
