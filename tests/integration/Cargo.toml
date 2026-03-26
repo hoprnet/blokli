@@ -6,7 +6,7 @@ version = "0.1.3"
 
 [dependencies]
 anyhow = { workspace = true }
-blokli-client = { workspace = true }
+blokli-client = { workspace = true, features = ["serde"] }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 eventsource-client = { workspace = true }
@@ -21,6 +21,7 @@ hopr-types = { workspace = true, features = [
   "internal",
   "primitive",
 ] }
+insta = { workspace = true, features = ["yaml"] }
 libc = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }

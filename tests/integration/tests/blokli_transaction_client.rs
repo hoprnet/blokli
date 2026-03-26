@@ -216,12 +216,7 @@ async fn test_safe_module_transaction_execution_success(#[future(awt)] fixture: 
         .client()
         .track_transaction(txid, Duration::from_secs(60))
         .await?;
-
-    assert_eq!(res.status, TransactionStatus::Confirmed);
-    let safe_exec = res
-        .safe_execution
-        .expect("safe_execution should be populated for module transactions");
-    assert!(safe_exec.success, "inner Safe execution should have succeeded");
+    insta::assert_yaml_snapshot!(res);
 
     Ok(())
 }
@@ -255,27 +250,7 @@ async fn test_safe_module_transaction_execution_failure(#[future(awt)] fixture: 
         .client()
         .track_transaction(txid, Duration::from_secs(60))
         .await?;
-
-    // The outer transaction confirms (the module call itself went through),
-    // but the internal Safe execution should have failed.
-    assert_eq!(res.status, TransactionStatus::Confirmed);
-    let safe_exec = res
-        .safe_execution
-        .expect("safe_execution should be populated for module transactions");
-    assert!(
-        !safe_exec.success,
-        "inner Safe execution should have failed for non-existent channel"
-    );
-
-    // Anvil supports debug_traceTransaction, so we should get a revert reason
-    // for a failed channel closure on a non-existent channel.
-    assert!(
-        safe_exec.revert_reason.is_some(),
-        "revert reason should be extracted from failed Safe execution"
-    );
-    let reason = safe_exec.revert_reason.as_ref().unwrap();
-    assert!(!reason.is_empty(), "revert reason should not be empty");
-    tracing::info!("Revert reason: {reason}");
+    insta::assert_yaml_snapshot!(res);
 
     Ok(())
 }
@@ -300,12 +275,7 @@ async fn test_plain_transaction_no_safe_enrichment(#[future(awt)] fixture: Integ
         .client()
         .track_transaction(txid, Duration::from_secs(30))
         .await?;
-
-    assert_eq!(res.status, TransactionStatus::Confirmed);
-    assert!(
-        res.safe_execution.is_none(),
-        "plain transfers should not have safe_execution enrichment"
-    );
+    insta::assert_yaml_snapshot!(res);
 
     Ok(())
 }

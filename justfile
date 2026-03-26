@@ -67,7 +67,7 @@ nextest-package package:
 
 # Run integration tests (requires Docker image with BLOKLI_TEST_REMOTE_IMAGE env var)
 integration-test:
-    cargo test --package blokli-integration-tests
+    cargo test -p blokli-integration-tests
 
 # Run system tests (full smoke test suite)
 system-test: smoke-test-full
