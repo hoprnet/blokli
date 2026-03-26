@@ -151,14 +151,14 @@ impl MigrationTrait for Migration {
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(Channel::Source).big_integer().not_null())
-                    .col(ColumnDef::new(Channel::Destination).big_integer().not_null())
                     .col(
                         ColumnDef::new(Channel::ConcreteChannelId)
                             .string_len(64)
                             .not_null()
                             .unique_key(),
                     )
+                    .col(ColumnDef::new(Channel::Source).big_integer().not_null())
+                    .col(ColumnDef::new(Channel::Destination).big_integer().not_null())
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_channel_source_account_id")
@@ -242,15 +242,15 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(false),
                     )
+                    .col(ColumnDef::new(ChannelState::PublishedBlock).big_integer().not_null())
+                    .col(ColumnDef::new(ChannelState::PublishedTxIndex).big_integer().not_null())
+                    .col(ColumnDef::new(ChannelState::PublishedLogIndex).big_integer().not_null())
                     .col(
                         ColumnDef::new(ChannelState::ReorgCorrection)
                             .boolean()
                             .not_null()
                             .default(false),
                     )
-                    .col(ColumnDef::new(ChannelState::PublishedBlock).big_integer().not_null())
-                    .col(ColumnDef::new(ChannelState::PublishedTxIndex).big_integer().not_null())
-                    .col(ColumnDef::new(ChannelState::PublishedLogIndex).big_integer().not_null())
                     .foreign_key(
                         ForeignKey::create()
                             .name("fk_channel_state_channel_id")
@@ -402,12 +402,6 @@ impl MigrationTrait for Migration {
                     )
                     .col(ColumnDef::new(ChainInfo::LastIndexedTxIndex).big_integer().null())
                     .col(ColumnDef::new(ChainInfo::LastIndexedLogIndex).big_integer().null())
-                    .col(
-                        ColumnDef::new(ChainInfo::ChannelClosureGracePeriod)
-                            .big_integer()
-                            .null(),
-                    )
-                    .col(ColumnDef::new(ChainInfo::KeyBindingFee).binary_len(12).null())
                     .col(ColumnDef::new(ChainInfo::TicketPrice).binary_len(12).null())
                     .col(ColumnDef::new(ChainInfo::ChannelsDST).binary_len(32).null())
                     .col(ColumnDef::new(ChainInfo::LedgerDST).binary_len(32).null())
@@ -418,6 +412,12 @@ impl MigrationTrait for Migration {
                             .not_null()
                             .default(DEFAULT_MINIMUM_INCOMING_TICKET_WIN_PROB),
                     )
+                    .col(
+                        ColumnDef::new(ChainInfo::ChannelClosureGracePeriod)
+                            .big_integer()
+                            .null(),
+                    )
+                    .col(ColumnDef::new(ChainInfo::KeyBindingFee).binary_len(12).null())
                     .to_owned(),
             )
             .await?;
@@ -1043,9 +1043,9 @@ enum AccountState {
 enum Channel {
     Table,
     Id,
+    ConcreteChannelId,
     Source,
     Destination,
-    ConcreteChannelId,
 }
 
 #[derive(DeriveIden)]
@@ -1059,10 +1059,10 @@ enum ChannelState {
     TicketIndex,
     ClosureTime,
     CorruptedState,
-    ReorgCorrection,
     PublishedBlock,
     PublishedTxIndex,
     PublishedLogIndex,
+    ReorgCorrection,
 }
 
 #[derive(DeriveIden)]
@@ -1084,12 +1084,12 @@ enum ChainInfo {
     LastIndexedBlock,
     LastIndexedTxIndex,
     LastIndexedLogIndex,
-    ChannelClosureGracePeriod,
-    KeyBindingFee,
     TicketPrice,
     ChannelsDST,
     LedgerDST,
     SafeRegistryDST,
+    ChannelClosureGracePeriod,
+    KeyBindingFee,
     MinIncomingTicketWinProb,
 }
 

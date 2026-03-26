@@ -32,20 +32,20 @@ CREATE TABLE "chain_info" (
     "last_indexed_block" integer NOT NULL DEFAULT 0,
     "last_indexed_tx_index" integer NULL,
     "last_indexed_log_index" integer NULL,
-    "channel_closure_grace_period" integer NULL,
-    "key_binding_fee" blob (12) NULL,
     "ticket_price" blob (12) NULL,
     "channels_dst" blob (32) NULL,
     "ledger_dst" blob (32) NULL,
     "safe_registry_dst" blob (32) NULL,
-    "min_incoming_ticket_win_prob" double NOT NULL DEFAULT 1
+    "min_incoming_ticket_win_prob" double NOT NULL DEFAULT 1,
+    "channel_closure_grace_period" integer NULL,
+    "key_binding_fee" blob (12) NULL
 );
 
 CREATE TABLE "channel" (
     "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "concrete_channel_id" varchar(64) NOT NULL UNIQUE,
     "source" integer NOT NULL,
     "destination" integer NOT NULL,
-    "concrete_channel_id" varchar(64) NOT NULL UNIQUE,
     FOREIGN KEY ("source") REFERENCES "account" ("id") ON DELETE CASCADE ON UPDATE CASCADE,
     FOREIGN KEY ("destination") REFERENCES "account" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
@@ -59,10 +59,10 @@ CREATE TABLE "channel_state" (
     "ticket_index" integer NOT NULL,
     "closure_time" timestamp_with_timezone_text NULL,
     "corrupted_state" boolean NOT NULL DEFAULT FALSE,
-    "reorg_correction" boolean NOT NULL DEFAULT FALSE,
     "published_block" integer NOT NULL,
     "published_tx_index" integer NOT NULL,
     "published_log_index" integer NOT NULL,
+    "reorg_correction" boolean NOT NULL DEFAULT FALSE,
     FOREIGN KEY ("channel_id") REFERENCES "channel" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
