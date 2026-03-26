@@ -166,7 +166,7 @@ export-db-schema output="design/db-schema.sql":
     # Query sqlite_schema directly. Sort order: tables (0) → views (1) → indexes (2), then by name.
     sqlite3 "$tmp_db" "SELECT sql || ';' || CHAR(10) FROM sqlite_schema WHERE type IN ('table', 'view', 'index') AND name NOT GLOB 'seaql*' AND name NOT GLOB 'sqlite_*' AND sql IS NOT NULL ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'view' THEN 1 WHEN 'index' THEN 2 ELSE 3 END, name;" | pg_format > {{ output }}
     echo "Database schema exported to {{ output }}"
-
+    
 # ============================================================================
 # Documentation
 # ============================================================================
