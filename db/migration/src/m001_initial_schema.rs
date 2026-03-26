@@ -743,7 +743,7 @@ impl MigrationTrait for Migration {
                 Query::insert()
                     .into_table(SchemaVersion::Table)
                     .columns([SchemaVersion::Id, SchemaVersion::Version])
-                    .values_panic([1.into(), "1.1".into()])
+                    .values_panic([1.into(), "1.1.0".into()])
                     .to_owned(),
             )
             .await?;
