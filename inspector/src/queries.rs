@@ -71,7 +71,7 @@ pub(crate) enum QueryTarget {
     SafesBalance {
         /// Restrict to safes associated with the given chain key (owner address).
         #[arg(long, value_parser = clap::value_parser!(Address))]
-        owner_address: Option<Address>,
+        owner: Option<Address>,
     },
     /// Gets information about redemptions
     Redemptions(RedemptionsArgs),
@@ -122,11 +122,9 @@ impl QueryTarget {
                 }
             }
             QueryTarget::Channel(sel) => format.serialize(client.query_channels(sel.try_into()?).await?),
-            QueryTarget::SafesBalance { owner_address } => format.serialize(
-                client
-                    .query_safes_balance(owner_address.map(ChainAddress::from))
-                    .await?,
-            ),
+            QueryTarget::SafesBalance { owner } => {
+                format.serialize(client.query_safes_balance(owner.map(ChainAddress::from)).await?)
+            }
             QueryTarget::ModuleAddress {
                 nonce,
                 owner,

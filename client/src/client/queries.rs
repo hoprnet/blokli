@@ -1,8 +1,8 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use cynic::QueryBuilder;
 use hex::ToHex;
-use primitive_types::U256;
+use hopr_types::primitive::prelude::HoprBalance as PrimitiveHoprBalance;
 
 use super::{BlokliClient, GraphQlQueries, response_to_data};
 use crate::{
@@ -11,18 +11,14 @@ use crate::{
 };
 
 fn aggregate_total_balance(channels: &[Channel]) -> Result<TokenValueString> {
-    let mut total_balance = U256::zero();
+    let mut total_balance = PrimitiveHoprBalance::zero();
     for channel in channels {
-        let balance_token = channel
+        let channel_balance = channel
             .balance
             .0
-            .split_whitespace()
-            .next()
-            .ok_or(ErrorKind::ParseError)?;
-        let channel_balance = U256::from_dec_str(balance_token).map_err(|_| ErrorKind::ParseError)?;
-        total_balance = total_balance
-            .checked_add(channel_balance)
-            .ok_or(ErrorKind::ParseError)?;
+            .parse::<PrimitiveHoprBalance>()
+            .map_err(|_| ErrorKind::ParseError)?;
+        total_balance += channel_balance;
     }
 
     Ok(TokenValueString(total_balance.to_string()))
@@ -87,6 +83,58 @@ impl BlokliClient {
             __typename: channels.__typename,
             total_balance: aggregate_total_balance(&filtered_channels)?,
             channels: filtered_channels,
+        })
+    }
+
+    async fn query_channels_by_safe_only(
+        &self,
+        safe_address: ChainAddress,
+        status: Option<ChannelStatus>,
+    ) -> Result<ChannelsList> {
+        let mut source_key_ids: Vec<i32> = self.source_key_ids_for_safe(safe_address).await?.into_iter().collect();
+        source_key_ids.sort_unstable();
+        source_key_ids.dedup();
+
+        if source_key_ids.is_empty() {
+            return Ok(ChannelsList {
+                __typename: "ChannelsList".to_string(),
+                channels: Vec::new(),
+                total_balance: TokenValueString(PrimitiveHoprBalance::zero().to_string()),
+            });
+        }
+
+        let mut channels_by_id: HashMap<String, Channel> = HashMap::new();
+        let mut typename: Option<String> = None;
+
+        for source_key_id in source_key_ids {
+            let source_key_id = u32::try_from(source_key_id).map_err(|_| ErrorKind::ParseError)?;
+            let selector = ChannelSelector {
+                filter: Some(ChannelFilter::SourceKeyId(source_key_id)),
+                status,
+                safe_address: None,
+            };
+
+            let response = self.build_query(GraphQlQueries::query_channels(selector))?.await?;
+            let channels_result = response_to_data(response)?.channels;
+            let page: ChannelsList = {
+                let parsed_channels: Result<ChannelsList> = channels_result.into();
+                parsed_channels?
+            };
+
+            if typename.is_none() {
+                typename = Some(page.__typename.clone());
+            }
+
+            for channel in page.channels {
+                channels_by_id.insert(channel.concrete_channel_id.clone(), channel);
+            }
+        }
+
+        let channels: Vec<Channel> = channels_by_id.into_values().collect();
+        Ok(ChannelsList {
+            __typename: typename.unwrap_or_else(|| "ChannelsList".to_string()),
+            total_balance: aggregate_total_balance(&channels)?,
+            channels,
         })
     }
 }
@@ -352,6 +400,12 @@ impl BlokliQueryClient for BlokliClient {
     async fn query_channels(&self, selector: ChannelSelector) -> Result<ChannelsList> {
         if selector.filter.is_none() && selector.safe_address.is_none() {
             return Err(ErrorKind::InvalidInput("at least one filter must be specified on channel query").into());
+        }
+
+        if let Some(safe_address) = selector.safe_address
+            && selector.filter.is_none()
+        {
+            return self.query_channels_by_safe_only(safe_address, selector.status).await;
         }
 
         let safe_address = selector.safe_address;

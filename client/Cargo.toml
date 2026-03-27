@@ -19,7 +19,6 @@ futures-time = { workspace = true }
 hex = { workspace = true }
 indexmap = { workspace = true, optional = true }
 parking_lot = { workspace = true, optional = true }
-primitive-types = { workspace = true }
 rand = { workspace = true, optional = true }
 reqwest = { workspace = true, features = [
   "brotli",
@@ -35,14 +34,13 @@ thiserror = { workspace = true }
 tracing = { workspace = true, features = ["release_max_level_debug"] }
 url = { workspace = true }
 
-hopr-types = { workspace = true, features = ["crypto"], optional = true }
+hopr-types = { workspace = true, features = ["crypto", "primitive"] }
 
 [features]
 serde = ["dep:serde", "indexmap/serde"]
 testing = [
   "dep:async-broadcast",
   "dep:chrono",
-  "dep:hopr-types",
   "dep:indexmap",
   "dep:parking_lot",
   "dep:rand",

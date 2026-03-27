@@ -15,11 +15,10 @@ use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::{
     account, chain_info,
     conversions::{
-        account_aggregation::fetch_accounts_with_filters,
-        channel_aggregation::{fetch_channels_with_state, fetch_safes_balance},
+        account_aggregation::fetch_accounts_with_filters, channel_aggregation::fetch_channels_with_state,
         redemptions_aggregation::fetch_aggregated_redeemed_stats,
     },
-    hopr_node_safe_registration,
+    hopr_node_safe_registration, hopr_safe_contract,
     views::{account_current, channel_current},
 };
 use hopr_types::{
@@ -1566,24 +1565,76 @@ impl QueryRoot {
             }
         };
 
-        match fetch_safes_balance(db, parsed_owner_address).await {
-            Ok(result) => {
-                let safe_count = match i32::try_from(result.safe_count) {
-                    Ok(c) => c,
-                    Err(_) => {
-                        return SafesBalanceResult::QueryFailed(errors::overflow_error(
-                            "safe count",
-                            result.safe_count.to_string(),
-                        ));
-                    }
-                };
-                SafesBalanceResult::SafesBalance(SafesBalance {
-                    total_balance: TokenValueString(result.total_balance.to_string()),
-                    safe_count,
-                })
+        let mut safe_addresses: Vec<Vec<u8>> = if let Some(owner) = parsed_owner_address {
+            let owner_bytes = owner.as_ref().to_vec();
+            match account_current::Entity::find()
+                .filter(account_current::Column::ChainKey.eq(owner_bytes))
+                .all(db)
+                .await
+            {
+                Ok(rows) => rows.into_iter().filter_map(|row| row.safe_address).collect(),
+                Err(e) => {
+                    return SafesBalanceResult::QueryFailed(errors::query_failed(
+                        "resolve safe addresses for owner",
+                        e,
+                    ));
+                }
             }
-            Err(e) => SafesBalanceResult::QueryFailed(errors::query_failed("aggregate safe HOPR balance", e)),
+        } else {
+            match hopr_safe_contract::Entity::find().all(db).await {
+                Ok(rows) => rows.into_iter().map(|row| row.address).collect(),
+                Err(e) => {
+                    return SafesBalanceResult::QueryFailed(errors::query_failed("fetch indexed safe addresses", e));
+                }
+            }
+        };
+
+        safe_addresses.sort_unstable();
+        safe_addresses.dedup();
+
+        let safe_count = match i32::try_from(safe_addresses.len()) {
+            Ok(c) => c,
+            Err(_) => {
+                return SafesBalanceResult::QueryFailed(errors::overflow_error(
+                    "safe count",
+                    safe_addresses.len().to_string(),
+                ));
+            }
+        };
+
+        if safe_addresses.is_empty() {
+            return SafesBalanceResult::SafesBalance(SafesBalance {
+                total_balance: TokenValueString(PrimitiveHoprBalance::zero().to_string()),
+                safe_count,
+            });
         }
+
+        let rpc = match ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>() {
+            Ok(rpc) => rpc,
+            Err(e) => {
+                return SafesBalanceResult::QueryFailed(errors::context_error("rpc operations", format!("{:?}", e)));
+            }
+        };
+
+        let mut total_balance = PrimitiveHoprBalance::zero();
+        for safe_bytes in safe_addresses {
+            let safe_address = match Address::try_from(safe_bytes.as_slice()) {
+                Ok(addr) => addr,
+                Err(e) => {
+                    return SafesBalanceResult::QueryFailed(errors::invalid_db_data("safe address", &e.to_string()));
+                }
+            };
+
+            match rpc.get_hopr_balance(safe_address).await {
+                Ok(balance) => total_balance += balance,
+                Err(e) => return SafesBalanceResult::QueryFailed(errors::rpc_query_failed("query safe balance", e)),
+            }
+        }
+
+        SafesBalanceResult::SafesBalance(SafesBalance {
+            total_balance: TokenValueString(total_balance.to_string()),
+            safe_count,
+        })
     }
 
     /// API version information

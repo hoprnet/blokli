@@ -1,5 +1,5 @@
 use hex::ToHex;
-use primitive_types::U256;
+use hopr_types::primitive::prelude::HoprBalance as PrimitiveHoprBalance;
 
 use super::{
     ChannelStatus, CountResult, DateTime, InvalidAddressError, MissingFilterError, QueryFailedError, TokenValueString,
@@ -112,13 +112,14 @@ impl From<ChannelsResult> for Result<ChannelsList, crate::errors::BlokliClientEr
     fn from(value: ChannelsResult) -> Self {
         match value {
             ChannelsResult::ChannelsList(list) => {
-                let mut total_balance = U256::zero();
+                let mut total_balance = PrimitiveHoprBalance::zero();
                 for channel in &list.channels {
-                    let channel_balance = U256::from_dec_str(&channel.balance.0)
+                    let channel_balance = channel
+                        .balance
+                        .0
+                        .parse::<PrimitiveHoprBalance>()
                         .map_err(|_| crate::errors::BlokliClientError::from(ErrorKind::ParseError))?;
-                    total_balance = total_balance
-                        .checked_add(channel_balance)
-                        .ok_or_else(|| crate::errors::BlokliClientError::from(ErrorKind::ParseError))?;
+                    total_balance += channel_balance;
                 }
                 Ok(ChannelsList {
                     __typename: list.__typename,
