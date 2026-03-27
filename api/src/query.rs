@@ -18,7 +18,7 @@ use blokli_db_entity::{
         account_aggregation::fetch_accounts_with_filters, channel_aggregation::fetch_channels_with_state,
         redemptions_aggregation::fetch_aggregated_redeemed_stats,
     },
-    hopr_node_safe_registration, hopr_safe_contract,
+    hopr_node_safe_registration,
     views::{account_current, channel_current},
 };
 use hopr_types::{
@@ -229,6 +229,24 @@ fn current_row_statement(backend: DatabaseBackend, column: &str, value: Vec<u8>)
         column, placeholder
     );
     Statement::from_sql_and_values(backend, sql, vec![value.into()])
+}
+
+fn safe_address_rows_statement(backend: DatabaseBackend, owner_chain_key: Option<Vec<u8>>) -> Statement {
+    match owner_chain_key {
+        Some(value) => {
+            let placeholder = if backend == DatabaseBackend::Postgres {
+                "$1"
+            } else {
+                "?"
+            };
+            let sql = format!(
+                "SELECT address FROM safe_contract_current WHERE chain_key = {}",
+                placeholder
+            );
+            Statement::from_sql_and_values(backend, sql, vec![value.into()])
+        }
+        None => Statement::from_string(backend, "SELECT address FROM safe_contract_current".to_string()),
+    }
 }
 
 /// Fetch a Safe contract by its address with current (latest) state
@@ -1531,8 +1549,8 @@ impl QueryRoot {
 
     /// Sum the wxHOPR token balances across indexed safe contracts.
     ///
-    /// When `owner_address` is provided, restricts to safes whose registered
-    /// accounts have that chain key. Safes with no indexed balance contribute zero.
+    /// When `owner_address` is provided, restricts to safes whose current safe
+    /// contract chain key matches that owner address.
     #[graphql(name = "safesBalance")]
     async fn safes_balance(
         &self,
@@ -1565,29 +1583,32 @@ impl QueryRoot {
             }
         };
 
-        let mut safe_addresses: Vec<Vec<u8>> = if let Some(owner) = parsed_owner_address {
-            let owner_bytes = owner.as_ref().to_vec();
-            match account_current::Entity::find()
-                .filter(account_current::Column::ChainKey.eq(owner_bytes))
-                .all(db)
-                .await
-            {
-                Ok(rows) => rows.into_iter().filter_map(|row| row.safe_address).collect(),
+        let stmt = safe_address_rows_statement(
+            db.get_database_backend(),
+            parsed_owner_address.as_ref().map(|owner| owner.as_ref().to_vec()),
+        );
+        let rows = match db.query_all_raw(stmt).await {
+            Ok(rows) => rows,
+            Err(e) => {
+                return SafesBalanceResult::QueryFailed(errors::query_failed(
+                    "fetch indexed safe addresses for safes balance",
+                    e,
+                ));
+            }
+        };
+
+        let mut safe_addresses: Vec<Vec<u8>> = Vec::with_capacity(rows.len());
+        for row in rows {
+            match row.try_get("", "address") {
+                Ok(address) => safe_addresses.push(address),
                 Err(e) => {
                     return SafesBalanceResult::QueryFailed(errors::query_failed(
-                        "resolve safe addresses for owner",
+                        "decode safe address rows for safes balance",
                         e,
                     ));
                 }
             }
-        } else {
-            match hopr_safe_contract::Entity::find().all(db).await {
-                Ok(rows) => rows.into_iter().map(|row| row.address).collect(),
-                Err(e) => {
-                    return SafesBalanceResult::QueryFailed(errors::query_failed("fetch indexed safe addresses", e));
-                }
-            }
-        };
+        }
 
         safe_addresses.sort_unstable();
         safe_addresses.dedup();

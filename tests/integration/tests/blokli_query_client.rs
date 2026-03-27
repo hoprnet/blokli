@@ -403,11 +403,15 @@ async fn query_safes_balance_for_owner_matches_safe_balance(#[future(awt)] fixtu
         .await?;
 
     assert_eq!(owner_safes_balance.safe_count, 1);
-    let _: HoprBalance = owner_safes_balance
+    let owner_total_balance: HoprBalance = owner_safes_balance
         .total_balance
         .0
         .parse()
         .context("failed to parse owner safes total_balance")?;
+    assert!(
+        owner_total_balance > HoprBalance::zero(),
+        "owner safes total_balance should be greater than zero for deployed funded safe"
+    );
 
     let empty_owner_safes_balance = fixture.client().query_safes_balance(Some([0u8; 20])).await?;
     assert_eq!(empty_owner_safes_balance.safe_count, 0);
