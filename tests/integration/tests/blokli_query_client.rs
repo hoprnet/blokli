@@ -7,7 +7,7 @@ use blokli_client::api::{
 };
 use blokli_integration_tests::{
     constants::parsed_safe_balance,
-    fixtures::{IntegrationFixture, integration_fixture as fixture},
+    fixtures::{IntegrationFixture, integration_fixture as fixture, poll_until},
 };
 use hex::{FromHex, ToHex};
 use hopr_bindings::exports::alloy::primitives::{Address, U256};
@@ -295,33 +295,64 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
 
     let amount: HoprBalance = "1 wei wxHOPR".parse().expect("failed to parse amount");
 
-    // Deploy safes for both parties
-    let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
-    fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
+    // Deploy safes for both parties concurrently
+    let (src_safe, _dst_safe) = tokio::try_join!(
+        fixture.deploy_safe_and_announce(&src, parsed_safe_balance()),
+        fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()),
+    )?;
 
     // Set allowance
     fixture.approve(&src, amount, &src_safe.module_address).await?;
-
-    sleep(Duration::from_secs(8)).await;
 
     // Create the channel
     fixture
         .open_channel(&src, &dst, amount, &src_safe.module_address, None)
         .await?;
 
-    sleep(Duration::from_secs(8)).await;
+    // Wait for the indexer to pick up the open channel
+    let open_selector = channel_selector.clone();
+    let client = fixture.client().clone();
+    poll_until(
+        "channel open indexed",
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+        || {
+            let client = client.clone();
+            let selector = open_selector.clone();
+            async move {
+                let count = client.count_channels(selector).await?;
+                Ok(if count >= 1 { Some(count) } else { None })
+            }
+        },
+    )
+    .await?;
 
     let after_count = fixture.client().count_channels(channel_selector.clone()).await?;
-
     assert_eq!(after_count, 1);
 
     fixture
         .initiate_outgoing_channel_closure(&src, &dst, &src_safe.module_address)
         .await?;
-    sleep(Duration::from_secs(8)).await;
+
+    // Wait for the indexer to pick up the channel closure
+    let closed_selector = channel_selector.clone();
+    let client = fixture.client().clone();
+    poll_until(
+        "channel closure indexed",
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+        || {
+            let client = client.clone();
+            let selector = closed_selector.clone();
+            async move {
+                let count = client.count_channels(selector).await?;
+                Ok(if count == 0 { Some(count) } else { None })
+            }
+        },
+    )
+    .await?;
 
     let count_after_closure = fixture.client().count_channels(channel_selector).await?;
-
     assert_eq!(count_after_closure, 0);
 
     Ok(())

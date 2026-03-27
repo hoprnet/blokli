@@ -81,8 +81,7 @@ impl TestConfig {
         let offset = port_offset(&self.stack_id);
 
         if self.bloklid_url.is_none() {
-            self.bloklid_url =
-                Some(Url::parse(&format!("http://localhost:{}", self.bloklid_port(offset))).unwrap());
+            self.bloklid_url = Some(Url::parse(&format!("http://localhost:{}", self.bloklid_port(offset))).unwrap());
         }
         if self.rpc_url.is_none() {
             self.rpc_url = Some(Url::parse(&format!("http://localhost:{}", self.anvil_port(offset))).unwrap());

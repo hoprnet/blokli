@@ -13,17 +13,17 @@ max-threads = 1
 max-threads = 1
 
 [[profile.default.overrides]]
-filter = "binary(blokli_query_client)"
+filter     = "binary(blokli_query_client)"
 test-group = "integration-query"
 
 [[profile.default.overrides]]
-filter = "binary(blokli_subscription_client)"
+filter     = "binary(blokli_subscription_client)"
 test-group = "integration-subscription"
 
 [[profile.default.overrides]]
-filter = "binary(blokli_transaction_client)"
+filter     = "binary(blokli_transaction_client)"
 test-group = "integration-transaction"
 
 [[profile.default.overrides]]
-filter = "binary(blokli_load)"
+filter     = "binary(blokli_load)"
 test-group = "integration-load"

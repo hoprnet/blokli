@@ -1,5 +1,6 @@
-use anyhow::{Context, Result};
 use std::process::{Command, Stdio};
+
+use anyhow::{Context, Result};
 use tracing::debug;
 
 pub fn run_command(mut command: Command, silenced: bool, description: &str) -> Result<()> {

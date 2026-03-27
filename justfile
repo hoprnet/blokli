@@ -57,6 +57,10 @@ test-package package:
 test-debug:
     cargo test --workspace -- --test-threads=1 --nocapture
 
+# Run tests for a specific package with execution time reported
+test-profile package:
+    nix develop .#experiment -c cargo test -p {{ package }} --no-fail-fast -- -Z unstable-options --report-time
+
 # Run all tests in workspace using nextest
 nextest:
     cargo nextest run --workspace --exclude blokli-integration-tests

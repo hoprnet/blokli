@@ -573,7 +573,7 @@ async fn wait_for_bloklid_ready(bloklid_url: &url::Url, timeout: Duration) -> Re
 }
 
 /// Polls a check function until it returns `Some(T)`, with timeout.
-async fn poll_until<F, Fut, T>(description: &str, timeout: Duration, interval: Duration, mut check: F) -> Result<T>
+pub async fn poll_until<F, Fut, T>(description: &str, timeout: Duration, interval: Duration, mut check: F) -> Result<T>
 where
     F: FnMut() -> Fut,
     Fut: Future<Output = Result<Option<T>>>,
