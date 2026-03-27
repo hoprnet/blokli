@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use blokli_api_types::Token;
 use blokli_chain_indexer::{IndexerConfig, block::Indexer, handlers::ContractEventHandlers, traits::ChainLogHandler};
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::ContractAddresses;
@@ -15,6 +16,7 @@ use tokio::sync::Mutex;
 struct MockRpcOperations {
     block_number: u64,
     hopr_balance: HoprBalance,
+    xhopr_balance: XHoprBalance,
     xdai_balance: XDaiBalance,
     channel_closure_notice_period: Duration,
 }
@@ -24,6 +26,7 @@ impl MockRpcOperations {
         Self {
             block_number: 2, // Set close to the blocks we'll provide (0, 1, 2)
             hopr_balance: HoprBalance::from(1000u64),
+            xhopr_balance: XHoprBalance::from(1000u64),
             xdai_balance: XDaiBalance::from(1000u64),
             channel_closure_notice_period: Duration::from_secs(300), // 5 minutes
         }
@@ -81,6 +84,10 @@ impl HoprIndexerRpcOperations for MockRpcOperations {
         Ok(self.hopr_balance.clone())
     }
 
+    async fn get_xhopr_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<XHoprBalance> {
+        Ok(self.xhopr_balance.clone())
+    }
+
     async fn get_hopr_allowance(
         &self,
         _owner: Address,
@@ -120,14 +127,15 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
     // Create contract addresses with some non-zero values
     let contract_addresses = ContractAddresses {
         token: Address::from([1; 20]),
-        channels: Address::from([2; 20]),
-        announcements: Address::from([3; 20]),
-        module_implementation: Address::from([8; 20]),
-        node_safe_migration: Address::from([9; 20]),
-        node_safe_registry: Address::from([4; 20]),
-        ticket_price_oracle: Address::from([5; 20]),
-        winning_probability_oracle: Address::from([6; 20]),
-        node_stake_factory: Address::from([7; 20]),
+        wrapped_token: Address::from([2; 20]),
+        channels: Address::from([3; 20]),
+        announcements: Address::from([4; 20]),
+        module_implementation: Address::from([5; 20]),
+        node_safe_migration: Address::from([6; 20]),
+        node_safe_registry: Address::from([7; 20]),
+        ticket_price_oracle: Address::from([8; 20]),
+        winning_probability_oracle: Address::from([9; 20]),
+        node_stake_factory: Address::from([10; 20]),
     };
 
     // Create indexer state for subscriptions (must be created before handlers)
@@ -195,14 +203,15 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
     // Create contract addresses with some non-zero values
     let contract_addresses = ContractAddresses {
         token: Address::from([1; 20]),
-        channels: Address::from([2; 20]),
-        announcements: Address::from([3; 20]),
-        module_implementation: Address::from([8; 20]),
-        node_safe_migration: Address::from([9; 20]),
-        node_safe_registry: Address::from([4; 20]),
-        ticket_price_oracle: Address::from([5; 20]),
-        winning_probability_oracle: Address::from([6; 20]),
-        node_stake_factory: Address::from([7; 20]),
+        wrapped_token: Address::from([2; 20]),
+        channels: Address::from([3; 20]),
+        announcements: Address::from([4; 20]),
+        module_implementation: Address::from([5; 20]),
+        node_safe_migration: Address::from([6; 20]),
+        node_safe_registry: Address::from([7; 20]),
+        ticket_price_oracle: Address::from([8; 20]),
+        winning_probability_oracle: Address::from([9; 20]),
+        node_stake_factory: Address::from([10; 20]),
     };
 
     // Create indexer state for subscriptions (must be created before handlers)
@@ -321,6 +330,10 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
             self.inner.get_hopr_balance(address).await
         }
 
+        async fn get_xhopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XHoprBalance> {
+            self.inner.get_xhopr_balance(address).await
+        }
+
         async fn get_hopr_allowance(
             &self,
             owner: Address,
@@ -354,14 +367,15 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
     // Create contract addresses with some non-zero values
     let contract_addresses = ContractAddresses {
         token: Address::from([1; 20]),
-        channels: Address::from([2; 20]),
-        announcements: Address::from([3; 20]),
-        module_implementation: Address::from([8; 20]),
-        node_safe_migration: Address::from([9; 20]),
-        node_safe_registry: Address::from([4; 20]),
-        ticket_price_oracle: Address::from([5; 20]),
-        winning_probability_oracle: Address::from([6; 20]),
-        node_stake_factory: Address::from([7; 20]),
+        wrapped_token: Address::from([2; 20]),
+        channels: Address::from([3; 20]),
+        announcements: Address::from([4; 20]),
+        module_implementation: Address::from([5; 20]),
+        node_safe_migration: Address::from([6; 20]),
+        node_safe_registry: Address::from([7; 20]),
+        ticket_price_oracle: Address::from([8; 20]),
+        winning_probability_oracle: Address::from([9; 20]),
+        node_stake_factory: Address::from([10; 20]),
     };
 
     // Create indexer state for subscriptions (must be created before handlers)
@@ -449,6 +463,7 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
     let mock_rpc = MockRpcOperations {
         block_number: 2,
         hopr_balance: HoprBalance::from(1000u64),
+        xhopr_balance: XHoprBalance::from(1000u64),
         xdai_balance: XDaiBalance::from(1000u64),
         channel_closure_notice_period: expected_grace_period,
     };
@@ -456,14 +471,15 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
     // Create contract addresses
     let contract_addresses = ContractAddresses {
         token: Address::from([1; 20]),
-        channels: Address::from([2; 20]),
-        announcements: Address::from([3; 20]),
-        module_implementation: Address::from([8; 20]),
-        node_safe_migration: Address::from([9; 20]),
-        node_safe_registry: Address::from([4; 20]),
-        ticket_price_oracle: Address::from([5; 20]),
-        winning_probability_oracle: Address::from([6; 20]),
-        node_stake_factory: Address::from([7; 20]),
+        wrapped_token: Address::from([2; 20]),
+        channels: Address::from([3; 20]),
+        announcements: Address::from([4; 20]),
+        module_implementation: Address::from([5; 20]),
+        node_safe_migration: Address::from([6; 20]),
+        node_safe_registry: Address::from([7; 20]),
+        ticket_price_oracle: Address::from([8; 20]),
+        winning_probability_oracle: Address::from([9; 20]),
+        node_stake_factory: Address::from([10; 20]),
     };
 
     // Create indexer state for subscriptions

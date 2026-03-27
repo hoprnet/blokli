@@ -34,7 +34,8 @@ thiserror = { workspace = true }
 tracing = { workspace = true, features = ["release_max_level_debug"] }
 url = { workspace = true }
 
-hopr-types = { workspace = true, features = ["crypto"], optional = true }
+blokli-api-types = { workspace = true }
+hopr-types       = { workspace = true, features = ["crypto"], optional = true }
 
 [features]
 serde = ["dep:serde", "indexmap/serde"]

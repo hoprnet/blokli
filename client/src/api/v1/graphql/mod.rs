@@ -14,6 +14,16 @@ pub(crate) mod schema {}
 // https://generator.cynic-rs.dev/
 
 #[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Token {
+    #[cynic(rename = "wxHOPR")]
+    WxHOPR,
+    #[cynic(rename = "xHOPR")]
+    XHOPR,
+    #[cynic(rename = "NATIVE")]
+    Native,
+}
+
+#[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ChannelStatus {
     #[cynic(rename = "OPEN")]
     Open,

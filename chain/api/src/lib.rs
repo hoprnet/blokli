@@ -34,7 +34,7 @@ use hopr_types::internal::{
     tickets::WinningProbability,
 };
 use hopr_types::primitive::{
-    prelude::{Address, Balance, Currency, HoprBalance, U256, WxHOPR, XDai},
+    prelude::{Address, Balance, Currency, HoprBalance, U256, WxHOPR, XDai, XHOPR},
     traits::IntoEndian,
 };
 
@@ -245,7 +245,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
     /// Retrieves the balance of the specified address for the given currency.
     ///
     /// This method queries the on-chain balance of the provided address for the specified currency.
-    /// It supports querying balances for XDai and WxHOPR currencies. If the currency is unsupported,
+    /// It supports querying balances for XDai, WxHOPR, and XHOPR currencies. If the currency is unsupported,
     /// an error is returned.
     ///
     /// # Arguments
@@ -259,6 +259,8 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
             self.rpc_operations.get_xdai_balance(safe_address).await?.to_be_bytes()
         } else if C::is::<WxHOPR>() {
             self.rpc_operations.get_hopr_balance(safe_address).await?.to_be_bytes()
+        } else if C::is::<XHOPR>() {
+            self.rpc_operations.get_xhopr_balance(safe_address).await?.to_be_bytes()
         } else {
             return Err(BlokliChainError::Api("unsupported currency".into()));
         };

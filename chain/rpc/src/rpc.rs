@@ -249,6 +249,17 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         ))
     }
 
+    pub(crate) async fn get_xhopr_balance(&self, address: Address) -> Result<XHoprBalance> {
+        Ok(XHoprBalance::from_be_bytes(
+            self.contract_instances
+                .xtoken
+                .balanceOf(AlloyAddress::from_hopr_address(address))
+                .call()
+                .await?
+                .to_be_bytes::<32>(),
+        ))
+    }
+
     pub(crate) async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> Result<HoprBalance> {
         Ok(HoprBalance::from_be_bytes(
             self.contract_instances

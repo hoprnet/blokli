@@ -1,11 +1,32 @@
 use blokli_client::{
     BlokliClient,
-    api::{BlokliQueryClient, ModulePredictionInput, SafeSelector},
+    api::{BlokliQueryClient, ModulePredictionInput, SafeSelector, types::Token},
 };
-use clap::Subcommand;
+use clap::{Subcommand, ValueEnum};
 use hopr_types::primitive::prelude::Address;
 
 use crate::{AccountArgs, AltAccount, ChannelArgs, Formats, RedemptionsArgs};
+
+/// Token type for balance queries.
+#[derive(Debug, Copy, Clone, ValueEnum, Default)]
+pub(crate) enum TokenArg {
+    /// wxHOPR wrapped HOPR token (default).
+    #[default]
+    #[value(name = "wxhopr")]
+    WxHOPR,
+    /// xHOPR native HOPR token.
+    #[value(name = "xhopr")]
+    XHOPR,
+}
+
+impl From<TokenArg> for Token {
+    fn from(value: TokenArg) -> Self {
+        match value {
+            TokenArg::WxHOPR => Token::WxHOPR,
+            TokenArg::XHOPR => Token::XHOPR,
+        }
+    }
+}
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum QueryTarget {
@@ -18,10 +39,13 @@ pub(crate) enum QueryTarget {
         #[arg(value_parser = clap::value_parser!(Address))]
         address: Address,
     },
-    /// Gets the token balance of an address.
+    /// Gets the token (wxHOPR or xHOPR) balance of an address.
     TokenBalance {
         #[arg(value_parser = clap::value_parser!(Address))]
         address: Address,
+        /// Token type to query (defaults to wxHOPR).
+        #[arg(short, long, value_enum, default_value = "wxhopr")]
+        token: TokenArg,
     },
     /// Gets information about the HOPR on-chain deployment.
     ChainInfo,
@@ -74,8 +98,8 @@ impl QueryTarget {
             QueryTarget::NativeBalance { address } => {
                 format.serialize(client.query_native_balance(&address.into()).await?)
             }
-            QueryTarget::TokenBalance { address } => {
-                format.serialize(client.query_token_balance(&address.into()).await?)
+            QueryTarget::TokenBalance { address, token } => {
+                format.serialize(client.query_token_balance(&address.into(), token.into()).await?)
             }
             QueryTarget::ChainInfo => format.serialize(client.query_chain_info().await?),
             QueryTarget::Safe {

@@ -6,8 +6,8 @@ use async_graphql::{Context, ID, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
     Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelsList, ChannelsResult,
     ContractAddressMap, CountResult, HoprBalance, InvalidAddressError, MissingFilterError, ModuleAddress,
-    NativeBalance, QueryFailedError, RedeemedStats, RedeemedStatsFilter, Safe, SafeHoprAllowance, TokenValueString,
-    Transaction, TransactionCount, UInt64,
+    NativeBalance, QueryFailedError, RedeemedStats, RedeemedStatsFilter, Safe, SafeHoprAllowance, Token,
+    TokenValueString, Transaction, TransactionCount, UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations};
@@ -559,13 +559,14 @@ impl QueryRoot {
 
     /// Retrieve HOPR token balance for a specific address
     ///
-    /// This query makes a direct RPC call to the blockchain to get the current HOPR token balance.
+    /// This query makes a direct RPC call to the blockchain to get a current token balance.
     /// No database storage is used - balance is fetched directly from the chain.
     #[graphql(name = "hoprBalance")]
     async fn hopr_balance(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "On-chain address to query (hexadecimal format)")] address: String,
+        #[graphql(desc = "Token type to query (defaults to wxHOPR)", default_with = "Token::WxHOPR")] token: Token,
     ) -> Result<HoprBalanceResult> {
         // Validate address format
         if let Err(e) = validate_eth_address(&address) {
@@ -582,16 +583,31 @@ impl QueryRoot {
         let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
 
         // Make RPC call to get balance from blockchain
-        match rpc.get_hopr_balance(parsed_address).await {
-            Ok(balance) => Ok(HoprBalanceResult::Balance(HoprBalance {
+        let result = match token {
+            Token::WxHOPR => rpc
+                .get_hopr_balance(parsed_address)
+                .await
+                .map(|b| b.to_string())
+                .map_err(|e| ("query wxHOPR balance", e)),
+            Token::XHOPR => rpc
+                .get_xhopr_balance(parsed_address)
+                .await
+                .map(|b| b.to_string())
+                .map_err(|e| ("query xHOPR balance", e)),
+            _ => {
+                return Ok(HoprBalanceResult::QueryFailed(errors::not_implemented(
+                    "Unsupported token",
+                )));
+            }
+        };
+
+        Ok(match result {
+            Ok(balance) => HoprBalanceResult::Balance(HoprBalance {
                 address,
-                balance: TokenValueString(balance.to_string()),
-            })),
-            Err(e) => Ok(HoprBalanceResult::QueryFailed(errors::rpc_query_failed(
-                "query HOPR balance",
-                e,
-            ))),
-        }
+                balance: TokenValueString(balance),
+            }),
+            Err((op, e)) => HoprBalanceResult::QueryFailed(errors::rpc_query_failed(op, e)),
+        })
     }
 
     /// Retrieve native token balance for a specific address

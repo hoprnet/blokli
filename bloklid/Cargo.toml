@@ -69,3 +69,5 @@ tempfile    = { workspace = true }
 thiserror   = { workspace = true }
 tokio       = { workspace = true, features = ["full"] }
 validator   = { workspace = true }
+
+blokli-api-types = { workspace = true }

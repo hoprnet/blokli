@@ -151,11 +151,8 @@ async fn test_get_hopr_allowance() -> anyhow::Result<()> {
 
     let rpc = RpcOperations::new(rpc_client, transport_client.client().clone(), cfg, None)?;
 
-    let owner: Address = (&chain_key_0).into();
-    let spender = *RANDY;
-
     // Initially, allowance should be zero
-    let allowance = rpc.get_hopr_allowance(owner, spender).await?;
+    let allowance = rpc.get_hopr_allowance((&chain_key_0).into(), *RANDY).await?;
     assert_eq!(allowance.amount().as_u64(), 0, "initial allowance should be zero");
 
     Ok(())

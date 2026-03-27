@@ -242,6 +242,8 @@ impl Args {
         config.chain_network = Some(chain_config.clone());
         let mut contracts = blokli_chain_types::ContractAddresses {
             token: network_config.addresses.token.to_hopr_address(),
+            xtoken: network_config.addresses.token.to_hopr_address(), /* TODO: update to use wxHOPR token address.
+                                                                       * Requires a contract's repo update */
             channels: network_config.addresses.channels.to_hopr_address(),
             announcements: network_config.addresses.announcements.to_hopr_address(),
             module_implementation: network_config.addresses.module_implementation.to_hopr_address(),
