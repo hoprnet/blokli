@@ -6,9 +6,7 @@ pub struct Migration;
 #[async_trait::async_trait]
 impl MigrationTrait for Migration {
     async fn up(&self, manager: &SchemaManager) -> Result<(), DbErr> {
-        // Log and LogStatus tables are kept separate to allow for easier export of the logs
-        // themselves.
-
+        // === log ===
         manager
             .create_table(
                 Table::create()
@@ -16,14 +14,14 @@ impl MigrationTrait for Migration {
                     .if_not_exists()
                     .col(
                         ColumnDef::new(Log::Id)
-                            .integer()
+                            .big_integer()
                             .not_null()
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(Log::TxIndex).not_null().big_integer())
-                    .col(ColumnDef::new(Log::LogIndex).not_null().big_integer())
-                    .col(ColumnDef::new(Log::BlockNumber).not_null().big_integer())
+                    .col(ColumnDef::new(Log::TxIndex).big_integer().not_null())
+                    .col(ColumnDef::new(Log::LogIndex).big_integer().not_null())
+                    .col(ColumnDef::new(Log::BlockNumber).big_integer().not_null())
                     .col(ColumnDef::new(Log::BlockHash).binary_len(32).not_null())
                     .col(ColumnDef::new(Log::TransactionHash).binary_len(32).not_null())
                     .col(ColumnDef::new(Log::Address).binary_len(20).not_null())
@@ -34,7 +32,6 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Add unique constraint on composite key (tx_index, log_index, block_number)
         manager
             .create_index(
                 Index::create()
@@ -48,6 +45,7 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
+        // === log_status ===
         manager
             .create_table(
                 Table::create()
@@ -55,15 +53,15 @@ impl MigrationTrait for Migration {
                     .if_not_exists()
                     .col(
                         ColumnDef::new(LogStatus::Id)
-                            .integer()
+                            .big_integer()
                             .not_null()
                             .auto_increment()
                             .primary_key(),
                     )
-                    .col(ColumnDef::new(LogStatus::LogId).integer().not_null())
-                    .col(ColumnDef::new(LogStatus::TxIndex).not_null().big_integer())
-                    .col(ColumnDef::new(LogStatus::LogIndex).not_null().big_integer())
-                    .col(ColumnDef::new(LogStatus::BlockNumber).not_null().big_integer())
+                    .col(ColumnDef::new(LogStatus::LogId).big_integer().not_null())
+                    .col(ColumnDef::new(LogStatus::TxIndex).big_integer().not_null())
+                    .col(ColumnDef::new(LogStatus::LogIndex).big_integer().not_null())
+                    .col(ColumnDef::new(LogStatus::BlockNumber).big_integer().not_null())
                     .col(ColumnDef::new(LogStatus::Processed).boolean().not_null().default(false))
                     .col(ColumnDef::new(LogStatus::ProcessedAt).date_time())
                     .col(ColumnDef::new(LogStatus::Checksum).binary_len(32))
@@ -79,7 +77,6 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Add unique constraint on composite key (tx_index, log_index, block_number)
         manager
             .create_index(
                 Index::create()
@@ -93,7 +90,33 @@ impl MigrationTrait for Migration {
             )
             .await?;
 
-        // Create LogTopicInfo table
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_unprocessed_log_status")
+                    .table(LogStatus::Table)
+                    .col(LogStatus::Processed)
+                    .col(LogStatus::BlockNumber)
+                    .col(LogStatus::TxIndex)
+                    .col(LogStatus::LogIndex)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_log_status_block_number_processed")
+                    .table(LogStatus::Table)
+                    .col(LogStatus::BlockNumber)
+                    .col(LogStatus::Processed)
+                    .to_owned(),
+            )
+            .await?;
+
+        // === log_topic_info (binary topic directly) ===
         manager
             .create_table(
                 Table::create()
@@ -101,26 +124,45 @@ impl MigrationTrait for Migration {
                     .if_not_exists()
                     .col(
                         ColumnDef::new(LogTopicInfo::Id)
-                            .primary_key()
+                            .big_integer()
                             .not_null()
-                            .integer()
-                            .auto_increment(),
+                            .auto_increment()
+                            .primary_key(),
                     )
                     .col(ColumnDef::new(LogTopicInfo::Address).binary_len(20).not_null())
-                    .col(ColumnDef::new(LogTopicInfo::Topic).string_len(64).not_null())
+                    .col(ColumnDef::new(LogTopicInfo::Topic).binary_len(32).not_null())
                     .to_owned(),
             )
-            .await
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .if_not_exists()
+                    .name("idx_contract_log_topic")
+                    .table(LogTopicInfo::Table)
+                    .col(LogTopicInfo::Address)
+                    .col(LogTopicInfo::Topic)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+
+        Ok(())
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
-            .drop_table(Table::drop().table(LogTopicInfo::Table).to_owned())
+            .drop_table(Table::drop().table(LogTopicInfo::Table).if_exists().to_owned())
             .await?;
         manager
-            .drop_table(Table::drop().table(LogStatus::Table).to_owned())
+            .drop_table(Table::drop().table(LogStatus::Table).if_exists().to_owned())
             .await?;
-        manager.drop_table(Table::drop().table(Log::Table).to_owned()).await
+        manager
+            .drop_table(Table::drop().table(Log::Table).if_exists().to_owned())
+            .await?;
+
+        Ok(())
     }
 }
 
@@ -129,25 +171,14 @@ impl MigrationTrait for Migration {
 enum Log {
     Table,
     Id,
-    // address from which this log originated.
     Address,
-    // Array of 0 to 4 32 Bytes DATA of indexed log arguments. The first topic is the
-    // hash of the signature of the event.
     Topics,
-    // contains zero or more 32 Bytes non-indexed arguments of the log.
     Data,
-    // the block number where this log was in. null when it's a pending log.
     BlockNumber,
-    // hash of the transactions this log was created from. null when its pending log.
-    // hash of the transaction this log was created from. null when it's a pending log.
     TransactionHash,
-    // integer of the transaction's index position this log was created from. null when it's a pending log.
     TxIndex,
-    // hash of the block where this log was in. null when its pending. null when its pending log.
     BlockHash,
-    // integer of the log index position in the block. null when its pending log.
     LogIndex,
-    // true when the log was removed, due to a chain reorganization. false if its a valid log.
     Removed,
 }
 
@@ -156,15 +187,11 @@ enum LogStatus {
     Table,
     Id,
     LogId,
-    // Values to identify the log.
     BlockNumber,
     TxIndex,
     LogIndex,
-    // Indicates whether the log has been processed.
     Processed,
-    // Time when the log was processed.
     ProcessedAt,
-    // Computed checksum of this log and previous logs
     Checksum,
 }
 
@@ -172,8 +199,6 @@ enum LogStatus {
 enum LogTopicInfo {
     Table,
     Id,
-    /// Contract address for filter
     Address,
-    /// Topic for the contract on this address
     Topic,
 }

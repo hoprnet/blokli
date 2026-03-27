@@ -1,40 +1,8 @@
 use sea_orm_migration::async_trait;
 pub use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
-mod m001_create_index_tables;
-mod m002_create_index_indices;
-mod m003_create_log_tables;
-mod m004_create_log_indices;
-mod m005_seed_initial_data;
-mod m006_create_balance_and_safe_tables;
-mod m007_create_performance_indices;
-mod m008_add_channel_closure_grace_period;
-mod m009_create_account_state_table;
-mod m010_create_channel_state_table;
-mod m011_alter_account_remove_safe_address;
-mod m012_alter_channel_remove_mutable_fields;
-mod m013_alter_chain_info_add_watermark_indices;
-mod m014_add_announcement_position_index;
-mod m015_create_current_state_views;
-mod m016_add_channel_state_reorg_correction;
-mod m017_add_ticket_params_notify_trigger;
-mod m018_alter_log_topic_info_topic_binary;
-mod m019_alter_chain_node_info_id_bigint;
-mod m020_add_key_binding_fee_to_chain_info;
-mod m021_clear_index_data;
-mod m022_clear_log_data;
-mod m023_alter_log_tables_id_bigint;
-mod m024_alter_index_tables_id_bigint;
-mod m025_create_schema_version_table;
-mod m026_add_module_and_chain_key_to_safe_contract;
-mod m027_drop_node_info_table;
-mod m028_add_node_safe_registration_table;
-mod m029_update_safe_contract_indices;
-mod m030_migrate_v3_safes;
-mod m031_remove_ticket_params_notify_trigger;
-mod m032_safe_contract_temporal_schema;
-mod m033_update_current_state_views;
-mod m034_create_safe_redeemed_stats_table;
+mod m001_initial_schema;
+mod m002_initial_log_schema;
 
 /// This is a special block ID that even pre-dates the v3 contract deployment on Gnosis chain,
 /// and therefore could be safely used to mark data added via the migration.
@@ -58,47 +26,15 @@ pub enum SafeDataOrigin {
     Jura = 1,
 }
 
-/// Contains all migration for non-Sqlite databases, such as Postgres.
+/// Contains all migrations for non-SQLite databases (e.g. Postgres) and also
+/// for SQLite when a single unified database file is used (no separate logs DB).
 pub struct Migrator<const NETWORK: u8>;
 
 impl<const NETWORK: u8> Migrator<NETWORK> {
     fn base_migrations() -> Vec<Box<dyn MigrationTrait>> {
         vec![
-            Box::new(m001_create_index_tables::Migration),
-            Box::new(m002_create_index_indices::Migration),
-            Box::new(m003_create_log_tables::Migration),
-            Box::new(m004_create_log_indices::Migration),
-            Box::new(m005_seed_initial_data::Migration),
-            Box::new(m006_create_balance_and_safe_tables::Migration),
-            Box::new(m007_create_performance_indices::Migration),
-            Box::new(m008_add_channel_closure_grace_period::Migration),
-            Box::new(m009_create_account_state_table::Migration),
-            Box::new(m010_create_channel_state_table::Migration),
-            Box::new(m011_alter_account_remove_safe_address::Migration),
-            Box::new(m012_alter_channel_remove_mutable_fields::Migration),
-            Box::new(m013_alter_chain_info_add_watermark_indices::Migration),
-            Box::new(m014_add_announcement_position_index::Migration),
-            Box::new(m015_create_current_state_views::Migration),
-            Box::new(m016_add_channel_state_reorg_correction::Migration),
-            Box::new(m017_add_ticket_params_notify_trigger::Migration),
-            Box::new(m018_alter_log_topic_info_topic_binary::Migration),
-            Box::new(m019_alter_chain_node_info_id_bigint::Migration),
-            Box::new(m020_add_key_binding_fee_to_chain_info::Migration),
-            Box::new(m021_clear_index_data::Migration),
-            Box::new(m022_clear_log_data::Migration),
-            Box::new(m023_alter_log_tables_id_bigint::Migration),
-            Box::new(m024_alter_index_tables_id_bigint::Migration),
-            Box::new(m025_create_schema_version_table::Migration),
-            Box::new(m026_add_module_and_chain_key_to_safe_contract::Migration),
-            Box::new(m027_drop_node_info_table::Migration),
-            Box::new(m028_add_node_safe_registration_table::Migration),
-            Box::new(m029_update_safe_contract_indices::Migration),
-            Box::new(m031_remove_ticket_params_notify_trigger::Migration),
-            Box::new(m032_safe_contract_temporal_schema::Migration),
-            Box::new(m033_update_current_state_views::Migration),
-            Box::new(m034_create_safe_redeemed_stats_table::Migration),
-            // Note: m030 (safe CSV data) is added by network-specific impls AFTER m033
-            // because m030 now uses the temporal schema (hopr_safe_contract_state)
+            Box::new(m001_initial_schema::Migration),
+            Box::new(m002_initial_log_schema::Migration),
         ]
     }
 }
@@ -113,54 +49,20 @@ impl MigratorTrait for Migrator<{ SafeDataOrigin::NoData as u8 }> {
 #[async_trait::async_trait]
 impl MigratorTrait for Migrator<{ SafeDataOrigin::Jura as u8 }> {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        let mut migrations = Self::base_migrations();
-        // m030 inserts CSV data into the temporal schema (hopr_safe_contract_state)
-        migrations.push(Box::new(m030_migrate_v3_safes::Migration(SafeDataOrigin::Jura)));
-        migrations
+        Self::base_migrations()
     }
 }
 
 /// SQLite does not allow writing lock tables only, and the write lock
 /// will apply to the entire database file. It is therefore beneficial
-/// to separate the exclusive concurrently accessing components into
-/// separate database files to benefit from multiple write locks over
+/// to place components that need concurrent exclusive write access into
+/// separate database files so that multiple write locks can be used over
 /// different parts of the database.
 pub struct MigratorIndex<const NETWORK: u8>;
 
 impl<const NETWORK: u8> MigratorIndex<NETWORK> {
     fn base_migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![
-            Box::new(m001_create_index_tables::Migration),
-            Box::new(m002_create_index_indices::Migration),
-            Box::new(m005_seed_initial_data::Migration),
-            Box::new(m006_create_balance_and_safe_tables::Migration),
-            Box::new(m007_create_performance_indices::Migration),
-            Box::new(m008_add_channel_closure_grace_period::Migration),
-            Box::new(m009_create_account_state_table::Migration),
-            Box::new(m010_create_channel_state_table::Migration),
-            Box::new(m011_alter_account_remove_safe_address::Migration),
-            Box::new(m012_alter_channel_remove_mutable_fields::Migration),
-            Box::new(m013_alter_chain_info_add_watermark_indices::Migration),
-            Box::new(m014_add_announcement_position_index::Migration),
-            Box::new(m015_create_current_state_views::Migration),
-            Box::new(m016_add_channel_state_reorg_correction::Migration),
-            Box::new(m017_add_ticket_params_notify_trigger::Migration),
-            Box::new(m019_alter_chain_node_info_id_bigint::Migration),
-            Box::new(m020_add_key_binding_fee_to_chain_info::Migration),
-            Box::new(m021_clear_index_data::Migration),
-            Box::new(m024_alter_index_tables_id_bigint::Migration),
-            Box::new(m025_create_schema_version_table::Migration),
-            Box::new(m026_add_module_and_chain_key_to_safe_contract::Migration),
-            Box::new(m027_drop_node_info_table::Migration),
-            Box::new(m028_add_node_safe_registration_table::Migration),
-            Box::new(m029_update_safe_contract_indices::Migration),
-            Box::new(m031_remove_ticket_params_notify_trigger::Migration),
-            Box::new(m032_safe_contract_temporal_schema::Migration),
-            Box::new(m033_update_current_state_views::Migration),
-            Box::new(m034_create_safe_redeemed_stats_table::Migration),
-            // Note: m030 (safe CSV data) is added by network-specific impls AFTER m033
-            // because m030 now uses the temporal schema (hopr_safe_contract_state)
-        ]
+        vec![Box::new(m001_initial_schema::Migration)]
     }
 }
 
@@ -174,10 +76,7 @@ impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::NoData as u8 }> {
 #[async_trait::async_trait]
 impl MigratorTrait for MigratorIndex<{ SafeDataOrigin::Jura as u8 }> {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        let mut migrations = Self::base_migrations();
-        // m030 inserts CSV data into the temporal schema (hopr_safe_contract_state)
-        migrations.push(Box::new(m030_migrate_v3_safes::Migration(SafeDataOrigin::Jura)));
-        migrations
+        Self::base_migrations()
     }
 }
 
@@ -189,13 +88,7 @@ pub struct MigratorChainLogs;
 #[async_trait::async_trait]
 impl MigratorTrait for MigratorChainLogs {
     fn migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![
-            Box::new(m003_create_log_tables::Migration),
-            Box::new(m004_create_log_indices::Migration),
-            Box::new(m018_alter_log_topic_info_topic_binary::Migration),
-            Box::new(m022_clear_log_data::Migration),
-            Box::new(m023_alter_log_tables_id_bigint::Migration),
-        ]
+        vec![Box::new(m002_initial_log_schema::Migration)]
     }
 }
 
@@ -464,445 +357,23 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_safe_redeemed_stats_table_created() {
+    async fn test_views_created() {
         let db = setup_test_db().await;
         Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
             .await
             .unwrap();
 
-        assert!(
-            table_exists(&db, "hopr_safe_redeemed_stats").await,
-            "hopr_safe_redeemed_stats table should exist"
-        );
-
-        let insert_result = db
-            .execute_raw(Statement::from_string(
-                DbBackend::Sqlite,
-                "INSERT INTO hopr_safe_redeemed_stats (safe_address, node_address, redeemed_amount, redemption_count, \
-                 last_redeemed_block, last_redeemed_tx_index, last_redeemed_log_index) VALUES \
-                 (X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', X'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb', \
-                 X'0000000000000000000000000000000000000000000000000000000000000001', 1, 100, 2, 3)"
-                    .to_string(),
-            ))
-            .await;
-
-        assert!(
-            insert_result.is_ok(),
-            "Should be able to insert into hopr_safe_redeemed_stats"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_safe_redeemed_stats_safe_node_composite_uniqueness() {
-        let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-            .await
-            .unwrap();
-
-        db.execute_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "INSERT INTO hopr_safe_redeemed_stats (safe_address, node_address, redeemed_amount, redemption_count, \
-             last_redeemed_block, last_redeemed_tx_index, last_redeemed_log_index) VALUES \
-             (X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', X'1111111111111111111111111111111111111111', \
-             X'0000000000000000000000000000000000000000000000000000000000000001', 1, 100, 0, 0)"
-                .to_string(),
-        ))
-        .await
-        .unwrap();
-
-        let second_node_insert = db
-            .execute_raw(Statement::from_string(
-                DbBackend::Sqlite,
-                "INSERT INTO hopr_safe_redeemed_stats (safe_address, node_address, redeemed_amount, redemption_count, \
-                 last_redeemed_block, last_redeemed_tx_index, last_redeemed_log_index) VALUES \
-                 (X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', X'2222222222222222222222222222222222222222', \
-                 X'0000000000000000000000000000000000000000000000000000000000000002', 1, 101, 0, 1)"
-                    .to_string(),
-            ))
-            .await;
-        assert!(
-            second_node_insert.is_ok(),
-            "Same safe with different node should be allowed"
-        );
-
-        let duplicate_pair_insert = db
-            .execute_raw(Statement::from_string(
-                DbBackend::Sqlite,
-                "INSERT INTO hopr_safe_redeemed_stats (safe_address, node_address, redeemed_amount, redemption_count, \
-                 last_redeemed_block, last_redeemed_tx_index, last_redeemed_log_index) VALUES \
-                 (X'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa', X'1111111111111111111111111111111111111111', \
-                 X'0000000000000000000000000000000000000000000000000000000000000003', 1, 102, 0, 2)"
-                    .to_string(),
-            ))
-            .await;
-        assert!(
-            duplicate_pair_insert.is_err(),
-            "Duplicate safe/node pair should be rejected"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_channel_state_performance_indices_created() {
-        let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-            .await
-            .unwrap();
-
-        // Verify performance indices exist
-        assert!(
-            index_exists(&db, "idx_channel_state_position").await,
-            "idx_channel_state_position should exist"
-        );
-
-        assert!(
-            index_exists(&db, "idx_channel_state_status_position").await,
-            "idx_channel_state_status_position should exist"
-        );
-
-        assert!(
-            index_exists(&db, "idx_channel_state_status_channel_position").await,
-            "idx_channel_state_status_channel_position should exist"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_account_state_performance_index_created() {
-        let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-            .await
-            .unwrap();
-
-        // Verify performance index exists
-        assert!(
-            index_exists(&db, "idx_account_state_position").await,
-            "idx_account_state_position should exist"
-        );
-    }
-
-    #[tokio::test]
-    async fn test_current_state_views_created() {
-        let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-            .await
-            .unwrap();
-
-        // Verify views exist
         assert!(
             view_exists(&db, "channel_current").await,
             "channel_current view should exist"
         );
-
         assert!(
             view_exists(&db, "account_current").await,
             "account_current view should exist"
         );
-    }
-
-    #[tokio::test]
-    async fn test_channel_current_view_returns_latest_state() {
-        let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-            .await
-            .unwrap();
-
-        // Insert test data
-        db.execute_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "INSERT INTO account (chain_key, packet_key) VALUES (X'0101010101010101010101010101010101010101', 'peer1')"
-                .to_string(),
-        ))
-        .await
-        .unwrap();
-
-        db.execute_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "INSERT INTO account (chain_key, packet_key) VALUES (X'0202020202020202020202020202020202020202', 'peer2')"
-                .to_string(),
-        ))
-        .await
-        .unwrap();
-
-        db.execute_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "INSERT INTO channel (source, destination, concrete_channel_id) VALUES (1, 2, '0xabc')".to_string(),
-        ))
-        .await
-        .unwrap();
-
-        // Insert multiple states for the same channel
-        db.execute_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "INSERT INTO channel_state (channel_id, balance, status, epoch, ticket_index, closure_time, \
-             corrupted_state, published_block, published_tx_index, published_log_index) VALUES (1, \
-             X'010000000000000000000000', 1, 0, 0, NULL, 0, 100, 0, 0)"
-                .to_string(),
-        ))
-        .await
-        .unwrap();
-
-        db.execute_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "INSERT INTO channel_state (channel_id, balance, status, epoch, ticket_index, closure_time, \
-             corrupted_state, published_block, published_tx_index, published_log_index) VALUES (1, \
-             X'020000000000000000000000', 1, 0, 0, NULL, 0, 150, 0, 0)"
-                .to_string(),
-        ))
-        .await
-        .unwrap();
-
-        // Query view - should return latest state (block 150)
-        let result = db
-            .query_one_raw(Statement::from_string(
-                DbBackend::Sqlite,
-                "SELECT published_block FROM channel_current WHERE channel_id = 1".to_string(),
-            ))
-            .await
-            .unwrap();
-
-        assert!(result.is_some(), "View should return result");
-        let row = result.unwrap();
-        let block: i64 = row.try_get("", "published_block").unwrap();
-        assert_eq!(block, 150, "View should return latest state at block 150");
-    }
-
-    #[tokio::test]
-    async fn test_account_current_view_returns_latest_state() {
-        let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-            .await
-            .unwrap();
-
-        // Insert test data
-        db.execute_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "INSERT INTO account (chain_key, packet_key) VALUES (X'0101010101010101010101010101010101010101', 'peer1')"
-                .to_string(),
-        ))
-        .await
-        .unwrap();
-
-        // Insert multiple states for the same account
-        db.execute_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "INSERT INTO account_state (account_id, safe_address, published_block, published_tx_index, \
-             published_log_index) VALUES (1, X'0202020202020202020202020202020202020202', 100, 0, 0)"
-                .to_string(),
-        ))
-        .await
-        .unwrap();
-
-        db.execute_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "INSERT INTO account_state (account_id, safe_address, published_block, published_tx_index, \
-             published_log_index) VALUES (1, X'0303030303030303030303030303030303030303', 150, 0, 0)"
-                .to_string(),
-        ))
-        .await
-        .unwrap();
-
-        // Query view - should return latest state (block 150)
-        let result = db
-            .query_one_raw(Statement::from_string(
-                DbBackend::Sqlite,
-                "SELECT published_block FROM account_current WHERE account_id = 1".to_string(),
-            ))
-            .await
-            .unwrap();
-
-        assert!(result.is_some(), "View should return result");
-        let row = result.unwrap();
-        let block: i64 = row.try_get("", "published_block").unwrap();
-        assert_eq!(block, 150, "View should return latest state at block 150");
-    }
-
-    #[tokio::test]
-    async fn test_foreign_key_cascade_on_account_state() {
-        let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-            .await
-            .unwrap();
-
-        // Insert account and state
-        db.execute_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "INSERT INTO account (chain_key, packet_key) VALUES (X'0101010101010101010101010101010101010101', 'peer1')"
-                .to_string(),
-        ))
-        .await
-        .unwrap();
-
-        db.execute_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "INSERT INTO account_state (account_id, safe_address, published_block, published_tx_index, \
-             published_log_index) VALUES (1, NULL, 100, 0, 0)"
-                .to_string(),
-        ))
-        .await
-        .unwrap();
-
-        // Verify state exists
-        let result_before = db
-            .query_one_raw(Statement::from_string(
-                DbBackend::Sqlite,
-                "SELECT COUNT(*) as cnt FROM account_state WHERE account_id = 1".to_string(),
-            ))
-            .await
-            .unwrap()
-            .unwrap();
-        let count_before: i32 = result_before.try_get("", "cnt").unwrap();
-        assert_eq!(count_before, 1, "Should have 1 account_state record");
-
-        // Delete account - should cascade to account_state
-        db.execute_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "DELETE FROM account WHERE id = 1".to_string(),
-        ))
-        .await
-        .unwrap();
-
-        // Verify state was also deleted
-        let result_after = db
-            .query_one_raw(Statement::from_string(
-                DbBackend::Sqlite,
-                "SELECT COUNT(*) as cnt FROM account_state WHERE account_id = 1".to_string(),
-            ))
-            .await
-            .unwrap()
-            .unwrap();
-        let count_after: i32 = result_after.try_get("", "cnt").unwrap();
-        assert_eq!(count_after, 0, "account_state should be deleted via cascade");
-    }
-
-    #[tokio::test]
-    async fn test_foreign_key_cascade_on_channel_state() {
-        let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-            .await
-            .unwrap();
-
-        // Insert accounts and channel
-        db.execute_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "INSERT INTO account (chain_key, packet_key) VALUES (X'0101010101010101010101010101010101010101', 'peer1')"
-                .to_string(),
-        ))
-        .await
-        .unwrap();
-
-        db.execute_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "INSERT INTO account (chain_key, packet_key) VALUES (X'0202020202020202020202020202020202020202', 'peer2')"
-                .to_string(),
-        ))
-        .await
-        .unwrap();
-
-        db.execute_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "INSERT INTO channel (source, destination, concrete_channel_id) VALUES (1, 2, '0xabc')".to_string(),
-        ))
-        .await
-        .unwrap();
-
-        db.execute_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "INSERT INTO channel_state (channel_id, balance, status, epoch, ticket_index, closure_time, \
-             corrupted_state, published_block, published_tx_index, published_log_index) VALUES (1, \
-             X'010000000000000000000000', 1, 0, 0, NULL, 0, 100, 0, 0)"
-                .to_string(),
-        ))
-        .await
-        .unwrap();
-
-        // Verify state exists
-        let result_before = db
-            .query_one_raw(Statement::from_string(
-                DbBackend::Sqlite,
-                "SELECT COUNT(*) as cnt FROM channel_state WHERE channel_id = 1".to_string(),
-            ))
-            .await
-            .unwrap()
-            .unwrap();
-        let count_before: i32 = result_before.try_get("", "cnt").unwrap();
-        assert_eq!(count_before, 1, "Should have 1 channel_state record");
-
-        // Delete channel - should cascade to channel_state
-        db.execute_raw(Statement::from_string(
-            DbBackend::Sqlite,
-            "DELETE FROM channel WHERE id = 1".to_string(),
-        ))
-        .await
-        .unwrap();
-
-        // Verify state was also deleted
-        let result_after = db
-            .query_one_raw(Statement::from_string(
-                DbBackend::Sqlite,
-                "SELECT COUNT(*) as cnt FROM channel_state WHERE channel_id = 1".to_string(),
-            ))
-            .await
-            .unwrap()
-            .unwrap();
-        let count_after: i32 = result_after.try_get("", "cnt").unwrap();
-        assert_eq!(count_after, 0, "channel_state should be deleted via cascade");
-    }
-
-    #[tokio::test]
-    async fn test_chain_info_watermark_indices_exist() {
-        let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
-            .await
-            .unwrap();
-
-        // Verify chain_info table exists with watermark fields
-        let insert_result = db
-            .execute_raw(Statement::from_string(
-                DbBackend::Sqlite,
-                "INSERT INTO chain_info (last_indexed_block, last_indexed_tx_index, last_indexed_log_index, \
-                 min_incoming_ticket_win_prob) VALUES (100, 5, 3, 0.5)"
-                    .to_string(),
-            ))
-            .await;
-
         assert!(
-            insert_result.is_ok(),
-            "Should be able to insert into chain_info with watermark fields"
+            view_exists(&db, "safe_contract_current").await,
+            "safe_contract_current view should exist"
         );
-    }
-
-    #[tokio::test]
-    async fn test_v3_safe_data_migration_rotsee() -> anyhow::Result<()> {
-        let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None).await?;
-
-        let result = db
-            .query_one_raw(Statement::from_string(
-                DbBackend::Sqlite,
-                "SELECT COUNT(*) as row_count FROM hopr_safe_contract".to_string(),
-            ))
-            .await?
-            .unwrap();
-
-        let count: i32 = result.try_get("", "row_count")?;
-        assert_eq!(count, 0);
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_v3_safe_data_migration_dufour() -> anyhow::Result<()> {
-        let db = setup_test_db().await;
-        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None).await?;
-
-        let result = db
-            .query_one_raw(Statement::from_string(
-                DbBackend::Sqlite,
-                "SELECT COUNT(*) as row_count FROM hopr_safe_contract".to_string(),
-            ))
-            .await?
-            .unwrap();
-
-        let count: i32 = result.try_get("", "row_count")?;
-        assert_eq!(count, 0);
-        Ok(())
     }
 }

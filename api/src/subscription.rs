@@ -1227,7 +1227,7 @@ impl SubscriptionRoot {
             };
 
             TicketParameters {
-                min_ticket_winning_probability: info.min_incoming_ticket_win_prob as f64,
+                min_ticket_winning_probability: info.min_incoming_ticket_win_prob,
                 ticket_price: TokenValueString(ticket_price),
             }
         }))
