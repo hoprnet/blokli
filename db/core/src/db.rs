@@ -16,6 +16,7 @@ use crate::{
     errors::{DbSqlError, Result},
     events::EventBus,
     safe_contracts::BlokliDbSafeContractOperations,
+    version,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, smart_default::SmartDefault, validator::Validate)]
@@ -187,6 +188,10 @@ impl BlokliDb {
             (db, logs_db)
         };
 
+        // If the stored schema major version is less than the major component of SCHEMA_VERSION,
+        // wipe all data and the seaql_migrations table so the migration stack can run from scratch.
+        version::check_major_version_and_reset(&db, logs_db.as_ref()).await?;
+
         // Apply migrations based on database backend
         if is_sqlite {
             if let Some(logs_db) = &logs_db {
@@ -210,7 +215,7 @@ impl BlokliDb {
         }
 
         // Check schema version and clear data if needed
-        let data_was_reset = crate::version::check_and_reset_if_needed(&db, logs_db.as_ref()).await?;
+        let data_was_reset = version::check_and_reset_if_needed(&db, logs_db.as_ref()).await?;
         if data_was_reset {
             tracing::warn!("Database data was reset due to schema version change");
         }

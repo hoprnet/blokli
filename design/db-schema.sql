@@ -36,7 +36,7 @@ CREATE TABLE "chain_info" (
     "channels_dst" blob (32) NULL,
     "ledger_dst" blob (32) NULL,
     "safe_registry_dst" blob (32) NULL,
-    "min_incoming_ticket_win_prob" float NOT NULL DEFAULT 1,
+    "min_incoming_ticket_win_prob" double NOT NULL DEFAULT 1,
     "channel_closure_grace_period" integer NULL,
     "key_binding_fee" blob (12) NULL
 );
@@ -153,7 +153,7 @@ CREATE TABLE "native_balance" (
 
 CREATE TABLE "schema_version" (
     "id" integer NOT NULL PRIMARY KEY,
-    "version" integer NOT NULL,
+    "version" text NOT NULL,
     "updated_at" timestamp_text NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 

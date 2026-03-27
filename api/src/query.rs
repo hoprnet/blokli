@@ -1331,9 +1331,7 @@ impl QueryRoot {
             }
         }
 
-        // f32 -> f64 is widening, always safe
-        #[allow(clippy::cast_lossless)]
-        let min_ticket_winning_probability = chain_info.min_incoming_ticket_win_prob as f64;
+        let min_ticket_winning_probability = chain_info.min_incoming_ticket_win_prob;
 
         // Convert domain separators from binary to hex strings
         let channel_dst = match chain_info.channels_dst.as_ref() {
