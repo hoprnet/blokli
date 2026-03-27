@@ -70,8 +70,8 @@ services:
       - "--rpc-url"
       - "http://anvil:8546"
       - "--private-key"
-      - "0x834452510e07921b0b09a51a173bd7c464c62d910ff4a1a79382a6948d091b49"
-      - "0x7933E809318f930dF42Df81bA8AacB5aa5352554"
+      - "0x7b47dca8772f76990ac12f3eea327481ddc40fad1aa745d4d8d3013c1706c167"
+      - "0xa64AA16c6946129AA2BE8b69cb025f295E6aac83"
       - "--value"
       - "1"
     depends_on:

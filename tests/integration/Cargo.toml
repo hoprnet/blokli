@@ -21,7 +21,7 @@ hopr-types = { workspace = true, features = [
   "internal",
   "primitive",
 ] }
-insta = { workspace = true, features = ["yaml"] }
+insta = { workspace = true, features = ["redactions", "yaml"] }
 libc = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
