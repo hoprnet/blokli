@@ -97,8 +97,6 @@ type Channel {
 
 """Success response for channels query"""
 type ChannelsList {
-  "Number of channels in this list"
-  channelCount: Int!
   "List of channels"
   channels: [Channel!]!
   "Total wxHOPR balance across all channels in this list"
@@ -361,6 +359,8 @@ type QueryRoot {
     concreteChannelId: String
     "Filter by destination node keyid"
     destinationKeyId: Int
+    "Filter by safe address — restricts to channels where the source belongs to this safe (hexadecimal format)"
+    safeAddress: String
     "Filter by source node keyid"
     sourceKeyId: Int
     "Filter by channel status"
@@ -464,6 +464,15 @@ type QueryRoot {
   safe(
     "Safe contract address to query (hexadecimal format)"
     address: String!
+  ): SafeResult @deprecated(reason: "Use safeBy(selector: ...)")
+  """
+  Retrieve safe by selector.
+  
+  Exactly one selector field must be provided: address, chainKey, or registeredNode.
+  """
+  safeBy(
+    "Selector for safe lookup; exactly one field must be set"
+    selector: SafeSelectorInput!
   ): SafeResult
   """
   Retrieve safe by chain key (owner address)
@@ -475,7 +484,7 @@ type QueryRoot {
   safeByChainKey(
     "Chain key to query (hexadecimal format)"
     chainKey: String!
-  ): SafeResult
+  ): SafeResult @deprecated(reason: "Use safeBy(selector: ...)")
   """
   Retrieve safe by registered node address
   
@@ -487,7 +496,7 @@ type QueryRoot {
   safeByRegisteredNode(
     "Node chain key to query (hexadecimal format)"
     chainKey: String!
-  ): SafeResult
+  ): SafeResult @deprecated(reason: "Use safeBy(selector: ...)")
   """
   Retrieve Safe HOPR token allowance for a specific Safe address
   
@@ -643,6 +652,19 @@ type SafesBalance {
 
 """Result type for total safe HOPR balance query"""
 union SafesBalanceResult = InvalidAddressError | QueryFailedError | SafesBalance
+
+"""
+Selector for safe lookup queries.
+Exactly one field must be provided.
+"""
+input SafeSelectorInput {
+  "Safe contract address to filter by (hexadecimal format)"
+  address: String
+  "Chain key (owner address) to filter by (hexadecimal format)"
+  chainKey: String
+  "Registered node address to filter by (hexadecimal format)"
+  registeredNode: String
+}
 
 """Success response for safes list query"""
 type SafesList {

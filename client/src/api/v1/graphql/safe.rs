@@ -20,6 +20,7 @@ pub struct Safe {
 
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "QueryRoot", variables = "SafeVariables")]
+/// Deprecated server query, kept for backward compatibility with older Blokli APIs.
 pub struct QuerySafeByChainKey {
     #[arguments(chainKey: $address)]
     pub safe_by_chain_key: Option<SafeResult>,
@@ -27,6 +28,7 @@ pub struct QuerySafeByChainKey {
 
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "QueryRoot", variables = "SafeVariables")]
+/// Deprecated server query, kept for backward compatibility with older Blokli APIs.
 pub struct QuerySafeByRegisteredNode {
     #[arguments(chainKey: $address)]
     pub safe_by_registered_node: Option<SafeResult>,
@@ -34,6 +36,7 @@ pub struct QuerySafeByRegisteredNode {
 
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "QueryRoot", variables = "SafeVariables")]
+/// Deprecated server query, kept for backward compatibility with older Blokli APIs.
 pub struct QuerySafeByAddress {
     #[arguments(address: $address)]
     pub safe: Option<SafeResult>,

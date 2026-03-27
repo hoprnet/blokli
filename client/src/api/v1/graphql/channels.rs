@@ -1,23 +1,26 @@
 use hex::ToHex;
+use primitive_types::U256;
 
 use super::{
     ChannelStatus, CountResult, DateTime, InvalidAddressError, MissingFilterError, QueryFailedError, TokenValueString,
     Uint64, schema,
 };
-use crate::api::v1::{ChannelFilter, ChannelSelector};
+use crate::{
+    api::v1::{ChannelFilter, ChannelSelector},
+    errors::ErrorKind,
+};
 
 #[derive(cynic::QueryVariables, Default)]
 pub struct ChannelsVariables {
     pub concrete_channel_id: Option<String>,
     pub destination_key_id: Option<i32>,
-    pub safe_address: Option<String>,
     pub source_key_id: Option<i32>,
     pub status: Option<ChannelStatus>,
 }
 
 impl From<ChannelSelector> for ChannelsVariables {
     fn from(value: ChannelSelector) -> Self {
-        let base = match value.filter {
+        match value.filter {
             Some(ChannelFilter::ChannelId(id)) => ChannelsVariables {
                 concrete_channel_id: Some(id.encode_hex()),
                 status: value.status,
@@ -43,10 +46,6 @@ impl From<ChannelSelector> for ChannelsVariables {
                 status: value.status,
                 ..Default::default()
             },
-        };
-        ChannelsVariables {
-            safe_address: value.safe_address.map(hex::encode),
-            ..base
         }
     }
 }
@@ -54,7 +53,7 @@ impl From<ChannelSelector> for ChannelsVariables {
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "QueryRoot", variables = "ChannelsVariables")]
 pub struct QueryChannels {
-    #[arguments(concreteChannelId: $concrete_channel_id, destinationKeyId: $destination_key_id, safeAddress: $safe_address, sourceKeyId: $source_key_id, status: $status)]
+    #[arguments(concreteChannelId: $concrete_channel_id, destinationKeyId: $destination_key_id, sourceKeyId: $source_key_id, status: $status)]
     pub channels: ChannelsResult,
 }
 
@@ -73,10 +72,16 @@ pub struct QueryChannelCount {
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
+#[cynic(graphql_type = "ChannelsList")]
+pub struct ChannelsListQuery {
+    pub __typename: String,
+    pub channels: Vec<Channel>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ChannelsList {
     pub __typename: String,
-    pub channel_count: i32,
     pub channels: Vec<Channel>,
     pub total_balance: TokenValueString,
 }
@@ -96,8 +101,7 @@ pub struct Channel {
 
 #[derive(cynic::InlineFragments, Debug)]
 pub enum ChannelsResult {
-    ChannelsList(ChannelsList),
-    InvalidAddressError(InvalidAddressError),
+    ChannelsList(ChannelsListQuery),
     MissingFilterError(MissingFilterError),
     QueryFailedError(QueryFailedError),
     #[cynic(fallback)]
@@ -107,8 +111,21 @@ pub enum ChannelsResult {
 impl From<ChannelsResult> for Result<ChannelsList, crate::errors::BlokliClientError> {
     fn from(value: ChannelsResult) -> Self {
         match value {
-            ChannelsResult::ChannelsList(list) => Ok(list),
-            ChannelsResult::InvalidAddressError(e) => Err(e.into()),
+            ChannelsResult::ChannelsList(list) => {
+                let mut total_balance = U256::zero();
+                for channel in &list.channels {
+                    let channel_balance = U256::from_dec_str(&channel.balance.0)
+                        .map_err(|_| crate::errors::BlokliClientError::from(ErrorKind::ParseError))?;
+                    total_balance = total_balance
+                        .checked_add(channel_balance)
+                        .ok_or_else(|| crate::errors::BlokliClientError::from(ErrorKind::ParseError))?;
+                }
+                Ok(ChannelsList {
+                    __typename: list.__typename,
+                    channels: list.channels,
+                    total_balance: TokenValueString(total_balance.to_string()),
+                })
+            }
             ChannelsResult::MissingFilterError(e) => Err(e.into()),
             ChannelsResult::QueryFailedError(e) => Err(e.into()),
             ChannelsResult::Unknown => Err(crate::errors::ErrorKind::NoData.into()),

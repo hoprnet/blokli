@@ -6,8 +6,8 @@ use async_graphql::{Context, ID, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
     Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelsList, ChannelsResult,
     ContractAddressMap, CountResult, HoprBalance, InvalidAddressError, MissingFilterError, ModuleAddress,
-    NativeBalance, QueryFailedError, RedeemedStats, RedeemedStatsFilter, Safe, SafeHoprAllowance, SafesBalance,
-    SafesBalanceResult, TokenValueString, Transaction, TransactionCount, UInt64,
+    NativeBalance, QueryFailedError, RedeemedStats, RedeemedStatsFilter, Safe, SafeHoprAllowance, SafeSelectorInput,
+    SafesBalance, SafesBalanceResult, TokenValueString, Transaction, TransactionCount, UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations};
@@ -20,7 +20,7 @@ use blokli_db_entity::{
         redemptions_aggregation::fetch_aggregated_redeemed_stats,
     },
     hopr_node_safe_registration,
-    views::channel_current,
+    views::{account_current, channel_current},
 };
 use hopr_types::{
     crypto::prelude::Hash,
@@ -276,6 +276,34 @@ async fn fetch_safe_by_chain_key(
     }))
 }
 
+async fn registered_nodes_for_safe(db: &DatabaseConnection, safe_address: Vec<u8>) -> Vec<String> {
+    match hopr_node_safe_registration::Entity::find()
+        .filter(hopr_node_safe_registration::Column::SafeAddress.eq(safe_address))
+        .all(db)
+        .await
+    {
+        Ok(registrations) => registrations
+            .into_iter()
+            .filter_map(|reg| Address::try_from(reg.node_address.as_slice()).ok())
+            .map(|addr| addr.to_hex())
+            .collect(),
+        Err(e) => {
+            warn!(
+                error = %e,
+                "Failed to fetch registered nodes for safe, returning empty list"
+            );
+            Vec::new()
+        }
+    }
+}
+
+fn safe_result_from_row(current: SafeContractCurrentRow, registered_nodes: Vec<String>) -> SafeResult {
+    match safe_from_current_row(current, registered_nodes) {
+        Ok(safe_data) => SafeResult::Safe(safe_data),
+        Err(e) => SafeResult::QueryFailed(errors::invalid_db_data("safe addresses", &e)),
+    }
+}
+
 /// Root query type providing read-only access to indexed blockchain data
 pub struct QueryRoot;
 
@@ -419,10 +447,33 @@ impl QueryRoot {
         #[graphql(desc = "Filter by source node keyid")] source_key_id: Option<i32>,
         #[graphql(desc = "Filter by destination node keyid")] destination_key_id: Option<i32>,
         #[graphql(desc = "Filter by concrete channel ID (hexadecimal format)")] concrete_channel_id: Option<String>,
+        #[graphql(
+            desc = "Filter by safe address — restricts to channels where the source belongs to this safe (hexadecimal \
+                    format)"
+        )]
+        safe_address: Option<String>,
         #[graphql(desc = "Filter by channel status (optional, combine with identity filters)")] status: Option<
             blokli_api_types::ChannelStatus,
         >,
     ) -> CountResult {
+        let parsed_safe_address = match safe_address {
+            Some(ref addr) => {
+                if let Err(e) = validate_eth_address(addr) {
+                    return CountResult::QueryFailed(errors::invalid_address_query_failed(e.message));
+                }
+                match Address::from_hex(addr) {
+                    Ok(parsed) => Some(parsed),
+                    Err(e) => {
+                        return CountResult::QueryFailed(errors::invalid_address_query_failed(format!(
+                            "Invalid address: {}",
+                            e
+                        )));
+                    }
+                }
+            }
+            None => None,
+        };
+
         let db = match ctx.data::<DatabaseConnection>() {
             Ok(db) => db,
             Err(e) => {
@@ -431,6 +482,25 @@ impl QueryRoot {
         };
 
         let mut query = channel_current::Entity::find();
+
+        if let Some(safe_addr) = parsed_safe_address {
+            let safe_addr_bytes = safe_addr.as_ref().to_vec();
+            let account_ids: Vec<i64> = match account_current::Entity::find()
+                .filter(account_current::Column::SafeAddress.eq(safe_addr_bytes))
+                .all(db)
+                .await
+            {
+                Ok(rows) => rows.into_iter().map(|row| row.account_id).collect(),
+                Err(e) => {
+                    return CountResult::QueryFailed(errors::query_failed(
+                        "resolve safe account IDs for channel count",
+                        e,
+                    ));
+                }
+            };
+
+            query = query.filter(channel_current::Column::Source.is_in(account_ids));
+        }
 
         if let Some(src_keyid) = source_key_id {
             query = query.filter(channel_current::Column::Source.eq(src_keyid));
@@ -582,18 +652,7 @@ impl QueryRoot {
             })
             .collect();
 
-        let channel_count = match i32::try_from(channels.len()) {
-            Ok(c) => c,
-            Err(_) => {
-                return ChannelsResult::QueryFailed(errors::overflow_error(
-                    "channel count",
-                    channels.len().to_string(),
-                ));
-            }
-        };
-
         ChannelsResult::Channels(ChannelsList {
-            channel_count,
             channels,
             total_balance: TokenValueString(total_balance.to_string()),
         })
@@ -861,6 +920,103 @@ impl QueryRoot {
         }
     }
 
+    #[graphql(name = "safeBy")]
+    async fn safe_by(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Selector for safe lookup; exactly one field must be set")] selector: SafeSelectorInput,
+    ) -> Result<Option<SafeResult>> {
+        let provided = [
+            selector.address.is_some(),
+            selector.chain_key.is_some(),
+            selector.registered_node.is_some(),
+        ]
+        .into_iter()
+        .filter(|present| *present)
+        .count();
+
+        if provided != 1 {
+            return Ok(Some(SafeResult::QueryFailed(errors::validation_failed(
+                "exactly one selector must be provided: address, chainKey, or registeredNode",
+            ))));
+        }
+
+        let db = ctx.data::<DatabaseConnection>()?;
+
+        if let Some(address) = selector.address {
+            let safe_address = match parse_safe_address(address) {
+                Ok(addr) => addr,
+                Err(error_result) => return Ok(Some(error_result)),
+            };
+
+            return match fetch_safe_by_address(db, safe_address.clone()).await {
+                Ok(Some(current)) => Ok(Some(safe_result_from_row(
+                    current,
+                    registered_nodes_for_safe(db, safe_address).await,
+                ))),
+                Ok(None) => Ok(None),
+                Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed("fetch safe", e)))),
+            };
+        }
+
+        if let Some(chain_key) = selector.chain_key {
+            let chain_key_address = match parse_safe_address(chain_key) {
+                Ok(addr) => addr,
+                Err(error_result) => return Ok(Some(error_result)),
+            };
+
+            return match fetch_safe_by_chain_key(db, chain_key_address).await {
+                Ok(Some(current)) => {
+                    let safe_address = current.address.clone();
+                    Ok(Some(safe_result_from_row(
+                        current,
+                        registered_nodes_for_safe(db, safe_address).await,
+                    )))
+                }
+                Ok(None) => Ok(None),
+                Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed(
+                    "fetch safe by chain key",
+                    e,
+                )))),
+            };
+        }
+
+        let node_address = match parse_safe_address(selector.registered_node.unwrap_or_default()) {
+            Ok(addr) => addr,
+            Err(error_result) => return Ok(Some(error_result)),
+        };
+
+        let registration = match hopr_node_safe_registration::Entity::find()
+            .filter(hopr_node_safe_registration::Column::NodeAddress.eq(node_address))
+            .one(db)
+            .await
+        {
+            Ok(Some(reg)) => reg,
+            Ok(None) => return Ok(None),
+            Err(e) => {
+                return Ok(Some(SafeResult::QueryFailed(errors::query_failed(
+                    "fetch safe by registered node",
+                    e,
+                ))));
+            }
+        };
+
+        match fetch_safe_by_address(db, registration.safe_address.clone()).await {
+            Ok(Some(current)) => Ok(Some(safe_result_from_row(
+                current,
+                registered_nodes_for_safe(db, registration.safe_address).await,
+            ))),
+            Ok(None) => Ok(Some(SafeResult::QueryFailed(errors::query_failed(
+                "fetch safe by registered node",
+                "Safe not found for registered node",
+            )))),
+            Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed(
+                "fetch safe by registered node",
+                e,
+            )))),
+        }
+    }
+
     /// Fetches a Safe by its contract address.
     ///
     /// Validates the provided hexadecimal address, queries the database for a matching safe contract,
@@ -886,54 +1042,20 @@ impl QueryRoot {
     /// //     None => println!("Safe not found"),
     /// // }
     /// ```
+    #[graphql(deprecation = "Use safeBy(selector: ...)")]
     async fn safe(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Safe contract address to query (hexadecimal format)")] address: String,
     ) -> Result<Option<SafeResult>> {
-        let safe_address = match parse_safe_address(address) {
-            Ok(addr) => addr,
-            Err(error_result) => return Ok(Some(error_result)),
-        };
-
-        let db = ctx.data::<DatabaseConnection>()?;
-
-        let safe_address_vec = safe_address.clone();
-
-        match fetch_safe_by_address(db, safe_address).await {
-            Ok(Some(current)) => {
-                let registered_nodes_result = hopr_node_safe_registration::Entity::find()
-                    .filter(hopr_node_safe_registration::Column::SafeAddress.eq(safe_address_vec))
-                    .all(db)
-                    .await;
-
-                let registered_nodes = match registered_nodes_result {
-                    Ok(registrations) => registrations
-                        .into_iter()
-                        .filter_map(|reg| Address::try_from(reg.node_address.as_slice()).ok())
-                        .map(|addr| addr.to_hex())
-                        .collect(),
-                    Err(e) => {
-                        warn!(
-                            safe_address = ?current.address,
-                            error = %e,
-                            "Failed to fetch registered nodes for safe, returning empty list"
-                        );
-                        Vec::new()
-                    }
-                };
-
-                match safe_from_current_row(current, registered_nodes) {
-                    Ok(safe_data) => Ok(Some(SafeResult::Safe(safe_data))),
-                    Err(e) => Ok(Some(SafeResult::QueryFailed(errors::invalid_db_data(
-                        "safe addresses",
-                        &e,
-                    )))),
-                }
-            }
-            Ok(None) => Ok(None),
-            Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed("fetch safe", e)))),
-        }
+        self.safe_by(
+            ctx,
+            SafeSelectorInput {
+                address: Some(address),
+                ..Default::default()
+            },
+        )
+        .await
     }
 
     /// Finds a Safe by its chain key (owner address) given as a hexadecimal string.
@@ -967,50 +1089,20 @@ impl QueryRoot {
     ///     None => println!("No safe for that chain key"),
     /// }
     /// ```
-    #[graphql(name = "safeByChainKey")]
+    #[graphql(name = "safeByChainKey", deprecation = "Use safeBy(selector: ...)")]
     async fn safe_by_chain_key(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Chain key to query (hexadecimal format)")] chain_key: String,
     ) -> Result<Option<SafeResult>> {
-        let chain_key_address = match parse_safe_address(chain_key) {
-            Ok(addr) => addr,
-            Err(error_result) => return Ok(Some(error_result)),
-        };
-
-        let db = ctx.data::<DatabaseConnection>()?;
-
-        match fetch_safe_by_chain_key(db, chain_key_address).await {
-            Ok(Some(current)) => {
-                let safe_address_vec = current.address.clone();
-                let registered_nodes_result = hopr_node_safe_registration::Entity::find()
-                    .filter(hopr_node_safe_registration::Column::SafeAddress.eq(safe_address_vec))
-                    .all(db)
-                    .await;
-
-                let registered_nodes = match registered_nodes_result {
-                    Ok(registrations) => registrations
-                        .into_iter()
-                        .filter_map(|reg| Address::try_from(reg.node_address.as_slice()).ok())
-                        .map(|addr| addr.to_hex())
-                        .collect(),
-                    Err(_) => Vec::new(),
-                };
-
-                match safe_from_current_row(current, registered_nodes) {
-                    Ok(safe_data) => Ok(Some(SafeResult::Safe(safe_data))),
-                    Err(e) => Ok(Some(SafeResult::QueryFailed(errors::invalid_db_data(
-                        "safe addresses",
-                        &e,
-                    )))),
-                }
-            }
-            Ok(None) => Ok(None),
-            Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed(
-                "fetch safe by chain key",
-                e,
-            )))),
-        }
+        self.safe_by(
+            ctx,
+            SafeSelectorInput {
+                chain_key: Some(chain_key),
+                ..Default::default()
+            },
+        )
+        .await
     }
 
     /// Fetches a Safe contract by registered node address.
@@ -1049,91 +1141,20 @@ impl QueryRoot {
     /// }
     /// # }
     /// ```
+    #[graphql(name = "safeByRegisteredNode", deprecation = "Use safeBy(selector: ...)")]
     async fn safe_by_registered_node(
         &self,
         ctx: &Context<'_>,
         #[graphql(name = "chainKey")] chain_key: String,
     ) -> Result<Option<SafeResult>> {
-        let db = ctx.data::<DatabaseConnection>()?;
-
-        // Parse the node address from hex
-        let node_address = match Address::from_hex(&chain_key) {
-            Ok(addr) => addr,
-            Err(e) => {
-                return Ok(Some(SafeResult::InvalidAddress(errors::invalid_address_error(
-                    &chain_key,
-                    e.to_string(),
-                ))));
-            }
-        };
-
-        let node_address_vec = node_address.as_ref().to_vec();
-
-        // Look up the registration to find the safe address
-        let registration_result = hopr_node_safe_registration::Entity::find()
-            .filter(hopr_node_safe_registration::Column::NodeAddress.eq(node_address_vec))
-            .one(db)
-            .await;
-
-        let registration = match registration_result {
-            Ok(Some(reg)) => reg,
-            Ok(None) => return Ok(None), // Node not registered to any safe
-            Err(e) => {
-                return Ok(Some(SafeResult::QueryFailed(errors::query_failed(
-                    "fetch safe by registered node",
-                    e,
-                ))));
-            }
-        };
-
-        // Fetch the safe contract with its latest state
-        let safe_result = fetch_safe_by_address(db, registration.safe_address.clone()).await;
-
-        let current = match safe_result {
-            Ok(Some(current)) => current,
-            Ok(None) => {
-                return Ok(Some(SafeResult::QueryFailed(errors::query_failed(
-                    "fetch safe by registered node",
-                    "Safe not found for registered node",
-                ))));
-            }
-            Err(e) => {
-                return Ok(Some(SafeResult::QueryFailed(errors::query_failed(
-                    "fetch safe by registered node",
-                    e,
-                ))));
-            }
-        };
-
-        // Fetch registered nodes for this safe
-        let registered_nodes_result = hopr_node_safe_registration::Entity::find()
-            .filter(hopr_node_safe_registration::Column::SafeAddress.eq(registration.safe_address))
-            .all(db)
-            .await;
-
-        let registered_nodes = match registered_nodes_result {
-            Ok(registrations) => registrations
-                .into_iter()
-                .filter_map(|reg| Address::try_from(reg.node_address.as_slice()).ok())
-                .map(|addr| addr.to_hex())
-                .collect(),
-            Err(e) => {
-                warn!(
-                    safe_address = ?current.address,
-                    error = %e,
-                    "Failed to fetch registered nodes for safe, returning empty list"
-                );
-                Vec::new()
-            }
-        };
-
-        match safe_from_current_row(current, registered_nodes) {
-            Ok(safe_obj) => Ok(Some(SafeResult::Safe(safe_obj))),
-            Err(e) => Ok(Some(SafeResult::QueryFailed(errors::invalid_db_data(
-                "safe address",
-                &e,
-            )))),
-        }
+        self.safe_by(
+            ctx,
+            SafeSelectorInput {
+                registered_node: Some(chain_key),
+                ..Default::default()
+            },
+        )
+        .await
     }
 
     /// Fetches all indexed Safe contracts.
@@ -1658,40 +1679,61 @@ mod tests {
         let source_key_id: Option<i32> = None;
         let destination_key_id: Option<i32> = None;
         let concrete_channel_id: Option<String> = None;
+        let safe_address: Option<String> = None;
 
-        let requires_identity_filter =
-            source_key_id.is_none() && destination_key_id.is_none() && concrete_channel_id.is_none();
+        let requires_identity_filter = source_key_id.is_none()
+            && destination_key_id.is_none()
+            && concrete_channel_id.is_none()
+            && safe_address.is_none();
         assert!(requires_identity_filter, "Should require at least one identity filter");
 
         let source_some: Option<i32> = Some(1);
-        let requires_filter_with_source =
-            source_some.is_none() && destination_key_id.is_none() && concrete_channel_id.is_none();
+        let requires_filter_with_source = source_some.is_none()
+            && destination_key_id.is_none()
+            && concrete_channel_id.is_none()
+            && safe_address.is_none();
         assert!(
             !requires_filter_with_source,
             "Should not require identity filter when source_key_id is provided"
         );
 
-        let requires_filter_with_status_only =
-            source_key_id.is_none() && destination_key_id.is_none() && concrete_channel_id.is_none();
+        let requires_filter_with_status_only = source_key_id.is_none()
+            && destination_key_id.is_none()
+            && concrete_channel_id.is_none()
+            && safe_address.is_none();
         assert!(
             requires_filter_with_status_only,
             "Should still require identity filter even when only status is provided"
         );
 
         let destination_some: Option<i32> = Some(2);
-        let requires_filter_with_destination =
-            source_key_id.is_none() && destination_some.is_none() && concrete_channel_id.is_none();
+        let requires_filter_with_destination = source_key_id.is_none()
+            && destination_some.is_none()
+            && concrete_channel_id.is_none()
+            && safe_address.is_none();
         assert!(
             !requires_filter_with_destination,
             "Should not require filter when destination_key_id is provided"
         );
 
         let channel_id_some: Option<String> = Some("0xabc".to_string());
-        let requires_filter_with_channel_id =
-            source_key_id.is_none() && destination_key_id.is_none() && channel_id_some.is_none();
+        let requires_filter_with_channel_id = source_key_id.is_none()
+            && destination_key_id.is_none()
+            && channel_id_some.is_none()
+            && safe_address.is_none();
         assert!(
             !requires_filter_with_channel_id,
             "Should not require filter when concrete_channel_id is provided"
+        );
+
+        let safe_address_some: Option<String> = Some("0x0123456789abcdef0123456789abcdef01234567".to_string());
+        let requires_filter_with_safe = source_key_id.is_none()
+            && destination_key_id.is_none()
+            && concrete_channel_id.is_none()
+            && safe_address_some.is_none();
+        assert!(
+            !requires_filter_with_safe,
+            "Should not require filter when safe_address is provided"
         );
     }
 }

@@ -1,11 +1,95 @@
+use std::collections::HashSet;
+
 use cynic::QueryBuilder;
 use hex::ToHex;
+use primitive_types::U256;
 
 use super::{BlokliClient, GraphQlQueries, response_to_data};
 use crate::{
     api::{internal::*, types::*, *},
     errors::{BlokliClientError, ErrorKind},
 };
+
+fn aggregate_total_balance(channels: &[Channel]) -> Result<TokenValueString> {
+    let mut total_balance = U256::zero();
+    for channel in channels {
+        let balance_token = channel
+            .balance
+            .0
+            .split_whitespace()
+            .next()
+            .ok_or(ErrorKind::ParseError)?;
+        let channel_balance = U256::from_dec_str(balance_token).map_err(|_| ErrorKind::ParseError)?;
+        total_balance = total_balance
+            .checked_add(channel_balance)
+            .ok_or(ErrorKind::ParseError)?;
+    }
+
+    Ok(TokenValueString(total_balance.to_string()))
+}
+
+fn parse_chain_address_hex(value: &str) -> Result<ChainAddress> {
+    let bytes = hex::decode(value.trim_start_matches("0x")).map_err(|_| ErrorKind::ParseError)?;
+    bytes.try_into().map_err(|_| ErrorKind::ParseError.into())
+}
+
+impl BlokliClient {
+    #[allow(deprecated)]
+    async fn source_key_ids_for_safe(&self, safe_address: ChainAddress) -> Result<HashSet<i32>> {
+        let safe_response = self
+            .build_query(GraphQlQueries::query_safe_by_address(&safe_address))?
+            .await?;
+
+        let safe: Option<Safe> = match response_to_data(safe_response)?.safe {
+            Some(safe_result) => {
+                let parsed_safe: Result<Option<Safe>> = safe_result.into();
+                parsed_safe?
+            }
+            None => None,
+        };
+
+        let Some(safe) = safe else {
+            return Ok(HashSet::new());
+        };
+
+        let mut source_key_ids = HashSet::new();
+        for registered_node in safe.registered_nodes {
+            let node_address = parse_chain_address_hex(&registered_node)?;
+            let accounts_response = self
+                .build_query(GraphQlQueries::query_accounts(AccountSelector::Address(node_address)))?
+                .await?;
+            let accounts_result = response_to_data(accounts_response)?.accounts;
+            let accounts: Vec<Account> = {
+                let parsed_accounts: Result<Vec<Account>> = accounts_result.into();
+                parsed_accounts?
+            };
+            for account in accounts {
+                source_key_ids.insert(account.keyid);
+            }
+        }
+
+        Ok(source_key_ids)
+    }
+
+    async fn filter_channels_by_safe(
+        &self,
+        channels: ChannelsList,
+        safe_address: ChainAddress,
+    ) -> Result<ChannelsList> {
+        let source_key_ids = self.source_key_ids_for_safe(safe_address).await?;
+        let filtered_channels: Vec<Channel> = channels
+            .channels
+            .into_iter()
+            .filter(|channel| source_key_ids.contains(&channel.source))
+            .collect();
+
+        Ok(ChannelsList {
+            __typename: channels.__typename,
+            total_balance: aggregate_total_balance(&filtered_channels)?,
+            channels: filtered_channels,
+        })
+    }
+}
 
 impl GraphQlQueries {
     /// `AccountCount` GraphQL query.
@@ -71,6 +155,7 @@ impl GraphQlQueries {
         })
     }
 
+    #[deprecated(note = "Use safeBy(selector: ...) on servers that support it")]
     /// `Safe` GraphQL query.
     pub fn query_safe_by_address(address: &ChainAddress) -> cynic::Operation<QuerySafeByAddress, SafeVariables> {
         QuerySafeByAddress::build(SafeVariables {
@@ -78,6 +163,7 @@ impl GraphQlQueries {
         })
     }
 
+    #[deprecated(note = "Use safeBy(selector: ...) on servers that support it")]
     /// `Safe` GraphQL query.
     pub fn query_safe_by_chain_key(address: &ChainAddress) -> cynic::Operation<QuerySafeByChainKey, SafeVariables> {
         QuerySafeByChainKey::build(SafeVariables {
@@ -85,6 +171,7 @@ impl GraphQlQueries {
         })
     }
 
+    #[deprecated(note = "Use safeBy(selector: ...) on servers that support it")]
     /// `Safe` GraphQL query.
     pub fn query_safe_by_registered_node(
         address: &ChainAddress,
@@ -205,6 +292,7 @@ impl BlokliQueryClient for BlokliClient {
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
+    #[allow(deprecated)]
     async fn query_safe(&self, selector: SafeSelector) -> Result<Option<Safe>> {
         match selector {
             SafeSelector::SafeAddress(safe_addr) => {
@@ -250,6 +338,11 @@ impl BlokliQueryClient for BlokliClient {
 
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
     async fn count_channels(&self, selector: ChannelSelector) -> Result<u32> {
+        if selector.safe_address.is_some() {
+            let channels = self.query_channels(selector).await?;
+            return u32::try_from(channels.channels.len()).map_err(|_| ErrorKind::ParseError.into());
+        }
+
         let resp = self.build_query(GraphQlQueries::query_channel_count(selector))?.await?;
 
         response_to_data(resp)?.channel_count.into()
@@ -261,8 +354,19 @@ impl BlokliQueryClient for BlokliClient {
             return Err(ErrorKind::InvalidInput("at least one filter must be specified on channel query").into());
         }
 
+        let safe_address = selector.safe_address;
         let resp = self.build_query(GraphQlQueries::query_channels(selector))?.await?;
-        response_to_data(resp)?.channels.into()
+        let channels_result = response_to_data(resp)?.channels;
+        let channels: ChannelsList = {
+            let parsed_channels: Result<ChannelsList> = channels_result.into();
+            parsed_channels?
+        };
+
+        if let Some(safe_address) = safe_address {
+            return self.filter_channels_by_safe(channels, safe_address).await;
+        }
+
+        Ok(channels)
     }
 
     #[tracing::instrument(level = "debug", skip(self))]

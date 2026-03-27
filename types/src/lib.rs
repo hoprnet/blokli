@@ -348,9 +348,6 @@ pub struct Channel {
 /// Success response for channels list query
 #[derive(SimpleObject, Clone, Debug)]
 pub struct ChannelsList {
-    /// Number of channels in this list
-    #[graphql(name = "channelCount")]
-    pub channel_count: i32,
     /// List of channels
     pub channels: Vec<Channel>,
     /// Total wxHOPR balance across all channels in this list
@@ -641,6 +638,24 @@ pub struct RedeemedStatsFilter {
     /// Destination node address to filter by (hexadecimal format)
     #[graphql(name = "nodeAddress")]
     pub node_address: Option<String>,
+}
+
+/// Selector for safe lookup queries.
+///
+/// Exactly one field should be provided:
+/// - `address` to find a safe by safe contract address
+/// - `chain_key` to find a safe by owner chain key
+/// - `registered_node` to find a safe by a registered node address
+#[derive(InputObject, Clone, Debug, Default)]
+pub struct SafeSelectorInput {
+    /// Safe contract address to filter by (hexadecimal format)
+    pub address: Option<String>,
+    /// Chain key (owner address) to filter by (hexadecimal format)
+    #[graphql(name = "chainKey")]
+    pub chain_key: Option<String>,
+    /// Registered node address to filter by (hexadecimal format)
+    #[graphql(name = "registeredNode")]
+    pub registered_node: Option<String>,
 }
 
 /// Aggregated redeemed ticket statistics
