@@ -105,7 +105,10 @@ impl DockerEnvironment {
     }
 
     pub fn compose_up(&mut self) -> Result<()> {
-        info!("starting docker-compose stack for blokli integration tests");
+        info!(
+            stack_id = %self.config.stack_id,
+            "starting docker-compose stack for blokli integration tests"
+        );
         let mut cmd = self.compose_command();
         cmd.arg("up").arg("-d");
 
@@ -128,14 +131,19 @@ impl DockerEnvironment {
         Ok(())
     }
 
+    fn container_name(&self, service: &str) -> String {
+        format!("blokli-{}-{}", self.config.stack_id, service)
+    }
+
     pub fn collect_logs(&self, name: &str, timestamp: DateTime<Utc>) -> Result<PathBuf> {
         if !self.running {
             bail!("Docker stack not running");
         }
         info!(name, "collecting container logs");
 
-        let command = build_command("docker", &["logs", &format!("blokli-integration-{}", name)]);
-        let logs = capture_command(command, &format!("docker logs blokli-integration-{}", name))?;
+        let container = self.container_name(name);
+        let command = build_command("docker", &["logs", &container]);
+        let logs = capture_command(command, &format!("docker logs {container}"))?;
         let timestamp = timestamp.format("%Y%m%d_%H%M%S");
         let filename = format!("blokli-integration/{}/{}.log", timestamp, name);
         let log_path = PathBuf::from("/tmp").join(filename);
@@ -147,18 +155,23 @@ impl DockerEnvironment {
     }
 
     fn compose_command(&self) -> Command {
-        let mut cmd = build_command("docker", &["compose", "-f", "docker-compose.yml"]);
+        let project_name = format!("blokli-{}", self.config.stack_id);
+        let mut cmd = build_command("docker", &["compose", "-p", &project_name, "-f", "docker-compose.yml"]);
 
         cmd.current_dir(&self.config.integration_dir);
+        cmd.env("STACK_ID", &self.config.stack_id);
         cmd.env("BLOKLID_IMAGE", &self.config.bloklid_image);
         cmd.env("INTEGRATION_CONFIG", &self.config.integration_config);
-        cmd.env("REGISTRY_PORT", self.config.registry_port.to_string());
+        cmd.env("REGISTRY_PORT", self.config.registry_port().to_string());
+        cmd.env("ANVIL_PORT", self.config.rpc_url().port().unwrap_or(8546).to_string());
+        cmd.env("BLOKLID_PORT", self.config.bloklid_url().port().unwrap_or(8081).to_string());
         cmd
     }
 
     pub fn fetch_anvil_accounts(&self) -> Result<Vec<AnvilAccount>> {
-        let cmd = build_command("docker", &["logs", "blokli-integration-anvil"]);
-        let logs = capture_command(cmd, "docker logs blokli-integration-anvil")?;
+        let container = self.container_name("anvil");
+        let cmd = build_command("docker", &["logs", &container]);
+        let logs = capture_command(cmd, &format!("docker logs {container}"))?;
         parse_anvil_accounts(&logs)
     }
 }

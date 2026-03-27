@@ -598,9 +598,9 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
     docker.compose_up()?;
     let accounts = docker.fetch_anvil_accounts()?;
 
-    let rpc = RpcClient::new(config.rpc_url.as_str(), config.http_timeout)?;
+    let rpc = RpcClient::new(config.rpc_url().as_str(), config.http_timeout)?;
 
-    let client = BlokliClient::new(config.bloklid_url.clone(), BlokliClientConfig::default());
+    let client = BlokliClient::new(config.bloklid_url().clone(), BlokliClientConfig::default());
 
     let deployer: ChainKeypair = accounts[0].keypair.clone();
     let wallet = PrivateKeySigner::from_slice(deployer.secret().as_ref()).expect("failed to construct wallet");
@@ -613,7 +613,7 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
         .filler(GasFiller)
         .filler(BlobGasFiller::default())
         .wallet(wallet)
-        .connect_http(config.rpc_url.clone());
+        .connect_http(config.rpc_url().clone());
 
     let contract_instances = ContractInstances::deploy_for_testing(provider, &deployer)
         .await
@@ -654,7 +654,7 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
         "minted and distributed HOPR tokens to test accounts",
     );
 
-    let bloklid_url = config.bloklid_url.clone();
+    let bloklid_url = config.bloklid_url().clone();
 
     let fixture = IntegrationFixture {
         inner: Arc::new(IntegrationFixtureInner {

@@ -386,7 +386,7 @@ async fn subscribe_keepalive_comments(#[future(awt)] fixture: IntegrationFixture
     let request_body = serde_json::to_string(&query).expect("Failed to serialize request");
     let url = fixture
         .config()
-        .bloklid_url
+        .bloklid_url()
         .join("graphql")
         .map_err(|e| anyhow!("failed to build GraphQL URL: {e}"))?;
 
@@ -548,7 +548,7 @@ async fn subscribe_transaction_status_updates(#[future(awt)] fixture: Integratio
     let request_body = serde_json::to_string(&query).expect("Failed to serialize request");
     let url = fixture
         .config()
-        .bloklid_url
+        .bloklid_url()
         .join("graphql")
         .map_err(|e| anyhow!("failed to build GraphQL URL: {e}"))?;
 
