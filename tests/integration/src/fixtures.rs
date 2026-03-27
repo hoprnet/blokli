@@ -502,6 +502,39 @@ impl IntegrationFixture {
             .await
     }
 
+    /// Opens a channel using fire-and-forget submission (no confirmation wait).
+    ///
+    /// Returns the transaction hash immediately after submission.
+    /// The caller is responsible for polling the indexer to confirm the channel was created.
+    pub async fn open_channel_fire_and_forget(
+        &self,
+        from: &AnvilAccount,
+        to: &AnvilAccount,
+        amount: HoprBalance,
+        module: &str,
+        nonce: Option<u64>,
+    ) -> Result<[u8; 32]> {
+        let nonce = self
+            .rpc()
+            .transaction_count(&from.address)
+            .await?
+            .max(nonce.unwrap_or(0));
+
+        let payload_generator = SafePayloadGenerator::new(
+            &from.keypair,
+            *self.contract_addresses(),
+            HoprAddress::from_str(module)?,
+        );
+
+        let payload = payload_generator.fund_channel(to.address, amount)?;
+
+        let payload_bytes = payload
+            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &from.keypair)
+            .await?;
+
+        self.submit_tx(&payload_bytes).await
+    }
+
     /// Starts closing an outgoing channel from `from` to `to`.
     pub async fn initiate_outgoing_channel_closure(
         &self,

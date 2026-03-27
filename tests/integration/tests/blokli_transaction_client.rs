@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use blokli_client::api::{BlokliQueryClient, BlokliTransactionClient, types::TransactionStatus};
 use blokli_integration_tests::{
     constants::parsed_safe_balance,
-    fixtures::{IntegrationFixture, integration_fixture as fixture},
+    fixtures::{IntegrationFixture, integration_fixture as fixture, poll_until},
 };
 use hex::FromHex;
 use hopr_bindings::exports::alloy::primitives::U256;
@@ -17,7 +17,6 @@ use hopr_types::{
 };
 use rstest::*;
 use serial_test::serial;
-use tokio::time::sleep;
 
 const TX_VALUE: u128 = 1_000_000; // 0.000000000001 ETH
 enum ClientType {
@@ -53,7 +52,26 @@ async fn submit_transaction(#[future(awt)] fixture: IntegrationFixture, #[case] 
         }
     }
 
-    sleep(Duration::from_secs(8)).await; // TODO: replace with actual block time
+    // Wait for the balance to update after the fire-and-forget submission
+    let expected_balance = initial_balance + tx_value;
+    poll_until(
+        "recipient balance updated",
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+        || {
+            let rpc = fixture.rpc();
+            let addr = &recipient.address;
+            async move {
+                let balance = rpc.get_balance(addr).await?;
+                Ok(if balance >= expected_balance {
+                    Some(balance)
+                } else {
+                    None
+                })
+            }
+        },
+    )
+    .await?;
 
     let final_balance = fixture.rpc().get_balance(&recipient.address).await?;
     let delta = final_balance

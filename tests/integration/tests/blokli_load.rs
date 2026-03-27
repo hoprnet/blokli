@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow};
 use blokli_client::api::{BlokliQueryClient, SafeSelector};
 use blokli_integration_tests::{
     constants::parsed_safe_balance,
-    fixtures::{IntegrationFixture, integration_fixture as fixture},
+    fixtures::{IntegrationFixture, integration_fixture as fixture, poll_until},
 };
 use rstest::*;
 use serial_test::serial;
@@ -28,9 +28,27 @@ async fn open_multiple_channels_simultaneously(#[future(awt)] fixture: Integrati
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
 
-    tokio::time::sleep(Duration::from_secs(8)).await;
+    // Wait for all safes to be indexed rather than sleeping a fixed duration
+    let safe_poll_futs = accounts.iter().map(|account| {
+        let client = fixture.client().clone();
+        let selector = SafeSelector::ChainKey(account.to_alloy_address().into());
+        async move {
+            poll_until(
+                "safe module indexing",
+                Duration::from_secs(30),
+                Duration::from_millis(500),
+                || {
+                    let client = client.clone();
+                    let selector = selector.clone();
+                    async move { Ok(client.query_safe(selector).await?) }
+                },
+            )
+            .await
+        }
+    });
+    let _ = futures::future::try_join_all(safe_poll_futs).await?;
 
-    // Verify that all safes has been deployed and announced simultaneously
+    // Collect module addresses for all safes
     let safes_futures = accounts.iter().map(|account| {
         fixture
             .client()

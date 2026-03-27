@@ -133,12 +133,19 @@ async fn query_token_balance_and_allowance_of_safe(#[future(awt)] fixture: Integ
         Some(safe) => safe,
         None => {
             fixture.deploy_or_get_safe(account, parsed_safe_balance()).await?;
-            tokio::time::sleep(Duration::from_secs(8)).await; // dummy wait for the safe to be indexed
-            fixture
-                .client()
-                .query_safe(SafeSelector::ChainKey(account.to_alloy_address().into()))
-                .await?
-                .expect("Safe not found")
+            let client = fixture.client().clone();
+            let selector = SafeSelector::ChainKey(account.to_alloy_address().into());
+            poll_until(
+                "safe indexing",
+                Duration::from_secs(30),
+                Duration::from_millis(500),
+                || {
+                    let client = client.clone();
+                    let selector = selector.clone();
+                    async move { Ok(client.query_safe(selector).await?) }
+                },
+            )
+            .await?
         }
     };
 
@@ -182,15 +189,28 @@ async fn query_safe_redeemed_stats_after_ticket_redeem(#[future(awt)] fixture: I
     let dst_safe = fixture.deploy_safe_and_announce(dst, parsed_safe_balance()).await?;
 
     fixture.approve(src, channel_amount, &src_safe.module_address).await?;
-    sleep(Duration::from_secs(8)).await;
 
     fixture
         .open_channel(src, dst, channel_amount, &src_safe.module_address, None)
         .await?;
 
-    sleep(Duration::from_secs(8)).await;
-
-    let channels = fixture.client().query_channels(channel_selector.clone()).await?;
+    // Wait for the indexer to pick up the open channel
+    let selector = channel_selector.clone();
+    let client = fixture.client().clone();
+    let channels = poll_until(
+        "channel open indexed",
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+        || {
+            let client = client.clone();
+            let selector = selector.clone();
+            async move {
+                let channels = client.query_channels(selector).await?;
+                Ok(if channels.is_empty() { None } else { Some(channels) })
+            }
+        },
+    )
+    .await?;
     let channel = channels
         .first()
         .context("opened channel not found after opening channel")?;
@@ -215,21 +235,30 @@ async fn query_safe_redeemed_stats_after_ticket_redeem(#[future(awt)] fixture: I
         )
         .await?;
 
-    sleep(Duration::from_secs(8)).await;
-
-    let stats = fixture
-        .client()
-        .query_redeemed_stats(RedeemedStatsSelector::SafeAddress(dst_safe_address.into()))
-        .await?;
+    // Wait for the indexer to pick up the redeemed ticket
+    let expected_count = initial_stats.redemption_count.0.parse::<u64>()? + 1;
+    let stats_selector = RedeemedStatsSelector::SafeAddress(dst_safe_address.into());
+    let client = fixture.client().clone();
+    let stats = poll_until(
+        "ticket redemption indexed",
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+        || {
+            let client = client.clone();
+            async move {
+                let s = client.query_redeemed_stats(stats_selector).await?;
+                let count = s.redemption_count.0.parse::<u64>().unwrap_or(0);
+                Ok(if count >= expected_count { Some(s) } else { None })
+            }
+        },
+    )
+    .await?;
 
     fixture
         .initiate_outgoing_channel_closure(src, dst, &src_safe.module_address)
         .await?;
 
-    assert_eq!(
-        initial_stats.redemption_count.0.parse::<u64>()? + 1,
-        stats.redemption_count.0.parse::<u64>()?
-    );
+    assert_eq!(expected_count, stats.redemption_count.0.parse::<u64>()?);
     assert_eq!(
         initial_stats.redeemed_amount.0.parse::<HoprBalance>()? + ticket_amount,
         stats.redeemed_amount.0.parse::<HoprBalance>()?
@@ -266,7 +295,7 @@ async fn query_transaction_count(#[future(awt)] fixture: IntegrationFixture) -> 
         if tx.status == TransactionStatus::Confirmed {
             break;
         }
-        sleep(Duration::from_secs(2)).await;
+        sleep(Duration::from_millis(500)).await;
     }
 
     let after_count = fixture

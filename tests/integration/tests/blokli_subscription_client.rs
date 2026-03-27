@@ -7,7 +7,7 @@ use blokli_client::api::{
 };
 use blokli_integration_tests::{
     constants::{EPSILON, parsed_safe_balance, subscription_timeout},
-    fixtures::{IntegrationFixture, integration_fixture as fixture},
+    fixtures::{IntegrationFixture, integration_fixture as fixture, poll_until},
 };
 use eventsource_client::{Client, ClientBuilder, SSE};
 use futures::stream::StreamExt;
@@ -214,8 +214,27 @@ async fn subscribe_graph_channel_update_on_closure(#[future(awt)] fixture: Integ
         .open_channel(&src, &dst, initial_amount, &src_safe.module_address, None)
         .await?;
 
-    // Wait for indexing so the channel is in the database
-    tokio::time::sleep(Duration::from_secs(8)).await;
+    // Wait for the channel to be indexed before subscribing
+    let channel_selector = ChannelSelector {
+        filter: Some(ChannelFilter::ChannelId(expected_id.into())),
+        status: Some(ChannelStatus::Open),
+    };
+    let poll_client = fixture.client().clone();
+    let poll_selector = channel_selector.clone();
+    poll_until(
+        "channel indexed for graph subscription",
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+        || {
+            let client = poll_client.clone();
+            let selector = poll_selector.clone();
+            async move {
+                let count = client.count_channels(selector).await?;
+                Ok(if count >= 1 { Some(count) } else { None })
+            }
+        },
+    )
+    .await?;
 
     // Subscribe after the channel exists - consume the stream directly in this task
     let client = fixture.client().clone();
@@ -446,15 +465,30 @@ async fn subscribe_channels_no_duplicate_initial_state(#[future(awt)] fixture: I
         .open_channel(&src, &dst, amount, &src_safe.module_address, None)
         .await?;
 
-    // 3. Wait for indexing to complete
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
-    // 4. NOW subscribe (channel already exists in DB)
-    let client = fixture.client().clone();
+    // 3. Wait for the channel to be indexed
     let channel_selector = ChannelSelector {
         filter: Some(ChannelFilter::ChannelId(expected_id.into())),
         status: Some(ChannelStatus::Open),
     };
+    let poll_client = fixture.client().clone();
+    let poll_selector = channel_selector.clone();
+    poll_until(
+        "channel indexed for no-duplicate test",
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+        || {
+            let client = poll_client.clone();
+            let selector = poll_selector.clone();
+            async move {
+                let count = client.count_channels(selector).await?;
+                Ok(if count >= 1 { Some(count) } else { None })
+            }
+        },
+    )
+    .await?;
+
+    // 4. NOW subscribe (channel already exists in DB)
+    let client = fixture.client().clone();
 
     let handle = tokio::task::spawn(async move {
         client
@@ -493,8 +527,23 @@ async fn subscribe_account_no_duplicate_initial_state(#[future(awt)] fixture: In
         .deploy_safe_and_announce(&account, parsed_safe_balance())
         .await?;
 
-    // 2. Wait for indexing
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    // 2. Wait for the account to be indexed
+    let poll_client = fixture.client().clone();
+    let poll_selector = AccountSelector::Address(*account.to_alloy_address().as_ref());
+    poll_until(
+        "account indexed for no-duplicate test",
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+        || {
+            let client = poll_client.clone();
+            let selector = poll_selector.clone();
+            async move {
+                let accounts = client.query_accounts(selector).await?;
+                Ok(if accounts.is_empty() { None } else { Some(()) })
+            }
+        },
+    )
+    .await?;
 
     // 3. Subscribe AFTER account already announced
     let client = fixture.client().clone();
