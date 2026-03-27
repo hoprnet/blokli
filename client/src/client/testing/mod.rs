@@ -482,7 +482,12 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
     async fn query_redeemed_stats(&self, selector: RedeemedStatsSelector) -> Result<RedeemedStats> {
         let state = self.state.read();
 
-        if let Some(safe_address) = selector.safe_address {
+        let maybe_safe = match selector {
+            RedeemedStatsSelector::SafeAddress(addr) => Some(addr),
+            RedeemedStatsSelector::SafeAndNodeAddress { safe_address, .. } => Some(safe_address),
+            RedeemedStatsSelector::NodeAddress(_) => None,
+        };
+        if let Some(safe_address) = maybe_safe {
             let safe_address_hex = hex::encode(safe_address);
             if !state.deployed_safes.contains_key(&safe_address_hex) {
                 return Err(ErrorKind::NoData.into());
