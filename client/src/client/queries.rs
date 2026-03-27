@@ -115,6 +115,15 @@ impl GraphQlQueries {
         QueryChannels::build(ChannelsVariables::from(selector))
     }
 
+    /// `SafesBalance` GraphQL query.
+    pub fn query_safes_balance(
+        owner_address: Option<ChainAddress>,
+    ) -> cynic::Operation<QuerySafesBalance, SafesBalanceVariables> {
+        QuerySafesBalance::build(SafesBalanceVariables {
+            owner_address: owner_address.map(hex::encode),
+        })
+    }
+
     /// `Transaction` GraphQL query.
     pub fn query_transaction(id: TxId) -> cynic::Operation<QueryTransaction, TransactionsVariables> {
         QueryTransaction::build(TransactionsVariables { id: id.into() })
@@ -247,9 +256,9 @@ impl BlokliQueryClient for BlokliClient {
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
-    async fn query_channels(&self, selector: ChannelSelector) -> Result<Vec<Channel>> {
-        if selector.filter.is_none() {
-            return Err(ErrorKind::InvalidInput("filter must be specified on channel query").into());
+    async fn query_channels(&self, selector: ChannelSelector) -> Result<ChannelsList> {
+        if selector.filter.is_none() && selector.safe_address.is_none() {
+            return Err(ErrorKind::InvalidInput("at least one filter must be specified on channel query").into());
         }
 
         let resp = self.build_query(GraphQlQueries::query_channels(selector))?.await?;
@@ -285,5 +294,14 @@ impl BlokliQueryClient for BlokliClient {
         let resp = self.build_query(GraphQlQueries::query_health())?.await?;
 
         response_to_data(resp).map(|data| data.health)
+    }
+
+    #[tracing::instrument(level = "debug", skip(self), fields(?owner_address))]
+    async fn query_safes_balance(&self, owner_address: Option<ChainAddress>) -> Result<SafesBalance> {
+        let resp = self
+            .build_query(GraphQlQueries::query_safes_balance(owner_address))?
+            .await?;
+
+        response_to_data(resp)?.safes_balance.into()
     }
 }

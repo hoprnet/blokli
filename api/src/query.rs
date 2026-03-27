@@ -6,8 +6,8 @@ use async_graphql::{Context, ID, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
     Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelsList, ChannelsResult,
     ContractAddressMap, CountResult, HoprBalance, InvalidAddressError, MissingFilterError, ModuleAddress,
-    NativeBalance, QueryFailedError, RedeemedStats, RedeemedStatsFilter, Safe, SafeHoprAllowance, TokenValueString,
-    Transaction, TransactionCount, UInt64,
+    NativeBalance, QueryFailedError, RedeemedStats, RedeemedStatsFilter, Safe, SafeHoprAllowance, SafesBalance,
+    SafesBalanceResult, TokenValueString, Transaction, TransactionCount, UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations};
@@ -15,7 +15,8 @@ use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::{
     account, chain_info,
     conversions::{
-        account_aggregation::fetch_accounts_with_filters, channel_aggregation::fetch_channels_with_state,
+        account_aggregation::fetch_accounts_with_filters,
+        channel_aggregation::{fetch_channels_with_state, fetch_safes_balance},
         redemptions_aggregation::fetch_aggregated_redeemed_stats,
     },
     hopr_node_safe_registration,
@@ -472,9 +473,10 @@ impl QueryRoot {
     /// Retrieve channels with required filtering
     ///
     /// At least one identity-based filter must be provided (source_key_id, destination_key_id,
-    /// or concrete_channel_id). The status filter is optional and can be combined with others.
-    /// Returns a union type indicating success or specific error conditions.
-    /// Filters can be combined to narrow results.
+    /// concrete_channel_id, or safe_address). The status filter is optional and can be combined
+    /// with others. The safe_address filter restricts results to channels where the source account
+    /// is associated with the given safe contract.
+    /// Returns the channel list alongside total wxHOPR balance across all matching channels.
     async fn channels(
         &self,
         ctx: &Context<'_>,
@@ -484,16 +486,43 @@ impl QueryRoot {
         #[graphql(desc = "Filter by channel status (optional, combine with identity filters)")] status: Option<
             blokli_api_types::ChannelStatus,
         >,
+        #[graphql(
+            desc = "Filter by safe address — restricts to channels where the source belongs to this safe (hexadecimal \
+                    format)"
+        )]
+        safe_address: Option<String>,
     ) -> ChannelsResult {
         // Require at least one identity filter to prevent excessive data retrieval
         // Note: status alone is not sufficient as it could still return thousands of channels
-        if source_key_id.is_none() && destination_key_id.is_none() && concrete_channel_id.is_none() {
+        if source_key_id.is_none()
+            && destination_key_id.is_none()
+            && concrete_channel_id.is_none()
+            && safe_address.is_none()
+        {
             return ChannelsResult::MissingFilter(errors::missing_filter_error(
-                "sourceKeyId, destinationKeyId, or concreteChannelId",
+                "sourceKeyId, destinationKeyId, concreteChannelId, or safeAddress",
                 "channels query. The status filter can be used in combination but not alone. Example: \
-                 channels(sourceKeyId: 1) or channels(sourceKeyId: 1, status: OPEN)",
+                 channels(sourceKeyId: 1) or channels(safeAddress: \"0x...\")",
             ));
         }
+
+        let parsed_safe_address = match safe_address {
+            Some(ref addr) => {
+                if let Err(e) = validate_eth_address(addr) {
+                    return ChannelsResult::InvalidAddress(errors::invalid_address_from_message(
+                        addr.clone(),
+                        e.message,
+                    ));
+                }
+                match Address::from_hex(addr) {
+                    Ok(parsed) => Some(parsed),
+                    Err(e) => {
+                        return ChannelsResult::InvalidAddress(errors::invalid_address_error(addr.clone(), e));
+                    }
+                }
+            }
+            None => None,
+        };
 
         let db = match ctx.data::<DatabaseConnection>() {
             Ok(db) => db,
@@ -505,47 +534,46 @@ impl QueryRoot {
         // Convert GraphQL ChannelStatus to database i16 representation if status filter is provided
         let status_i16: Option<i16> = status.map(|s| s.into());
 
-        // Fetch channels with state using optimized batch loading (2 queries total)
-        let aggregated_channels =
-            match fetch_channels_with_state(db, source_key_id, destination_key_id, concrete_channel_id, status_i16)
-                .await
-            {
-                Ok(channels) => channels,
-                Err(e) => {
-                    return ChannelsResult::QueryFailed(errors::query_failed("fetch channels", e));
-                }
-            };
+        let aggregated_channels = match fetch_channels_with_state(
+            db,
+            source_key_id,
+            destination_key_id,
+            concrete_channel_id,
+            status_i16,
+            parsed_safe_address,
+        )
+        .await
+        {
+            Ok(channels) => channels,
+            Err(e) => {
+                return ChannelsResult::QueryFailed(errors::query_failed("fetch channels", e));
+            }
+        };
 
-        // Convert to GraphQL Channel type
+        // Compute total balance and build channel list in one pass
+        let mut total_balance = PrimitiveHoprBalance::zero();
         let channels: Vec<Channel> = aggregated_channels
             .into_iter()
             .filter_map(|agg| {
-                // Convert status from i16 to ChannelStatus enum
+                total_balance += agg.balance;
+
                 let status: blokli_api_types::ChannelStatus = agg.status.into();
 
-                // Convert epoch from i64 to i32 with validation
                 let epoch = match i32::try_from(agg.epoch) {
                     Ok(e) => e,
-                    Err(_) => {
-                        // Skip channels with out-of-range epochs
-                        return None;
-                    }
+                    Err(_) => return None,
                 };
 
-                // Convert ticket_index from i64 to u64 (should always be non-negative)
                 let ticket_index = match u64::try_from(agg.ticket_index) {
                     Ok(ti) => blokli_api_types::UInt64(ti),
-                    Err(_) => {
-                        // Skip channels with negative ticket indices
-                        return None;
-                    }
+                    Err(_) => return None,
                 };
 
                 Some(Channel {
                     concrete_channel_id: agg.concrete_channel_id,
                     source: agg.source,
                     destination: agg.destination,
-                    balance: TokenValueString(agg.balance),
+                    balance: TokenValueString(agg.balance.to_string()),
                     status,
                     epoch,
                     ticket_index,
@@ -554,7 +582,21 @@ impl QueryRoot {
             })
             .collect();
 
-        ChannelsResult::Channels(ChannelsList { channels })
+        let channel_count = match i32::try_from(channels.len()) {
+            Ok(c) => c,
+            Err(_) => {
+                return ChannelsResult::QueryFailed(errors::overflow_error(
+                    "channel count",
+                    channels.len().to_string(),
+                ));
+            }
+        };
+
+        ChannelsResult::Channels(ChannelsList {
+            channel_count,
+            channels,
+            total_balance: TokenValueString(total_balance.to_string()),
+        })
     }
 
     /// Retrieve HOPR token balance for a specific address
@@ -1464,6 +1506,62 @@ impl QueryRoot {
                 "calculate module address",
                 e,
             ))),
+        }
+    }
+
+    /// Sum the wxHOPR token balances across indexed safe contracts.
+    ///
+    /// When `owner_address` is provided, restricts to safes whose registered
+    /// accounts have that chain key. Safes with no indexed balance contribute zero.
+    #[graphql(name = "safesBalance")]
+    async fn safes_balance(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Restrict to safes associated with this chain key (owner address, hexadecimal format)")]
+        owner_address: Option<String>,
+    ) -> SafesBalanceResult {
+        let parsed_owner_address = match owner_address {
+            Some(ref addr) => {
+                if let Err(e) = validate_eth_address(addr) {
+                    return SafesBalanceResult::InvalidAddress(errors::invalid_address_from_message(
+                        addr.clone(),
+                        e.message,
+                    ));
+                }
+                match Address::from_hex(addr) {
+                    Ok(parsed) => Some(parsed),
+                    Err(e) => {
+                        return SafesBalanceResult::InvalidAddress(errors::invalid_address_error(addr.clone(), e));
+                    }
+                }
+            }
+            None => None,
+        };
+
+        let db = match ctx.data::<DatabaseConnection>() {
+            Ok(db) => db,
+            Err(e) => {
+                return SafesBalanceResult::QueryFailed(errors::db_connection_error(format!("{:?}", e)));
+            }
+        };
+
+        match fetch_safes_balance(db, parsed_owner_address).await {
+            Ok(result) => {
+                let safe_count = match i32::try_from(result.safe_count) {
+                    Ok(c) => c,
+                    Err(_) => {
+                        return SafesBalanceResult::QueryFailed(errors::overflow_error(
+                            "safe count",
+                            result.safe_count.to_string(),
+                        ));
+                    }
+                };
+                SafesBalanceResult::SafesBalance(SafesBalance {
+                    total_balance: TokenValueString(result.total_balance.to_string()),
+                    safe_count,
+                })
+            }
+            Err(e) => SafesBalanceResult::QueryFailed(errors::query_failed("aggregate safe HOPR balance", e)),
         }
     }
 

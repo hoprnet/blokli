@@ -134,6 +134,9 @@ pub(crate) struct ChannelArgs {
     /// Channel with the given ID.
     #[arg(short, long)]
     channel_id: Option<String>,
+    /// Restrict to channels belonging to the given safe address.
+    #[arg(long, value_parser = clap::value_parser!(Address))]
+    safe_address: Option<Address>,
 }
 
 impl TryFrom<ChannelArgs> for ChannelSelector {
@@ -145,6 +148,7 @@ impl TryFrom<ChannelArgs> for ChannelSelector {
             dst_key_id,
             channel_id,
             allowed_states,
+            safe_address,
         } = value;
         Ok(ChannelSelector {
             filter: match (src_key_id, dst_key_id, channel_id) {
@@ -171,6 +175,7 @@ impl TryFrom<ChannelArgs> for ChannelSelector {
                 ChannelAllowedStates::PendingToClose => ChannelStatus::PendingToClose,
                 ChannelAllowedStates::Closed => ChannelStatus::Closed,
             }),
+            safe_address: safe_address.map(ChainAddress::from),
         })
     }
 }

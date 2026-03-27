@@ -1,7 +1,8 @@
 use hex::ToHex;
 
 use super::{
-    ChannelStatus, CountResult, DateTime, MissingFilterError, QueryFailedError, TokenValueString, Uint64, schema,
+    ChannelStatus, CountResult, DateTime, InvalidAddressError, MissingFilterError, QueryFailedError, TokenValueString,
+    Uint64, schema,
 };
 use crate::api::v1::{ChannelFilter, ChannelSelector};
 
@@ -9,13 +10,14 @@ use crate::api::v1::{ChannelFilter, ChannelSelector};
 pub struct ChannelsVariables {
     pub concrete_channel_id: Option<String>,
     pub destination_key_id: Option<i32>,
+    pub safe_address: Option<String>,
     pub source_key_id: Option<i32>,
     pub status: Option<ChannelStatus>,
 }
 
 impl From<ChannelSelector> for ChannelsVariables {
     fn from(value: ChannelSelector) -> Self {
-        match value.filter {
+        let base = match value.filter {
             Some(ChannelFilter::ChannelId(id)) => ChannelsVariables {
                 concrete_channel_id: Some(id.encode_hex()),
                 status: value.status,
@@ -41,6 +43,10 @@ impl From<ChannelSelector> for ChannelsVariables {
                 status: value.status,
                 ..Default::default()
             },
+        };
+        ChannelsVariables {
+            safe_address: value.safe_address.map(hex::encode),
+            ..base
         }
     }
 }
@@ -48,7 +54,7 @@ impl From<ChannelSelector> for ChannelsVariables {
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "QueryRoot", variables = "ChannelsVariables")]
 pub struct QueryChannels {
-    #[arguments(concreteChannelId: $concrete_channel_id, destinationKeyId: $destination_key_id, sourceKeyId: $source_key_id, status: $status)]
+    #[arguments(concreteChannelId: $concrete_channel_id, destinationKeyId: $destination_key_id, safeAddress: $safe_address, sourceKeyId: $source_key_id, status: $status)]
     pub channels: ChannelsResult,
 }
 
@@ -66,10 +72,13 @@ pub struct QueryChannelCount {
     pub channel_count: CountResult,
 }
 
-#[derive(cynic::QueryFragment, Debug)]
+#[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ChannelsList {
     pub __typename: String,
+    pub channel_count: i32,
     pub channels: Vec<Channel>,
+    pub total_balance: TokenValueString,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
@@ -88,19 +97,60 @@ pub struct Channel {
 #[derive(cynic::InlineFragments, Debug)]
 pub enum ChannelsResult {
     ChannelsList(ChannelsList),
+    InvalidAddressError(InvalidAddressError),
     MissingFilterError(MissingFilterError),
     QueryFailedError(QueryFailedError),
     #[cynic(fallback)]
     Unknown,
 }
 
-impl From<ChannelsResult> for Result<Vec<Channel>, crate::errors::BlokliClientError> {
+impl From<ChannelsResult> for Result<ChannelsList, crate::errors::BlokliClientError> {
     fn from(value: ChannelsResult) -> Self {
         match value {
-            ChannelsResult::ChannelsList(list) => Ok(list.channels),
+            ChannelsResult::ChannelsList(list) => Ok(list),
+            ChannelsResult::InvalidAddressError(e) => Err(e.into()),
             ChannelsResult::MissingFilterError(e) => Err(e.into()),
             ChannelsResult::QueryFailedError(e) => Err(e.into()),
             ChannelsResult::Unknown => Err(crate::errors::ErrorKind::NoData.into()),
+        }
+    }
+}
+
+#[derive(cynic::QueryVariables, Default)]
+pub struct SafesBalanceVariables {
+    pub owner_address: Option<String>,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "QueryRoot", variables = "SafesBalanceVariables")]
+pub struct QuerySafesBalance {
+    #[arguments(ownerAddress: $owner_address)]
+    pub safes_balance: SafesBalanceResult,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct SafesBalance {
+    pub total_balance: TokenValueString,
+    pub safe_count: i32,
+}
+
+#[derive(cynic::InlineFragments, Debug)]
+pub enum SafesBalanceResult {
+    InvalidAddressError(InvalidAddressError),
+    QueryFailedError(QueryFailedError),
+    SafesBalance(SafesBalance),
+    #[cynic(fallback)]
+    Unknown,
+}
+
+impl From<SafesBalanceResult> for Result<SafesBalance, crate::errors::BlokliClientError> {
+    fn from(value: SafesBalanceResult) -> Self {
+        match value {
+            SafesBalanceResult::SafesBalance(balance) => Ok(balance),
+            SafesBalanceResult::InvalidAddressError(e) => Err(e.into()),
+            SafesBalanceResult::QueryFailedError(e) => Err(e.into()),
+            SafesBalanceResult::Unknown => Err(crate::errors::ErrorKind::NoData.into()),
         }
     }
 }

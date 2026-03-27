@@ -97,12 +97,16 @@ type Channel {
 
 """Success response for channels query"""
 type ChannelsList {
+  "Number of channels in this list"
+  channelCount: Int!
   "List of channels"
   channels: [Channel!]!
+  "Total wxHOPR balance across all channels in this list"
+  totalBalance: TokenValueString!
 }
 
 """Result type for channels list query"""
-union ChannelsResult = ChannelsList | MissingFilterError | QueryFailedError
+union ChannelsResult = ChannelsList | InvalidAddressError | MissingFilterError | QueryFailedError
 
 """Status of a payment channel"""
 enum ChannelStatus {
@@ -365,19 +369,24 @@ type QueryRoot {
   """
   Retrieve channels with required filtering
   
-  **At least one identity filter must be provided** (sourceKeyId, destinationKeyId, or concreteChannelId).
+  **At least one identity filter must be provided** (sourceKeyId, destinationKeyId, concreteChannelId, or safeAddress).
   The status filter is optional and can be used in combination with identity filters.
+  The safeAddress filter restricts results to channels where the source account is associated
+  with the given safe contract.
+  Returns Error with code INVALID_ADDRESS if safeAddress format is invalid.
   Returns Error with code MISSING_REQUIRED_FILTER if no identity filters are specified.
   
   Filters can be combined to narrow results further.
   
-  Example: channels(sourceKeyId: 1) or channels(sourceKeyId: 1, status: OPEN)
+  Example: channels(sourceKeyId: 1) or channels(safeAddress: "0x...") or channels(sourceKeyId: 1, status: OPEN)
   """
   channels(
     "Filter by concrete channel ID (hexadecimal format)"
     concreteChannelId: String
     "Filter by destination node keyid"
     destinationKeyId: Int
+    "Filter by safe address — restricts to channels where the source belongs to this safe (hexadecimal format)"
+    safeAddress: String
     "Filter by source node keyid"
     sourceKeyId: Int
     "Filter by channel status (optional, combine with identity filters)"
@@ -501,6 +510,18 @@ type QueryRoot {
   """
   safes: SafesResult!
   """
+  Retrieve total aggregated wxHOPR balance across indexed safe contracts
+  
+  Sums the wxHOPR token balances for safe contract addresses indexed by the system.
+  When ownerAddress is provided, restricts to safes whose registered accounts have that chain key.
+  Returns Error with code INVALID_ADDRESS if ownerAddress is malformed.
+  Returns Error with code QUERY_FAILED if query fails.
+  """
+  safesBalance(
+    "Restrict to safes whose registered accounts have this chain key (hexadecimal format)"
+    ownerAddress: String
+  ): SafesBalanceResult!
+  """
   Retrieve aggregated TicketRedeemed statistics filtered by safe and/or node address
   
   At least one filter field must be provided: safeAddress, nodeAddress, or both.
@@ -611,6 +632,17 @@ union SafeHoprAllowanceResult = SafeHoprAllowance | InvalidAddressError | QueryF
 
 """Result type for single safe queries"""
 union SafeResult = Safe | InvalidAddressError | QueryFailedError
+
+"""Aggregated wxHOPR holdings across all indexed safe contracts"""
+type SafesBalance {
+  "Number of safes included"
+  safeCount: Int!
+  "Sum of wxHOPR balances for all safe contract addresses"
+  totalBalance: TokenValueString!
+}
+
+"""Result type for total safe HOPR balance query"""
+union SafesBalanceResult = InvalidAddressError | QueryFailedError | SafesBalance
 
 """Success response for safes list query"""
 type SafesList {

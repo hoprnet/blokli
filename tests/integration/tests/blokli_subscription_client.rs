@@ -36,6 +36,7 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
     let channel_selector = ChannelSelector {
         filter: Some(ChannelFilter::ChannelId(expected_id.into())),
         status: Some(ChannelStatus::Open),
+        ..Default::default()
     };
     let amount = "1 wei wxHOPR".parse().expect("failed to parse amount");
     let expected_channel_id = Hash::from(expected_id).encode_hex::<String>();
@@ -454,6 +455,8 @@ async fn subscribe_channels_no_duplicate_initial_state(#[future(awt)] fixture: I
     let channel_selector = ChannelSelector {
         filter: Some(ChannelFilter::ChannelId(expected_id.into())),
         status: Some(ChannelStatus::Open),
+        ..Default::default()
+
     };
 
     let handle = tokio::task::spawn(async move {

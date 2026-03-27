@@ -176,6 +176,7 @@ async fn query_safe_redeemed_stats_after_ticket_redeem(#[future(awt)] fixture: I
     let channel_selector = ChannelSelector {
         filter: Some(ChannelFilter::ChannelId(expected_id.into())),
         status: Some(ChannelStatus::Open),
+        ..Default::default()
     };
 
     let src_safe = fixture.deploy_safe_and_announce(src, parsed_safe_balance()).await?;
@@ -191,7 +192,7 @@ async fn query_safe_redeemed_stats_after_ticket_redeem(#[future(awt)] fixture: I
     sleep(Duration::from_secs(8)).await;
 
     let channels = fixture.client().query_channels(channel_selector.clone()).await?;
-    let channel = channels
+    let channel = channels.channels
         .first()
         .context("opened channel not found after opening channel")?;
 
@@ -291,6 +292,7 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
     let channel_selector = ChannelSelector {
         filter: Some(ChannelFilter::ChannelId(expected_id.into())),
         status: Some(ChannelStatus::Open),
+        ..Default::default()
     };
 
     let amount: HoprBalance = "1 wei wxHOPR".parse().expect("failed to parse amount");

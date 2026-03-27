@@ -348,8 +348,14 @@ pub struct Channel {
 /// Success response for channels list query
 #[derive(SimpleObject, Clone, Debug)]
 pub struct ChannelsList {
+    /// Number of channels in this list
+    #[graphql(name = "channelCount")]
+    pub channel_count: i32,
     /// List of channels
     pub channels: Vec<Channel>,
+    /// Total wxHOPR balance across all channels in this list
+    #[graphql(name = "totalBalance")]
+    pub total_balance: TokenValueString,
 }
 
 /// Result type for channels list query
@@ -357,10 +363,34 @@ pub struct ChannelsList {
 pub enum ChannelsResult {
     /// Successful channels list
     Channels(ChannelsList),
+    /// Address format is invalid
+    InvalidAddress(InvalidAddressError),
     /// Missing required filter parameter
     MissingFilter(MissingFilterError),
     /// Query failed
     QueryFailed(QueryFailedError),
+}
+
+/// Aggregated wxHOPR holdings across all indexed safe contracts
+#[derive(SimpleObject, Clone, Debug)]
+pub struct SafesBalance {
+    /// Sum of wxHOPR balances for all safe contract addresses
+    #[graphql(name = "totalBalance")]
+    pub total_balance: TokenValueString,
+    /// Number of safes included
+    #[graphql(name = "safeCount")]
+    pub safe_count: i32,
+}
+
+/// Result type for total safe HOPR balance query
+#[derive(Union, Clone, Debug)]
+pub enum SafesBalanceResult {
+    /// Invalid owner address
+    InvalidAddress(InvalidAddressError),
+    /// Query failed
+    QueryFailed(QueryFailedError),
+    /// Successful total safe balance
+    SafesBalance(SafesBalance),
 }
 
 /// Count value for count queries
