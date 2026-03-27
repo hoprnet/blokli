@@ -1,0 +1,6 @@
+[test-groups.integration]
+max-threads = 1
+
+[[profile.default.overrides]]
+filter = "package(blokli-integration-tests)"
+test-group = "integration"

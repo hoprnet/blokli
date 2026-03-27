@@ -1,7 +1,8 @@
 use std::{
+    future::Future,
     str::FromStr,
     sync::{Arc, Mutex, Once},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
@@ -43,11 +44,11 @@ use hopr_types::{
 use libc::atexit;
 use rand::seq::IndexedRandom;
 use rstest::fixture;
-use tokio::{sync::OnceCell, time::sleep};
+use tokio::sync::OnceCell;
 use tracing::{debug, info, warn};
 
 use crate::{
-    anvil::AnvilAccount, config::TestConfig, constants::STACK_STARTUP_WAIT, docker::DockerEnvironment, rpc::RpcClient,
+    anvil::AnvilAccount, config::TestConfig, docker::DockerEnvironment, rpc::RpcClient,
     transaction::TransactionBuilder as TestTransactionBuilder,
 };
 
@@ -261,12 +262,19 @@ impl IntegrationFixture {
             None => {
                 self.deploy_safe(owner, amount).await?;
 
-                sleep(Duration::from_secs(5)).await;
-                let safe = self
-                    .client()
-                    .query_safe(SafeSelector::ChainKey(owner.to_alloy_address().into()))
-                    .await?
-                    .expect("deployed safe for src not found");
+                let selector = SafeSelector::ChainKey(owner.to_alloy_address().into());
+                let client = self.client().clone();
+                let safe = poll_until(
+                    "safe indexing",
+                    Duration::from_secs(30),
+                    Duration::from_millis(500),
+                    || {
+                        let client = client.clone();
+                        let selector = selector.clone();
+                        async move { Ok(client.query_safe(selector).await?) }
+                    },
+                )
+                .await?;
 
                 self.register_safe(owner, &safe.address).await?;
 
@@ -330,14 +338,23 @@ impl IntegrationFixture {
             None => {
                 debug!("account not found, proceeding to announce");
                 self.announce_account(account, module).await?;
-                sleep(Duration::from_secs(10)).await;
 
-                let src_account = self
-                    .client()
-                    .query_accounts(AccountSelector::Address(account.to_alloy_address().into()))
-                    .await?;
-
-                assert!(!src_account.is_empty(), "account not found after announcement");
+                let selector = AccountSelector::Address(account.to_alloy_address().into());
+                let client = self.client().clone();
+                poll_until(
+                    "account indexing after announcement",
+                    Duration::from_secs(30),
+                    Duration::from_millis(500),
+                    || {
+                        let client = client.clone();
+                        let selector = selector.clone();
+                        async move {
+                            let accounts = client.query_accounts(selector).await?;
+                            if accounts.is_empty() { Ok(None) } else { Ok(Some(())) }
+                        }
+                    },
+                )
+                .await?;
                 Ok(())
             }
         }
@@ -530,17 +547,55 @@ impl IntegrationFixtureInner {
     }
 }
 
+#[derive(serde::Deserialize)]
+struct ReadyzResponse {
+    status: String,
+}
+
+/// Polls bloklid's `/readyz` endpoint until it reports ready.
+async fn wait_for_bloklid_ready(bloklid_url: &url::Url, timeout: Duration) -> Result<()> {
+    let client = reqwest::Client::new();
+    let url = format!("{bloklid_url}readyz");
+    let start = Instant::now();
+    loop {
+        if let Ok(resp) = client.get(&url).send().await {
+            if let Ok(body) = resp.json::<ReadyzResponse>().await {
+                if body.status == "ready" {
+                    return Ok(());
+                }
+            }
+        }
+        if start.elapsed() > timeout {
+            anyhow::bail!("bloklid did not become ready within {timeout:?}");
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+/// Polls a check function until it returns `Some(T)`, with timeout.
+async fn poll_until<F, Fut, T>(description: &str, timeout: Duration, interval: Duration, mut check: F) -> Result<T>
+where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = Result<Option<T>>>,
+{
+    let start = Instant::now();
+    loop {
+        if let Ok(Some(result)) = check().await {
+            return Ok(result);
+        }
+        if start.elapsed() > timeout {
+            anyhow::bail!("{description} did not complete within {timeout:?}");
+        }
+        tokio::time::sleep(interval).await;
+    }
+}
+
 pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
     let config: Arc<TestConfig> = Arc::new(TestConfig::load()?);
     let mut docker = DockerEnvironment::new(config.clone());
 
     docker.ensure_image_available()?;
     docker.compose_up()?;
-    info!(
-        seconds = STACK_STARTUP_WAIT.as_secs(),
-        "waiting for integration stack to stabilize"
-    );
-    tokio::time::sleep(STACK_STARTUP_WAIT).await;
     let accounts = docker.fetch_anvil_accounts()?;
 
     let rpc = RpcClient::new(config.rpc_url.as_str(), config.http_timeout)?;
@@ -599,6 +654,8 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
         "minted and distributed HOPR tokens to test accounts",
     );
 
+    let bloklid_url = config.bloklid_url.clone();
+
     let fixture = IntegrationFixture {
         inner: Arc::new(IntegrationFixtureInner {
             config,
@@ -610,7 +667,9 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
         }),
     };
 
-    tokio::time::sleep(Duration::from_secs(15)).await;
+    info!("waiting for bloklid to become ready");
+    wait_for_bloklid_ready(&bloklid_url, Duration::from_secs(60)).await?;
+    info!("bloklid is ready");
 
     register_shutdown_hook();
 
