@@ -185,8 +185,10 @@ async fn query_safe_redeemed_stats_after_ticket_redeem(#[future(awt)] fixture: I
         status: Some(ChannelStatus::Open),
     };
 
-    let src_safe = fixture.deploy_safe_and_announce(src, parsed_safe_balance()).await?;
-    let dst_safe = fixture.deploy_safe_and_announce(dst, parsed_safe_balance()).await?;
+    let (src_safe, dst_safe) = tokio::try_join!(
+        fixture.deploy_safe_and_announce(src, parsed_safe_balance()),
+        fixture.deploy_safe_and_announce(dst, parsed_safe_balance()),
+    )?;
 
     fixture.approve(src, channel_amount, &src_safe.module_address).await?;
 
@@ -295,7 +297,7 @@ async fn query_transaction_count(#[future(awt)] fixture: IntegrationFixture) -> 
         if tx.status == TransactionStatus::Confirmed {
             break;
         }
-        sleep(Duration::from_millis(500)).await;
+        sleep(Duration::from_millis(100)).await;
     }
 
     let after_count = fixture
