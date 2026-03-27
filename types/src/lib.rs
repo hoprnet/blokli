@@ -190,10 +190,10 @@ impl From<ChannelStatus> for i16 {
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug, serde::Serialize)]
 pub enum Token {
     /// wxHOPR token
-    #[graphql(name = "wxHOPR")]
+    #[graphql(name = "WXHOPR")]
     WxHOPR,
     /// xHOPR token
-    #[graphql(name = "xHOPR")]
+    #[graphql(name = "XHOPR")]
     XHOPR,
     /// Native token
     #[graphql(name = "NATIVE")]

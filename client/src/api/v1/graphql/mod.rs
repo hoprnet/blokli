@@ -15,9 +15,9 @@ pub(crate) mod schema {}
 
 #[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Token {
-    #[cynic(rename = "wxHOPR")]
+    #[cynic(rename = "WXHOPR")]
     WxHOPR,
-    #[cynic(rename = "xHOPR")]
+    #[cynic(rename = "XHOPR")]
     XHOPR,
     #[cynic(rename = "NATIVE")]
     Native,

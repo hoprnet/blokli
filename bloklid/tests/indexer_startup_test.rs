@@ -127,7 +127,7 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
     // Create contract addresses with some non-zero values
     let contract_addresses = ContractAddresses {
         token: Address::from([1; 20]),
-        wrapped_token: Address::from([2; 20]),
+        xtoken: Address::from([2; 20]),
         channels: Address::from([3; 20]),
         announcements: Address::from([4; 20]),
         module_implementation: Address::from([5; 20]),
@@ -203,7 +203,7 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
     // Create contract addresses with some non-zero values
     let contract_addresses = ContractAddresses {
         token: Address::from([1; 20]),
-        wrapped_token: Address::from([2; 20]),
+        xtoken: Address::from([2; 20]),
         channels: Address::from([3; 20]),
         announcements: Address::from([4; 20]),
         module_implementation: Address::from([5; 20]),
@@ -367,7 +367,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
     // Create contract addresses with some non-zero values
     let contract_addresses = ContractAddresses {
         token: Address::from([1; 20]),
-        wrapped_token: Address::from([2; 20]),
+        xtoken: Address::from([2; 20]),
         channels: Address::from([3; 20]),
         announcements: Address::from([4; 20]),
         module_implementation: Address::from([5; 20]),
@@ -471,7 +471,7 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
     // Create contract addresses
     let contract_addresses = ContractAddresses {
         token: Address::from([1; 20]),
-        wrapped_token: Address::from([2; 20]),
+        xtoken: Address::from([2; 20]),
         channels: Address::from([3; 20]),
         announcements: Address::from([4; 20]),
         module_implementation: Address::from([5; 20]),
