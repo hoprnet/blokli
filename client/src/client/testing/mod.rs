@@ -541,13 +541,16 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
         let count = i32::try_from(channels.len()).map_err(|_| ErrorKind::ParseError)?;
         let mut total = PrimitiveHoprBalance::zero();
         for ch in &channels {
-            if let Ok(bal) = ch.balance.0.parse::<PrimitiveHoprBalance>() {
-                total += bal;
-            }
+            let bal: PrimitiveHoprBalance = ch
+                .balance
+                .0
+                .parse()
+                .map_err(|_| ErrorKind::ParseError)?;
+            total += bal;
         }
         Ok(ChannelStats {
             count,
-            total_balance: TokenValueString(total.to_string()),
+            balance: TokenValueString(total.to_string()),
         })
     }
 
@@ -571,9 +574,10 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
         } else {
             state.deployed_safes.len()
         };
+        // NOTE: This test client currently reports a zero total balance for safes.
         Ok(SafesBalance {
-            safe_count: i32::try_from(safe_count).map_err(|_| ErrorKind::ParseError)?,
-            total_balance: TokenValueString(PrimitiveHoprBalance::zero().to_string()),
+            count: i32::try_from(safe_count).map_err(|_| ErrorKind::ParseError)?,
+            balance: TokenValueString(PrimitiveHoprBalance::zero().to_string()),
         })
     }
 

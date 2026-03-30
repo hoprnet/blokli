@@ -64,6 +64,9 @@ where
             .map(|row| row.account_id)
             .collect();
 
+        if account_ids.is_empty() {
+            return Ok(Vec::new());
+        }
         query = query.filter(channel_current::Column::Source.is_in(account_ids));
     }
 

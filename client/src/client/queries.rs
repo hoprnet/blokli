@@ -75,49 +75,22 @@ impl BlokliClient {
         safe_address: ChainAddress,
         status: Option<ChannelStatus>,
     ) -> Result<ChannelsList> {
-        let mut source_key_ids: Vec<i32> = self.source_key_ids_for_safe(safe_address).await?.into_iter().collect();
-        source_key_ids.sort_unstable();
-        source_key_ids.dedup();
+        let selector = ChannelSelector {
+            filter: None,
+            status,
+            safe_address: Some(safe_address),
+        };
 
-        if source_key_ids.is_empty() {
-            return Ok(ChannelsList {
-                __typename: "ChannelsList".to_string(),
-                channels: Vec::new(),
-            });
-        }
+        let response = self
+            .build_query(GraphQlQueries::query_channels(selector))?
+            .await?;
+        let channels_result = response_to_data(response)?.channels;
+        let page: ChannelsList = {
+            let parsed_channels: Result<ChannelsList> = channels_result.into();
+            parsed_channels?
+        };
 
-        let mut channels_by_id: HashMap<String, Channel> = HashMap::new();
-        let mut typename: Option<String> = None;
-
-        for source_key_id in source_key_ids {
-            let source_key_id = u32::try_from(source_key_id).map_err(|_| ErrorKind::ParseError)?;
-            let selector = ChannelSelector {
-                filter: Some(ChannelFilter::SourceKeyId(source_key_id)),
-                status,
-                safe_address: None,
-            };
-
-            let response = self.build_query(GraphQlQueries::query_channels(selector))?.await?;
-            let channels_result = response_to_data(response)?.channels;
-            let page: ChannelsList = {
-                let parsed_channels: Result<ChannelsList> = channels_result.into();
-                parsed_channels?
-            };
-
-            if typename.is_none() {
-                typename = Some(page.__typename.clone());
-            }
-
-            for channel in page.channels {
-                channels_by_id.insert(channel.concrete_channel_id.clone(), channel);
-            }
-        }
-
-        let channels: Vec<Channel> = channels_by_id.into_values().collect();
-        Ok(ChannelsList {
-            __typename: typename.unwrap_or_else(|| "ChannelsList".to_string()),
-            channels,
-        })
+        Ok(page)
     }
 }
 
