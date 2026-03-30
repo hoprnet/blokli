@@ -32,6 +32,16 @@ pre-commit.lib.${system}.run {
     # Commit message formatting
     commitizen.enable = true;
 
+    # Export database schema when migrations change
+    export-db-schema = {
+      enable = true;
+      name = "generate database schema";
+      entry = "bash -c 'just export-db-schema && git add design/db-schema.sql'";
+      files = "db/migration/src/.*\\.rs$";
+      language = "system";
+      pass_filenames = false;
+    };
+
     # Custom immutable files check (disabled by default)
     immutable-files = {
       enable = false;
