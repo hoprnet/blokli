@@ -6,7 +6,7 @@ pub mod types {
         ChannelStatus, DateTime, Hex32, TokenValueString, Uint64,
         accounts::Account,
         balances::{HoprBalance, NativeBalance, RedeemedStats, SafeHoprAllowance},
-        channels::{Channel, ChannelsList, SafesBalance},
+        channels::{Channel, ChannelStats, ChannelsList, SafesBalance},
         graph::OpenedChannelsGraphEntry,
         info::{ChainInfo, ContractAddressMap, TicketParameters},
         safe::{ModuleAddress, Safe},
@@ -24,8 +24,8 @@ pub(crate) mod internal {
             RedeemedStatsFilter, RedeemedStatsVariables,
         },
         channels::{
-            ChannelsVariables, QueryChannelCount, QueryChannels, QuerySafesBalance, SafesBalanceVariables,
-            SubscribeChannels,
+            ChannelStatsVariables, ChannelsVariables, QueryChannelCount, QueryChannelStats, QueryChannels,
+            QuerySafesBalance, SafesBalanceVariables, SubscribeChannels,
         },
         graph::SubscribeGraph,
         info::{QueryChainInfo, QueryHealth, QueryVersion, SubscribeTicketParams},
@@ -218,7 +218,15 @@ pub trait BlokliQueryClient {
     /// Queries the module address prediction of the given [Safe deployment data](ModulePredictionInput).
     async fn query_module_address_prediction(&self, input: ModulePredictionInput) -> Result<ChainAddress>;
     /// Counts the number of channels matching the given [`selector`](ChannelSelector).
+    #[deprecated(
+        since = "0.22.0",
+        note = "Use query_channel_stats instead, which returns both count and total wxHOPR balance."
+    )]
     async fn count_channels(&self, selector: ChannelSelector) -> Result<u32>;
+    /// Queries channel count and total wxHOPR balance matching the given [`selector`](ChannelSelector).
+    ///
+    /// If no filter is set on the selector, returns stats across all channels.
+    async fn query_channel_stats(&self, selector: ChannelSelector) -> Result<types::ChannelStats>;
     /// Queries the channels matching the given [`selector`](ChannelSelector), including aggregated balance.
     async fn query_channels(&self, selector: ChannelSelector) -> Result<types::ChannelsList>;
     /// Queries the total wxHOPR balance held across indexed safe contracts.

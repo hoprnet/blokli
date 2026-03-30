@@ -4,10 +4,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_graphql::{Context, ID, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
-    Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelsList, ChannelsResult,
-    ContractAddressMap, CountResult, HoprBalance, InvalidAddressError, MissingFilterError, ModuleAddress,
-    NativeBalance, QueryFailedError, RedeemedStats, RedeemedStatsFilter, Safe, SafeHoprAllowance, SafeSelectorInput,
-    SafesBalance, SafesBalanceResult, TokenValueString, Transaction, TransactionCount, UInt64,
+    Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelStats, ChannelStatsResult,
+    ChannelsList, ChannelsResult, ContractAddressMap, CountResult, HoprBalance, InvalidAddressError,
+    MissingFilterError, ModuleAddress, NativeBalance, QueryFailedError, RedeemedStats, RedeemedStatsFilter, Safe,
+    SafeHoprAllowance, SafeSelectorInput, SafesBalance, SafesBalanceResult, TokenValueString, Transaction,
+    TransactionCount, UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations};
@@ -15,7 +16,8 @@ use blokli_chain_types::ContractAddresses;
 use blokli_db_entity::{
     account, chain_info,
     conversions::{
-        account_aggregation::fetch_accounts_with_filters, channel_aggregation::fetch_channels_with_state,
+        account_aggregation::fetch_accounts_with_filters,
+        channel_aggregation::{fetch_channel_stats as fetch_channel_stats_db, fetch_channels_with_state},
         redemptions_aggregation::fetch_aggregated_redeemed_stats,
     },
     hopr_node_safe_registration,
@@ -457,7 +459,10 @@ impl QueryRoot {
     ///
     /// If no filters are provided, returns total channels count.
     /// Filters can be combined to narrow results.
-    #[graphql(name = "channelCount")]
+    #[graphql(
+        name = "channelCount",
+        deprecation = "Use channelStats instead, which also returns the total wxHOPR balance."
+    )]
     async fn channel_count(
         &self,
         ctx: &Context<'_>,
@@ -555,6 +560,85 @@ impl QueryRoot {
         };
 
         CountResult::Count(blokli_api_types::Count { count })
+    }
+
+    /// Retrieve count and total wxHOPR balance for channels matching optional filters
+    ///
+    /// If no filters are provided, returns stats across all channels.
+    /// The safe_address filter restricts results to channels where the source account
+    /// is associated with the given safe contract.
+    /// Filters can be combined to narrow results.
+    #[graphql(name = "channelStats")]
+    async fn channel_stats(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Filter by source node keyid")] source_key_id: Option<i64>,
+        #[graphql(desc = "Filter by destination node keyid")] destination_key_id: Option<i64>,
+        #[graphql(desc = "Filter by concrete channel ID (hexadecimal format)")] concrete_channel_id: Option<String>,
+        #[graphql(
+            desc = "Filter by safe address — restricts to channels where the source belongs to this safe (hexadecimal \
+                    format)"
+        )]
+        safe_address: Option<String>,
+        #[graphql(desc = "Filter by channel status")] status: Option<blokli_api_types::ChannelStatus>,
+    ) -> ChannelStatsResult {
+        let parsed_safe_address = match safe_address {
+            Some(ref addr) => {
+                if let Err(e) = validate_eth_address(addr) {
+                    return ChannelStatsResult::InvalidAddress(errors::invalid_address_from_message(
+                        addr.clone(),
+                        e.message,
+                    ));
+                }
+                match Address::from_hex(addr) {
+                    Ok(parsed) => Some(parsed),
+                    Err(e) => {
+                        return ChannelStatsResult::InvalidAddress(errors::invalid_address_error(addr.clone(), e));
+                    }
+                }
+            }
+            None => None,
+        };
+
+        let db = match ctx.data::<DatabaseConnection>() {
+            Ok(db) => db,
+            Err(e) => {
+                return ChannelStatsResult::QueryFailed(errors::db_connection_error(format!("{:?}", e)));
+            }
+        };
+
+        let status_i16: Option<i16> = status.map(|s| s.into());
+
+        let stats = match fetch_channel_stats_db(
+            db,
+            source_key_id,
+            destination_key_id,
+            concrete_channel_id,
+            status_i16,
+            parsed_safe_address,
+        )
+        .await
+        {
+            Ok(s) => s,
+            Err(e) => {
+                return ChannelStatsResult::QueryFailed(errors::query_failed("fetch channel stats", e));
+            }
+        };
+
+        let count = match i32::try_from(stats.count) {
+            Ok(c) => c,
+            Err(_) => {
+                return ChannelStatsResult::QueryFailed(errors::overflow_error(
+                    "channel count",
+                    stats.count.to_string(),
+                ));
+            }
+        };
+
+        ChannelStatsResult::ChannelStats(ChannelStats {
+            count,
+            total_balance: TokenValueString(stats.total_balance.to_string()),
+        })
     }
 
     /// Retrieve channels with required filtering

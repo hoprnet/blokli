@@ -6,7 +6,7 @@ use std::{
 
 use async_broadcast::TrySendError;
 use futures::{Stream, StreamExt};
-use hopr_types::crypto::types::Hash;
+use hopr_types::{crypto::types::Hash, primitive::prelude::HoprBalance as PrimitiveHoprBalance};
 use indexmap::IndexMap;
 
 use crate::{
@@ -532,12 +532,38 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
         Ok(if selector.matches_all() {
             self.state.read().channels.len() as u32
         } else {
-            self.query_channels(selector).await?.len() as u32
+            self.query_channels(selector).await?.channels.len() as u32
         })
     }
 
-    async fn query_channels(&self, selector: ChannelSelector) -> Result<Vec<Channel>> {
-        self.do_query_channels(selector)
+    async fn query_channel_stats(&self, selector: ChannelSelector) -> Result<ChannelStats> {
+        let channels = self.do_query_channels(selector)?;
+        let count = i32::try_from(channels.len()).map_err(|_| ErrorKind::ParseError)?;
+        let mut total = PrimitiveHoprBalance::zero();
+        for ch in &channels {
+            if let Ok(bal) = ch.balance.0.parse::<PrimitiveHoprBalance>() {
+                total += bal;
+            }
+        }
+        Ok(ChannelStats {
+            count,
+            total_balance: TokenValueString(total.to_string()),
+        })
+    }
+
+    async fn query_channels(&self, selector: ChannelSelector) -> Result<ChannelsList> {
+        let channels = self.do_query_channels(selector)?;
+        let mut total = PrimitiveHoprBalance::zero();
+        for ch in &channels {
+            if let Ok(bal) = ch.balance.0.parse::<PrimitiveHoprBalance>() {
+                total += bal;
+            }
+        }
+        Ok(ChannelsList {
+            __typename: "ChannelsList".to_string(),
+            channels,
+            total_balance: TokenValueString(total.to_string()),
+        })
     }
 
     async fn query_transaction_status(&self, tx_id: TxId) -> Result<Transaction> {

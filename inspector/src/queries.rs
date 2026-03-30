@@ -63,8 +63,8 @@ pub(crate) enum QueryTarget {
     CountAccounts(AccountArgs),
     /// Gets information about an account.
     Account(AccountArgs),
-    /// Gets the number of channels.
-    CountChannels(ChannelArgs),
+    /// Gets channel count and total wxHOPR balance matching optional filters.
+    ChannelStats(ChannelArgs),
     /// Gets channels with their aggregated wxHOPR balance. Use --safe-address to scope to a safe.
     Channel(ChannelArgs),
     /// Gets total wxHOPR balance held across indexed safe contracts.
@@ -145,7 +145,7 @@ impl QueryTarget {
                 format.serialize(client.query_safe_allowance(&address.into()).await?)
             }
             QueryTarget::CountAccounts(sel) => format.serialize(client.count_accounts(sel.try_into()?).await?),
-            QueryTarget::CountChannels(sel) => format.serialize(client.count_channels(sel.try_into()?).await?),
+            QueryTarget::ChannelStats(sel) => format.serialize(client.query_channel_stats(sel.try_into()?).await?),
             QueryTarget::Redemptions(sel) => format.serialize(client.query_redeemed_stats(sel.try_into()?).await?),
         }
     }

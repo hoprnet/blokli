@@ -245,6 +245,13 @@ impl GraphQlQueries {
         QueryChannelCount::build(ChannelsVariables::from(selector))
     }
 
+    /// `ChannelStats` GraphQL query.
+    pub fn query_channel_stats(
+        selector: ChannelSelector,
+    ) -> cynic::Operation<QueryChannelStats, ChannelStatsVariables> {
+        QueryChannelStats::build(ChannelStatsVariables::from(selector))
+    }
+
     /// `Channels` GraphQL query.
     pub fn query_channels(selector: ChannelSelector) -> cynic::Operation<QueryChannels, ChannelsVariables> {
         QueryChannels::build(ChannelsVariables::from(selector))
@@ -394,6 +401,13 @@ impl BlokliQueryClient for BlokliClient {
         let resp = self.build_query(GraphQlQueries::query_channel_count(selector))?.await?;
 
         response_to_data(resp)?.channel_count.into()
+    }
+
+    #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
+    async fn query_channel_stats(&self, selector: ChannelSelector) -> Result<ChannelStats> {
+        let resp = self.build_query(GraphQlQueries::query_channel_stats(selector))?.await?;
+
+        response_to_data(resp)?.channel_stats.into()
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]

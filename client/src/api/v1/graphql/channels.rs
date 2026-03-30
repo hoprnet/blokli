@@ -6,7 +6,7 @@ use super::{
     Uint64, schema,
 };
 use crate::{
-    api::v1::{ChannelFilter, ChannelSelector},
+    api::v1::{ChainAddress, ChannelFilter, ChannelSelector},
     errors::ErrorKind,
 };
 
@@ -69,6 +69,98 @@ pub struct SubscribeChannels {
 pub struct QueryChannelCount {
     #[arguments(concreteChannelId: $concrete_channel_id, destinationKeyId: $destination_key_id, sourceKeyId: $source_key_id, status: $status)]
     pub channel_count: CountResult,
+}
+
+#[derive(cynic::QueryVariables, Default)]
+pub struct ChannelStatsVariables {
+    pub concrete_channel_id: Option<String>,
+    pub destination_key_id: Option<i32>,
+    pub safe_address: Option<String>,
+    pub source_key_id: Option<i32>,
+    pub status: Option<ChannelStatus>,
+}
+
+impl From<ChannelSelector> for ChannelStatsVariables {
+    fn from(value: ChannelSelector) -> Self {
+        let safe_address = value.safe_address.map(|a: ChainAddress| hex::encode(a));
+        match value.filter {
+            Some(ChannelFilter::ChannelId(id)) => ChannelStatsVariables {
+                concrete_channel_id: Some(id.encode_hex()),
+                safe_address,
+                status: value.status,
+                ..Default::default()
+            },
+            Some(ChannelFilter::DestinationKeyId(dst)) => ChannelStatsVariables {
+                destination_key_id: Some(dst as i32),
+                safe_address,
+                status: value.status,
+                ..Default::default()
+            },
+            Some(ChannelFilter::SourceKeyId(src)) => ChannelStatsVariables {
+                source_key_id: Some(src as i32),
+                safe_address,
+                status: value.status,
+                ..Default::default()
+            },
+            Some(ChannelFilter::SourceAndDestinationKeyIds(src, dst)) => ChannelStatsVariables {
+                destination_key_id: Some(dst as i32),
+                source_key_id: Some(src as i32),
+                safe_address,
+                status: value.status,
+                ..Default::default()
+            },
+            None => ChannelStatsVariables {
+                safe_address,
+                status: value.status,
+                ..Default::default()
+            },
+        }
+    }
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "QueryRoot", variables = "ChannelStatsVariables")]
+pub struct QueryChannelStats {
+    #[arguments(concreteChannelId: $concrete_channel_id, destinationKeyId: $destination_key_id, safeAddress: $safe_address, sourceKeyId: $source_key_id, status: $status)]
+    pub channel_stats: ChannelStatsResult,
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+#[cynic(graphql_type = "ChannelStats")]
+pub struct ChannelStatsQuery {
+    pub count: i32,
+    pub total_balance: TokenValueString,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
+pub struct ChannelStats {
+    pub count: i32,
+    pub total_balance: TokenValueString,
+}
+
+#[derive(cynic::InlineFragments, Debug)]
+pub enum ChannelStatsResult {
+    ChannelStats(ChannelStatsQuery),
+    InvalidAddressError(InvalidAddressError),
+    QueryFailedError(QueryFailedError),
+    #[cynic(fallback)]
+    Unknown,
+}
+
+impl From<ChannelStatsResult> for Result<ChannelStats, crate::errors::BlokliClientError> {
+    fn from(value: ChannelStatsResult) -> Self {
+        match value {
+            ChannelStatsResult::ChannelStats(stats) => Ok(ChannelStats {
+                count: stats.count,
+                total_balance: stats.total_balance,
+            }),
+            ChannelStatsResult::InvalidAddressError(e) => Err(e.into()),
+            ChannelStatsResult::QueryFailedError(e) => Err(e.into()),
+            ChannelStatsResult::Unknown => Err(crate::errors::ErrorKind::NoData.into()),
+        }
+    }
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]

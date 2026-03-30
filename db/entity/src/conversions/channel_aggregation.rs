@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Utc};
 use hopr_types::primitive::prelude::{Address, HoprBalance, IntoEndian};
-use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect};
 
 use crate::{
     hopr_balance, hopr_safe_contract,
@@ -112,6 +112,94 @@ where
         .collect::<Result<Vec<_>, sea_orm::DbErr>>()?;
 
     Ok(result)
+}
+
+/// Aggregated channel statistics: count and total wxHOPR balance.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AggregatedChannelStats {
+    /// Number of channels matching the filters.
+    pub count: u64,
+    /// Sum of wxHOPR balances across all matching channels.
+    pub total_balance: HoprBalance,
+}
+
+/// Fetch channel count and total wxHOPR balance for channels matching optional filters.
+///
+/// Only the `balance` column is fetched from the database, reducing data transfer
+/// compared to [`fetch_channels_with_state`] which retrieves all columns.
+/// The count is derived from the number of returned rows.
+///
+/// When `safe_address` is provided, only channels where the source account is currently
+/// associated with that safe are included.
+///
+/// # Arguments
+/// * `conn` - Database connection
+/// * `source_key_id` - Optional filter by source account ID
+/// * `destination_key_id` - Optional filter by destination account ID
+/// * `concrete_channel_id` - Optional filter by concrete channel ID
+/// * `status` - Optional filter by channel status
+/// * `safe_address` - Optional safe contract address; restricts to channels where the source belongs to this safe
+pub async fn fetch_channel_stats<C>(
+    conn: &C,
+    source_key_id: Option<i64>,
+    destination_key_id: Option<i64>,
+    concrete_channel_id: Option<String>,
+    status: Option<i16>,
+    safe_address: Option<Address>,
+) -> Result<AggregatedChannelStats, sea_orm::DbErr>
+where
+    C: ConnectionTrait,
+{
+    let mut query = channel_current::Entity::find()
+        .select_only()
+        .column(channel_current::Column::Balance);
+
+    if let Some(ref safe_addr) = safe_address {
+        let safe_addr_bytes = safe_addr.as_ref().to_vec();
+        let account_ids: Vec<i64> = account_current::Entity::find()
+            .filter(account_current::Column::SafeAddress.eq(safe_addr_bytes))
+            .all(conn)
+            .await?
+            .into_iter()
+            .map(|row| row.account_id)
+            .collect();
+
+        query = query.filter(channel_current::Column::Source.is_in(account_ids));
+    }
+
+    if let Some(src) = source_key_id {
+        query = query.filter(channel_current::Column::Source.eq(src));
+    }
+
+    if let Some(dst) = destination_key_id {
+        query = query.filter(channel_current::Column::Destination.eq(dst));
+    }
+
+    if let Some(ch_id) = concrete_channel_id {
+        query = query.filter(
+            channel_current::Column::ConcreteChannelId.eq(ch_id.strip_prefix("0x").unwrap_or(&ch_id).to_string()),
+        );
+    }
+
+    if let Some(status_filter) = status {
+        query = query.filter(channel_current::Column::Status.eq(status_filter));
+    }
+
+    let balance_rows: Vec<Vec<u8>> = query.into_tuple().all(conn).await?;
+
+    let count = balance_rows.len() as u64;
+    let mut total_balance = HoprBalance::zero();
+    for balance_bytes in balance_rows {
+        let slice: [u8; 12] = balance_bytes.as_slice().try_into().map_err(|_| {
+            sea_orm::DbErr::Custom(format!(
+                "Invalid balance length in channel_current: expected 12, got {}",
+                balance_bytes.len()
+            ))
+        })?;
+        total_balance = total_balance + HoprBalance::from_be_bytes(slice);
+    }
+
+    Ok(AggregatedChannelStats { count, total_balance })
 }
 
 /// Aggregated wxHOPR balance held across all indexed safe contracts.

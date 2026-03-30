@@ -408,6 +408,27 @@ pub enum CountResult {
     QueryFailed(QueryFailedError),
 }
 
+/// Aggregated channel statistics: count and total balance
+#[derive(SimpleObject, Clone, Debug)]
+pub struct ChannelStats {
+    /// Number of channels matching the filters
+    pub count: i32,
+    /// Total wxHOPR balance across all matching channels
+    #[graphql(name = "totalBalance")]
+    pub total_balance: TokenValueString,
+}
+
+/// Result type for channel statistics query
+#[derive(Union, Clone, Debug)]
+pub enum ChannelStatsResult {
+    /// Successful channel statistics
+    ChannelStats(ChannelStats),
+    /// Address format is invalid
+    InvalidAddress(InvalidAddressError),
+    /// Query failed
+    QueryFailed(QueryFailedError),
+}
+
 /// Channel update event for subscriptions
 ///
 /// Contains complete channel information along with source and destination account details.

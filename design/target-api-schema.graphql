@@ -106,6 +106,17 @@ type ChannelsList {
 """Result type for channels list query"""
 union ChannelsResult = ChannelsList | InvalidAddressError | MissingFilterError | QueryFailedError
 
+"""Aggregated channel statistics: count and total wxHOPR balance"""
+type ChannelStats {
+  "Number of channels matching the filters"
+  count: Int!
+  "Total wxHOPR balance across all matching channels"
+  totalBalance: TokenValueString!
+}
+
+"""Result type for channel statistics query"""
+union ChannelStatsResult = ChannelStats | InvalidAddressError | QueryFailedError
+
 """Status of a payment channel"""
 enum ChannelStatus {
   "Channel has been closed"
@@ -353,6 +364,8 @@ type QueryRoot {
   If no filters are provided, returns total channels count.
   Filters can be combined to narrow results.
   Returns Error if query fails.
+  
+  **Deprecated**: Use `channelStats` instead, which also returns the total wxHOPR balance.
   """
   channelCount(
     "Filter by concrete channel ID (hexadecimal format)"
@@ -365,7 +378,28 @@ type QueryRoot {
     sourceKeyId: Int
     "Filter by channel status"
     status: ChannelStatus
-  ): CountResult!
+  ): CountResult! @deprecated(reason: "Use channelStats instead, which also returns the total wxHOPR balance.")
+  """
+  Retrieve channel count and total wxHOPR balance matching optional filters
+  
+  If no filters are provided, returns stats across all channels.
+  The safeAddress filter restricts results to channels where the source account is associated
+  with the given safe contract.
+  Filters can be combined to narrow results further.
+  Returns Error with code INVALID_ADDRESS if safeAddress format is invalid.
+  """
+  channelStats(
+    "Filter by concrete channel ID (hexadecimal format)"
+    concreteChannelId: String
+    "Filter by destination node keyid"
+    destinationKeyId: Int
+    "Filter by safe address — restricts to channels where the source belongs to this safe (hexadecimal format)"
+    safeAddress: String
+    "Filter by source node keyid"
+    sourceKeyId: Int
+    "Filter by channel status"
+    status: ChannelStatus
+  ): ChannelStatsResult!
   """
   Retrieve channels with required filtering
   
