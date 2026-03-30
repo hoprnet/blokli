@@ -55,8 +55,8 @@ use crate::{
 pub type DefaultHttpRequestor = blokli_chain_rpc::transport::ReqwestClient;
 
 fn build_transport_client(url: &str) -> Result<Http<ReqwestClient>> {
-    let parsed_url = url::Url::parse(url)
-        .map_err(|e| BlokliChainError::Configuration(format!("failed to parse URL '{url}': {e}")))?;
+    let parsed_url =
+        url::Url::parse(url).map_err(|e| BlokliChainError::Configuration(format!("failed to parse RPC URL: {e}")))?;
     Ok(ReqwestTransport::new(parsed_url))
 }
 
@@ -199,13 +199,13 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
             }
         }
 
-        let tx_hash = probe_tx_hash.ok_or_else(|| {
-            BlokliChainError::Configuration(
-                "No transactions found in the last 64 blocks; cannot verify debug_traceTransaction support. Ensure \
-                 the RPC is connected to an active chain."
-                    .to_string(),
-            )
-        })?;
+        let Some(tx_hash) = probe_tx_hash else {
+            info!(
+                "No transactions found in the last 64 blocks; debug_traceTransaction support could not be verified. \
+                 Revert reason extraction may fail if the RPC does not support debug tracing."
+            );
+            return Ok(());
+        };
 
         let params = serde_json::json!([
             format!("{tx_hash:#x}"),

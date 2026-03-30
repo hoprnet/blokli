@@ -1145,8 +1145,21 @@ impl SubscriptionRoot {
         let mut event_receiver = transaction_store.subscribe();
 
         Ok(stream! {
+            let is_terminal_status = |s: &StoreTransactionStatus| {
+                matches!(
+                    s,
+                    StoreTransactionStatus::Confirmed
+                        | StoreTransactionStatus::Reverted
+                        | StoreTransactionStatus::Timeout
+                        | StoreTransactionStatus::ValidationFailed
+                        | StoreTransactionStatus::SubmissionFailed
+                )
+            };
+
             // Phase 1: Emit current state if transaction exists
             if let Ok(record) = transaction_store.get(transaction_id) {
+                let is_terminal = is_terminal_status(&record.status);
+
                 yield Transaction {
                     id: ID::from(record.id.to_string()),
                     status: convert_transaction_status(record.status),
@@ -1154,6 +1167,10 @@ impl SubscriptionRoot {
                     transaction_hash: Hex32(record.transaction_hash.to_hex()),
                     safe_execution: convert_safe_execution(record.safe_execution),
                 };
+
+                if is_terminal {
+                    return;
+                }
             }
 
             // Phase 2: Listen for future status update events
@@ -1165,14 +1182,7 @@ impl SubscriptionRoot {
                     {
                         // Fetch full record to get consistent status + safe_execution
                         if let Ok(record) = transaction_store.get(transaction_id) {
-                            let is_terminal = matches!(
-                                record.status,
-                                StoreTransactionStatus::Confirmed
-                                    | StoreTransactionStatus::Reverted
-                                    | StoreTransactionStatus::Timeout
-                                    | StoreTransactionStatus::ValidationFailed
-                                    | StoreTransactionStatus::SubmissionFailed
-                            );
+                            let is_terminal = is_terminal_status(&record.status);
 
                             yield Transaction {
                                 id: ID::from(id.to_string()),

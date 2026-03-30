@@ -474,7 +474,13 @@ pub struct TransactionInput {
     pub raw_transaction: String,
 }
 
-/// Internal Safe contract execution result
+/// Internal Safe contract execution result.
+///
+/// This is supplementary to [`TransactionStatus`]: the `status` field on [`Transaction`] is
+/// the authoritative terminal outcome (e.g. `Confirmed` means the outer on-chain tx succeeded).
+/// When `safe_execution` is present, it describes the *internal* Safe module call outcome,
+/// which can differ from the outer tx status — a `Confirmed` transaction may still have
+/// `safe_execution.success == false` if the internal call reverted.
 #[derive(SimpleObject, Clone, Debug)]
 pub struct SafeExecution {
     /// Whether the internal Safe transaction succeeded

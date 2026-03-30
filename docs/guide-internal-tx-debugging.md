@@ -21,7 +21,7 @@ one of these events depending on the internal outcome:
 | Success         | `ExecutionFromModuleSuccess(address indexed module)`  | `0x6895c136...`              |
 | Failure         | `ExecutionFromModuleFailure(address indexed module)`  | `0xacd2c870...`              |
 
-The outer transaction **always succeeds** (status=1) even when the internal call
+The outer transaction **typically succeeds** (status=1) even when the internal call
 reverts. You must inspect the receipt logs to determine the internal status.
 
 ## Prerequisites
@@ -197,12 +197,12 @@ cast keccak "ExecutionFromModuleSuccess(address)"
 
 ## Complete Example
 
-Investigating a failed Safe module transaction end to end:
+Investigating a failed Safe module transaction end-to-end:
 
 ```bash
 TX=0xabc123...
 
-# 1. Confirm the outer tx succeeded (status=1, always true for module txs)
+# 1. Confirm the outer tx succeeded (status=1, typically true for module txs)
 cast receipt $TX status
 
 # 2. Get the block number

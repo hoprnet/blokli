@@ -221,6 +221,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         self.validator.validate_raw_transaction(&raw_tx)?;
 
         let confirmations = confirmations.unwrap_or(self.config.default_confirmations);
+        let submitted_at = Utc::now();
 
         // Submit to RPC with confirmation wait
         let tx_hash = self
@@ -235,7 +236,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             raw_transaction: raw_tx,
             transaction_hash: tx_hash,
             status: TransactionStatus::Confirmed,
-            submitted_at: Utc::now(),
+            submitted_at,
             confirmed_at: Some(Utc::now()),
             error_message: None,
             safe_execution: None,

@@ -222,8 +222,7 @@ async fn test_fire_and_forget_returns_hash_immediately() -> anyhow::Result<()> {
     assert_ne!(tx_hash, Hash::default());
 
     // Verify transaction is NOT in store (fire-and-forget doesn't track)
-    let submitted = ctx.store.list_by_status(TransactionStatus::Submitted);
-    assert!(submitted.is_empty(), "Fire-and-forget should not store transactions");
+    assert_eq!(ctx.store.count(), 0, "Fire-and-forget should not store transactions");
 
     Ok(())
 }
@@ -357,9 +356,8 @@ async fn test_async_mode_validation_failure() -> anyhow::Result<()> {
     let result = ctx.executor.send_raw_transaction_async(empty_tx).await;
     assert!(result.is_err(), "Empty transaction should fail validation");
 
-    // Verify nothing was stored
-    let submitted = ctx.store.list_by_status(TransactionStatus::Submitted);
-    assert!(submitted.is_empty(), "Failed validation should not create record");
+    // Verify nothing was stored under any status
+    assert_eq!(ctx.store.count(), 0, "Failed validation should not create record");
 
     Ok(())
 }
@@ -591,12 +589,12 @@ async fn test_mixed_mode_operations() -> anyhow::Result<()> {
     })
     .await?;
 
-    // Fire-and-forget should not be in store - count all statuses
-    let mut total_tracked = 0;
-    for status in [TransactionStatus::Submitted, TransactionStatus::Confirmed] {
-        total_tracked += ctx.store.list_by_status(status).len();
-    }
-    assert_eq!(total_tracked, 2); // Only async and sync
+    // Fire-and-forget should not be in store - only async and sync should be tracked
+    assert_eq!(
+        ctx.store.count(),
+        2,
+        "Only async and sync transactions should be tracked"
+    );
 
     Ok(())
 }

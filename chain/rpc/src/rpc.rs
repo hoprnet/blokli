@@ -180,6 +180,9 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
             .filler(BlobGasFiller::default())
             .connect_client(rpc_client);
 
+        if cfg.tx_polling_interval.is_zero() {
+            return Err(RpcError::Other("tx_polling_interval must be non-zero".to_string()));
+        }
         provider.client().set_poll_interval(cfg.tx_polling_interval);
 
         debug!("{:?}", cfg.contract_addrs);

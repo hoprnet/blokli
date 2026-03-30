@@ -8,7 +8,7 @@ pub fn run_command(mut command: Command, silenced: bool, description: &str) -> R
         command.stdout(Stdio::null()).stderr(Stdio::null());
     }
 
-    debug!(?command, "run command");
+    debug!(description, "run command");
     let status = command
         .status()
         .with_context(|| format!("Failed to run {description}"))?;

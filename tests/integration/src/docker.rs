@@ -145,7 +145,7 @@ impl DockerEnvironment {
         let command = build_command("docker", &["logs", &container]);
         let logs = capture_command(command, &format!("docker logs {container}"))?;
         let timestamp = timestamp.format("%Y%m%d_%H%M%S");
-        let filename = format!("blokli-integration/{}/{}.log", timestamp, name);
+        let filename = format!("blokli-integration/{}/{}/{}.log", self.config.stack_id, timestamp, name);
         let log_path = PathBuf::from("/tmp").join(filename);
 
         fs::create_dir_all(log_path.parent().unwrap())?;

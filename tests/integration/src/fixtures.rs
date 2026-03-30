@@ -588,10 +588,12 @@ struct ReadyzResponse {
 /// Polls bloklid's `/readyz` endpoint until it reports ready.
 async fn wait_for_bloklid_ready(bloklid_url: &url::Url, timeout: Duration) -> Result<()> {
     let client = reqwest::Client::new();
-    let url = format!("{bloklid_url}readyz");
+    let url = bloklid_url
+        .join("readyz")
+        .context("failed to append readyz to bloklid URL")?;
     let start = Instant::now();
     loop {
-        if let Ok(resp) = client.get(&url).send().await {
+        if let Ok(resp) = client.get(url.clone()).send().await {
             if let Ok(body) = resp.json::<ReadyzResponse>().await {
                 if body.status == "ready" {
                     return Ok(());
@@ -612,11 +614,17 @@ where
     Fut: Future<Output = Result<Option<T>>>,
 {
     let start = Instant::now();
+    let mut last_error: Option<anyhow::Error> = None;
     loop {
-        if let Ok(Some(result)) = check().await {
-            return Ok(result);
+        match check().await {
+            Ok(Some(result)) => return Ok(result),
+            Ok(None) => {}
+            Err(e) => last_error = Some(e),
         }
         if start.elapsed() > timeout {
+            if let Some(e) = last_error {
+                return Err(e.context(format!("{description} did not complete within {timeout:?}")));
+            }
             anyhow::bail!("{description} did not complete within {timeout:?}");
         }
         tokio::time::sleep(interval).await;

@@ -18,7 +18,6 @@ use hopr_types::{
 };
 use rstest::*;
 use serial_test::serial;
-use tokio::time::sleep;
 
 #[rstest]
 #[test_log::test(tokio::test)]
@@ -292,13 +291,20 @@ async fn query_transaction_count(#[future(awt)] fixture: IntegrationFixture) -> 
         .await?;
 
     let tx_id = fixture.submit_and_track_tx(&signed_bytes).await?;
-    loop {
-        let tx = fixture.client().query_transaction_status(tx_id.clone()).await?;
-        if tx.status == TransactionStatus::Confirmed {
-            break;
-        }
-        sleep(Duration::from_millis(100)).await;
-    }
+    poll_until(
+        "tracked transaction confirmation",
+        Duration::from_secs(30),
+        Duration::from_millis(100),
+        || {
+            let client = fixture.client().clone();
+            let tx_id = tx_id.clone();
+            async move {
+                let tx = client.query_transaction_status(tx_id).await?;
+                Ok((tx.status == TransactionStatus::Confirmed).then_some(()))
+            }
+        },
+    )
+    .await?;
 
     let after_count = fixture
         .client()
