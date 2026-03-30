@@ -1,4 +1,3 @@
----
 ################################################################################
 # Pull request pipeline for blokli
 #
@@ -6,7 +5,6 @@
 # workflows, then builds binaries, Docker images, and runs integration tests.
 ################################################################################
 name: PR
-
 on:
   merge_group:
     types: [checks_requested]
@@ -16,17 +14,13 @@ on:
       - synchronize
       - reopened
       - ready_for_review
-
 permissions:
   contents: read
-
 concurrency:
   group: ${{ github.event.pull_request.head.ref || github.ref_name }}-pr
   cancel-in-progress: true
-
 env:
   CARGO_TERM_COLOR: always
-
 jobs:
   # ── PR metadata ──────────────────────────────────────────────────────────────
   validate-pr-title:
@@ -54,7 +48,6 @@ jobs:
           ignoreLabels: |
             bot
             ignore-semantic-pull-request
-
   label:
     name: Add labels
     if: github.event_name == 'pull_request'
@@ -69,16 +62,13 @@ jobs:
         with:
           disable-sudo: true
           egress-policy: audit
-
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           persist-credentials: false
-
       - uses: actions/labeler@77a4082b841706ac431479b7e2bb11216ffef250 # main on 20.02.2025
         with:
           sync-labels: true
-
       - name: Add "external" label for forked PRs
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -89,7 +79,6 @@ jobs:
           if [[ "$HEAD_REPO" != "$BASE_REPO" ]]; then
             gh pr edit "$PR_NUMBER" --add-label "external"
           fi
-
   # ── Shared checks (lint, pre-commit, audit) ─────────────────────────────────
   checks:
     name: Check
@@ -103,7 +92,6 @@ jobs:
       runner_large: self-hosted-hoprnet-bigger
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-
   # ── Shared tests (unit) ─────────────────────────────────────────────────────
   tests:
     name: Test
@@ -119,7 +107,6 @@ jobs:
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       codecov_token: ${{ secrets.CODECOV_TOKEN }}
-
   # ── Repo-specific: nextest ──────────────────────────────────────────────────
   nextest:
     name: Nextest
@@ -138,7 +125,6 @@ jobs:
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Run unit tests using nextest
         run: nix run -L .#nextest
-
   # ── Repo-specific: schema validation ────────────────────────────────────────
   schema-validation:
     name: Schema Validation
@@ -160,7 +146,6 @@ jobs:
         run: nix develop --command just export-schema-sqlite
       - name: Validate schema against target
         run: nix develop --command uv run scripts/check_schema.py
-
   # ── Build: binaries ─────────────────────────────────────────────────────────
   build-binaries:
     name: Binary ${{ matrix.architecture }}
@@ -193,7 +178,6 @@ jobs:
       gcp_service_account: ${{ secrets.GCP_SA_GITHUB_RUNNER }}
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       gpg_private_key: ${{ secrets.GPG_HOPRNET_PRIVATE_KEY }}
-
   # ── Build: Docker ───────────────────────────────────────────────────────────
   build-docker:
     name: Docker
@@ -208,6 +192,7 @@ jobs:
       version_type: commit
       build_matrix: >-
         [
+
 
           {
             "runner": "self-hosted-hoprnet-bigger",
@@ -225,7 +210,6 @@ jobs:
     secrets:
       gcp_service_account: ${{ secrets.GCP_SA_GITHUB_RUNNER }}
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-
   # ── Build: blokli-client ────────────────────────────────────────────────────
   build-client:
     name: Build blokli-client
@@ -243,7 +227,6 @@ jobs:
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Build blokli-client-dev
         run: nix build -L .#blokli-client-dev --no-link
-
   # ── Integration tests ──────────────────────────────────────────────────────
   integration-test:
     name: Integration Tests
