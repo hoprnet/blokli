@@ -23,6 +23,7 @@ use blokli_db_entity::{
     hopr_node_safe_registration,
     views::{account_current, channel_current},
 };
+use futures::future::try_join_all;
 use hopr_types::{
     crypto::prelude::Hash,
     primitive::{
@@ -1714,20 +1715,30 @@ impl QueryRoot {
             }
         };
 
-        let mut total_balance = PrimitiveHoprBalance::zero();
-        for safe_bytes in safe_addresses {
-            let safe_address = match Address::try_from(safe_bytes.as_slice()) {
-                Ok(addr) => addr,
-                Err(e) => {
-                    return SafesBalanceResult::QueryFailed(errors::invalid_db_data("safe address", &e.to_string()));
-                }
-            };
+        let addresses: Vec<Address> = match safe_addresses
+            .iter()
+            .map(|b| {
+                Address::try_from(b.as_slice()).map_err(|e| errors::invalid_db_data("safe address", &e.to_string()))
+            })
+            .collect::<std::result::Result<_, _>>()
+        {
+            Ok(addrs) => addrs,
+            Err(e) => return SafesBalanceResult::QueryFailed(e),
+        };
 
-            match rpc.get_hopr_balance(safe_address).await {
-                Ok(balance) => total_balance += balance,
-                Err(e) => return SafesBalanceResult::QueryFailed(errors::rpc_query_failed("query safe balance", e)),
-            }
-        }
+        let balance_futures = addresses.into_iter().map(|addr| {
+            let rpc = Arc::clone(rpc);
+            async move { rpc.get_hopr_balance(addr).await }
+        });
+
+        let balances = match try_join_all(balance_futures).await {
+            Ok(balances) => balances,
+            Err(e) => return SafesBalanceResult::QueryFailed(errors::rpc_query_failed("query safe balance", e)),
+        };
+
+        let total_balance = balances
+            .into_iter()
+            .fold(PrimitiveHoprBalance::zero(), |acc, b| acc + b);
 
         SafesBalanceResult::SafesBalance(SafesBalance {
             balance: TokenValueString(total_balance.to_string()),
