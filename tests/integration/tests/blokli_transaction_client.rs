@@ -207,23 +207,37 @@ async fn submit_and_confirm_transaction(#[future(awt)] fixture: IntegrationFixtu
 #[serial]
 /// Test that a Safe module transaction (via execTransactionFromModule) that succeeds internally
 /// is correctly detected and enriched with safe_execution data.
+///
+/// Uses `fund_channel` which calls `execTransactionFromModule` on the Safe module,
+/// triggering an `ExecutionFromModuleSuccess` event from the Safe contract.
 async fn test_safe_module_transaction_execution_success(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
-    let [owner] = fixture.sample_accounts::<1>();
+    let [owner, counterparty] = fixture.sample_accounts::<2>();
     let safe = fixture.deploy_safe_and_announce(owner, parsed_safe_balance()).await?;
+    fixture
+        .deploy_safe_and_announce(counterparty, parsed_safe_balance())
+        .await?;
 
-    // Build an approve transaction via the Safe module.
-    // This is a module transaction (goes through execTransactionFromModule), not a direct
-    // Safe execTransaction call.
+    // Approve the channels contract to spend tokens on behalf of the Safe (setup).
+    // This is a direct token call, not a module transaction.
+    fixture
+        .approve(
+            owner,
+            "1 wxHOPR".parse().expect("failed to parse amount"),
+            &safe.module_address,
+        )
+        .await?;
+
+    // Build a fund_channel transaction via the Safe module.
+    // This goes through execTransactionFromModule → Safe → channels.fundChannel,
+    // emitting ExecutionFromModuleSuccess from the Safe.
     let nonce = fixture.rpc().transaction_count(&owner.address).await?;
-    let spender = HoprAddress::from_str(&fixture.contract_addresses().channels.to_string())?;
-    let amount = "0.01 wxHOPR".parse().expect("failed to parse amount");
-
     let payload_generator = SafePayloadGenerator::new(
         &owner.keypair,
         *fixture.contract_addresses(),
         HoprAddress::from_str(&safe.module_address)?,
     );
-    let payload = payload_generator.approve(spender, amount)?;
+    let amount = "0.01 wxHOPR".parse().expect("failed to parse amount");
+    let payload = payload_generator.fund_channel(counterparty.address, amount)?;
     let payload_bytes = payload
         .sign_and_encode_to_eip2718(nonce, fixture.rpc().chain_id().await?, None, &owner.keypair)
         .await?;

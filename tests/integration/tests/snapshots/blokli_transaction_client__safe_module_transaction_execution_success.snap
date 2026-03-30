@@ -6,4 +6,7 @@ id: "[uuid]"
 status: CONFIRMED
 submitted_at: "[timestamp]"
 transaction_hash: "[tx_hash]"
-safe_execution: ~
+safe_execution:
+  success: true
+  safe_tx_hash: ~
+  revert_reason: ~
