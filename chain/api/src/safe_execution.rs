@@ -5,6 +5,7 @@
 //! to extract the `to` address, and inspects receipt logs for
 //! `ExecutionSuccess`/`ExecutionFailure` events.
 
+use alloy_sol_types::{SolEvent, sol};
 use async_trait::async_trait;
 use blokli_db::BlokliDbAllOperations;
 use hopr_bindings::exports::alloy::{
@@ -19,37 +20,12 @@ use crate::{
     transaction_store::SafeExecutionResult,
 };
 
-/// Gnosis Safe event topic: keccak256("ExecutionSuccess(bytes32,uint256)")
-pub(crate) const EXECUTION_SUCCESS_TOPIC: [u8; 32] = [
-    0x44, 0x2e, 0x71, 0x5f, 0x62, 0x63, 0x46, 0xe8, 0xc5, 0x43, 0x81, 0x00, 0x2d, 0xa6, 0x14, 0xf6, 0x2b, 0xee, 0x8d,
-    0x27, 0x38, 0x65, 0x35, 0xb2, 0x52, 0x1e, 0xc8, 0x54, 0x08, 0x98, 0x55, 0x6e,
-];
-
-/// Gnosis Safe event topic: keccak256("ExecutionFailure(bytes32,uint256)")
-pub(crate) const EXECUTION_FAILURE_TOPIC: [u8; 32] = [
-    0x23, 0x42, 0x8b, 0x18, 0xac, 0xfb, 0x3e, 0xa6, 0x4b, 0x08, 0xdc, 0x0c, 0x1d, 0x29, 0x6e, 0xa9, 0xc0, 0x97, 0x02,
-    0xc0, 0x90, 0x83, 0xca, 0x52, 0x72, 0xe6, 0x4d, 0x11, 0x5b, 0x68, 0x7d, 0x23,
-];
-
-/// Gnosis Safe event topic: keccak256("ExecutionFromModuleSuccess(address)")
-///
-/// Emitted when a transaction is executed via a Safe module (e.g., `execTransactionFromModule`).
-/// The event signature is `event ExecutionFromModuleSuccess(address indexed module)`.
-/// Unlike direct execution events, there is no `txHash` parameter.
-pub(crate) const EXECUTION_FROM_MODULE_SUCCESS_TOPIC: [u8; 32] = [
-    0x68, 0x95, 0xc1, 0x36, 0x64, 0xaa, 0x4f, 0x67, 0x28, 0x8b, 0x25, 0xd7, 0xa2, 0x1d, 0x7a, 0xaa, 0x34, 0x91, 0x6e,
-    0x35, 0x5f, 0xb9, 0xb6, 0xfa, 0xe0, 0xa1, 0x39, 0xa9, 0x08, 0x5b, 0xec, 0xb8,
-];
-
-/// Gnosis Safe event topic: keccak256("ExecutionFromModuleFailure(address)")
-///
-/// Emitted when a module-initiated transaction fails inside the Safe.
-/// The event signature is `event ExecutionFromModuleFailure(address indexed module)`.
-/// Unlike direct execution events, there is no `txHash` parameter.
-pub(crate) const EXECUTION_FROM_MODULE_FAILURE_TOPIC: [u8; 32] = [
-    0xac, 0xd2, 0xc8, 0x70, 0x28, 0x04, 0x12, 0x8f, 0xdb, 0x0d, 0xb2, 0xbb, 0x49, 0xf6, 0xd1, 0x27, 0xdd, 0x01, 0x81,
-    0xc1, 0x3f, 0xd4, 0x5d, 0xbf, 0xe1, 0x6d, 0xe0, 0x93, 0x0e, 0x2b, 0xd3, 0x75,
-];
+sol! {
+    event ExecutionSuccess(bytes32 txHash, uint256 payment);
+    event ExecutionFailure(bytes32 txHash, uint256 payment);
+    event ExecutionFromModuleSuccess(address indexed module);
+    event ExecutionFromModuleFailure(address indexed module);
+}
 
 /// Extract the `to` address from a raw signed transaction.
 ///
@@ -76,7 +52,7 @@ pub fn inspect_safe_execution_logs(safe_address: &[u8; 20], logs: &[ReceiptLog])
             continue;
         };
 
-        if *topic0 == EXECUTION_SUCCESS_TOPIC {
+        if topic0 == ExecutionSuccess::SIGNATURE_HASH.as_slice() {
             return Some(SafeExecutionResult {
                 success: true,
                 safe_tx_hash: extract_safe_tx_hash(log),
@@ -84,7 +60,7 @@ pub fn inspect_safe_execution_logs(safe_address: &[u8; 20], logs: &[ReceiptLog])
             });
         }
 
-        if *topic0 == EXECUTION_FAILURE_TOPIC {
+        if topic0 == ExecutionFailure::SIGNATURE_HASH.as_slice() {
             return Some(SafeExecutionResult {
                 success: false,
                 safe_tx_hash: extract_safe_tx_hash(log),
@@ -98,7 +74,7 @@ pub fn inspect_safe_execution_logs(safe_address: &[u8; 20], logs: &[ReceiptLog])
         // Module execution events: ExecutionFromModuleSuccess/ExecutionFromModuleFailure
         // These have signature `event ExecutionFromModule{Success,Failure}(address indexed module)`
         // and do not contain a Safe txHash parameter.
-        if *topic0 == EXECUTION_FROM_MODULE_SUCCESS_TOPIC {
+        if topic0 == ExecutionFromModuleSuccess::SIGNATURE_HASH.as_slice() {
             return Some(SafeExecutionResult {
                 success: true,
                 safe_tx_hash: None,
@@ -106,7 +82,7 @@ pub fn inspect_safe_execution_logs(safe_address: &[u8; 20], logs: &[ReceiptLog])
             });
         }
 
-        if *topic0 == EXECUTION_FROM_MODULE_FAILURE_TOPIC {
+        if topic0 == ExecutionFromModuleFailure::SIGNATURE_HASH.as_slice() {
             return Some(SafeExecutionResult {
                 success: false,
                 safe_tx_hash: None,
@@ -187,8 +163,6 @@ impl<T: BlokliDbAllOperations + Send + Sync> SafeAddressChecker for DbSafeAddres
 
 #[cfg(test)]
 mod tests {
-    use hopr_bindings::exports::alloy::primitives::keccak256;
-
     use super::*;
 
     #[test]
@@ -203,7 +177,7 @@ mod tests {
         let safe_address = [0xAA; 20];
         let logs = vec![ReceiptLog {
             address: [0xBB; 20], // Different address
-            topics: vec![EXECUTION_SUCCESS_TOPIC],
+            topics: vec![ExecutionSuccess::SIGNATURE_HASH.0],
             data: vec![0u8; 64],
         }];
 
@@ -220,7 +194,7 @@ mod tests {
 
         let logs = vec![ReceiptLog {
             address: safe_address,
-            topics: vec![EXECUTION_SUCCESS_TOPIC],
+            topics: vec![ExecutionSuccess::SIGNATURE_HASH.0],
             data,
         }];
 
@@ -235,7 +209,7 @@ mod tests {
 
         let logs = vec![ReceiptLog {
             address: safe_address,
-            topics: vec![EXECUTION_FAILURE_TOPIC],
+            topics: vec![ExecutionFailure::SIGNATURE_HASH.0],
             data,
         }];
 
@@ -250,7 +224,7 @@ mod tests {
 
         let logs = vec![ReceiptLog {
             address: safe_address,
-            topics: vec![EXECUTION_SUCCESS_TOPIC, indexed_hash],
+            topics: vec![ExecutionSuccess::SIGNATURE_HASH.0, indexed_hash],
             data: vec![0u8; 32], // payment only (no txHash in data)
         }];
 
@@ -277,42 +251,18 @@ mod tests {
     }
 
     #[test]
-    fn test_execution_success_topic_hash() {
-        let computed = keccak256("ExecutionSuccess(bytes32,uint256)");
-        assert_eq!(computed.0, EXECUTION_SUCCESS_TOPIC);
-    }
-
-    #[test]
-    fn test_execution_failure_topic_hash() {
-        let computed = keccak256("ExecutionFailure(bytes32,uint256)");
-        assert_eq!(computed.0, EXECUTION_FAILURE_TOPIC);
-    }
-
-    #[test]
     fn test_inspect_safe_execution_logs_short_data_returns_none_hash() {
         let safe_address = [0xAA; 20];
 
         // Event with only the topic (no indexed txHash) and data shorter than 32 bytes
         let logs = vec![ReceiptLog {
             address: safe_address,
-            topics: vec![EXECUTION_SUCCESS_TOPIC],
+            topics: vec![ExecutionSuccess::SIGNATURE_HASH.0],
             data: vec![0u8; 10], // Too short to contain txHash
         }];
 
         let result = inspect_safe_execution_logs(&safe_address, &logs);
         insta::assert_yaml_snapshot!(&result);
-    }
-
-    #[test]
-    fn test_execution_from_module_success_topic_hash() {
-        let computed = keccak256("ExecutionFromModuleSuccess(address)");
-        assert_eq!(computed.0, EXECUTION_FROM_MODULE_SUCCESS_TOPIC);
-    }
-
-    #[test]
-    fn test_execution_from_module_failure_topic_hash() {
-        let computed = keccak256("ExecutionFromModuleFailure(address)");
-        assert_eq!(computed.0, EXECUTION_FROM_MODULE_FAILURE_TOPIC);
     }
 
     #[test]
@@ -322,7 +272,7 @@ mod tests {
 
         let logs = vec![ReceiptLog {
             address: safe_address,
-            topics: vec![EXECUTION_FROM_MODULE_SUCCESS_TOPIC, module_address],
+            topics: vec![ExecutionFromModuleSuccess::SIGNATURE_HASH.0, module_address],
             data: vec![],
         }];
 
@@ -337,7 +287,7 @@ mod tests {
 
         let logs = vec![ReceiptLog {
             address: safe_address,
-            topics: vec![EXECUTION_FROM_MODULE_FAILURE_TOPIC, module_address],
+            topics: vec![ExecutionFromModuleFailure::SIGNATURE_HASH.0, module_address],
             data: vec![],
         }];
 
@@ -353,7 +303,7 @@ mod tests {
         // Module success event from a different contract address should be ignored
         let logs = vec![ReceiptLog {
             address: other_address,
-            topics: vec![EXECUTION_FROM_MODULE_SUCCESS_TOPIC],
+            topics: vec![ExecutionFromModuleSuccess::SIGNATURE_HASH.0],
             data: vec![],
         }];
 

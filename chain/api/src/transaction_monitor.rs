@@ -276,6 +276,7 @@ pub async fn enrich_safe_execution(
 
 #[cfg(test)]
 mod tests {
+    use alloy_sol_types::SolEvent;
     use chrono::{DateTime, Utc};
     use dashmap::DashMap;
     use hopr_bindings::exports::alloy::{
@@ -287,7 +288,10 @@ mod tests {
     use uuid::Uuid;
 
     use super::*;
-    use crate::transaction_store::TransactionRecord;
+    use crate::{
+        safe_execution::{ExecutionFailure, ExecutionFromModuleSuccess, ExecutionSuccess},
+        transaction_store::TransactionRecord,
+    };
 
     const TEST_UUID: Uuid = Uuid::from_bytes([
         0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
@@ -643,7 +647,7 @@ mod tests {
             tx_hash,
             vec![ReceiptLog {
                 address: safe_address,
-                topics: vec![crate::safe_execution::EXECUTION_SUCCESS_TOPIC],
+                topics: vec![ExecutionSuccess::SIGNATURE_HASH.0],
                 data: log_data,
             }],
         );
@@ -780,7 +784,7 @@ mod tests {
             tx_hash,
             vec![ReceiptLog {
                 address: safe_address,
-                topics: vec![crate::safe_execution::EXECUTION_SUCCESS_TOPIC],
+                topics: vec![ExecutionSuccess::SIGNATURE_HASH.0],
                 data: log_data,
             }],
         );
@@ -829,7 +833,7 @@ mod tests {
             tx_hash,
             vec![ReceiptLog {
                 address: safe_address,
-                topics: vec![crate::safe_execution::EXECUTION_FROM_MODULE_SUCCESS_TOPIC, {
+                topics: vec![ExecutionFromModuleSuccess::SIGNATURE_HASH.0, {
                     // module address padded to 32 bytes (indexed address parameter)
                     let mut topic = [0u8; 32];
                     topic[12..].copy_from_slice(&module_address);
@@ -884,7 +888,7 @@ mod tests {
             tx_hash,
             vec![ReceiptLog {
                 address: safe_address,
-                topics: vec![crate::safe_execution::EXECUTION_FAILURE_TOPIC],
+                topics: vec![ExecutionFailure::SIGNATURE_HASH.0],
                 data: log_data,
             }],
         );
@@ -931,7 +935,7 @@ mod tests {
             tx_hash,
             vec![ReceiptLog {
                 address: safe_address,
-                topics: vec![crate::safe_execution::EXECUTION_FAILURE_TOPIC],
+                topics: vec![ExecutionFailure::SIGNATURE_HASH.0],
                 data: log_data,
             }],
         );
@@ -978,7 +982,7 @@ mod tests {
             tx_hash,
             vec![ReceiptLog {
                 address: safe_address,
-                topics: vec![crate::safe_execution::EXECUTION_FAILURE_TOPIC],
+                topics: vec![ExecutionFailure::SIGNATURE_HASH.0],
                 data: log_data,
             }],
         );
@@ -1026,7 +1030,7 @@ mod tests {
             tx_hash,
             vec![ReceiptLog {
                 address: safe_address,
-                topics: vec![crate::safe_execution::EXECUTION_SUCCESS_TOPIC],
+                topics: vec![ExecutionSuccess::SIGNATURE_HASH.0],
                 data: log_data,
             }],
         );
