@@ -112,10 +112,13 @@ jobs:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       unit_tests: true
       unit_test_command: "nix run -L .#test"
+      coverage: true
+      unit_coverage_command: "nix run .#coverage-unit"
       runner: self-hosted-hoprnet-bigger
       test_timeout: 30
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      codecov_token: ${{ secrets.CODECOV_TOKEN }}
 
   # ── Repo-specific: nextest ──────────────────────────────────────────────────
   nextest:

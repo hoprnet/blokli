@@ -425,6 +425,11 @@
                 zizmor
               ];
             };
+            coverage = nixLib.mkDevShell {
+              rustToolchainFile = ./rust-toolchain.toml;
+              shellName = "Coverage";
+              withLlvmTools = true;
+            };
           };
 
           # Import checks
@@ -547,7 +552,14 @@
           inherit checks;
 
           # Export applications using nix-lib
-          apps = utilityApps;
+          apps = utilityApps // {
+            coverage-unit = {
+              type = "app";
+              program = toString (pkgs.writeShellScript "coverage-unit" ''
+                nix develop .#coverage -c cargo llvm-cov --lib --lcov --output-path coverage.lcov
+              '');
+            };
+          };
 
           # Export packages
           packages = packages // {
