@@ -134,14 +134,20 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         let transaction_validator = Arc::new(TransactionValidator::new());
         let rpc_adapter = Arc::new(RpcAdapter::new(rpc_operations.clone()));
 
-        let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
-            rpc_adapter.clone(),
-            transaction_store.clone(),
-            transaction_validator,
-            RawTransactionExecutorConfig::default(),
-        ));
-
         let safe_checker: Arc<dyn SafeAddressChecker> = Arc::new(DbSafeAddressChecker::new(db.clone()));
+
+        let transaction_executor = Arc::new(
+            RawTransactionExecutor::with_shared_dependencies(
+                rpc_adapter.clone(),
+                transaction_store.clone(),
+                transaction_validator,
+                RawTransactionExecutorConfig::default(),
+            )
+            .with_safe_enrichment(
+                rpc_adapter.clone() as Arc<dyn crate::transaction_monitor::ReceiptProvider>,
+                safe_checker.clone(),
+            ),
+        );
 
         let transaction_monitor = Arc::new(TransactionMonitor::new(
             transaction_store.clone(),

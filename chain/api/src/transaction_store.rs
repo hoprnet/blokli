@@ -7,7 +7,6 @@
 use std::sync::Arc;
 
 use async_broadcast::{Receiver, Sender, broadcast};
-use blokli_api_types::{Hex32, ID, SafeExecution, Transaction, TransactionStatus as GqlTransactionStatus};
 use chrono::{DateTime, Utc};
 use dashmap::{DashMap, mapref::entry::Entry};
 use hopr_types::{crypto::types::Hash, primitive::traits::ToHex};
@@ -32,7 +31,9 @@ pub struct SafeExecutionResult {
     /// Whether the internal Safe transaction succeeded
     pub success: bool,
     /// Safe internal transaction hash (bytes32 from event).
-    /// `None` if the event data was malformed and the hash could not be extracted.
+    /// `None` for module-executed transactions (the standard HOPR path) since
+    /// module events do not carry a txHash. For direct `execTransaction` calls,
+    /// `None` only if the event data was malformed.
     #[serde(serialize_with = "serialize_optional_hash")]
     pub safe_tx_hash: Option<Hash>,
     /// Revert reason string (if execution failed and reason is decodable)
@@ -106,38 +107,6 @@ pub struct TransactionRecord {
     pub error_message: Option<String>,
     /// Internal Safe execution result (populated after confirmation for Safe transactions)
     pub safe_execution: Option<SafeExecutionResult>,
-}
-
-impl From<TransactionStatus> for GqlTransactionStatus {
-    fn from(status: TransactionStatus) -> Self {
-        match status {
-            TransactionStatus::Pending => GqlTransactionStatus::Pending,
-            TransactionStatus::Submitted => GqlTransactionStatus::Submitted,
-            TransactionStatus::Confirmed => GqlTransactionStatus::Confirmed,
-            TransactionStatus::Reverted => GqlTransactionStatus::Reverted,
-            TransactionStatus::Timeout => GqlTransactionStatus::Timeout,
-            TransactionStatus::ValidationFailed => GqlTransactionStatus::ValidationFailed,
-            TransactionStatus::SubmissionFailed => GqlTransactionStatus::SubmissionFailed,
-        }
-    }
-}
-
-impl From<TransactionRecord> for Transaction {
-    fn from(record: TransactionRecord) -> Self {
-        let safe_execution = record.safe_execution.map(|se| SafeExecution {
-            success: se.success,
-            safe_tx_hash: se.safe_tx_hash.map(Hex32::from),
-            revert_reason: se.revert_reason,
-        });
-
-        Transaction {
-            id: ID::from(record.id.to_string()),
-            status: record.status.into(),
-            submitted_at: record.submitted_at,
-            transaction_hash: record.transaction_hash.into(),
-            safe_execution,
-        }
-    }
 }
 
 /// Thread-safe in-memory store for transaction records

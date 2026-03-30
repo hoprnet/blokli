@@ -35,7 +35,9 @@ use sea_orm::{
 };
 use tracing::warn;
 
-use crate::{errors, mutation::TransactionResult, validation::validate_eth_address};
+use crate::{
+    conversions::transaction_from_record, errors, mutation::TransactionResult, validation::validate_eth_address,
+};
 
 /// Result type for HOPR balance queries
 #[derive(Union)]
@@ -1495,7 +1497,7 @@ impl QueryRoot {
 
         // Try to retrieve the transaction
         match store.get(uuid) {
-            Ok(record) => Ok(Some(TransactionResult::Transaction(record.into()))),
+            Ok(record) => Ok(Some(TransactionResult::Transaction(transaction_from_record(record)))),
             Err(_) => Ok(None), // Transaction not found
         }
     }

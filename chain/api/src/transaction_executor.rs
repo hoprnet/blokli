@@ -15,6 +15,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
+    transaction_monitor::{ReceiptProvider, SafeAddressChecker, enrich_safe_execution},
     transaction_store::{TransactionRecord, TransactionStatus, TransactionStore, TransactionStoreError},
     transaction_validator::{TransactionValidator, ValidationError},
 };
@@ -75,12 +76,23 @@ impl Default for RawTransactionExecutorConfig {
 /// - Fire-and-forget: Returns tx hash immediately, no tracking
 /// - Async: Returns UUID, tracks in store, background monitoring
 /// - Sync: Waits for confirmations, returns complete transaction record
-#[derive(Debug)]
 pub struct RawTransactionExecutor<R: RpcClient> {
     rpc_client: Arc<R>,
     transaction_store: Arc<TransactionStore>,
     validator: Arc<TransactionValidator>,
     config: RawTransactionExecutorConfig,
+    /// Receipt provider for Safe enrichment in sync mode
+    receipt_provider: Option<Arc<dyn ReceiptProvider>>,
+    /// Safe address checker for Safe enrichment in sync mode
+    safe_checker: Option<Arc<dyn SafeAddressChecker>>,
+}
+
+impl<R: RpcClient> std::fmt::Debug for RawTransactionExecutor<R> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("RawTransactionExecutor")
+            .field("config", &self.config)
+            .finish_non_exhaustive()
+    }
 }
 
 impl<R: RpcClient> RawTransactionExecutor<R> {
@@ -96,6 +108,8 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             transaction_store: Arc::new(transaction_store),
             validator: Arc::new(validator),
             config,
+            receipt_provider: None,
+            safe_checker: None,
         }
     }
 
@@ -114,7 +128,23 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             transaction_store,
             validator,
             config,
+            receipt_provider: None,
+            safe_checker: None,
         }
+    }
+
+    /// Set the Safe enrichment dependencies for sync-mode transactions
+    ///
+    /// When set, sync-mode transactions targeting Safe contracts will be
+    /// enriched with `safeExecution` data (success/failure, revert reason).
+    pub fn with_safe_enrichment(
+        mut self,
+        receipt_provider: Arc<dyn ReceiptProvider>,
+        safe_checker: Arc<dyn SafeAddressChecker>,
+    ) -> Self {
+        self.receipt_provider = Some(receipt_provider);
+        self.safe_checker = Some(safe_checker);
+        self
     }
 
     /// Fire-and-forget mode: Submit transaction and return hash immediately
@@ -199,10 +229,9 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             .await
             .map_err(TransactionExecutorError::RpcError)?;
 
-        // Create transaction record with confirmed status
-        let id = Uuid::new_v4();
-        let record = TransactionRecord {
-            id,
+        // Attempt Safe execution enrichment if dependencies are available
+        let mut record = TransactionRecord {
+            id: Uuid::new_v4(),
             raw_transaction: raw_tx,
             transaction_hash: tx_hash,
             status: TransactionStatus::Confirmed,
@@ -211,6 +240,13 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
             error_message: None,
             safe_execution: None,
         };
+
+        if let (Some(receipt_provider), Some(safe_checker)) =
+            (self.receipt_provider.as_ref(), self.safe_checker.as_ref())
+        {
+            record.safe_execution =
+                enrich_safe_execution(&record, receipt_provider.as_ref(), safe_checker.as_ref()).await;
+        }
 
         self.transaction_store.insert(record.clone())?;
         Ok(record)

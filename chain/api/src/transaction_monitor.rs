@@ -199,69 +199,77 @@ impl<R: ReceiptProvider> TransactionMonitor<R> {
         Ok(())
     }
 
-    /// Attempt to extract Safe execution results for a confirmed transaction.
-    ///
-    /// Decodes the raw transaction to extract the `to` address, checks if it is a
-    /// known Safe contract, and if so, fetches receipt logs to find
-    /// ExecutionSuccess/ExecutionFailure events.
-    ///
-    /// Returns `Some(result)` if the transaction targets a known Safe and an
-    /// execution event was found, `None` otherwise.
     async fn try_enrich_safe_execution(
         &self,
         record: &crate::transaction_store::TransactionRecord,
     ) -> Option<SafeExecutionResult> {
         let safe_checker = self.safe_checker.as_ref()?;
+        enrich_safe_execution(record, self.receipt_provider.as_ref(), safe_checker.as_ref()).await
+    }
+}
 
-        // Decode the raw transaction to extract the `to` address
-        let to_addr = decode_transaction_to_address(&record.raw_transaction)?;
+/// Attempt to extract Safe execution results for a confirmed transaction.
+///
+/// Decodes the raw transaction to extract the `to` address, checks if it is a
+/// known Safe contract, and if so, fetches receipt logs to find
+/// ExecutionSuccess/ExecutionFailure events.
+///
+/// Returns `Some(result)` if the transaction targets a known Safe and an
+/// execution event was found, `None` otherwise.
+///
+/// This is a free function so it can be called from both the background
+/// [`TransactionMonitor`] and the synchronous execution path.
+pub async fn enrich_safe_execution(
+    record: &crate::transaction_store::TransactionRecord,
+    receipt_provider: &dyn ReceiptProvider,
+    safe_checker: &dyn SafeAddressChecker,
+) -> Option<SafeExecutionResult> {
+    // Decode the raw transaction to extract the `to` address
+    let to_addr = decode_transaction_to_address(&record.raw_transaction)?;
 
-        // Resolve the target address to a Safe address.
-        // The target may be the Safe itself (direct execTransaction) or
-        // a module address (execTransactionFromModule).
-        let safe_address = safe_checker.find_safe_for_target(&to_addr).await?;
+    // Resolve the target address to a Safe address.
+    // The target may be the Safe itself (direct execTransaction) or
+    // a module address (execTransactionFromModule).
+    let safe_address = safe_checker.find_safe_for_target(&to_addr).await?;
 
-        debug!(
-            "Transaction {} targets a known Safe contract, fetching receipt logs",
-            record.id
-        );
+    debug!(
+        "Transaction {} targets a known Safe contract, fetching receipt logs",
+        record.id
+    );
 
-        // Fetch receipt logs and look for Safe execution events
-        match self
-            .receipt_provider
-            .get_transaction_receipt_logs(record.transaction_hash)
-            .await
-        {
-            Ok(Some(logs)) => {
-                let mut result = inspect_safe_execution_logs(&safe_address, &logs);
+    // Fetch receipt logs and look for Safe execution events
+    match receipt_provider
+        .get_transaction_receipt_logs(record.transaction_hash)
+        .await
+    {
+        Ok(Some(logs)) => {
+            let mut result = inspect_safe_execution_logs(&safe_address, &logs);
 
-                // Attempt to extract revert reason for failed executions
-                if let Some(ref mut exec_result) = result {
-                    if !exec_result.success {
-                        exec_result.revert_reason = self
-                            .receipt_provider
-                            .get_revert_reason(record.transaction_hash)
-                            .await
-                            .unwrap_or(None);
-                    }
+            // Attempt to extract revert reason for failed executions
+            if let Some(ref mut exec_result) = result {
+                if !exec_result.success {
+                    exec_result.revert_reason = receipt_provider
+                        .get_revert_reason(record.transaction_hash)
+                        .await
+                        .unwrap_or(None);
                 }
+            }
 
-                if let Some(ref r) = result {
-                    info!(
-                        "Transaction {} Safe execution: success={}, safe_tx_hash={:?}, revert_reason={:?}",
-                        record.id, r.success, r.safe_tx_hash, r.revert_reason
-                    );
-                }
-                result
+            if let Some(ref r) = result {
+                info!(
+                    "Transaction {} Safe execution: success={}, safe_tx_hash={:?}, revert_reason={:?}",
+                    record.id, r.success, r.safe_tx_hash, r.revert_reason
+                );
             }
-            Ok(None) => {
-                debug!("No receipt found for Safe tx {} (still pending)", record.id);
-                None
-            }
-            Err(e) => {
-                warn!("Failed to fetch receipt logs for Safe tx {}: {}", record.id, e);
-                None
-            }
+            result
+        }
+        Ok(None) => {
+            debug!("No receipt found for Safe tx {} (still pending)", record.id);
+            None
+        }
+        Err(e) => {
+            warn!("Failed to fetch receipt logs for Safe tx {}: {}", record.id, e);
+            None
         }
     }
 }

@@ -6,11 +6,11 @@ use async_broadcast::Receiver;
 use async_graphql::{Context, ID, Result, Subscription};
 use async_stream::stream;
 use blokli_api_types::{
-    Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, Safe, SafeExecution, TicketParameters,
-    TokenValueString, Transaction, TransactionStatus as GqlTransactionStatus, UInt64,
+    Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, Safe, TicketParameters, TokenValueString,
+    Transaction, UInt64,
 };
 use blokli_chain_api::transaction_store::{
-    SafeExecutionResult, TransactionEvent, TransactionStatus as StoreTransactionStatus, TransactionStore,
+    TransactionEvent, TransactionStatus as StoreTransactionStatus, TransactionStore,
 };
 use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
 use blokli_db_entity::{
@@ -35,7 +35,10 @@ use sea_orm::{
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use crate::errors;
+use crate::{
+    conversions::{convert_safe_execution, convert_transaction_status},
+    errors,
+};
 
 #[derive(Debug)]
 struct SafeContractCurrentRow {
@@ -397,31 +400,6 @@ async fn query_channels_at_watermark_with_filters(
     }
 
     Ok(results)
-}
-
-/// Convert an optional [`SafeExecutionResult`] to the GraphQL [`SafeExecution`] type.
-fn convert_safe_execution(result: Option<SafeExecutionResult>) -> Option<SafeExecution> {
-    result.map(|r| SafeExecution {
-        success: r.success,
-        safe_tx_hash: r.safe_tx_hash.map(|h| Hex32(h.to_hex())),
-        revert_reason: r.revert_reason,
-    })
-}
-
-/// Convert StoreTransactionStatus to GraphQL TransactionStatus
-///
-/// Provides a single source of truth for status conversion, eliminating
-/// duplicated match expressions throughout the codebase.
-fn convert_transaction_status(status: StoreTransactionStatus) -> GqlTransactionStatus {
-    match status {
-        StoreTransactionStatus::Pending => GqlTransactionStatus::Pending,
-        StoreTransactionStatus::Submitted => GqlTransactionStatus::Submitted,
-        StoreTransactionStatus::Confirmed => GqlTransactionStatus::Confirmed,
-        StoreTransactionStatus::Reverted => GqlTransactionStatus::Reverted,
-        StoreTransactionStatus::Timeout => GqlTransactionStatus::Timeout,
-        StoreTransactionStatus::ValidationFailed => GqlTransactionStatus::ValidationFailed,
-        StoreTransactionStatus::SubmissionFailed => GqlTransactionStatus::SubmissionFailed,
-    }
 }
 
 /// Builds SeaORM condition for filtering channel_state by watermark

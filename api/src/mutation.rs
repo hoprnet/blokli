@@ -15,7 +15,7 @@ use blokli_chain_api::{
     transaction_validator::ValidationError,
 };
 
-use crate::errors;
+use crate::{conversions::transaction_from_record, errors};
 
 /// Root mutation type providing transaction submission capabilities
 pub struct MutationRoot;
@@ -111,7 +111,7 @@ impl MutationRoot {
                     .get(uuid)
                     .map_err(|e| async_graphql::Error::new(format!("Failed to retrieve transaction: {}", e)))?;
 
-                Ok(SendTransactionAsyncResult::Transaction(record.into()))
+                Ok(SendTransactionAsyncResult::Transaction(transaction_from_record(record)))
             }
             Err(e) => Ok(executor_error_to_async_result(e)),
         }
@@ -150,7 +150,7 @@ impl MutationRoot {
 
         // Execute transaction in sync mode
         match executor.send_raw_transaction_sync(raw_tx, confirmations).await {
-            Ok(record) => Ok(SendTransactionSyncResult::Transaction(record.into())),
+            Ok(record) => Ok(SendTransactionSyncResult::Transaction(transaction_from_record(record))),
             Err(e) => Ok(executor_error_to_sync_result(e)),
         }
     }

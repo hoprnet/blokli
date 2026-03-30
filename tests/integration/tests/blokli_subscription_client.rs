@@ -22,6 +22,7 @@ use hopr_types::{
 use rstest::*;
 use serde_json::json;
 use serial_test::serial;
+use tracing::warn;
 use uuid::Uuid;
 
 #[rstest]
@@ -595,39 +596,8 @@ async fn subscribe_transaction_status_updates(#[future(awt)] fixture: Integratio
     // 2. Submit and get tracking ID
     let tx_id = fixture.submit_and_track_tx(&signed_bytes).await?;
 
-    // 3. Spawn subscription task using raw GraphQL query (since there's no client method yet)
-    let query = json!({
-        "query": format!(
-            "subscription {{ transactionUpdated(id: \"{}\") {{ id status submittedAt transactionHash }} }}",
-            tx_id
-        )
-    });
-    let request_body = serde_json::to_string(&query).expect("Failed to serialize request");
-    let url = fixture
-        .config()
-        .bloklid_url()
-        .join("graphql")
-        .map_err(|e| anyhow!("failed to build GraphQL URL: {e}"))?;
-
-    let client = ClientBuilder::for_url(url.as_str())
-        .map_err(|e| anyhow!("failed to build SSE client: {e}"))?
-        .connect_timeout(fixture.config().http_timeout)
-        .header("Accept", "text/event-stream")
-        .map_err(|e| anyhow!("failed to set Accept header: {e}"))?
-        .header("Content-Type", "application/json")
-        .map_err(|e| anyhow!("failed to set Content-Type header: {e}"))?
-        .method("POST".into())
-        .body(request_body)
-        .build();
-
-    let mut stream = client.stream().filter_map(|item| {
-        futures::future::ready(match item {
-            Ok(SSE::Event(event)) if event.event_type == "next" => {
-                serde_json::from_str::<serde_json::Value>(&event.data).ok()
-            }
-            _ => None,
-        })
-    });
+    // 3. Subscribe to transaction status updates via typed client
+    let mut stream = fixture.client().subscribe_transaction_updates(tx_id)?;
 
     // 4. Collect status updates until Confirmed or timeout
     let mut statuses = Vec::new();
@@ -641,24 +611,15 @@ async fn subscribe_transaction_status_updates(#[future(awt)] fixture: Integratio
         let remaining = FuturesDuration::from(overall_timeout - elapsed);
 
         match stream.next().timeout(remaining).await {
-            Ok(Some(update)) => {
-                if let Some(status_str) = update
-                    .get("data")
-                    .and_then(|d| d.get("transactionUpdated"))
-                    .and_then(|tx| tx.get("status"))
-                    .and_then(|s| s.as_str())
-                {
-                    let status = match status_str {
-                        "SUBMITTED" => TransactionStatus::Submitted,
-                        "PENDING" => TransactionStatus::Pending,
-                        "CONFIRMED" => TransactionStatus::Confirmed,
-                        _ => continue,
-                    };
-                    statuses.push(status);
-                    if status == TransactionStatus::Confirmed {
-                        break;
-                    }
+            Ok(Some(Ok(tx))) => {
+                statuses.push(tx.status);
+                if tx.status == TransactionStatus::Confirmed {
+                    break;
                 }
+            }
+            Ok(Some(Err(e))) => {
+                warn!("Subscription error: {e}");
+                continue;
             }
             Ok(None) => break,
             Err(_) => break,

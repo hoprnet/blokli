@@ -1908,7 +1908,6 @@ dependencies = [
  "anyhow",
  "async-broadcast",
  "async-trait",
- "blokli-api-types",
  "blokli-chain-indexer",
  "blokli-chain-rpc",
  "blokli-chain-types",
