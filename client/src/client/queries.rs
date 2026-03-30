@@ -69,27 +69,6 @@ impl BlokliClient {
             channels: filtered_channels,
         })
     }
-
-    async fn query_channels_by_safe_only(
-        &self,
-        safe_address: ChainAddress,
-        status: Option<ChannelStatus>,
-    ) -> Result<ChannelsList> {
-        let selector = ChannelSelector {
-            filter: None,
-            status,
-            safe_address: Some(safe_address),
-        };
-
-        let response = self.build_query(GraphQlQueries::query_channels(selector))?.await?;
-        let channels_result = response_to_data(response)?.channels;
-        let page: ChannelsList = {
-            let parsed_channels: Result<ChannelsList> = channels_result.into();
-            parsed_channels?
-        };
-
-        Ok(page)
-    }
 }
 
 impl GraphQlQueries {
@@ -369,12 +348,6 @@ impl BlokliQueryClient for BlokliClient {
     async fn query_channels(&self, selector: ChannelSelector) -> Result<ChannelsList> {
         if selector.filter.is_none() && selector.safe_address.is_none() {
             return Err(ErrorKind::InvalidInput("at least one filter must be specified on channel query").into());
-        }
-
-        if let Some(safe_address) = selector.safe_address
-            && selector.filter.is_none()
-        {
-            return self.query_channels_by_safe_only(safe_address, selector.status).await;
         }
 
         let safe_address = selector.safe_address;

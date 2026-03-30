@@ -648,7 +648,7 @@ impl QueryRoot {
     /// concrete_channel_id, or safe_address). The status filter is optional and can be combined
     /// with others. The safe_address filter restricts results to channels where the source account
     /// is associated with the given safe contract.
-    /// Returns the channel list alongside total wxHOPR balance across all matching channels.
+    /// Returns the list of matching channels.
     async fn channels(
         &self,
         ctx: &Context<'_>,

@@ -11,34 +11,41 @@ pub struct ChannelsVariables {
     pub concrete_channel_id: Option<String>,
     pub destination_key_id: Option<i32>,
     pub source_key_id: Option<i32>,
+    pub safe_address: Option<String>,
     pub status: Option<ChannelStatus>,
 }
 
 impl From<ChannelSelector> for ChannelsVariables {
     fn from(value: ChannelSelector) -> Self {
+        let safe_address = value.safe_address.map(|a: ChainAddress| hex::encode(a));
         match value.filter {
             Some(ChannelFilter::ChannelId(id)) => ChannelsVariables {
                 concrete_channel_id: Some(id.encode_hex()),
+                safe_address,
                 status: value.status,
                 ..Default::default()
             },
             Some(ChannelFilter::DestinationKeyId(dst)) => ChannelsVariables {
                 destination_key_id: Some(dst as i32),
+                safe_address,
                 status: value.status,
                 ..Default::default()
             },
             Some(ChannelFilter::SourceKeyId(src)) => ChannelsVariables {
                 source_key_id: Some(src as i32),
+                safe_address,
                 status: value.status,
                 ..Default::default()
             },
             Some(ChannelFilter::SourceAndDestinationKeyIds(src, dst)) => ChannelsVariables {
                 destination_key_id: Some(dst as i32),
                 source_key_id: Some(src as i32),
+                safe_address,
                 status: value.status,
                 ..Default::default()
             },
             None => ChannelsVariables {
+                safe_address,
                 status: value.status,
                 ..Default::default()
             },
@@ -49,7 +56,7 @@ impl From<ChannelSelector> for ChannelsVariables {
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "QueryRoot", variables = "ChannelsVariables")]
 pub struct QueryChannels {
-    #[arguments(concreteChannelId: $concrete_channel_id, destinationKeyId: $destination_key_id, sourceKeyId: $source_key_id, status: $status)]
+    #[arguments(concreteChannelId: $concrete_channel_id, destinationKeyId: $destination_key_id, sourceKeyId: $source_key_id, safeAddress: $safe_address, status: $status)]
     pub channels: ChannelsResult,
 }
 
@@ -63,7 +70,7 @@ pub struct SubscribeChannels {
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "QueryRoot", variables = "ChannelsVariables")]
 pub struct QueryChannelCount {
-    #[arguments(concreteChannelId: $concrete_channel_id, destinationKeyId: $destination_key_id, sourceKeyId: $source_key_id, status: $status)]
+    #[arguments(concreteChannelId: $concrete_channel_id, destinationKeyId: $destination_key_id, sourceKeyId: $source_key_id, safeAddress: $safe_address, status: $status)]
     pub channel_count: CountResult,
 }
 
