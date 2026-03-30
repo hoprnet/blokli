@@ -1905,6 +1905,7 @@ dependencies = [
 name = "blokli-chain-api"
 version = "0.6.1"
 dependencies = [
+ "alloy-primitives",
  "anyhow",
  "async-broadcast",
  "async-trait",
@@ -1916,6 +1917,7 @@ dependencies = [
  "dashmap",
  "env_logger",
  "futures",
+ "hex",
  "hex-literal",
  "hopr-async-runtime",
  "hopr-bindings",

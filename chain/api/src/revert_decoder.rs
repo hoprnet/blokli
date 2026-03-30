@@ -3,6 +3,7 @@
 //! This module handles parsing `debug_traceTransaction` output (using `callTracer`)
 //! and decoding Solidity revert reasons from the deepest failed internal call frame.
 
+use alloy_primitives::U256;
 use tracing::debug;
 
 /// Selector for `Error(string)` — first 4 bytes of keccak256("Error(string)")
@@ -24,7 +25,7 @@ pub fn decode_revert_reason(output: &[u8]) -> Option<String> {
     }
 
     if output.len() < 4 {
-        return Some(format!("0x{}", hex_encode(output)));
+        return Some(format!("0x{}", hex::encode(output)));
     }
 
     let selector: [u8; 4] = output[..4].try_into().ok()?;
@@ -38,7 +39,7 @@ pub fn decode_revert_reason(output: &[u8]) -> Option<String> {
     }
 
     // Unknown/custom error — return hex fallback
-    Some(format!("0x{}", hex_encode(output)))
+    Some(format!("0x{}", hex::encode(output)))
 }
 
 /// Extract the revert output bytes from the deepest failed frame in a `callTracer` trace.
@@ -96,32 +97,32 @@ fn find_deepest_revert(frame: &serde_json::Value, depth: usize, best: &mut Optio
 fn decode_error_string(data: &[u8]) -> Option<String> {
     // ABI encoding: offset (32 bytes) + length (32 bytes) + string data
     if data.len() < 64 {
-        return Some(format!("0x{}{}", hex_encode(&ERROR_SELECTOR), hex_encode(data)));
+        return Some(format!("0x{}{}", hex::encode(ERROR_SELECTOR), hex::encode(data)));
     }
 
     // Read the string length from bytes 32..64
     let length_bytes: [u8; 32] = data[32..64].try_into().ok()?;
-    let length = u256_to_usize(length_bytes)?;
+    let length = usize::try_from(U256::from_be_bytes(length_bytes)).ok()?;
 
     if data.len() < 64 + length {
-        return Some(format!("0x{}{}", hex_encode(&ERROR_SELECTOR), hex_encode(data)));
+        return Some(format!("0x{}{}", hex::encode(ERROR_SELECTOR), hex::encode(data)));
     }
 
     let string_data = &data[64..64 + length];
     match std::str::from_utf8(string_data) {
         Ok(s) => Some(s.to_string()),
-        Err(_) => Some(format!("0x{}{}", hex_encode(&ERROR_SELECTOR), hex_encode(data))),
+        Err(_) => Some(format!("0x{}{}", hex::encode(ERROR_SELECTOR), hex::encode(data))),
     }
 }
 
 /// Decode an ABI-encoded `Panic(uint256)` payload (after the 4-byte selector).
 fn decode_panic_code(data: &[u8]) -> Option<String> {
     if data.len() < 32 {
-        return Some(format!("0x{}{}", hex_encode(&PANIC_SELECTOR), hex_encode(data)));
+        return Some(format!("0x{}{}", hex::encode(PANIC_SELECTOR), hex::encode(data)));
     }
 
     let code_bytes: [u8; 32] = data[..32].try_into().ok()?;
-    let code = u256_to_usize(code_bytes).unwrap_or(usize::MAX);
+    let code = usize::try_from(U256::from_be_bytes(code_bytes)).unwrap_or(usize::MAX);
 
     let description = match code {
         0x00 => "generic compiler panic",
@@ -140,37 +141,10 @@ fn decode_panic_code(data: &[u8]) -> Option<String> {
     Some(format!("Panic(0x{code:02x}): {description}"))
 }
 
-/// Simple hex encoding (lowercase, no prefix).
-fn hex_encode(bytes: &[u8]) -> String {
-    bytes.iter().map(|b| format!("{b:02x}")).collect()
-}
-
 /// Decode a hex string (with or without `0x` prefix) to bytes.
-fn hex_decode(hex: &str) -> Option<Vec<u8>> {
-    let hex = hex.strip_prefix("0x").unwrap_or(hex);
-    if !hex.len().is_multiple_of(2) {
-        return None;
-    }
-
-    (0..hex.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).ok())
-        .collect()
-}
-
-/// Convert a big-endian 256-bit integer to usize, returning None on overflow.
-fn u256_to_usize(bytes: [u8; 32]) -> Option<usize> {
-    // Check that the high bytes are all zero (value fits in usize)
-    let high_cutoff = 32 - std::mem::size_of::<usize>();
-    if bytes[..high_cutoff].iter().any(|&b| b != 0) {
-        return None;
-    }
-
-    let mut result: usize = 0;
-    for &b in &bytes[high_cutoff..] {
-        result = result.checked_shl(8)?.checked_add(b as usize)?;
-    }
-    Some(result)
+fn hex_decode(s: &str) -> Option<Vec<u8>> {
+    let s = s.strip_prefix("0x").unwrap_or(s);
+    hex::decode(s).ok()
 }
 
 #[cfg(test)]
@@ -242,7 +216,7 @@ mod tests {
     #[test]
     fn test_extract_revert_from_nested_trace() {
         // Simulate a callTracer output with nested calls where the deepest one has the revert
-        let inner_output = format!("0x{}", hex_encode(&ERROR_SELECTOR));
+        let inner_output = format!("0x{}", hex::encode(ERROR_SELECTOR));
         let trace = serde_json::json!({
             "type": "CALL",
             "from": "0x1111111111111111111111111111111111111111",
