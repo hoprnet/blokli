@@ -637,7 +637,7 @@ impl QueryRoot {
 
         ChannelStatsResult::ChannelStats(ChannelStats {
             count,
-            total_balance: TokenValueString(stats.total_balance.to_string()),
+            balance: TokenValueString(stats.balance.to_string()),
         })
     }
 
@@ -721,13 +721,9 @@ impl QueryRoot {
             }
         };
 
-        // Compute total balance and build channel list in one pass
-        let mut total_balance = PrimitiveHoprBalance::zero();
         let channels: Vec<Channel> = aggregated_channels
             .into_iter()
             .filter_map(|agg| {
-                total_balance += agg.balance;
-
                 let status: blokli_api_types::ChannelStatus = agg.status.into();
 
                 let epoch = match i32::try_from(agg.epoch) {
@@ -753,10 +749,7 @@ impl QueryRoot {
             })
             .collect();
 
-        ChannelsResult::Channels(ChannelsList {
-            channels,
-            total_balance: TokenValueString(total_balance.to_string()),
-        })
+        ChannelsResult::Channels(ChannelsList { channels })
     }
 
     /// Retrieve HOPR token balance for a specific address
@@ -1709,8 +1702,8 @@ impl QueryRoot {
 
         if safe_addresses.is_empty() {
             return SafesBalanceResult::SafesBalance(SafesBalance {
-                total_balance: TokenValueString(PrimitiveHoprBalance::zero().to_string()),
-                safe_count,
+                balance: TokenValueString(PrimitiveHoprBalance::zero().to_string()),
+                count: safe_count,
             });
         }
 
@@ -1737,8 +1730,8 @@ impl QueryRoot {
         }
 
         SafesBalanceResult::SafesBalance(SafesBalance {
-            total_balance: TokenValueString(total_balance.to_string()),
-            safe_count,
+            balance: TokenValueString(total_balance.to_string()),
+            count: safe_count,
         })
     }
 

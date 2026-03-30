@@ -350,9 +350,6 @@ pub struct Channel {
 pub struct ChannelsList {
     /// List of channels
     pub channels: Vec<Channel>,
-    /// Total wxHOPR balance across all channels in this list
-    #[graphql(name = "totalBalance")]
-    pub total_balance: TokenValueString,
 }
 
 /// Result type for channels list query
@@ -372,11 +369,9 @@ pub enum ChannelsResult {
 #[derive(SimpleObject, Clone, Debug)]
 pub struct SafesBalance {
     /// Sum of wxHOPR balances for all safe contract addresses
-    #[graphql(name = "totalBalance")]
-    pub total_balance: TokenValueString,
+    pub balance: TokenValueString,
     /// Number of safes included
-    #[graphql(name = "safeCount")]
-    pub safe_count: i32,
+    pub count: i32,
 }
 
 /// Result type for total safe HOPR balance query
@@ -414,8 +409,7 @@ pub struct ChannelStats {
     /// Number of channels matching the filters
     pub count: i32,
     /// Total wxHOPR balance across all matching channels
-    #[graphql(name = "totalBalance")]
-    pub total_balance: TokenValueString,
+    pub balance: TokenValueString,
 }
 
 /// Result type for channel statistics query

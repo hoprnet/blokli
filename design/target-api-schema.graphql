@@ -99,8 +99,6 @@ type Channel {
 type ChannelsList {
   "List of channels"
   channels: [Channel!]!
-  "Total wxHOPR balance across all channels in this list"
-  totalBalance: TokenValueString!
 }
 
 """Result type for channels list query"""
@@ -108,10 +106,10 @@ union ChannelsResult = ChannelsList | InvalidAddressError | MissingFilterError |
 
 """Aggregated channel statistics: count and total wxHOPR balance"""
 type ChannelStats {
+  "Total wxHOPR balance across all matching channels"
+  balance: TokenValueString!
   "Number of channels matching the filters"
   count: Int!
-  "Total wxHOPR balance across all matching channels"
-  totalBalance: TokenValueString!
 }
 
 """Result type for channel statistics query"""
@@ -678,10 +676,10 @@ union SafeResult = Safe | InvalidAddressError | QueryFailedError
 
 """Aggregated wxHOPR holdings across all indexed safe contracts"""
 type SafesBalance {
-  "Number of safes included"
-  safeCount: Int!
   "Sum of wxHOPR balances for all safe contract addresses"
-  totalBalance: TokenValueString!
+  balance: TokenValueString!
+  "Number of safes included"
+  count: Int!
 }
 
 """Result type for total safe HOPR balance query"""

@@ -331,14 +331,6 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
             .context("failed to parse channel balance from channels query")?,
         amount
     );
-    assert_eq!(
-        queried_channels
-            .total_balance
-            .0
-            .parse::<HoprBalance>()
-            .context("failed to parse total_balance from channels query")?,
-        amount
-    );
 
     let src_safe_selector = ChannelSelector {
         safe_address: Some(Address::from_str(&src_safe.address)?.into()),
@@ -349,14 +341,6 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
     let src_safe_channels = fixture.client().query_channels(src_safe_selector).await?;
     assert_eq!(src_safe_count, 1);
     assert_eq!(src_safe_channels.channels.len(), 1);
-    assert_eq!(
-        src_safe_channels
-            .total_balance
-            .0
-            .parse::<HoprBalance>()
-            .context("failed to parse total_balance for source safe filter")?,
-        amount
-    );
 
     let dst_safe_selector = ChannelSelector {
         safe_address: Some(Address::from_str(&dst_safe.address)?.into()),
@@ -367,14 +351,6 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
     let dst_safe_channels = fixture.client().query_channels(dst_safe_selector).await?;
     assert_eq!(dst_safe_count, 0);
     assert!(dst_safe_channels.channels.is_empty());
-    assert_eq!(
-        dst_safe_channels
-            .total_balance
-            .0
-            .parse::<HoprBalance>()
-            .context("failed to parse total_balance for destination safe filter")?,
-        HoprBalance::zero()
-    );
 
     fixture
         .initiate_outgoing_channel_closure(&src, &dst, &src_safe.module_address)
@@ -425,10 +401,10 @@ async fn channel_stats_count_and_balance(#[future(awt)] fixture: IntegrationFixt
     assert_eq!(by_id.count, 1);
     assert_eq!(
         by_id
-            .total_balance
+            .balance
             .0
             .parse::<HoprBalance>()
-            .context("failed to parse total_balance from channel_stats (by id)")?,
+            .context("failed to parse balance from channel_stats (by id)")?,
         amount
     );
 
@@ -444,10 +420,10 @@ async fn channel_stats_count_and_balance(#[future(awt)] fixture: IntegrationFixt
     assert_eq!(by_src_safe.count, 1);
     assert_eq!(
         by_src_safe
-            .total_balance
+            .balance
             .0
             .parse::<HoprBalance>()
-            .context("failed to parse total_balance from channel_stats (src safe)")?,
+            .context("failed to parse balance from channel_stats (src safe)")?,
         amount
     );
 
@@ -463,10 +439,10 @@ async fn channel_stats_count_and_balance(#[future(awt)] fixture: IntegrationFixt
     assert_eq!(by_dst_safe.count, 0);
     assert_eq!(
         by_dst_safe
-            .total_balance
+            .balance
             .0
             .parse::<HoprBalance>()
-            .context("failed to parse total_balance from channel_stats (dst safe)")?,
+            .context("failed to parse balance from channel_stats (dst safe)")?,
         HoprBalance::zero()
     );
 
@@ -481,10 +457,10 @@ async fn channel_stats_count_and_balance(#[future(awt)] fixture: IntegrationFixt
     assert!(unfiltered.count >= 1);
     assert!(
         unfiltered
-            .total_balance
+            .balance
             .0
             .parse::<HoprBalance>()
-            .context("failed to parse total_balance from channel_stats (unfiltered)")?
+            .context("failed to parse balance from channel_stats (unfiltered)")?
             >= amount
     );
 
@@ -510,22 +486,22 @@ async fn query_safes_balance_for_owner(#[future(awt)] fixture: IntegrationFixtur
         .query_token_balance(Address::from_str(&safe.address)?.as_ref())
         .await?;
 
-    assert_eq!(safes_count_and_balance.safe_count, 1);
-    assert_eq!(safes_count_and_balance.total_balance, safe_balance.balance);
+    assert_eq!(safes_count_and_balance.count, 1);
+    assert_eq!(safes_count_and_balance.balance, safe_balance.balance);
     assert!(
-        safes_count_and_balance.total_balance.0.parse::<HoprBalance>()? > HoprBalance::zero(),
-        "owner safes' total_balance should be greater than zero for deployed funded safe"
+        safes_count_and_balance.balance.0.parse::<HoprBalance>()? > HoprBalance::zero(),
+        "owner safes' balance should be greater than zero for deployed funded safe"
     );
 
     let owner_with_no_safe_counts_and_balance = fixture.client().query_safes_balance(Some([0u8; 20])).await?;
 
-    assert_eq!(owner_with_no_safe_counts_and_balance.safe_count, 0);
+    assert_eq!(owner_with_no_safe_counts_and_balance.count, 0);
     assert_eq!(
         owner_with_no_safe_counts_and_balance
-            .total_balance
+            .balance
             .0
             .parse::<HoprBalance>()
-            .context("failed to parse empty-owner safes total_balance")?,
+            .context("failed to parse empty-owner safes balance")?,
         HoprBalance::zero()
     );
 

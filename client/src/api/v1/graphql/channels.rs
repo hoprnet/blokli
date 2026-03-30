@@ -1,14 +1,10 @@
 use hex::ToHex;
-use hopr_types::primitive::prelude::HoprBalance as PrimitiveHoprBalance;
 
 use super::{
     ChannelStatus, CountResult, DateTime, InvalidAddressError, MissingFilterError, QueryFailedError, TokenValueString,
     Uint64, schema,
 };
-use crate::{
-    api::v1::{ChainAddress, ChannelFilter, ChannelSelector},
-    errors::ErrorKind,
-};
+use crate::api::v1::{ChainAddress, ChannelFilter, ChannelSelector};
 
 #[derive(cynic::QueryVariables, Default)]
 pub struct ChannelsVariables {
@@ -128,21 +124,14 @@ pub struct QueryChannelStats {
 #[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 #[cynic(graphql_type = "ChannelStats")]
-pub struct ChannelStatsQuery {
-    pub count: i32,
-    pub total_balance: TokenValueString,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ChannelStats {
     pub count: i32,
-    pub total_balance: TokenValueString,
+    pub balance: TokenValueString,
 }
 
 #[derive(cynic::InlineFragments, Debug)]
 pub enum ChannelStatsResult {
-    ChannelStats(ChannelStatsQuery),
+    ChannelStats(ChannelStats),
     InvalidAddressError(InvalidAddressError),
     QueryFailedError(QueryFailedError),
     #[cynic(fallback)]
@@ -152,10 +141,7 @@ pub enum ChannelStatsResult {
 impl From<ChannelStatsResult> for Result<ChannelStats, crate::errors::BlokliClientError> {
     fn from(value: ChannelStatsResult) -> Self {
         match value {
-            ChannelStatsResult::ChannelStats(stats) => Ok(ChannelStats {
-                count: stats.count,
-                total_balance: stats.total_balance,
-            }),
+            ChannelStatsResult::ChannelStats(stats) => Ok(stats),
             ChannelStatsResult::InvalidAddressError(e) => Err(e.into()),
             ChannelStatsResult::QueryFailedError(e) => Err(e.into()),
             ChannelStatsResult::Unknown => Err(crate::errors::ErrorKind::NoData.into()),
@@ -163,19 +149,11 @@ impl From<ChannelStatsResult> for Result<ChannelStats, crate::errors::BlokliClie
     }
 }
 
-#[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
-#[cynic(graphql_type = "ChannelsList")]
-pub struct ChannelsListQuery {
-    pub __typename: String,
-    pub channels: Vec<Channel>,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(cynic::QueryFragment, Debug)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct ChannelsList {
     pub __typename: String,
     pub channels: Vec<Channel>,
-    pub total_balance: TokenValueString,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
@@ -193,7 +171,7 @@ pub struct Channel {
 
 #[derive(cynic::InlineFragments, Debug)]
 pub enum ChannelsResult {
-    ChannelsList(ChannelsListQuery),
+    ChannelsList(ChannelsList),
     MissingFilterError(MissingFilterError),
     QueryFailedError(QueryFailedError),
     #[cynic(fallback)]
@@ -203,22 +181,10 @@ pub enum ChannelsResult {
 impl From<ChannelsResult> for Result<ChannelsList, crate::errors::BlokliClientError> {
     fn from(value: ChannelsResult) -> Self {
         match value {
-            ChannelsResult::ChannelsList(list) => {
-                let mut total_balance = PrimitiveHoprBalance::zero();
-                for channel in &list.channels {
-                    let channel_balance = channel
-                        .balance
-                        .0
-                        .parse::<PrimitiveHoprBalance>()
-                        .map_err(|_| crate::errors::BlokliClientError::from(ErrorKind::ParseError))?;
-                    total_balance += channel_balance;
-                }
-                Ok(ChannelsList {
-                    __typename: list.__typename,
-                    channels: list.channels,
-                    total_balance: TokenValueString(total_balance.to_string()),
-                })
-            }
+            ChannelsResult::ChannelsList(list) => Ok(ChannelsList {
+                __typename: list.__typename,
+                channels: list.channels,
+            }),
             ChannelsResult::MissingFilterError(e) => Err(e.into()),
             ChannelsResult::QueryFailedError(e) => Err(e.into()),
             ChannelsResult::Unknown => Err(crate::errors::ErrorKind::NoData.into()),
@@ -241,8 +207,8 @@ pub struct QuerySafesBalance {
 #[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct SafesBalance {
-    pub total_balance: TokenValueString,
-    pub safe_count: i32,
+    pub balance: TokenValueString,
+    pub count: i32,
 }
 
 #[derive(cynic::InlineFragments, Debug)]

@@ -553,16 +553,27 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
 
     async fn query_channels(&self, selector: ChannelSelector) -> Result<ChannelsList> {
         let channels = self.do_query_channels(selector)?;
-        let mut total = PrimitiveHoprBalance::zero();
-        for ch in &channels {
-            if let Ok(bal) = ch.balance.0.parse::<PrimitiveHoprBalance>() {
-                total += bal;
-            }
-        }
         Ok(ChannelsList {
             __typename: "ChannelsList".to_string(),
             channels,
-            total_balance: TokenValueString(total.to_string()),
+        })
+    }
+
+    async fn query_safes_balance(&self, owner_address: Option<ChainAddress>) -> Result<SafesBalance> {
+        let state = self.state.read();
+        let safe_count = if let Some(owner) = owner_address {
+            let owner_hex = hex::encode(owner);
+            state
+                .deployed_safes
+                .values()
+                .filter(|s| s.chain_key == owner_hex)
+                .count()
+        } else {
+            state.deployed_safes.len()
+        };
+        Ok(SafesBalance {
+            safe_count: i32::try_from(safe_count).map_err(|_| ErrorKind::ParseError)?,
+            total_balance: TokenValueString(PrimitiveHoprBalance::zero().to_string()),
         })
     }
 

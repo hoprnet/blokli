@@ -120,7 +120,7 @@ pub struct AggregatedChannelStats {
     /// Number of channels matching the filters.
     pub count: u64,
     /// Sum of wxHOPR balances across all matching channels.
-    pub total_balance: HoprBalance,
+    pub balance: HoprBalance,
 }
 
 /// Fetch channel count and total wxHOPR balance for channels matching optional filters.
@@ -199,16 +199,19 @@ where
         total_balance = total_balance + HoprBalance::from_be_bytes(slice);
     }
 
-    Ok(AggregatedChannelStats { count, total_balance })
+    Ok(AggregatedChannelStats {
+        count,
+        balance: total_balance,
+    })
 }
 
 /// Aggregated wxHOPR balance held across all indexed safe contracts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AggregatedSafeHoprBalance {
     /// Sum of wxHOPR balances for all safe contract addresses.
-    pub total_balance: HoprBalance,
+    pub balance: HoprBalance,
     /// Number of safe contracts counted.
-    pub safe_count: u32,
+    pub count: u32,
 }
 
 /// Fetch the total wxHOPR balance held across indexed safe contracts.
@@ -254,8 +257,8 @@ where
 
     if safe_addresses.is_empty() {
         return Ok(AggregatedSafeHoprBalance {
-            total_balance: HoprBalance::zero(),
-            safe_count: 0,
+            balance: HoprBalance::zero(),
+            count: 0,
         });
     }
 
@@ -276,7 +279,7 @@ where
     }
 
     Ok(AggregatedSafeHoprBalance {
-        total_balance,
-        safe_count,
+        balance: total_balance,
+        count: safe_count,
     })
 }

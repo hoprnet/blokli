@@ -2,27 +2,12 @@ use std::collections::{HashMap, HashSet};
 
 use cynic::QueryBuilder;
 use hex::ToHex;
-use hopr_types::primitive::prelude::HoprBalance as PrimitiveHoprBalance;
 
 use super::{BlokliClient, GraphQlQueries, response_to_data};
 use crate::{
     api::{internal::*, types::*, *},
     errors::{BlokliClientError, ErrorKind},
 };
-
-fn aggregate_total_balance(channels: &[Channel]) -> Result<TokenValueString> {
-    let mut total_balance = PrimitiveHoprBalance::zero();
-    for channel in channels {
-        let channel_balance = channel
-            .balance
-            .0
-            .parse::<PrimitiveHoprBalance>()
-            .map_err(|_| ErrorKind::ParseError)?;
-        total_balance += channel_balance;
-    }
-
-    Ok(TokenValueString(total_balance.to_string()))
-}
 
 fn parse_chain_address_hex(value: &str) -> Result<ChainAddress> {
     let bytes = hex::decode(value.trim_start_matches("0x")).map_err(|_| ErrorKind::ParseError)?;
@@ -81,7 +66,6 @@ impl BlokliClient {
 
         Ok(ChannelsList {
             __typename: channels.__typename,
-            total_balance: aggregate_total_balance(&filtered_channels)?,
             channels: filtered_channels,
         })
     }
@@ -99,7 +83,6 @@ impl BlokliClient {
             return Ok(ChannelsList {
                 __typename: "ChannelsList".to_string(),
                 channels: Vec::new(),
-                total_balance: TokenValueString(PrimitiveHoprBalance::zero().to_string()),
             });
         }
 
@@ -133,7 +116,6 @@ impl BlokliClient {
         let channels: Vec<Channel> = channels_by_id.into_values().collect();
         Ok(ChannelsList {
             __typename: typename.unwrap_or_else(|| "ChannelsList".to_string()),
-            total_balance: aggregate_total_balance(&channels)?,
             channels,
         })
     }
