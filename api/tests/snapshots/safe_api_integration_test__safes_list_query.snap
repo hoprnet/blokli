@@ -5,4 +5,4 @@ expression: response
 data:
   safes:
     safes:
-      - address: "[address]"
+      - address: "0x1111111111111111111111111111111111111111"

@@ -6,15 +6,18 @@ use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations};
 use blokli_db_entity::hopr_safe_contract::{Column as SafeColumn, Entity as SafeEntity};
 use hopr_types::primitive::{prelude::Address, traits::ToHex};
-use rand::RngCore;
 use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
-// Helper to generate random address
-fn random_address() -> Address {
-    let mut rng = rand::rng();
-    let mut bytes = [0u8; 20];
-    rng.fill_bytes(&mut bytes);
-    Address::from(bytes)
+fn safe_address() -> Address {
+    Address::new(&[0x11; 20])
+}
+
+fn module_address() -> Address {
+    Address::new(&[0x22; 20])
+}
+
+fn chain_key_address() -> Address {
+    Address::new(&[0x33; 20])
 }
 
 type TestSchema = async_graphql::Schema<QueryRoot, async_graphql::EmptyMutation, async_graphql::EmptySubscription>;
@@ -37,15 +40,15 @@ fn build_test_schema(db: &BlokliDb) -> TestSchema {
 async fn test_safe_query() -> anyhow::Result<()> {
     let db = BlokliDb::new_in_memory().await?;
 
-    let safe_address = random_address();
-    let module_address = random_address();
-    let chain_key = random_address();
+    let safe_addr = safe_address();
+    let module_addr = module_address();
+    let chain_key = chain_key_address();
 
-    db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+    db.create_safe_contract(None, safe_addr, module_addr, chain_key, 100, 0, 0)
         .await?;
 
     let count = SafeEntity::find()
-        .filter(SafeColumn::Address.eq(safe_address.as_ref().to_vec()))
+        .filter(SafeColumn::Address.eq(safe_addr.as_ref().to_vec()))
         .count(db.conn(blokli_db::TargetDb::Index))
         .await?;
     assert_eq!(count, 1, "DB should have 1 safe contract");
@@ -70,15 +73,11 @@ async fn test_safe_query() -> anyhow::Result<()> {
             }}
         }}
         "#,
-        safe_address.to_hex()
+        safe_addr.to_hex()
     );
 
     let response = schema.execute(query).await;
-    insta::assert_yaml_snapshot!(response, {
-        ".data.safe.address" => "[address]",
-        ".data.safe.moduleAddress" => "[address]",
-        ".data.safe.chainKey" => "[address]",
-    });
+    insta::assert_yaml_snapshot!(response);
 
     Ok(())
 }
@@ -87,11 +86,11 @@ async fn test_safe_query() -> anyhow::Result<()> {
 async fn test_safe_by_chain_key_query() -> anyhow::Result<()> {
     let db = BlokliDb::new_in_memory().await?;
 
-    let safe_address = random_address();
-    let module_address = random_address();
-    let chain_key = random_address();
+    let safe_addr = safe_address();
+    let module_addr = module_address();
+    let chain_key = chain_key_address();
 
-    db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+    db.create_safe_contract(None, safe_addr, module_addr, chain_key, 100, 0, 0)
         .await?;
 
     let schema = build_test_schema(&db);
@@ -112,11 +111,7 @@ async fn test_safe_by_chain_key_query() -> anyhow::Result<()> {
     );
 
     let response = schema.execute(query).await;
-    insta::assert_yaml_snapshot!(response, {
-        ".data.safeByChainKey.address" => "[address]",
-        ".data.safeByChainKey.moduleAddress" => "[address]",
-        ".data.safeByChainKey.chainKey" => "[address]",
-    });
+    insta::assert_yaml_snapshot!(response);
 
     Ok(())
 }
@@ -125,11 +120,11 @@ async fn test_safe_by_chain_key_query() -> anyhow::Result<()> {
 async fn test_safes_list_query() -> anyhow::Result<()> {
     let db = BlokliDb::new_in_memory().await?;
 
-    let safe_address = random_address();
-    let module_address = random_address();
-    let chain_key = random_address();
+    let safe_addr = safe_address();
+    let module_addr = module_address();
+    let chain_key = chain_key_address();
 
-    db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+    db.create_safe_contract(None, safe_addr, module_addr, chain_key, 100, 0, 0)
         .await?;
 
     let schema = build_test_schema(&db);
@@ -147,9 +142,7 @@ async fn test_safes_list_query() -> anyhow::Result<()> {
     "#;
 
     let response = schema.execute(query).await;
-    insta::assert_yaml_snapshot!(response, {
-        ".data.safes.safes[].address" => "[address]",
-    });
+    insta::assert_yaml_snapshot!(response);
 
     Ok(())
 }
