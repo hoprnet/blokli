@@ -1905,7 +1905,7 @@ dependencies = [
 name = "blokli-chain-api"
 version = "0.6.1"
 dependencies = [
- "alloy-primitives",
+ "alloy-sol-types",
  "anyhow",
  "async-broadcast",
  "async-trait",

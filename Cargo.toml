@@ -20,6 +20,7 @@ members = [
 ]
 
 [workspace.dependencies]
+alloy-sol-types = "1.5.7"
 anyhow = "1.0.100"
 async-broadcast = "0.7.2"
 async-channel = "2.5.0"
@@ -58,7 +59,6 @@ futures = "0.3.31"
 futures-time = "3.0.1"
 futures-timer = "3.0.3"
 futures-util = "0.3.31"
-alloy-primitives = "1.5.7"
 hex = "0.4.3"
 hex-literal = "1.1.0"
 hopli = { git = "https://github.com/hoprnet/hopli" }

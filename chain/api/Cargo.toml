@@ -23,13 +23,13 @@ runtime-tokio = [
 ]
 
 [dependencies]
+alloy-sol-types = { workspace = true }
 async-broadcast = { workspace = true }
 async-trait     = { workspace = true }
 chrono          = { workspace = true }
 dashmap         = { workspace = true }
-alloy-primitives = { workspace = true }
-futures          = { workspace = true }
-hex              = { workspace = true }
+futures         = { workspace = true }
+hex             = { workspace = true }
 serde           = { workspace = true }
 serde_json      = { workspace = true }
 thiserror       = { workspace = true }

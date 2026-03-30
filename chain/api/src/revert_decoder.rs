@@ -3,43 +3,18 @@
 //! This module handles parsing `debug_traceTransaction` output (using `callTracer`)
 //! and decoding Solidity revert reasons from the deepest failed internal call frame.
 
-use alloy_primitives::U256;
 use tracing::debug;
-
-/// Selector for `Error(string)` — first 4 bytes of keccak256("Error(string)")
-const ERROR_SELECTOR: [u8; 4] = [0x08, 0xc3, 0x79, 0xa0];
-
-/// Selector for `Panic(uint256)` — first 4 bytes of keccak256("Panic(uint256)")
-const PANIC_SELECTOR: [u8; 4] = [0x4e, 0x48, 0x7b, 0x71];
 
 /// Decode a Solidity revert reason from raw output bytes.
 ///
-/// Supports:
-/// - `Error(string)`: ABI-encoded revert string (e.g., `require(false, "message")`)
-/// - `Panic(uint256)`: Panic codes (e.g., arithmetic overflow, division by zero)
-/// - Custom/unknown errors: returns hex-encoded fallback
-/// - Empty output: returns `None`
+/// Delegates to alloy's ABI decoder for `Error(string)` and `Panic(uint256)`,
+/// falling back to hex-encoded output for unrecognized or empty payloads.
 pub fn decode_revert_reason(output: &[u8]) -> Option<String> {
     if output.is_empty() {
         return None;
     }
 
-    if output.len() < 4 {
-        return Some(format!("0x{}", hex::encode(output)));
-    }
-
-    let selector: [u8; 4] = output[..4].try_into().ok()?;
-
-    if selector == ERROR_SELECTOR {
-        return decode_error_string(&output[4..]);
-    }
-
-    if selector == PANIC_SELECTOR {
-        return decode_panic_code(&output[4..]);
-    }
-
-    // Unknown/custom error — return hex fallback
-    Some(format!("0x{}", hex::encode(output)))
+    alloy_sol_types::decode_revert_reason(output).or_else(|| Some(format!("0x{}", hex::encode(output))))
 }
 
 /// Extract the revert output bytes from the deepest failed frame in a `callTracer` trace.
@@ -93,54 +68,6 @@ fn find_deepest_revert(frame: &serde_json::Value, depth: usize, best: &mut Optio
     }
 }
 
-/// Decode an ABI-encoded `Error(string)` payload (after the 4-byte selector).
-fn decode_error_string(data: &[u8]) -> Option<String> {
-    // ABI encoding: offset (32 bytes) + length (32 bytes) + string data
-    if data.len() < 64 {
-        return Some(format!("0x{}{}", hex::encode(ERROR_SELECTOR), hex::encode(data)));
-    }
-
-    // Read the string length from bytes 32..64
-    let length_bytes: [u8; 32] = data[32..64].try_into().ok()?;
-    let length = usize::try_from(U256::from_be_bytes(length_bytes)).ok()?;
-
-    if data.len() < 64 + length {
-        return Some(format!("0x{}{}", hex::encode(ERROR_SELECTOR), hex::encode(data)));
-    }
-
-    let string_data = &data[64..64 + length];
-    match std::str::from_utf8(string_data) {
-        Ok(s) => Some(s.to_string()),
-        Err(_) => Some(format!("0x{}{}", hex::encode(ERROR_SELECTOR), hex::encode(data))),
-    }
-}
-
-/// Decode an ABI-encoded `Panic(uint256)` payload (after the 4-byte selector).
-fn decode_panic_code(data: &[u8]) -> Option<String> {
-    if data.len() < 32 {
-        return Some(format!("0x{}{}", hex::encode(PANIC_SELECTOR), hex::encode(data)));
-    }
-
-    let code_bytes: [u8; 32] = data[..32].try_into().ok()?;
-    let code = usize::try_from(U256::from_be_bytes(code_bytes)).unwrap_or(usize::MAX);
-
-    let description = match code {
-        0x00 => "generic compiler panic",
-        0x01 => "assertion failure",
-        0x11 => "arithmetic overflow",
-        0x12 => "division by zero",
-        0x21 => "enum conversion overflow",
-        0x22 => "storage encoding error",
-        0x31 => "pop on empty array",
-        0x32 => "array index out of bounds",
-        0x41 => "excessive memory allocation",
-        0x51 => "uninitialized function pointer",
-        _ => "unknown panic code",
-    };
-
-    Some(format!("Panic(0x{code:02x}): {description}"))
-}
-
 /// Decode a hex string (with or without `0x` prefix) to bytes.
 fn hex_decode(s: &str) -> Option<Vec<u8>> {
     let s = s.strip_prefix("0x").unwrap_or(s);
@@ -149,34 +76,17 @@ fn hex_decode(s: &str) -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    use alloy_sol_types::{Panic, Revert, SolError};
+
     use super::*;
 
     #[test]
     fn test_decode_error_string_known_message() {
-        // Error(string) with message "insufficient funds"
-        let message = "insufficient funds";
-        let mut data = Vec::new();
+        let revert = Revert::from("insufficient funds");
+        let encoded = revert.abi_encode();
 
-        // Selector
-        data.extend_from_slice(&ERROR_SELECTOR);
-
-        // ABI encoding: offset = 32
-        let mut offset = [0u8; 32];
-        offset[31] = 0x20;
-        data.extend_from_slice(&offset);
-
-        // Length
-        let mut length = [0u8; 32];
-        length[31] = message.len() as u8;
-        data.extend_from_slice(&length);
-
-        // String data (padded to 32 bytes)
-        let mut padded = vec![0u8; 32];
-        padded[..message.len()].copy_from_slice(message.as_bytes());
-        data.extend_from_slice(&padded);
-
-        let result = decode_revert_reason(&data);
-        assert_eq!(result, Some("insufficient funds".to_string()));
+        let result = decode_revert_reason(&encoded);
+        assert_eq!(result, Some("revert: insufficient funds".to_string()));
     }
 
     #[test]
@@ -186,7 +96,7 @@ mod tests {
             .iter()
             .map(|&code| {
                 let mut data = Vec::new();
-                data.extend_from_slice(&PANIC_SELECTOR);
+                data.extend_from_slice(&Panic::SELECTOR);
 
                 let mut code_bytes = [0u8; 32];
                 code_bytes[31] = code;
@@ -216,7 +126,7 @@ mod tests {
     #[test]
     fn test_extract_revert_from_nested_trace() {
         // Simulate a callTracer output with nested calls where the deepest one has the revert
-        let inner_output = format!("0x{}", hex::encode(ERROR_SELECTOR));
+        let inner_output = format!("0x{}", hex::encode(Revert::SELECTOR));
         let trace = serde_json::json!({
             "type": "CALL",
             "from": "0x1111111111111111111111111111111111111111",
@@ -247,7 +157,7 @@ mod tests {
         assert!(output.is_some(), "should find output from deepest reverted frame");
 
         let bytes = output.unwrap();
-        assert_eq!(bytes, ERROR_SELECTOR.to_vec());
+        assert_eq!(bytes, Revert::SELECTOR.to_vec());
     }
 
     #[test]
