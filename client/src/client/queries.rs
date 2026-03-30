@@ -223,6 +223,7 @@ impl GraphQlQueries {
     }
 
     /// `ChannelCount` GraphQL query.
+    #[deprecated(note = "Use query_channel_stats instead, which returns both count and total wxHOPR balance.")]
     pub fn query_channel_count(selector: ChannelSelector) -> cynic::Operation<QueryChannelCount, ChannelsVariables> {
         QueryChannelCount::build(ChannelsVariables::from(selector))
     }
@@ -373,6 +374,7 @@ impl BlokliQueryClient for BlokliClient {
         response_to_data(resp)?.calculate_module_address.into()
     }
 
+    #[allow(deprecated)]
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
     async fn count_channels(&self, selector: ChannelSelector) -> Result<u32> {
         if selector.safe_address.is_some() {
