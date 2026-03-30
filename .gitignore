@@ -35,20 +35,6 @@ result
 /.pre-commit-config.yaml
 /schema.graphql
 
-# Daemon runtime files
-.beads/daemon.log
-.beads/daemon.pid
-.beads/daemon.lock
-.beads/bd.sock
-.beads/.exclusive-lock
-
-# .beads directory files (keep JSONL only)
-.beads/.gitignore
-.beads/db.sqlite
-.beads/bd.db
-
-# Keep JSONL exports (source of truth for git)
-!.beads/*.jsonl
 data
 api/tests/contracts/build
 *.tgz
@@ -57,7 +43,3 @@ api/tests/contracts/build
 
 *.log
 
-# Beads / Dolt files (added by bd init)
-.dolt/
-*.db
-.beads-credential-key

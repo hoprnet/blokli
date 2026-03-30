@@ -1,7 +1,0 @@
-{
-  "database": "dolt",
-  "backend": "dolt",
-  "dolt_mode": "server",
-  "dolt_database": "blokli",
-  "project_id": "75973635-8ce8-4cb2-b33b-7feb21e762c3"
-}
