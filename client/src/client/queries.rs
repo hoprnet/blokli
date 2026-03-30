@@ -81,9 +81,7 @@ impl BlokliClient {
             safe_address: Some(safe_address),
         };
 
-        let response = self
-            .build_query(GraphQlQueries::query_channels(selector))?
-            .await?;
+        let response = self.build_query(GraphQlQueries::query_channels(selector))?.await?;
         let channels_result = response_to_data(response)?.channels;
         let page: ChannelsList = {
             let parsed_channels: Result<ChannelsList> = channels_result.into();
