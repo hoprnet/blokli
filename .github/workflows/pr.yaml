@@ -31,6 +31,7 @@ jobs:
   # ── PR metadata ──────────────────────────────────────────────────────────────
   validate-pr-title:
     name: Validate title
+    if: github.event_name == 'pull_request'
     runs-on: self-hosted-hoprnet-small
     permissions:
       pull-requests: read
@@ -56,6 +57,7 @@ jobs:
 
   label:
     name: Add labels
+    if: github.event_name == 'pull_request'
     runs-on: self-hosted-hoprnet-small
     permissions:
       contents: read
