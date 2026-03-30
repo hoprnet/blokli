@@ -238,7 +238,6 @@ async fn test_safe_module_transaction_execution_success(#[future(awt)] fixture: 
         ".id" => "[uuid]",
         ".submitted_at" => "[timestamp]",
         ".transaction_hash" => "[tx_hash]",
-        ".safe_execution.revert_reason" => "[revert_data]",
     });
 
     Ok(())

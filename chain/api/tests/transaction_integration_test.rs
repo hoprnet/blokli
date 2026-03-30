@@ -515,14 +515,6 @@ async fn test_transaction_with_invalid_signature() -> anyhow::Result<()> {
     Ok(())
 }
 
-#[tokio::test]
-#[ignore] // Skipped: Cannot drop anvil instance due to Drop trait on TestContext
-async fn test_rpc_connection_failure_handling() -> anyhow::Result<()> {
-    // FIXME: This test would require a different approach to simulate RPC failure
-    // without dropping the anvil instance
-    Ok(())
-}
-
 // =============================================================================
 // Test Category 5: Concurrent Operations Tests
 // =============================================================================

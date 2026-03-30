@@ -1182,19 +1182,32 @@ impl SubscriptionRoot {
             loop {
                 match event_receiver.recv().await {
                     // Use pattern matching guard to filter for matching transaction ID
-                    Ok(TransactionEvent::StatusUpdated { id, status, .. })
+                    Ok(TransactionEvent::StatusUpdated { id, .. })
                         if id == transaction_id =>
                     {
-                        // Fetch full record to get transaction_hash and submitted_at
-                        // (event only contains delta fields)
+                        // Fetch full record to get consistent status + safe_execution
+                        // (avoids TOCTOU between event status and store state)
                         if let Ok(record) = transaction_store.get(transaction_id) {
+                            let is_terminal = matches!(
+                                record.status,
+                                StoreTransactionStatus::Confirmed
+                                    | StoreTransactionStatus::Reverted
+                                    | StoreTransactionStatus::Timeout
+                                    | StoreTransactionStatus::ValidationFailed
+                                    | StoreTransactionStatus::SubmissionFailed
+                            );
+
                             yield Transaction {
                                 id: ID::from(id.to_string()),
-                                status: convert_transaction_status(status),
+                                status: convert_transaction_status(record.status),
                                 submitted_at: record.submitted_at,
                                 transaction_hash: Hex32(record.transaction_hash.to_hex()),
                                 safe_execution: convert_safe_execution(record.safe_execution),
                             };
+
+                            if is_terminal {
+                                break;
+                            }
                         }
                     }
                     Ok(_) => {

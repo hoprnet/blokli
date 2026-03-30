@@ -55,7 +55,8 @@ use crate::{
 pub type DefaultHttpRequestor = blokli_chain_rpc::transport::ReqwestClient;
 
 fn build_transport_client(url: &str) -> Result<Http<ReqwestClient>> {
-    let parsed_url = url::Url::parse(url).unwrap_or_else(|_| panic!("failed to parse URL: {url}"));
+    let parsed_url = url::Url::parse(url)
+        .map_err(|e| BlokliChainError::Configuration(format!("failed to parse URL '{url}': {e}")))?;
     Ok(ReqwestTransport::new(parsed_url))
 }
 

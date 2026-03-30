@@ -133,8 +133,7 @@ fn extract_safe_tx_hash(log: &ReceiptLog) -> Option<Hash> {
 
     // Fall back to first 32 bytes of data (non-indexed parameter)
     if log.data.len() >= 32 {
-        let mut hash_bytes = [0u8; 32];
-        hash_bytes.copy_from_slice(&log.data[..32]);
+        let hash_bytes: [u8; 32] = log.data[..32].try_into().expect("slice length verified as >= 32");
         return Some(Hash::from(hash_bytes));
     }
 
@@ -172,15 +171,13 @@ impl<T: BlokliDbAllOperations + Send + Sync> SafeAddressChecker for DbSafeAddres
 
         // Check if the target is a known Safe contract address (returns itself)
         if let Ok(Some(entry)) = self.db.get_safe_contract_by_address(None, addr).await {
-            let mut safe_addr = [0u8; 20];
-            safe_addr.copy_from_slice(&entry.address);
+            let safe_addr: [u8; 20] = entry.address.as_slice().try_into().ok()?;
             return Some(safe_addr);
         }
 
         // Check if the target is a module address associated with a Safe
         if let Ok(Some(entry)) = self.db.get_safe_contract_by_module_address(None, addr).await {
-            let mut safe_addr = [0u8; 20];
-            safe_addr.copy_from_slice(&entry.address);
+            let safe_addr: [u8; 20] = entry.address.as_slice().try_into().ok()?;
             return Some(safe_addr);
         }
 

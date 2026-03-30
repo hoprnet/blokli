@@ -314,23 +314,6 @@ impl TransactionStore {
         Ok(())
     }
 
-    /// Update the Safe execution result for a transaction
-    ///
-    /// # Errors
-    /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
-    pub fn update_safe_execution(
-        &self,
-        id: Uuid,
-        safe_execution: SafeExecutionResult,
-    ) -> Result<(), TransactionStoreError> {
-        self.transactions
-            .get_mut(&id)
-            .map(|mut entry| {
-                entry.value_mut().safe_execution = Some(safe_execution);
-            })
-            .ok_or(TransactionStoreError::NotFound(id))
-    }
-
     /// List all transactions with a specific status
     pub fn list_by_status(&self, status: TransactionStatus) -> Vec<TransactionRecord> {
         self.transactions
@@ -727,56 +710,6 @@ mod tests {
         } = event;
         assert_eq!(event_id, id);
         assert_eq!(status, TransactionStatus::Confirmed);
-    }
-
-    #[test]
-    fn test_update_safe_execution() {
-        let store = TransactionStore::new();
-
-        let record = TransactionRecord {
-            id: TEST_UUID,
-            raw_transaction: vec![0x01],
-            transaction_hash: test_tx_hash(),
-            status: TransactionStatus::Confirmed,
-            submitted_at: test_timestamp(),
-            confirmed_at: Some(test_timestamp()),
-            error_message: None,
-            safe_execution: None,
-        };
-
-        let id = record.id;
-        store.insert(record).unwrap();
-
-        // Initially no safe execution
-        let retrieved = store.get(id).unwrap();
-        assert!(retrieved.safe_execution.is_none());
-
-        // Update with safe execution result
-        let safe_exec = SafeExecutionResult {
-            success: true,
-            safe_tx_hash: Some(Hash::from([0x42u8; 32])),
-            revert_reason: None,
-        };
-
-        store.update_safe_execution(id, safe_exec).unwrap();
-
-        let retrieved = store.get(id).unwrap();
-        insta::assert_yaml_snapshot!(retrieved);
-    }
-
-    #[test]
-    fn test_update_safe_execution_not_found() {
-        let store = TransactionStore::new();
-        let id = TEST_UUID;
-
-        let safe_exec = SafeExecutionResult {
-            success: true,
-            safe_tx_hash: None,
-            revert_reason: None,
-        };
-
-        let result = store.update_safe_execution(id, safe_exec);
-        assert!(matches!(result, Err(TransactionStoreError::NotFound(_))));
     }
 
     #[test]

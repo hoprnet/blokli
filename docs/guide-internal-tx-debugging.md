@@ -112,7 +112,7 @@ the execution event:
 cast receipt <TX_HASH> --json \
   | jq '.logs[] | select(
       .topics[0] == "0x6895c13664aa4f67288b25d7a21d7aaa34916e355fb9b6fae0a139a9085becb8"
-      or .topics[0] == "0xacd2c87028041289fdb0d2bb49f6d127dd0181c13fd45dbfe16de0930e2bd375"
+      or .topics[0] == "0xacd2c8702804128fdb0db2bb49f6d127dd0181c13fd45dbfe16de0930e2bd375"
     ) | {safe_address: .address, event_topic: .topics[0], module_topic: .topics[1]}'
 ```
 
@@ -211,7 +211,7 @@ BLOCK=$(cast receipt $TX blockNumber)
 # 3. Check for failure events in the receipt
 cast receipt $TX --json \
   | jq '.logs[] | select(
-      .topics[0] == "0xacd2c87028041289fdb0d2bb49f6d127dd0181c13fd45dbfe16de0930e2bd375"
+      .topics[0] == "0xacd2c8702804128fdb0db2bb49f6d127dd0181c13fd45dbfe16de0930e2bd375"
     ) | {safe: .address, module: .topics[1]}'
 # If this returns a result, the internal execution failed.
 # .address is the Safe, .topics[1] (last 40 hex chars) is the module.
@@ -240,7 +240,7 @@ and a `uint256 payment` parameter.
 | Event                                              | Topic0                                                               |
 |----------------------------------------------------|----------------------------------------------------------------------|
 | `ExecutionFromModuleSuccess(address indexed module)` | `0x6895c13664aa4f67288b25d7a21d7aaa34916e355fb9b6fae0a139a9085becb8` |
-| `ExecutionFromModuleFailure(address indexed module)` | `0xacd2c87028041289fdb0d2bb49f6d127dd0181c13fd45dbfe16de0930e2bd375` |
+| `ExecutionFromModuleFailure(address indexed module)` | `0xacd2c8702804128fdb0db2bb49f6d127dd0181c13fd45dbfe16de0930e2bd375` |
 
 These events only contain the calling module address. There is no Safe `txHash`
 parameter. This is the path used by HOPR via `SafePayloadGenerator`.
