@@ -415,6 +415,16 @@
               }
               // shellArgs
             );
+
+            ci = nixLib.mkDevShell {
+              rustToolchainFile = ./rust-toolchain.toml;
+              shellName = "blokli CI";
+              treefmtWrapper = config.treefmt.build.wrapper;
+              treefmtPrograms = pkgs.lib.attrValues config.treefmt.build.programs;
+              extraPackages = with pkgs; [
+                zizmor
+              ];
+            };
           };
 
           # Import checks
