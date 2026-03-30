@@ -97,7 +97,7 @@ impl BlokliTransactionClient for BlokliClient {
             .try_filter_map(|item| {
                 futures::future::ready(match &item.transaction_updated.status {
                     TransactionStatus::Confirmed => Ok(Some(item.transaction_updated)),
-                    TransactionStatus::Pending | TransactionStatus::Submitted => Ok(None),
+                    TransactionStatus::Submitted => Ok(None),
                     TransactionStatus::Reverted => Err(ErrorKind::TrackingError(TrackingErrorKind::Reverted).into()),
                     TransactionStatus::SubmissionFailed => {
                         Err(ErrorKind::TrackingError(TrackingErrorKind::SubmissionFailed).into())

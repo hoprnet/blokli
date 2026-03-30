@@ -222,7 +222,6 @@ async fn test_transaction_query_all_status_types() -> Result<()> {
     let ctx = setup_test_environment().await?;
 
     let status_tests = vec![
-        (TransactionStatus::Pending, "PENDING"),
         (TransactionStatus::Submitted, "SUBMITTED"),
         (TransactionStatus::Confirmed, "CONFIRMED"),
         (TransactionStatus::Reverted, "REVERTED"),

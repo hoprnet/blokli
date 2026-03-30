@@ -446,9 +446,6 @@ pub struct NativeBalance {
 /// Status of a submitted transaction
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum TransactionStatus {
-    /// Transaction is pending submission to the chain
-    #[graphql(name = "PENDING")]
-    Pending,
     /// Transaction has been submitted and is awaiting confirmation
     #[graphql(name = "SUBMITTED")]
     Submitted,

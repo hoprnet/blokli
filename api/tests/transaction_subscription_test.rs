@@ -272,13 +272,13 @@ async fn test_transaction_updated_with_nonexistent_transaction() -> Result<()> {
 async fn test_transaction_updated_multiple_status_transitions() -> Result<()> {
     let ctx = setup_test_environment().await?;
 
-    // Insert a test transaction in PENDING state
+    // Insert a test transaction in SUBMITTED state
     let tx_id = uuid::Uuid::new_v4();
     let record = TransactionRecord {
         id: tx_id,
         raw_transaction: create_test_transaction(&ctx.chain_key, AlloyAddress::ZERO, 1_000_000, 0, 31337),
         transaction_hash: Hash::default(),
-        status: TransactionStatus::Pending,
+        status: TransactionStatus::Submitted,
         submitted_at: chrono::Utc::now(),
         confirmed_at: None,
         error_message: None,
@@ -297,31 +297,22 @@ async fn test_transaction_updated_multiple_status_transitions() -> Result<()> {
 
     let mut stream = ctx.schema.execute_stream(&query).boxed();
 
-    // 1. Receive initial PENDING state
+    // 1. Receive initial SUBMITTED state
     let response1 = tokio::time::timeout(Duration::from_secs(1), stream.next())
         .await
         .expect("Timeout waiting for response")
         .expect("Stream should produce a value");
     let data1 = serde_json::to_value(response1).expect("Failed to serialize response");
-    assert_eq!(data1["data"]["transactionUpdated"]["status"], "PENDING");
+    assert_eq!(data1["data"]["transactionUpdated"]["status"], "SUBMITTED");
 
-    // 2. Update to SUBMITTED
-    ctx.store.update_status(tx_id, TransactionStatus::Submitted, None)?;
+    // 2. Update to CONFIRMED
+    ctx.store.update_status(tx_id, TransactionStatus::Confirmed, None)?;
     let response2 = tokio::time::timeout(Duration::from_secs(1), stream.next())
         .await
         .expect("Timeout waiting for response")
         .expect("Stream should produce a value");
     let data2 = serde_json::to_value(response2).expect("Failed to serialize response");
-    assert_eq!(data2["data"]["transactionUpdated"]["status"], "SUBMITTED");
-
-    // 3. Update to CONFIRMED
-    ctx.store.update_status(tx_id, TransactionStatus::Confirmed, None)?;
-    let response3 = tokio::time::timeout(Duration::from_secs(1), stream.next())
-        .await
-        .expect("Timeout waiting for response")
-        .expect("Stream should produce a value");
-    let data3 = serde_json::to_value(response3).expect("Failed to serialize response");
-    assert_eq!(data3["data"]["transactionUpdated"]["status"], "CONFIRMED");
+    assert_eq!(data2["data"]["transactionUpdated"]["status"], "CONFIRMED");
 
     Ok(())
 }
@@ -398,7 +389,6 @@ async fn test_transaction_updated_handles_all_status_types() -> Result<()> {
     let ctx = setup_test_environment().await?;
 
     let test_statuses = vec![
-        (TransactionStatus::Pending, "PENDING"),
         (TransactionStatus::Submitted, "SUBMITTED"),
         (TransactionStatus::Confirmed, "CONFIRMED"),
         (TransactionStatus::Reverted, "REVERTED"),

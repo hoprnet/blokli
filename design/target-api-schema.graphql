@@ -807,8 +807,6 @@ union TransactionResult = Transaction | InvalidTransactionIdError
 enum TransactionStatus {
   "Transaction has been confirmed on-chain with success"
   CONFIRMED
-  "Transaction is pending submission to the chain"
-  PENDING
   "Transaction was included on-chain but reverted (receipt.status = 0)"
   REVERTED
   "Transaction submission failed"

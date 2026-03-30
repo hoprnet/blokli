@@ -629,8 +629,8 @@ async fn subscribe_transaction_status_updates(#[future(awt)] fixture: Integratio
     // 5. Assert we received SUBMITTED and CONFIRMED statuses
     assert!(!statuses.is_empty(), "Should receive at least one status update");
     assert!(
-        statuses.contains(&TransactionStatus::Submitted) || statuses.contains(&TransactionStatus::Pending),
-        "Should receive SUBMITTED or PENDING status"
+        statuses.contains(&TransactionStatus::Submitted),
+        "Should receive SUBMITTED status"
     );
     assert!(
         statuses.contains(&TransactionStatus::Confirmed),

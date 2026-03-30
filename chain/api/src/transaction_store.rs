@@ -54,8 +54,6 @@ fn serialize_hash<S: serde::Serializer>(hash: &Hash, s: S) -> Result<S::Ok, S::E
 /// Status of a submitted transaction
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum TransactionStatus {
-    /// Transaction is pending submission to the chain
-    Pending,
     /// Transaction has been submitted and is awaiting confirmation
     Submitted,
     /// Transaction has been confirmed on-chain with success
@@ -560,7 +558,7 @@ mod tests {
             id: TEST_UUID,
             raw_transaction: vec![0x01, 0x02, 0x03],
             transaction_hash: test_tx_hash(),
-            status: TransactionStatus::Pending,
+            status: TransactionStatus::Submitted,
             submitted_at: test_timestamp(),
             confirmed_at: None,
             error_message: None,
@@ -616,7 +614,7 @@ mod tests {
             id: TEST_UUID,
             raw_transaction: vec![0x01, 0x02, 0x03],
             transaction_hash: test_tx_hash(),
-            status: TransactionStatus::Pending,
+            status: TransactionStatus::Submitted,
             submitted_at: test_timestamp(),
             confirmed_at: None,
             error_message: None,
@@ -655,7 +653,7 @@ mod tests {
             id: TEST_UUID,
             raw_transaction: vec![0x01, 0x02, 0x03],
             transaction_hash: test_tx_hash(),
-            status: TransactionStatus::Pending,
+            status: TransactionStatus::Submitted,
             submitted_at: test_timestamp(),
             confirmed_at: None,
             error_message: None,

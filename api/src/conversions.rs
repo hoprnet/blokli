@@ -35,7 +35,6 @@ pub fn transaction_from_record(record: TransactionRecord) -> Transaction {
 /// Convert [`StoreTransactionStatus`] to GraphQL [`GqlTransactionStatus`]
 pub fn convert_transaction_status(status: StoreTransactionStatus) -> GqlTransactionStatus {
     match status {
-        StoreTransactionStatus::Pending => GqlTransactionStatus::Pending,
         StoreTransactionStatus::Submitted => GqlTransactionStatus::Submitted,
         StoreTransactionStatus::Confirmed => GqlTransactionStatus::Confirmed,
         StoreTransactionStatus::Reverted => GqlTransactionStatus::Reverted,

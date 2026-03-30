@@ -223,11 +223,7 @@ async fn test_fire_and_forget_returns_hash_immediately() -> anyhow::Result<()> {
 
     // Verify transaction is NOT in store (fire-and-forget doesn't track)
     let submitted = ctx.store.list_by_status(TransactionStatus::Submitted);
-    let pending = ctx.store.list_by_status(TransactionStatus::Pending);
-    assert!(
-        submitted.is_empty() && pending.is_empty(),
-        "Fire-and-forget should not store transactions"
-    );
+    assert!(submitted.is_empty(), "Fire-and-forget should not store transactions");
 
     Ok(())
 }
@@ -343,8 +339,8 @@ async fn test_async_mode_query_status_before_confirmation() -> anyhow::Result<()
     // Should still be submitted (might not have 2 confirmations yet)
     let record = ctx.store.get(uuid)?;
     assert!(
-        matches!(record.status, TransactionStatus::Submitted | TransactionStatus::Pending),
-        "Should still be in submitted or pending state, got: {:?}",
+        matches!(record.status, TransactionStatus::Submitted),
+        "Should still be in submitted state, got: {:?}",
         record.status
     );
 
@@ -363,11 +359,7 @@ async fn test_async_mode_validation_failure() -> anyhow::Result<()> {
 
     // Verify nothing was stored
     let submitted = ctx.store.list_by_status(TransactionStatus::Submitted);
-    let pending = ctx.store.list_by_status(TransactionStatus::Pending);
-    assert!(
-        submitted.is_empty() && pending.is_empty(),
-        "Failed validation should not create record"
-    );
+    assert!(submitted.is_empty(), "Failed validation should not create record");
 
     Ok(())
 }
@@ -601,11 +593,7 @@ async fn test_mixed_mode_operations() -> anyhow::Result<()> {
 
     // Fire-and-forget should not be in store - count all statuses
     let mut total_tracked = 0;
-    for status in [
-        TransactionStatus::Submitted,
-        TransactionStatus::Confirmed,
-        TransactionStatus::Pending,
-    ] {
+    for status in [TransactionStatus::Submitted, TransactionStatus::Confirmed] {
         total_tracked += ctx.store.list_by_status(status).len();
     }
     assert_eq!(total_tracked, 2); // Only async and sync

@@ -1164,7 +1164,6 @@ impl SubscriptionRoot {
                         if id == transaction_id =>
                     {
                         // Fetch full record to get consistent status + safe_execution
-                        // (avoids TOCTOU between event status and store state)
                         if let Ok(record) = transaction_store.get(transaction_id) {
                             let is_terminal = matches!(
                                 record.status,
