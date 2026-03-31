@@ -365,7 +365,7 @@ pub enum ChannelsResult {
     QueryFailed(QueryFailedError),
 }
 
-/// Aggregated wxHOPR holdings across all indexed safe contracts
+/// Aggregated wxHOPR holdings across all or a filtered subset of indexed safe contracts
 #[derive(SimpleObject, Clone, Debug)]
 pub struct SafesBalance {
     /// Sum of wxHOPR balances for all safe contract addresses
@@ -374,7 +374,7 @@ pub struct SafesBalance {
     pub count: i32,
 }
 
-/// Result type for total safe HOPR balance query
+/// Result type for total safe wxHOPR balance query
 #[derive(Union, Clone, Debug)]
 pub enum SafesBalanceResult {
     /// Invalid owner address

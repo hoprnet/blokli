@@ -18,10 +18,11 @@ use blokli_db_entity::{
     conversions::{
         account_aggregation::fetch_accounts_with_filters,
         channel_aggregation::{fetch_channel_stats as fetch_channel_stats_db, fetch_channels_with_state},
+        node_safe_registration::fetch_registered_nodes_for_safe,
         redemptions_aggregation::fetch_aggregated_redeemed_stats,
     },
     hopr_node_safe_registration,
-    views::{account_current, channel_current},
+    views::{account_current, channel_current, safe_contract_current},
 };
 use futures::future::try_join_all;
 use hopr_types::{
@@ -111,31 +112,26 @@ pub enum CalculateModuleAddressResult {
     QueryFailed(QueryFailedError),
 }
 
-/// Validate an Ethereum hex address and return its 20-byte binary form.
+/// Validate and parse an Ethereum hex address.
 ///
-/// Parses and validates `address` (expected as a hex string, e.g. starting with `0x`); on success returns the address
-/// bytes suitable for database queries, otherwise returns `SafeResult::InvalidAddress` describing the validation error.
+/// Validates `address` format and parses it; on success returns the typed `Address`,
+/// otherwise returns an `InvalidAddressError` describing the validation failure.
 ///
 /// # Examples
 ///
 /// ```ignore
-/// let res = parse_safe_address("0x0123456789abcdef0123456789abcdef01234567".to_string());
-/// assert!(res.is_ok());
-/// let bytes = res.unwrap();
-/// assert_eq!(bytes.len(), 20);
+/// let addr = parse_eth_address("0x0123456789abcdef0123456789abcdef01234567".to_string());
+/// assert!(addr.is_ok());
 /// ```
-fn parse_safe_address(address: String) -> Result<Vec<u8>, SafeResult> {
-    // Validate address format
+fn parse_eth_address(address: String) -> Result<Address, InvalidAddressError> {
     if let Err(e) = validate_eth_address(&address) {
-        return Err(SafeResult::InvalidAddress(errors::invalid_address_from_message(
-            address, e.message,
-        )));
+        return Err(errors::invalid_address_from_message(address, e.message));
     }
+    Address::from_hex(&address).map_err(|e| errors::invalid_address_error(address, e))
+}
 
-    // Convert hex string to Address and then to binary
-    Address::from_hex(&address)
-        .map(|addr| addr.as_ref().to_vec())
-        .map_err(|e| SafeResult::InvalidAddress(errors::invalid_address_error(address, e)))
+fn parse_optional_eth_address(address: &Option<String>) -> Result<Option<Address>, InvalidAddressError> {
+    address.as_ref().map(|addr| parse_eth_address(addr.clone())).transpose()
 }
 
 fn scale_wei_by_multiplier(value: u128, multiplier: f64) -> u128 {
@@ -234,22 +230,15 @@ fn current_row_statement(backend: DatabaseBackend, column: &str, value: Vec<u8>)
     Statement::from_sql_and_values(backend, sql, vec![value.into()])
 }
 
-fn safe_address_rows_statement(backend: DatabaseBackend, owner_chain_key: Option<Vec<u8>>) -> Statement {
-    match owner_chain_key {
-        Some(value) => {
-            let placeholder = if backend == DatabaseBackend::Postgres {
-                "$1"
-            } else {
-                "?"
-            };
-            let sql = format!(
-                "SELECT address FROM safe_contract_current WHERE chain_key = {}",
-                placeholder
-            );
-            Statement::from_sql_and_values(backend, sql, vec![value.into()])
-        }
-        None => Statement::from_string(backend, "SELECT address FROM safe_contract_current".to_string()),
+async fn fetch_safe_addresses(
+    db: &DatabaseConnection,
+    owner_chain_key: Option<Vec<u8>>,
+) -> Result<Vec<Vec<u8>>, sea_orm::DbErr> {
+    let mut query = safe_contract_current::Entity::find();
+    if let Some(chain_key_bytes) = owner_chain_key {
+        query = query.filter(safe_contract_current::Column::ChainKey.eq(chain_key_bytes));
     }
+    Ok(query.all(db).await?.into_iter().map(|row| row.address).collect())
 }
 
 /// Fetch a Safe contract by its address with current (latest) state
@@ -297,16 +286,8 @@ async fn fetch_safe_by_chain_key(
 }
 
 async fn registered_nodes_for_safe(db: &DatabaseConnection, safe_address: Vec<u8>) -> Vec<String> {
-    match hopr_node_safe_registration::Entity::find()
-        .filter(hopr_node_safe_registration::Column::SafeAddress.eq(safe_address))
-        .all(db)
-        .await
-    {
-        Ok(registrations) => registrations
-            .into_iter()
-            .filter_map(|reg| Address::try_from(reg.node_address.as_slice()).ok())
-            .map(|addr| addr.to_hex())
-            .collect(),
+    match fetch_registered_nodes_for_safe(db, &safe_address).await {
+        Ok(nodes) => nodes.into_iter().map(|addr| addr.to_hex()).collect(),
         Err(e) => {
             warn!(
                 error = %e,
@@ -479,22 +460,9 @@ impl QueryRoot {
             blokli_api_types::ChannelStatus,
         >,
     ) -> CountResult {
-        let parsed_safe_address = match safe_address {
-            Some(ref addr) => {
-                if let Err(e) = validate_eth_address(addr) {
-                    return CountResult::QueryFailed(errors::invalid_address_query_failed(e.message));
-                }
-                match Address::from_hex(addr) {
-                    Ok(parsed) => Some(parsed),
-                    Err(e) => {
-                        return CountResult::QueryFailed(errors::invalid_address_query_failed(format!(
-                            "Invalid address: {}",
-                            e
-                        )));
-                    }
-                }
-            }
-            None => None,
+        let parsed_safe_address = match parse_optional_eth_address(&safe_address) {
+            Ok(addr) => addr,
+            Err(e) => return CountResult::QueryFailed(errors::invalid_address_query_failed(e.message)),
         };
 
         let db = match ctx.data::<DatabaseConnection>() {
@@ -583,22 +551,9 @@ impl QueryRoot {
         safe_address: Option<String>,
         #[graphql(desc = "Filter by channel status")] status: Option<blokli_api_types::ChannelStatus>,
     ) -> ChannelStatsResult {
-        let parsed_safe_address = match safe_address {
-            Some(ref addr) => {
-                if let Err(e) = validate_eth_address(addr) {
-                    return ChannelStatsResult::InvalidAddress(errors::invalid_address_from_message(
-                        addr.clone(),
-                        e.message,
-                    ));
-                }
-                match Address::from_hex(addr) {
-                    Ok(parsed) => Some(parsed),
-                    Err(e) => {
-                        return ChannelStatsResult::InvalidAddress(errors::invalid_address_error(addr.clone(), e));
-                    }
-                }
-            }
-            None => None,
+        let parsed_safe_address = match parse_optional_eth_address(&safe_address) {
+            Ok(addr) => addr,
+            Err(e) => return ChannelStatsResult::InvalidAddress(e),
         };
 
         let db = match ctx.data::<DatabaseConnection>() {
@@ -678,22 +633,9 @@ impl QueryRoot {
             ));
         }
 
-        let parsed_safe_address = match safe_address {
-            Some(ref addr) => {
-                if let Err(e) = validate_eth_address(addr) {
-                    return ChannelsResult::InvalidAddress(errors::invalid_address_from_message(
-                        addr.clone(),
-                        e.message,
-                    ));
-                }
-                match Address::from_hex(addr) {
-                    Ok(parsed) => Some(parsed),
-                    Err(e) => {
-                        return ChannelsResult::InvalidAddress(errors::invalid_address_error(addr.clone(), e));
-                    }
-                }
-            }
-            None => None,
+        let parsed_safe_address = match parse_optional_eth_address(&safe_address) {
+            Ok(addr) => addr,
+            Err(e) => return ChannelsResult::InvalidAddress(e),
         };
 
         let db = match ctx.data::<DatabaseConnection>() {
@@ -1039,9 +981,9 @@ impl QueryRoot {
         let db = ctx.data::<DatabaseConnection>()?;
 
         if let Some(address) = selector.address {
-            let safe_address = match parse_safe_address(address) {
-                Ok(addr) => addr,
-                Err(error_result) => return Ok(Some(error_result)),
+            let safe_address = match parse_eth_address(address) {
+                Ok(addr) => addr.as_ref().to_vec(),
+                Err(e) => return Ok(Some(SafeResult::InvalidAddress(e))),
             };
 
             return match fetch_safe_by_address(db, safe_address.clone()).await {
@@ -1055,9 +997,9 @@ impl QueryRoot {
         }
 
         if let Some(chain_key) = selector.chain_key {
-            let chain_key_address = match parse_safe_address(chain_key) {
-                Ok(addr) => addr,
-                Err(error_result) => return Ok(Some(error_result)),
+            let chain_key_address = match parse_eth_address(chain_key) {
+                Ok(addr) => addr.as_ref().to_vec(),
+                Err(e) => return Ok(Some(SafeResult::InvalidAddress(e))),
             };
 
             return match fetch_safe_by_chain_key(db, chain_key_address).await {
@@ -1076,9 +1018,9 @@ impl QueryRoot {
             };
         }
 
-        let node_address = match parse_safe_address(selector.registered_node.unwrap_or_default()) {
-            Ok(addr) => addr,
-            Err(error_result) => return Ok(Some(error_result)),
+        let node_address = match parse_eth_address(selector.registered_node.unwrap_or_default()) {
+            Ok(addr) => addr.as_ref().to_vec(),
+            Err(e) => return Ok(Some(SafeResult::InvalidAddress(e))),
         };
 
         let registration = match hopr_node_safe_registration::Entity::find()
@@ -1636,22 +1578,9 @@ impl QueryRoot {
         #[graphql(desc = "Restrict to safes associated with this chain key (owner address, hexadecimal format)")]
         owner_address: Option<String>,
     ) -> SafesBalanceResult {
-        let parsed_owner_address = match owner_address {
-            Some(ref addr) => {
-                if let Err(e) = validate_eth_address(addr) {
-                    return SafesBalanceResult::InvalidAddress(errors::invalid_address_from_message(
-                        addr.clone(),
-                        e.message,
-                    ));
-                }
-                match Address::from_hex(addr) {
-                    Ok(parsed) => Some(parsed),
-                    Err(e) => {
-                        return SafesBalanceResult::InvalidAddress(errors::invalid_address_error(addr.clone(), e));
-                    }
-                }
-            }
-            None => None,
+        let parsed_owner_address = match parse_optional_eth_address(&owner_address) {
+            Ok(addr) => addr,
+            Err(e) => return SafesBalanceResult::InvalidAddress(e),
         };
 
         let db = match ctx.data::<DatabaseConnection>() {
@@ -1661,32 +1590,16 @@ impl QueryRoot {
             }
         };
 
-        let stmt = safe_address_rows_statement(
-            db.get_database_backend(),
-            parsed_owner_address.as_ref().map(|owner| owner.as_ref().to_vec()),
-        );
-        let rows = match db.query_all_raw(stmt).await {
-            Ok(rows) => rows,
-            Err(e) => {
-                return SafesBalanceResult::QueryFailed(errors::query_failed(
-                    "fetch indexed safe addresses for safes balance",
-                    e,
-                ));
-            }
-        };
-
-        let mut safe_addresses: Vec<Vec<u8>> = Vec::with_capacity(rows.len());
-        for row in rows {
-            match row.try_get("", "address") {
-                Ok(address) => safe_addresses.push(address),
+        let mut safe_addresses =
+            match fetch_safe_addresses(db, parsed_owner_address.as_ref().map(|owner| owner.as_ref().to_vec())).await {
+                Ok(addresses) => addresses,
                 Err(e) => {
                     return SafesBalanceResult::QueryFailed(errors::query_failed(
-                        "decode safe address rows for safes balance",
+                        "fetch indexed safe addresses for safes balance",
                         e,
                     ));
                 }
-            }
-        }
+            };
 
         safe_addresses.sort_unstable();
         safe_addresses.dedup();
