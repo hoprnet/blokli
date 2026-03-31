@@ -221,20 +221,13 @@ impl Args {
             ))
         })?;
 
-        // Create resolved chain config with user overrides
-        let max_rpc_req = if config.max_rpc_requests_per_sec > 0 {
-            Some(config.max_rpc_requests_per_sec)
-        } else {
-            None
-        };
-
         let chain_config = ChainConfig {
             chain_id: network_config.chain_id,
             tx_polling_interval: config.network.tx_polling_interval(),
             confirmations: config.network.confirmations(),
             max_block_range: config.max_block_range,
             channel_contract_deploy_block: network_config.indexer_start_block_number,
-            max_requests_per_sec: max_rpc_req,
+            max_requests_per_sec: config.max_rpc_requests_per_sec,
             expected_block_time: config.network.expected_block_time(),
         };
 
@@ -1353,6 +1346,72 @@ mod tests {
             assert_eq!(
                 config.max_block_range, 2500,
                 "BLOKLI_MAX_BLOCK_RANGE env var should override config file"
+            );
+        });
+    }
+
+    #[test]
+    fn test_max_rpc_requests_per_sec_zero_from_config() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://localhost:8545"
+            max_rpc_requests_per_sec = 0
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_var("BLOKLI_MAX_RPC_REQUESTS_PER_SEC", None::<&str>, || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
+
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(
+                config.max_rpc_requests_per_sec,
+                Some(0),
+                "max_rpc_requests_per_sec should preserve explicit 0 from config"
+            );
+        });
+    }
+
+    #[test]
+    fn test_max_rpc_requests_per_sec_env_override_zero() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://localhost:8545"
+            max_rpc_requests_per_sec = 250
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_var("BLOKLI_MAX_RPC_REQUESTS_PER_SEC", Some("0"), || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
+
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(
+                config.max_rpc_requests_per_sec,
+                Some(0),
+                "BLOKLI_MAX_RPC_REQUESTS_PER_SEC should override config file value"
             );
         });
     }

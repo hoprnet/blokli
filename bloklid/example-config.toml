@@ -16,7 +16,6 @@ rpc_url = "http://localhost:8545"
 
 # Maximum number of RPC requests per second (0 for unlimited)
 # Overrides the default rate limit for the selected network
-# If not specified, uses the network's default rate limit
 max_rpc_requests_per_sec = 0
 
 # Maximum block range for RPC queries when fetching logs (default: 10000)
