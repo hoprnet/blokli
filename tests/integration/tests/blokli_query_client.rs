@@ -438,11 +438,6 @@ async fn channel_stats_count_and_balance(#[future(awt)] fixture: IntegrationFixt
         })
         .await?;
 
-    fixture
-        .initiate_outgoing_channel_closure(&src, &dst, &src_safe.module_address)
-        .await?;
-    sleep(Duration::from_secs(8)).await;
-
     assert_eq!(by_dst_safe.count, 0);
     assert_eq!(
         by_dst_safe
@@ -470,6 +465,10 @@ async fn channel_stats_count_and_balance(#[future(awt)] fixture: IntegrationFixt
             .context("failed to parse balance from channel_stats (unfiltered)")?
             >= amount
     );
+
+    fixture
+        .initiate_outgoing_channel_closure(&src, &dst, &src_safe.module_address)
+        .await?;
 
     Ok(())
 }
