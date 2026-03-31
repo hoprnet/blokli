@@ -1,6 +1,6 @@
 use blokli_client::{
     BlokliClient,
-    api::{BlokliQueryClient, ModulePredictionInput, SafeSelector},
+    api::{BlokliQueryClient, ChainAddress, ModulePredictionInput, SafeSelector},
 };
 use clap::Subcommand;
 use hopr_types::primitive::prelude::Address;
@@ -27,6 +27,11 @@ pub(crate) enum QueryTarget {
     ChainInfo,
     /// Gets the number of transactions sent by an address.
     TxCount {
+        #[arg(value_parser = clap::value_parser!(Address))]
+        address: Address,
+    },
+    /// Gets the wxHOPR allowance granted by a Safe to the HOPR channels contract.
+    SafeAllowance {
         #[arg(value_parser = clap::value_parser!(Address))]
         address: Address,
     },
@@ -58,10 +63,16 @@ pub(crate) enum QueryTarget {
     CountAccounts(AccountArgs),
     /// Gets information about an account.
     Account(AccountArgs),
-    /// Gets the number of channels.
-    CountChannels(ChannelArgs),
-    /// Gets information about channels.
+    /// Gets channel count and total wxHOPR balance matching optional filters.
+    ChannelStats(ChannelArgs),
+    /// Gets channels with their aggregated wxHOPR balance. Use --safe-address to scope to a safe.
     Channel(ChannelArgs),
+    /// Gets total wxHOPR balance held across indexed safe contracts.
+    SafesBalance {
+        /// Restrict to safes associated with the given chain key (owner address).
+        #[arg(long, value_parser = clap::value_parser!(Address))]
+        owner: Option<Address>,
+    },
     /// Gets information about redemptions
     Redemptions(RedemptionsArgs),
 }
@@ -111,6 +122,9 @@ impl QueryTarget {
                 }
             }
             QueryTarget::Channel(sel) => format.serialize(client.query_channels(sel.try_into()?).await?),
+            QueryTarget::SafesBalance { owner } => {
+                format.serialize(client.query_safes_balance(owner.map(ChainAddress::from)).await?)
+            }
             QueryTarget::ModuleAddress {
                 nonce,
                 owner,
@@ -127,8 +141,11 @@ impl QueryTarget {
             QueryTarget::TxCount { address } => {
                 format.serialize(client.query_transaction_count(&address.into()).await?)
             }
+            QueryTarget::SafeAllowance { address } => {
+                format.serialize(client.query_safe_allowance(&address.into()).await?)
+            }
             QueryTarget::CountAccounts(sel) => format.serialize(client.count_accounts(sel.try_into()?).await?),
-            QueryTarget::CountChannels(sel) => format.serialize(client.count_channels(sel.try_into()?).await?),
+            QueryTarget::ChannelStats(sel) => format.serialize(client.query_channel_stats(sel.try_into()?).await?),
             QueryTarget::Redemptions(sel) => format.serialize(client.query_redeemed_stats(sel.try_into()?).await?),
         }
     }
