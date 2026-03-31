@@ -36,7 +36,7 @@ pre-commit.lib.${system}.run {
     export-db-schema = {
       enable = true;
       name = "generate database schema";
-      entry = "bash -c 'just export-db-schema'";
+      entry = "${pkgs.just}/bin/just export-db-schema";
       files = "db/migration/src/.*\\.rs$";
       language = "system";
       pass_filenames = false;
