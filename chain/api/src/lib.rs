@@ -92,10 +92,13 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         // retries
         let rpc_http_retry_policy = DefaultRetryPolicy::default();
 
-        let max_requests_per_sec = chain_config
-            .max_requests_per_sec
-            .map(u64::from)
-            .unwrap_or(DEFAULT_MAX_RPC_REQUESTS_PER_SEC);
+        // Some(0) means "unlimited" and must not be forwarded as-is: RetryBackoffLayer divides by
+        // this value. Use u64::MAX as a safe stand-in. None falls back to the default rate.
+        let max_requests_per_sec: u64 = match chain_config.max_requests_per_sec {
+            None => DEFAULT_MAX_RPC_REQUESTS_PER_SEC,
+            Some(0) => u64::MAX,
+            Some(v) => u64::from(v),
+        };
 
         let rpc_cfg = RpcOperationsConfig {
             chain_id: chain_config.chain_id,
