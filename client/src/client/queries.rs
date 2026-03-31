@@ -141,7 +141,7 @@ impl GraphQlQueries {
     ) -> cynic::Operation<QuerySafeBy, SafeByVariables> {
         QuerySafeBy::build(SafeByVariables {
             selector,
-            value: address.encode_hex(),
+            address: address.encode_hex(),
         })
     }
 

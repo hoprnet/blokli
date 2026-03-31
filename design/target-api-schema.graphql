@@ -500,13 +500,13 @@ type QueryRoot {
   """
   Retrieve safe by selector.
   
-  The selector enum identifies the lookup type; value is the hexadecimal address.
+  The selector enum identifies the lookup type using the provided selected address.
   """
   safeBy(
+    "Address  for the selector (hexadecimal format)"
+    address: String!
     "Selector type for safe lookup"
     selector: SafeSelectorInput!
-    "Address value for the selector (hexadecimal format)"
-    value: String!
   ): SafeResult
   """
   Retrieve safe by chain key (owner address)

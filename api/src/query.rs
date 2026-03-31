@@ -962,13 +962,13 @@ impl QueryRoot {
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Selector type for safe lookup")] selector: SafeSelectorInput,
-        #[graphql(desc = "Address value for the selector (hexadecimal format)")] value: String,
+        #[graphql(desc = "Address value for the selector (hexadecimal format)")] address: String,
     ) -> Result<Option<SafeResult>> {
         let db = ctx.data::<DatabaseConnection>()?;
 
         match selector {
             SafeSelectorInput::Address => {
-                let safe_address = match parse_eth_address(value) {
+                let safe_address = match parse_eth_address(address) {
                     Ok(addr) => addr.as_ref().to_vec(),
                     Err(e) => return Ok(Some(SafeResult::InvalidAddress(e))),
                 };
@@ -984,7 +984,7 @@ impl QueryRoot {
             }
 
             SafeSelectorInput::ChainKey => {
-                let chain_key_address = match parse_eth_address(value) {
+                let chain_key_address = match parse_eth_address(address) {
                     Ok(addr) => addr.as_ref().to_vec(),
                     Err(e) => return Ok(Some(SafeResult::InvalidAddress(e))),
                 };
@@ -1006,7 +1006,7 @@ impl QueryRoot {
             }
 
             SafeSelectorInput::RegisteredNode => {
-                let node_address = match parse_eth_address(value) {
+                let node_address = match parse_eth_address(address) {
                     Ok(addr) => addr.as_ref().to_vec(),
                     Err(e) => return Ok(Some(SafeResult::InvalidAddress(e))),
                 };

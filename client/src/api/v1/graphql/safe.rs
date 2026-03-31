@@ -17,7 +17,7 @@ pub enum SafeSelectorInput {
 #[derive(cynic::QueryVariables, Debug)]
 pub struct SafeByVariables {
     pub selector: SafeSelectorInput,
-    pub value: String,
+    pub address: String,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
@@ -32,7 +32,7 @@ pub struct Safe {
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "QueryRoot", variables = "SafeByVariables")]
 pub struct QuerySafeBy {
-    #[arguments(selector: $selector, value: $value)]
+    #[arguments(selector: $selector, address: $address)]
     pub safe_by: Option<SafeResult>,
 }
 
