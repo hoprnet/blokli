@@ -355,6 +355,7 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
     fixture
         .initiate_outgoing_channel_closure(&src, &dst, &src_safe.module_address)
         .await?;
+
     sleep(Duration::from_secs(8)).await;
 
     let count_after_closure = fixture.client().count_channels(channel_selector).await?;
@@ -436,6 +437,12 @@ async fn channel_stats_count_and_balance(#[future(awt)] fixture: IntegrationFixt
             ..Default::default()
         })
         .await?;
+
+    fixture
+        .initiate_outgoing_channel_closure(&src, &dst, &src_safe.module_address)
+        .await?;
+    sleep(Duration::from_secs(8)).await;
+
     assert_eq!(by_dst_safe.count, 0);
     assert_eq!(
         by_dst_safe
