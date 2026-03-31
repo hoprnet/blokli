@@ -107,24 +107,6 @@ jobs:
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       codecov_token: ${{ secrets.CODECOV_TOKEN }}
-  # ── Repo-specific: nextest ──────────────────────────────────────────────────
-  nextest:
-    name: Nextest
-    runs-on: self-hosted-hoprnet-bigger
-    timeout-minutes: 30
-    if: github.event.pull_request.head.repo.full_name == github.repository
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        with:
-          persist-credentials: false
-      - name: Setup Nix
-        uses: hoprnet/hopr-workflows/actions/setup-nix@c8d45034bb33307dfda3b4dfcd1fc4000cadc05a # setup-nix-v1
-        with:
-          cachix_cache_name: blokli
-          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      - name: Run unit tests using nextest
-        run: nix run -L .#nextest
   # ── Repo-specific: schema validation ────────────────────────────────────────
   schema-validation:
     name: Schema Validation
