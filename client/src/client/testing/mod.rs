@@ -6,7 +6,7 @@ use std::{
 
 use async_broadcast::TrySendError;
 use futures::{Stream, StreamExt};
-use hopr_types::crypto::types::Hash;
+use hopr_types::{crypto::types::Hash, primitive::prelude::HoprBalance as PrimitiveHoprBalance};
 use indexmap::IndexMap;
 
 use crate::{
@@ -283,7 +283,7 @@ pub struct BlokliTestClient<M> {
     tx_simulation_delay: Duration,
 }
 
-fn channel_matches(channel: &Channel, selector: &ChannelSelector) -> bool {
+fn channel_matches(channel: &Channel, selector: &ChannelSelector, accounts: &IndexMap<u32, Account>) -> bool {
     let filter = match selector.filter {
         Some(ChannelFilter::ChannelId(id)) => channel.concrete_channel_id == hex::encode(id),
         Some(ChannelFilter::DestinationKeyId(dst_id)) => channel.destination as u32 == dst_id,
@@ -293,7 +293,13 @@ fn channel_matches(channel: &Channel, selector: &ChannelSelector) -> bool {
         }
         None => true,
     };
-    filter && selector.status.is_none_or(|status| channel.status == status)
+    let safe_ok = selector.safe_address.is_none_or(|safe| {
+        accounts
+            .get(&(channel.source as u32))
+            .and_then(|acc| acc.safe_address.as_ref())
+            .is_some_and(|acc_safe| *acc_safe == hex::encode(safe))
+    });
+    filter && safe_ok && selector.status.is_none_or(|status| channel.status == status)
 }
 
 fn account_matches(account: &Account, selector: &AccountSelector) -> bool {
@@ -403,12 +409,11 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
     }
 
     fn do_query_channels(&self, selector: ChannelSelector) -> Result<Vec<Channel>> {
-        Ok(self
-            .state
-            .read()
+        let state = self.state.read();
+        Ok(state
             .channels
             .values()
-            .filter(|c| channel_matches(c, &selector))
+            .filter(|c| channel_matches(c, &selector, &state.accounts))
             .cloned()
             .collect())
     }
@@ -532,12 +537,58 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
         Ok(if selector.matches_all() {
             self.state.read().channels.len() as u32
         } else {
-            self.query_channels(selector).await?.len() as u32
+            self.query_channels(selector).await?.channels.len() as u32
         })
     }
 
-    async fn query_channels(&self, selector: ChannelSelector) -> Result<Vec<Channel>> {
-        self.do_query_channels(selector)
+    async fn query_channel_stats(&self, selector: ChannelSelector) -> Result<ChannelStats> {
+        let channels = self.do_query_channels(selector)?;
+        let count = i32::try_from(channels.len()).map_err(|_| ErrorKind::ParseError)?;
+        let mut total = PrimitiveHoprBalance::zero();
+        for ch in &channels {
+            let bal: PrimitiveHoprBalance = ch.balance.0.parse().map_err(|_| ErrorKind::ParseError)?;
+            total += bal;
+        }
+        Ok(ChannelStats {
+            count,
+            balance: TokenValueString(total.to_string()),
+        })
+    }
+
+    async fn query_channels(&self, selector: ChannelSelector) -> Result<ChannelsList> {
+        let channels = self.do_query_channels(selector)?;
+        Ok(ChannelsList {
+            __typename: "ChannelsList".to_string(),
+            channels,
+        })
+    }
+
+    async fn query_safes_balance(&self, owner_address: Option<ChainAddress>) -> Result<SafesBalance> {
+        let state = self.state.read();
+        let matching_safes: Vec<&Safe> = if let Some(owner) = owner_address {
+            let owner_hex = hex::encode(owner);
+            state
+                .deployed_safes
+                .values()
+                .filter(|s| s.chain_key == owner_hex)
+                .collect()
+        } else {
+            state.deployed_safes.values().collect()
+        };
+
+        let count = i32::try_from(matching_safes.len()).map_err(|_| ErrorKind::ParseError)?;
+        let mut total = PrimitiveHoprBalance::zero();
+        for safe in &matching_safes {
+            if let Some(hopr_balance) = state.token_balances.get(&safe.address) {
+                let bal: PrimitiveHoprBalance = hopr_balance.balance.0.parse().map_err(|_| ErrorKind::ParseError)?;
+                total += bal;
+            }
+        }
+
+        Ok(SafesBalance {
+            count,
+            balance: TokenValueString(total.to_string()),
+        })
     }
 
     async fn query_transaction_status(&self, tx_id: TxId) -> Result<Transaction> {
@@ -576,13 +627,14 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliSubscriptionClient for Blokl
                 )
                 .boxed()
         } else {
+            let accounts = self.state.read().accounts.clone();
             futures::stream::iter(self.do_query_channels(selector.clone())?)
                 .map(Ok)
                 .chain(
                     self.channels_channel
                         .1
                         .activate_cloned()
-                        .filter(move |(_, c, _)| futures::future::ready(channel_matches(c, &selector)))
+                        .filter(move |(_, c, _)| futures::future::ready(channel_matches(c, &selector, &accounts)))
                         .map(|(_, channel, _)| Ok(channel)),
                 )
                 .boxed()

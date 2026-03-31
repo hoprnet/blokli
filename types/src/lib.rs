@@ -357,10 +357,32 @@ pub struct ChannelsList {
 pub enum ChannelsResult {
     /// Successful channels list
     Channels(ChannelsList),
+    /// Address format is invalid
+    InvalidAddress(InvalidAddressError),
     /// Missing required filter parameter
     MissingFilter(MissingFilterError),
     /// Query failed
     QueryFailed(QueryFailedError),
+}
+
+/// Aggregated wxHOPR holdings across all or a filtered subset of indexed safe contracts
+#[derive(SimpleObject, Clone, Debug)]
+pub struct SafesBalance {
+    /// Sum of wxHOPR balances for all safe contract addresses
+    pub balance: TokenValueString,
+    /// Number of safes included
+    pub count: i32,
+}
+
+/// Result type for total safe wxHOPR balance query
+#[derive(Union, Clone, Debug)]
+pub enum SafesBalanceResult {
+    /// Invalid owner address
+    InvalidAddress(InvalidAddressError),
+    /// Query failed
+    QueryFailed(QueryFailedError),
+    /// Successful total safe balance
+    SafesBalance(SafesBalance),
 }
 
 /// Count value for count queries
@@ -377,6 +399,26 @@ pub enum CountResult {
     Count(Count),
     /// Missing required filter parameter
     MissingFilter(MissingFilterError),
+    /// Query failed
+    QueryFailed(QueryFailedError),
+}
+
+/// Aggregated channel statistics: count and total balance
+#[derive(SimpleObject, Clone, Debug)]
+pub struct ChannelStats {
+    /// Number of channels matching the filters
+    pub count: i32,
+    /// Total wxHOPR balance across all matching channels
+    pub balance: TokenValueString,
+}
+
+/// Result type for channel statistics query
+#[derive(Union, Clone, Debug)]
+pub enum ChannelStatsResult {
+    /// Successful channel statistics
+    ChannelStats(ChannelStats),
+    /// Address format is invalid
+    InvalidAddress(InvalidAddressError),
     /// Query failed
     QueryFailed(QueryFailedError),
 }
@@ -611,6 +653,27 @@ pub struct RedeemedStatsFilter {
     /// Destination node address to filter by (hexadecimal format)
     #[graphql(name = "nodeAddress")]
     pub node_address: Option<String>,
+}
+
+/// Selector for safe lookup queries.
+///
+/// This enum is used together with a single `address` argument when querying
+/// for a safe. The selected variant determines how that `address` value is
+/// interpreted:
+/// - `Address`: `address` is the safe contract address
+/// - `ChainKey`: `address` is the owner chain key
+/// - `RegisteredNode`: `address` is a registered node address
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum SafeSelectorInput {
+    /// Safe contract address to filter by (hexadecimal format)
+    #[graphql(name = "ADDRESS")]
+    Address,
+    /// Chain key (owner address) to filter by (hexadecimal format)
+    #[graphql(name = "CHAIN_KEY")]
+    ChainKey,
+    /// Registered node address to filter by (hexadecimal format)
+    #[graphql(name = "REGISTERED_NODE")]
+    RegisteredNode,
 }
 
 /// Aggregated redeemed ticket statistics

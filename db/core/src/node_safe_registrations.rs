@@ -1,5 +1,8 @@
 use async_trait::async_trait;
-use blokli_db_entity::{hopr_node_safe_registration, prelude::HoprNodeSafeRegistration};
+use blokli_db_entity::{
+    conversions::node_safe_registration::fetch_registered_nodes_for_safe, hopr_node_safe_registration,
+    prelude::HoprNodeSafeRegistration,
+};
 use hopr_types::primitive::prelude::Address;
 use sea_orm::{ColumnTrait, DbErr, EntityTrait, ModelTrait, QueryFilter, Set};
 use sea_query::OnConflict;
@@ -228,21 +231,11 @@ impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
     /// # }
     /// ```
     async fn get_registered_nodes_for_safe<'a>(&'a self, tx: OptTx<'a>, safe_address: Address) -> Result<Vec<Address>> {
-        let query = HoprNodeSafeRegistration::find()
-            .filter(hopr_node_safe_registration::Column::SafeAddress.eq(safe_address.as_ref().to_vec()));
-
-        let registrations = if let Some(t) = tx {
-            query.all(t.as_ref()).await?
+        if let Some(t) = tx {
+            Ok(fetch_registered_nodes_for_safe(t.as_ref(), safe_address.as_ref()).await?)
         } else {
-            query.all(self.conn(crate::TargetDb::Index)).await?
-        };
-
-        let nodes: Vec<Address> = registrations
-            .into_iter()
-            .filter_map(|reg| Address::try_from(reg.node_address.as_slice()).ok())
-            .collect();
-
-        Ok(nodes)
+            Ok(fetch_registered_nodes_for_safe(self.conn(crate::TargetDb::Index), safe_address.as_ref()).await?)
+        }
     }
 
     /// Retrieves the safe address that a node is registered to.
