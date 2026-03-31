@@ -15,7 +15,7 @@ network = "rotsee"
 rpc_url = "http://localhost:8545"
 
 # Maximum number of RPC requests per second (0 for unlimited)
-# Overrides the default rate limit for the selected network
+# If omitted, defaults to 100 req/sec. Set to 0 for unlimited, or a positive value to override the default.
 max_rpc_requests_per_sec = 0
 
 # Maximum block range for RPC queries when fetching logs (default: 10000)
