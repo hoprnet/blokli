@@ -657,10 +657,12 @@ pub struct RedeemedStatsFilter {
 
 /// Selector for safe lookup queries.
 ///
-/// Exactly one field should be provided:
-/// - `address` to find a safe by safe contract address
-/// - `chain_key` to find a safe by owner chain key
-/// - `registered_node` to find a safe by a registered node address
+/// This enum is used together with a single `address` argument when querying
+/// for a safe. The selected variant determines how that `address` value is
+/// interpreted:
+/// - `Address`: `address` is the safe contract address
+/// - `ChainKey`: `address` is the owner chain key
+/// - `RegisteredNode`: `address` is a registered node address
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum SafeSelectorInput {
     /// Safe contract address to filter by (hexadecimal format)
