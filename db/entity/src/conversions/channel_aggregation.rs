@@ -1,8 +1,9 @@
 //! Channel aggregation utilities using the `channel_current` database view
 
 use chrono::{DateTime, Utc};
+use futures::StreamExt;
 use hopr_types::primitive::prelude::{Address, HoprBalance, IntoEndian};
-use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QuerySelect, StreamTrait};
 
 use crate::{
     hopr_balance, hopr_safe_contract,
@@ -151,7 +152,7 @@ pub async fn fetch_channel_stats<C>(
     safe_address: Option<Address>,
 ) -> Result<AggregatedChannelStats, sea_orm::DbErr>
 where
-    C: ConnectionTrait,
+    C: ConnectionTrait + StreamTrait,
 {
     let mut query = channel_current::Entity::find()
         .select_only()
@@ -188,11 +189,12 @@ where
         query = query.filter(channel_current::Column::Status.eq(status_filter));
     }
 
-    let balance_rows: Vec<Vec<u8>> = query.into_tuple().all(conn).await?;
+    let mut stream = query.into_tuple::<Vec<u8>>().stream(conn).await?;
 
-    let count = balance_rows.len() as u64;
+    let mut count = 0u64;
     let mut total_balance = HoprBalance::zero();
-    for balance_bytes in balance_rows {
+    while let Some(result) = stream.next().await {
+        let balance_bytes = result?;
         let slice: [u8; 12] = balance_bytes.as_slice().try_into().map_err(|_| {
             sea_orm::DbErr::Custom(format!(
                 "Invalid balance length in channel_current: expected 12, got {}",
@@ -200,6 +202,7 @@ where
             ))
         })?;
         total_balance = total_balance + HoprBalance::from_be_bytes(slice);
+        count += 1;
     }
 
     Ok(AggregatedChannelStats {
@@ -232,20 +235,17 @@ pub async fn fetch_safes_balance<C>(
     owner_address: Option<Address>,
 ) -> Result<AggregatedSafeHoprBalance, sea_orm::DbErr>
 where
-    C: ConnectionTrait,
+    C: ConnectionTrait + StreamTrait,
 {
     let safe_addresses: Vec<Vec<u8>> = if let Some(owner) = owner_address {
         let owner_bytes = owner.as_ref().to_vec();
-        let mut addrs: Vec<Vec<u8>> = account_current::Entity::find()
+        account_current::Entity::find()
             .filter(account_current::Column::ChainKey.eq(owner_bytes))
             .all(conn)
             .await?
             .into_iter()
             .filter_map(|row| row.safe_address)
-            .collect();
-        addrs.sort_unstable();
-        addrs.dedup();
-        addrs
+            .collect()
     } else {
         hopr_safe_contract::Entity::find()
             .all(conn)
@@ -265,13 +265,14 @@ where
         });
     }
 
-    let balance_rows = hopr_balance::Entity::find()
+    let mut stream = hopr_balance::Entity::find()
         .filter(hopr_balance::Column::Address.is_in(safe_addresses))
-        .all(conn)
+        .stream(conn)
         .await?;
 
     let mut total_balance = HoprBalance::zero();
-    for row in balance_rows {
+    while let Some(result) = stream.next().await {
+        let row = result?;
         let balance_slice: [u8; 12] = row.balance.as_slice().try_into().map_err(|_| {
             sea_orm::DbErr::Custom(format!(
                 "Invalid balance length in hopr_balance: expected 12, got {}",

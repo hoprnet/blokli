@@ -30,8 +30,8 @@ pub(crate) mod internal {
         graph::SubscribeGraph,
         info::{QueryChainInfo, QueryHealth, QueryVersion, SubscribeTicketParams},
         safe::{
-            ModuleAddressVariables, QueryModuleAddress, QuerySafeByAddress, QuerySafeByChainKey,
-            QuerySafeByRegisteredNode, SafeVariables, SubscribeSafeDeployment,
+            ModuleAddressVariables, QueryModuleAddress, QuerySafeBy, SafeByVariables, SafeSelectorInput,
+            SubscribeSafeDeployment,
         },
         txs::{
             ConfirmTransactionVariables, MutateConfirmTransaction, MutateSendTransaction, MutateTrackTransaction,

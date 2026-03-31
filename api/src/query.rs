@@ -961,96 +961,86 @@ impl QueryRoot {
     async fn safe_by(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Selector for safe lookup; exactly one field must be set")] selector: SafeSelectorInput,
+        #[graphql(desc = "Selector type for safe lookup")] selector: SafeSelectorInput,
+        #[graphql(desc = "Address value for the selector (hexadecimal format)")] value: String,
     ) -> Result<Option<SafeResult>> {
-        let provided = [
-            selector.address.is_some(),
-            selector.chain_key.is_some(),
-            selector.registered_node.is_some(),
-        ]
-        .into_iter()
-        .filter(|present| *present)
-        .count();
-
-        if provided != 1 {
-            return Ok(Some(SafeResult::QueryFailed(errors::validation_failed(
-                "exactly one selector must be provided: address, chainKey, or registeredNode",
-            ))));
-        }
-
         let db = ctx.data::<DatabaseConnection>()?;
 
-        if let Some(address) = selector.address {
-            let safe_address = match parse_eth_address(address) {
-                Ok(addr) => addr.as_ref().to_vec(),
-                Err(e) => return Ok(Some(SafeResult::InvalidAddress(e))),
-            };
+        match selector {
+            SafeSelectorInput::Address => {
+                let safe_address = match parse_eth_address(value) {
+                    Ok(addr) => addr.as_ref().to_vec(),
+                    Err(e) => return Ok(Some(SafeResult::InvalidAddress(e))),
+                };
 
-            return match fetch_safe_by_address(db, safe_address.clone()).await {
-                Ok(Some(current)) => Ok(Some(safe_result_from_row(
-                    current,
-                    registered_nodes_for_safe(db, safe_address).await,
-                ))),
-                Ok(None) => Ok(None),
-                Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed("fetch safe", e)))),
-            };
-        }
-
-        if let Some(chain_key) = selector.chain_key {
-            let chain_key_address = match parse_eth_address(chain_key) {
-                Ok(addr) => addr.as_ref().to_vec(),
-                Err(e) => return Ok(Some(SafeResult::InvalidAddress(e))),
-            };
-
-            return match fetch_safe_by_chain_key(db, chain_key_address).await {
-                Ok(Some(current)) => {
-                    let safe_address = current.address.clone();
-                    Ok(Some(safe_result_from_row(
+                match fetch_safe_by_address(db, safe_address.clone()).await {
+                    Ok(Some(current)) => Ok(Some(safe_result_from_row(
                         current,
                         registered_nodes_for_safe(db, safe_address).await,
-                    )))
+                    ))),
+                    Ok(None) => Ok(None),
+                    Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed("fetch safe", e)))),
                 }
-                Ok(None) => Ok(None),
-                Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed(
-                    "fetch safe by chain key",
-                    e,
-                )))),
-            };
-        }
-
-        let node_address = match parse_eth_address(selector.registered_node.unwrap_or_default()) {
-            Ok(addr) => addr.as_ref().to_vec(),
-            Err(e) => return Ok(Some(SafeResult::InvalidAddress(e))),
-        };
-
-        let registration = match hopr_node_safe_registration::Entity::find()
-            .filter(hopr_node_safe_registration::Column::NodeAddress.eq(node_address))
-            .one(db)
-            .await
-        {
-            Ok(Some(reg)) => reg,
-            Ok(None) => return Ok(None),
-            Err(e) => {
-                return Ok(Some(SafeResult::QueryFailed(errors::query_failed(
-                    "fetch safe by registered node",
-                    e,
-                ))));
             }
-        };
 
-        match fetch_safe_by_address(db, registration.safe_address.clone()).await {
-            Ok(Some(current)) => Ok(Some(safe_result_from_row(
-                current,
-                registered_nodes_for_safe(db, registration.safe_address).await,
-            ))),
-            Ok(None) => Ok(Some(SafeResult::QueryFailed(errors::query_failed(
-                "fetch safe by registered node",
-                "Safe not found for registered node",
-            )))),
-            Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed(
-                "fetch safe by registered node",
-                e,
-            )))),
+            SafeSelectorInput::ChainKey => {
+                let chain_key_address = match parse_eth_address(value) {
+                    Ok(addr) => addr.as_ref().to_vec(),
+                    Err(e) => return Ok(Some(SafeResult::InvalidAddress(e))),
+                };
+
+                match fetch_safe_by_chain_key(db, chain_key_address).await {
+                    Ok(Some(current)) => {
+                        let safe_address = current.address.clone();
+                        Ok(Some(safe_result_from_row(
+                            current,
+                            registered_nodes_for_safe(db, safe_address).await,
+                        )))
+                    }
+                    Ok(None) => Ok(None),
+                    Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed(
+                        "fetch safe by chain key",
+                        e,
+                    )))),
+                }
+            }
+
+            SafeSelectorInput::RegisteredNode => {
+                let node_address = match parse_eth_address(value) {
+                    Ok(addr) => addr.as_ref().to_vec(),
+                    Err(e) => return Ok(Some(SafeResult::InvalidAddress(e))),
+                };
+
+                let registration = match hopr_node_safe_registration::Entity::find()
+                    .filter(hopr_node_safe_registration::Column::NodeAddress.eq(node_address))
+                    .one(db)
+                    .await
+                {
+                    Ok(Some(reg)) => reg,
+                    Ok(None) => return Ok(None),
+                    Err(e) => {
+                        return Ok(Some(SafeResult::QueryFailed(errors::query_failed(
+                            "fetch safe by registered node",
+                            e,
+                        ))));
+                    }
+                };
+
+                match fetch_safe_by_address(db, registration.safe_address.clone()).await {
+                    Ok(Some(current)) => Ok(Some(safe_result_from_row(
+                        current,
+                        registered_nodes_for_safe(db, registration.safe_address).await,
+                    ))),
+                    Ok(None) => Ok(Some(SafeResult::QueryFailed(errors::query_failed(
+                        "fetch safe by registered node",
+                        "Safe not found for registered node",
+                    )))),
+                    Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed(
+                        "fetch safe by registered node",
+                        e,
+                    )))),
+                }
+            }
         }
     }
 
@@ -1085,14 +1075,7 @@ impl QueryRoot {
         ctx: &Context<'_>,
         #[graphql(desc = "Safe contract address to query (hexadecimal format)")] address: String,
     ) -> Result<Option<SafeResult>> {
-        self.safe_by(
-            ctx,
-            SafeSelectorInput {
-                address: Some(address),
-                ..Default::default()
-            },
-        )
-        .await
+        self.safe_by(ctx, SafeSelectorInput::Address, address).await
     }
 
     /// Finds a Safe by its chain key (owner address) given as a hexadecimal string.
@@ -1132,14 +1115,7 @@ impl QueryRoot {
         ctx: &Context<'_>,
         #[graphql(desc = "Chain key to query (hexadecimal format)")] chain_key: String,
     ) -> Result<Option<SafeResult>> {
-        self.safe_by(
-            ctx,
-            SafeSelectorInput {
-                chain_key: Some(chain_key),
-                ..Default::default()
-            },
-        )
-        .await
+        self.safe_by(ctx, SafeSelectorInput::ChainKey, chain_key).await
     }
 
     /// Fetches a Safe contract by registered node address.
@@ -1184,14 +1160,7 @@ impl QueryRoot {
         ctx: &Context<'_>,
         #[graphql(name = "chainKey")] chain_key: String,
     ) -> Result<Option<SafeResult>> {
-        self.safe_by(
-            ctx,
-            SafeSelectorInput {
-                registered_node: Some(chain_key),
-                ..Default::default()
-            },
-        )
-        .await
+        self.safe_by(ctx, SafeSelectorInput::RegisteredNode, chain_key).await
     }
 
     /// Fetches all indexed Safe contracts.

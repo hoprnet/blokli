@@ -565,20 +565,29 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
 
     async fn query_safes_balance(&self, owner_address: Option<ChainAddress>) -> Result<SafesBalance> {
         let state = self.state.read();
-        let safe_count = if let Some(owner) = owner_address {
+        let matching_safes: Vec<&Safe> = if let Some(owner) = owner_address {
             let owner_hex = hex::encode(owner);
             state
                 .deployed_safes
                 .values()
                 .filter(|s| s.chain_key == owner_hex)
-                .count()
+                .collect()
         } else {
-            state.deployed_safes.len()
+            state.deployed_safes.values().collect()
         };
-        // NOTE: This test client currently reports a zero total balance for safes.
+
+        let count = i32::try_from(matching_safes.len()).map_err(|_| ErrorKind::ParseError)?;
+        let mut total = PrimitiveHoprBalance::zero();
+        for safe in &matching_safes {
+            if let Some(hopr_balance) = state.token_balances.get(&safe.address) {
+                let bal: PrimitiveHoprBalance = hopr_balance.balance.0.parse().map_err(|_| ErrorKind::ParseError)?;
+                total += bal;
+            }
+        }
+
         Ok(SafesBalance {
-            count: i32::try_from(safe_count).map_err(|_| ErrorKind::ParseError)?,
-            balance: TokenValueString(PrimitiveHoprBalance::zero().to_string()),
+            count,
+            balance: TokenValueString(total.to_string()),
         })
     }
 

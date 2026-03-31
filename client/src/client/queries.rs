@@ -15,13 +15,12 @@ fn parse_chain_address_hex(value: &str) -> Result<ChainAddress> {
 }
 
 impl BlokliClient {
-    #[allow(deprecated)]
     async fn source_key_ids_for_safe(&self, safe_address: ChainAddress) -> Result<HashSet<i32>> {
         let safe_response = self
-            .build_query(GraphQlQueries::query_safe_by_address(&safe_address))?
+            .build_query(GraphQlQueries::query_safe_by(SafeSelectorInput::Address, &safe_address))?
             .await?;
 
-        let safe: Option<Safe> = match response_to_data(safe_response)?.safe {
+        let safe: Option<Safe> = match response_to_data(safe_response)?.safe_by {
             Some(safe_result) => {
                 let parsed_safe: Result<Option<Safe>> = safe_result.into();
                 parsed_safe?
@@ -135,29 +134,14 @@ impl GraphQlQueries {
         })
     }
 
-    #[deprecated(note = "Use safeBy(selector: ...) on servers that support it")]
-    /// `Safe` GraphQL query.
-    pub fn query_safe_by_address(address: &ChainAddress) -> cynic::Operation<QuerySafeByAddress, SafeVariables> {
-        QuerySafeByAddress::build(SafeVariables {
-            address: address.encode_hex(),
-        })
-    }
-
-    #[deprecated(note = "Use safeBy(selector: ...) on servers that support it")]
-    /// `Safe` GraphQL query.
-    pub fn query_safe_by_chain_key(address: &ChainAddress) -> cynic::Operation<QuerySafeByChainKey, SafeVariables> {
-        QuerySafeByChainKey::build(SafeVariables {
-            address: address.encode_hex(),
-        })
-    }
-
-    #[deprecated(note = "Use safeBy(selector: ...) on servers that support it")]
-    /// `Safe` GraphQL query.
-    pub fn query_safe_by_registered_node(
+    /// `safeBy` GraphQL query.
+    pub fn query_safe_by(
+        selector: SafeSelectorInput,
         address: &ChainAddress,
-    ) -> cynic::Operation<QuerySafeByRegisteredNode, SafeVariables> {
-        QuerySafeByRegisteredNode::build(SafeVariables {
-            address: address.encode_hex(),
+    ) -> cynic::Operation<QuerySafeBy, SafeByVariables> {
+        QuerySafeBy::build(SafeByVariables {
+            selector,
+            value: address.encode_hex(),
         })
     }
 
@@ -280,39 +264,20 @@ impl BlokliQueryClient for BlokliClient {
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
-    #[allow(deprecated)]
     async fn query_safe(&self, selector: SafeSelector) -> Result<Option<Safe>> {
-        match selector {
-            SafeSelector::SafeAddress(safe_addr) => {
-                let res = self
-                    .build_query(GraphQlQueries::query_safe_by_address(&safe_addr))?
-                    .await?;
+        let (gql_selector, addr) = match selector {
+            SafeSelector::SafeAddress(addr) => (SafeSelectorInput::Address, addr),
+            SafeSelector::ChainKey(addr) => (SafeSelectorInput::ChainKey, addr),
+            SafeSelector::RegisteredNode(addr) => (SafeSelectorInput::RegisteredNode, addr),
+        };
 
-                match response_to_data(res)?.safe {
-                    Some(result) => result.into(),
-                    None => Ok(None),
-                }
-            }
-            SafeSelector::ChainKey(chain_addr) => {
-                let res = self
-                    .build_query(GraphQlQueries::query_safe_by_chain_key(&chain_addr))?
-                    .await?;
+        let res = self
+            .build_query(GraphQlQueries::query_safe_by(gql_selector, &addr))?
+            .await?;
 
-                match response_to_data(res)?.safe_by_chain_key {
-                    Some(result) => result.into(),
-                    None => Ok(None),
-                }
-            }
-            SafeSelector::RegisteredNode(node_addr) => {
-                let res = self
-                    .build_query(GraphQlQueries::query_safe_by_registered_node(&node_addr))?
-                    .await?;
-
-                match response_to_data(res)?.safe_by_registered_node {
-                    Some(result) => result.into(),
-                    None => Ok(None),
-                }
-            }
+        match response_to_data(res)?.safe_by {
+            Some(result) => result.into(),
+            None => Ok(None),
         }
     }
 

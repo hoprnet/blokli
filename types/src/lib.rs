@@ -661,16 +661,17 @@ pub struct RedeemedStatsFilter {
 /// - `address` to find a safe by safe contract address
 /// - `chain_key` to find a safe by owner chain key
 /// - `registered_node` to find a safe by a registered node address
-#[derive(InputObject, Clone, Debug, Default)]
-pub struct SafeSelectorInput {
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum SafeSelectorInput {
     /// Safe contract address to filter by (hexadecimal format)
-    pub address: Option<String>,
+    #[graphql(name = "ADDRESS")]
+    Address,
     /// Chain key (owner address) to filter by (hexadecimal format)
-    #[graphql(name = "chainKey")]
-    pub chain_key: Option<String>,
+    #[graphql(name = "CHAIN_KEY")]
+    ChainKey,
     /// Registered node address to filter by (hexadecimal format)
-    #[graphql(name = "registeredNode")]
-    pub registered_node: Option<String>,
+    #[graphql(name = "REGISTERED_NODE")]
+    RegisteredNode,
 }
 
 /// Aggregated redeemed ticket statistics

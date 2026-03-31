@@ -500,11 +500,13 @@ type QueryRoot {
   """
   Retrieve safe by selector.
   
-  Exactly one selector field must be provided: address, chainKey, or registeredNode.
+  The selector enum identifies the lookup type; value is the hexadecimal address.
   """
   safeBy(
-    "Selector for safe lookup; exactly one field must be set"
+    "Selector type for safe lookup"
     selector: SafeSelectorInput!
+    "Address value for the selector (hexadecimal format)"
+    value: String!
   ): SafeResult
   """
   Retrieve safe by chain key (owner address)
@@ -685,17 +687,14 @@ type SafesBalance {
 """Result type for total safe HOPR balance query"""
 union SafesBalanceResult = InvalidAddressError | QueryFailedError | SafesBalance
 
-"""
-Selector for safe lookup queries.
-Exactly one field must be provided.
-"""
-input SafeSelectorInput {
-  "Safe contract address to filter by (hexadecimal format)"
-  address: String
-  "Chain key (owner address) to filter by (hexadecimal format)"
-  chainKey: String
-  "Registered node address to filter by (hexadecimal format)"
-  registeredNode: String
+"""Selector type for safe lookup queries."""
+enum SafeSelectorInput {
+  "Filter by safe contract address"
+  ADDRESS
+  "Filter by chain key (owner address)"
+  CHAIN_KEY
+  "Filter by registered node address"
+  REGISTERED_NODE
 }
 
 """Success response for safes list query"""
