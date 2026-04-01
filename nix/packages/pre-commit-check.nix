@@ -18,9 +18,9 @@ let
   # Pre-commit system hooks run outside the devshell, so tools must be explicitly
   # added to PATH.
   exportDbSchemaWrapper = pkgs.writeShellScript "export-db-schema-hook" ''
-    # Skip in nix build sandbox where /usr/bin/env is unavailable.
-    # Just's shebang recipes rely on #!/usr/bin/env bash which requires it.
-    if [ ! -x /usr/bin/env ]; then
+    # Skip in nix build sandbox where cargo can't compile (no network, no system libs).
+    # NIX_BUILD_TOP is set inside all nix build derivations.
+    if [ -n "''${NIX_BUILD_TOP:-}" ]; then
       echo "Skipping export-db-schema (nix build sandbox detected)"
       exit 0
     fi
