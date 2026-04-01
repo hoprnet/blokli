@@ -8,7 +8,31 @@
   system,
   config,
   pkgs,
+  stableToolchain,
 }:
+
+let
+  lib = pkgs.lib;
+
+  # Wrapper script that provides cargo and other tools to the export-db-schema hook.
+  # Pre-commit system hooks run outside the devshell, so tools must be explicitly
+  # added to PATH.
+  exportDbSchemaWrapper = pkgs.writeShellScript "export-db-schema-hook" ''
+    # Skip in nix build sandbox where /usr/bin/env is unavailable.
+    # Just's shebang recipes rely on #!/usr/bin/env bash which requires it.
+    if [ ! -x /usr/bin/env ]; then
+      echo "Skipping export-db-schema (nix build sandbox detected)"
+      exit 0
+    fi
+    export PATH="${lib.makeBinPath [
+      stableToolchain
+      pkgs.just
+      pkgs.sqlite
+      pkgs.pgformatter
+    ]}:$PATH"
+    exec ${pkgs.just}/bin/just export-db-schema
+  '';
+in
 
 pre-commit.lib.${system}.run {
   src = ./../..; # Root of the project
@@ -36,7 +60,7 @@ pre-commit.lib.${system}.run {
     export-db-schema = {
       enable = true;
       name = "generate database schema";
-      entry = "${pkgs.just}/bin/just export-db-schema";
+      entry = toString exportDbSchemaWrapper;
       files = "db/migration/src/.*\\.rs$";
       language = "system";
       pass_filenames = false;
