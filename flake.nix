@@ -307,7 +307,7 @@
 
               # Pre-commit hooks check
               pre-commit-check = pkgs.callPackage ./nix/packages/pre-commit-check.nix {
-                inherit pre-commit system config;
+                inherit pre-commit system config stableToolchain;
               };
 
               # Man pages
