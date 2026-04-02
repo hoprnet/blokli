@@ -483,11 +483,13 @@ where
     /// * `token` - Token-specific filters (Transfer, Approval events for safe)
     /// * `no_token` - Non-token contract filters for initial sync optimization
     fn generate_log_filters(logs_handler: &U) -> (FilterSet, Vec<(Address, Hash)>) {
-        let addresses_no_token = logs_handler
-            .contract_addresses()
-            .into_iter()
+        let static_addresses = logs_handler.contract_addresses();
+        let addresses_no_token = static_addresses
+            .iter()
+            .copied()
             .filter(|a| *a != logs_handler.contract_addresses_map().token)
             .collect::<Vec<_>>();
+
         let mut filter_base_addresses = vec![];
         let mut filter_base_topics = vec![];
         let mut address_topics = vec![];
@@ -506,6 +508,7 @@ where
         let filter_base = Filter::new()
             .address(filter_base_addresses)
             .event_signature(filter_base_topics);
+        let filter_safe_contract = Filter::new().event_signature(crate::constants::topics::safe_contract());
         let filter_token = Filter::new().address(AlloyAddress::from_hopr_address(
             logs_handler.contract_addresses_map().token,
         ));
@@ -517,12 +520,13 @@ where
         let set = FilterSet {
             all: vec![
                 filter_base.clone(),
+                filter_safe_contract.clone(),
                 filter_token_transfer.clone(),
                 filter_token_approval.clone(),
             ],
             // token: vec![filter_transfer_from, filter_transfer_to, filter_approval],
             token: vec![filter_token_approval, filter_token_transfer],
-            no_token: vec![filter_base],
+            no_token: vec![filter_base, filter_safe_contract],
         };
 
         (set, address_topics)
@@ -2051,6 +2055,7 @@ mod tests {
     }
 
     // Helper function to create a channel state
+    #[allow(clippy::too_many_arguments)]
     async fn create_channel_state(
         db: &BlokliDb,
         channel_id: i64,

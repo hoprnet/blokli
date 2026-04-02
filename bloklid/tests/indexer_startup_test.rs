@@ -74,11 +74,11 @@ impl HoprIndexerRpcOperations for MockRpcOperations {
     }
 
     async fn get_xdai_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {
-        Ok(self.xdai_balance.clone())
+        Ok(self.xdai_balance)
     }
 
     async fn get_hopr_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance> {
-        Ok(self.hopr_balance.clone())
+        Ok(self.hopr_balance)
     }
 
     async fn get_hopr_allowance(
@@ -86,7 +86,7 @@ impl HoprIndexerRpcOperations for MockRpcOperations {
         _owner: Address,
         _spender: Address,
     ) -> blokli_chain_rpc::errors::Result<HoprBalance> {
-        Ok(self.hopr_balance.clone())
+        Ok(self.hopr_balance)
     }
 
     async fn get_transaction_count(&self, _address: Address) -> blokli_chain_rpc::errors::Result<u64> {

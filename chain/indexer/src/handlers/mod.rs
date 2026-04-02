@@ -29,6 +29,7 @@ use tracing::{debug, error, trace};
 
 use crate::{
     IndexerState,
+    custom_abis::safe_contract_events::SafeContract::SafeContractEvents,
     errors::{CoreEthereumIndexerError, Result},
     state::IndexerEvent,
 };
@@ -39,6 +40,7 @@ mod channels;
 mod helpers;
 mod node_safe_registry;
 mod oracles;
+mod safe_contracts;
 mod stake_factory;
 #[cfg(test)]
 mod test_utils;
@@ -110,6 +112,12 @@ where
             _rpc_operations: rpc_operations,
             indexer_state,
         }
+    }
+
+    fn is_safe_contract_topic(topic: &[u8; 32]) -> bool {
+        crate::constants::topics::safe_contract()
+            .iter()
+            .any(|safe_topic| safe_topic.as_slice() == topic.as_slice())
     }
 
     #[allow(dead_code)]
@@ -216,6 +224,21 @@ where
         } else if log.address.eq(&self.addresses.node_safe_registry) {
             let event = HoprNodeSafeRegistryEvents::decode_log(&primitive_log)?;
             self.on_node_safe_registry_event(tx, &log, event.data, is_synced).await
+        } else if self
+            .db
+            .get_safe_contract_by_address(Some(tx), log.address)
+            .await?
+            .is_some()
+        {
+            let event = SafeContractEvents::decode_log(&primitive_log)?;
+            self.on_safe_contract_event(tx, log.address, &log, event.data, is_synced)
+                .await
+        } else if slog.topics.first().is_some_and(Self::is_safe_contract_topic) {
+            debug!(
+                address = %log.address,
+                "Ignoring Safe contract event for address not yet indexed as a Safe"
+            );
+            Ok(vec![])
         } else if log.address.eq(&self.addresses.ticket_price_oracle) {
             let event = HoprTicketPriceOracleEvents::decode_log(&primitive_log)?;
             self.on_ticket_price_oracle_event(tx, event.data, is_synced).await

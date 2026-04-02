@@ -858,6 +858,22 @@ account of the redeemed channel and resolves the account's current `safe_address
 The unique constraint on `(deployed_block, deployed_tx_index, deployed_log_index)` ensures that processing the same event multiple times
 (due to retries or reorgs) will not create duplicate Safe entries.
 
+**Safe Contract Event Indexing**:
+
+In addition to HOPR contract events, the indexer subscribes to the Safe event topics `SafeSetup`, `AddedOwner`, `RemovedOwner`,
+`ChangedThreshold`, `ExecutionSuccess`, and `ExecutionFailure`. Safe-topic logs are streamed globally and then filtered in the handler so
+only addresses already indexed as known Safe contracts are processed.
+
+When a Safe becomes known during block processing, the handler replays previously stored Safe logs for that address from the logs database
+up to the discovery position. This prevents losing setup or owner-management events that were emitted earlier in the same block or before
+the Safe was linked through the HOPR contracts.
+
+Decoded Safe events are persisted into dedicated index tables:
+
+- `hopr_safe_owner_state` stores temporal owner membership changes
+- `safe_owner_current` exposes the current owner set
+- `hopr_safe_activity` stores the on-chain Safe activity history needed for later Safe transaction queries
+
 ### Subscription Event Bus
 
 Blokli provides real-time GraphQL subscriptions using an in-memory event bus architecture. All subscriptions use the same unified mechanism

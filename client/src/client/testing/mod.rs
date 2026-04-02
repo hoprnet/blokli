@@ -510,10 +510,10 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
         let state = self.state.read();
         match selector {
             SafeSelector::SafeAddress(addr) => Ok(state.deployed_safes.get(&hex::encode(addr)).cloned()),
-            SafeSelector::ChainKey(chain_key) => Ok(state
+            SafeSelector::Owner(owner_address) | SafeSelector::ChainKey(owner_address) => Ok(state
                 .deployed_safes
                 .values()
-                .find(|s| s.chain_key == hex::encode(chain_key))
+                .find(|s| s.owners.contains(&hex::encode(owner_address)))
                 .cloned()),
             SafeSelector::RegisteredNode(node_address) => Ok(state
                 .deployed_safes

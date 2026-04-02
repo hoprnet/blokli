@@ -136,21 +136,15 @@ where
                 );
 
                 // Check for existing safe entry with non-zero module address
-                let existing_module = match self.db.get_safe_contract_by_address(Some(tx), safe_addr).await {
-                    Ok(Some(safe)) => {
+                let existing_safe = self.db.get_safe_contract_by_address(Some(tx), safe_addr).await?;
+                let safe_previously_known = existing_safe.is_some();
+                let existing_module = match existing_safe {
+                    Some(safe) => {
                         let module = Address::try_from(safe.module_address.as_slice()).ok();
                         // Only use if non-zero
                         module.filter(|addr| *addr != Address::default())
                     }
-                    Ok(None) => None,
-                    Err(e) => {
-                        warn!(
-                            safe_address = %safe_addr.to_hex(),
-                            error = %e,
-                            "DB lookup failed for safe address, will fetch module from RPC"
-                        );
-                        None
-                    }
+                    None => None,
                 };
 
                 let module_addr = if let Some(addr) = existing_module {
@@ -198,6 +192,11 @@ where
                     .db
                     .register_node_to_safe(Some(tx), safe_addr, node_addr, block, tx_index, log_index)
                     .await?;
+
+                if !safe_previously_known {
+                    self.replay_safe_logs_before_position(tx, safe_addr, block, tx_index, log_index)
+                        .await?;
+                }
 
                 self.update_account_safe_address(tx, node_addr, Some(safe_addr), block, tx_index, log_index)
                     .await?;

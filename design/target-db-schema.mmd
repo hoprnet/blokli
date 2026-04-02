@@ -122,6 +122,35 @@ erDiagram
         binary(8) deployed_log_index "log index (original u64 stored in bytes to preserve precision, NOT NULL)"
     }
 
+    hopr_safe_owner_state {
+        int id PK "Primary key"
+        bigint hopr_safe_contract_id FK "Foreign key to hopr_safe_contract.id (NOT NULL)"
+        binary(20) owner_address "Owner address (40-character hex string in bytes, NOT NULL)"
+        bool is_current_owner "Whether this event makes the owner active or inactive (NOT NULL)"
+        bigint published_block "Published block (NOT NULL)"
+        bigint published_tx_index "Published tx index (NOT NULL)"
+        bigint published_log_index "Published log index (NOT NULL)"
+    }
+    %% Composite unique constraint: UNIQUE(hopr_safe_contract_id, owner_address, published_block, published_tx_index, published_log_index)
+    %% Index: idx_safe_owner_state_current_lookup (hopr_safe_contract_id, owner_address, published_block DESC, published_tx_index DESC, published_log_index DESC)
+
+    hopr_safe_activity {
+        int id PK "Primary key"
+        bigint hopr_safe_contract_id FK "Foreign key to hopr_safe_contract.id (NOT NULL)"
+        string event_kind "Safe event type (SAFE_SETUP, ADDED_OWNER, REMOVED_OWNER, CHANGED_THRESHOLD, EXECUTION_SUCCESS, EXECUTION_FAILURE)"
+        binary(32) chain_tx_hash "Containing chain transaction hash (NOT NULL)"
+        binary(32) safe_tx_hash "Safe internal transaction hash (NULL)"
+        binary(20) owner_address "Owner address associated with the event (NULL)"
+        string threshold "Threshold value encoded as decimal string (NULL)"
+        string payment "Payment value encoded as decimal string (NULL)"
+        binary(20) initiator_address "Safe setup initiator address (NULL)"
+        bigint published_block "Published block (NOT NULL)"
+        bigint published_tx_index "Published tx index (NOT NULL)"
+        bigint published_log_index "Published log index (NOT NULL)"
+    }
+    %% Composite unique constraint: UNIQUE(hopr_safe_contract_id, published_block, published_tx_index, published_log_index)
+    %% Index: idx_safe_activity_safe_position (hopr_safe_contract_id, published_block DESC, published_tx_index DESC, published_log_index DESC)
+
     hopr_safe_redeemed_stats {
         int id PK "Primary key"
         binary(20) safe_address "Safe contract address (40-character hex string in bytes, NOT NULL; part of unique (safe_address,node_address) pair)"
@@ -144,6 +173,8 @@ erDiagram
     account ||--o{ channel : "source of many"
     account ||--o{ channel : "destination of many"
     account ||--o| hopr_safe_contract : "has 0 or 1"
+    hopr_safe_contract ||--o{ hopr_safe_owner_state : "has owner membership history"
+    hopr_safe_contract ||--o{ hopr_safe_activity : "has Safe event history"
     hopr_safe_contract ||--o{ hopr_safe_redeemed_stats : "has 0 or more (one per safe/node pair)"
     channel ||--o{ channel_state : "has version history"
     log ||--o| log_status : "has 0 or 1"
@@ -153,3 +184,4 @@ erDiagram
     %% ========================================
     %% account_current: Latest account state (account + most recent account_state)
     %% channel_current: Latest channel state (channel + most recent channel_state)
+    %% safe_owner_current: Latest owner membership state per (safe, owner) where the owner is currently active

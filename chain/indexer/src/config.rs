@@ -161,7 +161,7 @@ mod tests {
     #[test]
     fn test_full_valid_config() {
         let data_directory = "/tmp/hopr_test_data";
-        let logs_snapshot_url = format!("file:///tmp/snapshot.tar.xz");
+        let logs_snapshot_url = "file:///tmp/snapshot.tar.xz".to_string();
 
         let cfg = IndexerConfig::new(0, true, true, Some(logs_snapshot_url), data_directory.into(), 1000, 10);
 

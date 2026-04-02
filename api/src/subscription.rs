@@ -35,7 +35,7 @@ use sea_orm::{
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use crate::errors;
+use crate::{errors, query::owners_for_safe};
 
 #[derive(Debug)]
 struct SafeContractCurrentRow {
@@ -1113,6 +1113,7 @@ impl SubscriptionRoot {
                                     address: Address::new(&current.address).to_hex(),
                                     module_address: Address::new(&current.module_address).to_hex(),
                                     chain_key: Address::new(&current.chain_key).to_hex(),
+                                    owners: owners_for_safe(&db, current.address.clone()).await,
                                     registered_nodes,
                                 };
                             }

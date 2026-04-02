@@ -20,6 +20,7 @@
 pub mod block;
 pub mod config;
 pub mod constants;
+pub mod custom_abis;
 pub mod errors;
 pub mod handlers;
 pub mod snapshot;

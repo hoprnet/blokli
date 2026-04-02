@@ -42,10 +42,10 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
     let expected_channel_id = Hash::from(expected_id).encode_hex::<String>();
     let client = fixture.client().clone();
 
-    let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
-    fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
+    let src_safe = fixture.deploy_safe_and_announce(src, parsed_safe_balance()).await?;
+    fixture.deploy_safe_and_announce(dst, parsed_safe_balance()).await?;
 
-    fixture.approve(&src, amount, &src_safe.module_address).await?;
+    fixture.approve(src, amount, &src_safe.module_address).await?;
 
     let handle = tokio::task::spawn(async move {
         client
@@ -58,7 +58,7 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
                     .concrete_channel_id
                     .to_lowercase();
 
-                let should_skip = !(expected_channel_id.to_lowercase() == retrieved_channel);
+                let should_skip = expected_channel_id.to_lowercase() != retrieved_channel;
                 futures::future::ready(should_skip)
             })
             .next()
@@ -67,7 +67,7 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
     });
 
     fixture
-        .open_channel(&src, &dst, amount, &src_safe.module_address, None)
+        .open_channel(src, dst, amount, &src_safe.module_address, None)
         .await?;
 
     let channel = handle
@@ -152,10 +152,10 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
         .expect("failed to parse amount");
     let client = fixture.client().clone();
 
-    let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
-    fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
+    let src_safe = fixture.deploy_safe_and_announce(src, parsed_safe_balance()).await?;
+    fixture.deploy_safe_and_announce(dst, parsed_safe_balance()).await?;
 
-    fixture.approve(&src, amount, &src_safe.module_address).await?;
+    fixture.approve(src, amount, &src_safe.module_address).await?;
 
     let handle = tokio::task::spawn(async move {
         client
@@ -169,7 +169,7 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
                     .concrete_channel_id
                     .to_lowercase();
 
-                let should_skip = !(expected_id.encode_hex::<String>() == retrieved_channel);
+                let should_skip = expected_id.encode_hex::<String>() != retrieved_channel;
                 futures::future::ready(should_skip)
             })
             .next()
@@ -178,7 +178,7 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
     });
 
     fixture
-        .open_channel(&src, &dst, amount, &src_safe.module_address, None)
+        .open_channel(src, dst, amount, &src_safe.module_address, None)
         .await?;
 
     let graph_entry = handle
@@ -208,11 +208,11 @@ async fn subscribe_graph_channel_update_on_closure(#[future(awt)] fixture: Integ
     let total_amount: HoprBalance = "3 wei wxHOPR".parse().expect("failed to parse amount");
 
     // Setup: deploy safes, announce, approve, and open channel with initial balance
-    let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
-    fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
-    fixture.approve(&src, initial_amount, &src_safe.module_address).await?;
+    let src_safe = fixture.deploy_safe_and_announce(src, parsed_safe_balance()).await?;
+    fixture.deploy_safe_and_announce(dst, parsed_safe_balance()).await?;
+    fixture.approve(src, initial_amount, &src_safe.module_address).await?;
     fixture
-        .open_channel(&src, &dst, initial_amount, &src_safe.module_address, None)
+        .open_channel(src, dst, initial_amount, &src_safe.module_address, None)
         .await?;
 
     // Wait for indexing so the channel is in the database
@@ -240,9 +240,9 @@ async fn subscribe_graph_channel_update_on_closure(#[future(awt)] fixture: Integ
 
     // Fund the channel with additional tokens - triggers ChannelBalanceIncreased -> ChannelUpdated.
     // This runs AFTER the initial state was received and asserted above.
-    fixture.approve(&src, fund_amount, &src_safe.module_address).await?;
+    fixture.approve(src, fund_amount, &src_safe.module_address).await?;
     fixture
-        .open_channel(&src, &dst, fund_amount, &src_safe.module_address, None)
+        .open_channel(src, dst, fund_amount, &src_safe.module_address, None)
         .await?;
 
     // Receive balance increase event - can only arrive after the fund action above
@@ -261,7 +261,7 @@ async fn subscribe_graph_channel_update_on_closure(#[future(awt)] fixture: Integ
 
     // Trigger channel closure - runs AFTER the balance update was received and asserted above
     fixture
-        .initiate_outgoing_channel_closure(&src, &dst, &src_safe.module_address)
+        .initiate_outgoing_channel_closure(src, dst, &src_safe.module_address)
         .await?;
 
     // Receive closure event - can only arrive after the closure action above
@@ -367,6 +367,13 @@ async fn subscribe_safe_deployments(#[future(awt)] fixture: IntegrationFixture) 
         .await??
         .ok_or_else(|| anyhow!("no update received from subscription"))??;
 
+    assert!(
+        safe.owners
+            .iter()
+            .any(|owner| owner.eq_ignore_ascii_case(&account.address.to_string())),
+        "safe deployment subscription should include the deploying account in owners"
+    );
+
     // re-registering the same safe should fail
     assert!(fixture.register_safe(account, &safe.address).await.is_err());
 
@@ -435,16 +442,16 @@ async fn subscribe_channels_no_duplicate_initial_state(#[future(awt)] fixture: I
     // 1. Setup accounts and deploy safes
     let [src, dst] = fixture.sample_accounts::<2>();
     let expected_id = generate_channel_id(&src.address, &dst.address);
-    let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
-    fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
+    let src_safe = fixture.deploy_safe_and_announce(src, parsed_safe_balance()).await?;
+    fixture.deploy_safe_and_announce(dst, parsed_safe_balance()).await?;
 
     // 2. Open channel BEFORE subscribing
     let amount = "100 wei wxHOPR".parse().expect("failed to parse amount");
     let expected_channel_id = Hash::from(expected_id).encode_hex::<String>();
 
-    fixture.approve(&src, amount, &src_safe.module_address).await?;
+    fixture.approve(src, amount, &src_safe.module_address).await?;
     fixture
-        .open_channel(&src, &dst, amount, &src_safe.module_address, None)
+        .open_channel(src, dst, amount, &src_safe.module_address, None)
         .await?;
 
     // 3. Wait for indexing to complete
@@ -491,9 +498,7 @@ async fn subscribe_account_no_duplicate_initial_state(#[future(awt)] fixture: In
     let [account] = fixture.sample_accounts::<1>();
     let account_address = account.address.to_string();
 
-    fixture
-        .deploy_safe_and_announce(&account, parsed_safe_balance())
-        .await?;
+    fixture.deploy_safe_and_announce(account, parsed_safe_balance()).await?;
 
     // 2. Wait for indexing
     tokio::time::sleep(Duration::from_secs(2)).await;
@@ -533,7 +538,7 @@ async fn subscribe_transaction_status_updates(#[future(awt)] fixture: Integratio
     let tx_value = U256::from(1_000_000u128); // 0.000000000001 ETH
     let nonce = fixture.rpc().transaction_count(&sender.address).await?;
 
-    let raw_tx = fixture.build_raw_tx(tx_value, &sender, &recipient, nonce).await?;
+    let raw_tx = fixture.build_raw_tx(tx_value, sender, recipient, nonce).await?;
     let signed_bytes =
         Vec::from_hex(raw_tx.trim_start_matches("0x")).map_err(|e| anyhow!("failed to decode raw transaction: {e}"))?;
 

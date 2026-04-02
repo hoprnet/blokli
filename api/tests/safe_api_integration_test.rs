@@ -5,7 +5,7 @@ use blokli_api::{
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{
     BlokliDbGeneralModelOperations, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations,
-    safe_redeemed_stats::BlokliDbSafeRedeemedStatsOperations,
+    safe_history::BlokliDbSafeHistoryOperations, safe_redeemed_stats::BlokliDbSafeRedeemedStatsOperations,
 };
 use blokli_db_entity::hopr_safe_contract::{Column as SafeColumn, Entity as SafeEntity};
 use hopr_types::primitive::{
@@ -35,10 +35,19 @@ async fn test_safe_queries() -> anyhow::Result<()> {
     let safe_address_1 = random_address();
     let module_address_1 = random_address();
     let chain_key_1 = random_address();
+    let owner_address_2 = random_address();
 
     db.create_safe_contract(None, safe_address_0, module_address_0, chain_key_0, 100, 0, 0)
         .await?;
     db.create_safe_contract(None, safe_address_1, module_address_1, chain_key_1, 100, 0, 1)
+        .await?;
+    db.upsert_safe_owner_state(None, safe_address_0, chain_key_0, true, 100, 0, 0)
+        .await?;
+    db.upsert_safe_owner_state(None, safe_address_0, chain_key_1, true, 101, 0, 0)
+        .await?;
+    db.upsert_safe_owner_state(None, safe_address_0, owner_address_2, true, 102, 0, 0)
+        .await?;
+    db.upsert_safe_owner_state(None, safe_address_1, chain_key_1, true, 100, 0, 1)
         .await?;
     db.record_safe_ticket_redeemed(
         None,
@@ -117,6 +126,7 @@ async fn test_safe_queries() -> anyhow::Result<()> {
                     address
                     moduleAddress
                     chainKey
+                    owners
                 }}
                 ... on QueryFailedError {{
                     message
@@ -138,8 +148,38 @@ async fn test_safe_queries() -> anyhow::Result<()> {
     assert_eq!(safe_data["address"], safe_address_0.to_hex());
     assert_eq!(safe_data["moduleAddress"], module_address_0.to_hex());
     assert_eq!(safe_data["chainKey"], chain_key_0.to_hex());
+    assert_eq!(
+        safe_data["owners"].as_array().unwrap().len(),
+        3,
+        "Owners should come from indexed Safe owner history"
+    );
 
-    // Test safeByChainKey(chainKey) query
+    // Test safeBy(selector: OWNER) query
+    let query = format!(
+        r#"
+        query {{
+            safeBy(selector: OWNER, address: "{}") {{
+                ... on Safe {{
+                    address
+                    moduleAddress
+                    chainKey
+                }}
+            }}
+        }}
+        "#,
+        owner_address_2.to_hex()
+    );
+
+    let response = schema.execute(query).await;
+    assert!(response.errors.is_empty());
+
+    let data = response.data.into_json().unwrap();
+    let safe_data = data["safeBy"].as_object().unwrap();
+    assert_eq!(safe_data["address"], safe_address_0.to_hex());
+    assert_eq!(safe_data["moduleAddress"], module_address_0.to_hex());
+    assert_eq!(safe_data["chainKey"], chain_key_0.to_hex());
+
+    // Test deprecated safeByChainKey(chainKey) alias, which now resolves by indexed owner membership
     let query = format!(
         r#"
         query {{
@@ -152,7 +192,7 @@ async fn test_safe_queries() -> anyhow::Result<()> {
             }}
         }}
         "#,
-        chain_key_0.to_hex()
+        owner_address_2.to_hex()
     );
 
     let response = schema.execute(query).await;

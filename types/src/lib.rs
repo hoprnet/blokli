@@ -661,15 +661,22 @@ pub struct RedeemedStatsFilter {
 /// for a safe. The selected variant determines how that `address` value is
 /// interpreted:
 /// - `Address`: `address` is the safe contract address
-/// - `ChainKey`: `address` is the owner chain key
+/// - `Owner`: `address` is a current safe owner address
+/// - `ChainKey`: legacy alias for `Owner`
 /// - `RegisteredNode`: `address` is a registered node address
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum SafeSelectorInput {
     /// Safe contract address to filter by (hexadecimal format)
     #[graphql(name = "ADDRESS")]
     Address,
-    /// Chain key (owner address) to filter by (hexadecimal format)
-    #[graphql(name = "CHAIN_KEY")]
+    /// Current safe owner address to filter by (hexadecimal format)
+    #[graphql(name = "OWNER")]
+    Owner,
+    /// Legacy alias for owner address filtering (hexadecimal format)
+    #[graphql(
+        name = "CHAIN_KEY",
+        deprecation = "Use OWNER instead. CHAIN_KEY is a legacy alias for Safe owner lookup."
+    )]
     ChainKey,
     /// Registered node address to filter by (hexadecimal format)
     #[graphql(name = "REGISTERED_NODE")]
@@ -708,9 +715,14 @@ pub struct Safe {
     /// HOPR Node Management Module address (hexadecimal format)
     #[graphql(name = "moduleAddress")]
     pub module_address: String,
-    /// Chain key (owner address, hexadecimal format)
-    #[graphql(name = "chainKey")]
+    /// Legacy chain key field retained for backward compatibility
+    #[graphql(
+        name = "chainKey",
+        deprecation = "Use owners instead. chainKey is legacy Safe metadata and may not reflect the current owner set."
+    )]
     pub chain_key: String,
+    /// Current Safe owner addresses reconstructed from indexed Safe events
+    pub owners: Vec<String>,
     /// List of node addresses (chain keys) registered to this safe via RegisteredNodeSafe events
     #[graphql(name = "registeredNodes")]
     pub registered_nodes: Vec<String>,

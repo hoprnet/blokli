@@ -1,3 +1,4 @@
+---
 name: Zizmor
 on:
   pull_request:

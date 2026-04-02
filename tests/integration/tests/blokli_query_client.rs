@@ -167,6 +167,33 @@ async fn query_token_balance_and_allowance_of_safe(#[future(awt)] fixture: Integ
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
+/// deploys a safe and verifies that the queried Safe includes the indexed owners list.
+async fn query_safe_returns_indexed_owners(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    let [account] = fixture.sample_accounts::<1>();
+    let deployed_safe = fixture.deploy_or_get_safe(account, parsed_safe_balance()).await?;
+
+    sleep(Duration::from_secs(8)).await;
+
+    let safe = fixture
+        .client()
+        .query_safe(SafeSelector::Owner(account.to_alloy_address().into()))
+        .await?
+        .context("deployed safe not found")?;
+
+    assert_eq!(safe.address.to_lowercase(), deployed_safe.address.to_lowercase());
+    assert!(
+        safe.owners
+            .iter()
+            .any(|owner| owner.eq_ignore_ascii_case(&account.address.to_string())),
+        "queried safe owners should contain the deploying account"
+    );
+
+    Ok(())
+}
+
+#[rstest]
+#[test_log::test(tokio::test)]
+#[serial]
 async fn query_safe_redeemed_stats_after_ticket_redeem(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let channel_amount: HoprBalance = "5 wei wxHOPR".parse().expect("failed to parse channel amount");
     let ticket_amount: HoprBalance = "1 wei wxHOPR".parse().expect("failed to parse ticket amount");
@@ -299,22 +326,26 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
     let amount: HoprBalance = "1 wei wxHOPR".parse().expect("failed to parse amount");
 
     // Deploy safes for both parties
-    let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
-    let dst_safe = fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
+    let src_safe = fixture.deploy_safe_and_announce(src, parsed_safe_balance()).await?;
+    let dst_safe = fixture.deploy_safe_and_announce(dst, parsed_safe_balance()).await?;
 
     // Set allowance
-    fixture.approve(&src, amount, &src_safe.module_address).await?;
+    fixture.approve(src, amount, &src_safe.module_address).await?;
 
     sleep(Duration::from_secs(8)).await;
 
     // Create the channel
     fixture
-        .open_channel(&src, &dst, amount, &src_safe.module_address, None)
+        .open_channel(src, dst, amount, &src_safe.module_address, None)
         .await?;
 
     sleep(Duration::from_secs(8)).await;
 
-    let after_count = fixture.client().count_channels(channel_selector.clone()).await?;
+    let after_count = fixture
+        .client()
+        .query_channel_stats(channel_selector.clone())
+        .await?
+        .count;
     let queried_channels = fixture.client().query_channels(channel_selector.clone()).await?;
 
     assert_eq!(after_count, 1);
@@ -337,7 +368,11 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
         status: Some(ChannelStatus::Open),
         ..Default::default()
     };
-    let src_safe_count = fixture.client().count_channels(src_safe_selector.clone()).await?;
+    let src_safe_count = fixture
+        .client()
+        .query_channel_stats(src_safe_selector.clone())
+        .await?
+        .count;
     let src_safe_channels = fixture.client().query_channels(src_safe_selector).await?;
     assert_eq!(src_safe_count, 1);
     assert_eq!(src_safe_channels.channels.len(), 1);
@@ -347,18 +382,22 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
         status: Some(ChannelStatus::Open),
         ..Default::default()
     };
-    let dst_safe_count = fixture.client().count_channels(dst_safe_selector.clone()).await?;
+    let dst_safe_count = fixture
+        .client()
+        .query_channel_stats(dst_safe_selector.clone())
+        .await?
+        .count;
     let dst_safe_channels = fixture.client().query_channels(dst_safe_selector).await?;
     assert_eq!(dst_safe_count, 0);
     assert!(dst_safe_channels.channels.is_empty());
 
     fixture
-        .initiate_outgoing_channel_closure(&src, &dst, &src_safe.module_address)
+        .initiate_outgoing_channel_closure(src, dst, &src_safe.module_address)
         .await?;
 
     sleep(Duration::from_secs(8)).await;
 
-    let count_after_closure = fixture.client().count_channels(channel_selector).await?;
+    let count_after_closure = fixture.client().query_channel_stats(channel_selector).await?.count;
 
     assert_eq!(count_after_closure, 0);
 
@@ -377,15 +416,15 @@ async fn channel_stats_count_and_balance(#[future(awt)] fixture: IntegrationFixt
 
     let amount: HoprBalance = "1 wei wxHOPR".parse().expect("failed to parse amount");
 
-    let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
-    let dst_safe = fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
+    let src_safe = fixture.deploy_safe_and_announce(src, parsed_safe_balance()).await?;
+    let dst_safe = fixture.deploy_safe_and_announce(dst, parsed_safe_balance()).await?;
 
-    fixture.approve(&src, amount, &src_safe.module_address).await?;
+    fixture.approve(src, amount, &src_safe.module_address).await?;
 
     sleep(Duration::from_secs(8)).await;
 
     fixture
-        .open_channel(&src, &dst, amount, &src_safe.module_address, None)
+        .open_channel(src, dst, amount, &src_safe.module_address, None)
         .await?;
 
     sleep(Duration::from_secs(8)).await;
@@ -467,7 +506,7 @@ async fn channel_stats_count_and_balance(#[future(awt)] fixture: IntegrationFixt
     );
 
     fixture
-        .initiate_outgoing_channel_closure(&src, &dst, &src_safe.module_address)
+        .initiate_outgoing_channel_closure(src, dst, &src_safe.module_address)
         .await?;
 
     Ok(())
