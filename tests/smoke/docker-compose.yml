@@ -1,3 +1,4 @@
+---
 # Docker Compose configuration for smoke testing blokli
 # Tests that blokli can start and become healthy with PostgreSQL and Anvil
 #

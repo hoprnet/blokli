@@ -251,7 +251,9 @@ async fn query_safe_redeemed_stats_after_ticket_redeem(#[future(awt)] fixture: I
             let client = client.clone();
             async move {
                 let s = client.query_redeemed_stats(stats_selector).await?;
-                let count = s.redemption_count.0.parse::<u64>().unwrap_or(0);
+                let count: u64 = s.redemption_count.0.parse().map_err(|e| {
+                    anyhow::anyhow!("failed to parse redemption_count '{}': {}", s.redemption_count.0, e)
+                })?;
                 Ok(if count >= expected_count { Some(s) } else { None })
             }
         },
@@ -303,7 +305,11 @@ async fn query_transaction_count(#[future(awt)] fixture: IntegrationFixture) -> 
             let tx_id = tx_id.clone();
             async move {
                 let tx = client.query_transaction_status(tx_id).await?;
-                Ok((tx.status == TransactionStatus::Confirmed).then_some(()))
+                match tx.status {
+                    TransactionStatus::Confirmed => Ok(Some(())),
+                    TransactionStatus::Submitted => Ok(None),
+                    status => Err(anyhow::anyhow!("transaction reached terminal status: {:?}", status)),
+                }
             }
         },
     )

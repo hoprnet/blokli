@@ -13,7 +13,7 @@ use hopr_bindings::exports::alloy::{
     eips::eip2718::Decodable2718,
 };
 use hopr_types::{crypto::types::Hash, primitive::prelude::Address};
-use tracing::warn;
+use tracing::{error, warn};
 
 use crate::{
     transaction_monitor::{ReceiptLog, SafeAddressChecker},
@@ -146,15 +146,27 @@ impl<T: BlokliDbAllOperations + Send + Sync> SafeAddressChecker for DbSafeAddres
         let addr = Address::try_from(target.as_slice()).ok()?;
 
         // Check if the target is a known Safe contract address (returns itself)
-        if let Ok(Some(entry)) = self.db.get_safe_contract_by_address(None, addr).await {
-            let safe_addr: [u8; 20] = entry.address.as_slice().try_into().ok()?;
-            return Some(safe_addr);
+        match self.db.get_safe_contract_by_address(None, addr).await {
+            Ok(Some(entry)) => {
+                let safe_addr: [u8; 20] = entry.address.as_slice().try_into().ok()?;
+                return Some(safe_addr);
+            }
+            Ok(None) => {}
+            Err(e) => {
+                error!(target = ?target, source = %e, "DB error in get_safe_contract_by_address");
+            }
         }
 
         // Check if the target is a module address associated with a Safe
-        if let Ok(Some(entry)) = self.db.get_safe_contract_by_module_address(None, addr).await {
-            let safe_addr: [u8; 20] = entry.address.as_slice().try_into().ok()?;
-            return Some(safe_addr);
+        match self.db.get_safe_contract_by_module_address(None, addr).await {
+            Ok(Some(entry)) => {
+                let safe_addr: [u8; 20] = entry.address.as_slice().try_into().ok()?;
+                return Some(safe_addr);
+            }
+            Ok(None) => {}
+            Err(e) => {
+                error!(target = ?target, source = %e, "DB error in get_safe_contract_by_module_address");
+            }
         }
 
         None

@@ -163,10 +163,21 @@ impl DockerEnvironment {
         cmd.env("BLOKLID_IMAGE", &self.config.bloklid_image);
         cmd.env("INTEGRATION_CONFIG", &self.config.integration_config);
         cmd.env("REGISTRY_PORT", self.config.registry_port().to_string());
-        cmd.env("ANVIL_PORT", self.config.rpc_url().port().unwrap_or(8546).to_string());
+        cmd.env(
+            "ANVIL_PORT",
+            self.config
+                .rpc_url()
+                .port_or_known_default()
+                .unwrap_or(8546)
+                .to_string(),
+        );
         cmd.env(
             "BLOKLID_PORT",
-            self.config.bloklid_url().port().unwrap_or(8081).to_string(),
+            self.config
+                .bloklid_url()
+                .port_or_known_default()
+                .unwrap_or(8081)
+                .to_string(),
         );
         cmd
     }

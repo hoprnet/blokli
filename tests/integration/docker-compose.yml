@@ -1,3 +1,4 @@
+---
 # Docker Compose configuration for integration testing blokli
 #
 # Each test binary gets its own isolated stack via STACK_ID, which parameterizes
