@@ -275,7 +275,7 @@ pub struct Config {
     pub rpc_url: String,
 
     #[serde(default)]
-    pub max_rpc_requests_per_sec: u32,
+    pub max_rpc_requests_per_sec: Option<u32>,
 
     #[validate(range(min = 1))]
     #[default(10000)]
@@ -309,7 +309,7 @@ impl Config {
         output.push_str(&format!("  rpc_url: {}\n", redact_url(&self.rpc_url)));
         output.push_str(&format!("  data_directory: {}\n", self.data_directory));
         output.push_str(&format!(
-            "  max_rpc_requests_per_sec: {}\n",
+            "  max_rpc_requests_per_sec: {:?}\n",
             self.max_rpc_requests_per_sec
         ));
         output.push_str(&format!("  max_block_range: {}\n", self.max_block_range));
