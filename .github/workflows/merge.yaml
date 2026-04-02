@@ -130,6 +130,21 @@ jobs:
           image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid:${{ needs.build-docker.outputs.docker_build_version }}
           suffix: ${{ steps.revision.outputs.suffix }}
           flags: --timeout=600s
+  coverage:
+    name: Coverage
+    if: github.event.pull_request.merged == true
+    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@268553d7984344080e3dc65eb92778c9103af7ec # workflow-tests-v3
+    with:
+      source_branch: ${{ github.event.pull_request.base.ref }}
+      unit_tests: false
+      integration_tests: false
+      unit_coverage: true
+      unconditional: true
+      unit_coverage_command: "nix run .#coverage-unit"
+      runner: self-hosted-hoprnet-bigger
+    secrets:
+      cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      codecov_token: ${{ secrets.CODECOV_TOKEN }}
   notify:
     name: Notify failure
     needs:
@@ -137,7 +152,8 @@ jobs:
       - build-docker
       - build-docker-with-anvil
       - deploy-dev
-    if: ${{ always() && failure() }}
+      - coverage
+    if: ${{ always() && github.event.pull_request.merged == true && !success() }}
     runs-on: ubuntu-latest
     steps:
       - name: Notify failed merge pipeline
