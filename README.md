@@ -1,5 +1,7 @@
 # Blokli
 
+[![codecov](https://codecov.io/gh/hoprnet/blokli/branch/main/graph/badge.svg)](https://codecov.io/gh/hoprnet/blokli)
+
 This repository contains `Blokli`: On-chain Indexer of HOPR smart contracts and on-chain operations provider.
 
 ## Components

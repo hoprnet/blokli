@@ -4,8 +4,19 @@ use crate::{
     errors::{BlokliClientError, ErrorKind},
 };
 
+#[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SafeSelectorInput {
+    #[cynic(rename = "ADDRESS")]
+    Address,
+    #[cynic(rename = "CHAIN_KEY")]
+    ChainKey,
+    #[cynic(rename = "REGISTERED_NODE")]
+    RegisteredNode,
+}
+
 #[derive(cynic::QueryVariables, Debug)]
-pub struct SafeVariables {
+pub struct SafeByVariables {
+    pub selector: SafeSelectorInput,
     pub address: String,
 }
 
@@ -19,24 +30,10 @@ pub struct Safe {
 }
 
 #[derive(cynic::QueryFragment, Debug)]
-#[cynic(graphql_type = "QueryRoot", variables = "SafeVariables")]
-pub struct QuerySafeByChainKey {
-    #[arguments(chainKey: $address)]
-    pub safe_by_chain_key: Option<SafeResult>,
-}
-
-#[derive(cynic::QueryFragment, Debug)]
-#[cynic(graphql_type = "QueryRoot", variables = "SafeVariables")]
-pub struct QuerySafeByRegisteredNode {
-    #[arguments(chainKey: $address)]
-    pub safe_by_registered_node: Option<SafeResult>,
-}
-
-#[derive(cynic::QueryFragment, Debug)]
-#[cynic(graphql_type = "QueryRoot", variables = "SafeVariables")]
-pub struct QuerySafeByAddress {
-    #[arguments(address: $address)]
-    pub safe: Option<SafeResult>,
+#[cynic(graphql_type = "QueryRoot", variables = "SafeByVariables")]
+pub struct QuerySafeBy {
+    #[arguments(selector: $selector, address: $address)]
+    pub safe_by: Option<SafeResult>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]

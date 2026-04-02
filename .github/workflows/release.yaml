@@ -25,7 +25,7 @@ jobs:
           - architecture: x86_64-linux
             runner: self-hosted-hoprnet-bigger
             build_command: nix build -L .#binary-blokli-x86_64-linux
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@60486fe4eb9f78ed754c666b9c70c8545361e7c8 # build-binaries-v2
     permissions:
       contents: read
     with:
@@ -43,7 +43,7 @@ jobs:
       gpg_private_key: ${{ secrets.GPG_HOPRNET_PRIVATE_KEY }}
   build-docker:
     name: Docker
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@build-docker-v1
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@43b03a7b5df777770d95c6524f48be34184b26fa # build-docker-v1
     needs: build-binaries
     permissions:
       contents: read
@@ -54,10 +54,6 @@ jobs:
       version_type: release
       build_matrix: >-
         [
-
-
-
-
 
 
           {
@@ -119,7 +115,7 @@ jobs:
         run: echo "suffix=v$(echo '${{ needs.build-docker.outputs.docker_build_version }}' | tr '.' '-')" | tee -a "$GITHUB_OUTPUT"
       - name: Setup GCP
         id: gcp
-        uses: hoprnet/hopr-workflows/actions/setup-gcp@setup-gcp-v2
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@7295b2131e2ed8f8e62a8fc2d8e550d62528adc6 # setup-gcp-v2
         with:
           workload_identity_provider: ${{ vars.WIF_PROVIDER_STAGING }}
           service_account: ${{ vars.WIF_SERVICE_ACCOUNT_STAGING }}
