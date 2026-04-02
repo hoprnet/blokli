@@ -22,7 +22,6 @@ use hopr_types::{
 use rstest::*;
 use serde_json::json;
 use serial_test::serial;
-use tracing::warn;
 use uuid::Uuid;
 
 #[rstest]
@@ -226,6 +225,7 @@ async fn subscribe_graph_channel_update_on_closure(#[future(awt)] fixture: Integ
     let channel_selector = ChannelSelector {
         filter: Some(ChannelFilter::ChannelId(expected_id.into())),
         status: Some(ChannelStatus::Open),
+        ..Default::default()
     };
     let poll_client = fixture.client().clone();
     let poll_selector = channel_selector.clone();
@@ -620,8 +620,7 @@ async fn subscribe_transaction_status_updates(#[future(awt)] fixture: Integratio
                 }
             }
             Ok(Some(Err(e))) => {
-                warn!("Subscription error: {e}");
-                continue;
+                panic!("Subscription error: {e:?}");
             }
             Ok(None) => break,
             Err(_) => break,

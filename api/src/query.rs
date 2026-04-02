@@ -7,8 +7,7 @@ use blokli_api_types::{
     Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelStats, ChannelStatsResult,
     ChannelsList, ChannelsResult, ContractAddressMap, CountResult, HoprBalance, InvalidAddressError,
     MissingFilterError, ModuleAddress, NativeBalance, QueryFailedError, RedeemedStats, RedeemedStatsFilter, Safe,
-    SafeHoprAllowance, SafeSelectorInput, SafesBalance, SafesBalanceResult, TokenValueString, Transaction,
-    TransactionCount, UInt64,
+    SafeHoprAllowance, SafeSelectorInput, SafesBalance, SafesBalanceResult, TokenValueString, TransactionCount, UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations};
