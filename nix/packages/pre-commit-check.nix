@@ -8,7 +8,31 @@
   system,
   config,
   pkgs,
+  stableToolchain,
 }:
+
+let
+  lib = pkgs.lib;
+
+  # Wrapper script that provides cargo and other tools to the export-db-schema hook.
+  # Pre-commit system hooks run outside the devshell, so tools must be explicitly
+  # added to PATH.
+  exportDbSchemaWrapper = pkgs.writeShellScript "export-db-schema-hook" ''
+    # Skip in nix build sandbox where cargo can't compile (no network, no system libs).
+    # NIX_BUILD_TOP is set inside all nix build derivations.
+    if [ -n "''${NIX_BUILD_TOP:-}" ]; then
+      echo "Skipping export-db-schema (nix build sandbox detected)"
+      exit 0
+    fi
+    export PATH="${lib.makeBinPath [
+      stableToolchain
+      pkgs.just
+      pkgs.sqlite
+      pkgs.pgformatter
+    ]}:$PATH"
+    exec ${pkgs.just}/bin/just export-db-schema
+  '';
+in
 
 pre-commit.lib.${system}.run {
   src = ./../..; # Root of the project
@@ -31,6 +55,16 @@ pre-commit.lib.${system}.run {
 
     # Commit message formatting
     commitizen.enable = true;
+
+    # Export database schema when migrations change
+    export-db-schema = {
+      enable = true;
+      name = "generate database schema";
+      entry = toString exportDbSchemaWrapper;
+      files = "db/migration/src/.*\\.rs$";
+      language = "system";
+      pass_filenames = false;
+    };
 
     # Custom immutable files check (disabled by default)
     immutable-files = {
