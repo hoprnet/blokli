@@ -96,12 +96,12 @@ jobs:
   # ── Shared tests (unit) ─────────────────────────────────────────────────────
   tests:
     name: Test
-    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@bbd22e57cf954c15f0a6051d59329857809141dd # workflow-tests-v1
+    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@268553d7984344080e3dc65eb92778c9103af7ec # workflow-tests-v3
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       unit_tests: true
       unit_test_command: "nix run -L .#test"
-      coverage: true
+      unit_coverage: true
       unit_coverage_command: "nix run .#coverage-unit"
       runner: self-hosted-hoprnet-bigger
       test_timeout: 30
