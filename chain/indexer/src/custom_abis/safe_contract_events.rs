@@ -26,10 +26,10 @@ sol!(
             address initializer,
             address fallbackHandler
         );
-        event AddedOwner(address owner);
-        event RemovedOwner(address owner);
+        event AddedOwner(address indexed owner);
+        event RemovedOwner(address indexed owner);
         event ChangedThreshold(uint256 threshold);
-        event ExecutionSuccess(bytes32 txHash, uint256 payment);
-        event ExecutionFailure(bytes32 txHash, uint256 payment);
+        event ExecutionSuccess(bytes32 indexed txHash, uint256 payment);
+        event ExecutionFailure(bytes32 indexed txHash, uint256 payment);
     }
 );
