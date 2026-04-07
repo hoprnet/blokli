@@ -132,7 +132,6 @@ where
         })
     }
 
-    #[allow(dead_code)]
     pub(super) async fn replay_safe_logs_before_position(
         &self,
         tx: &OpenTransaction,

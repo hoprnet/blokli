@@ -1378,7 +1378,7 @@ mod tests {
                     && !filters
                         .no_token
                         .iter()
-                        .any(|filter| filter.matches_address(&AlloyAddress::from_hopr_address(safe_address)))
+                        .any(|filter| filter.matches_address(AlloyAddress::from_hopr_address(safe_address)))
             })
             .return_once(move |_, _, _| Ok(Box::pin(futures::stream::iter(vec![first_block]))));
         rpc.expect_try_stream_logs()
@@ -1389,7 +1389,7 @@ mod tests {
                     && filters
                         .no_token
                         .iter()
-                        .any(|filter| filter.matches_address(&AlloyAddress::from_hopr_address(safe_address)))
+                        .any(|filter| filter.matches_address(AlloyAddress::from_hopr_address(safe_address)))
             })
             .return_once(move |_, _, _| Ok(Box::pin(futures::stream::iter(vec![second_block]))));
 
