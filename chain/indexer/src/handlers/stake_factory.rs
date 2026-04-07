@@ -54,6 +54,11 @@ where
         if let HoprNodeStakeFactoryEvents::NewHoprNodeStakeModuleForSafe(deployed) = event {
             let module_addr = deployed.module.to_hopr_address();
             let safe_addr = deployed.safe.to_hopr_address();
+            let safe_previously_known = self
+                .db
+                .get_safe_contract_by_address(Some(tx), safe_addr)
+                .await?
+                .is_some();
 
             // Query RPC for transaction sender (this is the chain_key)
             let chain_key = self
@@ -83,8 +88,10 @@ where
                 .create_safe_contract(Some(tx), safe_addr, module_addr, chain_key, block, tx_index, log_index)
                 .await?;
 
-            self.replay_safe_logs_before_position(tx, safe_addr, block, tx_index, log_index)
-                .await?;
+            if !safe_previously_known {
+                let epoch = self.indexer_state.mark_safe_filters_dirty();
+                info!(safe = %safe_addr.to_hex(), epoch, "Marked Safe filters for refresh after deployment");
+            }
 
             info!(
                 safe_id,
@@ -114,15 +121,11 @@ mod tests {
     use blokli_chain_rpc::errors::RpcError;
     use blokli_chain_types::AlloyAddressExt;
     use blokli_db::{
-        BlokliDbGeneralModelOperations, TargetDb, api::logs::BlokliDbLogOperations, db::BlokliDb,
-        safe_contracts::BlokliDbSafeContractOperations, safe_history::BlokliDbSafeHistoryOperations,
+        BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations,
     };
     use blokli_db_entity::{hopr_safe_contract, prelude::HoprSafeContract};
     use hopr_bindings::{
-        exports::alloy::{
-            primitives::{Address as AlloyAddress, U256},
-            sol_types::SolEvent,
-        },
+        exports::alloy::{primitives::Address as AlloyAddress, sol_types::SolEvent},
         hopr_node_stake_factory::HoprNodeStakeFactory,
     };
     use hopr_types::{
@@ -132,10 +135,7 @@ mod tests {
     use mockall::predicate::*;
     use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
-    use crate::{
-        custom_abis::safe_contract_events::SafeContract, handlers::test_utils::test_helpers::*, state::IndexerEvent,
-        traits::ChainLogHandler,
-    };
+    use crate::{handlers::test_utils::test_helpers::*, state::IndexerEvent, traits::ChainLogHandler};
 
     /// Generates a cryptographically random Hopr `Address`.
     ///
@@ -337,89 +337,6 @@ mod tests {
             .count(db.conn(TargetDb::Index))
             .await?;
         assert_eq!(safe_count, 1, "Should only have one safe entry in database");
-
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_on_stake_factory_event_replays_prior_safe_logs() -> anyhow::Result<()> {
-        let db = BlokliDb::new_in_memory().await?;
-        let mut rpc_operations = MockIndexerRpcOperations::new();
-
-        let tx_hash = random_hash();
-        let sender = random_address();
-        rpc_operations
-            .expect_get_transaction_sender()
-            .with(eq(tx_hash))
-            .times(1)
-            .returning(move |_| Ok(sender));
-
-        let clonable_rpc_operations = ClonableMockOperations {
-            inner: Arc::new(rpc_operations),
-        };
-
-        let handlers = init_handlers(clonable_rpc_operations, db.clone());
-
-        let safe_address = random_address();
-        let module_address = random_address();
-        let owner_one: Address = "1111111111111111111111111111111111111111".parse()?;
-        let owner_two: Address = "2222222222222222222222222222222222222222".parse()?;
-
-        let safe_setup_log = event_to_log_at_block(
-            SafeContract::SafeSetup {
-                initiator: AlloyAddress::from_hopr_address(sender),
-                owners: vec![
-                    AlloyAddress::from_hopr_address(owner_one),
-                    AlloyAddress::from_hopr_address(owner_two),
-                ],
-                threshold: U256::from(2_u64),
-                initializer: AlloyAddress::ZERO,
-                fallbackHandler: AlloyAddress::ZERO,
-            },
-            safe_address,
-            100,
-            1,
-            1,
-        );
-        let safe_setup_log = SerializableLog {
-            tx_hash: tx_hash.into(),
-            block_hash: random_hash().into(),
-            ..safe_setup_log
-        };
-        db.store_log(safe_setup_log).await?;
-
-        let deployment = HoprNodeStakeFactory::NewHoprNodeStakeModuleForSafe {
-            safe: AlloyAddress::from_hopr_address(safe_address),
-            module: AlloyAddress::from_hopr_address(module_address),
-        };
-        let deployment_data = deployment.encode_log_data();
-        let deployment_log = SerializableLog {
-            address: handlers.addresses.node_stake_factory,
-            topics: deployment_data.topics().iter().map(|topic| topic.0).collect(),
-            data: deployment_data.data.to_vec(),
-            tx_hash: tx_hash.into(),
-            block_hash: random_hash().into(),
-            block_number: 100,
-            tx_index: 1,
-            log_index: 2,
-            ..test_log()
-        };
-
-        handlers.collect_log_event(deployment_log, true).await?;
-
-        let owners = db.get_safe_owners(None, safe_address).await?;
-        assert_eq!(
-            owners,
-            vec![owner_one, owner_two],
-            "replayed SafeSetup should populate the current owner set"
-        );
-
-        let activity = db.get_safe_activity(None, safe_address).await?;
-        assert_eq!(activity.len(), 1, "replayed SafeSetup should create one activity row");
-        assert_eq!(activity[0].event_kind, "SAFE_SETUP");
-        assert_eq!(activity[0].published_block, 100);
-        assert_eq!(activity[0].published_tx_index, 1);
-        assert_eq!(activity[0].published_log_index, 1);
 
         Ok(())
     }

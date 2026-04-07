@@ -11,6 +11,7 @@ use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{
     BlokliDbGeneralModelOperations, TargetDb, api::logs::BlokliDbLogOperations, info::BlokliDbInfoOperations,
+    safe_contracts::BlokliDbSafeContractOperations,
 };
 use blokli_db_entity::{channel_state, prelude::ChannelState};
 use futures::{StreamExt, channel::mpsc::channel, future::AbortHandle};
@@ -89,7 +90,14 @@ pub struct Indexer<T, U, Db>
 where
     T: HoprIndexerRpcOperations + Send + 'static,
     U: ChainLogHandler + Send + 'static,
-    Db: BlokliDbGeneralModelOperations + BlokliDbInfoOperations + BlokliDbLogOperations + Clone + Send + Sync + 'static,
+    Db: BlokliDbGeneralModelOperations
+        + BlokliDbInfoOperations
+        + BlokliDbLogOperations
+        + BlokliDbSafeContractOperations
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     rpc: Option<T>,
     db_processor: Option<U>,
@@ -105,7 +113,14 @@ impl<T, U, Db> Indexer<T, U, Db>
 where
     T: HoprIndexerRpcOperations + Sync + Send + 'static,
     U: ChainLogHandler + Send + Sync + 'static,
-    Db: BlokliDbGeneralModelOperations + BlokliDbInfoOperations + BlokliDbLogOperations + Clone + Send + Sync + 'static,
+    Db: BlokliDbGeneralModelOperations
+        + BlokliDbInfoOperations
+        + BlokliDbLogOperations
+        + BlokliDbSafeContractOperations
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     pub fn new(rpc: T, db_processor: U, db: Db, cfg: IndexerConfig, indexer_state: IndexerState) -> Self {
         Self {
@@ -131,6 +146,7 @@ where
         Db: BlokliDbGeneralModelOperations
             + BlokliDbInfoOperations
             + BlokliDbLogOperations
+            + BlokliDbSafeContractOperations
             + Clone
             + Send
             + Sync
@@ -149,7 +165,7 @@ where
         let db = self.db.clone();
         let panic_on_completion = self.panic_on_completion;
 
-        let (log_filters, address_topics) = Self::generate_log_filters(&logs_handler);
+        let address_topics = Self::generate_address_topics(&logs_handler);
 
         // Check that the contract addresses and topics are consistent with what is in the logs DB,
         // or if the DB is empty, prime it with the given addresses and topics.
@@ -313,95 +329,102 @@ where
 
             let rpc_ref = &rpc;
 
-            let event_stream = rpc
-                .try_stream_logs(next_block_to_process, log_filters, is_synced.load(Ordering::Relaxed))
-                .expect("block stream should be constructible")
-                .then(|block| {
-                    let db = db.clone();
-                    let chain_head = chain_head.clone();
-                    let is_synced = is_synced.clone();
-                    let tx = tx.clone();
-                    let logs_handler = logs_handler.clone();
+            let sync_progress_start_block = next_block_to_process;
+            let mut stream_start_block = next_block_to_process;
+            let mut safe_filter_epoch = indexer_state.safe_filter_epoch();
 
-                    async move {
-                        Self::calculate_sync_process(
-                            block.block_id,
-                            rpc_ref,
-                            db,
-                            chain_head.clone(),
-                            is_synced.clone(),
-                            next_block_to_process,
-                            tx.clone(),
-                            logs_handler.contract_addresses_map().channels.into(),
-                        )
-                        .await;
+            'stream_refresh: loop {
+                let stream_is_synced = is_synced.load(Ordering::Relaxed);
+                let log_filters = Self::generate_log_filters(&db, &logs_handler)
+                    .await
+                    .expect("log filters should be constructible");
+                let mut event_stream = rpc
+                    .try_stream_logs(stream_start_block, log_filters, stream_is_synced)
+                    .expect("block stream should be constructible");
 
-                        block
-                    }
-                })
-                .filter_map(|block| {
-                    let db = db.clone();
-                    let logs_handler = logs_handler.clone();
+                while let Some(block) = event_stream.next().await {
+                    Self::calculate_sync_process(
+                        block.block_id,
+                        rpc_ref,
+                        db.clone(),
+                        chain_head.clone(),
+                        is_synced.clone(),
+                        sync_progress_start_block,
+                        tx.clone(),
+                        logs_handler.contract_addresses_map().channels.into(),
+                    )
+                    .await;
 
-                    async move {
-                        debug!(%block, "storing logs from block");
-                        let logs = block.logs.clone();
+                    debug!(%block, "storing logs from block");
+                    let logs = block.logs.clone();
 
-                        // Filter out the token contract logs because we do not need to store these
-                        // in the database.
-                        let logs_vec = logs
-                            .into_iter()
-                            .filter(|log| log.address != logs_handler.contract_addresses_map().token)
-                            .collect();
+                    // Filter out the token contract logs because we do not need to store these
+                    // in the database.
+                    let logs_vec = logs
+                        .into_iter()
+                        .filter(|log| log.address != logs_handler.contract_addresses_map().token)
+                        .collect();
 
-                        match db.store_logs(logs_vec).await {
-                            Ok(store_results) => {
-                                if let Some(error) = store_results
-                                    .into_iter()
-                                    .filter(|r| r.is_err())
-                                    .map(|r| r.unwrap_err())
-                                    .next()
-                                {
-                                    error!(%block, %error, "failed to processed stored logs from block");
-                                    None
-                                } else {
-                                    Some(block)
-                                }
-                            }
-                            Err(error) => {
-                                error!(%block, %error, "failed to store logs from block");
-                                None
+                    match db.store_logs(logs_vec).await {
+                        Ok(store_results) => {
+                            if let Some(error) = store_results
+                                .into_iter()
+                                .filter(|r| r.is_err())
+                                .map(|r| r.unwrap_err())
+                                .next()
+                            {
+                                error!(%block, %error, "failed to processed stored logs from block");
+                                continue;
                             }
                         }
+                        Err(error) => {
+                            error!(%block, %error, "failed to store logs from block");
+                            continue;
+                        }
                     }
-                });
 
-            let block_processing_stream = event_stream.then(|block| {
-                let db = db.clone();
-                let logs_handler = logs_handler.clone();
-                let is_synced = is_synced.clone();
-                let indexer_state = indexer_state.clone();
-                async move {
                     // Events are now published directly via IndexerState within handlers
                     Self::process_block(
                         &db,
                         &logs_handler,
-                        block,
+                        block.clone(),
                         false,
                         is_synced.load(Ordering::Relaxed),
                         &indexer_state,
                     )
                     .await;
+
+                    stream_start_block = block.block_id.saturating_add(1);
+
+                    let latest_safe_filter_epoch = indexer_state.safe_filter_epoch();
+                    if latest_safe_filter_epoch != safe_filter_epoch {
+                        safe_filter_epoch = latest_safe_filter_epoch;
+                        info!(
+                            next_block = stream_start_block,
+                            safe_filter_epoch, "Refreshing RPC log filters after Safe discovery"
+                        );
+                        continue 'stream_refresh;
+                    }
+
+                    let latest_is_synced = is_synced.load(Ordering::Relaxed);
+                    if latest_is_synced != stream_is_synced {
+                        info!(
+                            next_block = stream_start_block,
+                            is_synced = latest_is_synced,
+                            "Refreshing RPC log filters after sync state change"
+                        );
+                        continue 'stream_refresh;
+                    }
                 }
-            });
 
-            // Process all blocks (events are published internally via IndexerState)
-            block_processing_stream.collect::<Vec<_>>().await;
+                if panic_on_completion {
+                    panic!(
+                        "Indexer event stream has been terminated. This error may be caused by a failed RPC \
+                         connection."
+                    );
+                }
 
-            if panic_on_completion {
-                panic!(
-                    "Indexer event stream has been terminated. This error may be caused by a failed RPC connection."
-                );
+                break;
             }
         });
 
@@ -474,15 +497,33 @@ where
     /// * `logs_handler` - Handler containing contract addresses and safe address
     ///
     /// # Returns
-    /// * `(FilterSet, Vec<(Address, Hash)>)` - A tuple containing:
-    ///   - `FilterSet`: Categorized filters for blockchain event processing.
-    ///   - `Vec<(Address, Hash)>`: A vector of address-topic pairs for logs origin validation.
+    /// * `Vec<(Address, Hash)>` - Address-topic pairs used to validate/prime the logs DB origin metadata.
     ///
     /// # Filter Categories
     /// * `all` - Complete set of filters for normal operation
     /// * `token` - Token-specific filters (Transfer, Approval events for safe)
     /// * `no_token` - Non-token contract filters for initial sync optimization
-    fn generate_log_filters(logs_handler: &U) -> (FilterSet, Vec<(Address, Hash)>) {
+    fn generate_address_topics(logs_handler: &U) -> Vec<(Address, Hash)> {
+        let static_addresses = logs_handler.contract_addresses();
+        let mut address_topics = vec![];
+
+        static_addresses
+            .iter()
+            .copied()
+            .filter(|a| *a != logs_handler.contract_addresses_map().token)
+            .for_each(|address| {
+                let topics = logs_handler.contract_address_topics(address);
+                if !topics.is_empty() {
+                    for topic in topics.iter() {
+                        address_topics.push((address, Hash::from(topic.0)))
+                    }
+                }
+            });
+
+        address_topics
+    }
+
+    async fn generate_log_filters(db: &Db, logs_handler: &U) -> Result<FilterSet> {
         let static_addresses = logs_handler.contract_addresses();
         let addresses_no_token = static_addresses
             .iter()
@@ -492,23 +533,18 @@ where
 
         let mut filter_base_addresses = vec![];
         let mut filter_base_topics = vec![];
-        let mut address_topics = vec![];
 
         addresses_no_token.iter().for_each(|address| {
             let topics = logs_handler.contract_address_topics(*address);
             if !topics.is_empty() {
                 filter_base_addresses.push(AlloyAddress::from_hopr_address(*address));
-                filter_base_topics.extend(topics.clone());
-                for topic in topics.iter() {
-                    address_topics.push((*address, Hash::from(topic.0)))
-                }
+                filter_base_topics.extend(topics);
             }
         });
 
         let filter_base = Filter::new()
             .address(filter_base_addresses)
             .event_signature(filter_base_topics);
-        let filter_safe_contract = Filter::new().event_signature(crate::constants::topics::safe_contract());
         let filter_token = Filter::new().address(AlloyAddress::from_hopr_address(
             logs_handler.contract_addresses_map().token,
         ));
@@ -517,19 +553,39 @@ where
 
         let filter_token_approval = filter_token.event_signature(Approval::SIGNATURE_HASH);
 
-        let set = FilterSet {
-            all: vec![
-                filter_base.clone(),
-                filter_safe_contract.clone(),
-                filter_token_transfer.clone(),
-                filter_token_approval.clone(),
-            ],
-            // token: vec![filter_transfer_from, filter_transfer_to, filter_approval],
-            token: vec![filter_token_approval, filter_token_transfer],
-            no_token: vec![filter_base, filter_safe_contract],
+        let safe_addresses = db.get_safe_contract_addresses(None).await?;
+        let safe_filter = if safe_addresses.is_empty() {
+            None
+        } else {
+            Some(
+                Filter::new()
+                    .address(
+                        safe_addresses
+                            .into_iter()
+                            .map(AlloyAddress::from_hopr_address)
+                            .collect::<Vec<_>>(),
+                    )
+                    .event_signature(crate::constants::topics::safe_contract()),
+            )
         };
 
-        (set, address_topics)
+        let mut all_filters = vec![filter_base.clone()];
+        if let Some(filter_safe_contract) = safe_filter.clone() {
+            all_filters.push(filter_safe_contract);
+        }
+        all_filters.push(filter_token_transfer.clone());
+        all_filters.push(filter_token_approval.clone());
+
+        let mut no_token_filters = vec![filter_base];
+        if let Some(filter_safe_contract) = safe_filter {
+            no_token_filters.push(filter_safe_contract);
+        }
+
+        Ok(FilterSet {
+            all: all_filters,
+            token: vec![filter_token_approval, filter_token_transfer],
+            no_token: no_token_filters,
+        })
     }
 
     /// Processes a block by its ID.
@@ -1115,14 +1171,22 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, pin::Pin};
+    use std::{
+        collections::BTreeSet,
+        pin::Pin,
+        sync::{
+            Arc,
+            atomic::{AtomicBool as StdAtomicBool, Ordering as StdOrdering},
+        },
+        time::Duration,
+    };
 
     use async_trait::async_trait;
     use blokli_chain_rpc::BlockWithLogs;
     use blokli_chain_types::{ContractAddresses, chain_events::ChainEventType};
     use blokli_db::{
         TargetDb, accounts::BlokliDbAccountOperations, db::BlokliDb, events::BlockPosition,
-        state_queries::get_channel_state_at,
+        safe_contracts::BlokliDbSafeContractOperations, state_queries::get_channel_state_at,
     };
     use blokli_db_entity::{
         account, channel,
@@ -1146,7 +1210,7 @@ mod tests {
     use multiaddr::Multiaddr;
 
     use super::*;
-    use crate::traits::MockChainLogHandler;
+    use crate::traits::{ChainLogHandler, MockChainLogHandler};
 
     lazy_static::lazy_static! {
         static ref ALICE_OKP: OffchainKeypair = OffchainKeypair::random();
@@ -1219,6 +1283,127 @@ mod tests {
             async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<std::time::Duration>;
             async fn get_hopr_module_from_safe(&self, safe_address: Address) -> blokli_chain_rpc::errors::Result<Option<Address>>;
         }
+    }
+
+    #[derive(Clone)]
+    struct SafeRefreshHandler {
+        contract_addresses: Arc<ContractAddresses>,
+        db: BlokliDb,
+        indexer_state: IndexerState,
+        primary_topic: B256,
+        safe_address: Address,
+        safe_created: Arc<StdAtomicBool>,
+    }
+
+    #[async_trait]
+    impl ChainLogHandler for SafeRefreshHandler {
+        fn contract_addresses(&self) -> Vec<Address> {
+            vec![self.contract_addresses.announcements]
+        }
+
+        fn contract_addresses_map(&self) -> Arc<ContractAddresses> {
+            self.contract_addresses.clone()
+        }
+
+        fn contract_address_topics(&self, contract: Address) -> Vec<B256> {
+            if contract == self.contract_addresses.announcements {
+                vec![self.primary_topic]
+            } else {
+                Vec::new()
+            }
+        }
+
+        async fn collect_log_event(&self, _log: SerializableLog, _is_synced: bool) -> crate::errors::Result<()> {
+            if !self.safe_created.swap(true, StdOrdering::SeqCst) {
+                self.db
+                    .create_safe_contract(None, self.safe_address, Address::default(), self.safe_address, 1, 0, 0)
+                    .await
+                    .map_err(CoreEthereumIndexerError::from)?;
+                self.indexer_state.mark_safe_filters_dirty();
+            }
+
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn test_indexer_refreshes_safe_filters_after_safe_discovery() -> anyhow::Result<()> {
+        let mut rpc = MockHoprIndexerOps::new();
+        let db = BlokliDb::new_in_memory().await?;
+        let indexer_state = IndexerState::default();
+
+        let primary_address = Address::new(b"my address 123456789");
+        let primary_topic = B256::from_slice(Hash::create(&[b"my topic"]).as_ref());
+        let safe_address = Address::new(b"safe address 1234567");
+
+        let handlers = SafeRefreshHandler {
+            contract_addresses: Arc::new(ContractAddresses {
+                announcements: primary_address,
+                ..ContractAddresses::default()
+            }),
+            db: db.clone(),
+            indexer_state: indexer_state.clone(),
+            primary_topic,
+            safe_address,
+            safe_created: Arc::new(StdAtomicBool::new(false)),
+        };
+
+        let first_block = BlockWithLogs {
+            block_id: 1,
+            logs: BTreeSet::from([SerializableLog {
+                address: primary_address,
+                topics: vec![primary_topic.0],
+                data: vec![1, 2, 3],
+                tx_hash: Hash::create(&[b"tx-1"]).into(),
+                block_hash: Hash::create(&[b"block-1"]).into(),
+                tx_index: 0,
+                block_number: 1,
+                log_index: 0,
+                ..Default::default()
+            }]),
+        };
+        let second_block = BlockWithLogs {
+            block_id: 2,
+            logs: BTreeSet::new(),
+        };
+
+        rpc.expect_block_number().returning(|| Ok(10));
+        rpc.expect_get_channel_closure_notice_period()
+            .returning(|| Ok(Duration::from_secs(1)));
+        rpc.expect_try_stream_logs()
+            .once()
+            .withf(move |start: &u64, filters: &FilterSet, is_synced: &bool| {
+                *start == 0
+                    && !*is_synced
+                    && !filters
+                        .no_token
+                        .iter()
+                        .any(|filter| filter.matches_address(&AlloyAddress::from_hopr_address(safe_address)))
+            })
+            .return_once(move |_, _, _| Ok(Box::pin(futures::stream::iter(vec![first_block]))));
+        rpc.expect_try_stream_logs()
+            .once()
+            .withf(move |start: &u64, filters: &FilterSet, is_synced: &bool| {
+                *start == 2
+                    && !*is_synced
+                    && filters
+                        .no_token
+                        .iter()
+                        .any(|filter| filter.matches_address(&AlloyAddress::from_hopr_address(safe_address)))
+            })
+            .return_once(move |_, _, _| Ok(Box::pin(futures::stream::iter(vec![second_block]))));
+
+        let indexer = Indexer::new(rpc, handlers, db.clone(), IndexerConfig::default(), indexer_state)
+            .without_panic_on_completion();
+
+        let start_result = indexer.start().await;
+        assert!(
+            start_result.is_err(),
+            "stream should terminate after the test streams complete"
+        );
+        assert_eq!(db.get_safe_contract_addresses(None).await?, vec![safe_address]);
+
+        Ok(())
     }
 
     #[tokio::test]

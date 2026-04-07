@@ -194,8 +194,12 @@ where
                     .await?;
 
                 if !safe_previously_known {
-                    self.replay_safe_logs_before_position(tx, safe_addr, block, tx_index, log_index)
-                        .await?;
+                    let epoch = self.indexer_state.mark_safe_filters_dirty();
+                    info!(
+                        safe_address = %safe_addr.to_hex(),
+                        epoch,
+                        "Marked Safe filters for refresh after new Safe registration"
+                    );
                 }
 
                 self.update_account_safe_address(tx, node_addr, Some(safe_addr), block, tx_index, log_index)

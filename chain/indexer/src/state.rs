@@ -7,7 +7,10 @@
 //! The synchronization ensures no race conditions when capturing the watermark
 //! for subscriptions, guaranteeing no duplicates or data loss.
 
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicU64, Ordering},
+};
 
 use async_broadcast::{Receiver, Sender, broadcast};
 use blokli_api_types::{Account, ChannelUpdate, TicketParameters, TokenValueString};
@@ -80,6 +83,9 @@ pub struct IndexerState {
 
     /// Initial shutdown receiver kept alive to maintain channel state
     _shutdown_rx: Arc<Receiver<()>>,
+
+    /// Monotonic counter used to trigger Safe filter refreshes.
+    safe_filter_epoch: Arc<AtomicU64>,
 }
 
 impl std::fmt::Debug for IndexerState {
@@ -90,6 +96,7 @@ impl std::fmt::Debug for IndexerState {
             .field("shutdown_signal", &"Sender<()>")
             .field("_event_bus_rx", &"Arc<Receiver<IndexerEvent>>")
             .field("_shutdown_rx", &"Arc<Receiver<()>>")
+            .field("safe_filter_epoch", &"Arc<AtomicU64>")
             .finish()
     }
 }
@@ -120,6 +127,7 @@ impl IndexerState {
             shutdown_signal,
             _event_bus_rx: Arc::new(event_bus_rx),
             _shutdown_rx: Arc::new(shutdown_rx),
+            safe_filter_epoch: Arc::new(AtomicU64::new(0)),
         }
     }
 
@@ -202,6 +210,16 @@ impl IndexerState {
     pub fn subscribe_to_shutdown(&self) -> Receiver<()> {
         // Get a fresh receiver from the sender to avoid inheriting backlog
         self.shutdown_signal.new_receiver()
+    }
+
+    /// Returns the current Safe filter epoch.
+    pub fn safe_filter_epoch(&self) -> u64 {
+        self.safe_filter_epoch.load(Ordering::Relaxed)
+    }
+
+    /// Marks the current Safe filter set as stale and returns the new epoch.
+    pub fn mark_safe_filters_dirty(&self) -> u64 {
+        self.safe_filter_epoch.fetch_add(1, Ordering::Relaxed) + 1
     }
 }
 
@@ -301,5 +319,16 @@ mod tests {
             IndexerEvent::AccountUpdated(account) => assert_eq!(account.keyid, 123),
             _ => panic!("Expected AccountUpdated event"),
         }
+    }
+
+    #[test]
+    fn test_safe_filter_epoch_increments() {
+        let state = IndexerState::default();
+
+        assert_eq!(state.safe_filter_epoch(), 0);
+        assert_eq!(state.mark_safe_filters_dirty(), 1);
+        assert_eq!(state.safe_filter_epoch(), 1);
+        assert_eq!(state.mark_safe_filters_dirty(), 2);
+        assert_eq!(state.safe_filter_epoch(), 2);
     }
 }

@@ -262,6 +262,9 @@ pub trait BlokliDbSafeContractOperations: BlokliDbGeneralModelOperations {
         safe_address: Address,
     ) -> Result<Vec<SafeContractEntry>>;
 
+    /// Returns all known Safe addresses ordered by insertion order.
+    async fn get_safe_contract_addresses<'a>(&'a self, tx: OptTx<'a>) -> Result<Vec<Address>>;
+
     /// Get all safes that have only pre-seeded state.
     ///
     /// Pre-seeded safes are those whose only state record has
@@ -549,6 +552,26 @@ impl BlokliDbSafeContractOperations for BlokliDb {
 
         // Combine identity with each state
         Ok(states.iter().map(|s| combine_entry(&identity, s)).collect())
+    }
+
+    async fn get_safe_contract_addresses<'a>(&'a self, tx: OptTx<'a>) -> Result<Vec<Address>> {
+        let tx = self.nest_transaction(tx).await?;
+
+        let safes = HoprSafeContract::find()
+            .order_by_asc(hopr_safe_contract::Column::Id)
+            .all(tx.as_ref())
+            .await?;
+
+        let addresses = safes
+            .into_iter()
+            .map(|safe| {
+                Address::try_from(safe.address.as_slice())
+                    .map_err(|e| DbSqlError::Construction(format!("invalid safe address length: {e}")))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        tx.commit().await?;
+        Ok(addresses)
     }
 
     async fn load_preseeded_safes<'a>(&'a self, tx: OptTx<'a>, network_name: &str) -> Result<usize> {
