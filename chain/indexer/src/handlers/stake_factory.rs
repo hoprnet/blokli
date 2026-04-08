@@ -89,13 +89,12 @@ where
                 .await?;
 
             if !safe_previously_known {
-                self.replay_safe_logs_before_position(tx, safe_addr, block, tx_index, log_index)
-                    .await?;
+                self.backfill_safe_logs_in_discovery_block(tx, safe_addr, block).await?;
                 let epoch = self.indexer_state.mark_safe_filters_dirty();
                 info!(
                     safe = %safe_addr.to_hex(),
                     epoch,
-                    "Replayed stored Safe logs and marked Safe filters for refresh after deployment"
+                    "Backfilled discovery-block Safe logs and marked Safe filters for refresh after deployment"
                 );
             }
 
@@ -185,6 +184,9 @@ mod tests {
             .expect_get_transaction_sender()
             .with(eq(tx_hash))
             .returning(move |_| Ok(sender));
+        rpc_operations
+            .expect_get_logs_for_address()
+            .returning(|_, _, _, _| Ok(vec![]));
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
@@ -289,6 +291,10 @@ mod tests {
             .with(eq(tx_hash))
             .times(2) // Called twice for duplicate event processing
             .returning(move |_| Ok(sender));
+        rpc_operations
+            .expect_get_logs_for_address()
+            .times(1)
+            .returning(|_, _, _, _| Ok(vec![]));
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
@@ -355,7 +361,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_on_stake_factory_event_replays_prior_safe_setup_logs() -> anyhow::Result<()> {
+    async fn test_on_stake_factory_event_does_not_replay_prior_safe_setup_logs() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let mut rpc_operations = MockIndexerRpcOperations::new();
 
@@ -365,6 +371,10 @@ mod tests {
             .expect_get_transaction_sender()
             .with(eq(tx_hash))
             .returning(move |_| Ok(sender));
+        rpc_operations
+            .expect_get_logs_for_address()
+            .withf(|_, _, from_block, to_block| *from_block == 100 && *to_block == 100)
+            .returning(|_, _, _, _| Ok(vec![]));
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
@@ -423,7 +433,92 @@ mod tests {
             .await?;
 
         let owners = db.get_safe_owners(None, safe_address).await?;
-        assert_eq!(owners, vec![owner_one, owner_two]);
+        assert!(owners.is_empty());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_on_stake_factory_event_backfills_safe_setup_from_discovery_block() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let mut rpc_operations = MockIndexerRpcOperations::new();
+
+        let deployment_tx_hash = random_hash();
+        let sender = random_address();
+        let safe_address = random_address();
+        let module_address = random_address();
+        let owner_one = random_address();
+        let owner_two = random_address();
+
+        rpc_operations
+            .expect_get_transaction_sender()
+            .with(eq(deployment_tx_hash))
+            .returning(move |_| Ok(sender));
+
+        let safe_setup = SafeContract::SafeSetup {
+            initiator: AlloyAddress::from_hopr_address(sender),
+            owners: vec![
+                AlloyAddress::from_hopr_address(owner_one),
+                AlloyAddress::from_hopr_address(owner_two),
+            ],
+            threshold: U256::from(2_u64),
+            initializer: AlloyAddress::from_hopr_address(Address::default()),
+            fallbackHandler: AlloyAddress::from_hopr_address(Address::default()),
+        };
+        let encoded_setup = safe_setup.encode_log_data();
+        let safe_setup_log = blokli_chain_rpc::Log {
+            address: safe_address,
+            topics: encoded_setup.topics().iter().map(|topic| Hash::from(topic.0)).collect(),
+            data: encoded_setup.data.to_vec().into_boxed_slice(),
+            tx_index: 19,
+            block_number: 100,
+            block_hash: random_hash(),
+            tx_hash: random_hash(),
+            log_index: 10_u64.into(),
+            removed: false,
+        };
+        rpc_operations
+            .expect_get_logs_for_address()
+            .withf(move |address, _, from_block, to_block| {
+                *address == safe_address && *from_block == 100 && *to_block == 100
+            })
+            .returning(move |_, _, _, _| Ok(vec![safe_setup_log.clone()]));
+
+        let clonable_rpc_operations = ClonableMockOperations {
+            inner: Arc::new(rpc_operations),
+        };
+        let handlers = init_handlers(clonable_rpc_operations, db.clone());
+
+        let event = HoprNodeStakeFactory::NewHoprNodeStakeModuleForSafe {
+            safe: AlloyAddress::from_hopr_address(safe_address),
+            module: AlloyAddress::from_hopr_address(module_address),
+        };
+        let encoded_event = event.encode_log_data();
+        handlers
+            .collect_log_event(
+                SerializableLog {
+                    address: handlers.addresses.node_stake_factory,
+                    topics: encoded_event.topics().iter().map(|topic| topic.0).collect(),
+                    data: encoded_event.data.to_vec(),
+                    tx_hash: deployment_tx_hash.into(),
+                    block_number: 100,
+                    tx_index: 20,
+                    log_index: 201,
+                    ..test_log()
+                },
+                false,
+            )
+            .await?;
+
+        let mut owners = db.get_safe_owners(None, safe_address).await?;
+        owners.sort_unstable();
+        let mut expected = vec![owner_one, owner_two];
+        expected.sort_unstable();
+        assert_eq!(owners, expected);
+
+        let stored_safe_log = db.get_log(100, 19, 10).await?;
+        assert_eq!(stored_safe_log.address, safe_address);
+        assert_eq!(stored_safe_log.processed, Some(true));
 
         Ok(())
     }

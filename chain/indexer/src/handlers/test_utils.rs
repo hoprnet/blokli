@@ -53,6 +53,14 @@ pub(super) mod test_helpers {
                 is_synced: bool,
             ) -> blokli_chain_rpc::errors::Result<std::pin::Pin<Box<dyn futures::Stream<Item=blokli_chain_rpc::BlockWithLogs> + Send + 'a> > >;
 
+            async fn get_logs_for_address(
+                &self,
+                address: Address,
+                topics: Vec<B256>,
+                from_block: u64,
+                to_block: u64,
+            ) -> blokli_chain_rpc::errors::Result<Vec<blokli_chain_rpc::Log>>;
+
             async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance>;
             async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
             async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
@@ -89,6 +97,18 @@ pub(super) mod test_helpers {
             std::pin::Pin<Box<dyn futures::Stream<Item = blokli_chain_rpc::BlockWithLogs> + Send + 'a>>,
         > {
             self.inner.try_stream_logs(start_block_number, filters, is_synced)
+        }
+
+        async fn get_logs_for_address(
+            &self,
+            address: Address,
+            topics: Vec<B256>,
+            from_block: u64,
+            to_block: u64,
+        ) -> blokli_chain_rpc::errors::Result<Vec<blokli_chain_rpc::Log>> {
+            self.inner
+                .get_logs_for_address(address, topics, from_block, to_block)
+                .await
         }
 
         async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {

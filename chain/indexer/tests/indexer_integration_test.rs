@@ -171,6 +171,16 @@ mod integration_tests {
         > {
             unreachable!("try_stream_logs not used in integration tests")
         }
+
+        async fn get_logs_for_address(
+            &self,
+            _address: Address,
+            _topics: Vec<B256>,
+            _from_block: u64,
+            _to_block: u64,
+        ) -> blokli_chain_rpc::errors::Result<Vec<blokli_chain_rpc::Log>> {
+            unreachable!("get_logs_for_address not used in integration tests")
+        }
     }
 
     /// Test context containing all components for integration testing

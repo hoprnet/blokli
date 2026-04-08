@@ -318,6 +318,31 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
         }))
     }
 
+    async fn get_logs_for_address(
+        &self,
+        address: Address,
+        topics: Vec<B256>,
+        from_block: u64,
+        to_block: u64,
+    ) -> Result<Vec<Log>> {
+        let filter = Filter::new()
+            .address(AlloyAddress::from_hopr_address(address))
+            .event_signature(topics)
+            .from_block(from_block)
+            .to_block(to_block);
+
+        let mut logs = self
+            .provider
+            .get_logs(&filter)
+            .await?
+            .into_iter()
+            .map(Log::try_from)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        logs.sort();
+        Ok(logs)
+    }
+
     async fn get_xdai_balance(&self, address: Address) -> Result<XDaiBalance> {
         self.get_xdai_balance(address).await
     }

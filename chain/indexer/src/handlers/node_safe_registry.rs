@@ -194,13 +194,12 @@ where
                     .await?;
 
                 if !safe_previously_known {
-                    self.replay_safe_logs_before_position(tx, safe_addr, block, tx_index, log_index)
-                        .await?;
+                    self.backfill_safe_logs_in_discovery_block(tx, safe_addr, block).await?;
                     let epoch = self.indexer_state.mark_safe_filters_dirty();
                     info!(
                         safe_address = %safe_addr.to_hex(),
                         epoch,
-                        "Replayed stored Safe logs and marked Safe filters for refresh after new Safe registration"
+                        "Backfilled discovery-block Safe logs and marked Safe filters for refresh after new Safe registration"
                     );
                 }
 
@@ -336,6 +335,9 @@ mod tests {
         rpc_operations
             .expect_get_hopr_module_from_safe()
             .returning(move |_| Ok(Some(module_address)));
+        rpc_operations
+            .expect_get_logs_for_address()
+            .returning(|_, _, _, _| Ok(vec![]));
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
@@ -528,6 +530,9 @@ mod tests {
         rpc_operations
             .expect_get_hopr_module_from_safe()
             .returning(|_| Ok(None));
+        rpc_operations
+            .expect_get_logs_for_address()
+            .returning(|_, _, _, _| Ok(vec![]));
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
@@ -584,6 +589,10 @@ mod tests {
         rpc_operations
             .expect_get_hopr_module_from_safe()
             .returning(move |_| Ok(Some(module_address)));
+        rpc_operations
+            .expect_get_logs_for_address()
+            .times(1)
+            .returning(|_, _, _, _| Ok(vec![]));
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
@@ -742,6 +751,10 @@ mod tests {
         rpc_operations
             .expect_get_hopr_module_from_safe()
             .returning(|_| Ok(None));
+        rpc_operations
+            .expect_get_logs_for_address()
+            .times(2)
+            .returning(|_, _, _, _| Ok(vec![]));
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),

@@ -1,6 +1,6 @@
 use blokli_chain_rpc::Log;
 use blokli_chain_types::AlloyAddressExt;
-use blokli_db::{BlokliDbAllOperations, OpenTransaction, TargetDb, safe_history::SafeActivityKind};
+use blokli_db::{BlokliDbAllOperations, OpenTransaction, safe_history::SafeActivityKind};
 use hopr_bindings::exports::alloy::{
     primitives::{Address as AlloyAddress, B256, Log as AlloyLog},
     sol_types::SolEventInterface,
@@ -9,7 +9,6 @@ use hopr_types::{
     crypto::types::Hash,
     primitive::prelude::{Address, SerializableLog},
 };
-use sea_orm::{ConnectionTrait, DatabaseBackend, QueryResult, Statement};
 use tracing::{debug, info, warn};
 
 use super::ContractEventHandlers;
@@ -20,172 +19,57 @@ where
     T: blokli_chain_rpc::HoprIndexerRpcOperations + Clone + Send + 'static,
     Db: BlokliDbAllOperations + Clone,
 {
-    fn safe_log_replay_statement(
-        backend: DatabaseBackend,
-        safe_address: Address,
-        block: u64,
-        tx_index: u64,
-        log_index: u64,
-    ) -> Statement {
-        let placeholder = |position: usize| {
-            if backend == DatabaseBackend::Postgres {
-                format!("${position}")
-            } else {
-                "?".to_string()
-            }
-        };
-
-        let sql = format!(
-            "SELECT address, topics, data, block_number, transaction_hash, tx_index, block_hash, log_index, removed
-             FROM log
-             WHERE address = {}
-               AND removed = FALSE
-               AND (
-                    block_number < {}
-                    OR (block_number = {} AND tx_index < {})
-                    OR (block_number = {} AND tx_index = {} AND log_index < {})
-               )
-             ORDER BY block_number ASC, tx_index ASC, log_index ASC",
-            placeholder(1),
-            placeholder(2),
-            placeholder(3),
-            placeholder(4),
-            placeholder(5),
-            placeholder(6),
-            placeholder(7),
-        );
-
-        Statement::from_sql_and_values(
-            backend,
-            sql,
-            vec![
-                safe_address.as_ref().to_vec().into(),
-                (block as i64).into(),
-                (block as i64).into(),
-                (tx_index as i64).into(),
-                (block as i64).into(),
-                (tx_index as i64).into(),
-                (log_index as i64).into(),
-            ],
-        )
-    }
-
-    fn serializable_log_from_row(row: QueryResult) -> Result<SerializableLog> {
-        let address_bytes: Vec<u8> = row.try_get("", "address").map_err(|e| {
-            crate::errors::CoreEthereumIndexerError::ProcessError(format!("failed to read address from log db: {e}"))
-        })?;
-        let topics_bytes: Vec<u8> = row.try_get("", "topics").map_err(|e| {
-            crate::errors::CoreEthereumIndexerError::ProcessError(format!("failed to read topics from log db: {e}"))
-        })?;
-        let tx_hash_bytes: Vec<u8> = row.try_get("", "transaction_hash").map_err(|e| {
-            crate::errors::CoreEthereumIndexerError::ProcessError(format!(
-                "failed to read transaction hash from log db: {e}"
-            ))
-        })?;
-        let block_hash_bytes: Vec<u8> = row.try_get("", "block_hash").map_err(|e| {
-            crate::errors::CoreEthereumIndexerError::ProcessError(format!("failed to read block hash from log db: {e}"))
-        })?;
-
-        let topics = topics_bytes
-            .chunks_exact(32)
-            .map(|chunk| {
-                let mut topic = [0u8; 32];
-                topic.copy_from_slice(chunk);
-                topic
-            })
-            .collect::<Vec<_>>();
-
-        let tx_hash: [u8; 32] = tx_hash_bytes.try_into().map_err(|_| {
-            crate::errors::CoreEthereumIndexerError::ProcessError("invalid tx hash length in log db".into())
-        })?;
-        let block_hash: [u8; 32] = block_hash_bytes.try_into().map_err(|_| {
-            crate::errors::CoreEthereumIndexerError::ProcessError("invalid block hash length in log db".into())
-        })?;
-
-        let block_number: i64 = row.try_get("", "block_number").map_err(|e| {
-            crate::errors::CoreEthereumIndexerError::ProcessError(format!(
-                "failed to read block number from log db: {e}"
-            ))
-        })?;
-        let tx_index: i64 = row.try_get("", "tx_index").map_err(|e| {
-            crate::errors::CoreEthereumIndexerError::ProcessError(format!("failed to read tx index from log db: {e}"))
-        })?;
-        let log_index: i64 = row.try_get("", "log_index").map_err(|e| {
-            crate::errors::CoreEthereumIndexerError::ProcessError(format!("failed to read log index from log db: {e}"))
-        })?;
-
-        Ok(SerializableLog {
-            address: Address::new(address_bytes.as_slice()),
-            topics,
-            data: row.try_get("", "data").map_err(|e| {
-                crate::errors::CoreEthereumIndexerError::ProcessError(format!("failed to read data from log db: {e}"))
-            })?,
-            block_number: block_number as u64,
-            tx_hash,
-            tx_index: tx_index as u64,
-            block_hash,
-            log_index: log_index as u64,
-            removed: row.try_get("", "removed").map_err(|e| {
-                crate::errors::CoreEthereumIndexerError::ProcessError(format!("failed to read removed flag: {e}"))
-            })?,
-            ..Default::default()
-        })
-    }
-
-    pub(super) async fn replay_safe_logs_before_position(
+    pub(super) async fn backfill_safe_logs_in_discovery_block(
         &self,
         tx: &OpenTransaction,
         safe_address: Address,
         block: u64,
-        tx_index: u64,
-        log_index: u64,
     ) -> Result<()> {
-        let backend = self.db.conn(TargetDb::Logs).get_database_backend();
-        let rows = self
-            .db
-            .conn(TargetDb::Logs)
-            .query_all_raw(Self::safe_log_replay_statement(
-                backend,
-                safe_address,
-                block,
-                tx_index,
-                log_index,
-            ))
-            .await
-            .map_err(|e| {
-                crate::errors::CoreEthereumIndexerError::ProcessError(format!(
-                    "failed to query stored Safe logs for replay: {e}"
-                ))
-            })?;
+        let safe_logs = self
+            ._rpc_operations
+            .get_logs_for_address(safe_address, crate::constants::topics::safe_contract(), block, block)
+            .await?;
 
-        for row in rows {
-            let slog = Self::serializable_log_from_row(row)?;
-            if !slog.topics.first().is_some_and(Self::is_safe_contract_topic) {
-                continue;
-            }
+        if safe_logs.is_empty() {
+            return Ok(());
+        }
 
+        let serialized_logs = safe_logs.iter().cloned().map(SerializableLog::from).collect::<Vec<_>>();
+
+        let store_results = self.db.store_logs(serialized_logs.clone()).await?;
+        if let Some(error) = store_results.into_iter().find_map(|result| result.err()) {
+            return Err(crate::errors::CoreEthereumIndexerError::ProcessError(format!(
+                "failed to store Safe discovery block logs: {error}"
+            )));
+        }
+
+        for (log, slog) in safe_logs.into_iter().zip(serialized_logs.into_iter()) {
             let primitive_log = AlloyLog::new(
-                AlloyAddress::from_hopr_address(slog.address),
-                slog.topics.iter().map(|hash| B256::from_slice(hash.as_ref())).collect(),
-                slog.data.clone().into(),
+                AlloyAddress::from_hopr_address(log.address),
+                log.topics.iter().map(|hash| B256::from_slice(hash.as_ref())).collect(),
+                log.data.clone().into(),
             )
             .ok_or_else(|| {
                 crate::errors::CoreEthereumIndexerError::ProcessError(format!(
-                    "failed to convert replayed safe log to primitive log: {slog:?}"
+                    "failed to convert fetched Safe log to primitive log: {slog:?}"
                 ))
             })?;
 
             let event = SafeContractEvents::decode_log(&primitive_log)?;
-            let log = Log::from(slog);
             debug!(
                 safe_address = %safe_address,
                 block = log.block_number,
                 tx_index = log.tx_index,
                 log_index = %log.log_index,
-                "Replaying stored Safe log after Safe discovery"
+                "Backfilling Safe discovery-block log"
             );
             self.on_safe_contract_event(tx, safe_address, &log, event.data, false)
                 .await?;
+            self.db.set_log_processed(slog).await.map_err(|e| {
+                crate::errors::CoreEthereumIndexerError::ProcessError(format!(
+                    "failed to mark Safe discovery block log as processed: {e}"
+                ))
+            })?;
         }
 
         Ok(())

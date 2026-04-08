@@ -1276,6 +1276,14 @@ mod tests {
                 is_synced: bool,
             ) -> blokli_chain_rpc::errors::Result<Pin<Box<dyn Stream<Item = BlockWithLogs> + Send + 'a>>>;
 
+            async fn get_logs_for_address(
+                &self,
+                address: Address,
+                topics: Vec<B256>,
+                from_block: u64,
+                to_block: u64,
+            ) -> blokli_chain_rpc::errors::Result<Vec<blokli_chain_rpc::Log>>;
+
             async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance>;
             async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
             async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
