@@ -193,7 +193,7 @@ where
                     .register_node_to_safe(Some(tx), safe_addr, node_addr, block, tx_index, log_index)
                     .await?;
 
-                if !safe_previously_known {
+                if !safe_previously_known && is_synced {
                     self.backfill_safe_logs_in_discovery_block(tx, safe_addr, block).await?;
                     let epoch = self.indexer_state.mark_safe_filters_dirty();
                     info!(

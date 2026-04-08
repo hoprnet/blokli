@@ -728,6 +728,34 @@ Blockchain RPC
 - **Fan-out Pattern**: Single database update triggers multiple subscription notifications
 - **Batch Loading**: Account lookups for channels use batch-fetch with HashMap to avoid N+1 query patterns
 
+### Historical Sync Phases
+
+Historical catch-up uses a phased strategy instead of a single monolithic filter set.
+
+**Phase 1: Discovery**
+
+- The indexer fetches historical logs only for the static HOPR contracts needed to discover Safe contracts and node registrations.
+- Safe-address filters are intentionally excluded during this pass.
+- New Safes found during historical sync are recorded in the database, but do not trigger live filter refreshes yet.
+
+**Phase 2: Safe Backfill**
+
+- After the discovery pass reaches the current historical head, the indexer runs a second historical pass using only address-scoped Safe
+  filters for the Safes already known in the database.
+- This phase reconstructs Safe-specific history such as setup, owner changes, threshold changes, and execution activity without broad
+  topic-only Safe scans.
+- Historical phase finalization updates log checksums and advances the persisted indexer position only after the phase completes.
+
+**Phase 3: Continuous Mode**
+
+- Once both historical phases complete, the indexer switches to continuous streaming mode.
+- Continuous mode combines the static HOPR contract filters with the current Safe-address filters.
+- When a new Safe is discovered in continuous mode, the indexer performs a targeted backfill for that Safe on the discovery block, then
+  refreshes the active Safe filter set from the next block onward.
+
+This split reduces the cost of historical syncing on Safe-heavy chains by avoiding repeated filter refreshes and repeated Safe backfills
+while the indexer is still catching up.
+
 ### Transaction Submission Flow
 
 This diagram illustrates outbound transaction flow from clients to blockchain:

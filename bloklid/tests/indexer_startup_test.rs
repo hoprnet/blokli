@@ -6,6 +6,7 @@ use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{api::logs::BlokliDbLogOperations, db::BlokliDb, info::BlokliDbInfoOperations};
 use futures::stream::{self, StreamExt};
+use hopr_bindings::exports::alloy::primitives::B256;
 use hopr_types::{crypto::types::Hash, primitive::prelude::*};
 use tempfile::TempDir;
 use tokio::sync::Mutex;
@@ -71,6 +72,16 @@ impl HoprIndexerRpcOperations for MockRpcOperations {
         });
 
         Ok(Box::pin(stream))
+    }
+
+    async fn get_logs_for_address(
+        &self,
+        _address: Address,
+        _topics: Vec<B256>,
+        _from_block: u64,
+        _to_block: u64,
+    ) -> blokli_chain_rpc::errors::Result<Vec<blokli_chain_rpc::Log>> {
+        Ok(vec![])
     }
 
     async fn get_xdai_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {
@@ -311,6 +322,18 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
             });
 
             Ok(Box::pin(stream))
+        }
+
+        async fn get_logs_for_address(
+            &self,
+            address: Address,
+            topics: Vec<B256>,
+            from_block: u64,
+            to_block: u64,
+        ) -> blokli_chain_rpc::errors::Result<Vec<blokli_chain_rpc::Log>> {
+            self.inner
+                .get_logs_for_address(address, topics, from_block, to_block)
+                .await
         }
 
         async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {

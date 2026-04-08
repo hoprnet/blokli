@@ -88,7 +88,7 @@ where
                 .create_safe_contract(Some(tx), safe_addr, module_addr, chain_key, block, tx_index, log_index)
                 .await?;
 
-            if !safe_previously_known {
+            if !safe_previously_known && is_synced {
                 self.backfill_safe_logs_in_discovery_block(tx, safe_addr, block).await?;
                 let epoch = self.indexer_state.mark_safe_filters_dirty();
                 info!(
@@ -428,7 +428,7 @@ mod tests {
                     log_index: 2,
                     ..test_log()
                 },
-                false,
+                true,
             )
             .await?;
 
@@ -506,7 +506,7 @@ mod tests {
                     log_index: 201,
                     ..test_log()
                 },
-                false,
+                true,
             )
             .await?;
 
