@@ -5,7 +5,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-client"
 repository  = "https://github.com/hoprnet/blokli"
-version     = "0.21.1"
+version     = "0.22.0"
 
 [dependencies]
 anyhow = { workspace = true }
@@ -35,14 +35,13 @@ tracing = { workspace = true, features = ["release_max_level_debug"] }
 url = { workspace = true }
 
 blokli-api-types = { workspace = true }
-hopr-types       = { workspace = true, features = ["crypto"], optional = true }
+hopr-types = { workspace = true, features = ["crypto", "primitive"] }
 
 [features]
 serde = ["dep:serde", "indexmap/serde"]
 testing = [
   "dep:async-broadcast",
   "dep:chrono",
-  "dep:hopr-types",
   "dep:indexmap",
   "dep:parking_lot",
   "dep:rand",

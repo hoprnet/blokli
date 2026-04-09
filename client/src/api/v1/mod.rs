@@ -6,7 +6,7 @@ pub mod types {
         ChannelStatus, DateTime, Hex32, Token, TokenValueString, Uint64,
         accounts::Account,
         balances::{HoprBalance, NativeBalance, RedeemedStats, SafeHoprAllowance},
-        channels::Channel,
+        channels::{Channel, ChannelStats, ChannelsList, SafesBalance},
         graph::OpenedChannelsGraphEntry,
         info::{ChainInfo, ContractAddressMap, TicketParameters},
         safe::{ModuleAddress, Safe},
@@ -23,12 +23,15 @@ pub(crate) mod internal {
             BalanceVariables, QueryHoprBalance, QueryNativeBalance, QueryRedeemedStats, QuerySafeAllowance,
             RedeemedStatsFilter, RedeemedStatsVariables,
         },
-        channels::{ChannelsVariables, QueryChannelCount, QueryChannels, SubscribeChannels},
+        channels::{
+            ChannelStatsVariables, ChannelsVariables, QueryChannelCount, QueryChannelStats, QueryChannels,
+            QuerySafesBalance, SafesBalanceVariables, SubscribeChannels,
+        },
         graph::SubscribeGraph,
         info::{QueryChainInfo, QueryHealth, QueryVersion, SubscribeTicketParams},
         safe::{
-            ModuleAddressVariables, QueryModuleAddress, QuerySafeByAddress, QuerySafeByChainKey,
-            QuerySafeByRegisteredNode, SafeVariables, SubscribeSafeDeployment,
+            ModuleAddressVariables, QueryModuleAddress, QuerySafeBy, SafeByVariables, SafeSelectorInput,
+            SubscribeSafeDeployment,
         },
         txs::{
             ConfirmTransactionVariables, MutateConfirmTransaction, MutateSendTransaction, MutateTrackTransaction,
@@ -68,19 +71,22 @@ impl std::fmt::Debug for AccountSelector {
     }
 }
 
-/// Allows selecting [`Channels`](types::Channel) based on a [`ChannelFilter`] and optionally a [`ChannelStatus`].
-#[derive(Debug, Clone)]
+/// Allows selecting [`Channels`](types::Channel) based on a [`ChannelFilter`], optionally a [`ChannelStatus`],
+/// and optionally a safe contract address.
+#[derive(Debug, Clone, Default)]
 pub struct ChannelSelector {
     /// Filter for the selected channels.
     pub filter: Option<ChannelFilter>,
     /// Optional status filter for the selected channels.
     pub status: Option<types::ChannelStatus>,
+    /// Optional safe contract address; restricts to channels where the source belongs to this safe.
+    pub safe_address: Option<ChainAddress>,
 }
 
 impl ChannelSelector {
     /// Returns `true` if the selector matches any channel.
     pub fn matches_all(&self) -> bool {
-        self.filter.is_none() && self.status.is_none()
+        self.filter.is_none() && self.status.is_none() && self.safe_address.is_none()
     }
 }
 
@@ -212,9 +218,21 @@ pub trait BlokliQueryClient {
     /// Queries the module address prediction of the given [Safe deployment data](ModulePredictionInput).
     async fn query_module_address_prediction(&self, input: ModulePredictionInput) -> Result<ChainAddress>;
     /// Counts the number of channels matching the given [`selector`](ChannelSelector).
+    #[deprecated(
+        since = "0.22.0",
+        note = "Use query_channel_stats instead, which returns both count and total wxHOPR balance."
+    )]
     async fn count_channels(&self, selector: ChannelSelector) -> Result<u32>;
-    /// Queries the channels matching the given [`selector`](ChannelSelector).
-    async fn query_channels(&self, selector: ChannelSelector) -> Result<Vec<types::Channel>>;
+    /// Queries channel count and total wxHOPR balance matching the given [`selector`](ChannelSelector).
+    ///
+    /// If no filter is set on the selector, returns stats across all channels.
+    async fn query_channel_stats(&self, selector: ChannelSelector) -> Result<types::ChannelStats>;
+    /// Queries the channels matching the given [`selector`](ChannelSelector), including aggregated balance.
+    async fn query_channels(&self, selector: ChannelSelector) -> Result<types::ChannelsList>;
+    /// Queries the total wxHOPR balance held across indexed safe contracts.
+    ///
+    /// When `owner_address` is provided, restricts to safes whose registered accounts have that chain key.
+    async fn query_safes_balance(&self, owner_address: Option<ChainAddress>) -> Result<types::SafesBalance>;
     /// Queries the status of the transaction given the `tx_id` previously returned by
     /// [`BlokliTransactionClient::submit_and_track_transaction`].
     async fn query_transaction_status(&self, tx_id: TxId) -> Result<types::Transaction>;

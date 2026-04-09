@@ -102,7 +102,18 @@ type ChannelsList {
 }
 
 """Result type for channels list query"""
-union ChannelsResult = ChannelsList | MissingFilterError | QueryFailedError
+union ChannelsResult = ChannelsList | InvalidAddressError | MissingFilterError | QueryFailedError
+
+"""Aggregated channel statistics: count and total wxHOPR balance"""
+type ChannelStats {
+  "Total wxHOPR balance across all matching channels"
+  balance: TokenValueString!
+  "Number of channels matching the filters"
+  count: Int!
+}
+
+"""Result type for channel statistics query"""
+union ChannelStatsResult = ChannelStats | InvalidAddressError | QueryFailedError
 
 """Status of a payment channel"""
 enum ChannelStatus {
@@ -351,33 +362,63 @@ type QueryRoot {
   If no filters are provided, returns total channels count.
   Filters can be combined to narrow results.
   Returns Error if query fails.
+  
+  **Deprecated**: Use `channelStats` instead, which also returns the total wxHOPR balance.
   """
   channelCount(
     "Filter by concrete channel ID (hexadecimal format)"
     concreteChannelId: String
     "Filter by destination node keyid"
     destinationKeyId: Int
+    "Filter by safe address — restricts to channels where the source belongs to this safe (hexadecimal format)"
+    safeAddress: String
     "Filter by source node keyid"
     sourceKeyId: Int
     "Filter by channel status"
     status: ChannelStatus
-  ): CountResult!
+  ): CountResult! @deprecated(reason: "Use channelStats instead, which also returns the total wxHOPR balance.")
+  """
+  Retrieve channel count and total wxHOPR balance matching optional filters
+  
+  If no filters are provided, returns stats across all channels.
+  The safeAddress filter restricts results to channels where the source account is associated
+  with the given safe contract.
+  Filters can be combined to narrow results further.
+  Returns Error with code INVALID_ADDRESS if safeAddress format is invalid.
+  """
+  channelStats(
+    "Filter by concrete channel ID (hexadecimal format)"
+    concreteChannelId: String
+    "Filter by destination node keyid"
+    destinationKeyId: Int
+    "Filter by safe address — restricts to channels where the source belongs to this safe (hexadecimal format)"
+    safeAddress: String
+    "Filter by source node keyid"
+    sourceKeyId: Int
+    "Filter by channel status"
+    status: ChannelStatus
+  ): ChannelStatsResult!
   """
   Retrieve channels with required filtering
   
-  **At least one identity filter must be provided** (sourceKeyId, destinationKeyId, or concreteChannelId).
+  **At least one identity filter must be provided** (sourceKeyId, destinationKeyId, concreteChannelId, or safeAddress).
   The status filter is optional and can be used in combination with identity filters.
+  The safeAddress filter restricts results to channels where the source account is associated
+  with the given safe contract.
+  Returns Error with code INVALID_ADDRESS if safeAddress format is invalid.
   Returns Error with code MISSING_REQUIRED_FILTER if no identity filters are specified.
   
   Filters can be combined to narrow results further.
   
-  Example: channels(sourceKeyId: 1) or channels(sourceKeyId: 1, status: OPEN)
+  Example: channels(sourceKeyId: 1) or channels(safeAddress: "0x...") or channels(sourceKeyId: 1, status: OPEN)
   """
   channels(
     "Filter by concrete channel ID (hexadecimal format)"
     concreteChannelId: String
     "Filter by destination node keyid"
     destinationKeyId: Int
+    "Filter by safe address — restricts to channels where the source belongs to this safe (hexadecimal format)"
+    safeAddress: String
     "Filter by source node keyid"
     sourceKeyId: Int
     "Filter by channel status (optional, combine with identity filters)"
@@ -457,6 +498,17 @@ type QueryRoot {
   safe(
     "Safe contract address to query (hexadecimal format)"
     address: String!
+  ): SafeResult @deprecated(reason: "Use safeBy(selector: ...)")
+  """
+  Retrieve safe by selector.
+  
+  The selector enum identifies the lookup type using the provided selected address.
+  """
+  safeBy(
+    "Address  for the selector (hexadecimal format)"
+    address: String!
+    "Selector type for safe lookup"
+    selector: SafeSelectorInput!
   ): SafeResult
   """
   Retrieve safe by chain key (owner address)
@@ -468,7 +520,7 @@ type QueryRoot {
   safeByChainKey(
     "Chain key to query (hexadecimal format)"
     chainKey: String!
-  ): SafeResult
+  ): SafeResult @deprecated(reason: "Use safeBy(selector: ...)")
   """
   Retrieve safe by registered node address
   
@@ -480,7 +532,7 @@ type QueryRoot {
   safeByRegisteredNode(
     "Node chain key to query (hexadecimal format)"
     chainKey: String!
-  ): SafeResult
+  ): SafeResult @deprecated(reason: "Use safeBy(selector: ...)")
   """
   Retrieve Safe HOPR token allowance for a specific Safe address
   
@@ -502,6 +554,18 @@ type QueryRoot {
   Returns Error with code QUERY_FAILED if query fails.
   """
   safes: SafesResult!
+  """
+  Retrieve total aggregated wxHOPR balance across indexed safe contracts
+  
+  Sums the wxHOPR token balances for safe contract addresses indexed by the system.
+  When ownerAddress is provided, restricts to safes whose registered accounts have that chain key.
+  Returns Error with code INVALID_ADDRESS if ownerAddress is malformed.
+  Returns Error with code QUERY_FAILED if query fails.
+  """
+  safesBalance(
+    "Restrict to safes whose registered accounts have this chain key (hexadecimal format)"
+    ownerAddress: String
+  ): SafesBalanceResult!
   """
   Retrieve aggregated TicketRedeemed statistics filtered by safe and/or node address
   
@@ -613,6 +677,27 @@ union SafeHoprAllowanceResult = SafeHoprAllowance | InvalidAddressError | QueryF
 
 """Result type for single safe queries"""
 union SafeResult = Safe | InvalidAddressError | QueryFailedError
+
+"""Aggregated wxHOPR holdings across all indexed safe contracts"""
+type SafesBalance {
+  "Sum of wxHOPR balances for all safe contract addresses"
+  balance: TokenValueString!
+  "Number of safes included"
+  count: Int!
+}
+
+"""Result type for total safe HOPR balance query"""
+union SafesBalanceResult = InvalidAddressError | QueryFailedError | SafesBalance
+
+"""Selector type for safe lookup queries."""
+enum SafeSelectorInput {
+  "Filter by safe contract address"
+  ADDRESS
+  "Filter by chain key (owner address)"
+  CHAIN_KEY
+  "Filter by registered node address"
+  REGISTERED_NODE
+}
 
 """Success response for safes list query"""
 type SafesList {

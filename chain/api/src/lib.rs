@@ -49,6 +49,8 @@ use crate::{
 
 pub type DefaultHttpRequestor = blokli_chain_rpc::transport::ReqwestClient;
 
+const DEFAULT_MAX_RPC_REQUESTS_PER_SEC: u64 = 100;
+
 fn build_transport_client(url: &str) -> Result<Http<ReqwestClient>> {
     let parsed_url = url::Url::parse(url).unwrap_or_else(|_| panic!("failed to parse URL: {url}"));
     Ok(ReqwestTransport::new(parsed_url))
@@ -86,17 +88,18 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         indexer_cfg: IndexerConfig,
         rpc_url: String,
     ) -> Result<Self> {
-        // TODO: extract this from the global config type, and use the configured values for the http client
-        // let mut rpc_http_config = blokli_chain_rpc::HttpPostRequestorConfig::default();
-        // if let Some(max_rpc_req) = chain_config.max_requests_per_sec {
-        //     rpc_http_config.max_requests_per_sec = Some(max_rpc_req); // override the default if set
-        // }
-
         // TODO(#7140): replace this DefaultRetryPolicy with a custom one that computes backoff with the number of
         // retries
         let rpc_http_retry_policy = DefaultRetryPolicy::default();
 
-        // TODO: extract this from the global config type
+        // Some(0) means "unlimited" and must not be forwarded as-is: RetryBackoffLayer divides by
+        // this value. Use u64::MAX as a safe stand-in. None falls back to the default rate.
+        let max_requests_per_sec: u64 = match chain_config.max_requests_per_sec {
+            None => DEFAULT_MAX_RPC_REQUESTS_PER_SEC,
+            Some(0) => u64::MAX,
+            Some(v) => u64::from(v),
+        };
+
         let rpc_cfg = RpcOperationsConfig {
             chain_id: chain_config.chain_id,
             contract_addrs: contract_addresses,
@@ -112,7 +115,12 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         let transport_client = build_transport_client(&rpc_url)?;
 
         let rpc_client = ClientBuilder::default()
-            .layer(RetryBackoffLayer::new_with_policy(2, 100, 100, rpc_http_retry_policy))
+            .layer(RetryBackoffLayer::new_with_policy(
+                2,
+                100,
+                max_requests_per_sec,
+                rpc_http_retry_policy,
+            ))
             .transport(transport_client.clone(), transport_client.guess_local());
 
         let requestor = DefaultHttpRequestor::new();

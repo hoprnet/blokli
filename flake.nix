@@ -307,7 +307,12 @@
 
               # Pre-commit hooks check
               pre-commit-check = pkgs.callPackage ./nix/packages/pre-commit-check.nix {
-                inherit pre-commit system config;
+                inherit
+                  pre-commit
+                  system
+                  config
+                  stableToolchain
+                  ;
               };
 
               # Man pages
@@ -393,6 +398,8 @@
               foundry-bin
               pkgs.solc
               kubernetes-helm
+              cargo-machete
+              cargo-shear
               yq
               uv
               sqlite
@@ -415,6 +422,23 @@
               }
               // shellArgs
             );
+
+            ci = nixLib.mkDevShell {
+              rustToolchainFile = ./rust-toolchain.toml;
+              shellName = "blokli CI";
+              treefmtWrapper = config.treefmt.build.wrapper;
+              treefmtPrograms = pkgs.lib.attrValues config.treefmt.build.programs;
+              extraPackages = with pkgs; [
+                cargo-machete
+                cargo-shear
+                zizmor
+              ];
+            };
+            coverage = nixLib.mkDevShell {
+              rustToolchainFile = ./rust-toolchain.toml;
+              shellName = "Coverage";
+              withLlvmTools = true;
+            };
           };
 
           # Import checks
@@ -537,7 +561,16 @@
           inherit checks;
 
           # Export applications using nix-lib
-          apps = utilityApps;
+          apps = utilityApps // {
+            coverage-unit = {
+              type = "app";
+              program = toString (
+                pkgs.writeShellScript "coverage-unit" ''
+                  nix develop .#coverage -c cargo llvm-cov --workspace --lib --lcov --output-path coverage.lcov
+                ''
+              );
+            };
+          };
 
           # Export packages
           packages = packages // {

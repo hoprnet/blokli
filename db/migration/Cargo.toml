@@ -21,14 +21,10 @@ name = "migration"
 path = "src/main.rs"
 
 [dependencies]
-csv               = { workspace = true }
 sea-orm-migration = { workspace = true }
-serde             = { workspace = true }
-serde-hex         = { workspace = true }
 tokio             = { workspace = true }
 
 hopr-types = { workspace = true, features = ["internal"] }
 
 [dev-dependencies]
-anyhow  = { workspace = true }
 sea-orm = { workspace = true }
