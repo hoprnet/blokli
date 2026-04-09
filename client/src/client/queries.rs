@@ -85,13 +85,18 @@ impl GraphQlQueries {
     pub fn query_native_balance(address: &ChainAddress) -> cynic::Operation<QueryNativeBalance, BalanceVariables> {
         QueryNativeBalance::build(BalanceVariables {
             address: address.encode_hex(),
+            token: None,
         })
     }
 
     /// `TokenBalance` GraphQL query.
-    pub fn query_token_balance(address: &ChainAddress) -> cynic::Operation<QueryHoprBalance, BalanceVariables> {
+    pub fn query_token_balance(
+        address: &ChainAddress,
+        token: Token,
+    ) -> cynic::Operation<QueryHoprBalance, BalanceVariables> {
         QueryHoprBalance::build(BalanceVariables {
             address: address.encode_hex(),
+            token: Some(token),
         })
     }
 
@@ -106,6 +111,7 @@ impl GraphQlQueries {
     pub fn query_safe_allowance(address: &ChainAddress) -> cynic::Operation<QuerySafeAllowance, BalanceVariables> {
         QuerySafeAllowance::build(BalanceVariables {
             address: address.encode_hex(),
+            token: None,
         })
     }
 
@@ -232,8 +238,10 @@ impl BlokliQueryClient for BlokliClient {
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(address = hex::encode(address)))]
-    async fn query_token_balance(&self, address: &ChainAddress) -> Result<HoprBalance> {
-        let resp = self.build_query(GraphQlQueries::query_token_balance(address))?.await?;
+    async fn query_token_balance(&self, address: &ChainAddress, token: Token) -> Result<HoprBalance> {
+        let resp = self
+            .build_query(GraphQlQueries::query_token_balance(address, token))?
+            .await?;
 
         response_to_data(resp)?.hopr_balance.into()
     }

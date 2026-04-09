@@ -57,6 +57,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let output = ContractsOutput {
         contracts: BlokliContractAddresses {
             token: h2a(contracts.token),
+            xtoken: h2a(contracts.token), // TODO: update to use wxHOPR token address. Requires a contract's repo update
             channels: h2a(contracts.channels),
             announcements: h2a(contracts.announcements),
             module_implementation: h2a(contracts.module_implementation),

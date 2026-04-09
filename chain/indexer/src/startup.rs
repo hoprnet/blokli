@@ -69,7 +69,7 @@ mod tests {
     use futures::Stream;
     use hopr_types::{
         crypto::types::Hash,
-        primitive::prelude::{Address, HoprBalance, XDaiBalance},
+        primitive::prelude::{Address, HoprBalance, XDaiBalance, XHoprBalance},
     };
 
     use super::*;
@@ -107,6 +107,10 @@ mod tests {
         }
 
         async fn get_hopr_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance> {
+            Err(RpcError::Other("unused".into()))
+        }
+
+        async fn get_xhopr_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<XHoprBalance> {
             Err(RpcError::Other("unused".into()))
         }
 

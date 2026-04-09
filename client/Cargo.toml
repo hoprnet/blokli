@@ -34,6 +34,7 @@ thiserror = { workspace = true }
 tracing = { workspace = true, features = ["release_max_level_debug"] }
 url = { workspace = true }
 
+blokli-api-types = { workspace = true }
 hopr-types = { workspace = true, features = ["crypto", "primitive"] }
 
 [features]

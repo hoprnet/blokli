@@ -1,9 +1,10 @@
-use super::{InvalidAddressError, MissingFilterError, QueryFailedError, Uint64, schema};
+use super::{InvalidAddressError, MissingFilterError, QueryFailedError, Token, Uint64, schema};
 use crate::{api::types::TokenValueString, errors::BlokliClientError};
 
 #[derive(cynic::QueryVariables)]
 pub struct BalanceVariables {
     pub address: String,
+    pub token: Option<Token>,
 }
 
 #[derive(cynic::InputObject, Debug, Default, Clone)]
@@ -23,7 +24,7 @@ pub struct RedeemedStatsVariables {
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "QueryRoot", variables = "BalanceVariables")]
 pub struct QueryHoprBalance {
-    #[arguments(address: $address)]
+    #[arguments(address: $address, token: $token)]
     pub hopr_balance: HoprBalanceResult,
 }
 

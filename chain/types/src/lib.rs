@@ -94,8 +94,10 @@ pub struct ChainConfig {
 /// Holds addresses of all smart contracts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ContractAddresses {
-    /// Token contract
+    /// wxHOPR token contract
     pub token: Address,
+    /// xHOPR token contract
+    pub xtoken: Address,
     /// Channels contract
     pub channels: Address,
     /// Announcements contract
@@ -118,6 +120,7 @@ pub struct ContractAddresses {
 #[derive(Debug)]
 pub struct ContractInstances<P> {
     pub token: HoprTokenInstance<P>,
+    pub xtoken: HoprTokenInstance<P>,
     pub channels: HoprChannelsInstance<P>,
     pub announcements: HoprAnnouncementsInstance<P>,
     pub module_implementation: HoprNodeManagementModuleInstance<P>,
@@ -136,6 +139,10 @@ where
         Self {
             token: HoprTokenInstance::new(
                 AlloyAddress::from_hopr_address(contract_addresses.token),
+                provider.clone(),
+            ),
+            xtoken: HoprTokenInstance::new(
+                AlloyAddress::from_hopr_address(contract_addresses.xtoken),
                 provider.clone(),
             ),
             channels: HoprChannelsInstance::new(
@@ -218,7 +225,8 @@ where
                                               * decimal values */
         )
         .await?;
-        let token = HoprToken::deploy(provider.clone()).await?;
+        let token = HoprToken::deploy(provider.clone()).await?; // TODO(xHOPR): update to deploy a separate wxHOPR token. Requires a contract's repo update
+        let xtoken = token.clone(); // TODO(xHOPR): update to deploy a separate wxHOPR token. Requires a contract's repo update
         let channels = HoprChannels::deploy(
             provider.clone(),
             AlloyAddress::from(token.address().as_ref()),
@@ -234,6 +242,7 @@ where
 
         Ok(Self {
             token,
+            xtoken,
             channels,
             announcements,
             module_implementation,
@@ -267,6 +276,7 @@ where
     fn from(instances: &ContractInstances<P>) -> Self {
         Self {
             token: instances.token.address().to_hopr_address(),
+            xtoken: instances.xtoken.address().to_hopr_address(),
             channels: instances.channels.address().to_hopr_address(),
             announcements: instances.announcements.address().to_hopr_address(),
             module_implementation: instances.module_implementation.address().to_hopr_address(),

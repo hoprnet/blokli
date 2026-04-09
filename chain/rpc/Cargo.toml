@@ -36,6 +36,7 @@ thiserror                  = { workspace = true }
 url                        = { workspace = true }
 validator                  = { workspace = true }
 
+blokli-api-types = { workspace = true }
 blokli-chain-types = { workspace = true }
 hopr-async-runtime = { workspace = true }
 hopr-bindings = { workspace = true }

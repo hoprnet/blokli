@@ -453,7 +453,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
             .ok_or_else(|| ErrorKind::NoData.into())
     }
 
-    async fn query_token_balance(&self, address: &ChainAddress) -> Result<HoprBalance> {
+    async fn query_token_balance(&self, address: &ChainAddress, token: Token) -> Result<HoprBalance> {
         let address = hex::encode(address);
         self.state
             .read()

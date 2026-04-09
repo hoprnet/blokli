@@ -1869,6 +1869,7 @@ dependencies = [
  "anyhow",
  "async-broadcast",
  "async-trait",
+ "blokli-api-types",
  "blokli-chain-indexer",
  "blokli-chain-rpc",
  "blokli-chain-types",
@@ -1935,6 +1936,7 @@ dependencies = [
  "anyhow",
  "async-stream",
  "async-trait",
+ "blokli-api-types",
  "blokli-chain-types",
  "env_logger",
  "futures",
@@ -1990,6 +1992,7 @@ dependencies = [
  "anyhow",
  "async-broadcast",
  "async-trait",
+ "blokli-api-types",
  "chrono",
  "cynic",
  "cynic-codegen",
@@ -2139,6 +2142,7 @@ dependencies = [
  "async-trait",
  "axum",
  "blokli-api",
+ "blokli-api-types",
  "blokli-chain-api",
  "blokli-chain-indexer",
  "blokli-chain-rpc",
@@ -2417,7 +2421,7 @@ version = "3.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "faf9468729b8cbcea668e36183cb69d317348c2e08e994829fb56ebfdfbaac34"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.48.0",
 ]
 
 [[package]]
@@ -2953,7 +2957,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ab67060fc6b8ef687992d439ca0fa36e7ed17e9a0b16b25b601e8757df720de"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.117",
 ]
 
 [[package]]
@@ -3955,8 +3959,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-bindings"
-version = "4.7.0"
-source = "git+https://github.com/hoprnet/contracts?branch=main#da7effb8a708eca4fc1a73d276645ce7ce21d2e8"
+version = "4.7.2"
+source = "git+https://github.com/hoprnet/contracts?branch=main#f8f5ad3c8bcfa6960aa9c0ecf238965098dd4cb8"
 dependencies = [
  "alloy",
  "anyhow",
@@ -3972,8 +3976,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-chain-types"
-version = "1.2.0"
-source = "git+https://github.com/hoprnet/hopr-types?branch=main#c5a65c8c020748718e1b74d930ec21fe6dfd5f2e"
+version = "1.4.0"
+source = "git+https://github.com/hoprnet/hopr-types?branch=main#8599359887bc58d32c606ff8d55a0a098549084f"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -4009,8 +4013,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-crypto-random"
-version = "1.2.0"
-source = "git+https://github.com/hoprnet/hopr-types?branch=main#c5a65c8c020748718e1b74d930ec21fe6dfd5f2e"
+version = "1.4.0"
+source = "git+https://github.com/hoprnet/hopr-types?branch=main#8599359887bc58d32c606ff8d55a0a098549084f"
 dependencies = [
  "generic-array 1.3.5",
  "rand 0.10.0",
@@ -4018,8 +4022,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-crypto-types"
-version = "1.2.0"
-source = "git+https://github.com/hoprnet/hopr-types?branch=main#c5a65c8c020748718e1b74d930ec21fe6dfd5f2e"
+version = "1.4.0"
+source = "git+https://github.com/hoprnet/hopr-types?branch=main#8599359887bc58d32c606ff8d55a0a098549084f"
 dependencies = [
  "aes",
  "blake3",
@@ -4050,8 +4054,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-internal-types"
-version = "1.2.0"
-source = "git+https://github.com/hoprnet/hopr-types?branch=main#c5a65c8c020748718e1b74d930ec21fe6dfd5f2e"
+version = "1.4.0"
+source = "git+https://github.com/hoprnet/hopr-types?branch=main#8599359887bc58d32c606ff8d55a0a098549084f"
 dependencies = [
  "aquamarine",
  "async-trait",
@@ -4089,8 +4093,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-primitive-types"
-version = "1.2.0"
-source = "git+https://github.com/hoprnet/hopr-types?branch=main#c5a65c8c020748718e1b74d930ec21fe6dfd5f2e"
+version = "1.4.0"
+source = "git+https://github.com/hoprnet/hopr-types?branch=main#8599359887bc58d32c606ff8d55a0a098549084f"
 dependencies = [
  "bigdecimal",
  "chrono",
@@ -4107,8 +4111,8 @@ dependencies = [
 
 [[package]]
 name = "hopr-types"
-version = "1.2.0"
-source = "git+https://github.com/hoprnet/hopr-types?branch=main#c5a65c8c020748718e1b74d930ec21fe6dfd5f2e"
+version = "1.4.0"
+source = "git+https://github.com/hoprnet/hopr-types?branch=main#8599359887bc58d32c606ff8d55a0a098549084f"
 dependencies = [
  "hopr-chain-types",
  "hopr-crypto-random",
@@ -4344,7 +4348,7 @@ dependencies = [
  "js-sys",
  "log",
  "wasm-bindgen",
- "windows-core 0.62.2",
+ "windows-core",
 ]
 
 [[package]]
@@ -8851,7 +8855,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9babd3a767a4c1aef6900409f85f5d53ce2544ccdfaa86dad48c91782c6d6893"
 dependencies = [
  "windows-collections",
- "windows-core 0.61.2",
+ "windows-core",
  "windows-future",
  "windows-link 0.1.3",
  "windows-numerics",
@@ -8863,7 +8867,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3beeceb5e5cfd9eb1d76b381630e82c4241ccd0d27f1a39ed41b2760b255c5e8"
 dependencies = [
- "windows-core 0.61.2",
+ "windows-core",
 ]
 
 [[package]]
@@ -8880,25 +8884,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "windows-core"
-version = "0.62.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b8e83a14d34d0623b51dce9581199302a221863196a1dde71a7663a4c2be9deb"
-dependencies = [
- "windows-implement",
- "windows-interface",
- "windows-link 0.2.1",
- "windows-result 0.4.1",
- "windows-strings 0.5.1",
-]
-
-[[package]]
 name = "windows-future"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fc6a41e98427b19fe4b73c550f060b59fa592d7d686537eebf9385621bfbad8e"
 dependencies = [
- "windows-core 0.61.2",
+ "windows-core",
  "windows-link 0.1.3",
  "windows-threading",
 ]
@@ -8943,7 +8934,7 @@ version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9150af68066c4c5c07ddc0ce30421554771e528bde427614c61038bc2c92c2b1"
 dependencies = [
- "windows-core 0.61.2",
+ "windows-core",
  "windows-link 0.1.3",
 ]
 

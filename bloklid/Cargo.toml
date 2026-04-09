@@ -66,10 +66,11 @@ thiserror   = { workspace = true }
 tokio       = { workspace = true, features = ["full"] }
 validator   = { workspace = true }
 
+blokli-api-types = { workspace = true }
+
 [package.metadata.cargo-machete]
 ignored = ["hopli", "humantime-serde"]
 
 
 [package.metadata.cargo-shear]
 ignored = ["humantime-serde"]
-

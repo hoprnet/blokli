@@ -3,7 +3,7 @@ use std::{str::FromStr, time::Duration};
 use anyhow::{Context, Result};
 use blokli_client::api::{
     AccountSelector, BlokliQueryClient, ChannelFilter, ChannelSelector, RedeemedStatsSelector, SafeSelector,
-    types::{ChannelStatus, TransactionStatus},
+    types::{ChannelStatus, Token, TransactionStatus},
 };
 use blokli_integration_tests::{
     constants::parsed_safe_balance,
@@ -104,7 +104,7 @@ async fn query_token_balance_of_eoa(#[future(awt)] fixture: IntegrationFixture) 
 
     let blokli_balance = fixture
         .client()
-        .query_token_balance(account.to_alloy_address().as_ref())
+        .query_token_balance(account.to_alloy_address().as_ref(), Token::WxHOPR)
         .await?;
 
     let _: HoprBalance = blokli_balance
@@ -144,7 +144,10 @@ async fn query_token_balance_and_allowance_of_safe(#[future(awt)] fixture: Integ
 
     let safe_address = Address::from_str(&safe.address)?;
 
-    let blokli_balance = fixture.client().query_token_balance(safe_address.as_ref()).await?;
+    let blokli_balance = fixture
+        .client()
+        .query_token_balance(safe_address.as_ref(), Token::WxHOPR)
+        .await?;
 
     let _: HoprBalance = blokli_balance
         .balance

@@ -14,7 +14,7 @@ pub(super) mod test_helpers {
         },
         internal::channels::ChannelStatus,
         primitive::{
-            prelude::{Address, HoprBalance, SerializableLog, XDaiBalance},
+            prelude::{Address, HoprBalance, SerializableLog, XDaiBalance, XHoprBalance},
             traits::IntoEndian,
         },
     };
@@ -32,6 +32,7 @@ pub(super) mod test_helpers {
         pub static ref STAKE_ADDRESS: Address = "4331eaa9542b6b034c43090d9ec1c2198758dbc3".parse().expect("lazy static address should be constructible");
         pub static ref CHANNELS_ADDR: Address = "bab20aea98368220baa4e3b7f151273ee71df93b".parse().expect("lazy static address should be constructible"); // just a dummy
         pub static ref TOKEN_ADDR: Address = "47d1677e018e79dcdd8a9c554466cb1556fa5007".parse().expect("lazy static address should be constructible"); // just a dummy
+        pub static ref XTOKEN_ADDR: Address = "47d1677e018e79dcdd8a9c554466cb1556fa5007".parse().expect("lazy static address should be constructible"); // just a dummy // TODO(xHOPR)
         pub static ref NODE_SAFE_REGISTRY_ADDR: Address = "0dcd1bf9a1b36ce34237eeafef220932846bcd82".parse().expect("lazy static address should be constructible"); // just a dummy
         pub static ref ANNOUNCEMENTS_ADDR: Address = "11db4791bf45ef31a10ea4a1b5cb90f46cc72c7e".parse().expect("lazy static address should be constructible"); // just a dummy
         pub static ref TICKET_PRICE_ORACLE_ADDR: Address = "11db4391bf45ef31a10ea4a1b5cb90f46cc72c7e".parse().expect("lazy static address should be constructible"); // just a dummy
@@ -55,6 +56,7 @@ pub(super) mod test_helpers {
 
             async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance>;
             async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
+            async fn get_xhopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XHoprBalance>;
             async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
             async fn get_transaction_count(&self, address: Address) -> blokli_chain_rpc::errors::Result<u64>;
             async fn get_channel_closure_notice_period(&self) -> blokli_chain_rpc::errors::Result<Duration>;
@@ -97,6 +99,10 @@ pub(super) mod test_helpers {
 
         async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance> {
             self.inner.get_hopr_balance(address).await
+        }
+
+        async fn get_xhopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XHoprBalance> {
+            self.inner.get_xhopr_balance(address).await
         }
 
         async fn get_hopr_allowance(
@@ -142,6 +148,7 @@ pub(super) mod test_helpers {
             ContractAddresses {
                 channels: *CHANNELS_ADDR,
                 token: *TOKEN_ADDR,
+                xtoken: *XTOKEN_ADDR,
                 node_safe_registry: *NODE_SAFE_REGISTRY_ADDR,
                 announcements: *ANNOUNCEMENTS_ADDR,
                 module_implementation: Default::default(),

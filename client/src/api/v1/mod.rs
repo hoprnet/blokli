@@ -3,7 +3,7 @@ use std::{fmt::Formatter, time::Duration};
 mod graphql;
 pub mod types {
     pub use super::graphql::{
-        ChannelStatus, DateTime, Hex32, TokenValueString, Uint64,
+        ChannelStatus, DateTime, Hex32, Token, TokenValueString, Uint64,
         accounts::Account,
         balances::{HoprBalance, NativeBalance, RedeemedStats, SafeHoprAllowance},
         channels::{Channel, ChannelStats, ChannelsList, SafesBalance},
@@ -206,7 +206,7 @@ pub trait BlokliQueryClient {
     /// Queries the native balance of the given account.
     async fn query_native_balance(&self, address: &ChainAddress) -> Result<types::NativeBalance>;
     /// Queries the token balance of the given account.
-    async fn query_token_balance(&self, address: &ChainAddress) -> Result<types::HoprBalance>;
+    async fn query_token_balance(&self, address: &ChainAddress, token: types::Token) -> Result<types::HoprBalance>;
     /// Queries the number of transactions sent from the given account.
     async fn query_transaction_count(&self, address: &ChainAddress) -> Result<u64>;
     /// Queries the safe allowance of the given account.

@@ -94,6 +94,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         chain_id,
                         contract_addrs: ContractAddresses {
                             token: Address::default(),
+                            xtoken: Address::default(),
                             channels: Address::default(),
                             announcements: Address::default(),
                             module_implementation: Address::default(),

@@ -394,8 +394,11 @@ pub trait HoprIndexerRpcOperations {
     /// Retrieves on-chain xdai balance of the given address.
     async fn get_xdai_balance(&self, address: Address) -> Result<XDaiBalance>;
 
-    /// Retrieves on-chain wxHOPR token balance of the given address.
+    /// Retrieves the on-chain wxHOPR balance of a given address.
     async fn get_hopr_balance(&self, address: Address) -> Result<HoprBalance>;
+
+    /// Retrieves the on-chain xHOPR balance of a given address.
+    async fn get_xhopr_balance(&self, address: Address) -> Result<XHoprBalance>;
 
     /// Retrieves the wxHOPR token allowance for the given owner and spender.
     async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> Result<HoprBalance>;

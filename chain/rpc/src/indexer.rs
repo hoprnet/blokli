@@ -326,6 +326,10 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
         self.get_hopr_balance(address).await
     }
 
+    async fn get_xhopr_balance(&self, address: Address) -> Result<XHoprBalance> {
+        self.get_xhopr_balance(address).await
+    }
+
     async fn get_hopr_allowance(&self, owner: Address, spender: Address) -> Result<HoprBalance> {
         self.get_hopr_allowance(owner, spender).await
     }
