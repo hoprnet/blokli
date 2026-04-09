@@ -12,9 +12,8 @@ workspace = true
 
 [features]
 default = ["sqlite", "traits"]
-prometheus = ["dep:hopr-metrics", "dep:lazy_static"]
+prometheus = ["dep:lazy_static"]
 runtime-tokio = [
-  "hopr-async-runtime/runtime-tokio",
   "sea-orm/runtime-tokio",
   "sea-orm/runtime-tokio-rustls",
 ]
@@ -45,10 +44,6 @@ validator = { workspace = true }
 
 blokli-db-entity = { workspace = true }
 blokli-db-migration = { workspace = true }
-hopr-async-runtime = { workspace = true }
-hopr-metrics = { workspace = true, optional = true }
-hopr-network-types = { workspace = true }
-hopr-platform = { workspace = true }
 hopr-types = { workspace = true, features = [
   "crypto",
   "internal",
@@ -64,7 +59,6 @@ sea-orm     = { workspace = true }
 tempfile    = { workspace = true }
 tokio       = { workspace = true }
 
-hopr-async-runtime = { workspace = true, features = ["runtime-tokio"] }
 hopr-types = { workspace = true, features = [
   "crypto",
   "internal",

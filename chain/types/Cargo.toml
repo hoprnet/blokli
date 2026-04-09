@@ -28,8 +28,5 @@ hopr-types = { workspace = true, features = [
   "primitive",
 ] }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-hex = { workspace = true }
-
 [features]
 default = []

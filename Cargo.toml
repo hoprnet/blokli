@@ -23,19 +23,15 @@ members = [
 alloy-sol-types = "1.5.7"
 anyhow = "1.0.100"
 async-broadcast = "0.7.2"
-async-channel = "2.5.0"
 async-compression = "0.4.30"
 async-graphql = { version = "7.0.14", features = ["chrono", "dataloader"] }
-async-graphql-axum = "7.0.14"
 async-lock = "3.4.1"
 async-signal = "0.2.12"
 async-stream = "0.3.6"
 async-tar = "0.5.0"
 async-trait = "0.1.89"
 axum = { version = "0.8.4", features = ["http2", "ws"] }
-axum-extra = { version = "0.10.1", features = ["query"] }
 backon = { version = "1.5.2", default-features = false }
-bincode = "2.0.1"
 blokli-api = { path = "api" }
 blokli-api-types = { path = "types" }
 blokli-chain-api = { path = "chain/api" }
@@ -49,7 +45,6 @@ blokli-db-migration = { path = "db/migration" }
 chrono = "0.4.44"
 clap = { version = "4.5.47", features = ["derive", "env", "string"] }
 config = "0.15.19"
-csv = "1.4.0"
 cynic = "3.12.0"
 cynic-codegen = "3.12.0"
 dashmap = "6.1.0"
@@ -69,11 +64,6 @@ hopr-types = { git = "https://github.com/hoprnet/hopr-types", branch = "main", f
 ] }
 
 hopr-metrics = { git = "https://github.com/hoprnet/hoprnet" }
-hopr-network-types = { git = "https://github.com/hoprnet/hoprnet", features = [
-  "serde",
-] }
-
-hopr-platform = { git = "https://github.com/hoprnet/hoprnet" }
 
 http = "1.3.1"
 humantime-serde = "1.1"
@@ -90,15 +80,12 @@ mockall = "0.13.1"
 mockito = "1.7.0"
 moka = { version = "0.12.10", features = ["future"] }
 multiaddr = "0.18.2"
-num_enum = "0.7.4"
 parking_lot = "0.12.5"
 primitive-types = { version = "0.14.0", features = ["serde"] }
 rand = "0.9.2" # ignored in renovate, cannot be updated, dependencies reference old ones
 regex = "1.11.1"
 reqwest = { version = "0.12.23", features = ["json"] }
-ringbuffer = "0.16.0"
 rstest = "0.26.1"
-rstest-log = "0.2.0"
 rust-stream-ext-concurrent = "1.0.0"
 rustls = { version = "0.23", default-features = false, features = ["std"] }
 rustls-pemfile = "2.1"
@@ -120,10 +107,8 @@ sea-orm-migration = { version = "2.0.0-rc.37", default-features = false, feature
 ] }
 sea-query = { version = "1.0.0-rc.31", default-features = false }
 # Keep sea-query aligned with SeaORM RC line to avoid resolver drift.
-seaography = { version = "2.0.0-rc.2", features = ["with-chrono"] }
 semver = "1.0.26"
 serde = { version = "1.0", features = ["derive"] }
-serde-hex = "0.1.0"
 serde_json = "1.0.143"
 serde_with = { version = "3.14.0" }
 serde_yaml = "0.9"
@@ -150,7 +135,6 @@ tokio = { version = "1.47.1", features = [
 tokio-rustls = { version = "0.26", default-features = false, features = [
   "ring",
 ] }
-tokio-test = "0.4"
 toml = "0.8.19"
 tower = { version = "0.5.2", default-features = false, features = ["util"] }
 tower-http = { version = "0.6.2", features = [
@@ -165,7 +149,6 @@ tracing-subscriber = { version = "0.3.20", features = [
   "registry",
   "std",
 ] }
-tracing-test = { version = "0.2.5", features = ["no-env-filter"] }
 url = { version = "2.5.7", features = ["serde"] }
 uuid = { version = "1.11.0", features = ["serde", "v4"] }
 validator = { version = "0.20.0", features = ["derive"] }

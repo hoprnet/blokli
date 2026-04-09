@@ -392,6 +392,8 @@
               foundry-bin
               pkgs.solc
               kubernetes-helm
+              cargo-machete
+              cargo-shear
               yq
               uv
               sqlite
@@ -421,6 +423,8 @@
               treefmtWrapper = config.treefmt.build.wrapper;
               treefmtPrograms = pkgs.lib.attrValues config.treefmt.build.programs;
               extraPackages = with pkgs; [
+                cargo-machete
+                cargo-shear
                 zizmor
               ];
             };

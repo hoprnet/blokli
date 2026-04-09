@@ -18,17 +18,14 @@ runtime-tokio = [
 ]
 
 [dependencies]
-async-channel      = { workspace = true }
 async-signal       = { workspace = true }
 axum               = { workspace = true }
 clap               = { workspace = true }
 futures            = { workspace = true }
-hex                = { workspace = true }
 humantime-serde    = { workspace = true }
 sea-orm            = { workspace = true }
 serde              = { workspace = true }
 serde_with         = { workspace = true }
-serde_yaml         = { workspace = true }
 smart-default      = { workspace = true }
 thiserror          = { workspace = true }
 tokio              = { workspace = true }
@@ -63,9 +60,16 @@ hopli = { workspace = true }
 [dev-dependencies]
 anyhow      = { workspace = true }
 async-trait = { workspace = true }
-mockall     = { workspace = true }
 temp-env    = { workspace = true }
 tempfile    = { workspace = true }
 thiserror   = { workspace = true }
 tokio       = { workspace = true, features = ["full"] }
 validator   = { workspace = true }
+
+[package.metadata.cargo-machete]
+ignored = ["hopli", "humantime-serde"]
+
+
+[package.metadata.cargo-shear]
+ignored = ["humantime-serde"]
+
