@@ -8,12 +8,12 @@ repository  = "https://github.com/hoprnet/blokli"
 version     = "0.22.0"
 
 [dependencies]
-anyhow = { workspace = true }
+anyhow          = { workspace = true }
 async-broadcast = { workspace = true, optional = true }
-async-trait = { workspace = true }
-chrono = { workspace = true, optional = true }
-cynic = { workspace = true, features = ["http-reqwest"] }
-bytes = "1"
+async-trait     = { workspace = true }
+bytes           = "1"
+chrono          = { workspace = true, optional = true }
+cynic           = { workspace = true, features = ["http-reqwest"] }
 # Use custom reqwest transport (no built-in hyper transport).
 eventsource-client = { version = "0.17.0", default-features = false }
 futures = { workspace = true }
@@ -22,6 +22,7 @@ hex = { workspace = true }
 http = { workspace = true }
 http-body-util = "0.1"
 indexmap = { workspace = true, optional = true }
+launchdarkly-sdk-transport = "0.1.0"
 parking_lot = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 reqwest = { workspace = true, features = [
@@ -31,16 +32,15 @@ reqwest = { workspace = true, features = [
   "json",
   "zstd",
 ] }
-launchdarkly-sdk-transport = "0.1.0"
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true }
 smart-default = { workspace = true }
 thiserror = { workspace = true }
 # Required adapter crate for reqwest -> tower Service used by ESS transport.
-tower-reqwest = "0.6.0-alpha.1"
-tracing = { workspace = true, features = ["release_max_level_debug"] }
-tower = { workspace = true }
-url = { workspace = true }
+tower         = { workspace = true }
+tower-reqwest = "=0.6.0-alpha.1"
+tracing       = { workspace = true, features = ["release_max_level_debug"] }
+url           = { workspace = true }
 
 hopr-types = { workspace = true, features = ["crypto", "primitive"] }
 

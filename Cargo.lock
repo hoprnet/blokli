@@ -8477,16 +8477,18 @@ checksum = "121c2a6cda46980bb0fcd1647ffaf6cd3fc79a013de288782836f6df9c48780e"
 
 [[package]]
 name = "tower-reqwest"
-version = "0.6.0"
+version = "0.6.0-alpha.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5e110e9288579214e107085e2c07bc63839bb2ae3aebee6ddb4a9c2f2e998113"
+checksum = "48e4cfd90bf8ef131f2d61df3e0418fa9749f8e0ac3d667b1e33318dfc92a116"
 dependencies = [
+ "bytes",
  "futures-util",
  "http 1.4.0",
+ "http-body 1.0.1",
  "http-body-util",
  "include-utils",
  "pin-project",
- "reqwest 0.13.2",
+ "reqwest 0.12.28",
  "thiserror 2.0.18",
  "tower-layer",
  "tower-service",

@@ -8,16 +8,16 @@ use std::{fmt::Debug, future::Future, time::Duration};
 
 use cynic::GraphQlResponse;
 use eventsource_client::{Client, ReconnectOptionsBuilder, SSE};
-use futures::{StreamExt, TryFutureExt};
+use futures::{StreamExt, TryFutureExt, TryStreamExt};
 use http_body_util::BodyExt;
 use launchdarkly_sdk_transport::{ByteStream, HttpTransport, ResponseFuture, TransportError};
 use reqwest::redirect::Policy as RedirectPolicy;
-use tower::ServiceExt;
-use tower_reqwest::HttpClientService;
 #[cfg(feature = "testing")]
 pub use testing::{
     BlokliTestClient, BlokliTestState, BlokliTestStateMutator, BlokliTestStateSnapshot, NopStateMutator,
 };
+use tower::ServiceExt;
+use tower_reqwest::HttpClientService;
 
 use crate::{
     api::VERSION,
@@ -112,11 +112,7 @@ impl HttpTransport for ReqwestTransport {
         let service = self.service.clone();
         Box::pin(async move {
             let (parts, body) = request.into_parts();
-            let body = match body {
-                Some(body) => reqwest::Body::from(body),
-                None => reqwest::Body::default(),
-            };
-            let request = http::Request::from_parts(parts, body);
+            let request = http::Request::from_parts(parts, body.map(reqwest::Body::from).unwrap_or_default());
             let response = service.oneshot(request).await.map_err(TransportError::new)?;
             let (parts, body) = response.into_parts();
             let body: ByteStream = Box::pin(body.into_data_stream().map_err(TransportError::new));
@@ -301,10 +297,10 @@ pub(crate) fn response_to_data<Q>(response: GraphQlResponse<Q>) -> crate::api::R
 
 #[cfg(test)]
 mod tests {
-    use super::ReqwestTransport;
-
     use futures::TryStreamExt;
     use launchdarkly_sdk_transport::HttpTransport;
+
+    use super::ReqwestTransport;
 
     #[tokio::test]
     async fn reqwest_transport_returns_streaming_response_body() {
