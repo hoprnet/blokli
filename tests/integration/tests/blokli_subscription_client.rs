@@ -599,7 +599,7 @@ async fn subscribe_transaction_status_updates(#[future(awt)] fixture: Integratio
     let tx_id = fixture.submit_and_track_tx(&signed_bytes).await?;
 
     // 3. Subscribe to transaction status updates via typed client
-    let mut stream = fixture.client().subscribe_transaction_updates(tx_id)?;
+    let mut stream = fixture.client().subscribe_track_transaction(tx_id)?;
 
     // 4. Collect status updates until Confirmed or timeout
     let mut statuses = Vec::new();

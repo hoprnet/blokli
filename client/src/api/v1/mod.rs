@@ -266,6 +266,11 @@ pub trait BlokliSubscriptionClient {
     fn subscribe_ticket_params(&self) -> Result<impl futures::Stream<Item = Result<types::TicketParameters>> + Send>;
     /// Subscribes to on-chain Safe deployments.
     fn subscribe_safe_deployments(&self) -> Result<impl futures::Stream<Item = Result<types::Safe>> + Send>;
+    /// Subscribes to status updates of a tracked transaction.
+    fn subscribe_track_transaction(
+        &self,
+        tx_id: TxId,
+    ) -> Result<impl futures::Stream<Item = Result<types::Transaction>> + Send>;
 }
 
 /// Trait defining Blokli API for signed transaction submission to the chain.
