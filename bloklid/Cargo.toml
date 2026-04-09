@@ -72,4 +72,3 @@ ignored = ["hopli", "humantime-serde"]
 
 [package.metadata.cargo-shear]
 ignored = ["humantime-serde"]
-

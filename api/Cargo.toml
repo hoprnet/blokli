@@ -36,7 +36,7 @@ tower      = { workspace = true }
 tower-http = { workspace = true }
 
 # GraphQL
-async-graphql      = { workspace = true }
+async-graphql = { workspace = true }
 
 # Serialization
 serde      = { workspace = true }
@@ -98,4 +98,3 @@ ignored = ["humantime-serde"]
 
 [package.metadata.cargo-shear]
 ignored = ["humantime-serde"]
-
