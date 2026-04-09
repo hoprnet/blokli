@@ -83,8 +83,8 @@ pub struct ChainConfig {
     pub confirmations: u16,
     /// Maximum block range for RPC queries
     pub max_block_range: u32,
-    /// Starting block number for channel contract (where indexing should begin)
-    pub channel_contract_deploy_block: u32,
+    /// Starting block number where indexing should begin
+    pub start_block_number: u32,
     /// Maximum RPC requests per second (None = default, Some(0) = unlimited)
     pub max_requests_per_sec: Option<u32>,
     /// Expected block time in seconds (network-specific, affects indexer polling frequency)
