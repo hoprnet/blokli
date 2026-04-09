@@ -288,11 +288,22 @@ impl BlokliDbAccountOperations for BlokliDb {
                             .exec(tx.as_ref())
                             .await
                         {
-                            Ok(insert_result) => insert_result.last_insert_id,
+                            Ok(_insert_result) => {
+                                // Look up by natural key instead of last_insert_id, which is
+                                // unreliable with ON CONFLICT DO NOTHING (Postgres returns 0)
+                                account::Entity::find()
+                                    .filter(account::Column::ChainKey.eq(chain_key.as_ref().to_vec()))
+                                    .filter(account::Column::PacketKey.eq(hex::encode(packet_key.as_ref())))
+                                    .one(tx.as_ref())
+                                    .await?
+                                    .ok_or_else(|| DbSqlError::LogicalError("Inserted account not found".to_string()))?
+                                    .id
+                            }
                             Err(DbErr::RecordNotInserted) => {
                                 // Race condition: account was inserted between find and insert
                                 account::Entity::find()
                                     .filter(account::Column::ChainKey.eq(chain_key.as_ref().to_vec()))
+                                    .filter(account::Column::PacketKey.eq(hex::encode(packet_key.as_ref())))
                                     .one(tx.as_ref())
                                     .await?
                                     .ok_or_else(|| {

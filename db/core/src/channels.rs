@@ -254,7 +254,7 @@ async fn insert_channel_state_and_emit(
     };
 
     tracing::debug!(?state_model, "About to insert channel_state");
-    let inserted = match ChannelState::insert(state_model)
+    let (inserted, is_new) = match ChannelState::insert(state_model)
         .on_conflict(
             OnConflict::columns([
                 channel_state::Column::ChannelId,
@@ -268,15 +268,23 @@ async fn insert_channel_state_and_emit(
         .exec(tx)
         .await
     {
-        Ok(insert_result) => {
+        Ok(_insert_result) => {
             tracing::debug!(
-                "Successfully inserted channel_state with id: {}",
-                insert_result.last_insert_id
+                channel_id,
+                block,
+                tx_index,
+                log_index,
+                "Successfully inserted channel_state"
             );
-            channel_state::Entity::find_by_id(insert_result.last_insert_id)
+            let model = channel_state::Entity::find()
+                .filter(channel_state::Column::ChannelId.eq(channel_id))
+                .filter(channel_state::Column::PublishedBlock.eq(block))
+                .filter(channel_state::Column::PublishedTxIndex.eq(tx_index))
+                .filter(channel_state::Column::PublishedLogIndex.eq(log_index))
                 .one(tx)
                 .await?
-                .ok_or_else(|| DbSqlError::LogicalError("Inserted channel_state not found".to_string()))?
+                .ok_or_else(|| DbSqlError::LogicalError("Inserted channel_state not found".to_string()))?;
+            (model, true)
         }
         Err(DbErr::RecordNotInserted) => {
             // Idempotent: record already exists from a previous incomplete sync
@@ -287,7 +295,7 @@ async fn insert_channel_state_and_emit(
                 log_index,
                 "Channel state already exists, skipping insert"
             );
-            channel_state::Entity::find()
+            let model = channel_state::Entity::find()
                 .filter(channel_state::Column::ChannelId.eq(channel_id))
                 .filter(channel_state::Column::PublishedBlock.eq(block))
                 .filter(channel_state::Column::PublishedTxIndex.eq(tx_index))
@@ -296,27 +304,31 @@ async fn insert_channel_state_and_emit(
                 .await?
                 .ok_or_else(|| {
                     DbSqlError::LogicalError("Existing channel_state not found after conflict".to_string())
-                })?
+                })?;
+            (model, false)
         }
         Err(e) => return Err(e.into()),
     };
 
-    // Emit state change event (fire and forget - don't block on event delivery)
-    let event = StateChange::ChannelState(ChannelStateChange {
-        channel_id,
-        state_id: inserted.id,
-        published_block: block,
-        published_tx_index: tx_index,
-        published_log_index: log_index,
-    });
+    // Only emit events for genuine new inserts to avoid duplicate downstream processing on restart
+    if is_new {
+        // Emit state change event (fire and forget - don't block on event delivery)
+        let event = StateChange::ChannelState(ChannelStateChange {
+            channel_id,
+            state_id: inserted.id,
+            published_block: block,
+            published_tx_index: tx_index,
+            published_log_index: log_index,
+        });
 
-    // Spawn event emission as a background task to avoid blocking
-    let event_bus = db.event_bus.clone();
-    tokio::spawn(async move {
-        if let Err(e) = event_bus.publish(event).await {
-            tracing::warn!("Failed to publish channel state change event: {}", e);
-        }
-    });
+        // Spawn event emission as a background task to avoid blocking
+        let event_bus = db.event_bus.clone();
+        tokio::spawn(async move {
+            if let Err(e) = event_bus.publish(event).await {
+                tracing::warn!("Failed to publish channel state change event: {}", e);
+            }
+        });
+    }
 
     Ok(inserted)
 }
