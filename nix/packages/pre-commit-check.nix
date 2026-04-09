@@ -24,12 +24,14 @@ let
       echo "Skipping export-db-schema (nix build sandbox detected)"
       exit 0
     fi
-    export PATH="${lib.makeBinPath [
-      stableToolchain
-      pkgs.just
-      pkgs.sqlite
-      pkgs.pgformatter
-    ]}:$PATH"
+    export PATH="${
+      lib.makeBinPath [
+        stableToolchain
+        pkgs.just
+        pkgs.sqlite
+        pkgs.pgformatter
+      ]
+    }:$PATH"
     exec ${pkgs.just}/bin/just export-db-schema
   '';
 in

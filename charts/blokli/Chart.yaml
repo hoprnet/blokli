@@ -1,3 +1,4 @@
+---
 apiVersion: v2
 name: blokli
 description: Helm chart for Blokli - HOPR on-chain indexer with GraphQL API
