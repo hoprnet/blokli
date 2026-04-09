@@ -488,6 +488,13 @@ pub struct NativeBalance {
 /// Status of a submitted transaction
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum TransactionStatus {
+    /// Transactions are never emitted in this state; they go directly to Submitted.
+    #[graphql(
+        name = "PENDING",
+        deprecation = "Transactions go directly to SUBMITTED. This variant exists only for backwards compatibility \
+                       and will be removed in a future release."
+    )]
+    Pending,
     /// Transaction has been submitted and is awaiting confirmation
     #[graphql(name = "SUBMITTED")]
     Submitted,

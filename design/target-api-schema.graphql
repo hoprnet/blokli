@@ -892,6 +892,8 @@ union TransactionResult = Transaction | InvalidTransactionIdError
 enum TransactionStatus {
   "Transaction has been confirmed on-chain with success"
   CONFIRMED
+  "Transactions are never emitted in this state; they go directly to SUBMITTED"
+  PENDING @deprecated(reason: "Transactions go directly to SUBMITTED. This variant exists only for backwards compatibility and will be removed in a future release.")
   "Transaction was included on-chain but reverted (receipt.status = 0)"
   REVERTED
   "Transaction submission failed"

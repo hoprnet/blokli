@@ -40,13 +40,6 @@ impl GraphQlQueries {
     pub fn subscribe_safe_deployments() -> cynic::StreamingOperation<SubscribeSafeDeployment, ()> {
         SubscribeSafeDeployment::build(())
     }
-
-    /// `SubscribeTransaction` subscription GraphQL query.
-    pub fn subscribe_transaction_updates(
-        tx_id: TxId,
-    ) -> cynic::StreamingOperation<SubscribeTransaction, TransactionsVariables> {
-        SubscribeTransaction::build(TransactionsVariables { id: tx_id.into() })
-    }
 }
 
 impl BlokliSubscriptionClient for BlokliClient {
@@ -83,12 +76,5 @@ impl BlokliSubscriptionClient for BlokliClient {
         Ok(self
             .build_subscription_stream(GraphQlQueries::subscribe_safe_deployments())?
             .try_filter_map(|item| futures::future::ok(Some(item.safe_deployed))))
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
-    fn subscribe_transaction_updates(&self, tx_id: TxId) -> Result<impl Stream<Item = Result<Transaction>> + Send> {
-        Ok(self
-            .build_subscription_stream(GraphQlQueries::subscribe_transaction_updates(tx_id))?
-            .try_filter_map(|item| futures::future::ok(Some(item.transaction_updated))))
     }
 }

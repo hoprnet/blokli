@@ -116,6 +116,8 @@ impl From<TransactionResult> for Result<Transaction, BlokliClientError> {
 pub enum TransactionStatus {
     #[cynic(rename = "CONFIRMED")]
     Confirmed,
+    #[cynic(rename = "PENDING")]
+    Pending,
     #[cynic(rename = "REVERTED")]
     Reverted,
     #[cynic(rename = "SUBMISSION_FAILED")]

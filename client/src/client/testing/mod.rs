@@ -715,10 +715,6 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliSubscriptionClient for Blokl
             .chain(self.safe_deployed_channel.1.activate_cloned())
             .map(Ok))
     }
-
-    fn subscribe_transaction_updates(&self, _tx_id: TxId) -> Result<impl Stream<Item = Result<Transaction>> + Send> {
-        Ok(futures::stream::empty())
-    }
 }
 
 fn simulate_tx_execution(
