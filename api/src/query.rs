@@ -185,6 +185,7 @@ struct SafeContractCurrentRow {
     address: Vec<u8>,
     module_address: Vec<u8>,
     chain_key: Vec<u8>,
+    threshold: Option<String>,
 }
 
 fn safe_owner_statement(backend: DatabaseBackend, safe_address: Vec<u8>) -> Statement {
@@ -238,6 +239,7 @@ fn safe_from_current_row(
         address: address.to_hex(),
         module_address: module_address.to_hex(),
         chain_key: chain_key.to_hex(),
+        threshold: current.threshold,
         owners,
         registered_nodes,
     })
@@ -250,7 +252,22 @@ fn current_row_statement(backend: DatabaseBackend, column: &str, value: Vec<u8>)
         "?"
     };
     let sql = format!(
-        "SELECT address, module_address, chain_key FROM safe_contract_current WHERE {} = {}",
+        "SELECT
+            scc.address,
+            scc.module_address,
+            scc.chain_key,
+            (
+                SELECT sa.threshold
+                FROM hopr_safe_activity sa
+                JOIN hopr_safe_contract sc ON sc.id = sa.hopr_safe_contract_id
+                WHERE sc.address = scc.address
+                  AND sa.threshold IS NOT NULL
+                  AND sa.event_kind IN ('SAFE_SETUP', 'CHANGED_THRESHOLD')
+                ORDER BY sa.published_block DESC, sa.published_tx_index DESC, sa.published_log_index DESC
+                LIMIT 1
+            ) AS threshold
+         FROM safe_contract_current scc
+         WHERE {} = {}",
         column, placeholder
     );
     Statement::from_sql_and_values(backend, sql, vec![value.into()])
@@ -263,7 +280,20 @@ fn current_row_by_owner_statement(backend: DatabaseBackend, owner_address: Vec<u
         "?"
     };
     let sql = format!(
-        "SELECT scc.address, scc.module_address, scc.chain_key
+        "SELECT
+            scc.address,
+            scc.module_address,
+            scc.chain_key,
+            (
+                SELECT sa.threshold
+                FROM hopr_safe_activity sa
+                JOIN hopr_safe_contract sc ON sc.id = sa.hopr_safe_contract_id
+                WHERE sc.address = scc.address
+                  AND sa.threshold IS NOT NULL
+                  AND sa.event_kind IN ('SAFE_SETUP', 'CHANGED_THRESHOLD')
+                ORDER BY sa.published_block DESC, sa.published_tx_index DESC, sa.published_log_index DESC
+                LIMIT 1
+            ) AS threshold
          FROM safe_contract_current scc
          JOIN safe_owner_current soc ON soc.safe_address = scc.address
          WHERE soc.owner_address = {}
@@ -331,7 +361,21 @@ async fn fetch_safe_by_address(
         address: row.try_get("", "address")?,
         module_address: row.try_get("", "module_address")?,
         chain_key: row.try_get("", "chain_key")?,
+        threshold: row.try_get("", "threshold")?,
     }))
+}
+
+pub(crate) async fn fetch_safe_threshold_by_address(
+    db: &DatabaseConnection,
+    safe_address_bytes: Vec<u8>,
+) -> Result<Option<String>, sea_orm::DbErr> {
+    let stmt = current_row_statement(db.get_database_backend(), "address", safe_address_bytes);
+    let row = db.query_one_raw(stmt).await?;
+
+    match row {
+        Some(row) => row.try_get("", "threshold"),
+        None => Ok(None),
+    }
 }
 
 /// Fetch a Safe contract by owner address with current (latest) state
@@ -353,6 +397,7 @@ async fn fetch_safe_by_owner(
         address: row.try_get("", "address")?,
         module_address: row.try_get("", "module_address")?,
         chain_key: row.try_get("", "chain_key")?,
+        threshold: row.try_get("", "threshold")?,
     }))
 }
 
@@ -1334,7 +1379,22 @@ impl QueryRoot {
 
         let stmt = Statement::from_string(
             db.get_database_backend(),
-            "SELECT address, module_address, chain_key FROM safe_contract_current".to_string(),
+            "SELECT
+                scc.address,
+                scc.module_address,
+                scc.chain_key,
+                (
+                    SELECT sa.threshold
+                    FROM hopr_safe_activity sa
+                    JOIN hopr_safe_contract sc ON sc.id = sa.hopr_safe_contract_id
+                    WHERE sc.address = scc.address
+                      AND sa.threshold IS NOT NULL
+                      AND sa.event_kind IN ('SAFE_SETUP', 'CHANGED_THRESHOLD')
+                    ORDER BY sa.published_block DESC, sa.published_tx_index DESC, sa.published_log_index DESC
+                    LIMIT 1
+                ) AS threshold
+             FROM safe_contract_current scc"
+                .to_string(),
         );
 
         let rows = match db.query_all_raw(stmt).await {
@@ -1354,6 +1414,10 @@ impl QueryRoot {
                     Err(e) => return Ok(SafesResult::QueryFailed(errors::query_failed("fetch safes", e))),
                 },
                 chain_key: match row.try_get("", "chain_key") {
+                    Ok(value) => value,
+                    Err(e) => return Ok(SafesResult::QueryFailed(errors::query_failed("fetch safes", e))),
+                },
+                threshold: match row.try_get("", "threshold") {
                     Ok(value) => value,
                     Err(e) => return Ok(SafesResult::QueryFailed(errors::query_failed("fetch safes", e))),
                 },

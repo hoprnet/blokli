@@ -30,6 +30,7 @@ pub struct Safe {
     pub owners: Vec<String>,
     pub module_address: String,
     pub registered_nodes: Vec<String>,
+    pub threshold: Option<String>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]

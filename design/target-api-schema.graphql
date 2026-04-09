@@ -662,6 +662,8 @@ type Safe {
   owners: [String!]!
   "List of registered node addresses (hexadecimal format) for this Safe"
   registeredNodes: [String!]!
+  "Current signer threshold reconstructed from indexed Safe events"
+  threshold: String
 }
 
 """Safe HOPR token allowance information for a specific Safe address"""

@@ -4,13 +4,19 @@ use blokli_api::{
 };
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{
-    BlokliDbGeneralModelOperations, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations,
-    safe_history::BlokliDbSafeHistoryOperations, safe_redeemed_stats::BlokliDbSafeRedeemedStatsOperations,
+    BlokliDbGeneralModelOperations,
+    db::BlokliDb,
+    safe_contracts::BlokliDbSafeContractOperations,
+    safe_history::{BlokliDbSafeHistoryOperations, SafeActivityKind},
+    safe_redeemed_stats::BlokliDbSafeRedeemedStatsOperations,
 };
 use blokli_db_entity::hopr_safe_contract::{Column as SafeColumn, Entity as SafeEntity};
-use hopr_types::primitive::{
-    prelude::{Address, Balance, WxHOPR},
-    traits::ToHex,
+use hopr_types::{
+    crypto::types::Hash,
+    primitive::{
+        prelude::{Address, Balance, WxHOPR},
+        traits::ToHex,
+    },
 };
 use rand::RngCore;
 use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
@@ -49,6 +55,36 @@ async fn test_safe_queries() -> anyhow::Result<()> {
         .await?;
     db.upsert_safe_owner_state(None, safe_address_1, chain_key_1, true, 100, 0, 1)
         .await?;
+    db.record_safe_activity(
+        None,
+        safe_address_0,
+        SafeActivityKind::SafeSetup,
+        Hash::default(),
+        None,
+        None,
+        Some("2".to_string()),
+        None,
+        Some(chain_key_0),
+        100,
+        0,
+        0,
+    )
+    .await?;
+    db.record_safe_activity(
+        None,
+        safe_address_0,
+        SafeActivityKind::ChangedThreshold,
+        Hash::default(),
+        None,
+        None,
+        Some("3".to_string()),
+        None,
+        None,
+        105,
+        0,
+        0,
+    )
+    .await?;
     db.record_safe_ticket_redeemed(
         None,
         safe_address_0,
@@ -126,6 +162,7 @@ async fn test_safe_queries() -> anyhow::Result<()> {
                     address
                     moduleAddress
                     chainKey
+                    threshold
                     owners
                 }}
                 ... on QueryFailedError {{
@@ -148,6 +185,7 @@ async fn test_safe_queries() -> anyhow::Result<()> {
     assert_eq!(safe_data["address"], safe_address_0.to_hex());
     assert_eq!(safe_data["moduleAddress"], module_address_0.to_hex());
     assert_eq!(safe_data["chainKey"], chain_key_0.to_hex());
+    assert_eq!(safe_data["threshold"], "3");
     assert_eq!(
         safe_data["owners"].as_array().unwrap().len(),
         3,
@@ -163,6 +201,7 @@ async fn test_safe_queries() -> anyhow::Result<()> {
                     address
                     moduleAddress
                     chainKey
+                    threshold
                 }}
             }}
         }}
@@ -178,6 +217,7 @@ async fn test_safe_queries() -> anyhow::Result<()> {
     assert_eq!(safe_data["address"], safe_address_0.to_hex());
     assert_eq!(safe_data["moduleAddress"], module_address_0.to_hex());
     assert_eq!(safe_data["chainKey"], chain_key_0.to_hex());
+    assert_eq!(safe_data["threshold"], "3");
 
     // Test deprecated safeByChainKey(chainKey) alias, which now resolves by indexed owner membership
     let query = format!(
@@ -188,6 +228,7 @@ async fn test_safe_queries() -> anyhow::Result<()> {
                     address
                     moduleAddress
                     chainKey
+                    threshold
                 }}
             }}
         }}
@@ -203,6 +244,7 @@ async fn test_safe_queries() -> anyhow::Result<()> {
     assert_eq!(safe_data["address"], safe_address_0.to_hex());
     assert_eq!(safe_data["moduleAddress"], module_address_0.to_hex());
     assert_eq!(safe_data["chainKey"], chain_key_0.to_hex());
+    assert_eq!(safe_data["threshold"], "3");
 
     // Test safes() list query
     let query = r#"
@@ -211,6 +253,7 @@ async fn test_safe_queries() -> anyhow::Result<()> {
                 ... on SafesList {
                     safes {
                         address
+                        threshold
                     }
                 }
             }
@@ -224,6 +267,11 @@ async fn test_safe_queries() -> anyhow::Result<()> {
     let safes_list = data["safes"]["safes"].as_array().unwrap();
     assert!(!safes_list.is_empty());
     assert!(safes_list.iter().any(|s| s["address"] == safe_address_0.to_hex()));
+    assert!(
+        safes_list
+            .iter()
+            .any(|s| s["address"] == safe_address_0.to_hex() && s["threshold"] == "3")
+    );
 
     let query = format!(
         r#"

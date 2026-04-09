@@ -35,13 +35,17 @@ use sea_orm::{
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use crate::{errors, query::owners_for_safe};
+use crate::{
+    errors,
+    query::{fetch_safe_threshold_by_address, owners_for_safe},
+};
 
 #[derive(Debug)]
 struct SafeContractCurrentRow {
     address: Vec<u8>,
     module_address: Vec<u8>,
     chain_key: Vec<u8>,
+    threshold: Option<String>,
 }
 
 fn current_row_statement(backend: DatabaseBackend, value: Vec<u8>) -> Statement {
@@ -1082,10 +1086,24 @@ impl SubscriptionRoot {
                                     }
                                 };
 
+                                let current_safe_address = address.clone();
+                                let threshold = match fetch_safe_threshold_by_address(&db, current_safe_address.clone()).await {
+                                    Ok(threshold) => threshold,
+                                    Err(e) => {
+                                        warn!(
+                                            safe_address = ?current_safe_address,
+                                            error = %e,
+                                            "Failed to fetch threshold for safe, returning null"
+                                        );
+                                        None
+                                    }
+                                };
+
                                 let current = SafeContractCurrentRow {
                                     address,
                                     module_address,
                                     chain_key,
+                                    threshold,
                                 };
 
                                 debug!(safe_address = ?current.address, "processing SafeDeployed event");
@@ -1113,6 +1131,7 @@ impl SubscriptionRoot {
                                     address: Address::new(&current.address).to_hex(),
                                     module_address: Address::new(&current.module_address).to_hex(),
                                     chain_key: Address::new(&current.chain_key).to_hex(),
+                                    threshold: current.threshold,
                                     owners: owners_for_safe(&db, current.address.clone()).await,
                                     registered_nodes,
                                 };
