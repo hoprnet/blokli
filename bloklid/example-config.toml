@@ -75,11 +75,6 @@ url = "postgresql://bloklid:password@localhost:5432/bloklid"
 # Enable fast sync mode for initial synchronization
 fast_sync = true
 
-# Optional override for the initial historical sync start block.
-# This only affects a fresh sync; if the database already contains indexed data, bloklid will still 
-# resume from the persisted watermark/checksum state.
-start_block_number = 29690235
-
 # Enable downloading logs snapshot for faster initial sync
 enable_logs_snapshot = false
 

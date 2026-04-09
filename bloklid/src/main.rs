@@ -118,7 +118,6 @@ impl Args {
             ("BLOKLI_DATABASE_LOGS_PATH", "database.logs_path"),
             // Indexer
             ("BLOKLI_INDEXER_FAST_SYNC", "indexer.fast_sync"),
-            ("BLOKLI_INDEXER_START_BLOCK_NUMBER", "indexer.start_block_number"),
             ("BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT", "indexer.enable_logs_snapshot"),
             ("BLOKLI_INDEXER_LOGS_SNAPSHOT_URL", "indexer.logs_snapshot_url"),
             // Indexer Subscription
@@ -222,17 +221,12 @@ impl Args {
             ))
         })?;
 
-        let start_block_number = config
-            .indexer
-            .start_block_number
-            .unwrap_or(network_config.indexer_start_block_number);
-
         let chain_config = ChainConfig {
             chain_id: network_config.chain_id,
             tx_polling_interval: config.network.tx_polling_interval(),
             confirmations: config.network.confirmations(),
             max_block_range: config.max_block_range,
-            start_block_number,
+            channel_contract_deploy_block: network_config.indexer_start_block_number,
             max_requests_per_sec: config.max_rpc_requests_per_sec,
             expected_block_time: config.network.expected_block_time(),
         };
@@ -402,7 +396,7 @@ async fn run(args: Args) -> errors::Result<()> {
             })?;
 
             let indexer_config = blokli_chain_indexer::IndexerConfig {
-                start_block_number: chain_network.start_block_number as u64,
+                start_block_number: chain_network.channel_contract_deploy_block as u64,
                 fast_sync: cfg.indexer.fast_sync,
                 enable_logs_snapshot: cfg.indexer.enable_logs_snapshot,
                 logs_snapshot_url: cfg.indexer.logs_snapshot_url.clone(),
@@ -1021,76 +1015,6 @@ mod tests {
                 }
                 _ => panic!("Expected SQLite database config"),
             }
-        });
-    }
-
-    #[test]
-    fn test_indexer_start_block_override_from_config_file() {
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "jura"
-            rpc_url = "http://localhost:8545"
-            [database]
-            type = "postgresql"
-            url = "postgres://file:5432/db"
-            [indexer]
-            start_block_number = 34208807
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        let args = Args {
-            verbose: 0,
-            config: Some(path),
-            command: None,
-        };
-
-        let config = args.load_config(false).expect("Failed to load config");
-        let chain_network = config
-            .chain_network
-            .as_ref()
-            .expect("chain network should be resolved during config loading");
-
-        assert_eq!(config.indexer.start_block_number, Some(34_208_807));
-        assert_eq!(chain_network.start_block_number, 34_208_807);
-    }
-
-    #[test]
-    fn test_indexer_start_block_override_from_env_var() {
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "jura"
-            rpc_url = "http://localhost:8545"
-            [database]
-            type = "postgresql"
-            url = "postgres://file:5432/db"
-            [indexer]
-            start_block_number = 29690235
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        temp_env::with_var("BLOKLI_INDEXER_START_BLOCK_NUMBER", Some("34208807"), || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            let config = args.load_config(false).expect("Failed to load config");
-            let chain_network = config
-                .chain_network
-                .as_ref()
-                .expect("chain network should be resolved during config loading");
-
-            assert_eq!(config.indexer.start_block_number, Some(34_208_807));
-            assert_eq!(chain_network.start_block_number, 34_208_807);
         });
     }
 

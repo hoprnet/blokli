@@ -322,10 +322,6 @@ impl Config {
 
         output.push_str(&format!("  indexer.fast_sync: {}\n", self.indexer.fast_sync));
         output.push_str(&format!(
-            "  indexer.start_block_number: {:?}\n",
-            self.indexer.start_block_number
-        ));
-        output.push_str(&format!(
             "  indexer.enable_logs_snapshot: {}\n",
             self.indexer.enable_logs_snapshot
         ));
@@ -367,14 +363,6 @@ pub struct IndexerConfig {
     #[default(true)]
     #[serde(default = "default_true")]
     pub fast_sync: bool,
-
-    /// Optional override for the initial historical sync start block.
-    ///
-    /// When set, this value is used instead of the network's default
-    /// `indexer_start_block_number` from hopr-bindings during a fresh sync.
-    /// Resume behavior is unchanged and still follows persisted database state.
-    #[serde(default)]
-    pub start_block_number: Option<u32>,
 
     #[default(false)]
     #[serde(default = "default_false")]
@@ -723,7 +711,6 @@ mod tests {
 
         // Check indexer config
         assert!(config.indexer.fast_sync);
-        assert_eq!(config.indexer.start_block_number, None);
         assert_eq!(config.indexer.subscription.event_bus_capacity, 1000);
 
         // Check API config
@@ -748,27 +735,9 @@ mod tests {
 
         let cfg = res.unwrap();
         assert!(!cfg.indexer.fast_sync);
-        assert_eq!(cfg.indexer.start_block_number, None); // Default
         assert!(!cfg.indexer.enable_logs_snapshot); // Default
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 1000); // Default
         assert_eq!(cfg.indexer.subscription.batch_size, 100); // Default
-    }
-
-    #[test]
-    fn test_indexer_start_block_override() {
-        let config = r#"
-         [indexer]
-         start_block_number = 29690235
-         [database]
-         type = "sqlite"
-         index_path = ":memory:"
-         logs_path = ":memory:"
-     "#;
-        let cfg: Config = toml::from_str(config).expect("Failed to parse config");
-
-        assert_eq!(cfg.indexer.start_block_number, Some(29_690_235));
-        assert!(cfg.indexer.fast_sync); // Default
-        assert!(!cfg.indexer.enable_logs_snapshot); // Default
     }
 
     #[test]
