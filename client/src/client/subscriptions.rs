@@ -3,12 +3,12 @@ use futures::{Stream, TryStreamExt};
 
 use super::{BlokliClient, GraphQlQueries};
 use crate::api::{
-    AccountSelector, BlokliSubscriptionClient, ChannelSelector, Result, TxId,
+    AccountSelector, BlokliSubscriptionClient, ChannelSelector, Result,
     internal::{
         AccountVariables, ChannelsVariables, SubscribeAccounts, SubscribeChannels, SubscribeGraph,
-        SubscribeSafeDeployment, SubscribeTicketParams, SubscribeTransaction, TransactionsVariables,
+        SubscribeSafeDeployment, SubscribeTicketParams,
     },
-    types::{Account, Channel, OpenedChannelsGraphEntry, Safe, TicketParameters, Transaction},
+    types::{Account, Channel, OpenedChannelsGraphEntry, Safe, TicketParameters},
 };
 
 impl GraphQlQueries {

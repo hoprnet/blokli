@@ -47,7 +47,7 @@ use crate::{
     rpc_adapter::RpcAdapter,
     safe_execution::DbSafeAddressChecker,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
-    transaction_monitor::{SafeAddressChecker, TransactionMonitor, TransactionMonitorConfig},
+    transaction_monitor::{TransactionMonitor, TransactionMonitorConfig},
     transaction_store::TransactionStore,
     transaction_validator::TransactionValidator,
 };
@@ -83,7 +83,7 @@ pub struct BlokliChain<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt
     rpc_operations: RpcOperations<DefaultHttpRequestor>,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
-    transaction_monitor: Arc<TransactionMonitor<RpcAdapter<DefaultHttpRequestor>>>,
+    transaction_monitor: Arc<TransactionMonitor<RpcAdapter<DefaultHttpRequestor>, DbSafeAddressChecker<T>>>,
 }
 
 impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static> BlokliChain<T> {
@@ -142,7 +142,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         let transaction_validator = Arc::new(TransactionValidator::new());
         let rpc_adapter = Arc::new(RpcAdapter::new(rpc_operations.clone()));
 
-        let safe_checker: Arc<dyn SafeAddressChecker> = Arc::new(DbSafeAddressChecker::new(db.clone()));
+        let safe_checker = Arc::new(DbSafeAddressChecker::new(db.clone()));
 
         let transaction_executor = Arc::new(
             RawTransactionExecutor::with_shared_dependencies(
@@ -151,10 +151,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
                 transaction_validator,
                 RawTransactionExecutorConfig::default(),
             )
-            .with_safe_enrichment(
-                rpc_adapter.clone() as Arc<dyn crate::transaction_monitor::ReceiptProvider>,
-                safe_checker.clone(),
-            ),
+            .with_safe_enrichment(rpc_adapter.clone(), safe_checker.clone()),
         );
 
         let transaction_monitor = Arc::new(TransactionMonitor::new(

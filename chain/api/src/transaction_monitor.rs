@@ -63,6 +63,32 @@ pub trait SafeAddressChecker: Send + Sync + std::fmt::Debug {
     async fn find_safe_for_target(&self, target: &[u8; 20]) -> Option<[u8; 20]>;
 }
 
+/// Placeholder type used when Safe enrichment is not configured.
+#[derive(Debug)]
+pub struct NoSafeEnrichment;
+
+#[async_trait]
+impl ReceiptProvider for NoSafeEnrichment {
+    async fn get_transaction_status(&self, _tx_hash: Hash) -> Result<Option<bool>, String> {
+        unreachable!("NoSafeEnrichment is behind Option::None")
+    }
+
+    async fn get_transaction_receipt_logs(&self, _tx_hash: Hash) -> Result<Option<Vec<ReceiptLog>>, String> {
+        unreachable!("NoSafeEnrichment is behind Option::None")
+    }
+
+    async fn get_revert_reason(&self, _tx_hash: Hash) -> Result<Option<String>, String> {
+        unreachable!("NoSafeEnrichment is behind Option::None")
+    }
+}
+
+#[async_trait]
+impl SafeAddressChecker for NoSafeEnrichment {
+    async fn find_safe_for_target(&self, _target: &[u8; 20]) -> Option<[u8; 20]> {
+        unreachable!("NoSafeEnrichment is behind Option::None")
+    }
+}
+
 /// Configuration for the transaction monitor
 #[derive(Debug, Clone)]
 pub struct TransactionMonitorConfig {
@@ -86,14 +112,14 @@ impl Default for TransactionMonitorConfig {
 }
 
 /// Background monitor for tracking transaction confirmations
-pub struct TransactionMonitor<R: ReceiptProvider> {
+pub struct TransactionMonitor<R: ReceiptProvider, S: SafeAddressChecker> {
     transaction_store: Arc<TransactionStore>,
     receipt_provider: Arc<R>,
-    safe_checker: Option<Arc<dyn SafeAddressChecker>>,
+    safe_checker: Option<Arc<S>>,
     config: TransactionMonitorConfig,
 }
 
-impl<R: ReceiptProvider> std::fmt::Debug for TransactionMonitor<R> {
+impl<R: ReceiptProvider, S: SafeAddressChecker> std::fmt::Debug for TransactionMonitor<R, S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("TransactionMonitor")
             .field("config", &self.config)
@@ -102,13 +128,13 @@ impl<R: ReceiptProvider> std::fmt::Debug for TransactionMonitor<R> {
     }
 }
 
-impl<R: ReceiptProvider> TransactionMonitor<R> {
+impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
     /// Create a new transaction monitor
     pub fn new(
         transaction_store: Arc<TransactionStore>,
         receipt_provider: R,
         config: TransactionMonitorConfig,
-        safe_checker: Option<Arc<dyn SafeAddressChecker>>,
+        safe_checker: Option<Arc<S>>,
     ) -> Self {
         Self {
             transaction_store,
@@ -221,8 +247,8 @@ impl<R: ReceiptProvider> TransactionMonitor<R> {
 /// [`TransactionMonitor`] and the synchronous execution path.
 pub async fn enrich_safe_execution(
     record: &crate::transaction_store::TransactionRecord,
-    receipt_provider: &dyn ReceiptProvider,
-    safe_checker: &dyn SafeAddressChecker,
+    receipt_provider: &(impl ReceiptProvider + ?Sized),
+    safe_checker: &(impl SafeAddressChecker + ?Sized),
 ) -> Option<SafeExecutionResult> {
     // Decode the raw transaction to extract the `to` address
     let to_addr = decode_transaction_to_address(&record.raw_transaction)?;
@@ -428,7 +454,7 @@ mod tests {
     fn create_monitor(
         store: Arc<TransactionStore>,
         provider: MockReceiptProvider,
-    ) -> TransactionMonitor<MockReceiptProvider> {
+    ) -> TransactionMonitor<MockReceiptProvider, NoSafeEnrichment> {
         TransactionMonitor::new(store, provider, TransactionMonitorConfig::default(), None)
     }
 
@@ -436,7 +462,7 @@ mod tests {
         store: Arc<TransactionStore>,
         provider: MockReceiptProvider,
         safe_checker: MockSafeAddressChecker,
-    ) -> TransactionMonitor<MockReceiptProvider> {
+    ) -> TransactionMonitor<MockReceiptProvider, MockSafeAddressChecker> {
         TransactionMonitor::new(
             store,
             provider,

@@ -12,7 +12,7 @@ use blokli_chain_api::{
     DefaultHttpRequestor,
     rpc_adapter::RpcAdapter,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
-    transaction_monitor::{TransactionMonitor, TransactionMonitorConfig},
+    transaction_monitor::{NoSafeEnrichment, TransactionMonitor, TransactionMonitorConfig},
     transaction_store::{TransactionStatus, TransactionStore},
     transaction_validator::TransactionValidator,
 };
@@ -47,7 +47,7 @@ struct TestContext {
     chain_key: ChainKeypair,
     executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     store: Arc<TransactionStore>,
-    monitor: Arc<TransactionMonitor<RpcAdapter<DefaultHttpRequestor>>>,
+    monitor: Arc<TransactionMonitor<RpcAdapter<DefaultHttpRequestor>, NoSafeEnrichment>>,
     rpc_adapter: Arc<RpcAdapter<DefaultHttpRequestor>>,
     monitor_handle: Option<AbortHandle>,
 }
@@ -120,7 +120,7 @@ async fn setup_test_environment(
         transaction_store.clone(),
         (*rpc_adapter).clone(),
         monitor_config,
-        None,
+        None::<Arc<NoSafeEnrichment>>,
     ));
 
     Ok(TestContext {

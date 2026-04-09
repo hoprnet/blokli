@@ -8,7 +8,10 @@
 use alloy_sol_types::{SolEvent, sol};
 use async_trait::async_trait;
 use blokli_db::BlokliDbAllOperations;
-use hopr_bindings::exports::alloy::{consensus::TxEnvelope, eips::eip2718::Decodable2718};
+use hopr_bindings::exports::alloy::{
+    consensus::{Transaction, TxEnvelope},
+    eips::eip2718::Decodable2718,
+};
 use hopr_types::{crypto::types::Hash, primitive::prelude::Address};
 use tracing::{error, warn};
 
