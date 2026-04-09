@@ -32,13 +32,11 @@ tokio-rustls   = { workspace = true }
 
 # Web framework
 axum       = { workspace = true }
-axum-extra = { workspace = true }
 tower      = { workspace = true }
 tower-http = { workspace = true }
 
 # GraphQL
 async-graphql      = { workspace = true }
-async-graphql-axum = { workspace = true }
 
 # Serialization
 serde      = { workspace = true }
@@ -50,7 +48,6 @@ thiserror = { workspace = true }
 
 # Database
 sea-orm = { workspace = true }
-sqlx    = { workspace = true }
 
 # Encoding
 chrono          = { workspace = true }
@@ -86,11 +83,18 @@ clap = { workspace = true }
 blokli-db-migration = { path = "../db/migration" }
 env_logger          = { workspace = true }
 hopr-types          = { workspace = true, features = ["internal"] }
-mockall             = { workspace = true }
 multiaddr           = { workspace = true }
 rand                = { workspace = true }
 regex               = { workspace = true }
 temp-env            = { workspace = true }
 test-log            = { workspace = true }
-tokio-test          = { workspace = true }
 tower               = { workspace = true, features = ["util"] }
+
+
+[package.metadata.cargo-machete]
+ignored = ["humantime-serde"]
+
+
+[package.metadata.cargo-shear]
+ignored = ["humantime-serde"]
+

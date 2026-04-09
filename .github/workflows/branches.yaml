@@ -1,0 +1,30 @@
+---
+name: Branches
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+concurrency:
+  group: branches-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  coverage:
+    name: Coverage
+    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@268553d7984344080e3dc65eb92778c9103af7ec # workflow-tests-v3
+    with:
+      source_branch: ${{ github.ref_name }}
+      unit_tests: false
+      integration_tests: false
+      unit_coverage: true
+      unconditional: true
+      unit_coverage_command: "nix run .#coverage-unit"
+      runner: self-hosted-hoprnet-bigger
+    secrets:
+      cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      codecov_token: ${{ secrets.CODECOV_TOKEN }}
