@@ -393,6 +393,8 @@
               foundry-bin
               pkgs.solc
               kubernetes-helm
+              cargo-machete
+              cargo-shear
               yq
               uv
               sqlite
