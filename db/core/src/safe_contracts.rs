@@ -3,11 +3,14 @@ use blokli_db_entity::{
     hopr_safe_contract, hopr_safe_contract_state,
     prelude::{HoprSafeContract, HoprSafeContractState},
 };
-use hopr_types::primitive::prelude::Address;
+use hopr_types::{crypto::types::Hash, primitive::prelude::Address};
 use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter, QueryOrder, Set, Statement};
 use sea_query::OnConflict;
 
-use crate::{BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result};
+use crate::{
+    BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result,
+    safe_history::{BlokliDbSafeHistoryOperations, SafeActivityKind},
+};
 
 /// Combined safe contract entry with identity and current state.
 ///
@@ -53,14 +56,52 @@ struct SafeCsvEntry {
     address: Address,
     module_address: Address,
     chain_key: Address,
+    owners: Vec<Address>,
+    threshold: Option<u64>,
     deployed_tx_index: u64,
     deployed_log_index: u64,
 }
 
+fn parse_optional_u64_field(value: &str, field_name: &str, line_number: usize) -> Result<Option<u64>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+
+    let parsed: u64 = trimmed
+        .parse()
+        .map_err(|e| DbSqlError::Construction(format!("invalid {field_name} on line {line_number}: {e}")))?;
+    Ok(Some(parsed))
+}
+
+fn parse_owner_list(value: &str, line_number: usize) -> Result<Vec<Address>> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    trimmed
+        .split(';')
+        .map(str::trim)
+        .filter(|owner| !owner.is_empty())
+        .map(|owner| {
+            owner
+                .parse()
+                .map_err(|e| DbSqlError::Construction(format!("invalid safe owner on line {line_number}: {e}")))
+        })
+        .collect()
+}
+
 fn parse_csv_entry(line: &str, line_number: usize) -> Result<Option<SafeCsvEntry>> {
     let fields: Vec<&str> = line.split(',').map(str::trim).collect();
-    if fields.len() < 6 {
+    if fields.is_empty() || fields.iter().all(|field| field.is_empty()) {
         return Ok(None);
+    }
+    if fields.len() != 6 && fields.len() != 8 {
+        return Err(DbSqlError::Construction(format!(
+            "invalid number of safe CSV fields on line {line_number}: expected 6 or 8, got {}",
+            fields.len()
+        )));
     }
 
     let address: Address = fields[0]
@@ -72,10 +113,20 @@ fn parse_csv_entry(line: &str, line_number: usize) -> Result<Option<SafeCsvEntry
     let chain_key: Address = fields[2]
         .parse()
         .map_err(|e| DbSqlError::Construction(format!("invalid chain key on line {line_number}: {e}")))?;
-    let deployed_tx_index: u64 = fields[4]
+    let owners: Vec<Address> = if fields.len() == 8 {
+        parse_owner_list(fields[4], line_number)?
+    } else {
+        Vec::new()
+    };
+    let threshold: Option<u64> = if fields.len() == 8 {
+        parse_optional_u64_field(fields[5], "threshold", line_number)?
+    } else {
+        None
+    };
+    let deployed_tx_index: u64 = if fields.len() == 8 { fields[6] } else { fields[4] }
         .parse()
         .map_err(|e| DbSqlError::Construction(format!("invalid tx index on line {line_number}: {e}")))?;
-    let deployed_log_index: u64 = fields[5]
+    let deployed_log_index: u64 = if fields.len() == 8 { fields[7] } else { fields[5] }
         .parse()
         .map_err(|e| DbSqlError::Construction(format!("invalid log index on line {line_number}: {e}")))?;
 
@@ -83,9 +134,49 @@ fn parse_csv_entry(line: &str, line_number: usize) -> Result<Option<SafeCsvEntry
         address,
         module_address,
         chain_key,
+        owners,
+        threshold,
         deployed_tx_index,
         deployed_log_index,
     }))
+}
+
+async fn persist_preseeded_safe_history<'a, Db>(db: &'a Db, tx: OptTx<'a>, entry: &SafeCsvEntry) -> Result<()>
+where
+    Db: BlokliDbSafeHistoryOperations + Sync,
+{
+    if let Some(threshold) = entry.threshold {
+        db.record_safe_activity(
+            tx,
+            entry.address,
+            SafeActivityKind::SafeSetup,
+            Hash::default(),
+            None,
+            None,
+            Some(threshold.to_string()),
+            None,
+            None,
+            PRESEEDED_BLOCK as u64,
+            entry.deployed_tx_index,
+            entry.deployed_log_index,
+        )
+        .await?;
+    }
+
+    for owner in &entry.owners {
+        db.upsert_safe_owner_state(
+            tx,
+            entry.address,
+            *owner,
+            true,
+            PRESEEDED_BLOCK as u64,
+            entry.deployed_tx_index,
+            entry.deployed_log_index,
+        )
+        .await?;
+    }
+
+    Ok(())
 }
 
 fn preseeded_csv_for_network(network_name: &str) -> Option<&'static str> {
@@ -100,7 +191,7 @@ fn preseeded_csv_for_network(network_name: &str) -> Option<&'static str> {
 
 async fn load_preseeded_safes_from_csv<'a, Db>(db: &'a Db, tx: OptTx<'a>, csv_data: &str) -> Result<usize>
 where
-    Db: BlokliDbSafeContractOperations + Sync,
+    Db: BlokliDbSafeContractOperations + BlokliDbSafeHistoryOperations + Sync,
 {
     let mut loaded = 0;
 
@@ -133,6 +224,7 @@ where
             entry.deployed_log_index,
         )
         .await?;
+        persist_preseeded_safe_history(db, Some(&tx), &entry).await?;
         loaded += 1;
     }
 
@@ -705,7 +797,7 @@ mod tests {
     use sea_orm::PaginatorTrait;
 
     use super::*;
-    use crate::db::BlokliDb;
+    use crate::{db::BlokliDb, safe_history::BlokliDbSafeHistoryOperations};
 
     /// Generates a new random `Address` from cryptographically secure random bytes.
     fn random_address() -> Address {
@@ -727,27 +819,31 @@ mod tests {
         let safe_address = random_address();
         let module_address = random_address();
         let chain_key = random_address();
+        let owner_one: Address = "1111111111111111111111111111111111111111".parse()?;
+        let owner_two: Address = "2222222222222222222222222222222222222222".parse()?;
 
         let csv_data = format!(
-            "address,module_address,chain_key,deployed_block,deployed_tx_index,deployed_log_index\n{},{},{},30000000,\
-             0,1\n",
+            "address,module_address,chain_key,deployed_block,owners,threshold,deployed_tx_index,deployed_log_index\\
+             n{},{},{},30000000,{};{},2,0,1\n",
             safe_address.to_hex(),
             module_address.to_hex(),
-            chain_key.to_hex()
+            chain_key.to_hex(),
+            owner_one.to_hex(),
+            owner_two.to_hex()
         );
 
         let loaded = load_preseeded_safes_from_csv(&db, None, &csv_data).await?;
         assert_eq!(loaded, 1);
 
-        let entry = db
-            .get_safe_contract_by_address(None, safe_address)
-            .await?
-            .expect("safe should exist");
-        assert_eq!(entry.module_address, module_address.as_ref().to_vec());
-        assert_eq!(entry.published_block, PRESEEDED_BLOCK);
+        let owners = db.get_safe_owners(None, safe_address).await?;
+        assert_eq!(owners, vec![owner_one, owner_two]);
 
-        let loaded_again = load_preseeded_safes_from_csv(&db, None, &csv_data).await?;
-        assert_eq!(loaded_again, 0);
+        let activity = db.get_safe_activity(None, safe_address).await?;
+        assert_eq!(activity.len(), 1);
+        assert_eq!(activity[0].event_kind, SafeActivityKind::SafeSetup.as_str());
+        assert_eq!(activity[0].threshold.as_deref(), Some("2"));
+        assert_eq!(activity[0].published_tx_index, 0);
+        assert_eq!(activity[0].published_log_index, 1);
 
         Ok(())
     }

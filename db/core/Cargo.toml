@@ -11,14 +11,11 @@ version     = "0.15.0"
 workspace = true
 
 [features]
-default = ["sqlite", "traits"]
-prometheus = ["dep:lazy_static"]
-runtime-tokio = [
-  "sea-orm/runtime-tokio",
-  "sea-orm/runtime-tokio-rustls",
-]
-sqlite = ["sea-orm/sqlx-sqlite", "sea-query/backend-sqlite"]
-traits = []
+default       = ["sqlite", "traits"]
+prometheus    = ["dep:lazy_static"]
+runtime-tokio = ["sea-orm/runtime-tokio", "sea-orm/runtime-tokio-rustls"]
+sqlite        = ["sea-orm/sqlx-sqlite", "sea-query/backend-sqlite"]
+traits        = []
 
 [dependencies]
 async-broadcast = { workspace = true }
