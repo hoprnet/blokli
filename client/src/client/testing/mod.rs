@@ -516,15 +516,15 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
                 .state
                 .read()
                 .safe_redeem_stats
-                .get(&safe_address_hex)
-                .cloned()
-                .ok_or(ErrorKind::NoData)?)
+                .entry(safe_address_hex.clone())
+                .or_insert_with(|| RedeemedStats {
+                    __typename: "RedeemedStats".to_string(),
+                    redeemed_amount: TokenValueString("0 wxHOPR".into()),
+                    redemption_count: Uint64("0".into()),
+                })
+                .clone())
         } else {
-            Ok(RedeemedStats {
-                __typename: "RedeemedStats".to_string(),
-                redeemed_amount: TokenValueString("0 wxHOPR".into()),
-                redemption_count: Uint64("0".into()),
-            })
+            Err(ErrorKind::NoData.into())
         }
     }
 
