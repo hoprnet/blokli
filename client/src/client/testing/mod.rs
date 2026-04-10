@@ -499,30 +499,32 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
     }
 
     async fn query_redeemed_stats(&self, selector: RedeemedStatsSelector) -> Result<RedeemedStats> {
-        let state = self.state.read();
+        let state = self.state.upgradable_read();
 
         let maybe_safe = match selector {
             RedeemedStatsSelector::SafeAddress(addr) => Some(addr),
             RedeemedStatsSelector::SafeAndNodeAddress { safe_address, .. } => Some(safe_address),
             RedeemedStatsSelector::NodeAddress(_) => None,
         };
+
         if let Some(safe_address) = maybe_safe {
             let safe_address_hex = hex::encode(safe_address);
             if !state.deployed_safes.contains_key(&safe_address_hex) {
                 return Err(ErrorKind::NoData.into());
             }
 
-            Ok(self
-                .state
-                .read()
-                .safe_redeem_stats
-                .entry(safe_address_hex.clone())
-                .or_insert_with(|| RedeemedStats {
+            if let Some(v) = state.safe_redeem_stats.get(&safe_address_hex) {
+                Ok(v.clone())
+            } else {
+                let mut state = parking_lot::RwLockUpgradableReadGuard::upgrade(state);
+                let stats = RedeemedStats {
                     __typename: "RedeemedStats".to_string(),
                     redeemed_amount: TokenValueString("0 wxHOPR".into()),
                     redemption_count: Uint64("0".into()),
-                })
-                .clone())
+                };
+                state.safe_redeem_stats.insert(safe_address_hex, stats.clone());
+                Ok(stats)
+            }
         } else {
             Err(ErrorKind::NoData.into())
         }
