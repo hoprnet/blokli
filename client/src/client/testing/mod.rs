@@ -36,6 +36,8 @@ pub struct BlokliTestState {
     pub safe_allowances: IndexMap<String, SafeHoprAllowance>,
     /// Contains deployed Safes for addresses.
     pub deployed_safes: IndexMap<String, Safe>,
+    /// Ticket redemption statistics per Safe address
+    pub safe_redeem_stats: IndexMap<String, RedeemedStats>,
     /// Contains transaction counts for addresses.
     pub tx_counts: IndexMap<String, u64>,
     /// Contains ChannelId -> Channel.
@@ -62,6 +64,7 @@ impl PartialEq for BlokliTestState {
             && self.native_balances == other.native_balances
             && self.token_balances == other.token_balances
             && self.safe_allowances == other.safe_allowances
+            && self.safe_redeem_stats == other.safe_redeem_stats
             && self.tx_counts == other.tx_counts
             && self.channels == other.channels
             && self.chain_info == other.chain_info
@@ -78,6 +81,7 @@ impl Default for BlokliTestState {
             token_balances: Default::default(),
             safe_allowances: Default::default(),
             deployed_safes: Default::default(),
+            safe_redeem_stats: Default::default(),
             tx_counts: Default::default(),
             channels: Default::default(),
             chain_info: ChainInfo {
@@ -171,6 +175,16 @@ impl BlokliTestState {
     pub fn get_account_safe_allowance_mut(&mut self, chain_key: &ChainAddress) -> Option<&mut SafeHoprAllowance> {
         let account = self.get_account(chain_key).and_then(|a| a.safe_address.clone())?;
         self.safe_allowances.get_mut(&account)
+    }
+
+    /// Gets [`RedeemedStats`] for the given Safe address.
+    pub fn get_safe_redeem_stats(&self, chain_address: &ChainAddress) -> Option<&RedeemedStats> {
+        self.safe_redeem_stats.get(&hex::encode(chain_address))
+    }
+
+    /// Gets [`RedeemedStats`] for the given Safe address by mutable reference.
+    pub fn get_safe_redeem_stats_mut(&mut self, chain_address: &ChainAddress) -> Option<&mut RedeemedStats> {
+        self.safe_redeem_stats.get_mut(&hex::encode(chain_address))
     }
 
     /// Convenience method to return a reference to an [`Safe`] with the given owner's [`ChainAddress`].
