@@ -1880,6 +1880,7 @@ impl QueryRoot {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::anyhow;
     use blokli_db::{
         BlokliDbGeneralModelOperations, TargetDb,
         db::BlokliDb,
@@ -2057,14 +2058,18 @@ mod tests {
 
         let conn = db.conn(TargetDb::Index);
 
-        let mut owners = owners_for_safe(conn, safe_address.as_ref().to_vec()).await?;
+        let mut owners = owners_for_safe(conn, safe_address.as_ref().to_vec())
+            .await
+            .map_err(|error| anyhow!("owners_for_safe failed: {} ({})", error.message, error.code))?;
         owners.sort();
         let mut expected_owners = vec![owner_one.to_hex(), owner_two.to_hex()];
         expected_owners.sort();
 
         assert_eq!(owners, expected_owners);
         assert_eq!(
-            fetch_safe_threshold_by_address(conn, safe_address.as_ref().to_vec()).await?,
+            fetch_safe_threshold_by_address(conn, safe_address.as_ref().to_vec())
+                .await
+                .map_err(|error| anyhow!("fetch_safe_threshold_by_address failed: {}", error))?,
             Some("3".to_string())
         );
 
@@ -2090,7 +2095,9 @@ mod tests {
 
         let conn = db.conn(TargetDb::Index);
 
-        let safe_addresses = fetch_safe_addresses(conn, Some(owner.as_ref().to_vec())).await?;
+        let safe_addresses = fetch_safe_addresses(conn, Some(owner.as_ref().to_vec()))
+            .await
+            .map_err(|error| anyhow!("fetch_safe_addresses failed: {}", error))?;
         assert_eq!(safe_addresses, vec![safe_address.as_ref().to_vec()]);
 
         let current_safe = fetch_safe_by_owner(conn, owner.as_ref().to_vec())
