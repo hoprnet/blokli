@@ -133,12 +133,7 @@ async fn test_safe_queries() -> anyhow::Result<()> {
         .await?;
     assert_eq!(count, 1, "DB should have 1 safe contract");
 
-    let stored_safe = SafeEntity::find()
-        .one(db.conn(blokli_db::TargetDb::Index))
-        .await?
-        .unwrap();
-    println!("Stored safe: {:?}", stored_safe);
-    println!("Safe address hex: {}", safe_address_0.to_hex());
+    let _ = SafeEntity::find().one(db.conn(blokli_db::TargetDb::Index)).await?;
 
     // We don't need RPC for safe queries, so we don't inject it.
     let schema = async_graphql::Schema::build(
@@ -358,6 +353,62 @@ async fn test_safe_queries() -> anyhow::Result<()> {
     let stats_data = data["ticketRedemptionStats"].as_object().unwrap();
     assert_eq!(stats_data["redeemedAmount"], "0.000000000000000011 wxHOPR");
     assert_eq!(stats_data["redemptionCount"], "1");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_preseeded_safe_query_returns_owners_and_threshold() -> anyhow::Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+    let loaded = db.load_preseeded_safes(None, "jura").await?;
+    assert!(loaded > 0, "expected jura pre-seeded safes to load");
+
+    let schema = async_graphql::Schema::build(
+        QueryRoot,
+        async_graphql::EmptyMutation,
+        async_graphql::EmptySubscription,
+    )
+    .data(db.conn(blokli_db::TargetDb::Index).clone())
+    .data(ContractAddresses::default())
+    .data(ChainId(100))
+    .data(NetworkName("jura".to_string()))
+    .data(blokli_api::schema::GasMultiplier(1.0))
+    .finish();
+
+    let safe_address = "0xf767efe1700e8c14d16e214920b26a0ce568ae5b";
+    let expected_module_address = "0x4e0799e4b9dca722523b2a211135450a2755aa59";
+    let expected_chain_key = "0x4ff4e61052a4dfb1be72866ab711ae08dd861976";
+
+    let query = format!(
+        r#"
+        query {{
+            safe(address: "{}") {{
+                ... on Safe {{
+                    address
+                    moduleAddress
+                    chainKey
+                    threshold
+                    owners
+                }}
+            }}
+        }}
+        "#,
+        safe_address
+    );
+
+    let response = schema.execute(query).await;
+    assert!(response.errors.is_empty(), "Errors: {:?}", response.errors);
+
+    let data = response.data.into_json().unwrap();
+    let safe_data = data["safe"].as_object().unwrap();
+    assert_eq!(safe_data["address"], safe_address);
+    assert_eq!(safe_data["moduleAddress"], expected_module_address);
+    assert_eq!(safe_data["chainKey"], expected_chain_key);
+    assert_eq!(safe_data["threshold"], "1");
+    assert_eq!(
+        safe_data["owners"].as_array().unwrap(),
+        &vec![serde_json::Value::String(expected_chain_key.to_string())]
+    );
 
     Ok(())
 }

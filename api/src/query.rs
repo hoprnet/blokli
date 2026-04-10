@@ -1880,7 +1880,29 @@ impl QueryRoot {
 
 #[cfg(test)]
 mod tests {
-    use super::scale_wei_by_multiplier;
+    use blokli_db::{
+        BlokliDbGeneralModelOperations, TargetDb,
+        db::BlokliDb,
+        safe_contracts::BlokliDbSafeContractOperations,
+        safe_history::{BlokliDbSafeHistoryOperations, SafeActivityKind},
+    };
+    use hopr_types::{
+        crypto::types::Hash,
+        primitive::{prelude::Address, traits::ToHex},
+    };
+
+    use super::{
+        SafeContractCurrentRow, fetch_safe_addresses, fetch_safe_by_owner, fetch_safe_threshold_by_address,
+        owners_for_safe, safe_from_current_row, scale_wei_by_multiplier,
+    };
+
+    fn random_address() -> Address {
+        Address::from(rand::random::<[u8; 20]>())
+    }
+
+    fn random_hash() -> Hash {
+        Hash::from(rand::random::<[u8; 32]>())
+    }
 
     #[test]
     fn test_scale_wei_by_multiplier_identity() {
@@ -1983,6 +2005,125 @@ mod tests {
         assert!(
             !requires_filter_with_safe,
             "Should not require filter when safe_address is provided"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_safe_helpers_return_current_owners_and_threshold() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let safe_address = random_address();
+        let module_address = random_address();
+        let chain_key = random_address();
+        let owner_one = random_address();
+        let owner_two = random_address();
+
+        db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+            .await?;
+        db.upsert_safe_owner_state(None, safe_address, owner_one, true, 101, 0, 0)
+            .await?;
+        db.upsert_safe_owner_state(None, safe_address, owner_two, true, 102, 0, 0)
+            .await?;
+        db.record_safe_activity(
+            None,
+            safe_address,
+            SafeActivityKind::SafeSetup,
+            random_hash(),
+            None,
+            None,
+            Some("2".to_string()),
+            None,
+            Some(owner_one),
+            101,
+            0,
+            0,
+        )
+        .await?;
+        db.record_safe_activity(
+            None,
+            safe_address,
+            SafeActivityKind::ChangedThreshold,
+            random_hash(),
+            None,
+            None,
+            Some("3".to_string()),
+            None,
+            None,
+            105,
+            0,
+            0,
+        )
+        .await?;
+
+        let conn = db.conn(TargetDb::Index);
+
+        let mut owners = owners_for_safe(conn, safe_address.as_ref().to_vec()).await;
+        owners.sort();
+        let mut expected_owners = vec![owner_one.to_hex(), owner_two.to_hex()];
+        expected_owners.sort();
+
+        assert_eq!(owners, expected_owners);
+        assert_eq!(
+            fetch_safe_threshold_by_address(conn, safe_address.as_ref().to_vec()).await?,
+            Some("3".to_string())
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_safe_queries_filter_by_owner_membership() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let safe_address = random_address();
+        let module_address = random_address();
+        let chain_key = random_address();
+        let owner = random_address();
+        let unrelated_owner = random_address();
+
+        db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+            .await?;
+        db.upsert_safe_owner_state(None, safe_address, owner, true, 101, 0, 0)
+            .await?;
+        db.upsert_safe_owner_state(None, safe_address, unrelated_owner, false, 102, 0, 0)
+            .await?;
+
+        let conn = db.conn(TargetDb::Index);
+
+        let safe_addresses = fetch_safe_addresses(conn, Some(owner.as_ref().to_vec())).await?;
+        assert_eq!(safe_addresses, vec![safe_address.as_ref().to_vec()]);
+
+        let current_safe = fetch_safe_by_owner(conn, owner.as_ref().to_vec())
+            .await?
+            .expect("safe should exist for current owner");
+        assert_eq!(current_safe.address, safe_address.as_ref().to_vec());
+        assert_eq!(current_safe.module_address, module_address.as_ref().to_vec());
+        assert_eq!(current_safe.chain_key, chain_key.as_ref().to_vec());
+
+        let no_safe = fetch_safe_by_owner(conn, unrelated_owner.as_ref().to_vec()).await?;
+        assert!(no_safe.is_none(), "former owners should not match current-owner lookup");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_safe_from_current_row_validates_address_lengths() {
+        let result = safe_from_current_row(
+            SafeContractCurrentRow {
+                address: vec![1; 20],
+                module_address: vec![2; 19],
+                chain_key: vec![3; 20],
+                threshold: Some("2".to_string()),
+            },
+            Vec::new(),
+            Vec::new(),
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .expect_err("invalid module address length should fail")
+                .contains("Invalid module address length")
         );
     }
 }
