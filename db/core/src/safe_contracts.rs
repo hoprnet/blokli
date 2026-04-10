@@ -822,15 +822,19 @@ mod tests {
         let owner_one: Address = "1111111111111111111111111111111111111111".parse()?;
         let owner_two: Address = "2222222222222222222222222222222222222222".parse()?;
 
-        let csv_data = format!(
-            "address,module_address,chain_key,deployed_block,owners,threshold,deployed_tx_index,deployed_log_index\\
-             n{},{},{},30000000,{};{},2,0,1\n",
+        let headers =
+            "address,module_address,chain_key,deployed_block,owners,threshold,deployed_tx_index,deployed_log_index";
+
+        let values = format!(
+            "{},{},{},30000000,{};{},2,0,1",
             safe_address.to_hex(),
             module_address.to_hex(),
             chain_key.to_hex(),
             owner_one.to_hex(),
             owner_two.to_hex()
         );
+
+        let csv_data = vec![headers, &values].join("\n");
 
         let loaded = load_preseeded_safes_from_csv(&db, None, &csv_data).await?;
         assert_eq!(loaded, 1);
