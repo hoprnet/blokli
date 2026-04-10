@@ -401,8 +401,7 @@ where
                 error!(%error, "failed to notify about achieving indexer synchronization")
             }
             #[cfg(all(feature = "prometheus", not(test)))]
-            METRIC_INDEXER_SYNC_PROGRESS.set(&[LogFilterPhase::Continuous.into()], 1.0);
-
+            METRIC_INDEXER_SYNC_PROGRESS.set(&[LogFilterPhase::Continuous.to_string()], 1.0);
             let mut safe_filter_epoch = indexer_state.safe_filter_epoch();
 
             'stream_refresh: loop {
@@ -739,7 +738,7 @@ where
             #[cfg(all(feature = "prometheus", not(test)))]
             {
                 METRIC_INDEXER_CURRENT_BLOCK.set(block.block_id as f64);
-                METRIC_INDEXER_SYNC_PROGRESS.set(&[filter_phase.into()], progress / 100_f64);
+                METRIC_INDEXER_SYNC_PROGRESS.set(&[filter_phase.to_string()], progress / 100_f64);
             }
             info!(
                 phase = phase_name,
