@@ -889,12 +889,12 @@ The unique constraint on `(deployed_block, deployed_tx_index, deployed_log_index
 **Safe Contract Event Indexing**:
 
 In addition to HOPR contract events, the indexer subscribes to the Safe event topics `SafeSetup`, `AddedOwner`, `RemovedOwner`,
-`ChangedThreshold`, `ExecutionSuccess`, and `ExecutionFailure`. Safe-topic logs are streamed globally and then filtered in the handler so
-only addresses already indexed as known Safe contracts are processed.
+`ChangedThreshold`, `ExecutionSuccess`, and `ExecutionFailure` through address-scoped filters built from the current set of indexed Safe
+contracts. Unknown Safe addresses are not streamed globally.
 
-When a Safe becomes known during block processing, the handler replays previously stored Safe logs for that address from the logs database
-up to the discovery position. This prevents losing setup or owner-management events that were emitted earlier in the same block or before
-the Safe was linked through the HOPR contracts.
+When a Safe becomes known during block processing, the indexer refreshes its Safe-address filter set and performs a targeted RPC backfill
+for the discovery block so setup and owner-management events emitted earlier in that same block are still indexed. Historical Safe backfill
+for already-known Safes is also run as a dedicated sync phase using the current indexed Safe address set.
 
 Decoded Safe events are persisted into dedicated index tables:
 

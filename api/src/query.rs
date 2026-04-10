@@ -414,65 +414,53 @@ async fn registered_nodes_for_safe(db: &DatabaseConnection, safe_address: Vec<u8
     }
 }
 
-pub(crate) async fn owners_for_safe(db: &DatabaseConnection, safe_address: Vec<u8>) -> Vec<String> {
-    match db
+pub(crate) async fn owners_for_safe(
+    db: &DatabaseConnection,
+    safe_address: Vec<u8>,
+) -> std::result::Result<Vec<String>, QueryFailedError> {
+    let rows = db
         .query_all_raw(safe_owner_statement(db.get_database_backend(), safe_address))
         .await
-    {
-        Ok(rows) => rows
-            .into_iter()
-            .filter_map(|row| {
-                let owner_address: std::result::Result<Vec<u8>, _> = row.try_get("", "owner_address");
-                owner_address.ok()
-            })
-            .filter_map(|bytes| Address::try_from(bytes.as_slice()).ok())
-            .map(|addr| addr.to_hex())
-            .collect(),
-        Err(e) => {
-            warn!(
-                error = %e,
-                "Failed to fetch safe owners, returning empty list"
-            );
-            Vec::new()
-        }
-    }
+        .map_err(|e| errors::query_failed("fetch safe owners", e))?;
+
+    rows.into_iter()
+        .map(|row| {
+            let owner_address: Vec<u8> = row
+                .try_get("", "owner_address")
+                .map_err(|e| errors::invalid_db_data("safe_owner_current.owner_address", &e.to_string()))?;
+            let owner_address = Address::try_from(owner_address.as_slice())
+                .map_err(|e| errors::invalid_db_data("safe_owner_current.owner_address", &e.to_string()))?;
+            Ok(owner_address.to_hex())
+        })
+        .collect()
 }
 
-async fn owners_by_safe(db: &DatabaseConnection) -> HashMap<Vec<u8>, Vec<String>> {
-    match db
+async fn owners_by_safe(
+    db: &DatabaseConnection,
+) -> std::result::Result<HashMap<Vec<u8>, Vec<String>>, QueryFailedError> {
+    let rows = db
         .query_all_raw(all_safe_owner_statement(db.get_database_backend()))
         .await
-    {
-        Ok(rows) => {
-            let mut owners_by_safe: HashMap<Vec<u8>, Vec<String>> = HashMap::new();
-            for row in rows {
-                let safe_address: Vec<u8> = match row.try_get("", "safe_address") {
-                    Ok(value) => value,
-                    Err(_) => continue,
-                };
-                let owner_address: Vec<u8> = match row.try_get("", "owner_address") {
-                    Ok(value) => value,
-                    Err(_) => continue,
-                };
-                let Ok(owner_address) = Address::try_from(owner_address.as_slice()) else {
-                    continue;
-                };
+        .map_err(|e| errors::query_failed("fetch safe owners for list query", e))?;
 
-                owners_by_safe
-                    .entry(safe_address)
-                    .or_default()
-                    .push(owner_address.to_hex());
-            }
-            owners_by_safe
-        }
-        Err(e) => {
-            warn!(
-                error = %e,
-                "Failed to fetch safe owners for list query, returning empty map"
-            );
-            HashMap::new()
-        }
+    let mut owners_by_safe: HashMap<Vec<u8>, Vec<String>> = HashMap::new();
+    for row in rows {
+        let safe_address: Vec<u8> = row
+            .try_get("", "safe_address")
+            .map_err(|e| errors::invalid_db_data("safe_owner_current.safe_address", &e.to_string()))?;
+        let owner_address: Vec<u8> = row
+            .try_get("", "owner_address")
+            .map_err(|e| errors::invalid_db_data("safe_owner_current.owner_address", &e.to_string()))?;
+        let owner_address = Address::try_from(owner_address.as_slice())
+            .map_err(|e| errors::invalid_db_data("safe_owner_current.owner_address", &e.to_string()))?;
+
+        owners_by_safe
+            .entry(safe_address)
+            .or_default()
+            .push(owner_address.to_hex());
     }
+
+    Ok(owners_by_safe)
 }
 
 fn safe_result_from_row(
@@ -1155,11 +1143,14 @@ impl QueryRoot {
                 };
 
                 match fetch_safe_by_address(db, safe_address.clone()).await {
-                    Ok(Some(current)) => Ok(Some(safe_result_from_row(
-                        current,
-                        registered_nodes_for_safe(db, safe_address.clone()).await,
-                        owners_for_safe(db, safe_address).await,
-                    ))),
+                    Ok(Some(current)) => match owners_for_safe(db, safe_address.clone()).await {
+                        Ok(owners) => Ok(Some(safe_result_from_row(
+                            current,
+                            registered_nodes_for_safe(db, safe_address).await,
+                            owners,
+                        ))),
+                        Err(e) => Ok(Some(SafeResult::QueryFailed(e))),
+                    },
                     Ok(None) => Ok(None),
                     Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed("fetch safe", e)))),
                 }
@@ -1174,11 +1165,14 @@ impl QueryRoot {
                 match fetch_safe_by_owner(db, owner_address).await {
                     Ok(Some(current)) => {
                         let safe_address = current.address.clone();
-                        Ok(Some(safe_result_from_row(
-                            current,
-                            registered_nodes_for_safe(db, safe_address.clone()).await,
-                            owners_for_safe(db, safe_address).await,
-                        )))
+                        match owners_for_safe(db, safe_address.clone()).await {
+                            Ok(owners) => Ok(Some(safe_result_from_row(
+                                current,
+                                registered_nodes_for_safe(db, safe_address).await,
+                                owners,
+                            ))),
+                            Err(e) => Ok(Some(SafeResult::QueryFailed(e))),
+                        }
                     }
                     Ok(None) => Ok(None),
                     Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed(
@@ -1210,11 +1204,14 @@ impl QueryRoot {
                 };
 
                 match fetch_safe_by_address(db, registration.safe_address.clone()).await {
-                    Ok(Some(current)) => Ok(Some(safe_result_from_row(
-                        current,
-                        registered_nodes_for_safe(db, registration.safe_address.clone()).await,
-                        owners_for_safe(db, registration.safe_address).await,
-                    ))),
+                    Ok(Some(current)) => match owners_for_safe(db, registration.safe_address.clone()).await {
+                        Ok(owners) => Ok(Some(safe_result_from_row(
+                            current,
+                            registered_nodes_for_safe(db, registration.safe_address).await,
+                            owners,
+                        ))),
+                        Err(e) => Ok(Some(SafeResult::QueryFailed(e))),
+                    },
                     Ok(None) => Ok(Some(SafeResult::QueryFailed(errors::query_failed(
                         "fetch safe by registered node",
                         "Safe not found for registered node",
@@ -1448,7 +1445,10 @@ impl QueryRoot {
             }
         }
 
-        let owners_by_safe = owners_by_safe(db).await;
+        let owners_by_safe = match owners_by_safe(db).await {
+            Ok(owners_by_safe) => owners_by_safe,
+            Err(e) => return Ok(SafesResult::QueryFailed(e)),
+        };
 
         let safe_results: Result<Vec<Safe>, String> = current_rows
             .into_iter()
@@ -2057,7 +2057,7 @@ mod tests {
 
         let conn = db.conn(TargetDb::Index);
 
-        let mut owners = owners_for_safe(conn, safe_address.as_ref().to_vec()).await;
+        let mut owners = owners_for_safe(conn, safe_address.as_ref().to_vec()).await?;
         owners.sort();
         let mut expected_owners = vec![owner_one.to_hex(), owner_two.to_hex()];
         expected_owners.sort();

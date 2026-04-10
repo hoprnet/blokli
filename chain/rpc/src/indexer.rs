@@ -118,18 +118,13 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
                     .collect::<Vec<_>>()
                     .await;
 
-                // at this point we need to ensure logs are ordered by block number since that is
-                // expected by the indexer
-                results.sort_by(|a, b| {
-                    if let Ok(a) = a {
-                        if let Ok(b) = b {
-                            a.block_number.cmp(&b.block_number)
-                        } else {
-                            Ordering::Greater
-                        }
-                    } else {
-                        Ordering::Less
-                    }
+                // Keep live-stream ordering aligned with targeted backfills by using
+                // the same canonical ordering as `Log::Ord`.
+                results.sort_by(|a, b| match (a, b) {
+                    (Ok(a), Ok(b)) => a.cmp(b),
+                    (Err(_), Ok(_)) => Ordering::Less,
+                    (Ok(_), Err(_)) => Ordering::Greater,
+                    (Err(_), Err(_)) => Ordering::Equal,
                 });
 
                 futures::stream::iter(results)

@@ -1127,12 +1127,25 @@ impl SubscriptionRoot {
                                     }
                                 };
                                 debug!(?current, "yielding Safe from SafeDeployed event");
+                                let owners = match owners_for_safe(&db, current.address.clone()).await {
+                                    Ok(owners) => owners,
+                                    Err(e) => {
+                                        warn!(
+                                            safe_address = ?current.address,
+                                            code = %e.code,
+                                            message = %e.message,
+                                            "Failed to fetch safe owners, skipping subscription payload"
+                                        );
+                                        continue;
+                                    }
+                                };
+
                                 yield Safe {
                                     address: Address::new(&current.address).to_hex(),
                                     module_address: Address::new(&current.module_address).to_hex(),
                                     chain_key: Address::new(&current.chain_key).to_hex(),
                                     threshold: current.threshold,
-                                    owners: owners_for_safe(&db, current.address.clone()).await,
+                                    owners,
                                     registered_nodes,
                                 };
                             }

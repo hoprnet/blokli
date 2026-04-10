@@ -133,6 +133,7 @@ erDiagram
     }
     %% Composite unique constraint: UNIQUE(hopr_safe_contract_id, owner_address, published_block, published_tx_index, published_log_index)
     %% Index: idx_safe_owner_state_current_lookup (hopr_safe_contract_id, owner_address, published_block DESC, published_tx_index DESC, published_log_index DESC)
+    %% Index: idx_safe_owner_state_owner_lookup (owner_address, published_block DESC, published_tx_index DESC, published_log_index DESC)
 
     hopr_safe_activity {
         int id PK "Primary key"
@@ -150,6 +151,7 @@ erDiagram
     }
     %% Composite unique constraint: UNIQUE(hopr_safe_contract_id, published_block, published_tx_index, published_log_index)
     %% Index: idx_safe_activity_safe_position (hopr_safe_contract_id, published_block DESC, published_tx_index DESC, published_log_index DESC)
+    %% Index: idx_safe_activity_chain_tx_hash (chain_tx_hash)
 
     hopr_safe_redeemed_stats {
         int id PK "Primary key"
