@@ -15,7 +15,7 @@ bytes           = "1"
 chrono          = { workspace = true, optional = true }
 cynic           = { workspace = true, features = ["http-reqwest"] }
 # Use custom reqwest transport (no built-in hyper transport).
-eventsource-client = { version = "0.17.0", default-features = false }
+eventsource-client = { workspace = true }
 futures = { workspace = true }
 futures-time = { workspace = true }
 hex = { workspace = true }
@@ -38,7 +38,7 @@ smart-default = { workspace = true }
 thiserror = { workspace = true }
 # Required adapter crate for reqwest -> tower Service used by ESS transport.
 tower         = { workspace = true }
-tower-reqwest = "=0.6.0-alpha.1"
+tower-reqwest = "0.6.0"
 tracing       = { workspace = true, features = ["release_max_level_debug"] }
 url           = { workspace = true }
 

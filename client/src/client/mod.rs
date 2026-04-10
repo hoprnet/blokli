@@ -95,12 +95,12 @@ impl SubscriptionStreamState {
 }
 
 #[derive(Clone, Debug)]
-struct ReqwestTransport {
+pub struct ReqwestTransport {
     service: HttpClientService<reqwest::Client>,
 }
 
 impl ReqwestTransport {
-    fn new(client: reqwest::Client) -> Self {
+    pub fn new(client: reqwest::Client) -> Self {
         Self {
             service: HttpClientService::new(client),
         }
