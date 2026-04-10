@@ -9,15 +9,12 @@ use std::{fmt::Debug, future::Future, time::Duration};
 use cynic::GraphQlResponse;
 use eventsource_client::{Client, ReconnectOptionsBuilder, SSE};
 use futures::{StreamExt, TryFutureExt, TryStreamExt};
-use http_body_util::BodyExt;
 use launchdarkly_sdk_transport::{ByteStream, HttpTransport, ResponseFuture, TransportError};
 use reqwest::redirect::Policy as RedirectPolicy;
 #[cfg(feature = "testing")]
 pub use testing::{
     BlokliTestClient, BlokliTestState, BlokliTestStateMutator, BlokliTestStateSnapshot, NopStateMutator,
 };
-use tower::ServiceExt;
-use tower_reqwest::HttpClientService;
 
 use crate::{
     api::VERSION,
@@ -96,27 +93,35 @@ impl SubscriptionStreamState {
 
 #[derive(Clone, Debug)]
 pub struct ReqwestTransport {
-    service: HttpClientService<reqwest::Client>,
+    client: reqwest::Client,
 }
 
 impl ReqwestTransport {
     pub fn new(client: reqwest::Client) -> Self {
-        Self {
-            service: HttpClientService::new(client),
-        }
+        Self { client }
     }
 }
 
 impl HttpTransport for ReqwestTransport {
     fn request(&self, request: http::Request<Option<bytes::Bytes>>) -> ResponseFuture {
-        let service = self.service.clone();
+        let client = self.client.clone();
         Box::pin(async move {
             let (parts, body) = request.into_parts();
             let request = http::Request::from_parts(parts, body.map(reqwest::Body::from).unwrap_or_default());
-            let response = service.oneshot(request).await.map_err(TransportError::new)?;
-            let (parts, body) = response.into_parts();
-            let body: ByteStream = Box::pin(body.into_data_stream().map_err(TransportError::new));
-            Ok(http::Response::from_parts(parts, body))
+            let request = reqwest::Request::try_from(request).map_err(TransportError::new)?;
+            let response = client.execute(request).await.map_err(TransportError::new)?;
+
+            let status = response.status();
+            let version = response.version();
+            let headers = response.headers().clone();
+            let body: ByteStream = Box::pin(response.bytes_stream().map_err(TransportError::new));
+
+            let mut response_builder = http::Response::builder().status(status).version(version);
+            if let Some(response_headers) = response_builder.headers_mut() {
+                *response_headers = headers;
+            }
+
+            response_builder.body(body).map_err(TransportError::new)
         })
     }
 }

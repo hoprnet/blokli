@@ -20,9 +20,8 @@ futures = { workspace = true }
 futures-time = { workspace = true }
 hex = { workspace = true }
 http = { workspace = true }
-http-body-util = "0.1"
 indexmap = { workspace = true, optional = true }
-launchdarkly-sdk-transport = "0.1.0"
+launchdarkly-sdk-transport = { workspace = true }
 parking_lot = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 reqwest = { workspace = true, features = [
@@ -30,17 +29,15 @@ reqwest = { workspace = true, features = [
   "deflate",
   "gzip",
   "json",
+  "stream",
   "zstd",
 ] }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true }
 smart-default = { workspace = true }
 thiserror = { workspace = true }
-# Required adapter crate for reqwest -> tower Service used by ESS transport.
-tower         = { workspace = true }
-tower-reqwest = "0.6.0"
-tracing       = { workspace = true, features = ["release_max_level_debug"] }
-url           = { workspace = true }
+tracing = { workspace = true, features = ["release_max_level_debug"] }
+url = { workspace = true }
 
 hopr-types = { workspace = true, features = ["crypto", "primitive"] }
 
