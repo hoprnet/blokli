@@ -335,9 +335,9 @@ where
             {
                 METRIC_INDEXER_SYNC_SOURCE.set(&["fast-sync"], 0.0);
                 METRIC_INDEXER_SYNC_SOURCE.set(&["rpc"], 1.0);
-                METRIC_INDEXER_SYNC_PROGRESS.set(&[LogFilterPhase::HistoricalDiscovery.into()], 0.0);
-                METRIC_INDEXER_SYNC_PROGRESS.set(&[LogFilterPhase::HistoricalSafeBackfill.into()], 0.0);
-                METRIC_INDEXER_SYNC_PROGRESS.set(&[LogFilterPhase::Continuous.into()], 0.0);
+                METRIC_INDEXER_SYNC_PROGRESS.set(&[LogFilterPhase::HistoricalDiscovery.to_string()], 0.0);
+                METRIC_INDEXER_SYNC_PROGRESS.set(&[LogFilterPhase::HistoricalSafeBackfill.to_string()], 0.0);
+                METRIC_INDEXER_SYNC_PROGRESS.set(&[LogFilterPhase::Continuous.to_string()], 0.0);
             }
 
             let mut stream_start_block = next_block_to_process;
