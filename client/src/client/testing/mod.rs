@@ -511,13 +511,17 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
             if !state.deployed_safes.contains_key(&safe_address_hex) {
                 return Err(ErrorKind::NoData.into());
             }
-        }
 
-        Ok(RedeemedStats {
-            __typename: "RedeemedStats".to_string(),
-            redeemed_amount: TokenValueString("0 wxHOPR".to_string()),
-            redemption_count: Uint64("0".to_string()),
-        })
+            Ok(self
+                .state
+                .read()
+                .safe_redeem_stats
+                .get(&safe_address_hex)
+                .cloned()
+                .ok_or(ErrorKind::NoData)?)
+        } else {
+            Err(ErrorKind::NoData.into())
+        }
     }
 
     async fn query_safe(&self, selector: SafeSelector) -> Result<Option<Safe>> {
