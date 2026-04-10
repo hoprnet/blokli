@@ -26,12 +26,18 @@ const MIN_RECONNECTION_DELAY: Duration = Duration::from_millis(1);
 /// Configuration for the [`BlokliClient`].
 #[derive(Clone, Debug, PartialEq, Eq, smart_default::SmartDefault)]
 pub struct BlokliClientConfig {
-    /// General timeout for all requests.
+    /// General timeout for non-streaming requests and SSE connection establishment.
     #[default(Duration::from_secs(10))]
     pub timeout: Duration,
     /// Reconnection timeout for SSE streams.
     #[default(Duration::from_secs(30))]
     pub stream_reconnect_timeout: Duration,
+    /// Per-read timeout for SSE streams. If `None`, established streams may stay open indefinitely.
+    #[default(Some(Duration::from_secs(60)))]
+    pub subscription_read_timeout: Option<Duration>,
+    /// TCP keepalive interval for SSE streams.
+    #[default(Duration::from_secs(15))]
+    pub subscription_tcp_keepalive: Duration,
     /// Delay before recreating a completed SSE stream. If `None`, completed streams will not be recreated.
     #[default(Some(Duration::from_secs(1)))]
     pub subscription_stream_restart_delay: Option<Duration>,
@@ -180,6 +186,24 @@ impl BlokliClient {
             .map_err(ErrorKind::from)?)
     }
 
+    fn build_subscription_reqwest_client(&self) -> Result<reqwest::Client, BlokliClientError> {
+        let mut client_builder = reqwest::Client::builder()
+            .connect_timeout(self.cfg.timeout)
+            .tcp_keepalive(self.cfg.subscription_tcp_keepalive)
+            .brotli(true)
+            .gzip(true)
+            .zstd(true)
+            .deflate(true)
+            .user_agent(format!("blokli-client/{}-{}", env!("CARGO_PKG_VERSION"), VERSION))
+            .redirect(RedirectPolicy::limited(REDIRECT_LIMIT));
+
+        if let Some(read_timeout) = self.cfg.subscription_read_timeout {
+            client_builder = client_builder.read_timeout(read_timeout);
+        }
+
+        Ok(client_builder.build().map_err(ErrorKind::from)?)
+    }
+
     fn build_subscription_stream<Q, V>(
         &self,
         op: cynic::StreamingOperation<Q, V>,
@@ -191,7 +215,7 @@ impl BlokliClient {
         let query = serde_json::to_string(&op).map_err(ErrorKind::from)?;
         tracing::debug!(query, "sending SSE query");
         let graphql_url = self.graphql_url()?;
-        let reqwest_client = self.build_reqwest_client()?;
+        let reqwest_client = self.build_subscription_reqwest_client()?;
 
         Ok(futures::stream::try_unfold(
             SubscriptionStreamState::new(graphql_url, query, self.cfg.clone(), reqwest_client)?,
