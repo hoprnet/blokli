@@ -7,7 +7,7 @@ use async_graphql::{Context, ID, Result, Subscription};
 use async_stream::stream;
 use blokli_api_types::{
     Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, Safe, TicketParameters, TokenValueString,
-    Transaction, TransactionStatus as GqlTransactionStatus, UInt64,
+    Transaction, UInt64,
 };
 use blokli_chain_api::transaction_store::{
     TransactionEvent, TransactionStatus as StoreTransactionStatus, TransactionStore,
@@ -36,8 +36,9 @@ use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 use crate::{
-    errors,
+    conversions::{convert_safe_execution, convert_transaction_status},
     query::{fetch_safe_threshold_by_address, owners_for_safe},
+    errors,
 };
 
 #[derive(Debug)]
@@ -401,22 +402,6 @@ async fn query_channels_at_watermark_with_filters(
     }
 
     Ok(results)
-}
-
-/// Convert StoreTransactionStatus to GraphQL TransactionStatus
-///
-/// Provides a single source of truth for status conversion, eliminating
-/// duplicated match expressions throughout the codebase.
-fn convert_transaction_status(status: StoreTransactionStatus) -> GqlTransactionStatus {
-    match status {
-        StoreTransactionStatus::Pending => GqlTransactionStatus::Pending,
-        StoreTransactionStatus::Submitted => GqlTransactionStatus::Submitted,
-        StoreTransactionStatus::Confirmed => GqlTransactionStatus::Confirmed,
-        StoreTransactionStatus::Reverted => GqlTransactionStatus::Reverted,
-        StoreTransactionStatus::Timeout => GqlTransactionStatus::Timeout,
-        StoreTransactionStatus::ValidationFailed => GqlTransactionStatus::ValidationFailed,
-        StoreTransactionStatus::SubmissionFailed => GqlTransactionStatus::SubmissionFailed,
-    }
 }
 
 /// Builds SeaORM condition for filtering channel_state by watermark
@@ -1191,32 +1176,56 @@ impl SubscriptionRoot {
         let mut event_receiver = transaction_store.subscribe();
 
         Ok(stream! {
+            let is_terminal_status = |s: &StoreTransactionStatus| {
+                matches!(
+                    s,
+                    StoreTransactionStatus::Confirmed
+                        | StoreTransactionStatus::Reverted
+                        | StoreTransactionStatus::Timeout
+                        | StoreTransactionStatus::ValidationFailed
+                        | StoreTransactionStatus::SubmissionFailed
+                )
+            };
+
             // Phase 1: Emit current state if transaction exists
             if let Ok(record) = transaction_store.get(transaction_id) {
+                let is_terminal = is_terminal_status(&record.status);
+
                 yield Transaction {
                     id: ID::from(record.id.to_string()),
                     status: convert_transaction_status(record.status),
                     submitted_at: record.submitted_at,
                     transaction_hash: Hex32(record.transaction_hash.to_hex()),
+                    safe_execution: convert_safe_execution(record.safe_execution),
                 };
+
+                if is_terminal {
+                    return;
+                }
             }
 
             // Phase 2: Listen for future status update events
             loop {
                 match event_receiver.recv().await {
                     // Use pattern matching guard to filter for matching transaction ID
-                    Ok(TransactionEvent::StatusUpdated { id, status, .. })
+                    Ok(TransactionEvent::StatusUpdated { id, .. })
                         if id == transaction_id =>
                     {
-                        // Fetch full record to get transaction_hash and submitted_at
-                        // (event only contains delta fields)
+                        // Fetch full record to get consistent status + safe_execution
                         if let Ok(record) = transaction_store.get(transaction_id) {
+                            let is_terminal = is_terminal_status(&record.status);
+
                             yield Transaction {
                                 id: ID::from(id.to_string()),
-                                status: convert_transaction_status(status),
+                                status: convert_transaction_status(record.status),
                                 submitted_at: record.submitted_at,
                                 transaction_hash: Hex32(record.transaction_hash.to_hex()),
+                                safe_execution: convert_safe_execution(record.safe_execution),
                             };
+
+                            if is_terminal {
+                                break;
+                            }
                         }
                     }
                     Ok(_) => {

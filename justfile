@@ -57,6 +57,10 @@ test-package package:
 test-debug:
     cargo test --workspace -- --test-threads=1 --nocapture
 
+# Run tests for a specific package with execution time reported
+test-profile package:
+    nix develop .#experiment -c cargo test -p {{ package }} --no-fail-fast -- -Z unstable-options --report-time
+
 # Run all tests in workspace using nextest
 nextest:
     cargo nextest run --workspace --exclude blokli-integration-tests
@@ -67,7 +71,7 @@ nextest-package package:
 
 # Run integration tests (requires Docker image with BLOKLI_TEST_REMOTE_IMAGE env var)
 integration-test:
-    cargo test --package blokli-integration-tests
+    cargo test -p blokli-integration-tests
 
 # Run system tests (full smoke test suite)
 system-test: smoke-test-full
@@ -284,18 +288,21 @@ helm-template:
 helm-lint:
     helm lint ./charts/blokli -f ./charts/blokli/values-testing.yaml
 
+# Generate Helm chart README from values.yaml
 helm-docs:
-    $HOME/.npm-global/bin/readme-generator  --values ./charts/blokli/values.yaml --readme ./charts/blokli/README.md --schema "/tmp/schema.json" 
+    bunx @bitnami/readme-generator-for-helm --values ./charts/blokli/values.yaml --readme ./charts/blokli/README.md --schema "/tmp/schema.json"
 
 # Package Helm chart for distribution
 helm-package:
     helm package ./charts/blokli
 
+# Authenticate with Google Artifact Registry for Helm
 helm-login:
     #!/usr/bin/env bash
     token=$(gcloud auth print-access-token)
     helm registry login -u oauth2accesstoken --password "$token" https://europe-west3-docker.pkg.dev
 
+# Push Helm chart to Google Artifact Registry
 helm-push:
     #!/usr/bin/env bash
     set -euo pipefail
