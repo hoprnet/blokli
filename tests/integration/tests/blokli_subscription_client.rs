@@ -417,16 +417,21 @@ async fn subscribe_keepalive_comments(#[future(awt)] fixture: IntegrationFixture
         .join("graphql")
         .map_err(|e| anyhow!("failed to build GraphQL URL: {e}"))?;
 
+    let reqwest_client = reqwest::Client::builder()
+        .connect_timeout(fixture.config().http_timeout)
+        .build()
+        .map_err(|e| anyhow!("failed to build reqwest client: {e}"))?;
+    let transport = blokli_client::ReqwestTransport::new(reqwest_client);
+
     let client = ClientBuilder::for_url(url.as_str())
         .map_err(|e| anyhow!("failed to build SSE client: {e}"))?
-        .connect_timeout(fixture.config().http_timeout)
         .header("Accept", "text/event-stream")
         .map_err(|e| anyhow!("failed to set Accept header: {e}"))?
         .header("Content-Type", "application/json")
         .map_err(|e| anyhow!("failed to set Content-Type header: {e}"))?
         .method("POST".into())
         .body(request_body)
-        .build();
+        .build_with_transport(transport);
 
     let stream = client.stream();
     // Validate that the server emits keepalive comments on idle streams.

@@ -1,3 +1,4 @@
+---
 id: no-use-in-functions
 language: rust
 severity: error

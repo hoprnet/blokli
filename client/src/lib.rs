@@ -4,7 +4,7 @@ mod client;
 /// Errors returned by the Blokli client.
 pub mod errors;
 
-pub use client::{BlokliClient, BlokliClientConfig};
+pub use client::{BlokliClient, BlokliClientConfig, ReqwestTransport};
 #[cfg(feature = "testing")]
 pub use client::{
     BlokliTestClient, BlokliTestState, BlokliTestStateMutator, BlokliTestStateSnapshot, GraphQlQueries, NopStateMutator,
