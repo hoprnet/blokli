@@ -1,0 +1,8 @@
+---
+source: chain/api/src/revert_decoder.rs
+expression: results
+---
+- "panic: assertion failed (0x01)"
+- "panic: arithmetic underflow or overflow (0x11)"
+- "panic: division or modulo by zero (0x12)"
+- "panic: array out-of-bounds access (0x32)"

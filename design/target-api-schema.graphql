@@ -662,6 +662,16 @@ type Safe {
   registeredNodes: [String!]!
 }
 
+"""Internal Safe contract execution result"""
+type SafeExecution {
+  "Revert reason if execution failed and reason is decodable (null if succeeded or reason unavailable)"
+  revertReason: String
+  "Safe internal transaction hash (bytes32 hex). Null for module-executed transactions (the standard HOPR path via execTransactionFromModule) since module events do not carry a txHash. For direct execTransaction calls, null only if event data was malformed."
+  safeTxHash: Hex32
+  "Whether the internal Safe transaction succeeded"
+  success: Boolean!
+}
+
 """Safe HOPR token allowance information for a specific Safe address"""
 type SafeHoprAllowance {
   "Safe contract address"
@@ -848,6 +858,8 @@ scalar TokenValueString
 type Transaction {
   "Unique identifier for the transaction (UUID)"
   id: ID!
+  "Internal Safe execution result (null for non-Safe transactions or before confirmation)"
+  safeExecution: SafeExecution
   "Current status of the transaction"
   status: TransactionStatus!
   "Timestamp when transaction was submitted"
@@ -880,8 +892,8 @@ union TransactionResult = Transaction | InvalidTransactionIdError
 enum TransactionStatus {
   "Transaction has been confirmed on-chain with success"
   CONFIRMED
-  "Transaction is pending submission to the chain"
-  PENDING
+  "Transactions are never emitted in this state; they go directly to SUBMITTED"
+  PENDING @deprecated(reason: "Transactions go directly to SUBMITTED. This variant exists only for backwards compatibility and will be removed in a future release.")
   "Transaction was included on-chain but reverted (receipt.status = 0)"
   REVERTED
   "Transaction submission failed"

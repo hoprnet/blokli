@@ -1,12 +1,14 @@
 use std::process::{Command, Stdio};
 
 use anyhow::{Context, Result};
+use tracing::debug;
 
 pub fn run_command(mut command: Command, silenced: bool, description: &str) -> Result<()> {
     if silenced {
         command.stdout(Stdio::null()).stderr(Stdio::null());
     }
 
+    debug!(description, "run command");
     let status = command
         .status()
         .with_context(|| format!("Failed to run {description}"))?;

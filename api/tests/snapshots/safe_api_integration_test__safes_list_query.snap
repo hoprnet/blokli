@@ -1,0 +1,8 @@
+---
+source: api/tests/safe_api_integration_test.rs
+expression: response
+---
+data:
+  safes:
+    safes:
+      - address: "0x1111111111111111111111111111111111111111"

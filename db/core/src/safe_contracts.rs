@@ -274,6 +274,20 @@ pub trait BlokliDbSafeContractOperations: BlokliDbGeneralModelOperations {
 
     async fn load_preseeded_safes<'a>(&'a self, tx: OptTx<'a>, network_name: &str) -> Result<usize>;
 
+    /// Get safe contract by module address with current (latest) state.
+    ///
+    /// Returns the combined identity and latest state as a SafeContractEntry,
+    /// looking up the safe by its associated module address instead of the safe address.
+    ///
+    /// # Returns
+    /// * `Ok(Some(entry))` - Safe exists with matching module address
+    /// * `Ok(None)` - No safe found with this module address
+    async fn get_safe_contract_by_module_address<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        module_address: Address,
+    ) -> Result<Option<SafeContractEntry>>;
+
     #[allow(clippy::too_many_arguments)]
     async fn update_safe_module_address<'a>(
         &'a self,
@@ -556,6 +570,38 @@ impl BlokliDbSafeContractOperations for BlokliDb {
             return Ok(0);
         };
         load_preseeded_safes_from_csv(self, tx, csv_data).await
+    }
+
+    async fn get_safe_contract_by_module_address<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        module_address: Address,
+    ) -> Result<Option<SafeContractEntry>> {
+        let tx = self.nest_transaction(tx).await?;
+
+        let stmt = current_row_statement(
+            tx.as_ref().get_database_backend(),
+            "module_address",
+            module_address.as_ref().to_vec(),
+        );
+
+        let row = tx.as_ref().query_one_raw(stmt).await?;
+        let row = match row {
+            Some(row) => row,
+            None => return Ok(None),
+        };
+
+        let current = SafeContractCurrentRow {
+            safe_contract_id: row.try_get("", "safe_contract_id")?,
+            address: row.try_get("", "address")?,
+            module_address: row.try_get("", "module_address")?,
+            chain_key: row.try_get("", "chain_key")?,
+            published_block: row.try_get("", "published_block")?,
+            published_tx_index: row.try_get("", "published_tx_index")?,
+            published_log_index: row.try_get("", "published_log_index")?,
+        };
+
+        Ok(Some(combine_current_row(current)))
     }
 
     async fn get_preseeded_safes<'a>(&'a self, tx: OptTx<'a>) -> Result<Vec<SafeContractEntry>> {
@@ -1044,6 +1090,41 @@ mod tests {
             .await?
             .expect("state should exist at block 300");
         assert_eq!(at_300.module_address, module_v2.as_ref().to_vec());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_safe_contract_by_module_address() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let safe_addr = random_address();
+        let module_addr = random_address();
+        let chain_key = random_address();
+
+        // Module address not found initially
+        let result = db.get_safe_contract_by_module_address(None, module_addr).await?;
+        assert!(
+            result.is_none(),
+            "should not find safe by module address before creation"
+        );
+
+        // Create safe contract
+        db.upsert_safe_contract(None, safe_addr, module_addr, chain_key, 100, 0, 0)
+            .await?;
+
+        // Look up by module address
+        let entry = db
+            .get_safe_contract_by_module_address(None, module_addr)
+            .await?
+            .expect("should find safe by module address");
+        assert_eq!(entry.address, safe_addr.as_ref().to_vec());
+        assert_eq!(entry.module_address, module_addr.as_ref().to_vec());
+
+        // Look up by a different module address returns None
+        let other_module = random_address();
+        let result = db.get_safe_contract_by_module_address(None, other_module).await?;
+        assert!(result.is_none(), "should not find safe by unrelated module address");
 
         Ok(())
     }
