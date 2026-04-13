@@ -182,6 +182,45 @@ mod tests {
     }
 
     #[test]
+    fn test_read_cert_and_key_multiple_certs() {
+        let cert1_data = create_pem("CERTIFICATE", b"cert 1");
+        let cert2_data = create_pem("CERTIFICATE", b"cert 2");
+        let cert_data = format!("{}\n{}", cert1_data, cert2_data);
+        let key_data = create_pem("PRIVATE KEY", b"dummy key data");
+
+        let mut cert_file = NamedTempFile::new().unwrap();
+        cert_file.write_all(cert_data.as_bytes()).unwrap();
+
+        let mut key_file = NamedTempFile::new().unwrap();
+        key_file.write_all(key_data.as_bytes()).unwrap();
+
+        let config = TlsConfig {
+            cert_path: cert_file.path().to_path_buf(),
+            key_path: key_file.path().to_path_buf(),
+        };
+
+        let (certs, _key) = read_cert_and_key(&config).expect("Should read cert and key");
+        assert_eq!(certs.len(), 2, "Should read 2 certificates");
+    }
+
+    #[test]
+    fn test_read_committed_cert_and_key() {
+        let mut cert_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        cert_path.push("tests/fixtures/tls/cert.pem");
+        let mut key_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        key_path.push("tests/fixtures/tls/key.pem");
+
+        let config = TlsConfig { cert_path, key_path };
+
+        let (certs, key) = read_cert_and_key(&config).expect("Should read committed cert and key");
+        assert_eq!(certs.len(), 1, "Should read 1 certificate");
+        match key {
+            PrivateKeyDer::Pkcs8(_) => (),
+            _ => panic!("Expected PKCS#8 key from committed fixture"),
+        }
+    }
+
+    #[test]
     fn test_read_cert_and_key_no_cert() {
         let key_data = create_pem("PRIVATE KEY", b"dummy key data");
 
