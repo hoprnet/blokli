@@ -320,6 +320,7 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
     let client = fixture.client().clone();
 
     let new_win_prob = 0.005f64;
+    let quiet_period = Duration::from_secs(5);
 
     let mut stream = client
         .subscribe_ticket_params()
@@ -333,11 +334,32 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
         )
         .await?;
 
-    let output = stream
-        .next()
-        .timeout(subscription_timeout())
-        .await?
-        .ok_or_else(|| anyhow!("no update received from subscription"))??;
+
+    // wait for the latest ticket param update
+    let deadline = Instant::now() + Duration::from_secs(subscription_timeout().as_secs());
+    let mut latest_output = None;
+
+    while Instant::now() < deadline {
+        let wait_time = quiet_period.min(deadline.saturating_duration_since(Instant::now()));
+
+        match tokio::time::timeout(wait_time, stream.next()).await {
+            Ok(Some(Ok(output))) => {
+                tracing::info!("Received ticket parameters subscription event: {:?}", output);
+                latest_output = Some(output);
+            }
+            Ok(Some(Err(error))) => return Err(error.into()),
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
+
+    let output = latest_output.ok_or_else(|| anyhow!("no ticket parameters received from subscription"))?;
+
+    tracing::info!(
+        "Received ticket parameters update: {:?}, expected: {:?}",
+        output,
+        new_win_prob
+    );
 
     assert!((output.min_ticket_winning_probability - new_win_prob).abs() < EPSILON);
 
