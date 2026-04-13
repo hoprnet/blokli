@@ -19,7 +19,9 @@ use hopr_bindings::{
     hopr_token::HoprToken::{Approval, Transfer},
 };
 #[cfg(all(feature = "prometheus", not(test)))]
-use hopr_types::primitive::prelude::U256;
+use hopr_metrics::{MultiGauge, SimpleGauge};
+#[cfg(all(feature = "prometheus", not(test)))]
+use hopr_types::primitive::prelude::ToHex;
 use hopr_types::{
     crypto::types::Hash,
     primitive::prelude::{Address, SerializableLog},
@@ -36,23 +38,23 @@ use crate::{
 
 #[cfg(all(feature = "prometheus", not(test)))]
 lazy_static::lazy_static! {
-    static ref METRIC_INDEXER_CURRENT_BLOCK: hopr_metrics::metrics::SimpleGauge =
-        hopr_metrics::metrics::SimpleGauge::new(
+    static ref METRIC_INDEXER_CURRENT_BLOCK: SimpleGauge =
+        SimpleGauge::new(
             "hopr_indexer_block_number",
             "Current last processed block number by the indexer",
     ).unwrap();
-    static ref METRIC_INDEXER_CHECKSUM: hopr_metrics::metrics::SimpleGauge =
-        hopr_metrics::metrics::SimpleGauge::new(
+    static ref METRIC_INDEXER_CHECKSUM: SimpleGauge =
+        SimpleGauge::new(
             "hopr_indexer_checksum",
             "Contains an unsigned integer that represents the low 32-bits of the Indexer checksum"
     ).unwrap();
-    static ref METRIC_INDEXER_SYNC_PROGRESS: hopr_metrics::metrics::SimpleGauge =
-        hopr_metrics::metrics::SimpleGauge::new(
+    static ref METRIC_INDEXER_SYNC_PROGRESS: SimpleGauge =
+        SimpleGauge::new(
             "hopr_indexer_sync_progress",
             "Sync progress of the historical data by the indexer",
     ).unwrap();
-    static ref METRIC_INDEXER_SYNC_SOURCE: hopr_metrics::metrics::MultiGauge =
-        hopr_metrics::metrics::MultiGauge::new(
+    static ref METRIC_INDEXER_SYNC_SOURCE: MultiGauge =
+        MultiGauge::new(
             "hopr_indexer_data_source",
             "Current data source of the Indexer",
             &["source"],
@@ -680,7 +682,12 @@ where
                     #[cfg(all(feature = "prometheus", not(test)))]
                     {
                         if let Ok(checksum_hash) = Hash::from_hex(checksum.as_str()) {
-                            let low_4_bytes = U256::from_big_endian(checksum_hash.as_ref()).low_u32();
+                            let checksum_bytes: &[u8] = checksum_hash.as_ref();
+                            let low_4_bytes = u32::from_be_bytes(
+                                checksum_bytes[checksum_bytes.len() - 4..]
+                                    .try_into()
+                                    .expect("checksum hash should be 32 bytes"),
+                            );
                             METRIC_INDEXER_CHECKSUM.set(low_4_bytes.into());
                         } else {
                             error!("Invalid checksum generated from logs");

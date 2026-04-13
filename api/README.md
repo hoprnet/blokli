@@ -31,7 +31,8 @@ cargo run --release -p blokli-api
 
 - **GraphQL API**: `http://localhost:8080/graphql` (GET for playground, POST for queries)
 - **GraphQL Subscriptions**: `http://localhost:8080/graphql/subscriptions` (SSE)
-- **Health Check**: `http://localhost:8080/health`
+- **Liveness Check**: `http://localhost:8080/healthz`
+- **Readiness Check**: `http://localhost:8080/readyz`
 
 ## GraphQL Schema
 

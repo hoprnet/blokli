@@ -89,6 +89,9 @@ just docker-run-anvil trace
 
 Once running, access the GraphQL playground at: <http://localhost:8080/graphql>
 
+To push daemon telemetry to an OpenTelemetry collector, set `telemetry.otlp_endpoint` in `bloklid/example-config.toml` and choose the
+exported signals with `telemetry.otlp_signals`.
+
 ## Testing
 
 Blokli has comprehensive test coverage for temporal queries, blockchain reorganization handling, subscriptions, and edge cases.

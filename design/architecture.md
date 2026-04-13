@@ -70,6 +70,9 @@ The architecture follows an event-driven model with clear separation between dat
 - Signal handling for graceful shutdown and config reload
 - Orchestration of BlokliChain and API server components
 - Process lifecycle management
+- Exposure of operational HTTP endpoints through the embedded API server, including liveness and readiness
+- OTLP export of selected telemetry signals (metrics, traces, logs) from the daemon to an external OpenTelemetry collector when
+  `telemetry.otlp_endpoint` is configured
 
 **Configuration Layer**: The configuration layer aggregates settings from multiple sources (Env > File > Defaults). It supports canonical
 environment variables (e.g. `DATABASE_URL`, `PGHOST`) alongside application-specific variables (`BLOKLI_HOST`, `BLOKLI_INDEXER_FAST_SYNC`)

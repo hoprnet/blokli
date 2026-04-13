@@ -161,7 +161,8 @@ pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> 
     if config.playground_enabled {
         info!("GraphQL Playground: {}://{}/graphql", protocol, config.bind_address);
     }
-    info!("Health check: {}://{}/health", protocol, config.bind_address);
+    info!("Health check: {}://{}/healthz", protocol, config.bind_address);
+    info!("Readiness check: {}://{}/readyz", protocol, config.bind_address);
 
     // Start the server with TLS if configured
     if let Some(tls_config) = config.tls {
