@@ -73,6 +73,11 @@ impl SubscriptionStreamState {
     }
 
     fn start_stream(&mut self) -> Result<(), BlokliClientError> {
+        let initial_reconnect_delay = self
+            .cfg
+            .stream_reconnect_timeout
+            .min(Duration::from_secs(2))
+            .max(MIN_RECONNECTION_DELAY);
         let client = eventsource_client::ClientBuilder::for_url(self.graphql_url.as_str())
             .map_err(ErrorKind::from)?
             .header("Accept", "text/event-stream")
@@ -85,7 +90,7 @@ impl SubscriptionStreamState {
             .reconnect(
                 ReconnectOptionsBuilder::new(true)
                     .retry_initial(true)
-                    .delay(Duration::from_secs(2))
+                    .delay(initial_reconnect_delay)
                     .backoff_factor(2)
                     .delay_max(self.cfg.stream_reconnect_timeout)
                     .build(),
