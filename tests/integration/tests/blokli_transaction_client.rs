@@ -1,13 +1,22 @@
-use std::time::Duration;
+use std::{str::FromStr, time::Duration};
 
 use anyhow::{Context, Result};
 use blokli_client::api::{BlokliQueryClient, BlokliTransactionClient, types::TransactionStatus};
-use blokli_integration_tests::fixtures::{IntegrationFixture, integration_fixture as fixture};
+use blokli_integration_tests::{
+    constants::parsed_safe_balance,
+    fixtures::{IntegrationFixture, integration_fixture as fixture, poll_until},
+};
 use hex::FromHex;
 use hopr_bindings::exports::alloy::primitives::U256;
+use hopr_types::{
+    chain::{
+        payload::{PayloadGenerator, SafePayloadGenerator},
+        prelude::SignableTransaction,
+    },
+    primitive::prelude::Address as HoprAddress,
+};
 use rstest::*;
 use serial_test::serial;
-use tokio::time::sleep;
 
 const TX_VALUE: u128 = 1_000_000; // 0.000000000001 ETH
 enum ClientType {
@@ -43,7 +52,26 @@ async fn submit_transaction(#[future(awt)] fixture: IntegrationFixture, #[case] 
         }
     }
 
-    sleep(Duration::from_secs(8)).await; // TODO: replace with actual block time
+    // Wait for the balance to update after the fire-and-forget submission
+    let expected_balance = initial_balance + tx_value;
+    poll_until(
+        "recipient balance updated",
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+        || {
+            let rpc = fixture.rpc();
+            let addr = &recipient.address;
+            async move {
+                let balance = rpc.get_balance(addr).await?;
+                Ok(if balance >= expected_balance {
+                    Some(balance)
+                } else {
+                    None
+                })
+            }
+        },
+    )
+    .await?;
 
     let final_balance = fixture.rpc().get_balance(&recipient.address).await?;
     let delta = final_balance
@@ -171,5 +199,129 @@ async fn submit_and_confirm_transaction(#[future(awt)] fixture: IntegrationFixtu
         .checked_sub(initial_balance)
         .context("recipient balance decreased unexpectedly")?;
     assert_eq!(delta, tx_value);
+    Ok(())
+}
+
+#[rstest]
+#[test_log::test(tokio::test)]
+#[serial]
+/// Test that a Safe module transaction (via execTransactionFromModule) that succeeds internally
+/// is correctly detected and enriched with safe_execution data.
+///
+/// Uses `fund_channel` which calls `execTransactionFromModule` on the Safe module,
+/// triggering an `ExecutionFromModuleSuccess` event from the Safe contract.
+async fn test_safe_module_transaction_execution_success(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    let [owner, counterparty] = fixture.sample_accounts::<2>();
+    let safe = fixture.deploy_safe_and_announce(owner, parsed_safe_balance()).await?;
+    fixture
+        .deploy_safe_and_announce(counterparty, parsed_safe_balance())
+        .await?;
+
+    // Approve the channels contract to spend tokens on behalf of the Safe (setup).
+    // This is a direct token call, not a module transaction.
+    fixture
+        .approve(
+            owner,
+            "1 wxHOPR".parse().expect("failed to parse amount"),
+            &safe.module_address,
+        )
+        .await?;
+
+    // Build a fund_channel transaction via the Safe module.
+    // This goes through execTransactionFromModule → Safe → channels.fundChannel,
+    // emitting ExecutionFromModuleSuccess from the Safe.
+    let nonce = fixture.rpc().transaction_count(&owner.address).await?;
+    let payload_generator = SafePayloadGenerator::new(
+        &owner.keypair,
+        *fixture.contract_addresses(),
+        HoprAddress::from_str(&safe.module_address)?,
+    );
+    let amount = "0.01 wxHOPR".parse().expect("failed to parse amount");
+    let payload = payload_generator.fund_channel(counterparty.address, amount)?;
+    let payload_bytes = payload
+        .sign_and_encode_to_eip2718(nonce, fixture.rpc().chain_id().await?, None, &owner.keypair)
+        .await?;
+
+    let txid = fixture.submit_and_track_tx(&payload_bytes).await?;
+
+    let res = fixture
+        .client()
+        .track_transaction(txid, Duration::from_secs(60))
+        .await?;
+    insta::assert_yaml_snapshot!(res, {
+        ".id" => "[uuid]",
+        ".submitted_at" => "[timestamp]",
+        ".transaction_hash" => "[tx_hash]",
+    });
+
+    Ok(())
+}
+
+#[rstest]
+#[test_log::test(tokio::test)]
+#[serial]
+/// Test that a Safe module transaction that fails internally (inner revert) is correctly
+/// detected with safe_execution.success = false while the outer transaction still confirms.
+async fn test_safe_module_transaction_execution_failure(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    let [owner, counterparty] = fixture.sample_accounts::<2>();
+    let safe = fixture.deploy_safe_and_announce(owner, parsed_safe_balance()).await?;
+
+    // Build a channel closure transaction for a non-existent channel.
+    // The inner call will revert because there's no open channel between these parties.
+    let nonce = fixture.rpc().transaction_count(&owner.address).await?;
+
+    let payload_generator = SafePayloadGenerator::new(
+        &owner.keypair,
+        *fixture.contract_addresses(),
+        HoprAddress::from_str(&safe.module_address)?,
+    );
+    let payload = payload_generator.initiate_outgoing_channel_closure(counterparty.address)?;
+    let payload_bytes = payload
+        .sign_and_encode_to_eip2718(nonce, fixture.rpc().chain_id().await?, None, &owner.keypair)
+        .await?;
+
+    let txid = fixture.submit_and_track_tx(&payload_bytes).await?;
+
+    let res = fixture
+        .client()
+        .track_transaction(txid, Duration::from_secs(60))
+        .await?;
+    insta::assert_yaml_snapshot!(res, {
+        ".id" => "[uuid]",
+        ".submitted_at" => "[timestamp]",
+        ".transaction_hash" => "[tx_hash]",
+        ".safe_execution.revert_reason" => "[revert_data]",
+    });
+
+    Ok(())
+}
+
+#[rstest]
+#[test_log::test(tokio::test)]
+#[serial]
+/// Test that a plain ETH transfer (not targeting a Safe or module) has no safe_execution
+/// enrichment.
+async fn test_plain_transaction_no_safe_enrichment(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    let [sender, recipient] = fixture.sample_accounts::<2>();
+    let tx_value = U256::from(TX_VALUE);
+    let nonce = fixture.rpc().transaction_count(&sender.address).await?;
+
+    let raw_tx = fixture.build_raw_tx(tx_value, sender, recipient, nonce).await?;
+    let signed_bytes =
+        Vec::from_hex(raw_tx.trim_start_matches("0x")).context("failed to decode raw transaction payload")?;
+
+    let txid = fixture.submit_and_track_tx(&signed_bytes).await?;
+
+    let res = fixture
+        .client()
+        .track_transaction(txid, Duration::from_secs(30))
+        .await?;
+    insta::assert_yaml_snapshot!(res, {
+        ".id" => "[uuid]",
+        ".submitted_at" => "[timestamp]",
+        ".transaction_hash" => "[tx_hash]",
+        ".safe_execution.revert_reason" => "[revert_data]",
+    });
+
     Ok(())
 }

@@ -7,7 +7,8 @@ use std::collections::HashMap;
 
 mod tests;
 
-use async_graphql::{Enum, ID, InputObject, InputValueError, Scalar, ScalarType, SimpleObject, Union, Value};
+pub use async_graphql::ID;
+use async_graphql::{Enum, InputObject, InputValueError, Scalar, ScalarType, SimpleObject, Union, Value};
 use hopr_types::{crypto::types::Hash, primitive::prelude::ToHex};
 
 /// Token value represented as a string to maintain precision
@@ -487,8 +488,12 @@ pub struct NativeBalance {
 /// Status of a submitted transaction
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum TransactionStatus {
-    /// Transaction is pending submission to the chain
-    #[graphql(name = "PENDING")]
+    /// Transactions are never emitted in this state; they go directly to Submitted.
+    #[graphql(
+        name = "PENDING",
+        deprecation = "Transactions go directly to SUBMITTED. This variant exists only for backwards compatibility \
+                       and will be removed in a future release."
+    )]
     Pending,
     /// Transaction has been submitted and is awaiting confirmation
     #[graphql(name = "SUBMITTED")]
@@ -518,6 +523,27 @@ pub struct TransactionInput {
     pub raw_transaction: String,
 }
 
+/// Internal Safe contract execution result.
+///
+/// This is supplementary to [`TransactionStatus`]: the `status` field on [`Transaction`] is
+/// the authoritative terminal outcome (e.g. `Confirmed` means the outer on-chain tx succeeded).
+/// When `safe_execution` is present, it describes the *internal* Safe module call outcome,
+/// which can differ from the outer tx status — a `Confirmed` transaction may still have
+/// `safe_execution.success == false` if the internal call reverted.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct SafeExecution {
+    /// Whether the internal Safe transaction succeeded
+    pub success: bool,
+    /// Safe internal transaction hash (bytes32 hex).
+    /// Null for module-executed transactions (`execTransactionFromModule`) which do not
+    /// emit a txHash, or if the event data was malformed and the hash could not be extracted.
+    #[graphql(name = "safeTxHash")]
+    pub safe_tx_hash: Option<Hex32>,
+    /// Revert reason (if execution failed and reason is decodable)
+    #[graphql(name = "revertReason")]
+    pub revert_reason: Option<String>,
+}
+
 /// Transaction submission result
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Transaction {
@@ -531,6 +557,9 @@ pub struct Transaction {
     /// Transaction hash from successful blockchain submission
     #[graphql(name = "transactionHash")]
     pub transaction_hash: Hex32,
+    /// Internal Safe execution result (null for non-Safe transactions or before confirmation)
+    #[graphql(name = "safeExecution")]
+    pub safe_execution: Option<SafeExecution>,
 }
 
 /// Success response for fire-and-forget transaction submission

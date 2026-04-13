@@ -1,0 +1,7 @@
+---
+source: chain/api/src/transaction_monitor.rs
+expression: "&result"
+---
+success: false
+safe_tx_hash: "0x4242424242424242424242424242424242424242424242424242424242424242"
+revert_reason: insufficient funds
