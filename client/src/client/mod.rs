@@ -326,10 +326,13 @@ pub(crate) fn response_to_data<Q>(response: GraphQlResponse<Q>) -> crate::api::R
 
 #[cfg(test)]
 mod tests {
+    use cynic::GraphQlResponse;
     use futures::TryStreamExt;
     use launchdarkly_sdk_transport::HttpTransport;
+    use serde_json::json;
 
-    use super::ReqwestTransport;
+    use super::{BlokliClient, BlokliClientConfig, ReqwestTransport, response_to_data};
+    use crate::errors::ErrorKind;
 
     #[tokio::test]
     async fn reqwest_transport_returns_streaming_response_body() {
@@ -361,5 +364,107 @@ mod tests {
             acc
         });
         assert_eq!(body, b"data: hello\n\n");
+    }
+
+    #[tokio::test]
+    async fn reqwest_transport_returns_error_for_invalid_request_uri() {
+        let transport = ReqwestTransport::new(reqwest::Client::new());
+        let request = launchdarkly_sdk_transport::Request::builder()
+            .method("GET")
+            .uri("/relative-only")
+            .body(None)
+            .expect("failed to build request");
+
+        let error = match transport.request(request).await {
+            Ok(_) => panic!("relative URI should fail"),
+            Err(error) => error,
+        };
+
+        assert!(error.to_string().contains("builder error"));
+    }
+
+    #[test]
+    fn graphql_url_appends_graphql_when_base_url_has_no_trailing_slash() {
+        let client = BlokliClient::new(
+            url::Url::parse("http://example.com/api").expect("valid URL"),
+            BlokliClientConfig::default(),
+        );
+
+        let graphql_url = client.graphql_url().expect("graphql URL should be derived");
+
+        assert_eq!(graphql_url.as_str(), "http://example.com/api/graphql");
+    }
+
+    #[test]
+    fn graphql_url_preserves_trailing_slash() {
+        let client = BlokliClient::new(
+            url::Url::parse("http://example.com/api/").expect("valid URL"),
+            BlokliClientConfig::default(),
+        );
+
+        let graphql_url = client.graphql_url().expect("graphql URL should be derived");
+
+        assert_eq!(graphql_url.as_str(), "http://example.com/api/graphql");
+    }
+
+    #[test]
+    fn response_to_data_returns_data_even_when_graphql_errors_are_present() {
+        let response: GraphQlResponse<serde_json::Value> = serde_json::from_value(json!({
+            "data": {
+                "version": "1.2.3"
+            },
+            "errors": [
+                {
+                    "message": "partial failure"
+                }
+            ]
+        }))
+        .expect("response should deserialize");
+
+        let data = response_to_data(response).expect("data should still be returned");
+
+        assert_eq!(data["version"], "1.2.3");
+    }
+
+    #[test]
+    fn response_to_data_merges_graphql_errors_when_data_is_missing() {
+        let response: GraphQlResponse<serde_json::Value> = serde_json::from_value(json!({
+            "errors": [
+                {
+                    "message": "first problem",
+                    "locations": [{ "line": 1, "column": 2 }],
+                    "path": ["query", "fieldA"]
+                },
+                {
+                    "message": "second problem",
+                    "locations": [{ "line": 3, "column": 4 }],
+                    "path": ["query", "fieldB"]
+                }
+            ]
+        }))
+        .expect("response should deserialize");
+
+        let error = response_to_data(response).expect_err("missing data should fail");
+
+        match error.kind() {
+            ErrorKind::GraphQLError(graphql_error) => {
+                assert_eq!(graphql_error.message, "first problem, second problem");
+                assert_eq!(graphql_error.locations.as_ref().map(Vec::len), Some(2));
+                assert_eq!(graphql_error.path.as_ref().map(Vec::len), Some(4));
+            }
+            other => panic!("expected GraphQLError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn response_to_data_returns_no_data_error_when_response_is_empty() {
+        let response = GraphQlResponse::<serde_json::Value> {
+            data: None,
+            errors: None,
+        };
+
+        let error = response_to_data(response).expect_err("empty response should fail");
+
+        assert!(matches!(error.kind(), ErrorKind::NoData));
     }
 }
