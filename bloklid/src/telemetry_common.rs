@@ -60,3 +60,15 @@ pub(crate) fn install_otel_layers(layers: Vec<OtelBoxedLayer>) -> Result<()> {
         .map_err(|error| BloklidError::NonSpecific(error.to_string()))?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_install_otel_layers_fails_before_base_subscriber_is_initialized() {
+        let error = install_otel_layers(Vec::new()).expect_err("otel layers should require a base subscriber");
+
+        assert!(error.to_string().contains("base subscriber not initialized"));
+    }
+}

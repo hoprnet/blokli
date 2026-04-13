@@ -40,27 +40,34 @@ pub(crate) fn generate_config_template() -> String {
     include_str!("../example-config.toml").to_string()
 }
 
-pub(crate) fn peek_verbosity_from_env_args() -> u8 {
-    fn verbosity_from_arg(arg: &OsString) -> u8 {
-        let Some(arg) = arg.to_str() else {
-            return 0;
-        };
+fn verbosity_from_arg(arg: &OsString) -> u8 {
+    let Some(arg) = arg.to_str() else {
+        return 0;
+    };
 
-        if arg == "--verbose" || arg == "-v" {
-            return 1;
-        }
-
-        if arg.starts_with('-') && !arg.starts_with("--") && arg[1..].chars().all(|value| value == 'v') {
-            return (arg.len() - 1) as u8;
-        }
-
-        0
+    if arg == "--verbose" || arg == "-v" {
+        return 1;
     }
 
-    std::env::args_os()
+    if arg.starts_with('-') && !arg.starts_with("--") && arg[1..].chars().all(|value| value == 'v') {
+        return (arg.len() - 1) as u8;
+    }
+
+    0
+}
+
+fn peek_verbosity_from_args<I>(args: I) -> u8
+where
+    I: IntoIterator<Item = OsString>,
+{
+    args.into_iter()
         .skip(1)
         .map(|arg| verbosity_from_arg(&arg))
         .fold(0u8, u8::saturating_add)
+}
+
+pub(crate) fn peek_verbosity_from_env_args() -> u8 {
+    peek_verbosity_from_args(std::env::args_os())
 }
 
 impl Args {
@@ -249,9 +256,69 @@ impl Args {
 
 #[cfg(test)]
 mod tests {
-    use std::{io::Write, time::Duration};
+    use std::{io::Write, os::unix::ffi::OsStringExt, time::Duration};
 
     use super::*;
+
+    #[test]
+    fn test_peek_verbosity_counts_short_verbose_flags() {
+        let verbosity = peek_verbosity_from_args(vec![
+            OsString::from("bloklid"),
+            OsString::from("-v"),
+            OsString::from("-vv"),
+            OsString::from("-vvv"),
+        ]);
+
+        assert_eq!(verbosity, 6);
+    }
+
+    #[test]
+    fn test_peek_verbosity_counts_long_verbose_flags() {
+        let verbosity = peek_verbosity_from_args(vec![
+            OsString::from("bloklid"),
+            OsString::from("--verbose"),
+            OsString::from("--verbose"),
+        ]);
+
+        assert_eq!(verbosity, 2);
+    }
+
+    #[test]
+    fn test_peek_verbosity_ignores_non_verbose_flags() {
+        let verbosity = peek_verbosity_from_args(vec![
+            OsString::from("bloklid"),
+            OsString::from("--version"),
+            OsString::from("--verbose=debug"),
+            OsString::from("-x"),
+        ]);
+
+        assert_eq!(verbosity, 0);
+    }
+
+    #[test]
+    fn test_peek_verbosity_accumulates_only_verbose_args() {
+        let verbosity = peek_verbosity_from_args(vec![
+            OsString::from("bloklid"),
+            OsString::from("--config"),
+            OsString::from("blokli.toml"),
+            OsString::from("-vv"),
+            OsString::from("--verbose"),
+        ]);
+
+        assert_eq!(verbosity, 3);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_peek_verbosity_ignores_non_utf8_args() {
+        let verbosity = peek_verbosity_from_args(vec![
+            OsString::from("bloklid"),
+            OsString::from_vec(vec![0xFF, b'v']),
+            OsString::from("-v"),
+        ]);
+
+        assert_eq!(verbosity, 1);
+    }
 
     #[test]
     fn test_env_var_override() {

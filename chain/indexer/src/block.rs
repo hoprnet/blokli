@@ -73,6 +73,16 @@ pub struct ReorgInfo {
     pub removed_log_count: usize,
 }
 
+#[cfg(any(test, feature = "prometheus"))]
+fn checksum_low_32_bits(checksum_hash: &Hash) -> u32 {
+    let checksum_bytes: &[u8] = checksum_hash.as_ref();
+    u32::from_be_bytes(
+        checksum_bytes[checksum_bytes.len() - 4..]
+            .try_into()
+            .expect("checksum hash should be 32 bytes"),
+    )
+}
+
 /// Indexer
 ///
 /// Accepts the RPC operational functionality [blokli_chain_rpc::HoprIndexerRpcOperations]
@@ -682,13 +692,7 @@ where
                     #[cfg(all(feature = "prometheus", not(test)))]
                     {
                         if let Ok(checksum_hash) = Hash::from_hex(checksum.as_str()) {
-                            let checksum_bytes: &[u8] = checksum_hash.as_ref();
-                            let low_4_bytes = u32::from_be_bytes(
-                                checksum_bytes[checksum_bytes.len() - 4..]
-                                    .try_into()
-                                    .expect("checksum hash should be 32 bytes"),
-                            );
-                            METRIC_INDEXER_CHECKSUM.set(low_4_bytes.into());
+                            METRIC_INDEXER_CHECKSUM.set(checksum_low_32_bits(&checksum_hash).into());
                         } else {
                             error!("Invalid checksum generated from logs");
                         }
@@ -1164,6 +1168,14 @@ mod tests {
             address: hex!("2f4b7662a192b8125bbf51cfbf1bf5cc00b2c8e5").into(),
             multiaddresses: vec![Multiaddr::empty()],
         };
+    }
+
+    #[test]
+    fn test_checksum_low_32_bits_uses_last_four_bytes() {
+        let checksum_hash = Hash::from_hex("0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20")
+            .expect("valid checksum hash");
+
+        assert_eq!(checksum_low_32_bits(&checksum_hash), 0x1d1e1f20);
     }
 
     fn build_announcement_logs(
