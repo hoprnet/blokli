@@ -9,7 +9,10 @@ use blokli_integration_tests::{
 use hex::FromHex;
 use hopr_bindings::exports::alloy::primitives::U256;
 use hopr_types::{
-    chain::{payload::SafePayloadGenerator, prelude::SignableTransaction},
+    chain::{
+        payload::{PayloadGenerator, SafePayloadGenerator},
+        prelude::SignableTransaction,
+    },
     primitive::prelude::Address as HoprAddress,
 };
 use rstest::*;

@@ -209,7 +209,11 @@ async fn query_safe_redeemed_stats_after_ticket_redeem(#[future(awt)] fixture: I
             let selector = selector.clone();
             async move {
                 let channels = client.query_channels(selector).await?;
-                Ok(if channels.is_empty() { None } else { Some(channels) })
+                Ok(if channels.channels.is_empty() {
+                    None
+                } else {
+                    Some(channels)
+                })
             }
         },
     )
