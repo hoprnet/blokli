@@ -8,9 +8,23 @@ use std::{sync::Arc, time::Duration};
 use async_trait::async_trait;
 use hopr_types::crypto::types::Hash;
 use tokio::time::sleep;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
-use crate::transaction_store::{TransactionStatus, TransactionStore};
+use crate::{
+    safe_execution::{decode_transaction_to_address, inspect_safe_execution_logs},
+    transaction_store::{SafeExecutionResult, TransactionStatus, TransactionStore},
+};
+
+/// A single log entry from a transaction receipt
+#[derive(Debug, Clone)]
+pub struct ReceiptLog {
+    /// Address of the contract that emitted the log
+    pub address: [u8; 20],
+    /// Log topics (indexed parameters, first topic is event signature)
+    pub topics: Vec<[u8; 32]>,
+    /// Non-indexed log data
+    pub data: Vec<u8>,
+}
 
 /// Trait for querying transaction receipts from the RPC
 #[async_trait]
@@ -18,6 +32,61 @@ pub trait ReceiptProvider: Send + Sync {
     /// Get the status of a transaction by its hash
     /// Returns Some(true) if confirmed, Some(false) if reverted, None if still pending
     async fn get_transaction_status(&self, tx_hash: Hash) -> Result<Option<bool>, String>;
+
+    /// Fetch receipt logs for a confirmed transaction.
+    ///
+    /// Returns `Ok(Some(logs))` when the receipt exists (even if logs are empty),
+    /// `Ok(None)` when the receipt is not found (transaction still pending),
+    /// or `Err` on RPC failure.
+    async fn get_transaction_receipt_logs(&self, tx_hash: Hash) -> Result<Option<Vec<ReceiptLog>>, String>;
+
+    /// Extract the revert reason from a failed transaction using debug tracing.
+    ///
+    /// Returns `Ok(Some(reason))` if extracted, `Ok(None)` if tracing
+    /// succeeded but no decodable reason was found, or `Err` on RPC failure.
+    async fn get_revert_reason(&self, tx_hash: Hash) -> Result<Option<String>, String>;
+}
+
+/// Trait for resolving a transaction target address to a Safe contract address.
+///
+/// The target may be a known Safe address directly, or a module address
+/// associated with a Safe (used by `execTransactionFromModule`).
+#[async_trait]
+pub trait SafeAddressChecker: Send + Sync + std::fmt::Debug {
+    /// Given a transaction target address, resolve the associated Safe address.
+    ///
+    /// Returns `Some(safe_address)` if the target is:
+    /// - A known Safe contract address (returns itself)
+    /// - A known module address associated with a Safe (returns the Safe address)
+    ///
+    /// Returns `None` if the target is not recognized as either.
+    async fn find_safe_for_target(&self, target: &[u8; 20]) -> Option<[u8; 20]>;
+}
+
+/// Placeholder type used when Safe enrichment is not configured.
+#[derive(Debug)]
+pub struct NoSafeEnrichment;
+
+#[async_trait]
+impl ReceiptProvider for NoSafeEnrichment {
+    async fn get_transaction_status(&self, _tx_hash: Hash) -> Result<Option<bool>, String> {
+        unreachable!("NoSafeEnrichment is behind Option::None")
+    }
+
+    async fn get_transaction_receipt_logs(&self, _tx_hash: Hash) -> Result<Option<Vec<ReceiptLog>>, String> {
+        unreachable!("NoSafeEnrichment is behind Option::None")
+    }
+
+    async fn get_revert_reason(&self, _tx_hash: Hash) -> Result<Option<String>, String> {
+        unreachable!("NoSafeEnrichment is behind Option::None")
+    }
+}
+
+#[async_trait]
+impl SafeAddressChecker for NoSafeEnrichment {
+    async fn find_safe_for_target(&self, _target: &[u8; 20]) -> Option<[u8; 20]> {
+        unreachable!("NoSafeEnrichment is behind Option::None")
+    }
 }
 
 /// Configuration for the transaction monitor
@@ -43,23 +112,34 @@ impl Default for TransactionMonitorConfig {
 }
 
 /// Background monitor for tracking transaction confirmations
-#[derive(Debug)]
-pub struct TransactionMonitor<R: ReceiptProvider> {
+pub struct TransactionMonitor<R: ReceiptProvider, S: SafeAddressChecker> {
     transaction_store: Arc<TransactionStore>,
     receipt_provider: Arc<R>,
+    safe_checker: Option<Arc<S>>,
     config: TransactionMonitorConfig,
 }
 
-impl<R: ReceiptProvider> TransactionMonitor<R> {
+impl<R: ReceiptProvider, S: SafeAddressChecker> std::fmt::Debug for TransactionMonitor<R, S> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("TransactionMonitor")
+            .field("config", &self.config)
+            .field("safe_checker", &self.safe_checker)
+            .finish_non_exhaustive()
+    }
+}
+
+impl<R: ReceiptProvider, S: SafeAddressChecker> TransactionMonitor<R, S> {
     /// Create a new transaction monitor
     pub fn new(
         transaction_store: Arc<TransactionStore>,
         receipt_provider: R,
         config: TransactionMonitorConfig,
+        safe_checker: Option<Arc<S>>,
     ) -> Self {
         Self {
             transaction_store,
             receipt_provider: Arc::new(receipt_provider),
+            safe_checker,
             config,
         }
     }
@@ -107,11 +187,16 @@ impl<R: ReceiptProvider> TransactionMonitor<R> {
             match self.receipt_provider.get_transaction_status(tx_hash).await {
                 Ok(Some(true)) => {
                     info!("Transaction {} confirmed", record.id);
+
+                    // Collect Safe enrichment data before confirming, so that
+                    // status and safe_execution are set atomically.
+                    let safe_execution = self.try_enrich_safe_execution(&record).await;
+
                     if let Err(e) = self
                         .transaction_store
-                        .update_status(record.id, TransactionStatus::Confirmed, None)
+                        .confirm_with_safe_execution(record.id, safe_execution)
                     {
-                        error!("Failed to update transaction {} status to Confirmed: {}", record.id, e);
+                        error!("Failed to confirm transaction {}: {}", record.id, e);
                     }
                 }
                 Ok(Some(false)) => {
@@ -139,32 +224,147 @@ impl<R: ReceiptProvider> TransactionMonitor<R> {
 
         Ok(())
     }
+
+    async fn try_enrich_safe_execution(
+        &self,
+        record: &crate::transaction_store::TransactionRecord,
+    ) -> Option<SafeExecutionResult> {
+        let safe_checker = self.safe_checker.as_ref()?;
+        enrich_safe_execution(record, self.receipt_provider.as_ref(), safe_checker.as_ref()).await
+    }
+}
+
+/// Attempt to extract Safe execution results for a confirmed transaction.
+///
+/// Decodes the raw transaction to extract the `to` address, checks if it is a
+/// known Safe contract, and if so, fetches receipt logs to find
+/// ExecutionSuccess/ExecutionFailure events.
+///
+/// Returns `Some(result)` if the transaction targets a known Safe and an
+/// execution event was found, `None` otherwise.
+///
+/// This is a free function so it can be called from both the background
+/// [`TransactionMonitor`] and the synchronous execution path.
+pub async fn enrich_safe_execution(
+    record: &crate::transaction_store::TransactionRecord,
+    receipt_provider: &(impl ReceiptProvider + ?Sized),
+    safe_checker: &(impl SafeAddressChecker + ?Sized),
+) -> Option<SafeExecutionResult> {
+    // Decode the raw transaction to extract the `to` address
+    let to_addr = decode_transaction_to_address(&record.raw_transaction)?;
+
+    // Resolve the target address to a Safe address.
+    // The target may be the Safe itself (direct execTransaction) or
+    // a module address (execTransactionFromModule).
+    let safe_address = safe_checker.find_safe_for_target(&to_addr).await?;
+
+    debug!(
+        "Transaction {} targets a known Safe contract, fetching receipt logs",
+        record.id
+    );
+
+    // Fetch receipt logs and look for Safe execution events
+    match receipt_provider
+        .get_transaction_receipt_logs(record.transaction_hash)
+        .await
+    {
+        Ok(Some(logs)) => {
+            let mut result = inspect_safe_execution_logs(&safe_address, &logs);
+
+            // Attempt to extract revert reason for failed executions
+            if let Some(ref mut exec_result) = result {
+                if !exec_result.success {
+                    exec_result.revert_reason = receipt_provider
+                        .get_revert_reason(record.transaction_hash)
+                        .await
+                        .unwrap_or(None);
+                }
+            }
+
+            if let Some(ref r) = result {
+                info!(
+                    "Transaction {} Safe execution: success={}, safe_tx_hash={:?}, revert_reason={:?}",
+                    record.id, r.success, r.safe_tx_hash, r.revert_reason
+                );
+            }
+            result
+        }
+        Ok(None) => {
+            debug!("No receipt found for Safe tx {} (still pending)", record.id);
+            None
+        }
+        Err(e) => {
+            warn!("Failed to fetch receipt logs for Safe tx {}: {}", record.id, e);
+            None
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use chrono::Utc;
+    use alloy_sol_types::SolEvent;
+    use chrono::{DateTime, Utc};
     use dashmap::DashMap;
+    use hopr_bindings::exports::alloy::{
+        consensus::{SignableTransaction, TxLegacy},
+        eips::eip2718::Encodable2718,
+        primitives::{Address as AlloyAddress, TxKind, U256},
+        signers::{Signer, local::PrivateKeySigner},
+    };
     use uuid::Uuid;
 
     use super::*;
-    use crate::transaction_store::TransactionRecord;
+    use crate::{
+        safe_execution::{ExecutionFailure, ExecutionFromModuleSuccess, ExecutionSuccess},
+        transaction_store::TransactionRecord,
+    };
 
-    // Mock receipt provider for testing
+    const TEST_UUID: Uuid = Uuid::from_bytes([
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+    ]);
+
+    fn test_timestamp() -> DateTime<Utc> {
+        DateTime::from_timestamp(1_700_000_000, 0).unwrap()
+    }
+
+    fn test_tx_hash() -> Hash {
+        Hash::from([0xABu8; 32])
+    }
+
+    // Mock receipt provider for testing with configurable statuses and logs
     struct MockReceiptProvider {
         // Map from tx_hash to status (Some(true) = confirmed, Some(false) = reverted, None = pending)
         statuses: Arc<DashMap<Hash, Option<bool>>>,
+        // Map from tx_hash to receipt logs (or error).
+        // Some(Ok(logs)) = receipt found with logs, Some(Err(..)) = RPC error, None = pending
+        receipt_logs: Arc<DashMap<Hash, Result<Option<Vec<ReceiptLog>>, String>>>,
+        // Map from tx_hash to revert reason result
+        revert_reasons: Arc<DashMap<Hash, Result<Option<String>, String>>>,
     }
 
     impl MockReceiptProvider {
         fn new() -> Self {
             Self {
                 statuses: Arc::new(DashMap::new()),
+                receipt_logs: Arc::new(DashMap::new()),
+                revert_reasons: Arc::new(DashMap::new()),
             }
         }
 
         fn set_status(&self, tx_hash: Hash, status: Option<bool>) {
             self.statuses.insert(tx_hash, status);
+        }
+
+        fn set_receipt_logs(&self, tx_hash: Hash, logs: Vec<ReceiptLog>) {
+            self.receipt_logs.insert(tx_hash, Ok(Some(logs)));
+        }
+
+        fn set_receipt_logs_error(&self, tx_hash: Hash, error: String) {
+            self.receipt_logs.insert(tx_hash, Err(error));
+        }
+
+        fn set_revert_reason(&self, tx_hash: Hash, reason: Result<Option<String>, String>) {
+            self.revert_reasons.insert(tx_hash, reason);
         }
     }
 
@@ -173,13 +373,102 @@ mod tests {
         async fn get_transaction_status(&self, tx_hash: Hash) -> Result<Option<bool>, String> {
             Ok(self.statuses.get(&tx_hash).map(|entry| *entry.value()).unwrap_or(None))
         }
+
+        async fn get_transaction_receipt_logs(&self, tx_hash: Hash) -> Result<Option<Vec<ReceiptLog>>, String> {
+            match self.receipt_logs.get(&tx_hash) {
+                Some(entry) => entry.value().clone(),
+                // No entry configured: receipt not found (pending)
+                None => Ok(None),
+            }
+        }
+
+        async fn get_revert_reason(&self, tx_hash: Hash) -> Result<Option<String>, String> {
+            match self.revert_reasons.get(&tx_hash) {
+                Some(entry) => entry.value().clone(),
+                None => Ok(None),
+            }
+        }
+    }
+
+    // Mock Safe address checker for testing.
+    // Maps known Safe addresses to themselves, and module addresses to their Safe addresses.
+    #[derive(Debug)]
+    struct MockSafeAddressChecker {
+        /// Safe address -> () (direct safe lookup)
+        known_safes: Arc<DashMap<[u8; 20], ()>>,
+        /// Module address -> Safe address (module-to-safe mapping)
+        module_to_safe: Arc<DashMap<[u8; 20], [u8; 20]>>,
+    }
+
+    impl MockSafeAddressChecker {
+        fn new() -> Self {
+            Self {
+                known_safes: Arc::new(DashMap::new()),
+                module_to_safe: Arc::new(DashMap::new()),
+            }
+        }
+
+        fn add_safe(&self, address: [u8; 20]) {
+            self.known_safes.insert(address, ());
+        }
+
+        fn add_module(&self, module_address: [u8; 20], safe_address: [u8; 20]) {
+            self.module_to_safe.insert(module_address, safe_address);
+        }
+    }
+
+    #[async_trait]
+    impl SafeAddressChecker for MockSafeAddressChecker {
+        async fn find_safe_for_target(&self, target: &[u8; 20]) -> Option<[u8; 20]> {
+            // Check if target is a known Safe address
+            if self.known_safes.contains_key(target) {
+                return Some(*target);
+            }
+            // Check if target is a known module address
+            self.module_to_safe.get(target).map(|entry| *entry.value())
+        }
+    }
+
+    /// Create a raw signed transaction targeting a specific address
+    async fn create_raw_tx_to(target: &[u8; 20]) -> Vec<u8> {
+        let signer = PrivateKeySigner::random();
+        let tx = TxLegacy {
+            chain_id: Some(1),
+            nonce: 0,
+            gas_price: 1_000_000_000,
+            gas_limit: 21_000,
+            to: TxKind::Call(AlloyAddress::from_slice(target)),
+            value: U256::ZERO,
+            input: Default::default(),
+        };
+
+        let tx_hash = tx.signature_hash();
+        let signature = signer.sign_hash(&tx_hash).await.expect("signing failed");
+        let signed_tx = tx.into_signed(signature);
+
+        let mut encoded = Vec::new();
+        signed_tx.encode_2718(&mut encoded);
+        encoded
     }
 
     fn create_monitor(
         store: Arc<TransactionStore>,
         provider: MockReceiptProvider,
-    ) -> TransactionMonitor<MockReceiptProvider> {
-        TransactionMonitor::new(store, provider, TransactionMonitorConfig::default())
+    ) -> TransactionMonitor<MockReceiptProvider, NoSafeEnrichment> {
+        TransactionMonitor::new(store, provider, TransactionMonitorConfig::default(), None)
+    }
+
+    fn create_monitor_with_safe_checker(
+        store: Arc<TransactionStore>,
+        provider: MockReceiptProvider,
+        safe_checker: MockSafeAddressChecker,
+    ) -> TransactionMonitor<MockReceiptProvider, MockSafeAddressChecker> {
+        TransactionMonitor::new(
+            store,
+            provider,
+            TransactionMonitorConfig::default(),
+            Some(Arc::new(safe_checker)),
+        )
     }
 
     #[tokio::test]
@@ -187,15 +476,16 @@ mod tests {
         let store = Arc::new(TransactionStore::new());
         let provider = MockReceiptProvider::new();
 
-        let tx_hash = Hash::default();
+        let tx_hash = test_tx_hash();
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: vec![0x01],
             transaction_hash: tx_hash,
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: chrono::Utc::now(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id = record.id;
@@ -209,8 +499,10 @@ mod tests {
 
         // Verify status was updated
         let updated = store.get(id).unwrap();
-        assert_eq!(updated.status, TransactionStatus::Confirmed);
-        assert!(updated.confirmed_at.is_some());
+        insta::assert_yaml_snapshot!(updated, {
+            ".submitted_at" => "[timestamp]",
+            ".confirmed_at" => "[timestamp]",
+        });
     }
 
     #[tokio::test]
@@ -218,15 +510,16 @@ mod tests {
         let store = Arc::new(TransactionStore::new());
         let provider = MockReceiptProvider::new();
 
-        let tx_hash = Hash::default();
+        let tx_hash = test_tx_hash();
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: vec![0x01],
             transaction_hash: tx_hash,
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: chrono::Utc::now(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id = record.id;
@@ -240,8 +533,9 @@ mod tests {
 
         // Verify status was updated
         let updated = store.get(id).unwrap();
-        assert_eq!(updated.status, TransactionStatus::Reverted);
-        assert!(updated.error_message.is_some());
+        insta::assert_yaml_snapshot!(updated, {
+            ".submitted_at" => "[timestamp]",
+        });
     }
 
     #[tokio::test]
@@ -249,15 +543,16 @@ mod tests {
         let store = Arc::new(TransactionStore::new());
         let provider = MockReceiptProvider::new();
 
-        let tx_hash = Hash::default();
+        let tx_hash = test_tx_hash();
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: vec![0x01],
             transaction_hash: tx_hash,
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: chrono::Utc::now(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id = record.id;
@@ -269,7 +564,9 @@ mod tests {
 
         // Verify status unchanged
         let updated = store.get(id).unwrap();
-        assert_eq!(updated.status, TransactionStatus::Submitted);
+        insta::assert_yaml_snapshot!(updated, {
+            ".submitted_at" => "[timestamp]",
+        });
     }
 
     #[tokio::test]
@@ -277,16 +574,17 @@ mod tests {
         let store = Arc::new(TransactionStore::new());
         let provider = MockReceiptProvider::new();
 
-        let tx_hash = Hash::default();
+        let tx_hash = test_tx_hash();
         // Create record with old timestamp (will be timed out)
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: vec![0x01],
             transaction_hash: tx_hash,
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now() - chrono::Duration::try_seconds(400).unwrap(), // 400 seconds ago
+            submitted_at: chrono::Utc::now() - chrono::Duration::try_seconds(400).unwrap(), // 400 seconds ago
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id = record.id;
@@ -311,23 +609,25 @@ mod tests {
         let tx_hash2 = Hash::from([2u8; 32]);
 
         let record1 = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: Uuid::from_u128(1),
             raw_transaction: vec![0x01],
             transaction_hash: tx_hash1,
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: chrono::Utc::now(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let record2 = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: Uuid::from_u128(2),
             raw_transaction: vec![0x02],
             transaction_hash: tx_hash2,
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: chrono::Utc::now(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id1 = record1.id;
@@ -349,5 +649,445 @@ mod tests {
 
         let updated2 = store.get(id2).unwrap();
         assert_eq!(updated2.status, TransactionStatus::Reverted);
+    }
+
+    // =========================================================================
+    // try_enrich_safe_execution tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_enrich_safe_execution_succeeds_for_known_safe() {
+        let safe_address = [0xAA; 20];
+        let raw_tx = create_raw_tx_to(&safe_address).await;
+        let tx_hash = Hash::from([0x11u8; 32]);
+
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // Set up receipt logs with ExecutionSuccess event
+        let safe_tx_hash_bytes = [0x42u8; 32];
+        let mut log_data = vec![0u8; 64];
+        log_data[..32].copy_from_slice(&safe_tx_hash_bytes);
+
+        provider.set_receipt_logs(
+            tx_hash,
+            vec![ReceiptLog {
+                address: safe_address,
+                topics: vec![ExecutionSuccess::SIGNATURE_HASH.0],
+                data: log_data,
+            }],
+        );
+
+        let safe_checker = MockSafeAddressChecker::new();
+        safe_checker.add_safe(safe_address);
+
+        let record = TransactionRecord {
+            id: TEST_UUID,
+            raw_transaction: raw_tx,
+            transaction_hash: tx_hash,
+            status: TransactionStatus::Submitted,
+            submitted_at: test_timestamp(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        };
+
+        store.insert(record.clone()).unwrap();
+
+        let monitor = create_monitor_with_safe_checker(store, provider, safe_checker);
+        let result = monitor.try_enrich_safe_execution(&record).await;
+
+        insta::assert_yaml_snapshot!(&result);
+    }
+
+    #[tokio::test]
+    async fn test_enrich_safe_execution_receipt_fetch_fails() {
+        let safe_address = [0xBB; 20];
+        let raw_tx = create_raw_tx_to(&safe_address).await;
+        let tx_hash = Hash::from([0x22u8; 32]);
+
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // Set receipt logs to return an error
+        provider.set_receipt_logs_error(tx_hash, "RPC timeout".to_string());
+
+        let safe_checker = MockSafeAddressChecker::new();
+        safe_checker.add_safe(safe_address);
+
+        let record = TransactionRecord {
+            id: TEST_UUID,
+            raw_transaction: raw_tx,
+            transaction_hash: tx_hash,
+            status: TransactionStatus::Submitted,
+            submitted_at: test_timestamp(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        };
+
+        store.insert(record.clone()).unwrap();
+
+        let monitor = create_monitor_with_safe_checker(store, provider, safe_checker);
+        let result = monitor.try_enrich_safe_execution(&record).await;
+
+        assert!(result.is_none(), "should return None when receipt fetch fails");
+    }
+
+    #[tokio::test]
+    async fn test_enrich_safe_execution_unknown_address() {
+        let target_address = [0xCC; 20];
+        let raw_tx = create_raw_tx_to(&target_address).await;
+        let tx_hash = Hash::from([0x33u8; 32]);
+
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // Safe checker does NOT recognize this address
+        let safe_checker = MockSafeAddressChecker::new();
+
+        let record = TransactionRecord {
+            id: TEST_UUID,
+            raw_transaction: raw_tx,
+            transaction_hash: tx_hash,
+            status: TransactionStatus::Submitted,
+            submitted_at: test_timestamp(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        };
+
+        store.insert(record.clone()).unwrap();
+
+        let monitor = create_monitor_with_safe_checker(store, provider, safe_checker);
+        let result = monitor.try_enrich_safe_execution(&record).await;
+
+        assert!(result.is_none(), "should return None for unknown addresses");
+    }
+
+    #[tokio::test]
+    async fn test_enrich_safe_execution_no_safe_checker() {
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        let record = TransactionRecord {
+            id: TEST_UUID,
+            raw_transaction: vec![0x01],
+            transaction_hash: test_tx_hash(),
+            status: TransactionStatus::Submitted,
+            submitted_at: test_timestamp(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        };
+
+        store.insert(record.clone()).unwrap();
+
+        // Monitor without safe_checker (None)
+        let monitor = create_monitor(store, provider);
+        let result = monitor.try_enrich_safe_execution(&record).await;
+
+        assert!(result.is_none(), "should return None when safe_checker is None");
+    }
+
+    #[tokio::test]
+    async fn test_poll_once_confirms_with_safe_execution_atomically() {
+        let safe_address = [0xDD; 20];
+        let raw_tx = create_raw_tx_to(&safe_address).await;
+        let tx_hash = Hash::from([0x44u8; 32]);
+
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // Transaction is confirmed
+        provider.set_status(tx_hash, Some(true));
+
+        // Set up receipt logs with ExecutionSuccess event
+        let mut log_data = vec![0u8; 64];
+        log_data[0] = 0xEE;
+
+        provider.set_receipt_logs(
+            tx_hash,
+            vec![ReceiptLog {
+                address: safe_address,
+                topics: vec![ExecutionSuccess::SIGNATURE_HASH.0],
+                data: log_data,
+            }],
+        );
+
+        let safe_checker = MockSafeAddressChecker::new();
+        safe_checker.add_safe(safe_address);
+
+        let record = TransactionRecord {
+            id: TEST_UUID,
+            raw_transaction: raw_tx,
+            transaction_hash: tx_hash,
+            status: TransactionStatus::Submitted,
+            submitted_at: chrono::Utc::now(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        };
+
+        let id = record.id;
+        store.insert(record).unwrap();
+
+        let monitor = create_monitor_with_safe_checker(store.clone(), provider, safe_checker);
+        monitor.poll_once().await.unwrap();
+
+        // Both status and safe_execution should be set atomically
+        let updated = store.get(id).unwrap();
+        insta::assert_yaml_snapshot!(updated, {
+            ".submitted_at" => "[timestamp]",
+            ".confirmed_at" => "[timestamp]",
+            ".raw_transaction" => "[raw_tx]",
+        });
+    }
+
+    #[tokio::test]
+    async fn test_enrich_safe_execution_via_module_address() {
+        let module_address = [0xEE; 20];
+        let safe_address = [0xFF; 20];
+        let raw_tx = create_raw_tx_to(&module_address).await;
+        let tx_hash = Hash::from([0x55u8; 32]);
+
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // Set up receipt logs with ExecutionFromModuleSuccess event emitted by the Safe
+        provider.set_receipt_logs(
+            tx_hash,
+            vec![ReceiptLog {
+                address: safe_address,
+                topics: vec![ExecutionFromModuleSuccess::SIGNATURE_HASH.0, {
+                    // module address padded to 32 bytes (indexed address parameter)
+                    let mut topic = [0u8; 32];
+                    topic[12..].copy_from_slice(&module_address);
+                    topic
+                }],
+                data: vec![],
+            }],
+        );
+
+        let safe_checker = MockSafeAddressChecker::new();
+        // Register the module -> safe mapping (not the safe directly)
+        safe_checker.add_module(module_address, safe_address);
+
+        let record = TransactionRecord {
+            id: TEST_UUID,
+            raw_transaction: raw_tx,
+            transaction_hash: tx_hash,
+            status: TransactionStatus::Submitted,
+            submitted_at: test_timestamp(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        };
+
+        store.insert(record.clone()).unwrap();
+
+        let monitor = create_monitor_with_safe_checker(store, provider, safe_checker);
+        let result = monitor.try_enrich_safe_execution(&record).await;
+
+        insta::assert_yaml_snapshot!(&result);
+    }
+
+    // =========================================================================
+    // Revert reason extraction tests
+    // =========================================================================
+
+    #[tokio::test]
+    async fn test_enrich_safe_execution_failure_with_revert_reason() {
+        let safe_address = [0xAA; 20];
+        let raw_tx = create_raw_tx_to(&safe_address).await;
+        let tx_hash = Hash::from([0x66u8; 32]);
+
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // Set up receipt logs with ExecutionFailure event
+        let safe_tx_hash_bytes = [0x42u8; 32];
+        let mut log_data = vec![0u8; 64];
+        log_data[..32].copy_from_slice(&safe_tx_hash_bytes);
+
+        provider.set_receipt_logs(
+            tx_hash,
+            vec![ReceiptLog {
+                address: safe_address,
+                topics: vec![ExecutionFailure::SIGNATURE_HASH.0],
+                data: log_data,
+            }],
+        );
+
+        // Set up a revert reason for this transaction
+        provider.set_revert_reason(tx_hash, Ok(Some("insufficient funds".to_string())));
+
+        let safe_checker = MockSafeAddressChecker::new();
+        safe_checker.add_safe(safe_address);
+
+        let record = TransactionRecord {
+            id: TEST_UUID,
+            raw_transaction: raw_tx,
+            transaction_hash: tx_hash,
+            status: TransactionStatus::Submitted,
+            submitted_at: test_timestamp(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        };
+
+        store.insert(record.clone()).unwrap();
+
+        let monitor = create_monitor_with_safe_checker(store, provider, safe_checker);
+        let result = monitor.try_enrich_safe_execution(&record).await;
+
+        insta::assert_yaml_snapshot!(&result);
+    }
+
+    #[tokio::test]
+    async fn test_enrich_safe_execution_failure_revert_reason_rpc_error() {
+        let safe_address = [0xAA; 20];
+        let raw_tx = create_raw_tx_to(&safe_address).await;
+        let tx_hash = Hash::from([0x77u8; 32]);
+
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // Set up receipt logs with ExecutionFailure event
+        let mut log_data = vec![0u8; 64];
+        log_data[0] = 0x42;
+
+        provider.set_receipt_logs(
+            tx_hash,
+            vec![ReceiptLog {
+                address: safe_address,
+                topics: vec![ExecutionFailure::SIGNATURE_HASH.0],
+                data: log_data,
+            }],
+        );
+
+        // Simulate RPC error when fetching revert reason
+        provider.set_revert_reason(tx_hash, Err("RPC timeout".to_string()));
+
+        let safe_checker = MockSafeAddressChecker::new();
+        safe_checker.add_safe(safe_address);
+
+        let record = TransactionRecord {
+            id: TEST_UUID,
+            raw_transaction: raw_tx,
+            transaction_hash: tx_hash,
+            status: TransactionStatus::Submitted,
+            submitted_at: test_timestamp(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        };
+
+        store.insert(record.clone()).unwrap();
+
+        let monitor = create_monitor_with_safe_checker(store, provider, safe_checker);
+        let result = monitor.try_enrich_safe_execution(&record).await;
+
+        insta::assert_yaml_snapshot!(&result);
+    }
+
+    #[tokio::test]
+    async fn test_enrich_safe_execution_failure_revert_reason_none() {
+        let safe_address = [0xAA; 20];
+        let raw_tx = create_raw_tx_to(&safe_address).await;
+        let tx_hash = Hash::from([0x88u8; 32]);
+
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // Set up receipt logs with ExecutionFailure event
+        let mut log_data = vec![0u8; 64];
+        log_data[0] = 0x42;
+
+        provider.set_receipt_logs(
+            tx_hash,
+            vec![ReceiptLog {
+                address: safe_address,
+                topics: vec![ExecutionFailure::SIGNATURE_HASH.0],
+                data: log_data,
+            }],
+        );
+
+        // get_revert_reason returns Ok(None) — tracing succeeded but no decodable reason
+        provider.set_revert_reason(tx_hash, Ok(None));
+
+        let safe_checker = MockSafeAddressChecker::new();
+        safe_checker.add_safe(safe_address);
+
+        let record = TransactionRecord {
+            id: TEST_UUID,
+            raw_transaction: raw_tx,
+            transaction_hash: tx_hash,
+            status: TransactionStatus::Submitted,
+            submitted_at: test_timestamp(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        };
+
+        store.insert(record.clone()).unwrap();
+
+        let monitor = create_monitor_with_safe_checker(store, provider, safe_checker);
+        let result = monitor.try_enrich_safe_execution(&record).await;
+
+        insta::assert_yaml_snapshot!(&result);
+    }
+
+    #[tokio::test]
+    async fn test_enrich_safe_execution_success_does_not_call_revert_reason() {
+        let safe_address = [0xAA; 20];
+        let raw_tx = create_raw_tx_to(&safe_address).await;
+        let tx_hash = Hash::from([0x99u8; 32]);
+
+        let store = Arc::new(TransactionStore::new());
+        let provider = MockReceiptProvider::new();
+
+        // Set up receipt logs with ExecutionSuccess event
+        let safe_tx_hash_bytes = [0x42u8; 32];
+        let mut log_data = vec![0u8; 64];
+        log_data[..32].copy_from_slice(&safe_tx_hash_bytes);
+
+        provider.set_receipt_logs(
+            tx_hash,
+            vec![ReceiptLog {
+                address: safe_address,
+                topics: vec![ExecutionSuccess::SIGNATURE_HASH.0],
+                data: log_data,
+            }],
+        );
+
+        // Set a revert reason that should NOT be used (success path skips it)
+        provider.set_revert_reason(tx_hash, Ok(Some("should not appear".to_string())));
+
+        let safe_checker = MockSafeAddressChecker::new();
+        safe_checker.add_safe(safe_address);
+
+        let record = TransactionRecord {
+            id: TEST_UUID,
+            raw_transaction: raw_tx,
+            transaction_hash: tx_hash,
+            status: TransactionStatus::Submitted,
+            submitted_at: test_timestamp(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        };
+
+        store.insert(record.clone()).unwrap();
+
+        let monitor = create_monitor_with_safe_checker(store, provider, safe_checker);
+        let result = monitor.try_enrich_safe_execution(&record).await;
+
+        let exec = result.expect("enrichment should return a result");
+        assert!(exec.success);
+        assert!(
+            exec.revert_reason.is_none(),
+            "revert_reason should be None for successful executions"
+        );
     }
 }

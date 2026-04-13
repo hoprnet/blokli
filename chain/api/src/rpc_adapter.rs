@@ -13,9 +13,12 @@ use hopr_bindings::exports::alloy::{
     providers::Provider,
 };
 use hopr_types::crypto::types::Hash;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
-use crate::{transaction_executor::RpcClient, transaction_monitor::ReceiptProvider};
+use crate::{
+    transaction_executor::RpcClient,
+    transaction_monitor::{ReceiptLog, ReceiptProvider},
+};
 
 /// RPC adapter that implements RpcClient and ReceiptProvider traits for RpcOperations
 ///
@@ -158,6 +161,63 @@ impl<R: HttpRequestor + 'static + Clone> ReceiptProvider for RpcAdapter<R> {
             Err(e) => {
                 error!("Error getting transaction receipt for {:?}: {}", tx_hash, e);
                 Err(format!("Receipt error: {}", e))
+            }
+        }
+    }
+
+    async fn get_transaction_receipt_logs(&self, tx_hash: Hash) -> Result<Option<Vec<ReceiptLog>>, String> {
+        debug!("Fetching receipt logs for hash: {:?}", tx_hash);
+
+        let b256_hash = B256::from_slice(tx_hash.as_ref());
+
+        match self.rpc.provider.get_transaction_receipt(b256_hash).await {
+            Ok(Some(receipt)) => {
+                let logs = receipt
+                    .inner
+                    .logs()
+                    .iter()
+                    .map(|log| ReceiptLog {
+                        address: log.address().into_array(),
+                        topics: log.topics().iter().map(|t| t.0).collect(),
+                        data: log.data().data.to_vec(),
+                    })
+                    .collect();
+                Ok(Some(logs))
+            }
+            Ok(None) => {
+                debug!("No receipt found for {:?} (transaction still pending)", tx_hash);
+                Ok(None)
+            }
+            Err(e) => {
+                error!("Error getting receipt logs for {:?}: {}", tx_hash, e);
+                Err(format!("Receipt error: {}", e))
+            }
+        }
+    }
+
+    async fn get_revert_reason(&self, tx_hash: Hash) -> Result<Option<String>, String> {
+        let b256_hash = B256::from_slice(tx_hash.as_ref());
+
+        let params = serde_json::json!([
+            format!("{b256_hash:#x}"),
+            { "tracer": "callTracer", "tracerConfig": { "onlyTopCall": false } }
+        ]);
+
+        match self
+            .rpc
+            .provider
+            .raw_request::<_, serde_json::Value>("debug_traceTransaction".into(), params)
+            .await
+        {
+            Ok(trace) => {
+                let output = crate::revert_decoder::extract_revert_output_from_trace(&trace);
+                Ok(output.and_then(|b| crate::revert_decoder::decode_revert_reason(&b)))
+            }
+            Err(e) => {
+                // RPC supports tracing (verified at startup) but this specific
+                // call failed — log and return None rather than blocking confirmation.
+                warn!("debug_traceTransaction failed for {b256_hash:#x}: {e}");
+                Ok(None)
             }
         }
     }

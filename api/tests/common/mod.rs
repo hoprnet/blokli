@@ -29,7 +29,7 @@ use blokli_api::{
 use blokli_chain_api::{
     rpc_adapter::RpcAdapter,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
-    transaction_monitor::{TransactionMonitor, TransactionMonitorConfig},
+    transaction_monitor::{NoSafeEnrichment, TransactionMonitor, TransactionMonitorConfig},
     transaction_store::TransactionStore,
     transaction_validator::TransactionValidator,
 };
@@ -356,7 +356,7 @@ pub struct TransactionTestContext {
     /// Transaction store for tracking transaction state
     pub store: Arc<TransactionStore>,
     /// Transaction monitor for polling transaction status
-    pub monitor: Arc<TransactionMonitor<RpcAdapter<ReqwestClient>>>,
+    pub monitor: Arc<TransactionMonitor<RpcAdapter<ReqwestClient>, NoSafeEnrichment>>,
     /// Monitor task handle for cleanup
     pub monitor_handle: Option<AbortHandle>,
     /// Transaction executor
@@ -457,6 +457,7 @@ pub async fn setup_transaction_test_environment(
         transaction_store.clone(),
         (*rpc_adapter).clone(),
         monitor_config,
+        None::<Arc<NoSafeEnrichment>>,
     ));
 
     let monitor_handle = Some(

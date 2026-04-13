@@ -1,24 +1,15 @@
 //! Database model to GraphQL type conversions
 //!
-//! This module contains conversion functions that convert database entity
-//! models into GraphQL types. These conversions are kept separate from
-//! the type definitions to avoid requiring API clients to depend on database entities.
+//! This module contains conversion functions that convert internal domain types
+//! into GraphQL types. These conversions are kept separate from the type
+//! definitions to maintain clean module boundaries — the chain layer remains
+//! independent of GraphQL presentation types.
 
-use blokli_api_types::{Announcement, TransactionStatus};
-use blokli_chain_api::transaction_store::TransactionStatus as StoreStatus;
-
-/// Convert store TransactionStatus to GraphQL TransactionStatus
-pub fn store_status_to_graphql(status: StoreStatus) -> TransactionStatus {
-    match status {
-        StoreStatus::Pending => TransactionStatus::Pending,
-        StoreStatus::Submitted => TransactionStatus::Submitted,
-        StoreStatus::Confirmed => TransactionStatus::Confirmed,
-        StoreStatus::Reverted => TransactionStatus::Reverted,
-        StoreStatus::Timeout => TransactionStatus::Timeout,
-        StoreStatus::ValidationFailed => TransactionStatus::ValidationFailed,
-        StoreStatus::SubmissionFailed => TransactionStatus::SubmissionFailed,
-    }
-}
+use blokli_api_types::{Announcement, Hex32, SafeExecution, Transaction, TransactionStatus as GqlTransactionStatus};
+use blokli_chain_api::transaction_store::{
+    SafeExecutionResult, TransactionRecord, TransactionStatus as StoreTransactionStatus,
+};
+use hopr_types::primitive::traits::ToHex;
 
 /// Convert database announcement model to GraphQL type
 pub fn announcement_from_model(model: blokli_db_entity::announcement::Model) -> Announcement {
@@ -28,6 +19,38 @@ pub fn announcement_from_model(model: blokli_db_entity::announcement::Model) -> 
         multiaddress: model.multiaddress,
         published_block: model.published_block.to_string(),
     }
+}
+
+/// Convert a [`TransactionRecord`] to the GraphQL [`Transaction`] type
+pub fn transaction_from_record(record: TransactionRecord) -> Transaction {
+    Transaction {
+        id: async_graphql::ID::from(record.id.to_string()),
+        status: convert_transaction_status(record.status),
+        submitted_at: record.submitted_at,
+        transaction_hash: Hex32(record.transaction_hash.to_hex()),
+        safe_execution: convert_safe_execution(record.safe_execution),
+    }
+}
+
+/// Convert [`StoreTransactionStatus`] to GraphQL [`GqlTransactionStatus`]
+pub fn convert_transaction_status(status: StoreTransactionStatus) -> GqlTransactionStatus {
+    match status {
+        StoreTransactionStatus::Submitted => GqlTransactionStatus::Submitted,
+        StoreTransactionStatus::Confirmed => GqlTransactionStatus::Confirmed,
+        StoreTransactionStatus::Reverted => GqlTransactionStatus::Reverted,
+        StoreTransactionStatus::Timeout => GqlTransactionStatus::Timeout,
+        StoreTransactionStatus::ValidationFailed => GqlTransactionStatus::ValidationFailed,
+        StoreTransactionStatus::SubmissionFailed => GqlTransactionStatus::SubmissionFailed,
+    }
+}
+
+/// Convert an optional [`SafeExecutionResult`] to the GraphQL [`SafeExecution`] type
+pub fn convert_safe_execution(result: Option<SafeExecutionResult>) -> Option<SafeExecution> {
+    result.map(|r| SafeExecution {
+        success: r.success,
+        safe_tx_hash: r.safe_tx_hash.map(|h| Hex32(h.to_hex())),
+        revert_reason: r.revert_reason,
+    })
 }
 
 #[cfg(test)]
