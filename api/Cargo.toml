@@ -26,9 +26,9 @@ futures         = { workspace = true }
 tokio           = { workspace = true }
 
 # TLS
-rustls         = { workspace = true }
-rustls-pemfile = { workspace = true }
-tokio-rustls   = { workspace = true }
+pem-rfc7468  = { workspace = true, features = ["alloc"] }
+rustls       = { workspace = true }
+tokio-rustls = { workspace = true }
 
 # Web framework
 axum       = { workspace = true }
@@ -80,6 +80,7 @@ tracing-subscriber = { workspace = true }
 clap = { workspace = true }
 
 [dev-dependencies]
+base64ct            = { workspace = true, features = ["alloc"] }
 blokli-db-migration = { path = "../db/migration" }
 env_logger          = { workspace = true }
 hopr-types          = { workspace = true, features = ["internal"] }
@@ -87,6 +88,7 @@ multiaddr           = { workspace = true }
 rand                = { workspace = true }
 regex               = { workspace = true }
 temp-env            = { workspace = true }
+tempfile            = { workspace = true }
 test-log            = { workspace = true }
 tower               = { workspace = true, features = ["util"] }
 
