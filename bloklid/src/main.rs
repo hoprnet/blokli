@@ -60,12 +60,18 @@ async fn main() -> ExitCode {
             }
         };
 
-        if let Err(error) = telemetry::init(args.verbose, &config.telemetry) {
-            tracing::error!(%error, "error initializing '{BIN_NAME}' telemetry");
-            return ExitCode::FAILURE;
-        }
+        let telemetry_handles = match telemetry::init(args.verbose, &config.telemetry) {
+            Ok(handles) => handles,
+            Err(error) => {
+                tracing::error!(%error, "error initializing '{BIN_NAME}' telemetry");
+                return ExitCode::FAILURE;
+            }
+        };
 
-        if let Err(error) = run(args, Some(config)).await {
+        let run_result = run(args, Some(config)).await;
+        drop(telemetry_handles);
+
+        if let Err(error) = run_result {
             tracing::error!(%error, "error while running '{BIN_NAME}'");
             return ExitCode::FAILURE;
         }

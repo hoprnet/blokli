@@ -49,11 +49,7 @@ use tokio::sync::OnceCell;
 use tracing::{debug, info, warn};
 
 use crate::{
-    anvil::AnvilAccount,
-    config::TestConfig,
-    constants::STACK_STARTUP_WAIT,
-    docker::DockerEnvironment,
-    rpc::RpcClient,
+    anvil::AnvilAccount, config::TestConfig, constants::STACK_STARTUP_WAIT, docker::DockerEnvironment, rpc::RpcClient,
     transaction::TransactionBuilder as TestTransactionBuilder,
 };
 

@@ -374,7 +374,7 @@ pub struct TelemetryConfig {
     #[serde(default)]
     pub otlp_endpoint: Option<String>,
 
-    #[default(_code = "Duration::from_secs(60)")]
+    #[default(_code = "Duration::from_secs(15)")]
     #[serde(default = "default_metric_export_interval", with = "humantime_serde")]
     pub metric_export_interval: Duration,
 
