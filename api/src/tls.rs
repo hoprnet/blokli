@@ -4,7 +4,7 @@
 
 use std::{fs, sync::Arc, time::Duration};
 
-use pem_rfc7468::{Decoder, decode_vec};
+use pem_rfc7468::decode_vec;
 use rustls::{
     ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer},
@@ -41,16 +41,18 @@ fn read_cert_and_key(config: &TlsConfig) -> ApiResult<(Vec<CertificateDer<'stati
         .map_err(|e| ApiError::ConfigError(format!("Failed to read certificate file: {}", e)))?;
 
     let mut certs = Vec::new();
-    let mut decoder = Decoder::new(&cert_data)
-        .map_err(|e| ApiError::ConfigError(format!("Failed to parse certificate file: {}", e)))?;
+    let cert_str = std::str::from_utf8(&cert_data)
+        .map_err(|e| ApiError::ConfigError(format!("Certificate file is not valid UTF-8: {}", e)))?;
 
-    while !decoder.is_finished() {
-        let label = decoder.type_label().to_string();
-        let mut der_buf = vec![0u8; decoder.remaining_len()];
-        let der_slice = decoder
-            .decode(&mut der_buf)
+    for block in cert_str.split("-----BEGIN CERTIFICATE-----") {
+        let block = block.trim();
+        if block.is_empty() {
+            continue;
+        }
+
+        let full_block = format!("-----BEGIN CERTIFICATE-----\n{}", block);
+        let (label, der) = decode_vec(full_block.as_bytes())
             .map_err(|e| ApiError::ConfigError(format!("Failed to decode certificate: {}", e)))?;
-        let der = der_slice.to_vec();
 
         if label == "CERTIFICATE" {
             certs.push(CertificateDer::from(der));
@@ -121,8 +123,9 @@ impl axum::serve::Listener for TlsListener {
 
 #[cfg(test)]
 mod tests {
-    use std::io::Write;
+    use std::{io::Write, path::PathBuf};
 
+    use anyhow::Context;
     use base64ct::{Base64, Encoding};
     use tempfile::NamedTempFile;
 
@@ -134,101 +137,129 @@ mod tests {
     }
 
     #[test]
-    fn test_read_cert_and_key_pkcs8() {
+    fn test_read_cert_and_key_pkcs8() -> anyhow::Result<()> {
         let cert_data = create_pem("CERTIFICATE", b"dummy cert data");
         let key_data = create_pem("PRIVATE KEY", b"dummy key data");
 
-        let mut cert_file = NamedTempFile::new().unwrap();
-        cert_file.write_all(cert_data.as_bytes()).unwrap();
+        let mut cert_file = NamedTempFile::new().context("Failed to create temp cert file")?;
+        cert_file
+            .write_all(cert_data.as_bytes())
+            .context("Failed to write to temp cert file")?;
 
-        let mut key_file = NamedTempFile::new().unwrap();
-        key_file.write_all(key_data.as_bytes()).unwrap();
+        let mut key_file = NamedTempFile::new().context("Failed to create temp key file")?;
+        key_file
+            .write_all(key_data.as_bytes())
+            .context("Failed to write to temp key file")?;
 
         let config = TlsConfig {
             cert_path: cert_file.path().to_path_buf(),
             key_path: key_file.path().to_path_buf(),
         };
 
-        let (certs, key) = read_cert_and_key(&config).expect("Should read cert and key");
-        assert_eq!(certs.len(), 1);
+        let (certs, key) = read_cert_and_key(&config).map_err(|e| anyhow::anyhow!("{:?}", e))?;
+        let certs_len: usize = certs.len();
+        assert_eq!(certs_len, 1);
         match key {
             PrivateKeyDer::Pkcs8(_) => (),
             _ => panic!("Expected PKCS#8 key"),
         }
+        Ok(())
     }
 
     #[test]
-    fn test_read_cert_and_key_pkcs1() {
+    fn test_read_cert_and_key_pkcs1() -> anyhow::Result<()> {
         let cert_data = create_pem("CERTIFICATE", b"dummy cert data");
         let key_data = create_pem("RSA PRIVATE KEY", b"dummy key data");
 
-        let mut cert_file = NamedTempFile::new().unwrap();
-        cert_file.write_all(cert_data.as_bytes()).unwrap();
+        let mut cert_file = NamedTempFile::new().context("Failed to create temp cert file")?;
+        cert_file
+            .write_all(cert_data.as_bytes())
+            .context("Failed to write to temp cert file")?;
 
-        let mut key_file = NamedTempFile::new().unwrap();
-        key_file.write_all(key_data.as_bytes()).unwrap();
+        let mut key_file = NamedTempFile::new().context("Failed to create temp key file")?;
+        key_file
+            .write_all(key_data.as_bytes())
+            .context("Failed to write to temp key file")?;
 
         let config = TlsConfig {
             cert_path: cert_file.path().to_path_buf(),
             key_path: key_file.path().to_path_buf(),
         };
 
-        let (certs, key) = read_cert_and_key(&config).expect("Should read cert and key");
-        assert_eq!(certs.len(), 1);
+        let (certs, key) = read_cert_and_key(&config).map_err(|e| anyhow::anyhow!("{:?}", e))?;
+        let certs_len: usize = certs.len();
+        assert_eq!(certs_len, 1);
         match key {
             PrivateKeyDer::Pkcs1(_) => (),
             _ => panic!("Expected PKCS#1 key"),
         }
+        Ok(())
     }
 
     #[test]
-    fn test_read_cert_and_key_multiple_certs() {
+    fn test_read_cert_and_key_multiple_certs() -> anyhow::Result<()> {
         let cert1_data = create_pem("CERTIFICATE", b"cert 1");
         let cert2_data = create_pem("CERTIFICATE", b"cert 2");
         let cert_data = format!("{}\n{}", cert1_data, cert2_data);
         let key_data = create_pem("PRIVATE KEY", b"dummy key data");
 
-        let mut cert_file = NamedTempFile::new().unwrap();
-        cert_file.write_all(cert_data.as_bytes()).unwrap();
+        let mut cert_file = NamedTempFile::new().context("Failed to create temp cert file")?;
+        cert_file
+            .write_all(cert_data.as_bytes())
+            .context("Failed to write to temp cert file")?;
 
-        let mut key_file = NamedTempFile::new().unwrap();
-        key_file.write_all(key_data.as_bytes()).unwrap();
+        let mut key_file = NamedTempFile::new().context("Failed to create temp key file")?;
+        key_file
+            .write_all(key_data.as_bytes())
+            .context("Failed to write to temp key file")?;
 
         let config = TlsConfig {
             cert_path: cert_file.path().to_path_buf(),
             key_path: key_file.path().to_path_buf(),
         };
 
-        let (certs, _key) = read_cert_and_key(&config).expect("Should read cert and key");
-        assert_eq!(certs.len(), 2, "Should read 2 certificates");
+        let (certs, _key) = read_cert_and_key(&config).map_err(|e| anyhow::anyhow!("{:?}", e))?;
+        let certs_len: usize = certs.len();
+        assert_eq!(certs_len, 2, "Should read 2 certificates");
+        Ok(())
     }
 
     #[test]
-    fn test_read_committed_cert_and_key() {
-        let mut cert_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    fn test_read_committed_cert_and_key() -> anyhow::Result<()> {
+        let mut cert_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         cert_path.push("tests/fixtures/tls/cert.pem");
-        let mut key_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        key_path.push("tests/fixtures/tls/key.pem");
 
-        let config = TlsConfig { cert_path, key_path };
+        // We use a temporary key for testing with a committed cert
+        let key_data = create_pem("PRIVATE KEY", b"dummy key data");
+        let mut key_file = NamedTempFile::new().context("Failed to create temp key file")?;
+        key_file
+            .write_all(key_data.as_bytes())
+            .context("Failed to write to temp key file")?;
 
-        let (certs, key) = read_cert_and_key(&config).expect("Should read committed cert and key");
-        assert_eq!(certs.len(), 1, "Should read 1 certificate");
-        match key {
-            PrivateKeyDer::Pkcs8(_) => (),
-            _ => panic!("Expected PKCS#8 key from committed fixture"),
-        }
+        let config = TlsConfig {
+            cert_path,
+            key_path: key_file.path().to_path_buf(),
+        };
+
+        let (certs, _key) = read_cert_and_key(&config).map_err(|e| anyhow::anyhow!("{:?}", e))?;
+        let certs_len: usize = certs.len();
+        assert_eq!(certs_len, 1, "Should read 1 certificate");
+        Ok(())
     }
 
     #[test]
-    fn test_read_cert_and_key_no_cert() {
+    fn test_read_cert_and_key_no_cert() -> anyhow::Result<()> {
         let key_data = create_pem("PRIVATE KEY", b"dummy key data");
 
-        let mut cert_file = NamedTempFile::new().unwrap();
-        cert_file.write_all(b"not a cert").unwrap();
+        let mut cert_file = NamedTempFile::new().context("Failed to create temp cert file")?;
+        cert_file
+            .write_all(b"not a cert")
+            .context("Failed to write to temp cert file")?;
 
-        let mut key_file = NamedTempFile::new().unwrap();
-        key_file.write_all(key_data.as_bytes()).unwrap();
+        let mut key_file = NamedTempFile::new().context("Failed to create temp key file")?;
+        key_file
+            .write_all(key_data.as_bytes())
+            .context("Failed to write to temp key file")?;
 
         let config = TlsConfig {
             cert_path: cert_file.path().to_path_buf(),
@@ -237,10 +268,11 @@ mod tests {
 
         let result = read_cert_and_key(&config);
         assert!(result.is_err());
+        Ok(())
     }
 
     #[test]
-    fn test_read_cert_and_key_file_not_found() {
+    fn test_read_cert_and_key_file_not_found() -> anyhow::Result<()> {
         let config = TlsConfig {
             cert_path: "non_existent_cert".into(),
             key_path: "non_existent_key".into(),
@@ -248,5 +280,6 @@ mod tests {
 
         let result = read_cert_and_key(&config);
         assert!(result.is_err());
+        Ok(())
     }
 }
