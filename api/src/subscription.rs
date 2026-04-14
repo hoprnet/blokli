@@ -37,8 +37,8 @@ use uuid::Uuid;
 
 use crate::{
     conversions::{convert_safe_execution, convert_transaction_status},
-    query::{fetch_safe_threshold_by_address, owners_for_safe},
     errors,
+    query::{fetch_safe_threshold_by_address, owners_for_safe},
 };
 
 #[derive(Debug)]

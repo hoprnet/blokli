@@ -334,7 +334,6 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
         )
         .await?;
 
-
     // wait for the latest ticket param update
     let deadline = Instant::now() + Duration::from_secs(subscription_timeout().as_secs());
     let mut latest_output = None;

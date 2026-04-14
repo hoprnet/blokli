@@ -18,9 +18,9 @@ use hopr_types::{
         traits::ToHex,
     },
 };
-use rand::RngCore;
-use hopr_types::primitive::{prelude::Address, traits::ToHex};
 use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
+
+type TestSchema = async_graphql::Schema<QueryRoot, async_graphql::EmptyMutation, async_graphql::EmptySubscription>;
 
 fn safe_address() -> Address {
     Address::new(&[0x11; 20])
@@ -34,7 +34,21 @@ fn chain_key_address() -> Address {
     Address::new(&[0x33; 20])
 }
 
-type TestSchema = async_graphql::Schema<QueryRoot, async_graphql::EmptyMutation, async_graphql::EmptySubscription>;
+fn secondary_safe_address() -> Address {
+    Address::new(&[0x44; 20])
+}
+
+fn secondary_module_address() -> Address {
+    Address::new(&[0x55; 20])
+}
+
+fn secondary_chain_key_address() -> Address {
+    Address::new(&[0x66; 20])
+}
+
+fn owner_address() -> Address {
+    Address::new(&[0x77; 20])
+}
 
 fn build_test_schema(db: &BlokliDb) -> TestSchema {
     async_graphql::Schema::build(
@@ -54,17 +68,16 @@ fn build_test_schema(db: &BlokliDb) -> TestSchema {
 async fn test_safe_query() -> anyhow::Result<()> {
     let db = BlokliDb::new_in_memory().await?;
 
-    // Create test data
-    let safe_address_0 = random_address();
-    let module_address_0 = random_address();
-    let chain_key_0 = random_address();
+    let safe_address_0 = safe_address();
+    let module_address_0 = module_address();
+    let chain_key_0 = chain_key_address();
 
-    let safe_address_1 = random_address();
-    let module_address_1 = random_address();
-    let chain_key_1 = random_address();
-    let owner_address_2 = random_address();
+    let safe_address_1 = secondary_safe_address();
+    let module_address_1 = secondary_module_address();
+    let chain_key_1 = secondary_chain_key_address();
+    let owner_address_2 = owner_address();
 
-    db.create_safe_contract(None, safe_addr, module_addr, chain_key, 100, 0, 0)
+    db.create_safe_contract(None, safe_address_0, module_address_0, chain_key_0, 100, 0, 0)
         .await?;
     db.create_safe_contract(None, safe_address_1, module_address_1, chain_key_1, 100, 0, 1)
         .await?;
@@ -148,7 +161,7 @@ async fn test_safe_query() -> anyhow::Result<()> {
     .await?;
 
     let count = SafeEntity::find()
-        .filter(SafeColumn::Address.eq(safe_addr.as_ref().to_vec()))
+        .filter(SafeColumn::Address.eq(safe_address_0.as_ref().to_vec()))
         .count(db.conn(blokli_db::TargetDb::Index))
         .await?;
     assert_eq!(count, 1, "DB should have 1 safe contract");
@@ -176,7 +189,7 @@ async fn test_safe_query() -> anyhow::Result<()> {
             }}
         }}
         "#,
-        safe_addr.to_hex()
+        safe_address_0.to_hex()
     );
 
     let response = schema.execute(query).await;
@@ -189,12 +202,30 @@ async fn test_safe_query() -> anyhow::Result<()> {
 async fn test_safe_by_chain_key_query() -> anyhow::Result<()> {
     let db = BlokliDb::new_in_memory().await?;
 
-    let safe_addr = safe_address();
-    let module_addr = module_address();
+    let safe_address = safe_address();
+    let module_address = module_address();
     let chain_key = chain_key_address();
+    let owner_address = owner_address();
 
-    db.create_safe_contract(None, safe_addr, module_addr, chain_key, 100, 0, 0)
+    db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
         .await?;
+    db.upsert_safe_owner_state(None, safe_address, owner_address, true, 101, 0, 0)
+        .await?;
+    db.record_safe_activity(
+        None,
+        safe_address,
+        SafeActivityKind::ChangedThreshold,
+        Hash::default(),
+        None,
+        None,
+        Some("2".to_string()),
+        None,
+        None,
+        105,
+        0,
+        0,
+    )
+    .await?;
 
     let schema = build_test_schema(&db);
 
@@ -211,18 +242,11 @@ async fn test_safe_by_chain_key_query() -> anyhow::Result<()> {
             }}
         }}
         "#,
-        owner_address_2.to_hex()
+        owner_address.to_hex()
     );
 
     let response = schema.execute(query).await;
     insta::assert_yaml_snapshot!(response);
-
-    let data = response.data.into_json().unwrap();
-    let safe_data = data["safeByChainKey"].as_object().unwrap();
-    assert_eq!(safe_data["address"], safe_address_0.to_hex());
-    assert_eq!(safe_data["moduleAddress"], module_address_0.to_hex());
-    assert_eq!(safe_data["chainKey"], chain_key_0.to_hex());
-    assert_eq!(safe_data["threshold"], "3");
     Ok(())
 }
 
@@ -230,12 +254,27 @@ async fn test_safe_by_chain_key_query() -> anyhow::Result<()> {
 async fn test_safes_list_query() -> anyhow::Result<()> {
     let db = BlokliDb::new_in_memory().await?;
 
-    let safe_addr = safe_address();
-    let module_addr = module_address();
+    let safe_address = safe_address();
+    let module_address = module_address();
     let chain_key = chain_key_address();
 
-    db.create_safe_contract(None, safe_addr, module_addr, chain_key, 100, 0, 0)
+    db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
         .await?;
+    db.record_safe_activity(
+        None,
+        safe_address,
+        SafeActivityKind::SafeSetup,
+        Hash::default(),
+        None,
+        None,
+        Some("4".to_string()),
+        None,
+        Some(chain_key),
+        100,
+        0,
+        0,
+    )
+    .await?;
 
     let schema = build_test_schema(&db);
 
