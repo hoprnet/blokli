@@ -1822,9 +1822,9 @@ dependencies = [
  "env_logger",
  "futures",
  "hex",
- "hopr-bindings 4.7.4",
+ "hopr-bindings",
  "hopr-metrics",
- "hopr-types 1.5.4",
+ "hopr-types",
  "humantime-serde",
  "insta",
  "multiaddr",
@@ -1856,7 +1856,7 @@ dependencies = [
  "async-graphql",
  "blokli-chain-types",
  "chrono",
- "hopr-types 1.5.4",
+ "hopr-types",
  "serde_json",
 ]
 
@@ -1878,8 +1878,8 @@ dependencies = [
  "futures",
  "hex",
  "hopr-async-runtime",
- "hopr-bindings 4.7.4",
- "hopr-types 1.5.4",
+ "hopr-bindings",
+ "hopr-types",
  "insta",
  "rand 0.9.2",
  "serde",
@@ -1912,9 +1912,9 @@ dependencies = [
  "futures-util",
  "hex-literal",
  "hopr-async-runtime",
- "hopr-bindings 4.7.4",
+ "hopr-bindings",
  "hopr-metrics",
- "hopr-types 1.5.4",
+ "hopr-types",
  "lazy_static",
  "mockall",
  "multiaddr",
@@ -1944,9 +1944,9 @@ dependencies = [
  "futures-timer",
  "hex-literal",
  "hopr-async-runtime",
- "hopr-bindings 4.7.4",
+ "hopr-bindings",
  "hopr-metrics",
- "hopr-types 1.5.4",
+ "hopr-types",
  "http",
  "lazy_static",
  "mockall",
@@ -1975,8 +1975,8 @@ name = "blokli-chain-types"
 version = "0.3.0"
 dependencies = [
  "hex-literal",
- "hopr-bindings 4.7.4",
- "hopr-types 1.5.4",
+ "hopr-bindings",
+ "hopr-types",
  "lazy_static",
  "libp2p-identity",
  "multiaddr",
@@ -2001,7 +2001,7 @@ dependencies = [
  "futures",
  "futures-time",
  "hex",
- "hopr-types 1.5.4",
+ "hopr-types",
  "http",
  "indexmap 2.14.0",
  "insta",
@@ -2032,7 +2032,7 @@ dependencies = [
  "futures",
  "hex",
  "hex-literal",
- "hopr-types 1.5.4",
+ "hopr-types",
  "lazy_static",
  "multiaddr",
  "rand 0.9.2",
@@ -2058,7 +2058,7 @@ dependencies = [
  "clap",
  "futures",
  "hex",
- "hopr-types 1.5.4",
+ "hopr-types",
  "sea-orm",
  "sea-orm-cli",
  "sea-orm-migration",
@@ -2070,7 +2070,7 @@ dependencies = [
 name = "blokli-db-migration"
 version = "0.11.0"
 dependencies = [
- "hopr-types 1.5.4",
+ "hopr-types",
  "sea-orm",
  "sea-orm-migration",
  "tokio",
@@ -2084,8 +2084,8 @@ dependencies = [
  "blokli-chain-types",
  "clap",
  "hex",
- "hopr-bindings 4.7.4",
- "hopr-types 1.5.4",
+ "hopr-bindings",
+ "hopr-types",
 ]
 
 [[package]]
@@ -2097,7 +2097,7 @@ dependencies = [
  "clap",
  "futures",
  "hex",
- "hopr-types 1.5.4",
+ "hopr-types",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -2119,8 +2119,8 @@ dependencies = [
  "futures-time",
  "hex",
  "hopli",
- "hopr-bindings 4.7.4",
- "hopr-types 1.5.4",
+ "hopr-bindings",
+ "hopr-types",
  "insta",
  "libc",
  "rand 0.9.2",
@@ -2156,9 +2156,9 @@ dependencies = [
  "flagset",
  "futures",
  "hopli",
- "hopr-bindings 4.7.4",
+ "hopr-bindings",
  "hopr-metrics",
- "hopr-types 1.5.4",
+ "hopr-types",
  "humantime-serde",
  "opentelemetry",
  "opentelemetry-otlp",
@@ -3928,16 +3928,16 @@ dependencies = [
 [[package]]
 name = "hopli"
 version = "0.17.1"
-source = "git+https://github.com/hoprnet/hopli?branch=main#12c87c90c723929975dc6d05daa79d5fe0b1b036"
+source = "git+https://github.com/hoprnet/hopli?branch=main#87a6a238cbbcf027a771f4445e9caf0a8be4accf"
 dependencies = [
  "alloy-transport-http",
  "anyhow",
  "clap",
  "hex",
  "hex-literal",
- "hopr-bindings 4.7.3",
+ "hopr-bindings",
  "hopr-crypto-keypair",
- "hopr-types 1.5.3",
+ "hopr-types",
  "lazy_static",
  "rpassword",
  "serde",
@@ -3980,30 +3980,13 @@ dependencies = [
 ]
 
 [[package]]
-name = "hopr-bindings"
-version = "4.7.4"
-source = "git+https://github.com/hoprnet/contracts?branch=main#cba2eaab72158a83438dde261a45654c3872de8b"
-dependencies = [
- "alloy",
- "anyhow",
- "const_format",
- "hex-literal",
- "serde",
- "serde_json",
- "serde_with",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
-]
-
-[[package]]
 name = "hopr-crypto-keypair"
 version = "0.5.3"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#fdd905796366041e9159e973c4eb64265037e02d"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#b39d31cde88c47df9fe5d799a4b5ca2b6cc21e2c"
 dependencies = [
  "hex",
  "hopr-platform",
- "hopr-types 1.5.3",
+ "hopr-types",
  "scrypt",
  "serde",
  "serde_json",
@@ -4026,7 +4009,7 @@ dependencies = [
 [[package]]
 name = "hopr-platform"
 version = "0.3.1"
-source = "git+https://github.com/hoprnet/hoprnet?branch=master#fdd905796366041e9159e973c4eb64265037e02d"
+source = "git+https://github.com/hoprnet/hoprnet?branch=master#b39d31cde88c47df9fe5d799a4b5ca2b6cc21e2c"
 dependencies = [
  "thiserror 2.0.18",
 ]
@@ -4054,54 +4037,7 @@ dependencies = [
  "generic-array 1.3.5",
  "hex",
  "hex-literal",
- "hopr-bindings 4.7.3",
- "k256",
- "lazy_static",
- "libp2p-identity",
- "multiaddr",
- "num_enum",
- "poly1305",
- "primitive-types 0.14.0",
- "rand 0.10.0",
- "rayon",
- "regex",
- "secp256k1 0.31.1",
- "serde",
- "serde_bytes",
- "serde_with",
- "sha2",
- "sha3",
- "smart-default",
- "strum 0.28.0",
- "subtle",
- "thiserror 2.0.18",
- "tracing",
- "typenum",
- "zeroize",
-]
-
-[[package]]
-name = "hopr-types"
-version = "1.5.4"
-source = "git+https://github.com/hoprnet/hopr-types?branch=main#1aedd842f80316910cbb28b88a08da68d590b922"
-dependencies = [
- "aes",
- "anyhow",
- "aquamarine",
- "async-trait",
- "bigdecimal",
- "blake3",
- "chacha20 0.9.1",
- "chrono",
- "cipher",
- "ctr",
- "curve25519-dalek",
- "digest 0.10.7",
- "ed25519-dalek",
- "float-cmp",
- "generic-array 1.3.5",
- "hex",
- "hex-literal",
+ "hopr-bindings",
  "k256",
  "lazy_static",
  "libp2p-identity",
