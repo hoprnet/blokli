@@ -2,11 +2,11 @@
 edition = "2021"
 name    = "blokli-integration-tests"
 publish = false
-version = "0.1.3"
+version = "0.2.0"
 
 [dependencies]
 anyhow = { workspace = true }
-blokli-client = { workspace = true }
+blokli-client = { workspace = true, features = ["serde"] }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
 eventsource-client = { workspace = true }
@@ -21,6 +21,7 @@ hopr-types = { workspace = true, features = [
   "internal",
   "primitive",
 ] }
+insta = { workspace = true, features = ["redactions", "yaml"] }
 libc = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }

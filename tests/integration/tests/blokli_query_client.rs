@@ -7,7 +7,7 @@ use blokli_client::api::{
 };
 use blokli_integration_tests::{
     constants::parsed_safe_balance,
-    fixtures::{IntegrationFixture, integration_fixture as fixture},
+    fixtures::{IntegrationFixture, integration_fixture as fixture, poll_until},
 };
 use hex::{FromHex, ToHex};
 use hopr_bindings::exports::alloy::primitives::{Address, U256};
@@ -133,12 +133,19 @@ async fn query_token_balance_and_allowance_of_safe(#[future(awt)] fixture: Integ
         Some(safe) => safe,
         None => {
             fixture.deploy_or_get_safe(account, parsed_safe_balance()).await?;
-            tokio::time::sleep(Duration::from_secs(8)).await; // dummy wait for the safe to be indexed
-            fixture
-                .client()
-                .query_safe(SafeSelector::ChainKey(account.to_alloy_address().into()))
-                .await?
-                .expect("Safe not found")
+            let client = fixture.client().clone();
+            let selector = SafeSelector::ChainKey(account.to_alloy_address().into());
+            poll_until(
+                "safe indexing",
+                Duration::from_secs(30),
+                Duration::from_millis(500),
+                || {
+                    let client = client.clone();
+                    let selector = selector.clone();
+                    async move { Ok(client.query_safe(selector).await?) }
+                },
+            )
+            .await?
         }
     };
 
@@ -179,19 +186,38 @@ async fn query_safe_redeemed_stats_after_ticket_redeem(#[future(awt)] fixture: I
         ..Default::default()
     };
 
-    let src_safe = fixture.deploy_safe_and_announce(src, parsed_safe_balance()).await?;
-    let dst_safe = fixture.deploy_safe_and_announce(dst, parsed_safe_balance()).await?;
+    let (src_safe, dst_safe) = tokio::try_join!(
+        fixture.deploy_safe_and_announce(src, parsed_safe_balance()),
+        fixture.deploy_safe_and_announce(dst, parsed_safe_balance()),
+    )?;
 
     fixture.approve(src, channel_amount, &src_safe.module_address).await?;
-    sleep(Duration::from_secs(8)).await;
 
     fixture
         .open_channel(src, dst, channel_amount, &src_safe.module_address, None)
         .await?;
 
-    sleep(Duration::from_secs(8)).await;
-
-    let channels = fixture.client().query_channels(channel_selector.clone()).await?;
+    // Wait for the indexer to pick up the open channel
+    let selector = channel_selector.clone();
+    let client = fixture.client().clone();
+    let channels = poll_until(
+        "channel open indexed",
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+        || {
+            let client = client.clone();
+            let selector = selector.clone();
+            async move {
+                let channels = client.query_channels(selector).await?;
+                Ok(if channels.channels.is_empty() {
+                    None
+                } else {
+                    Some(channels)
+                })
+            }
+        },
+    )
+    .await?;
     let channel = channels
         .channels
         .first()
@@ -217,21 +243,32 @@ async fn query_safe_redeemed_stats_after_ticket_redeem(#[future(awt)] fixture: I
         )
         .await?;
 
-    sleep(Duration::from_secs(8)).await;
-
-    let stats = fixture
-        .client()
-        .query_redeemed_stats(RedeemedStatsSelector::SafeAddress(dst_safe_address.into()))
-        .await?;
+    // Wait for the indexer to pick up the redeemed ticket
+    let expected_count = initial_stats.redemption_count.0.parse::<u64>()? + 1;
+    let stats_selector = RedeemedStatsSelector::SafeAddress(dst_safe_address.into());
+    let client = fixture.client().clone();
+    let stats = poll_until(
+        "ticket redemption indexed",
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+        || {
+            let client = client.clone();
+            async move {
+                let s = client.query_redeemed_stats(stats_selector).await?;
+                let count: u64 = s.redemption_count.0.parse().map_err(|e| {
+                    anyhow::anyhow!("failed to parse redemption_count '{}': {}", s.redemption_count.0, e)
+                })?;
+                Ok(if count >= expected_count { Some(s) } else { None })
+            }
+        },
+    )
+    .await?;
 
     fixture
         .initiate_outgoing_channel_closure(src, dst, &src_safe.module_address)
         .await?;
 
-    assert_eq!(
-        initial_stats.redemption_count.0.parse::<u64>()? + 1,
-        stats.redemption_count.0.parse::<u64>()?
-    );
+    assert_eq!(expected_count, stats.redemption_count.0.parse::<u64>()?);
     assert_eq!(
         initial_stats.redeemed_amount.0.parse::<HoprBalance>()? + ticket_amount,
         stats.redeemed_amount.0.parse::<HoprBalance>()?
@@ -263,13 +300,24 @@ async fn query_transaction_count(#[future(awt)] fixture: IntegrationFixture) -> 
         .await?;
 
     let tx_id = fixture.submit_and_track_tx(&signed_bytes).await?;
-    loop {
-        let tx = fixture.client().query_transaction_status(tx_id.clone()).await?;
-        if tx.status == TransactionStatus::Confirmed {
-            break;
-        }
-        sleep(Duration::from_secs(2)).await;
-    }
+    poll_until(
+        "tracked transaction confirmation",
+        Duration::from_secs(30),
+        Duration::from_millis(100),
+        || {
+            let client = fixture.client().clone();
+            let tx_id = tx_id.clone();
+            async move {
+                let tx = client.query_transaction_status(tx_id).await?;
+                match tx.status {
+                    TransactionStatus::Confirmed => Ok(Some(())),
+                    TransactionStatus::Submitted => Ok(None),
+                    status => Err(anyhow::anyhow!("transaction reached terminal status: {:?}", status)),
+                }
+            }
+        },
+    )
+    .await?;
 
     let after_count = fixture
         .client()
@@ -298,21 +346,37 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
 
     let amount: HoprBalance = "1 wei wxHOPR".parse().expect("failed to parse amount");
 
-    // Deploy safes for both parties
-    let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
-    let dst_safe = fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
+    // Deploy safes for both parties concurrently
+    let (src_safe, dst_safe) = tokio::try_join!(
+        fixture.deploy_safe_and_announce(&src, parsed_safe_balance()),
+        fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()),
+    )?;
 
     // Set allowance
     fixture.approve(&src, amount, &src_safe.module_address).await?;
-
-    sleep(Duration::from_secs(8)).await;
 
     // Create the channel
     fixture
         .open_channel(&src, &dst, amount, &src_safe.module_address, None)
         .await?;
 
-    sleep(Duration::from_secs(8)).await;
+    // Wait for the indexer to pick up the open channel
+    let open_selector = channel_selector.clone();
+    let client = fixture.client().clone();
+    poll_until(
+        "channel open indexed",
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+        || {
+            let client = client.clone();
+            let selector = open_selector.clone();
+            async move {
+                let count = client.count_channels(selector).await?;
+                Ok(if count >= 1 { Some(count) } else { None })
+            }
+        },
+    )
+    .await?;
 
     let after_count = fixture.client().count_channels(channel_selector.clone()).await?;
     let queried_channels = fixture.client().query_channels(channel_selector.clone()).await?;
@@ -356,10 +420,25 @@ async fn count_and_query_channels(#[future(awt)] fixture: IntegrationFixture) ->
         .initiate_outgoing_channel_closure(&src, &dst, &src_safe.module_address)
         .await?;
 
-    sleep(Duration::from_secs(8)).await;
+    // Wait for the indexer to pick up the channel closure
+    let closed_selector = channel_selector.clone();
+    let client = fixture.client().clone();
+    poll_until(
+        "channel closure indexed",
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+        || {
+            let client = client.clone();
+            let selector = closed_selector.clone();
+            async move {
+                let count = client.count_channels(selector).await?;
+                Ok(if count == 0 { Some(count) } else { None })
+            }
+        },
+    )
+    .await?;
 
     let count_after_closure = fixture.client().count_channels(channel_selector).await?;
-
     assert_eq!(count_after_closure, 0);
 
     Ok(())

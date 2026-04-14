@@ -3,12 +3,12 @@ use futures::{Stream, TryStreamExt};
 
 use super::{BlokliClient, GraphQlQueries};
 use crate::api::{
-    AccountSelector, BlokliSubscriptionClient, ChannelSelector, Result,
+    AccountSelector, BlokliSubscriptionClient, ChannelSelector, Result, TxId,
     internal::{
         AccountVariables, ChannelsVariables, SubscribeAccounts, SubscribeChannels, SubscribeGraph,
         SubscribeSafeDeployment, SubscribeTicketParams,
     },
-    types::{Account, Channel, OpenedChannelsGraphEntry, Safe, TicketParameters},
+    types::{Account, Channel, OpenedChannelsGraphEntry, Safe, TicketParameters, Transaction},
 };
 
 impl GraphQlQueries {
@@ -76,5 +76,12 @@ impl BlokliSubscriptionClient for BlokliClient {
         Ok(self
             .build_subscription_stream(GraphQlQueries::subscribe_safe_deployments())?
             .try_filter_map(|item| futures::future::ok(Some(item.safe_deployed))))
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    fn subscribe_track_transaction(&self, tx_id: TxId) -> Result<impl Stream<Item = Result<Transaction>> + Send> {
+        Ok(self
+            .build_subscription_stream(GraphQlQueries::subscribe_track_transaction(tx_id))?
+            .try_filter_map(|item| futures::future::ok(Some(item.transaction_updated))))
     }
 }

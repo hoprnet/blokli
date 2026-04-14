@@ -4,7 +4,7 @@ description = "Implements the main HOPR chain interface"
 edition     = "2021"
 license     = "GPL-3.0-only"
 name        = "blokli-chain-api"
-version     = "0.6.1"
+version     = "0.7.0"
 
 [lib]
 crate-type = ["rlib"]
@@ -23,11 +23,15 @@ runtime-tokio = [
 ]
 
 [dependencies]
+alloy-sol-types = { workspace = true }
 async-broadcast = { workspace = true }
 async-trait     = { workspace = true }
 chrono          = { workspace = true }
 dashmap         = { workspace = true }
 futures         = { workspace = true }
+hex             = { workspace = true }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
 thiserror       = { workspace = true }
 tokio           = { workspace = true }
 tracing         = { workspace = true }
@@ -52,5 +56,6 @@ anyhow             = { workspace = true }
 blokli-chain-types = { workspace = true }
 blokli-db          = { workspace = true, features = ["runtime-tokio"] }
 env_logger         = { workspace = true }
+insta              = { workspace = true, features = ["redactions", "yaml"] }
 rand               = { workspace = true }
 tokio              = { workspace = true }
