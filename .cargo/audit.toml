@@ -45,4 +45,9 @@ ignore = [
   # Status: Critical for production TLS support. No suitable replacement.
   # Review by: 2026-06-30
   "RUSTSEC-2025-0134",
+
+  # RUSTSEC-2026-0097: Rand is unsound with a custom logger using `rand::rng()`
+  # Crate: rand 0.8.5, 0.8.6, 0.9.2, 0.10.0
+  # Review by: 2026-06-30
+  "RUSTSEC-2026-0097",
 ]
