@@ -1,7 +1,7 @@
 use std::{
     str::FromStr,
     sync::{Arc, Mutex, Once},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
@@ -42,6 +42,7 @@ use hopr_types::{
 };
 use libc::atexit;
 use rand::seq::IndexedRandom;
+use reqwest::StatusCode;
 use rstest::fixture;
 use tokio::{sync::OnceCell, time::sleep};
 use tracing::{debug, info, warn};
@@ -68,6 +69,7 @@ struct IntegrationFixtureInner {
 const DEFAULT_MAX_FEE_PER_GAS: u128 = 2_000_000_000;
 const DEFAULT_MAX_PRIORITY_FEE_PER_GAS: u128 = 1_000_000_000;
 const DEFAULT_GAS_LIMIT: u64 = 10_000_000;
+const READY_POLL_INTERVAL: Duration = Duration::from_millis(250);
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Eip1559GasParameters {
@@ -530,6 +532,85 @@ impl IntegrationFixtureInner {
     }
 }
 
+async fn wait_for_blokli_ready(config: &TestConfig) -> Result<()> {
+    let client = reqwest::Client::builder()
+        .timeout(config.http_timeout)
+        .build()
+        .context("failed to build readiness HTTP client")?;
+    let readyz_url = config
+        .bloklid_url
+        .join("readyz")
+        .context("failed to construct blokli readiness URL")?;
+    let deadline = Instant::now() + STACK_STARTUP_WAIT;
+
+    loop {
+        let last_observation = match client.get(readyz_url.clone()).send().await {
+            Ok(response) => {
+                let status = response.status();
+
+                if status == StatusCode::OK {
+                    info!(url = %readyz_url, "integration stack is ready");
+                    return Ok(());
+                }
+
+                format!("HTTP {}", status)
+            }
+            Err(error) => error.to_string(),
+        };
+
+        if Instant::now() >= deadline {
+            return Err(anyhow::anyhow!(
+                "timed out waiting for blokli readiness at {} after {}s (last observation: {})",
+                readyz_url,
+                STACK_STARTUP_WAIT.as_secs(),
+                last_observation
+            ));
+        }
+
+        tokio::time::sleep(READY_POLL_INTERVAL).await;
+    }
+}
+
+async fn wait_for_blokli_indexed_block(client: &BlokliClient, rpc: &RpcClient) -> Result<()> {
+    let target_block = rpc
+        .block_number()
+        .await
+        .context("failed to query RPC block number after integration bootstrap")?;
+    let deadline = Instant::now() + STACK_STARTUP_WAIT;
+
+    info!(
+        target_block,
+        seconds = STACK_STARTUP_WAIT.as_secs(),
+        "waiting for blokli to index bootstrap transactions"
+    );
+
+    loop {
+        let last_observation = match client.query_chain_info().await {
+            Ok(chain_info) => {
+                let indexed_block = u64::try_from(chain_info.block_number).unwrap_or(0);
+
+                if indexed_block >= target_block {
+                    info!(indexed_block, target_block, "bootstrap transactions indexed by blokli");
+                    return Ok(());
+                }
+
+                format!("indexed block {} < target block {}", indexed_block, target_block)
+            }
+            Err(error) => error.to_string(),
+        };
+
+        if Instant::now() >= deadline {
+            return Err(anyhow::anyhow!(
+                "timed out waiting for blokli to index bootstrap transactions after {}s (last observation: {})",
+                STACK_STARTUP_WAIT.as_secs(),
+                last_observation
+            ));
+        }
+
+        tokio::time::sleep(READY_POLL_INTERVAL).await;
+    }
+}
+
 pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
     let config: Arc<TestConfig> = Arc::new(TestConfig::load()?);
     let mut docker = DockerEnvironment::new(config.clone());
@@ -538,9 +619,10 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
     docker.compose_up()?;
     info!(
         seconds = STACK_STARTUP_WAIT.as_secs(),
-        "waiting for integration stack to stabilize"
+        readiness_url = %config.bloklid_url.join("readyz").context("failed to construct blokli readiness URL")?,
+        "waiting for integration stack readiness"
     );
-    tokio::time::sleep(STACK_STARTUP_WAIT).await;
+    wait_for_blokli_ready(&config).await?;
     let accounts = docker.fetch_anvil_accounts()?;
 
     let rpc = RpcClient::new(config.rpc_url.as_str(), config.http_timeout)?;
@@ -610,7 +692,7 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
         }),
     };
 
-    tokio::time::sleep(Duration::from_secs(15)).await;
+    wait_for_blokli_indexed_block(fixture.client(), fixture.rpc()).await?;
 
     register_shutdown_hook();
 

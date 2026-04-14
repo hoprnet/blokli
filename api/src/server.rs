@@ -238,6 +238,7 @@ pub async fn build_app(
     Ok(Router::new()
         // GraphQL endpoint (queries, mutations, and SSE subscriptions)
         .route("/graphql", get(graphql_playground).post(graphql_handler))
+        .route("/metrics", get(metrics_handler))
         // Health check endpoints for Kubernetes probes
         .route("/healthz", get(healthz_handler))
         .route("/readyz", get(readyz_handler))
@@ -343,6 +344,21 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
         })
     }))
     .into_response()
+}
+
+async fn metrics_handler() -> impl IntoResponse {
+    match hopr_metrics::gather_all_metrics().map_err(|error| error.to_string()) {
+        Ok(metrics) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+            metrics,
+        )
+            .into_response(),
+        Err(error) => {
+            tracing::error!(%error, "failed to gather metrics");
+            (StatusCode::UNPROCESSABLE_ENTITY, "Failed to gather metrics").into_response()
+        }
+    }
 }
 
 /// GraphQL Playground UI (only enabled if playground_enabled config is true)
@@ -465,7 +481,13 @@ async fn readyz_handler(State(state): State<AppState>) -> impl IntoResponse {
 
 #[cfg(test)]
 mod tests {
-    use axum::http::{HeaderValue, Response, StatusCode};
+    use axum::{
+        Router,
+        body::Body,
+        http::{HeaderValue, Request, Response, StatusCode},
+        routing::get,
+    };
+    use tower::ServiceExt;
 
     use super::*;
 
@@ -837,5 +859,35 @@ mod tests {
             extract_subscription_name("subscription SafeDeployed($id: ID!) { address }"),
             "safe-deployed"
         );
+    }
+
+    #[tokio::test]
+    async fn test_metrics_handler_returns_prometheus_text() {
+        let metric_name = format!("blokli_metrics_handler_test_{}", Uuid::new_v4().simple());
+        let metric = hopr_metrics::MultiCounter::new(&metric_name, "metrics endpoint test", &["kind"])
+            .expect("metric should be created");
+
+        metric.increment(&["test-kind"]);
+
+        let app = Router::new().route("/metrics", get(metrics_handler));
+        let request = Request::builder()
+            .uri("/metrics")
+            .body(Body::empty())
+            .expect("request should be built");
+
+        let response = app.oneshot(request).await.expect("request should succeed");
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let body = String::from_utf8(body.to_vec()).expect("metrics response should be UTF-8");
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            headers.get(header::CONTENT_TYPE).and_then(|value| value.to_str().ok()),
+            Some("text/plain; version=0.0.4; charset=utf-8")
+        );
+        assert!(body.contains(&metric_name));
     }
 }

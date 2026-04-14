@@ -1822,6 +1822,7 @@ dependencies = [
  "futures",
  "hex",
  "hopr-bindings",
+ "hopr-metrics",
  "hopr-types",
  "humantime-serde",
  "multiaddr",

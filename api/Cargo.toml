@@ -67,6 +67,7 @@ blokli-chain-types   = { workspace = true }
 blokli-db            = { workspace = true }
 blokli-db-entity     = { workspace = true }
 hopr-bindings        = { workspace = true }
+hopr-metrics         = { workspace = true }
 hopr-types           = { workspace = true, features = ["crypto", "primitive"] }
 
 # Randomization

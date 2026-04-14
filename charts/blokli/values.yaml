@@ -190,7 +190,7 @@ monitoring:
     ## @param monitoring.serviceMonitor.scrapeTimeout Scrape timeout
     ##
     scrapeTimeout: 10s
-    ## @param monitoring.serviceMonitor.path Metrics path (update when metrics endpoint is implemented)
+    ## @param monitoring.serviceMonitor.path Metrics path exposed by the embedded API server
     ##
     path: /metrics
 ## @param extraEnv Additional environment variables
