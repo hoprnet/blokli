@@ -43,20 +43,25 @@ fn read_cert_and_key(config: &TlsConfig) -> ApiResult<(Vec<CertificateDer<'stati
     let mut certs = Vec::new();
     let cert_str = std::str::from_utf8(&cert_data)
         .map_err(|e| ApiError::ConfigError(format!("Certificate file is not valid UTF-8: {}", e)))?;
+    const CERT_BEGIN: &str = "-----BEGIN CERTIFICATE-----";
+    const CERT_END: &str = "-----END CERTIFICATE-----";
+    let mut rest = cert_str;
 
-    for block in cert_str.split("-----BEGIN CERTIFICATE-----") {
-        let block = block.trim();
-        if block.is_empty() {
-            continue;
-        }
+    while let Some(begin_idx) = rest.find(CERT_BEGIN) {
+        let after_begin = &rest[begin_idx..];
+        let end_idx = after_begin
+            .find(CERT_END)
+            .ok_or_else(|| ApiError::ConfigError("Unterminated certificate PEM block".to_string()))?;
 
-        let full_block = format!("-----BEGIN CERTIFICATE-----\n{}", block);
-        let (label, der) = decode_vec(full_block.as_bytes())
+        let pem_block = &after_begin[..end_idx + CERT_END.len()];
+        let (label, der) = decode_vec(pem_block.as_bytes())
             .map_err(|e| ApiError::ConfigError(format!("Failed to decode certificate: {}", e)))?;
 
         if label == "CERTIFICATE" {
             certs.push(CertificateDer::from(der));
         }
+
+        rest = &after_begin[end_idx + CERT_END.len()..];
     }
 
     if certs.is_empty() {

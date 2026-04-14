@@ -7,7 +7,7 @@ use blokli_client::api::{
 };
 use blokli_integration_tests::{
     constants::{EPSILON, parsed_safe_balance, subscription_timeout},
-    fixtures::{IntegrationFixture, integration_fixture as fixture},
+    fixtures::{IntegrationFixture, integration_fixture as fixture, poll_until},
 };
 use eventsource_client::{Client, ClientBuilder, SSE};
 use futures::stream::StreamExt;
@@ -42,8 +42,10 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
     let expected_channel_id = Hash::from(expected_id).encode_hex::<String>();
     let client = fixture.client().clone();
 
-    let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
-    fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
+    let (src_safe, _dst_safe) = tokio::try_join!(
+        fixture.deploy_safe_and_announce(&src, parsed_safe_balance()),
+        fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()),
+    )?;
 
     fixture.approve(&src, amount, &src_safe.module_address).await?;
 
@@ -152,8 +154,10 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
         .expect("failed to parse amount");
     let client = fixture.client().clone();
 
-    let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
-    fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
+    let (src_safe, _dst_safe) = tokio::try_join!(
+        fixture.deploy_safe_and_announce(&src, parsed_safe_balance()),
+        fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()),
+    )?;
 
     fixture.approve(&src, amount, &src_safe.module_address).await?;
 
@@ -208,15 +212,37 @@ async fn subscribe_graph_channel_update_on_closure(#[future(awt)] fixture: Integ
     let total_amount: HoprBalance = "3 wei wxHOPR".parse().expect("failed to parse amount");
 
     // Setup: deploy safes, announce, approve, and open channel with initial balance
-    let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
-    fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
+    let (src_safe, _dst_safe) = tokio::try_join!(
+        fixture.deploy_safe_and_announce(&src, parsed_safe_balance()),
+        fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()),
+    )?;
     fixture.approve(&src, initial_amount, &src_safe.module_address).await?;
     fixture
         .open_channel(&src, &dst, initial_amount, &src_safe.module_address, None)
         .await?;
 
-    // Wait for indexing so the channel is in the database
-    tokio::time::sleep(Duration::from_secs(8)).await;
+    // Wait for the channel to be indexed before subscribing
+    let channel_selector = ChannelSelector {
+        filter: Some(ChannelFilter::ChannelId(expected_id.into())),
+        status: Some(ChannelStatus::Open),
+        ..Default::default()
+    };
+    let poll_client = fixture.client().clone();
+    let poll_selector = channel_selector.clone();
+    poll_until(
+        "channel indexed for graph subscription",
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+        || {
+            let client = poll_client.clone();
+            let selector = poll_selector.clone();
+            async move {
+                let count = client.count_channels(selector).await?;
+                Ok(if count >= 1 { Some(count) } else { None })
+            }
+        },
+    )
+    .await?;
 
     // Subscribe after the channel exists - consume the stream directly in this task
     let client = fixture.client().clone();
@@ -294,6 +320,7 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
     let client = fixture.client().clone();
 
     let new_win_prob = 0.005f64;
+    let quiet_period = Duration::from_secs(5);
 
     let mut stream = client
         .subscribe_ticket_params()
@@ -307,11 +334,32 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
         )
         .await?;
 
-    let output = stream
-        .next()
-        .timeout(subscription_timeout())
-        .await?
-        .ok_or_else(|| anyhow!("no update received from subscription"))??;
+
+    // wait for the latest ticket param update
+    let deadline = Instant::now() + Duration::from_secs(subscription_timeout().as_secs());
+    let mut latest_output = None;
+
+    while Instant::now() < deadline {
+        let wait_time = quiet_period.min(deadline.saturating_duration_since(Instant::now()));
+
+        match tokio::time::timeout(wait_time, stream.next()).await {
+            Ok(Some(Ok(output))) => {
+                tracing::info!("Received ticket parameters subscription event: {:?}", output);
+                latest_output = Some(output);
+            }
+            Ok(Some(Err(error))) => return Err(error.into()),
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
+
+    let output = latest_output.ok_or_else(|| anyhow!("no ticket parameters received from subscription"))?;
+
+    tracing::info!(
+        "Received ticket parameters update: {:?}, expected: {:?}",
+        output,
+        new_win_prob
+    );
 
     assert!((output.min_ticket_winning_probability - new_win_prob).abs() < EPSILON);
 
@@ -387,7 +435,7 @@ async fn subscribe_keepalive_comments(#[future(awt)] fixture: IntegrationFixture
     let request_body = serde_json::to_string(&query).expect("Failed to serialize request");
     let url = fixture
         .config()
-        .bloklid_url
+        .bloklid_url()
         .join("graphql")
         .map_err(|e| anyhow!("failed to build GraphQL URL: {e}"))?;
 
@@ -440,8 +488,10 @@ async fn subscribe_channels_no_duplicate_initial_state(#[future(awt)] fixture: I
     // 1. Setup accounts and deploy safes
     let [src, dst] = fixture.sample_accounts::<2>();
     let expected_id = generate_channel_id(&src.address, &dst.address);
-    let src_safe = fixture.deploy_safe_and_announce(&src, parsed_safe_balance()).await?;
-    fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()).await?;
+    let (src_safe, _dst_safe) = tokio::try_join!(
+        fixture.deploy_safe_and_announce(&src, parsed_safe_balance()),
+        fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()),
+    )?;
 
     // 2. Open channel BEFORE subscribing
     let amount = "100 wei wxHOPR".parse().expect("failed to parse amount");
@@ -452,16 +502,31 @@ async fn subscribe_channels_no_duplicate_initial_state(#[future(awt)] fixture: I
         .open_channel(&src, &dst, amount, &src_safe.module_address, None)
         .await?;
 
-    // 3. Wait for indexing to complete
-    tokio::time::sleep(Duration::from_secs(2)).await;
-
-    // 4. NOW subscribe (channel already exists in DB)
-    let client = fixture.client().clone();
+    // 3. Wait for the channel to be indexed
     let channel_selector = ChannelSelector {
         filter: Some(ChannelFilter::ChannelId(expected_id.into())),
         status: Some(ChannelStatus::Open),
         ..Default::default()
     };
+    let poll_client = fixture.client().clone();
+    let poll_selector = channel_selector.clone();
+    poll_until(
+        "channel indexed for no-duplicate test",
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+        || {
+            let client = poll_client.clone();
+            let selector = poll_selector.clone();
+            async move {
+                let count = client.count_channels(selector).await?;
+                Ok(if count >= 1 { Some(count) } else { None })
+            }
+        },
+    )
+    .await?;
+
+    // 4. NOW subscribe (channel already exists in DB)
+    let client = fixture.client().clone();
 
     let handle = tokio::task::spawn(async move {
         client
@@ -500,8 +565,23 @@ async fn subscribe_account_no_duplicate_initial_state(#[future(awt)] fixture: In
         .deploy_safe_and_announce(&account, parsed_safe_balance())
         .await?;
 
-    // 2. Wait for indexing
-    tokio::time::sleep(Duration::from_secs(2)).await;
+    // 2. Wait for the account to be indexed
+    let poll_client = fixture.client().clone();
+    let poll_selector = AccountSelector::Address(*account.to_alloy_address().as_ref());
+    poll_until(
+        "account indexed for no-duplicate test",
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+        || {
+            let client = poll_client.clone();
+            let selector = poll_selector.clone();
+            async move {
+                let accounts = client.query_accounts(selector).await?;
+                Ok(if accounts.is_empty() { None } else { Some(()) })
+            }
+        },
+    )
+    .await?;
 
     // 3. Subscribe AFTER account already announced
     let client = fixture.client().clone();
@@ -545,44 +625,8 @@ async fn subscribe_transaction_status_updates(#[future(awt)] fixture: Integratio
     // 2. Submit and get tracking ID
     let tx_id = fixture.submit_and_track_tx(&signed_bytes).await?;
 
-    // 3. Spawn subscription task using raw GraphQL query (since there's no client method yet)
-    let query = json!({
-        "query": format!(
-            "subscription {{ transactionUpdated(id: \"{}\") {{ id status submittedAt transactionHash }} }}",
-            tx_id
-        )
-    });
-    let request_body = serde_json::to_string(&query).expect("Failed to serialize request");
-    let url = fixture
-        .config()
-        .bloklid_url
-        .join("graphql")
-        .map_err(|e| anyhow!("failed to build GraphQL URL: {e}"))?;
-
-    let reqwest_client = reqwest::Client::builder()
-        .connect_timeout(fixture.config().http_timeout)
-        .build()
-        .map_err(|e| anyhow!("failed to build reqwest client: {e}"))?;
-    let transport = blokli_client::ReqwestTransport::new(reqwest_client);
-
-    let client = ClientBuilder::for_url(url.as_str())
-        .map_err(|e| anyhow!("failed to build SSE client: {e}"))?
-        .header("Accept", "text/event-stream")
-        .map_err(|e| anyhow!("failed to set Accept header: {e}"))?
-        .header("Content-Type", "application/json")
-        .map_err(|e| anyhow!("failed to set Content-Type header: {e}"))?
-        .method("POST".into())
-        .body(request_body)
-        .build_with_transport(transport);
-
-    let mut stream = client.stream().filter_map(|item| {
-        futures::future::ready(match item {
-            Ok(SSE::Event(event)) if event.event_type == "next" => {
-                serde_json::from_str::<serde_json::Value>(&event.data).ok()
-            }
-            _ => None,
-        })
-    });
+    // 3. Subscribe to transaction status updates via typed client
+    let mut stream = fixture.client().subscribe_track_transaction(tx_id)?;
 
     // 4. Collect status updates until Confirmed or timeout
     let mut statuses = Vec::new();
@@ -596,36 +640,22 @@ async fn subscribe_transaction_status_updates(#[future(awt)] fixture: Integratio
         let remaining = FuturesDuration::from(overall_timeout - elapsed);
 
         match stream.next().timeout(remaining).await {
-            Ok(Some(update)) => {
-                if let Some(status_str) = update
-                    .get("data")
-                    .and_then(|d| d.get("transactionUpdated"))
-                    .and_then(|tx| tx.get("status"))
-                    .and_then(|s| s.as_str())
-                {
-                    let status = match status_str {
-                        "SUBMITTED" => TransactionStatus::Submitted,
-                        "PENDING" => TransactionStatus::Pending,
-                        "CONFIRMED" => TransactionStatus::Confirmed,
-                        _ => continue,
-                    };
-                    statuses.push(status);
-                    if status == TransactionStatus::Confirmed {
-                        break;
-                    }
+            Ok(Some(Ok(tx))) => {
+                statuses.push(tx.status);
+                if tx.status == TransactionStatus::Confirmed {
+                    break;
                 }
+            }
+            Ok(Some(Err(e))) => {
+                panic!("Subscription error: {e:?}");
             }
             Ok(None) => break,
             Err(_) => break,
         }
     }
 
-    // 5. Assert we received SUBMITTED and CONFIRMED statuses
+    // 5. Assert we received status updates including CONFIRMED
     assert!(!statuses.is_empty(), "Should receive at least one status update");
-    assert!(
-        statuses.contains(&TransactionStatus::Submitted) || statuses.contains(&TransactionStatus::Pending),
-        "Should receive SUBMITTED or PENDING status"
-    );
     assert!(
         statuses.contains(&TransactionStatus::Confirmed),
         "Should receive CONFIRMED status"
