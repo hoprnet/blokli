@@ -38,11 +38,4 @@ ignore = [
   # Status: Macro library for Solidity type generation. No runtime impact.
   # Review by: 2026-06-30
   "RUSTSEC-2024-0436",
-
-  # RUSTSEC-2025-0134: rustls-pemfile unmaintained
-  # Crate: rustls-pemfile 1.0.4 and 2.2.0
-  # Transitive: hyper-rustls -> axum/eventsource-client, rustls-native-certs
-  # Status: Critical for production TLS support. No suitable replacement.
-  # Review by: 2026-06-30
-  "RUSTSEC-2025-0134",
 ]
