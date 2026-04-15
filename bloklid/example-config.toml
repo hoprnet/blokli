@@ -70,16 +70,18 @@ url = "postgresql://bloklid:password@localhost:5432/bloklid"
 # logs_path = "data/bloklid-logs.db"    # Use ":memory:" for in-memory database
 # max_connections = 10
 
-# OpenTelemetry metrics export configuration
+# OpenTelemetry export configuration
 [telemetry]
-# OTLP metrics endpoint.
-# Leave this unset to disable OTLP metric export.
+# OTLP collector endpoint.
+# Leave this unset to disable OTLP export.
 # Transport is inferred from the scheme:
 # - http:// or https:// -> OTLP/HTTP
 # - grpc:// -> OTLP/gRPC
-# For HTTP, use the full metrics path (for example "http://localhost:4318/v1/metrics").
-# For gRPC, use the collector endpoint (for example "grpc://localhost:4317").
-otlp_endpoint = "http://localhost:4318/v1/metrics"
+# For OTLP/HTTP, use the collector base URL.
+# bloklid appends /v1/traces, /v1/logs, or /v1/metrics internally per signal.
+# For multi-signal export, prefer the collector gRPC endpoint
+# (for example "grpc://localhost:4317").
+otlp_endpoint = "http://localhost:4318"
 
 # Comma-separated OTLP signals to export (default: "metrics")
 # Supported values: "metrics", "traces", "logs"
@@ -90,7 +92,8 @@ otlp_signals = "metrics"
 
 # Interval between OTLP metric exports (default: 60s)
 # Must be greater than 0. Supports humantime syntax like "15s", "1m", or "500ms".
-# Only applies when "metrics" is included in otlp_signals.
+# Runtime use is limited to OTLP metrics export. Current config validation still
+# requires a value greater than 0 whenever otlp_endpoint is set.
 metric_export_interval = "60s"
 
 # Indexer configuration

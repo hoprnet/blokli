@@ -38,6 +38,9 @@ See `example-config.toml` for a complete configuration example. Key settings inc
   - `otlp_endpoint`: Collector endpoint for OTLP telemetry; if unset, OTLP export is disabled
   - `otlp_signals`: Comma-separated OTLP signals to export (`metrics`, `traces`, `logs`)
   - `metric_export_interval`: Push interval for OTLP metrics when `metrics` export is enabled
+
+For the complete OTLP setup guide, including environment overrides and endpoint examples, see [OTLP.md](../OTLP.md).
+
 - `indexer`: Indexer-specific configuration
   - `start_block_number`: Block to start indexing from
   - `fast_sync`: Enable fast synchronization

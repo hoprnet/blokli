@@ -21,6 +21,7 @@ use opentelemetry_sdk::{
 use strum::{Display, EnumString};
 use tracing::field::{Field, Visit};
 use tracing_subscriber::Layer;
+use url::Url;
 
 use crate::{
     config::TelemetryConfig,
@@ -103,6 +104,10 @@ impl OtlpConfig {
 
     fn has_signal(&self, signal: OtlpSignal) -> bool {
         self.signals.contains(signal)
+    }
+
+    fn endpoint_for(&self, signal: OtlpSignal) -> Result<String> {
+        resolve_otlp_endpoint(&self.endpoint, self.transport, signal)
     }
 }
 
@@ -248,13 +253,13 @@ pub fn init(verbosity: u8, config: &TelemetryConfig) -> Result<TelemetryHandles>
             OtlpTransport::Grpc => opentelemetry_otlp::SpanExporter::builder()
                 .with_tonic()
                 .with_protocol(Protocol::Grpc)
-                .with_endpoint(otlp_config.endpoint.clone())
+                .with_endpoint(otlp_config.endpoint_for(OtlpSignal::Traces)?)
                 .with_timeout(Duration::from_secs(5))
                 .build(),
             OtlpTransport::Http => opentelemetry_otlp::SpanExporter::builder()
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
-                .with_endpoint(otlp_config.endpoint.clone())
+                .with_endpoint(otlp_config.endpoint_for(OtlpSignal::Traces)?)
                 .with_timeout(Duration::from_secs(5))
                 .build(),
         }
@@ -284,13 +289,13 @@ pub fn init(verbosity: u8, config: &TelemetryConfig) -> Result<TelemetryHandles>
             OtlpTransport::Grpc => opentelemetry_otlp::LogExporter::builder()
                 .with_tonic()
                 .with_protocol(Protocol::Grpc)
-                .with_endpoint(otlp_config.endpoint.clone())
+                .with_endpoint(otlp_config.endpoint_for(OtlpSignal::Logs)?)
                 .with_timeout(Duration::from_secs(5))
                 .build(),
             OtlpTransport::Http => opentelemetry_otlp::LogExporter::builder()
                 .with_http()
                 .with_protocol(opentelemetry_otlp::Protocol::HttpJson)
-                .with_endpoint(otlp_config.endpoint.clone())
+                .with_endpoint(otlp_config.endpoint_for(OtlpSignal::Logs)?)
                 .with_timeout(Duration::from_secs(5))
                 .build(),
         }
@@ -323,13 +328,13 @@ pub fn init(verbosity: u8, config: &TelemetryConfig) -> Result<TelemetryHandles>
             OtlpTransport::Grpc => opentelemetry_otlp::MetricExporter::builder()
                 .with_tonic()
                 .with_protocol(Protocol::Grpc)
-                .with_endpoint(otlp_config.endpoint.clone())
+                .with_endpoint(otlp_config.endpoint_for(OtlpSignal::Metrics)?)
                 .with_timeout(Duration::from_secs(5))
                 .build(),
             OtlpTransport::Http => opentelemetry_otlp::MetricExporter::builder()
                 .with_http()
                 .with_protocol(Protocol::HttpBinary)
-                .with_endpoint(otlp_config.endpoint.clone())
+                .with_endpoint(otlp_config.endpoint_for(OtlpSignal::Metrics)?)
                 .with_timeout(Duration::from_secs(5))
                 .build(),
         }
@@ -442,6 +447,52 @@ fn normalize_otlp_endpoint(endpoint: &str, transport: OtlpTransport) -> String {
     }
 }
 
+fn resolve_otlp_endpoint(endpoint: &str, transport: OtlpTransport, signal: OtlpSignal) -> Result<String> {
+    match transport {
+        OtlpTransport::Grpc => Ok(normalize_otlp_endpoint(endpoint, transport)),
+        OtlpTransport::Http => resolve_http_otlp_endpoint(endpoint, signal),
+    }
+}
+
+fn resolve_http_otlp_endpoint(endpoint: &str, signal: OtlpSignal) -> Result<String> {
+    let mut url = Url::parse(endpoint).map_err(|error| {
+        BloklidError::NonSpecific(format!(
+            "failed to parse telemetry.otlp_endpoint '{endpoint}' as an HTTP(S) URL: {error}"
+        ))
+    })?;
+    let signal_path = otlp_http_signal_path(signal);
+    let current_path = url.path();
+
+    if current_path.is_empty() || current_path == "/" {
+        url.set_path(signal_path);
+        return Ok(url.to_string());
+    }
+
+    if let Some(prefix) = strip_known_http_signal_suffix(current_path) {
+        let normalized_path = format!("{prefix}{signal_path}");
+        url.set_path(&normalized_path);
+        return Ok(url.to_string());
+    }
+
+    let normalized_path = format!("{}{signal_path}", current_path.trim_end_matches('/'));
+    url.set_path(&normalized_path);
+    Ok(url.to_string())
+}
+
+fn strip_known_http_signal_suffix(path: &str) -> Option<&str> {
+    ["/v1/traces", "/v1/logs", "/v1/metrics"]
+        .into_iter()
+        .find_map(|suffix| path.strip_suffix(suffix))
+}
+
+fn otlp_http_signal_path(signal: OtlpSignal) -> &'static str {
+    match signal {
+        OtlpSignal::Traces => "/v1/traces",
+        OtlpSignal::Logs => "/v1/logs",
+        OtlpSignal::Metrics => "/v1/metrics",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -501,6 +552,42 @@ mod tests {
     fn test_normalize_otlp_endpoint_for_grpc() {
         assert_eq!(
             normalize_otlp_endpoint("grpc://localhost:4317", OtlpTransport::Grpc),
+            "http://localhost:4317"
+        );
+    }
+
+    #[test]
+    fn test_resolve_http_otlp_endpoint_appends_metric_path_for_base_url() {
+        assert_eq!(
+            resolve_http_otlp_endpoint("http://localhost:4318", OtlpSignal::Metrics)
+                .expect("base collector URL should resolve"),
+            "http://localhost:4318/v1/metrics"
+        );
+    }
+
+    #[test]
+    fn test_resolve_http_otlp_endpoint_appends_signal_path_for_nested_base_url() {
+        assert_eq!(
+            resolve_http_otlp_endpoint("https://collector.example/otel", OtlpSignal::Logs)
+                .expect("nested base collector URL should resolve"),
+            "https://collector.example/otel/v1/logs"
+        );
+    }
+
+    #[test]
+    fn test_resolve_http_otlp_endpoint_rewrites_existing_signal_suffix() {
+        assert_eq!(
+            resolve_http_otlp_endpoint("http://localhost:4318/v1/metrics", OtlpSignal::Traces)
+                .expect("legacy full metrics path should be rewritten for traces"),
+            "http://localhost:4318/v1/traces"
+        );
+    }
+
+    #[test]
+    fn test_resolve_otlp_endpoint_keeps_grpc_normalization() {
+        assert_eq!(
+            resolve_otlp_endpoint("grpc://localhost:4317", OtlpTransport::Grpc, OtlpSignal::Metrics)
+                .expect("grpc endpoint should normalize"),
             "http://localhost:4317"
         );
     }
