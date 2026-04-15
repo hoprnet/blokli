@@ -162,7 +162,10 @@ pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> 
     if config.playground_enabled {
         info!("GraphQL Playground: {}://{}/graphql", protocol, config.bind_address);
     }
+    #[cfg(feature = "telemetry")]
     info!("Metrics endpoint: {}://{}/metrics", protocol, config.bind_address);
+    #[cfg(not(feature = "telemetry"))]
+    info!("Metrics endpoint disabled (build without telemetry feature)");
     info!("Health check: {}://{}/healthz", protocol, config.bind_address);
     info!("Readiness check: {}://{}/readyz", protocol, config.bind_address);
 

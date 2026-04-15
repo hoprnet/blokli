@@ -637,7 +637,12 @@ async fn wait_for_blokli_indexed_block(client: &BlokliClient, rpc: &RpcClient) -
     loop {
         let last_observation = match client.query_chain_info().await {
             Ok(chain_info) => {
-                let indexed_block = u64::try_from(chain_info.block_number).unwrap_or(0);
+                let indexed_block = u64::try_from(chain_info.block_number).map_err(|_| {
+                    anyhow::anyhow!(
+                        "blokli reported a negative indexed block during bootstrap: {}",
+                        chain_info.block_number
+                    )
+                })?;
 
                 if indexed_block >= target_block {
                     info!(indexed_block, target_block, "bootstrap transactions indexed by blokli");
@@ -691,9 +696,13 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
 
     docker.ensure_image_available()?;
     docker.compose_up()?;
+    let readiness_url = config
+        .bloklid_url()
+        .join("readyz")
+        .context("failed to construct blokli readiness URL")?;
     info!(
         seconds = STACK_STARTUP_WAIT.as_secs(),
-        readiness_url = %config.bloklid_url().join("readyz").context("failed to construct blokli readiness URL")?,
+        readiness_url = %readiness_url,
         "waiting for integration stack readiness"
     );
     wait_for_blokli_ready(&config).await?;

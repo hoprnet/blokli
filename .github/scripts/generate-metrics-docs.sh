@@ -15,23 +15,84 @@ METRICS_DOC="$REPO_ROOT/METRICS.md"
 # Outputs tab-separated rows:  name \t type \t description \t detail
 # Requires 8 lines of trailing context to capture buckets/keys on later lines.
 extract_metrics() {
-  (cd "$REPO_ROOT" && grep -rA8 -E '(Simple|Multi)(Counter|Gauge|Histogram)::new\(' --exclude-dir='.git' --exclude-dir='target' --exclude-dir='.cargo' --include='*.rs' .) |
+  (cd "$REPO_ROOT" && grep -hrA8 -E '(Simple|Multi)(Counter|Gauge|Histogram)::new\(' --exclude-dir='.git' --exclude-dir='target' --exclude-dir='.cargo' --include='*.rs' .) |
     gawk '
-    /^\.\/misc\/metrics\// { next }
-
-    # ── new ::new( call → flush previous metric and start fresh ──
-    match($0, /(Simple|Multi)(Counter|Gauge|Histogram)::new\(/, t) {
+    function flush_metric(    detail, escaped_desc, escaped_detail) {
       if (name != "") {
+        if (collecting_desc && desc == "" && desc_buffer != "") {
+          desc = desc_buffer
+          gsub(/[[:space:]]+/, " ", desc)
+          sub(/^ /, "", desc)
+          sub(/ $/, "", desc)
+        }
         detail = ""
         if (keys != "") detail = detail "keys: " keys
         if (buckets != "") { if (detail != "") detail = detail "; "; detail = detail "buckets: " buckets }
-        printf "%s\t%s\t%s\t%s\n", name, type, desc, detail
+        escaped_desc = desc
+        escaped_detail = detail
+        gsub(/\|/, "\\|", escaped_desc)
+        gsub(/\|/, "\\|", escaped_detail)
+        printf "%s\t%s\t%s\t%s\n", name, type, escaped_desc, escaped_detail
       }
       name = ""; type = ""; desc = ""; buckets = ""; keys = ""
+      collecting_desc = 0; desc_buffer = ""
+    }
+
+    function append_desc_fragment(fragment) {
+      sub(/\\[[:space:]]*$/, "", fragment)
+      if (desc_buffer == "") desc_buffer = fragment
+      else desc_buffer = desc_buffer " " fragment
+    }
+
+    function finish_desc() {
+      desc = desc_buffer
+      gsub(/[[:space:]]+/, " ", desc)
+      sub(/^ /, "", desc)
+      sub(/ $/, "", desc)
+      collecting_desc = 0
+      desc_buffer = ""
+    }
+
+    function handle_desc_continuation(line,    closing_pos, remainder) {
+      if (!collecting_desc) return 0
+
+      closing_pos = index(line, "\"")
+      if (closing_pos > 0) {
+        append_desc_fragment(substr(line, 1, closing_pos - 1))
+        finish_desc()
+        remainder = substr(line, closing_pos + 1)
+        if (match(remainder, /vec!\[([0-9.,_ ]+)\]/, b)) {
+          buckets = b[1]
+          gsub(/[_ ]/, "", buckets)
+        }
+        if (match(remainder, /&\[([^\]]+)\]/, k)) {
+          keys = k[1]
+          gsub(/"/, "", keys)
+          gsub(/,  */, ", ", keys)
+        }
+      } else {
+        append_desc_fragment(line)
+      }
+
+      return 1
+    }
+
+    /^\.\/misc\/metrics\// { next }
+
+    handle_desc_continuation($0) { next }
+
+    # ── new ::new( call → flush previous metric and start fresh ──
+    match($0, /(Simple|Multi)(Counter|Gauge|Histogram)::new\(/, t) {
+      flush_metric()
       type = t[1] t[2]
       # Try to extract name + description + keys + buckets from the same line
       if (match($0, /"(blokli_[a-z0-9_]+)"/, m)) name = m[1]
       if (name != "" && match($0, /blokli_[a-z0-9_]+",[ ]*"([^"]+)"/, d)) desc = d[2]
+      if (name != "" && desc == "" && match($0, /blokli_[a-z0-9_]+",[ ]*"([^"]*)$/, d)) {
+        collecting_desc = 1
+        desc_buffer = ""
+        append_desc_fragment(d[1])
+      }
       if (name != "" && match($0, /&\[([^\]]+)\]/, k)) {
         keys = k[1]; gsub(/"/, "", keys); gsub(/,  */, ", ", keys)
       }
@@ -43,13 +104,7 @@ extract_metrics() {
 
     # ── group separator ──
     /^--$/ {
-      if (name != "") {
-        detail = ""
-        if (keys != "") detail = detail "keys: " keys
-        if (buckets != "") { if (detail != "") detail = detail "; "; detail = detail "buckets: " buckets }
-        printf "%s\t%s\t%s\t%s\n", name, type, desc, detail
-      }
-      name = ""; type = ""; desc = ""; buckets = ""; keys = ""
+      flush_metric()
       next
     }
 
@@ -58,6 +113,12 @@ extract_metrics() {
 
     # ── second quoted string is the description ──
     name != "" && desc == "" && match($0, /"([^"]+)"/, d) { desc = d[1]; next }
+    name != "" && desc == "" && match($0, /"([^"]*)$/, d) {
+      collecting_desc = 1
+      desc_buffer = ""
+      append_desc_fragment(d[1])
+      next
+    }
 
     # ── collect bucket values (vec![...]) ──
     name != "" && match($0, /vec!\[([0-9.,_ ]+)\]/, b) {
@@ -75,12 +136,7 @@ extract_metrics() {
     }
 
     END {
-      if (name != "") {
-        detail = ""
-        if (keys != "") detail = detail "keys: " keys
-        if (buckets != "") { if (detail != "") detail = detail "; "; detail = detail "buckets: " buckets }
-        printf "%s\t%s\t%s\t%s\n", name, type, desc, detail
-      }
+      flush_metric()
     }
   ' |
     sort -t$'\t' -k1

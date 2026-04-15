@@ -938,34 +938,21 @@ mod tests {
     async fn test_channel_get_for_destination_that_exists_should_be_returned() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
 
-        let expected_destination = Address::default();
+        let src = ChainKeypair::random().public().to_address();
+        let dst = ChainKeypair::random().public().to_address();
 
-        // Create account first (required before channels can be created)
-        let packet_key_expected_destination = *OffchainKeypair::random().public();
-        db.upsert_account(
-            None,
-            1,
-            expected_destination,
-            packet_key_expected_destination,
-            None,
-            1,
-            0,
-            0,
-        )
-        .await?;
+        // Create accounts first (required before channels can be created)
+        let packet_key_src = *OffchainKeypair::random().public();
+        let packet_key_dst: hopr_types::crypto::types::OffchainPublicKey = *OffchainKeypair::random().public();
 
-        let ce = build_channel_entry(
-            expected_destination,
-            expected_destination,
-            0.into(),
-            0_u32.into(),
-            ChannelStatus::Open,
-            0_u32.into(),
-        );
+        db.upsert_account(None, 1, src, packet_key_src, None, 1, 0, 0).await?;
+        db.upsert_account(None, 2, dst, packet_key_dst, None, 2, 0, 0).await?;
+
+        let ce = build_channel_entry(src, dst, 0.into(), 0_u32.into(), ChannelStatus::Open, 0_u32.into());
 
         db.upsert_channel(None, ce, 1, 0, 0).await?;
         let from_db = db
-            .get_channels_via(None, ChannelDirection::Incoming, &Address::default())
+            .get_channels_via(None, ChannelDirection::Incoming, &dst)
             .await?
             .first()
             .cloned();
@@ -977,8 +964,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_incoming_outgoing_channels() -> anyhow::Result<()> {
-        let ckp = ChainKeypair::random();
-        let addr_1 = ckp.public().to_address();
+        let addr_1 = ChainKeypair::random().public().to_address();
         let addr_2 = ChainKeypair::random().public().to_address();
 
         let db = BlokliDb::new_in_memory().await?;

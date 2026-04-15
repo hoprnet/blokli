@@ -376,17 +376,25 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
 }
 
 async fn metrics_handler() -> impl IntoResponse {
-    match hopr_metrics::gather_all_metrics().map_err(|error| error.to_string()) {
-        Ok(metrics) => (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
-            metrics,
-        )
-            .into_response(),
-        Err(error) => {
-            tracing::error!(%error, "failed to gather metrics");
-            (StatusCode::UNPROCESSABLE_ENTITY, "Failed to gather metrics").into_response()
+    #[cfg(feature = "telemetry")]
+    {
+        match hopr_metrics::gather_all_metrics().map_err(|error| error.to_string()) {
+            Ok(metrics) => (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+                metrics,
+            )
+                .into_response(),
+            Err(error) => {
+                tracing::error!(%error, "failed to gather metrics");
+                (StatusCode::INTERNAL_SERVER_ERROR, "Failed to gather metrics").into_response()
+            }
         }
+    }
+
+    #[cfg(not(feature = "telemetry"))]
+    {
+        (StatusCode::NOT_FOUND, "Metrics endpoint is disabled").into_response()
     }
 }
 
@@ -890,6 +898,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "telemetry")]
     #[tokio::test]
     async fn test_metrics_handler_returns_prometheus_text() {
         let metric_name = format!("blokli_metrics_handler_test_{}", Uuid::new_v4().simple());
@@ -918,5 +927,25 @@ mod tests {
             Some("text/plain; version=0.0.4; charset=utf-8")
         );
         assert!(body.contains(&metric_name));
+    }
+
+    #[cfg(not(feature = "telemetry"))]
+    #[tokio::test]
+    async fn test_metrics_handler_returns_not_found_when_disabled() {
+        let app = Router::new().route("/metrics", get(metrics_handler));
+        let request = Request::builder()
+            .uri("/metrics")
+            .body(Body::empty())
+            .expect("request should be built");
+
+        let response = app.oneshot(request).await.expect("request should succeed");
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let body = String::from_utf8(body.to_vec()).expect("metrics response should be UTF-8");
+
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body, "Metrics endpoint is disabled");
     }
 }

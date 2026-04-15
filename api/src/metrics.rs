@@ -3,7 +3,7 @@
 //! This module provides metric definitions and update functions for monitoring
 //! the health and performance of the blokli service.
 //!
-//! The following metrics are exported (when the `prometheus` feature is enabled):
+//! The following metrics are exported (when the `telemetry` feature is enabled):
 //!
 //! - `blokli_health`: Gauge (0 or 1) with a `status` label indicating the current health state (`ok`, `timeout`,
 //!   `unsynched`, `corrupted`).
@@ -112,7 +112,7 @@ pub fn observe_request_duration(request_type: &str, duration_secs: f64) {
 
 /// Gather all registered Prometheus metrics and encode them in text format.
 ///
-/// Returns `None` when the `prometheus` feature is not enabled.
+/// Returns `None` when the `telemetry` feature is not enabled for this build.
 #[cfg(all(feature = "telemetry", not(test)))]
 pub fn gather_metrics() -> Option<String> {
     hopr_metrics::gather_all_metrics().ok()
@@ -120,7 +120,7 @@ pub fn gather_metrics() -> Option<String> {
 
 /// Gather all registered Prometheus metrics and encode them in text format.
 ///
-/// Returns `None` when the `prometheus` feature is not enabled.
+/// Returns `None` when the `telemetry` feature is not enabled for this build.
 #[cfg(not(all(feature = "telemetry", not(test))))]
 pub fn gather_metrics() -> Option<String> {
     None

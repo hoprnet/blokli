@@ -1382,7 +1382,7 @@ server-side with full stack trace for debugging. Client receives safe error mess
   - Database connectivity (queries chain_info table)
   - RPC endpoint availability (fetches current block number)
   - Indexer lag calculation (blocks behind chain head, configurable threshold default: 10 blocks)
-- `/metrics` - Prometheus text endpoint exposing `hopr_metrics` output
+- `/metrics` - Prometheus text endpoint exposing the service's `blokli_*` metrics
 
 Health check configuration:
 
