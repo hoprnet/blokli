@@ -16,6 +16,7 @@ runtime-tokio = [
   "blokli-chain-rpc/runtime-tokio",
   "blokli-db/runtime-tokio",
 ]
+telemetry = ["blokli-api/telemetry"]
 
 [dependencies]
 async-signal = { workspace = true }
@@ -61,7 +62,7 @@ validator = { workspace = true }
 
 # Local dependencies
 blokli-api           = { workspace = true }
-blokli-chain-api     = { workspace = true, features = ["prometheus"] }
+blokli-chain-api     = { workspace = true, features = ["telemetry"] }
 blokli-chain-indexer = { workspace = true }
 blokli-chain-rpc     = { workspace = true }
 blokli-chain-types   = { workspace = true }

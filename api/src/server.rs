@@ -1,6 +1,6 @@
 //! Axum HTTP server configuration with GraphQL support
 
-use std::{pin::Pin, sync::Arc};
+use std::{pin::Pin, sync::Arc, time::Instant};
 
 use async_graphql::{
     Schema,
@@ -42,6 +42,7 @@ use uuid::Uuid;
 use crate::{
     config::{ApiConfig, HealthConfig},
     errors::ApiResult,
+    metrics,
     mutation::MutationRoot,
     query::QueryRoot,
     readiness::{ReadinessChecker, ReadinessState},
@@ -278,6 +279,7 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
     let request = match serde_json::from_value::<async_graphql::Request>(request) {
         Ok(req) => req,
         Err(e) => {
+            metrics::increment_errors("invalid_request");
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({
@@ -300,6 +302,18 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
     // Check if the request is a subscription
     let is_subscription = request.query.trim_start().starts_with("subscription");
 
+    // Determine request type label for metrics
+    let request_type = if is_subscription {
+        "subscription"
+    } else if request.query.trim_start().starts_with("mutation") {
+        "mutation"
+    } else {
+        "query"
+    };
+
+    // Track request count
+    metrics::increment_request_count(request_type);
+
     // Handle subscription requests via SSE
     if accepts_sse && is_subscription {
         // Generate unique identifier for this SSE connection
@@ -319,6 +333,9 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
             Box::pin(stream! {
                 let mut response_stream = schema.as_ref().execute_stream(request);
                 while let Some(response) = response_stream.next().await {
+                    if !response.errors.is_empty() {
+                        metrics::increment_errors(request_type);
+                    }
                     let json = serde_json::to_string(&response)
                         .unwrap_or_else(|_| r#"{"errors":[{"message":"Failed to serialize response"}]}"#.to_string());
                     yield Ok::<_, std::convert::Infallible>(Event::default().event("next").data(json));
@@ -334,8 +351,20 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
         return Sse::new(sse_stream).into_response();
     }
 
+    // Start timer for request duration. Intentionnaly after the subscription check, as timing a
+    // subscription is not meaningful - it's a long-lived connection, not a single request.
+    let start_time = Instant::now();
+
     // Execute regular query/mutation
     let response = state.schema.execute(request).await;
+
+    // Record request duration
+    metrics::observe_request_duration(request_type, start_time.elapsed().as_secs_f64());
+
+    // Count any errors returned in the response
+    if !response.errors.is_empty() {
+        metrics::increment_errors(request_type);
+    }
 
     // Serialize and return the response
     Json(serde_json::to_value(response).unwrap_or_else(|_| {
