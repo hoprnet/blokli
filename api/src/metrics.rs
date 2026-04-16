@@ -109,19 +109,3 @@ pub fn observe_request_duration(request_type: &str, duration_secs: f64) {
     #[cfg(all(feature = "telemetry", not(test)))]
     METRIC_BLOKLI_REQUEST_DURATION_SECONDS.observe(&[request_type], duration_secs);
 }
-
-/// Gather all registered Prometheus metrics and encode them in text format.
-///
-/// Returns `None` when the `telemetry` feature is not enabled for this build.
-#[cfg(all(feature = "telemetry", not(test)))]
-pub fn gather_metrics() -> Option<String> {
-    hopr_metrics::gather_all_metrics().ok()
-}
-
-/// Gather all registered Prometheus metrics and encode them in text format.
-///
-/// Returns `None` when the `telemetry` feature is not enabled for this build.
-#[cfg(not(all(feature = "telemetry", not(test))))]
-pub fn gather_metrics() -> Option<String> {
-    None
-}
