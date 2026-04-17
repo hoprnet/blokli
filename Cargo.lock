@@ -1808,6 +1808,7 @@ dependencies = [
  "async-graphql",
  "async-stream",
  "axum",
+ "base64ct",
  "blokli-api-types",
  "blokli-chain-api",
  "blokli-chain-indexer",
@@ -1826,14 +1827,15 @@ dependencies = [
  "humantime-serde",
  "insta",
  "multiaddr",
+ "pem-rfc7468 1.0.0",
  "rand 0.9.2",
  "regex",
  "rustls",
- "rustls-pemfile",
  "sea-orm",
  "serde",
  "serde_json",
  "temp-env",
+ "tempfile",
  "test-log",
  "thiserror 2.0.18",
  "tokio",
@@ -2967,7 +2969,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e7c1832837b905bbfb5101e07cc24c8deddf52f93225eee6ead5f4d63d53ddcb"
 dependencies = [
  "const-oid",
- "pem-rfc7468",
+ "pem-rfc7468 0.7.0",
  "zeroize",
 ]
 
@@ -5558,6 +5560,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "pem-rfc7468"
+version = "1.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a6305423e0e7738146434843d1694d621cce767262b2a86910beab705e4493d9"
+dependencies = [
+ "base64ct",
+]
+
+[[package]]
 name = "percent-encoding"
 version = "2.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6547,15 +6558,6 @@ dependencies = [
  "rustls-webpki",
  "subtle",
  "zeroize",
-]
-
-[[package]]
-name = "rustls-pemfile"
-version = "2.2.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dce314e5fee3f39953d46bb63bb8a46d40c2f8fb7cc5a3b6cab2bde9721d6e50"
-dependencies = [
- "rustls-pki-types",
 ]
 
 [[package]]
