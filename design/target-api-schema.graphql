@@ -16,7 +16,7 @@ type Account {
   chainKey: String!
   "Unique identifier for the account"
   keyid: Int!
-  "List of multiaddresses associated with the packet key"
+  "Latest announced multiaddress for the packet key, returned as an empty or single-element list"
   multiAddresses: [String!]!
   "Unique account packet key in peer id format"
   packetKey: String!

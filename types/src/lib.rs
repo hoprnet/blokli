@@ -288,7 +288,7 @@ pub struct Account {
     /// HOPR Safe contract address to which the account is linked
     #[graphql(name = "safeAddress")]
     pub safe_address: Option<String>,
-    /// List of multiaddresses associated with the packet key
+    /// Latest announced multiaddress for the packet key, returned as an empty or single-element list
     #[graphql(name = "multiAddresses")]
     pub multi_addresses: Vec<String>,
 }
