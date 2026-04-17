@@ -89,15 +89,12 @@ async fn test_safe_query() -> anyhow::Result<()> {
         .await?;
     db.upsert_safe_owner_state(None, safe_address_1, chain_key_1, true, 100, 0, 1)
         .await?;
-    db.record_safe_activity(
+    db.record_safe_setup(
         None,
         safe_address_0,
-        SafeActivityKind::SafeSetup,
         Hash::default(),
-        None,
-        None,
-        Some("2".to_string()),
-        None,
+        vec![chain_key_0, chain_key_1, owner_address_2],
+        "2".to_string(),
         Some(chain_key_0),
         100,
         0,
@@ -260,15 +257,12 @@ async fn test_safes_list_query() -> anyhow::Result<()> {
 
     db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
         .await?;
-    db.record_safe_activity(
+    db.record_safe_setup(
         None,
         safe_address,
-        SafeActivityKind::SafeSetup,
         Hash::default(),
-        None,
-        None,
-        Some("4".to_string()),
-        None,
+        vec![],
+        "4".to_string(),
         Some(chain_key),
         100,
         0,

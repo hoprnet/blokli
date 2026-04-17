@@ -1,13 +1,24 @@
+use std::collections::{HashMap, HashSet};
+
 use async_trait::async_trait;
+use blokli_db_entity::{
+    hopr_safe_contract, hopr_safe_event, hopr_safe_execution_event, hopr_safe_owner_change_event,
+    hopr_safe_owner_state, hopr_safe_setup_event, hopr_safe_setup_owner, hopr_safe_threshold_change_event,
+    hopr_safe_threshold_state,
+    prelude::{
+        HoprSafeContract, HoprSafeEvent, HoprSafeExecutionEvent, HoprSafeOwnerChangeEvent, HoprSafeOwnerState,
+        HoprSafeSetupEvent, HoprSafeSetupOwner, HoprSafeThresholdChangeEvent, HoprSafeThresholdState,
+    },
+};
 use hopr_types::{
     crypto::types::Hash,
     primitive::prelude::{Address, ToHex},
 };
-use sea_orm::{ConnectionTrait, DatabaseBackend, QueryResult, Statement};
+use sea_orm::{ColumnTrait, ConnectionTrait, DbErr, EntityTrait, QueryFilter, QueryOrder, Set};
+use sea_query::OnConflict;
 
 use crate::{
-    BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result, TargetDb,
-    safe_contracts::BlokliDbSafeContractOperations,
+    BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result, safe_contracts::BlokliDbSafeContractOperations,
 };
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -31,6 +42,18 @@ impl SafeActivityKind {
             Self::ExecutionFailure => "EXECUTION_FAILURE",
         }
     }
+
+    fn from_str(value: &str) -> Result<Self> {
+        match value {
+            "SAFE_SETUP" => Ok(Self::SafeSetup),
+            "ADDED_OWNER" => Ok(Self::AddedOwner),
+            "REMOVED_OWNER" => Ok(Self::RemovedOwner),
+            "CHANGED_THRESHOLD" => Ok(Self::ChangedThreshold),
+            "EXECUTION_SUCCESS" => Ok(Self::ExecutionSuccess),
+            "EXECUTION_FAILURE" => Ok(Self::ExecutionFailure),
+            _ => Err(DbSqlError::Construction(format!("unknown safe activity kind: {value}"))),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -40,6 +63,7 @@ pub struct SafeActivityEntry {
     pub chain_tx_hash: Vec<u8>,
     pub safe_tx_hash: Option<Vec<u8>>,
     pub owner_address: Option<Vec<u8>>,
+    pub owners: Vec<Vec<u8>>,
     pub threshold: Option<String>,
     pub payment: Option<String>,
     pub initiator_address: Option<Vec<u8>>,
@@ -48,250 +72,307 @@ pub struct SafeActivityEntry {
     pub published_log_index: i64,
 }
 
-fn sql_placeholder(backend: DatabaseBackend, position: usize) -> String {
-    if backend == DatabaseBackend::Postgres {
-        format!("${position}")
-    } else {
-        "?".to_string()
+#[derive(Clone, Debug)]
+struct SafeEventHeader {
+    event_id: i64,
+    event_kind: SafeActivityKind,
+    chain_tx_hash: Vec<u8>,
+    published_block: i64,
+    published_tx_index: i64,
+    published_log_index: i64,
+}
+
+#[derive(Clone, Debug)]
+struct SafeSetupDetail {
+    initiator_address: Option<Vec<u8>>,
+    threshold: String,
+}
+
+#[derive(Clone, Debug)]
+struct SafeOwnerChangeDetail {
+    owner_address: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+struct SafeThresholdChangeDetail {
+    threshold: String,
+}
+
+#[derive(Clone, Debug)]
+struct SafeExecutionDetail {
+    safe_tx_hash: Vec<u8>,
+    payment: String,
+}
+
+fn ignore_record_not_inserted<T>(result: std::result::Result<T, DbErr>) -> Result<()> {
+    match result {
+        Ok(_) | Err(DbErr::RecordNotInserted) => Ok(()),
+        Err(err) => Err(err.into()),
     }
 }
 
-fn safe_owner_state_insert_statement(
-    backend: DatabaseBackend,
-    safe_contract_id: i64,
-    owner_address: Address,
-    is_current_owner: bool,
-    block: u64,
-    tx_index: u64,
-    log_index: u64,
-) -> Statement {
-    let placeholders = (1..=6)
-        .map(|position| sql_placeholder(backend, position))
-        .collect::<Vec<_>>();
-
-    let sql = format!(
-        "INSERT INTO hopr_safe_owner_state (
-            hopr_safe_contract_id,
-            owner_address,
-            is_current_owner,
-            published_block,
-            published_tx_index,
-            published_log_index
-        ) VALUES ({}, {}, {}, {}, {}, {})
-        ON CONFLICT DO NOTHING",
-        placeholders[0], placeholders[1], placeholders[2], placeholders[3], placeholders[4], placeholders[5],
-    );
-
-    Statement::from_sql_and_values(
-        backend,
-        sql,
-        vec![
-            safe_contract_id.into(),
-            owner_address.as_ref().to_vec().into(),
-            is_current_owner.into(),
-            block.cast_signed().into(),
-            tx_index.cast_signed().into(),
-            log_index.cast_signed().into(),
-        ],
-    )
+async fn get_safe_contract<C: ConnectionTrait>(
+    conn: &C,
+    safe_address: Address,
+) -> Result<Option<hopr_safe_contract::Model>> {
+    HoprSafeContract::find()
+        .filter(hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
+        .one(conn)
+        .await
+        .map_err(Into::into)
 }
 
-#[allow(clippy::too_many_arguments)]
-fn safe_activity_insert_statement(
-    backend: DatabaseBackend,
+async fn insert_safe_event<C: ConnectionTrait>(
+    conn: &C,
     safe_contract_id: i64,
     event_kind: SafeActivityKind,
     chain_tx_hash: Hash,
-    safe_tx_hash: Option<Hash>,
-    owner_address: Option<Address>,
-    threshold: Option<String>,
-    payment: Option<String>,
-    initiator_address: Option<Address>,
     block: u64,
     tx_index: u64,
     log_index: u64,
-) -> Statement {
-    let placeholders = (1..=11)
-        .map(|position| sql_placeholder(backend, position))
-        .collect::<Vec<_>>();
-
-    let sql = format!(
-        "INSERT INTO hopr_safe_activity (
-            hopr_safe_contract_id,
-            event_kind,
-            chain_tx_hash,
-            safe_tx_hash,
-            owner_address,
-            threshold,
-            payment,
-            initiator_address,
-            published_block,
-            published_tx_index,
-            published_log_index
-        ) VALUES ({}, {}, {}, {}, {}, {}, {}, {}, {}, {}, {})
-        ON CONFLICT DO NOTHING",
-        placeholders[0],
-        placeholders[1],
-        placeholders[2],
-        placeholders[3],
-        placeholders[4],
-        placeholders[5],
-        placeholders[6],
-        placeholders[7],
-        placeholders[8],
-        placeholders[9],
-        placeholders[10],
-    );
-
-    Statement::from_sql_and_values(
-        backend,
-        sql,
-        vec![
-            safe_contract_id.into(),
-            event_kind.as_str().into(),
-            chain_tx_hash.as_ref().to_vec().into(),
-            safe_tx_hash.map(|hash| hash.as_ref().to_vec()).into(),
-            owner_address.map(|address| address.as_ref().to_vec()).into(),
-            threshold.into(),
-            payment.into(),
-            initiator_address.map(|address| address.as_ref().to_vec()).into(),
-            block.cast_signed().into(),
-            tx_index.cast_signed().into(),
-            log_index.cast_signed().into(),
-        ],
+) -> Result<i64> {
+    match HoprSafeEvent::insert(hopr_safe_event::ActiveModel {
+        hopr_safe_contract_id: Set(safe_contract_id),
+        event_kind: Set(event_kind.as_str().to_string()),
+        chain_tx_hash: Set(chain_tx_hash.as_ref().to_vec()),
+        published_block: Set(block.cast_signed()),
+        published_tx_index: Set(tx_index.cast_signed()),
+        published_log_index: Set(log_index.cast_signed()),
+        ..Default::default()
+    })
+    .on_conflict(
+        OnConflict::columns([
+            hopr_safe_event::Column::HoprSafeContractId,
+            hopr_safe_event::Column::PublishedBlock,
+            hopr_safe_event::Column::PublishedTxIndex,
+            hopr_safe_event::Column::PublishedLogIndex,
+        ])
+        .do_nothing()
+        .to_owned(),
     )
+    .exec(conn)
+    .await
+    {
+        Ok(result) => Ok(result.last_insert_id),
+        Err(DbErr::RecordNotInserted) => HoprSafeEvent::find()
+            .filter(hopr_safe_event::Column::HoprSafeContractId.eq(safe_contract_id))
+            .filter(hopr_safe_event::Column::PublishedBlock.eq(block.cast_signed()))
+            .filter(hopr_safe_event::Column::PublishedTxIndex.eq(tx_index.cast_signed()))
+            .filter(hopr_safe_event::Column::PublishedLogIndex.eq(log_index.cast_signed()))
+            .one(conn)
+            .await?
+            .map(|event| event.id)
+            .ok_or_else(|| {
+                DbSqlError::EntityNotFound(format!(
+                    "safe event not found after insert for contract {safe_contract_id} at \
+                     {block}:{tx_index}:{log_index}"
+                ))
+            }),
+        Err(err) => Err(err.into()),
+    }
 }
 
-fn safe_owner_state_id_statement(
-    backend: DatabaseBackend,
-    safe_contract_id: i64,
-    owner_address: Address,
-    block: u64,
-    tx_index: u64,
-    log_index: u64,
-) -> Statement {
-    let placeholders = (1..=5)
-        .map(|position| sql_placeholder(backend, position))
-        .collect::<Vec<_>>();
+async fn load_safe_activity_entries<C: ConnectionTrait>(
+    conn: &C,
+    safe: &hopr_safe_contract::Model,
+) -> Result<Vec<SafeActivityEntry>> {
+    let event_rows = HoprSafeEvent::find()
+        .filter(hopr_safe_event::Column::HoprSafeContractId.eq(safe.id))
+        .order_by_asc(hopr_safe_event::Column::PublishedBlock)
+        .order_by_asc(hopr_safe_event::Column::PublishedTxIndex)
+        .order_by_asc(hopr_safe_event::Column::PublishedLogIndex)
+        .all(conn)
+        .await?;
 
-    let sql = format!(
-        "SELECT id FROM hopr_safe_owner_state
-         WHERE hopr_safe_contract_id = {}
-           AND owner_address = {}
-           AND published_block = {}
-           AND published_tx_index = {}
-           AND published_log_index = {}",
-        placeholders[0], placeholders[1], placeholders[2], placeholders[3], placeholders[4],
-    );
+    let headers = event_rows
+        .into_iter()
+        .map(|event| {
+            Ok(SafeEventHeader {
+                event_id: event.id,
+                event_kind: SafeActivityKind::from_str(&event.event_kind)?,
+                chain_tx_hash: event.chain_tx_hash,
+                published_block: event.published_block,
+                published_tx_index: event.published_tx_index,
+                published_log_index: event.published_log_index,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
 
-    Statement::from_sql_and_values(
-        backend,
-        sql,
-        vec![
-            safe_contract_id.into(),
-            owner_address.as_ref().to_vec().into(),
-            block.cast_signed().into(),
-            tx_index.cast_signed().into(),
-            log_index.cast_signed().into(),
-        ],
-    )
-}
+    let mut setup_ids = Vec::new();
+    let mut owner_change_ids = Vec::new();
+    let mut threshold_change_ids = Vec::new();
+    let mut execution_ids = Vec::new();
 
-fn safe_activity_id_statement(
-    backend: DatabaseBackend,
-    safe_contract_id: i64,
-    block: u64,
-    tx_index: u64,
-    log_index: u64,
-) -> Statement {
-    let placeholders = (1..=4)
-        .map(|position| sql_placeholder(backend, position))
-        .collect::<Vec<_>>();
+    for header in &headers {
+        match header.event_kind {
+            SafeActivityKind::SafeSetup => setup_ids.push(header.event_id),
+            SafeActivityKind::AddedOwner | SafeActivityKind::RemovedOwner => owner_change_ids.push(header.event_id),
+            SafeActivityKind::ChangedThreshold => threshold_change_ids.push(header.event_id),
+            SafeActivityKind::ExecutionSuccess | SafeActivityKind::ExecutionFailure => {
+                execution_ids.push(header.event_id)
+            }
+        }
+    }
 
-    let sql = format!(
-        "SELECT id FROM hopr_safe_activity
-         WHERE hopr_safe_contract_id = {}
-           AND published_block = {}
-           AND published_tx_index = {}
-           AND published_log_index = {}",
-        placeholders[0], placeholders[1], placeholders[2], placeholders[3],
-    );
+    let mut setup_details = HashMap::new();
+    if !setup_ids.is_empty() {
+        for row in HoprSafeSetupEvent::find()
+            .filter(hopr_safe_setup_event::Column::HoprSafeEventId.is_in(setup_ids.clone()))
+            .all(conn)
+            .await?
+        {
+            setup_details.insert(
+                row.hopr_safe_event_id,
+                SafeSetupDetail {
+                    initiator_address: row.initiator_address,
+                    threshold: row.threshold,
+                },
+            );
+        }
+    }
 
-    Statement::from_sql_and_values(
-        backend,
-        sql,
-        vec![
-            safe_contract_id.into(),
-            block.cast_signed().into(),
-            tx_index.cast_signed().into(),
-            log_index.cast_signed().into(),
-        ],
-    )
-}
+    let mut setup_owners: HashMap<i64, Vec<Vec<u8>>> = HashMap::new();
+    if !setup_ids.is_empty() {
+        for row in HoprSafeSetupOwner::find()
+            .filter(hopr_safe_setup_owner::Column::HoprSafeEventId.is_in(setup_ids))
+            .order_by_asc(hopr_safe_setup_owner::Column::HoprSafeEventId)
+            .order_by_asc(hopr_safe_setup_owner::Column::OwnerPosition)
+            .all(conn)
+            .await?
+        {
+            setup_owners
+                .entry(row.hopr_safe_event_id)
+                .or_default()
+                .push(row.owner_address);
+        }
+    }
 
-fn safe_current_owners_statement(backend: DatabaseBackend, safe_address: Address) -> Statement {
-    let placeholder = sql_placeholder(backend, 1);
-    let sql = format!(
-        "SELECT owner_address
-         FROM safe_owner_current
-         WHERE safe_address = {}
-         ORDER BY owner_address ASC",
-        placeholder,
-    );
-    Statement::from_sql_and_values(backend, sql, vec![safe_address.as_ref().to_vec().into()])
-}
+    let mut owner_change_details = HashMap::new();
+    if !owner_change_ids.is_empty() {
+        for row in HoprSafeOwnerChangeEvent::find()
+            .filter(hopr_safe_owner_change_event::Column::HoprSafeEventId.is_in(owner_change_ids))
+            .all(conn)
+            .await?
+        {
+            owner_change_details.insert(
+                row.hopr_safe_event_id,
+                SafeOwnerChangeDetail {
+                    owner_address: row.owner_address,
+                },
+            );
+        }
+    }
 
-fn safe_activity_history_statement(backend: DatabaseBackend, safe_address: Address) -> Statement {
-    let placeholder = sql_placeholder(backend, 1);
-    let sql = format!(
-        "SELECT
-            sc.address AS safe_address,
-            sa.event_kind,
-            sa.chain_tx_hash,
-            sa.safe_tx_hash,
-            sa.owner_address,
-            sa.threshold,
-            sa.payment,
-            sa.initiator_address,
-            sa.published_block,
-            sa.published_tx_index,
-            sa.published_log_index
-         FROM hopr_safe_activity sa
-         JOIN hopr_safe_contract sc ON sc.id = sa.hopr_safe_contract_id
-         WHERE sc.address = {}
-         ORDER BY sa.published_block ASC, sa.published_tx_index ASC, sa.published_log_index ASC",
-        placeholder,
-    );
-    Statement::from_sql_and_values(backend, sql, vec![safe_address.as_ref().to_vec().into()])
-}
+    let mut threshold_change_details = HashMap::new();
+    if !threshold_change_ids.is_empty() {
+        for row in HoprSafeThresholdChangeEvent::find()
+            .filter(hopr_safe_threshold_change_event::Column::HoprSafeEventId.is_in(threshold_change_ids))
+            .all(conn)
+            .await?
+        {
+            threshold_change_details.insert(
+                row.hopr_safe_event_id,
+                SafeThresholdChangeDetail {
+                    threshold: row.threshold,
+                },
+            );
+        }
+    }
 
-fn try_get_i64(row: &QueryResult, column: &str) -> Result<i64> {
-    row.try_get("", column)
-        .map_err(|e| DbSqlError::Construction(format!("Failed to read {column}: {e}")))
-}
+    let mut execution_details = HashMap::new();
+    if !execution_ids.is_empty() {
+        for row in HoprSafeExecutionEvent::find()
+            .filter(hopr_safe_execution_event::Column::HoprSafeEventId.is_in(execution_ids))
+            .all(conn)
+            .await?
+        {
+            execution_details.insert(
+                row.hopr_safe_event_id,
+                SafeExecutionDetail {
+                    safe_tx_hash: row.safe_tx_hash,
+                    payment: row.payment,
+                },
+            );
+        }
+    }
 
-fn try_get_bytes(row: &QueryResult, column: &str) -> Result<Vec<u8>> {
-    row.try_get("", column)
-        .map_err(|e| DbSqlError::Construction(format!("Failed to read {column}: {e}")))
-}
+    headers
+        .into_iter()
+        .map(|header| {
+            let mut entry = SafeActivityEntry {
+                safe_address: safe.address.clone(),
+                event_kind: header.event_kind.as_str().to_string(),
+                chain_tx_hash: header.chain_tx_hash,
+                safe_tx_hash: None,
+                owner_address: None,
+                owners: Vec::new(),
+                threshold: None,
+                payment: None,
+                initiator_address: None,
+                published_block: header.published_block,
+                published_tx_index: header.published_tx_index,
+                published_log_index: header.published_log_index,
+            };
 
-fn try_get_optional_bytes(row: &QueryResult, column: &str) -> Result<Option<Vec<u8>>> {
-    row.try_get("", column)
-        .map_err(|e| DbSqlError::Construction(format!("Failed to read {column}: {e}")))
-}
-
-fn try_get_string(row: &QueryResult, column: &str) -> Result<String> {
-    row.try_get("", column)
-        .map_err(|e| DbSqlError::Construction(format!("Failed to read {column}: {e}")))
-}
-
-fn try_get_optional_string(row: &QueryResult, column: &str) -> Result<Option<String>> {
-    row.try_get("", column)
-        .map_err(|e| DbSqlError::Construction(format!("Failed to read {column}: {e}")))
+            match header.event_kind {
+                SafeActivityKind::SafeSetup => {
+                    let detail = setup_details.get(&header.event_id).ok_or_else(|| {
+                        DbSqlError::EntityNotFound(format!("safe setup detail not found for event {}", header.event_id))
+                    })?;
+                    entry.initiator_address = detail.initiator_address.clone();
+                    entry.threshold = Some(detail.threshold.clone());
+                    entry.owners = setup_owners.remove(&header.event_id).unwrap_or_default();
+                }
+                SafeActivityKind::AddedOwner | SafeActivityKind::RemovedOwner => {
+                    let detail = owner_change_details.get(&header.event_id).ok_or_else(|| {
+                        DbSqlError::EntityNotFound(format!(
+                            "safe owner change detail not found for event {}",
+                            header.event_id
+                        ))
+                    })?;
+                    entry.owner_address = Some(detail.owner_address.clone());
+                }
+                SafeActivityKind::ChangedThreshold => {
+                    let detail = threshold_change_details.get(&header.event_id).ok_or_else(|| {
+                        DbSqlError::EntityNotFound(format!(
+                            "safe threshold detail not found for event {}",
+                            header.event_id
+                        ))
+                    })?;
+                    entry.threshold = Some(detail.threshold.clone());
+                }
+                SafeActivityKind::ExecutionSuccess | SafeActivityKind::ExecutionFailure => {
+                    let detail = execution_details.get(&header.event_id).ok_or_else(|| {
+                        DbSqlError::EntityNotFound(format!(
+                            "safe execution detail not found for event {}",
+                            header.event_id
+                        ))
+                    })?;
+                    entry.safe_tx_hash = Some(detail.safe_tx_hash.clone());
+                    entry.payment = Some(detail.payment.clone());
+                }
+            }
+            Ok(entry)
+        })
+        .collect()
 }
 
 #[async_trait]
 pub trait BlokliDbSafeHistoryOperations: BlokliDbGeneralModelOperations + BlokliDbSafeContractOperations {
+    #[allow(clippy::too_many_arguments)]
+    async fn record_safe_setup<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        safe_address: Address,
+        chain_tx_hash: Hash,
+        owners: Vec<Address>,
+        threshold: String,
+        initiator_address: Option<Address>,
+        block: u64,
+        tx_index: u64,
+        log_index: u64,
+    ) -> Result<i64>;
+
     #[allow(clippy::too_many_arguments)]
     async fn record_safe_activity<'a>(
         &'a self,
@@ -329,6 +410,103 @@ pub trait BlokliDbSafeHistoryOperations: BlokliDbGeneralModelOperations + Blokli
 #[async_trait]
 impl BlokliDbSafeHistoryOperations for BlokliDb {
     #[allow(clippy::too_many_arguments)]
+    async fn record_safe_setup<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        safe_address: Address,
+        chain_tx_hash: Hash,
+        owners: Vec<Address>,
+        threshold: String,
+        initiator_address: Option<Address>,
+        block: u64,
+        tx_index: u64,
+        log_index: u64,
+    ) -> Result<i64> {
+        let tx = self.nest_transaction(tx).await?;
+        let safe = get_safe_contract(tx.as_ref(), safe_address).await?.ok_or_else(|| {
+            DbSqlError::EntityNotFound(format!("safe contract not found for {}", safe_address.to_hex()))
+        })?;
+        let event_id = insert_safe_event(
+            tx.as_ref(),
+            safe.id,
+            SafeActivityKind::SafeSetup,
+            chain_tx_hash,
+            block,
+            tx_index,
+            log_index,
+        )
+        .await?;
+
+        ignore_record_not_inserted(
+            HoprSafeSetupEvent::insert(hopr_safe_setup_event::ActiveModel {
+                hopr_safe_event_id: Set(event_id),
+                initiator_address: Set(initiator_address.map(|address| address.as_ref().to_vec())),
+                threshold: Set(threshold.clone()),
+            })
+            .on_conflict(
+                OnConflict::column(hopr_safe_setup_event::Column::HoprSafeEventId)
+                    .do_nothing()
+                    .to_owned(),
+            )
+            .exec(tx.as_ref())
+            .await,
+        )?;
+
+        for (owner_position, owner_address) in owners.iter().copied().enumerate() {
+            let owner_position = i64::try_from(owner_position).map_err(|_| {
+                DbSqlError::Construction(format!(
+                    "safe setup owner position overflow for {}",
+                    safe_address.to_hex()
+                ))
+            })?;
+            ignore_record_not_inserted(
+                HoprSafeSetupOwner::insert(hopr_safe_setup_owner::ActiveModel {
+                    hopr_safe_event_id: Set(event_id),
+                    owner_position: Set(owner_position),
+                    owner_address: Set(owner_address.as_ref().to_vec()),
+                    ..Default::default()
+                })
+                .on_conflict(
+                    OnConflict::columns([
+                        hopr_safe_setup_owner::Column::HoprSafeEventId,
+                        hopr_safe_setup_owner::Column::OwnerPosition,
+                    ])
+                    .do_nothing()
+                    .to_owned(),
+                )
+                .exec(tx.as_ref())
+                .await,
+            )?;
+        }
+
+        ignore_record_not_inserted(
+            HoprSafeThresholdState::insert(hopr_safe_threshold_state::ActiveModel {
+                hopr_safe_contract_id: Set(safe.id),
+                threshold: Set(threshold),
+                published_block: Set(block.cast_signed()),
+                published_tx_index: Set(tx_index.cast_signed()),
+                published_log_index: Set(log_index.cast_signed()),
+                ..Default::default()
+            })
+            .on_conflict(
+                OnConflict::columns([
+                    hopr_safe_threshold_state::Column::HoprSafeContractId,
+                    hopr_safe_threshold_state::Column::PublishedBlock,
+                    hopr_safe_threshold_state::Column::PublishedTxIndex,
+                    hopr_safe_threshold_state::Column::PublishedLogIndex,
+                ])
+                .do_nothing()
+                .to_owned(),
+            )
+            .exec(tx.as_ref())
+            .await,
+        )?;
+
+        tx.commit().await?;
+        Ok(event_id)
+    }
+
+    #[allow(clippy::too_many_arguments)]
     async fn record_safe_activity<'a>(
         &'a self,
         tx: OptTx<'a>,
@@ -344,49 +522,115 @@ impl BlokliDbSafeHistoryOperations for BlokliDb {
         tx_index: u64,
         log_index: u64,
     ) -> Result<i64> {
+        if initiator_address.is_some() {
+            return Err(DbSqlError::Construction(
+                "initiator_address is only supported for SafeSetup events".to_string(),
+            ));
+        }
+
         let tx = self.nest_transaction(tx).await?;
-        let safe = self
-            .get_safe_contract_by_address(Some(&tx), safe_address)
-            .await?
-            .ok_or_else(|| {
-                DbSqlError::EntityNotFound(format!("safe contract not found for {}", safe_address.to_hex()))
-            })?;
-        let backend = tx.as_ref().get_database_backend();
+        let safe = get_safe_contract(tx.as_ref(), safe_address).await?.ok_or_else(|| {
+            DbSqlError::EntityNotFound(format!("safe contract not found for {}", safe_address.to_hex()))
+        })?;
+        let event_id = insert_safe_event(
+            tx.as_ref(),
+            safe.id,
+            event_kind,
+            chain_tx_hash,
+            block,
+            tx_index,
+            log_index,
+        )
+        .await?;
 
-        tx.as_ref()
-            .execute_raw(safe_activity_insert_statement(
-                backend,
-                safe.id,
-                event_kind,
-                chain_tx_hash,
-                safe_tx_hash,
-                owner_address,
-                threshold,
-                payment,
-                initiator_address,
-                block,
-                tx_index,
-                log_index,
-            ))
-            .await?;
+        match event_kind {
+            SafeActivityKind::SafeSetup => {
+                return Err(DbSqlError::Construction(
+                    "record_safe_setup must be used for SafeSetup events".to_string(),
+                ));
+            }
+            SafeActivityKind::AddedOwner | SafeActivityKind::RemovedOwner => {
+                let owner_address = owner_address.ok_or_else(|| {
+                    DbSqlError::Construction(format!("{} requires owner_address", event_kind.as_str()))
+                })?;
+                ignore_record_not_inserted(
+                    HoprSafeOwnerChangeEvent::insert(hopr_safe_owner_change_event::ActiveModel {
+                        hopr_safe_event_id: Set(event_id),
+                        owner_address: Set(owner_address.as_ref().to_vec()),
+                    })
+                    .on_conflict(
+                        OnConflict::column(hopr_safe_owner_change_event::Column::HoprSafeEventId)
+                            .do_nothing()
+                            .to_owned(),
+                    )
+                    .exec(tx.as_ref())
+                    .await,
+                )?;
+            }
+            SafeActivityKind::ChangedThreshold => {
+                let threshold = threshold
+                    .ok_or_else(|| DbSqlError::Construction("CHANGED_THRESHOLD requires threshold".to_string()))?;
+                ignore_record_not_inserted(
+                    HoprSafeThresholdChangeEvent::insert(hopr_safe_threshold_change_event::ActiveModel {
+                        hopr_safe_event_id: Set(event_id),
+                        threshold: Set(threshold.clone()),
+                    })
+                    .on_conflict(
+                        OnConflict::column(hopr_safe_threshold_change_event::Column::HoprSafeEventId)
+                            .do_nothing()
+                            .to_owned(),
+                    )
+                    .exec(tx.as_ref())
+                    .await,
+                )?;
+                ignore_record_not_inserted(
+                    HoprSafeThresholdState::insert(hopr_safe_threshold_state::ActiveModel {
+                        hopr_safe_contract_id: Set(safe.id),
+                        threshold: Set(threshold),
+                        published_block: Set(block.cast_signed()),
+                        published_tx_index: Set(tx_index.cast_signed()),
+                        published_log_index: Set(log_index.cast_signed()),
+                        ..Default::default()
+                    })
+                    .on_conflict(
+                        OnConflict::columns([
+                            hopr_safe_threshold_state::Column::HoprSafeContractId,
+                            hopr_safe_threshold_state::Column::PublishedBlock,
+                            hopr_safe_threshold_state::Column::PublishedTxIndex,
+                            hopr_safe_threshold_state::Column::PublishedLogIndex,
+                        ])
+                        .do_nothing()
+                        .to_owned(),
+                    )
+                    .exec(tx.as_ref())
+                    .await,
+                )?;
+            }
+            SafeActivityKind::ExecutionSuccess | SafeActivityKind::ExecutionFailure => {
+                let safe_tx_hash = safe_tx_hash.ok_or_else(|| {
+                    DbSqlError::Construction(format!("{} requires safe_tx_hash", event_kind.as_str()))
+                })?;
+                let payment = payment
+                    .ok_or_else(|| DbSqlError::Construction(format!("{} requires payment", event_kind.as_str())))?;
+                ignore_record_not_inserted(
+                    HoprSafeExecutionEvent::insert(hopr_safe_execution_event::ActiveModel {
+                        hopr_safe_event_id: Set(event_id),
+                        safe_tx_hash: Set(safe_tx_hash.as_ref().to_vec()),
+                        payment: Set(payment),
+                    })
+                    .on_conflict(
+                        OnConflict::column(hopr_safe_execution_event::Column::HoprSafeEventId)
+                            .do_nothing()
+                            .to_owned(),
+                    )
+                    .exec(tx.as_ref())
+                    .await,
+                )?;
+            }
+        }
 
-        let row = tx
-            .as_ref()
-            .query_one_raw(safe_activity_id_statement(backend, safe.id, block, tx_index, log_index))
-            .await?
-            .ok_or_else(|| {
-                DbSqlError::EntityNotFound(format!(
-                    "safe activity not found after insert for {} at {}:{}:{}",
-                    safe_address.to_hex(),
-                    block,
-                    tx_index,
-                    log_index
-                ))
-            })?;
-
-        let id = try_get_i64(&row, "id")?;
         tx.commit().await?;
-        Ok(id)
+        Ok(event_id)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -401,145 +645,104 @@ impl BlokliDbSafeHistoryOperations for BlokliDb {
         log_index: u64,
     ) -> Result<i64> {
         let tx = self.nest_transaction(tx).await?;
-        let safe = self
-            .get_safe_contract_by_address(Some(&tx), safe_address)
-            .await?
-            .ok_or_else(|| {
-                DbSqlError::EntityNotFound(format!("safe contract not found for {}", safe_address.to_hex()))
-            })?;
-        let backend = tx.as_ref().get_database_backend();
+        let safe = get_safe_contract(tx.as_ref(), safe_address).await?.ok_or_else(|| {
+            DbSqlError::EntityNotFound(format!("safe contract not found for {}", safe_address.to_hex()))
+        })?;
+        let id = match HoprSafeOwnerState::insert(hopr_safe_owner_state::ActiveModel {
+            hopr_safe_contract_id: Set(safe.id),
+            owner_address: Set(owner_address.as_ref().to_vec()),
+            is_current_owner: Set(is_current_owner),
+            published_block: Set(block.cast_signed()),
+            published_tx_index: Set(tx_index.cast_signed()),
+            published_log_index: Set(log_index.cast_signed()),
+            ..Default::default()
+        })
+        .on_conflict(
+            OnConflict::columns([
+                hopr_safe_owner_state::Column::HoprSafeContractId,
+                hopr_safe_owner_state::Column::OwnerAddress,
+                hopr_safe_owner_state::Column::PublishedBlock,
+                hopr_safe_owner_state::Column::PublishedTxIndex,
+                hopr_safe_owner_state::Column::PublishedLogIndex,
+            ])
+            .do_nothing()
+            .to_owned(),
+        )
+        .exec(tx.as_ref())
+        .await
+        {
+            Ok(result) => result.last_insert_id,
+            Err(DbErr::RecordNotInserted) => HoprSafeOwnerState::find()
+                .filter(hopr_safe_owner_state::Column::HoprSafeContractId.eq(safe.id))
+                .filter(hopr_safe_owner_state::Column::OwnerAddress.eq(owner_address.as_ref().to_vec()))
+                .filter(hopr_safe_owner_state::Column::PublishedBlock.eq(block.cast_signed()))
+                .filter(hopr_safe_owner_state::Column::PublishedTxIndex.eq(tx_index.cast_signed()))
+                .filter(hopr_safe_owner_state::Column::PublishedLogIndex.eq(log_index.cast_signed()))
+                .one(tx.as_ref())
+                .await?
+                .map(|state| state.id)
+                .ok_or_else(|| {
+                    DbSqlError::EntityNotFound(format!(
+                        "safe owner state not found after insert for {} owner {} at {}:{}:{}",
+                        safe_address.to_hex(),
+                        owner_address.to_hex(),
+                        block,
+                        tx_index,
+                        log_index
+                    ))
+                })?,
+            Err(err) => return Err(err.into()),
+        };
 
-        tx.as_ref()
-            .execute_raw(safe_owner_state_insert_statement(
-                backend,
-                safe.id,
-                owner_address,
-                is_current_owner,
-                block,
-                tx_index,
-                log_index,
-            ))
-            .await?;
-
-        let row = tx
-            .as_ref()
-            .query_one_raw(safe_owner_state_id_statement(
-                backend,
-                safe.id,
-                owner_address,
-                block,
-                tx_index,
-                log_index,
-            ))
-            .await?
-            .ok_or_else(|| {
-                DbSqlError::EntityNotFound(format!(
-                    "safe owner state not found after insert for {} owner {} at {}:{}:{}",
-                    safe_address.to_hex(),
-                    owner_address.to_hex(),
-                    block,
-                    tx_index,
-                    log_index
-                ))
-            })?;
-
-        let id = try_get_i64(&row, "id")?;
         tx.commit().await?;
         Ok(id)
     }
 
     async fn get_safe_owners<'a>(&'a self, tx: OptTx<'a>, safe_address: Address) -> Result<Vec<Address>> {
-        if tx.is_some() {
-            let nested = self.nest_transaction(tx).await?;
-            let backend = nested.as_ref().get_database_backend();
-            let rows = nested
-                .as_ref()
-                .query_all_raw(safe_current_owners_statement(backend, safe_address))
-                .await?;
-
-            let owners = rows
-                .into_iter()
-                .map(|row| {
-                    let owner_bytes = try_get_bytes(&row, "owner_address")?;
-                    Address::try_from(owner_bytes.as_slice())
-                        .map_err(|e| DbSqlError::Construction(format!("invalid safe owner address length: {e}")))
-                })
-                .collect::<Result<Vec<_>>>()?;
-
+        let nested = self.nest_transaction(tx).await?;
+        let Some(safe) = get_safe_contract(nested.as_ref(), safe_address).await? else {
             nested.commit().await?;
-            Ok(owners)
-        } else {
-            let backend = self.conn(TargetDb::Index).get_database_backend();
-            let rows = self
-                .conn(TargetDb::Index)
-                .query_all_raw(safe_current_owners_statement(backend, safe_address))
-                .await?;
+            return Ok(Vec::new());
+        };
 
-            rows.into_iter()
-                .map(|row| {
-                    let owner_bytes = try_get_bytes(&row, "owner_address")?;
-                    Address::try_from(owner_bytes.as_slice())
-                        .map_err(|e| DbSqlError::Construction(format!("invalid safe owner address length: {e}")))
-                })
-                .collect::<Result<Vec<_>>>()
+        let states = HoprSafeOwnerState::find()
+            .filter(hopr_safe_owner_state::Column::HoprSafeContractId.eq(safe.id))
+            .order_by_desc(hopr_safe_owner_state::Column::PublishedBlock)
+            .order_by_desc(hopr_safe_owner_state::Column::PublishedTxIndex)
+            .order_by_desc(hopr_safe_owner_state::Column::PublishedLogIndex)
+            .all(nested.as_ref())
+            .await?;
+
+        let mut seen = HashSet::new();
+        let mut owner_bytes = Vec::new();
+        for state in states {
+            if seen.insert(state.owner_address.clone()) && state.is_current_owner {
+                owner_bytes.push(state.owner_address);
+            }
         }
+
+        owner_bytes.sort();
+        let owners = owner_bytes
+            .into_iter()
+            .map(|owner| {
+                Address::try_from(owner.as_slice())
+                    .map_err(|e| DbSqlError::Construction(format!("invalid safe owner address length: {e}")))
+            })
+            .collect::<Result<Vec<_>>>()?;
+
+        nested.commit().await?;
+        Ok(owners)
     }
 
     async fn get_safe_activity<'a>(&'a self, tx: OptTx<'a>, safe_address: Address) -> Result<Vec<SafeActivityEntry>> {
-        if tx.is_some() {
-            let nested = self.nest_transaction(tx).await?;
-            let backend = nested.as_ref().get_database_backend();
-            let rows = nested
-                .as_ref()
-                .query_all_raw(safe_activity_history_statement(backend, safe_address))
-                .await?;
-
-            let entries = rows
-                .into_iter()
-                .map(|row| {
-                    Ok(SafeActivityEntry {
-                        safe_address: try_get_bytes(&row, "safe_address")?,
-                        event_kind: try_get_string(&row, "event_kind")?,
-                        chain_tx_hash: try_get_bytes(&row, "chain_tx_hash")?,
-                        safe_tx_hash: try_get_optional_bytes(&row, "safe_tx_hash")?,
-                        owner_address: try_get_optional_bytes(&row, "owner_address")?,
-                        threshold: try_get_optional_string(&row, "threshold")?,
-                        payment: try_get_optional_string(&row, "payment")?,
-                        initiator_address: try_get_optional_bytes(&row, "initiator_address")?,
-                        published_block: try_get_i64(&row, "published_block")?,
-                        published_tx_index: try_get_i64(&row, "published_tx_index")?,
-                        published_log_index: try_get_i64(&row, "published_log_index")?,
-                    })
-                })
-                .collect::<Result<Vec<_>>>()?;
-
+        let nested = self.nest_transaction(tx).await?;
+        let Some(safe) = get_safe_contract(nested.as_ref(), safe_address).await? else {
             nested.commit().await?;
-            Ok(entries)
-        } else {
-            let backend = self.conn(TargetDb::Index).get_database_backend();
-            let rows = self
-                .conn(TargetDb::Index)
-                .query_all_raw(safe_activity_history_statement(backend, safe_address))
-                .await?;
-
-            rows.into_iter()
-                .map(|row| {
-                    Ok(SafeActivityEntry {
-                        safe_address: try_get_bytes(&row, "safe_address")?,
-                        event_kind: try_get_string(&row, "event_kind")?,
-                        chain_tx_hash: try_get_bytes(&row, "chain_tx_hash")?,
-                        safe_tx_hash: try_get_optional_bytes(&row, "safe_tx_hash")?,
-                        owner_address: try_get_optional_bytes(&row, "owner_address")?,
-                        threshold: try_get_optional_string(&row, "threshold")?,
-                        payment: try_get_optional_string(&row, "payment")?,
-                        initiator_address: try_get_optional_bytes(&row, "initiator_address")?,
-                        published_block: try_get_i64(&row, "published_block")?,
-                        published_tx_index: try_get_i64(&row, "published_tx_index")?,
-                        published_log_index: try_get_i64(&row, "published_log_index")?,
-                    })
-                })
-                .collect::<Result<Vec<_>>>()
-        }
+            return Ok(Vec::new());
+        };
+        let entries = load_safe_activity_entries(nested.as_ref(), &safe).await?;
+        nested.commit().await?;
+        Ok(entries)
     }
 }
 
@@ -609,6 +812,7 @@ mod tests {
         let module_address = random_address();
         let chain_key = random_address();
         let owner = random_address();
+        let owner_two = random_address();
         let chain_tx_hash = random_hash();
         let safe_tx_hash = random_hash();
 
@@ -616,38 +820,48 @@ mod tests {
             .await?;
 
         let first_id = db
-            .record_safe_activity(
+            .record_safe_setup(
                 None,
                 safe_address,
-                SafeActivityKind::AddedOwner,
-                chain_tx_hash,
-                None,
-                Some(owner),
-                None,
-                None,
-                None,
-                110,
-                2,
+                random_hash(),
+                vec![owner, owner_two],
+                "2".to_string(),
+                Some(chain_key),
+                109,
+                1,
                 0,
             )
             .await?;
         let duplicate_id = db
-            .record_safe_activity(
+            .record_safe_setup(
                 None,
                 safe_address,
-                SafeActivityKind::AddedOwner,
-                chain_tx_hash,
-                None,
-                Some(owner),
-                None,
-                None,
-                None,
-                110,
-                2,
+                random_hash(),
+                vec![owner, owner_two],
+                "2".to_string(),
+                Some(chain_key),
+                109,
+                1,
                 0,
             )
             .await?;
-        assert_eq!(first_id, duplicate_id, "duplicate activity insert should be idempotent");
+        assert_eq!(first_id, duplicate_id, "duplicate setup insert should be idempotent");
+
+        db.record_safe_activity(
+            None,
+            safe_address,
+            SafeActivityKind::AddedOwner,
+            chain_tx_hash,
+            None,
+            Some(owner),
+            None,
+            None,
+            None,
+            110,
+            2,
+            0,
+        )
+        .await?;
 
         db.record_safe_activity(
             None,
@@ -666,18 +880,21 @@ mod tests {
         .await?;
 
         let activity = db.get_safe_activity(None, safe_address).await?;
+        assert_eq!(activity.len(), 3);
+        assert_eq!(activity[0].event_kind, SafeActivityKind::SafeSetup.as_str());
+        assert_eq!(activity[0].threshold.as_deref(), Some("2"));
+        assert_eq!(activity[0].initiator_address, Some(chain_key.as_ref().to_vec()));
         assert_eq!(
-            activity.len(),
-            2,
-            "duplicate replay should not create duplicate activity rows"
+            activity[0].owners,
+            vec![owner.as_ref().to_vec(), owner_two.as_ref().to_vec()]
         );
-        assert_eq!(activity[0].event_kind, SafeActivityKind::AddedOwner.as_str());
-        assert_eq!(activity[0].owner_address, Some(owner.as_ref().to_vec()));
-        assert_eq!(activity[0].published_block, 110);
-        assert_eq!(activity[1].event_kind, SafeActivityKind::ExecutionSuccess.as_str());
-        assert_eq!(activity[1].safe_tx_hash, Some(safe_tx_hash.as_ref().to_vec()));
-        assert_eq!(activity[1].payment.as_deref(), Some("12"));
-        assert_eq!(activity[1].published_block, 111);
+        assert_eq!(activity[1].event_kind, SafeActivityKind::AddedOwner.as_str());
+        assert_eq!(activity[1].owner_address, Some(owner.as_ref().to_vec()));
+        assert_eq!(activity[1].published_block, 110);
+        assert_eq!(activity[2].event_kind, SafeActivityKind::ExecutionSuccess.as_str());
+        assert_eq!(activity[2].safe_tx_hash, Some(safe_tx_hash.as_ref().to_vec()));
+        assert_eq!(activity[2].payment.as_deref(), Some("12"));
+        assert_eq!(activity[2].published_block, 111);
 
         Ok(())
     }

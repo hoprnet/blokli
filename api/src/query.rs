@@ -257,17 +257,9 @@ fn current_row_statement(backend: DatabaseBackend, column: &str, value: Vec<u8>)
             scc.address,
             scc.module_address,
             scc.chain_key,
-            (
-                SELECT sa.threshold
-                FROM hopr_safe_activity sa
-                JOIN hopr_safe_contract sc ON sc.id = sa.hopr_safe_contract_id
-                WHERE sc.address = scc.address
-                  AND sa.threshold IS NOT NULL
-                  AND sa.event_kind IN ('SAFE_SETUP', 'CHANGED_THRESHOLD')
-                ORDER BY sa.published_block DESC, sa.published_tx_index DESC, sa.published_log_index DESC
-                LIMIT 1
-            ) AS threshold
+            stc.threshold
          FROM safe_contract_current scc
+         LEFT JOIN safe_threshold_current stc ON stc.safe_address = scc.address
          WHERE {} = {}",
         column, placeholder
     );
@@ -285,18 +277,10 @@ fn current_row_by_owner_statement(backend: DatabaseBackend, owner_address: Vec<u
             scc.address,
             scc.module_address,
             scc.chain_key,
-            (
-                SELECT sa.threshold
-                FROM hopr_safe_activity sa
-                JOIN hopr_safe_contract sc ON sc.id = sa.hopr_safe_contract_id
-                WHERE sc.address = scc.address
-                  AND sa.threshold IS NOT NULL
-                  AND sa.event_kind IN ('SAFE_SETUP', 'CHANGED_THRESHOLD')
-                ORDER BY sa.published_block DESC, sa.published_tx_index DESC, sa.published_log_index DESC
-                LIMIT 1
-            ) AS threshold
+            stc.threshold
          FROM safe_contract_current scc
          JOIN safe_owner_current soc ON soc.safe_address = scc.address
+         LEFT JOIN safe_threshold_current stc ON stc.safe_address = scc.address
          WHERE soc.owner_address = {}
          ORDER BY scc.address ASC
          LIMIT 1",
@@ -370,7 +354,16 @@ pub(crate) async fn fetch_safe_threshold_by_address(
     db: &DatabaseConnection,
     safe_address_bytes: Vec<u8>,
 ) -> Result<Option<String>, sea_orm::DbErr> {
-    let stmt = current_row_statement(db.get_database_backend(), "address", safe_address_bytes);
+    let placeholder = if db.get_database_backend() == DatabaseBackend::Postgres {
+        "$1"
+    } else {
+        "?"
+    };
+    let stmt = Statement::from_sql_and_values(
+        db.get_database_backend(),
+        format!("SELECT threshold FROM safe_threshold_current WHERE safe_address = {placeholder}"),
+        vec![safe_address_bytes.into()],
+    );
     let row = db.query_one_raw(stmt).await?;
 
     match row {
@@ -1381,17 +1374,9 @@ impl QueryRoot {
                 scc.address,
                 scc.module_address,
                 scc.chain_key,
-                (
-                    SELECT sa.threshold
-                    FROM hopr_safe_activity sa
-                    JOIN hopr_safe_contract sc ON sc.id = sa.hopr_safe_contract_id
-                    WHERE sc.address = scc.address
-                      AND sa.threshold IS NOT NULL
-                      AND sa.event_kind IN ('SAFE_SETUP', 'CHANGED_THRESHOLD')
-                    ORDER BY sa.published_block DESC, sa.published_tx_index DESC, sa.published_log_index DESC
-                    LIMIT 1
-                ) AS threshold
-             FROM safe_contract_current scc"
+                stc.threshold
+             FROM safe_contract_current scc
+             LEFT JOIN safe_threshold_current stc ON stc.safe_address = scc.address"
                 .to_string(),
         );
 
@@ -2017,15 +2002,12 @@ mod tests {
             .await?;
         db.upsert_safe_owner_state(None, safe_address, owner_two, true, 102, 0, 0)
             .await?;
-        db.record_safe_activity(
+        db.record_safe_setup(
             None,
             safe_address,
-            SafeActivityKind::SafeSetup,
             random_hash(),
-            None,
-            None,
-            Some("2".to_string()),
-            None,
+            vec![owner_one, owner_two],
+            "2".to_string(),
             Some(owner_one),
             101,
             0,

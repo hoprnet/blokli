@@ -88,16 +88,18 @@ where
         match event {
             SafeContractEvents::SafeSetup(safe_setup) => {
                 let owner_count = safe_setup.owners.len();
+                let owners = safe_setup
+                    .owners
+                    .iter()
+                    .map(|owner| owner.to_hopr_address())
+                    .collect::<Vec<_>>();
                 self.db
-                    .record_safe_activity(
+                    .record_safe_setup(
                         Some(tx),
                         safe_address,
-                        SafeActivityKind::SafeSetup,
                         chain_tx_hash,
-                        None,
-                        None,
-                        Some(safe_setup.threshold.to_string()),
-                        None,
+                        owners.clone(),
+                        safe_setup.threshold.to_string(),
                         Some(safe_setup.initiator.to_hopr_address()),
                         log.block_number,
                         log.tx_index,
@@ -105,8 +107,7 @@ where
                     )
                     .await?;
 
-                for owner in safe_setup.owners {
-                    let owner = owner.to_hopr_address();
+                for owner in owners {
                     self.db
                         .upsert_safe_owner_state(
                             Some(tx),
