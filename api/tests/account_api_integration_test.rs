@@ -5,6 +5,7 @@
 //! - Executing GraphQL queries against the schema
 //! - Verifying filtering, validation, and type conversions
 
+use anyhow::Context;
 use blokli_api::{
     query::QueryRoot,
     schema::{ChainId, NetworkName},
@@ -470,6 +471,71 @@ async fn test_accounts_query_with_multiaddresses() -> anyhow::Result<()> {
     assert_eq!(multi_addresses.len(), 1);
     assert_eq!(multi_addresses[0].as_str().unwrap(), multiaddr_str);
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_accounts_query_returns_only_latest_multiaddress() -> anyhow::Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+
+    let keypair = random_keypair();
+    let offchain = random_offchain_keypair();
+    let chain_key = keypair.public().to_address();
+    let packet_key = offchain.public();
+
+    db.upsert_account(None, 1, chain_key, *packet_key, None, 100, 0, 0)
+        .await?;
+
+    let first_multiaddr_str = "/ip4/127.0.0.1/tcp/9091";
+    let second_multiaddr_str = "/ip4/127.0.0.1/tcp/9092";
+    let first_multiaddr: Multiaddr = first_multiaddr_str.parse().context("must be able to parse multiaddr")?;
+    let second_multiaddr: Multiaddr = second_multiaddr_str
+        .parse()
+        .context("must be able to parse multiaddr")?;
+
+    db.insert_announcement(None, chain_key, first_multiaddr, 101).await?;
+    db.insert_announcement(None, chain_key, second_multiaddr, 102).await?;
+
+    let schema = async_graphql::Schema::build(
+        QueryRoot,
+        async_graphql::EmptyMutation,
+        async_graphql::EmptySubscription,
+    )
+    .data(db.conn(TargetDb::Index).clone())
+    .data(ContractAddresses::default())
+    .data(ChainId(100))
+    .data(NetworkName("test".to_string()))
+    .data(blokli_api::schema::GasMultiplier(1.0))
+    .finish();
+
+    let query = r#"
+        query {
+            accounts(keyid: 1) {
+                __typename
+                ... on AccountsList {
+                    accounts {
+                        keyid
+                        multiAddresses
+                    }
+                }
+                ... on MissingFilterError { code message }
+                ... on QueryFailedError { code message }
+            }
+        }
+    "#;
+
+    let response = execute_graphql_query(&schema, query).await;
+    assert!(response.errors.is_empty());
+
+    let data = response.data.into_json()?;
+    let accounts = extract_accounts_from_result(&data)?;
+    assert_eq!(accounts.len(), 1);
+
+    let received_multiaddrs = accounts[0]["multiAddresses"]
+        .as_array()
+        .context("should be available")?;
+    assert_eq!(received_multiaddrs.len(), 1);
+    assert_eq!(received_multiaddrs[0].as_str().unwrap(), second_multiaddr_str);
     Ok(())
 }
 
