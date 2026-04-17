@@ -5,6 +5,7 @@
 //! - Executing GraphQL queries against the schema
 //! - Verifying filtering, validation, and type conversions
 
+use anyhow::Context;
 use blokli_api::{
     query::QueryRoot,
     schema::{ChainId, NetworkName},
@@ -487,8 +488,10 @@ async fn test_accounts_query_returns_only_latest_multiaddress() -> anyhow::Resul
 
     let first_multiaddr_str = "/ip4/127.0.0.1/tcp/9091";
     let second_multiaddr_str = "/ip4/127.0.0.1/tcp/9092";
-    let first_multiaddr: Multiaddr = first_multiaddr_str.parse().unwrap();
-    let second_multiaddr: Multiaddr = second_multiaddr_str.parse().unwrap();
+    let first_multiaddr: Multiaddr = first_multiaddr_str.parse().context("must be able to parse multiaddr")?;
+    let second_multiaddr: Multiaddr = second_multiaddr_str
+        .parse()
+        .context("must be able to parse multiaddr")?;
 
     db.insert_announcement(None, chain_key, first_multiaddr, 101).await?;
     db.insert_announcement(None, chain_key, second_multiaddr, 102).await?;
@@ -528,10 +531,11 @@ async fn test_accounts_query_returns_only_latest_multiaddress() -> anyhow::Resul
     let accounts = extract_accounts_from_result(&data)?;
     assert_eq!(accounts.len(), 1);
 
-    let multi_addresses = accounts[0]["multiAddresses"].as_array().unwrap();
-    assert_eq!(multi_addresses.len(), 1);
-    assert_eq!(multi_addresses[0].as_str().unwrap(), second_multiaddr_str);
-
+    let received_multiaddrs = accounts[0]["multiAddresses"]
+        .as_array()
+        .context("should be available")?;
+    assert_eq!(received_multiaddrs.len(), 1);
+    assert_eq!(received_multiaddrs[0].as_str().unwrap(), second_multiaddr_str);
     Ok(())
 }
 

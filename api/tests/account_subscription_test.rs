@@ -9,6 +9,7 @@
 
 use std::{sync::Arc, time::Duration};
 
+use anyhow::Context;
 use async_graphql::Schema;
 use blokli_api::{mutation::MutationRoot, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot};
 use blokli_api_types::Account;
@@ -744,8 +745,12 @@ async fn test_account_subscription_handles_account_with_multiple_announcements()
     // Add multiple announcements
     let multiaddr1: Multiaddr = "/ip4/127.0.0.1/tcp/9091".parse().unwrap();
     let multiaddr2: Multiaddr = "/ip4/127.0.0.1/tcp/9092".parse().unwrap();
-    db.insert_announcement(None, chain_key, multiaddr1, 101).await.unwrap();
-    db.insert_announcement(None, chain_key, multiaddr2.clone(), 102).await.unwrap();
+    db.insert_announcement(None, chain_key, multiaddr1, 101)
+        .await
+        .context("should be able to insert a multiaddress");
+    db.insert_announcement(None, chain_key, multiaddr2.clone(), 102)
+        .await
+        .context("should be able to insert a multiaddress");
 
     let (schema, _indexer_state) = create_test_schema(&db);
 
