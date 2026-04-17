@@ -900,7 +900,10 @@ Decoded Safe events are persisted into dedicated index tables:
 
 - `hopr_safe_owner_state` stores temporal owner membership changes
 - `safe_owner_current` exposes the current owner set
-- `hopr_safe_activity` stores the on-chain Safe activity history needed for later Safe transaction queries
+- `hopr_safe_event` stores the shared event header and ordering metadata for all indexed Safe events
+- `hopr_safe_setup_event`, `hopr_safe_setup_owner`, `hopr_safe_owner_change_event`, `hopr_safe_threshold_change_event`, and
+  `hopr_safe_execution_event` store typed Safe event payloads without sparse nullable columns
+- `hopr_safe_threshold_state` stores temporal threshold state, and `safe_threshold_current` exposes the latest threshold per Safe
 
 ### Subscription Event Bus
 

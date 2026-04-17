@@ -1,15 +1,16 @@
+use std::collections::{HashMap, HashSet};
+
 use async_trait::async_trait;
 use blokli_db_entity::{
     hopr_safe_contract, hopr_safe_contract_state,
     prelude::{HoprSafeContract, HoprSafeContractState},
 };
 use hopr_types::{crypto::types::Hash, primitive::prelude::Address};
-use sea_orm::{ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, QueryFilter, QueryOrder, Set, Statement};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder, Set};
 use sea_query::OnConflict;
 
 use crate::{
-    BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result,
-    safe_history::{BlokliDbSafeHistoryOperations, SafeActivityKind},
+    BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result, safe_history::BlokliDbSafeHistoryOperations,
 };
 
 /// Combined safe contract entry with identity and current state.
@@ -41,16 +42,6 @@ pub struct SafeContractEntry {
 /// not from real blockchain events. This allows identifying which safes
 /// need their module addresses refreshed on startup.
 pub const PRESEEDED_BLOCK: i64 = 30_000_000;
-
-struct SafeContractCurrentRow {
-    safe_contract_id: i64,
-    address: Vec<u8>,
-    module_address: Vec<u8>,
-    chain_key: Vec<u8>,
-    published_block: i64,
-    published_tx_index: i64,
-    published_log_index: i64,
-}
 
 struct SafeCsvEntry {
     address: Address,
@@ -146,15 +137,12 @@ where
     Db: BlokliDbSafeHistoryOperations + Sync,
 {
     if let Some(threshold) = entry.threshold {
-        db.record_safe_activity(
+        db.record_safe_setup(
             tx,
             entry.address,
-            SafeActivityKind::SafeSetup,
             Hash::default(),
-            None,
-            None,
-            Some(threshold.to_string()),
-            None,
+            entry.owners.clone(),
+            threshold.to_string(),
             None,
             PRESEEDED_BLOCK as u64,
             entry.deployed_tx_index,
@@ -408,30 +396,18 @@ fn combine_entry(identity: &hopr_safe_contract::Model, state: &hopr_safe_contrac
     }
 }
 
-fn combine_current_row(row: SafeContractCurrentRow) -> SafeContractEntry {
-    SafeContractEntry {
-        id: row.safe_contract_id,
-        address: row.address,
-        module_address: row.module_address,
-        chain_key: row.chain_key,
-        published_block: row.published_block,
-        published_tx_index: row.published_tx_index,
-        published_log_index: row.published_log_index,
-    }
-}
-
-fn current_row_statement(backend: DatabaseBackend, column: &str, value: Vec<u8>) -> Statement {
-    let placeholder = if backend == DatabaseBackend::Postgres {
-        "$1"
-    } else {
-        "?"
-    };
-    let sql = format!(
-        "SELECT safe_contract_id, address, module_address, chain_key, published_block, published_tx_index, \
-         published_log_index FROM safe_contract_current WHERE {} = {}",
-        column, placeholder
-    );
-    Statement::from_sql_and_values(backend, sql, vec![value.into()])
+async fn get_latest_safe_state<C: ConnectionTrait>(
+    conn: &C,
+    safe_contract_id: i64,
+) -> Result<Option<hopr_safe_contract_state::Model>> {
+    HoprSafeContractState::find()
+        .filter(hopr_safe_contract_state::Column::HoprSafeContractId.eq(safe_contract_id))
+        .order_by_desc(hopr_safe_contract_state::Column::PublishedBlock)
+        .order_by_desc(hopr_safe_contract_state::Column::PublishedTxIndex)
+        .order_by_desc(hopr_safe_contract_state::Column::PublishedLogIndex)
+        .one(conn)
+        .await
+        .map_err(Into::into)
 }
 
 #[async_trait]
@@ -567,30 +543,19 @@ impl BlokliDbSafeContractOperations for BlokliDb {
         safe_address: Address,
     ) -> Result<Option<SafeContractEntry>> {
         let tx = self.nest_transaction(tx).await?;
-
-        let stmt = current_row_statement(
-            tx.as_ref().get_database_backend(),
-            "address",
-            safe_address.as_ref().to_vec(),
-        );
-
-        let row = tx.as_ref().query_one_raw(stmt).await?;
-        let row = match row {
-            Some(row) => row,
-            None => return Ok(None),
+        let Some(identity) = HoprSafeContract::find()
+            .filter(hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
+            .one(tx.as_ref())
+            .await?
+        else {
+            return Ok(None);
         };
 
-        let current = SafeContractCurrentRow {
-            safe_contract_id: row.try_get("", "safe_contract_id")?,
-            address: row.try_get("", "address")?,
-            module_address: row.try_get("", "module_address")?,
-            chain_key: row.try_get("", "chain_key")?,
-            published_block: row.try_get("", "published_block")?,
-            published_tx_index: row.try_get("", "published_tx_index")?,
-            published_log_index: row.try_get("", "published_log_index")?,
+        let Some(state) = get_latest_safe_state(tx.as_ref(), identity.id).await? else {
+            return Ok(None);
         };
 
-        Ok(Some(combine_current_row(current)))
+        Ok(Some(combine_entry(&identity, &state)))
     }
 
     #[allow(clippy::cast_possible_wrap)]
@@ -693,72 +658,115 @@ impl BlokliDbSafeContractOperations for BlokliDb {
         module_address: Address,
     ) -> Result<Option<SafeContractEntry>> {
         let tx = self.nest_transaction(tx).await?;
+        let candidate_states = HoprSafeContractState::find()
+            .filter(hopr_safe_contract_state::Column::ModuleAddress.eq(module_address.as_ref().to_vec()))
+            .order_by_desc(hopr_safe_contract_state::Column::PublishedBlock)
+            .order_by_desc(hopr_safe_contract_state::Column::PublishedTxIndex)
+            .order_by_desc(hopr_safe_contract_state::Column::PublishedLogIndex)
+            .all(tx.as_ref())
+            .await?;
 
-        let stmt = current_row_statement(
-            tx.as_ref().get_database_backend(),
-            "module_address",
-            module_address.as_ref().to_vec(),
-        );
+        let mut seen_safe_ids = HashSet::new();
+        for candidate_state in candidate_states {
+            if !seen_safe_ids.insert(candidate_state.hopr_safe_contract_id) {
+                continue;
+            }
 
-        let row = tx.as_ref().query_one_raw(stmt).await?;
-        let row = match row {
-            Some(row) => row,
-            None => return Ok(None),
-        };
+            let Some(latest_state) = get_latest_safe_state(tx.as_ref(), candidate_state.hopr_safe_contract_id).await?
+            else {
+                continue;
+            };
+            if latest_state.id != candidate_state.id {
+                continue;
+            }
 
-        let current = SafeContractCurrentRow {
-            safe_contract_id: row.try_get("", "safe_contract_id")?,
-            address: row.try_get("", "address")?,
-            module_address: row.try_get("", "module_address")?,
-            chain_key: row.try_get("", "chain_key")?,
-            published_block: row.try_get("", "published_block")?,
-            published_tx_index: row.try_get("", "published_tx_index")?,
-            published_log_index: row.try_get("", "published_log_index")?,
-        };
+            let identity = HoprSafeContract::find_by_id(candidate_state.hopr_safe_contract_id)
+                .one(tx.as_ref())
+                .await?
+                .ok_or_else(|| {
+                    DbSqlError::EntityNotFound(format!(
+                        "safe contract identity not found for id {}",
+                        candidate_state.hopr_safe_contract_id
+                    ))
+                })?;
 
-        Ok(Some(combine_current_row(current)))
+            return Ok(Some(combine_entry(&identity, &latest_state)));
+        }
+
+        Ok(None)
     }
 
     async fn get_preseeded_safes<'a>(&'a self, tx: OptTx<'a>) -> Result<Vec<SafeContractEntry>> {
         let tx = self.nest_transaction(tx).await?;
-        let backend = tx.as_ref().get_database_backend();
-        let placeholder = if backend == DatabaseBackend::Postgres {
-            "$1"
-        } else {
-            "?"
-        };
-        let sql = format!(
-            "SELECT sc.id AS safe_contract_id, sc.address, scs.module_address, scs.chain_key, scs.published_block, \
-             scs.published_tx_index, scs.published_log_index FROM hopr_safe_contract sc JOIN hopr_safe_contract_state \
-             scs ON scs.hopr_safe_contract_id = sc.id WHERE sc.id IN (SELECT hopr_safe_contract_id FROM \
-             hopr_safe_contract_state GROUP BY hopr_safe_contract_id HAVING MIN(published_block) = {placeholder} AND \
-             MAX(published_block) = {placeholder}) AND scs.id = (SELECT s2.id FROM hopr_safe_contract_state s2 WHERE \
-             s2.hopr_safe_contract_id = sc.id ORDER BY s2.published_block DESC, s2.published_tx_index DESC, \
-             s2.published_log_index DESC LIMIT 1)"
-        );
-        let values = if backend == DatabaseBackend::Postgres {
-            vec![PRESEEDED_BLOCK.into()]
-        } else {
-            vec![PRESEEDED_BLOCK.into(), PRESEEDED_BLOCK.into()]
-        };
-        let stmt = Statement::from_sql_and_values(backend, sql, values);
-        let rows = tx.as_ref().query_all_raw(stmt).await?;
+        let states = HoprSafeContractState::find()
+            .order_by_asc(hopr_safe_contract_state::Column::HoprSafeContractId)
+            .order_by_asc(hopr_safe_contract_state::Column::PublishedBlock)
+            .order_by_asc(hopr_safe_contract_state::Column::PublishedTxIndex)
+            .order_by_asc(hopr_safe_contract_state::Column::PublishedLogIndex)
+            .all(tx.as_ref())
+            .await?;
 
-        let mut preseeded = Vec::with_capacity(rows.len());
-        for row in rows {
-            let current = SafeContractCurrentRow {
-                safe_contract_id: row.try_get("", "safe_contract_id")?,
-                address: row.try_get("", "address")?,
-                module_address: row.try_get("", "module_address")?,
-                chain_key: row.try_get("", "chain_key")?,
-                published_block: row.try_get("", "published_block")?,
-                published_tx_index: row.try_get("", "published_tx_index")?,
-                published_log_index: row.try_get("", "published_log_index")?,
-            };
-            preseeded.push(combine_current_row(current));
+        let mut grouped_states = Vec::new();
+        let mut current_safe_id = None;
+        let mut first_block = PRESEEDED_BLOCK;
+        let mut last_state: Option<hopr_safe_contract_state::Model> = None;
+
+        for state in states {
+            match current_safe_id {
+                Some(safe_id) if safe_id != state.hopr_safe_contract_id => {
+                    if first_block == PRESEEDED_BLOCK {
+                        if let Some(latest) = last_state.take() {
+                            if latest.published_block == PRESEEDED_BLOCK {
+                                grouped_states.push((safe_id, latest));
+                            }
+                        }
+                    }
+                    current_safe_id = Some(state.hopr_safe_contract_id);
+                    first_block = state.published_block;
+                    last_state = Some(state);
+                }
+                Some(_) => {
+                    last_state = Some(state);
+                }
+                None => {
+                    current_safe_id = Some(state.hopr_safe_contract_id);
+                    first_block = state.published_block;
+                    last_state = Some(state);
+                }
+            }
         }
 
-        Ok(preseeded)
+        if let Some(safe_id) = current_safe_id {
+            if first_block == PRESEEDED_BLOCK {
+                if let Some(latest) = last_state.take() {
+                    if latest.published_block == PRESEEDED_BLOCK {
+                        grouped_states.push((safe_id, latest));
+                    }
+                }
+            }
+        }
+
+        if grouped_states.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let identities = HoprSafeContract::find()
+            .filter(hopr_safe_contract::Column::Id.is_in(grouped_states.iter().map(|(id, _)| *id).collect::<Vec<_>>()))
+            .all(tx.as_ref())
+            .await?;
+        let identities_by_id = identities
+            .into_iter()
+            .map(|identity| (identity.id, identity))
+            .collect::<HashMap<_, _>>();
+
+        Ok(grouped_states
+            .into_iter()
+            .filter_map(|(safe_id, state)| {
+                identities_by_id
+                    .get(&safe_id)
+                    .map(|identity| combine_entry(identity, &state))
+            })
+            .collect())
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -843,7 +851,10 @@ mod tests {
     use sea_orm::PaginatorTrait;
 
     use super::*;
-    use crate::{db::BlokliDb, safe_history::BlokliDbSafeHistoryOperations};
+    use crate::{
+        db::BlokliDb,
+        safe_history::{BlokliDbSafeHistoryOperations, SafeActivityKind},
+    };
 
     /// Generates a new random `Address` from cryptographically secure random bytes.
     fn random_address() -> Address {

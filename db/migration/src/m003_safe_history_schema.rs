@@ -100,45 +100,32 @@ impl MigrationTrait for Migration {
         manager
             .create_table(
                 Table::create()
-                    .table(HoprSafeActivity::Table)
+                    .table(HoprSafeEvent::Table)
                     .if_not_exists()
                     .col(
-                        ColumnDef::new(HoprSafeActivity::Id)
+                        ColumnDef::new(HoprSafeEvent::Id)
                             .big_integer()
                             .not_null()
                             .auto_increment()
                             .primary_key(),
                     )
                     .col(
-                        ColumnDef::new(HoprSafeActivity::HoprSafeContractId)
+                        ColumnDef::new(HoprSafeEvent::HoprSafeContractId)
                             .big_integer()
                             .not_null(),
                     )
-                    .col(ColumnDef::new(HoprSafeActivity::EventKind).string().not_null())
-                    .col(ColumnDef::new(HoprSafeActivity::ChainTxHash).binary_len(32).not_null())
-                    .col(ColumnDef::new(HoprSafeActivity::SafeTxHash).binary_len(32))
-                    .col(ColumnDef::new(HoprSafeActivity::OwnerAddress).binary_len(20))
-                    .col(ColumnDef::new(HoprSafeActivity::Threshold).string())
-                    .col(ColumnDef::new(HoprSafeActivity::Payment).string())
-                    .col(ColumnDef::new(HoprSafeActivity::InitiatorAddress).binary_len(20))
+                    .col(ColumnDef::new(HoprSafeEvent::EventKind).string().not_null())
+                    .col(ColumnDef::new(HoprSafeEvent::ChainTxHash).binary_len(32).not_null())
+                    .col(ColumnDef::new(HoprSafeEvent::PublishedBlock).big_integer().not_null())
+                    .col(ColumnDef::new(HoprSafeEvent::PublishedTxIndex).big_integer().not_null())
                     .col(
-                        ColumnDef::new(HoprSafeActivity::PublishedBlock)
-                            .big_integer()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(HoprSafeActivity::PublishedTxIndex)
-                            .big_integer()
-                            .not_null(),
-                    )
-                    .col(
-                        ColumnDef::new(HoprSafeActivity::PublishedLogIndex)
+                        ColumnDef::new(HoprSafeEvent::PublishedLogIndex)
                             .big_integer()
                             .not_null(),
                     )
                     .foreign_key(
                         ForeignKey::create()
-                            .from(HoprSafeActivity::Table, HoprSafeActivity::HoprSafeContractId)
+                            .from(HoprSafeEvent::Table, HoprSafeEvent::HoprSafeContractId)
                             .to(HoprSafeContract::Table, HoprSafeContract::Id)
                             .on_delete(ForeignKeyAction::Cascade)
                             .on_update(ForeignKeyAction::Cascade),
@@ -150,12 +137,12 @@ impl MigrationTrait for Migration {
         manager
             .create_index(
                 Index::create()
-                    .name("idx_safe_activity_unique_position")
-                    .table(HoprSafeActivity::Table)
-                    .col(HoprSafeActivity::HoprSafeContractId)
-                    .col(HoprSafeActivity::PublishedBlock)
-                    .col(HoprSafeActivity::PublishedTxIndex)
-                    .col(HoprSafeActivity::PublishedLogIndex)
+                    .name("idx_safe_event_unique_position")
+                    .table(HoprSafeEvent::Table)
+                    .col(HoprSafeEvent::HoprSafeContractId)
+                    .col(HoprSafeEvent::PublishedBlock)
+                    .col(HoprSafeEvent::PublishedTxIndex)
+                    .col(HoprSafeEvent::PublishedLogIndex)
                     .unique()
                     .to_owned(),
             )
@@ -164,12 +151,12 @@ impl MigrationTrait for Migration {
         manager
             .create_index(
                 Index::create()
-                    .name("idx_safe_activity_safe_position")
-                    .table(HoprSafeActivity::Table)
-                    .col(HoprSafeActivity::HoprSafeContractId)
-                    .col((HoprSafeActivity::PublishedBlock, IndexOrder::Desc))
-                    .col((HoprSafeActivity::PublishedTxIndex, IndexOrder::Desc))
-                    .col((HoprSafeActivity::PublishedLogIndex, IndexOrder::Desc))
+                    .name("idx_safe_event_safe_position")
+                    .table(HoprSafeEvent::Table)
+                    .col(HoprSafeEvent::HoprSafeContractId)
+                    .col((HoprSafeEvent::PublishedBlock, IndexOrder::Desc))
+                    .col((HoprSafeEvent::PublishedTxIndex, IndexOrder::Desc))
+                    .col((HoprSafeEvent::PublishedLogIndex, IndexOrder::Desc))
                     .to_owned(),
             )
             .await?;
@@ -177,9 +164,266 @@ impl MigrationTrait for Migration {
         manager
             .create_index(
                 Index::create()
-                    .name("idx_safe_activity_chain_tx_hash")
-                    .table(HoprSafeActivity::Table)
-                    .col(HoprSafeActivity::ChainTxHash)
+                    .name("idx_safe_event_chain_tx_hash")
+                    .table(HoprSafeEvent::Table)
+                    .col(HoprSafeEvent::ChainTxHash)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(HoprSafeSetupEvent::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(HoprSafeSetupEvent::HoprSafeEventId)
+                            .big_integer()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(ColumnDef::new(HoprSafeSetupEvent::InitiatorAddress).binary_len(20))
+                    .col(ColumnDef::new(HoprSafeSetupEvent::Threshold).string().not_null())
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(HoprSafeSetupEvent::Table, HoprSafeSetupEvent::HoprSafeEventId)
+                            .to(HoprSafeEvent::Table, HoprSafeEvent::Id)
+                            .on_delete(ForeignKeyAction::Cascade)
+                            .on_update(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(HoprSafeSetupOwner::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(HoprSafeSetupOwner::Id)
+                            .big_integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(HoprSafeSetupOwner::HoprSafeEventId)
+                            .big_integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(HoprSafeSetupOwner::OwnerPosition)
+                            .big_integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(HoprSafeSetupOwner::OwnerAddress)
+                            .binary_len(20)
+                            .not_null(),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(HoprSafeSetupOwner::Table, HoprSafeSetupOwner::HoprSafeEventId)
+                            .to(HoprSafeSetupEvent::Table, HoprSafeSetupEvent::HoprSafeEventId)
+                            .on_delete(ForeignKeyAction::Cascade)
+                            .on_update(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_safe_setup_owner_unique_position")
+                    .table(HoprSafeSetupOwner::Table)
+                    .col(HoprSafeSetupOwner::HoprSafeEventId)
+                    .col(HoprSafeSetupOwner::OwnerPosition)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_safe_setup_owner_event_lookup")
+                    .table(HoprSafeSetupOwner::Table)
+                    .col(HoprSafeSetupOwner::HoprSafeEventId)
+                    .col(HoprSafeSetupOwner::OwnerPosition)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(HoprSafeOwnerChangeEvent::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(HoprSafeOwnerChangeEvent::HoprSafeEventId)
+                            .big_integer()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(HoprSafeOwnerChangeEvent::OwnerAddress)
+                            .binary_len(20)
+                            .not_null(),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(
+                                HoprSafeOwnerChangeEvent::Table,
+                                HoprSafeOwnerChangeEvent::HoprSafeEventId,
+                            )
+                            .to(HoprSafeEvent::Table, HoprSafeEvent::Id)
+                            .on_delete(ForeignKeyAction::Cascade)
+                            .on_update(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(HoprSafeThresholdChangeEvent::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(HoprSafeThresholdChangeEvent::HoprSafeEventId)
+                            .big_integer()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(HoprSafeThresholdChangeEvent::Threshold)
+                            .string()
+                            .not_null(),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(
+                                HoprSafeThresholdChangeEvent::Table,
+                                HoprSafeThresholdChangeEvent::HoprSafeEventId,
+                            )
+                            .to(HoprSafeEvent::Table, HoprSafeEvent::Id)
+                            .on_delete(ForeignKeyAction::Cascade)
+                            .on_update(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(HoprSafeExecutionEvent::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(HoprSafeExecutionEvent::HoprSafeEventId)
+                            .big_integer()
+                            .not_null()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(HoprSafeExecutionEvent::SafeTxHash)
+                            .binary_len(32)
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(HoprSafeExecutionEvent::Payment).string().not_null())
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(HoprSafeExecutionEvent::Table, HoprSafeExecutionEvent::HoprSafeEventId)
+                            .to(HoprSafeEvent::Table, HoprSafeEvent::Id)
+                            .on_delete(ForeignKeyAction::Cascade)
+                            .on_update(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_safe_execution_safe_tx_hash")
+                    .table(HoprSafeExecutionEvent::Table)
+                    .col(HoprSafeExecutionEvent::SafeTxHash)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_table(
+                Table::create()
+                    .table(HoprSafeThresholdState::Table)
+                    .if_not_exists()
+                    .col(
+                        ColumnDef::new(HoprSafeThresholdState::Id)
+                            .big_integer()
+                            .not_null()
+                            .auto_increment()
+                            .primary_key(),
+                    )
+                    .col(
+                        ColumnDef::new(HoprSafeThresholdState::HoprSafeContractId)
+                            .big_integer()
+                            .not_null(),
+                    )
+                    .col(ColumnDef::new(HoprSafeThresholdState::Threshold).string().not_null())
+                    .col(
+                        ColumnDef::new(HoprSafeThresholdState::PublishedBlock)
+                            .big_integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(HoprSafeThresholdState::PublishedTxIndex)
+                            .big_integer()
+                            .not_null(),
+                    )
+                    .col(
+                        ColumnDef::new(HoprSafeThresholdState::PublishedLogIndex)
+                            .big_integer()
+                            .not_null(),
+                    )
+                    .foreign_key(
+                        ForeignKey::create()
+                            .from(
+                                HoprSafeThresholdState::Table,
+                                HoprSafeThresholdState::HoprSafeContractId,
+                            )
+                            .to(HoprSafeContract::Table, HoprSafeContract::Id)
+                            .on_delete(ForeignKeyAction::Cascade)
+                            .on_update(ForeignKeyAction::Cascade),
+                    )
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_safe_threshold_state_unique_position")
+                    .table(HoprSafeThresholdState::Table)
+                    .col(HoprSafeThresholdState::HoprSafeContractId)
+                    .col(HoprSafeThresholdState::PublishedBlock)
+                    .col(HoprSafeThresholdState::PublishedTxIndex)
+                    .col(HoprSafeThresholdState::PublishedLogIndex)
+                    .unique()
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .create_index(
+                Index::create()
+                    .name("idx_safe_threshold_state_current_lookup")
+                    .table(HoprSafeThresholdState::Table)
+                    .col(HoprSafeThresholdState::HoprSafeContractId)
+                    .col((HoprSafeThresholdState::PublishedBlock, IndexOrder::Desc))
+                    .col((HoprSafeThresholdState::PublishedTxIndex, IndexOrder::Desc))
+                    .col((HoprSafeThresholdState::PublishedLogIndex, IndexOrder::Desc))
                     .to_owned(),
             )
             .await?;
@@ -214,17 +458,88 @@ impl MigrationTrait for Migration {
             ))
             .await?;
 
+        manager
+            .get_connection()
+            .execute_unprepared(&format!(
+                "{create_view} safe_threshold_current AS
+                SELECT
+                    sc.id AS safe_contract_id,
+                    sc.address AS safe_address,
+                    sts.threshold,
+                    sts.published_block,
+                    sts.published_tx_index,
+                    sts.published_log_index
+                FROM hopr_safe_contract sc
+                JOIN hopr_safe_threshold_state sts ON sts.hopr_safe_contract_id = sc.id
+                WHERE sts.id = (
+                    SELECT s2.id FROM hopr_safe_threshold_state s2
+                    WHERE s2.hopr_safe_contract_id = sc.id
+                    ORDER BY s2.published_block DESC, s2.published_tx_index DESC, s2.published_log_index DESC
+                    LIMIT 1
+                )"
+            ))
+            .await?;
+
         Ok(())
     }
 
     async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
         manager
             .get_connection()
+            .execute_unprepared("DROP VIEW IF EXISTS safe_threshold_current")
+            .await?;
+
+        manager
+            .get_connection()
             .execute_unprepared("DROP VIEW IF EXISTS safe_owner_current")
             .await?;
 
         manager
-            .drop_table(Table::drop().table(HoprSafeActivity::Table).if_exists().to_owned())
+            .drop_table(
+                Table::drop()
+                    .table(HoprSafeThresholdState::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .drop_table(
+                Table::drop()
+                    .table(HoprSafeExecutionEvent::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .drop_table(
+                Table::drop()
+                    .table(HoprSafeThresholdChangeEvent::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .drop_table(
+                Table::drop()
+                    .table(HoprSafeOwnerChangeEvent::Table)
+                    .if_exists()
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .drop_table(Table::drop().table(HoprSafeSetupOwner::Table).if_exists().to_owned())
+            .await?;
+
+        manager
+            .drop_table(Table::drop().table(HoprSafeSetupEvent::Table).if_exists().to_owned())
+            .await?;
+
+        manager
+            .drop_table(Table::drop().table(HoprSafeEvent::Table).if_exists().to_owned())
             .await?;
 
         manager
@@ -254,17 +569,62 @@ enum HoprSafeOwnerState {
 }
 
 #[derive(DeriveIden)]
-enum HoprSafeActivity {
+enum HoprSafeEvent {
     Table,
     Id,
     HoprSafeContractId,
     EventKind,
     ChainTxHash,
-    SafeTxHash,
-    OwnerAddress,
-    Threshold,
-    Payment,
+    PublishedBlock,
+    PublishedTxIndex,
+    PublishedLogIndex,
+}
+
+#[derive(DeriveIden)]
+enum HoprSafeSetupEvent {
+    Table,
+    HoprSafeEventId,
     InitiatorAddress,
+    Threshold,
+}
+
+#[derive(DeriveIden)]
+enum HoprSafeSetupOwner {
+    Table,
+    Id,
+    HoprSafeEventId,
+    OwnerPosition,
+    OwnerAddress,
+}
+
+#[derive(DeriveIden)]
+enum HoprSafeOwnerChangeEvent {
+    Table,
+    HoprSafeEventId,
+    OwnerAddress,
+}
+
+#[derive(DeriveIden)]
+enum HoprSafeThresholdChangeEvent {
+    Table,
+    HoprSafeEventId,
+    Threshold,
+}
+
+#[derive(DeriveIden)]
+enum HoprSafeExecutionEvent {
+    Table,
+    HoprSafeEventId,
+    SafeTxHash,
+    Payment,
+}
+
+#[derive(DeriveIden)]
+enum HoprSafeThresholdState {
+    Table,
+    Id,
+    HoprSafeContractId,
+    Threshold,
     PublishedBlock,
     PublishedTxIndex,
     PublishedLogIndex,
