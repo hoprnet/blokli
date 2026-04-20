@@ -11,15 +11,15 @@ crate-type = ["rlib"]
 
 [features]
 default = []
-prometheus = [
-  "blokli-chain-indexer/prometheus",
-  "blokli-chain-rpc/prometheus",
-  "blokli-db/prometheus",
-]
 runtime-tokio = [
   "blokli-chain-indexer/runtime-tokio",
   "blokli-db/runtime-tokio",
   "hopr-async-runtime/runtime-tokio",
+]
+telemetry = [
+  "blokli-chain-indexer/telemetry",
+  "blokli-chain-rpc/telemetry",
+  "blokli-db/telemetry",
 ]
 
 [dependencies]

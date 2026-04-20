@@ -20,51 +20,49 @@ members = [
 ]
 
 [workspace.dependencies]
-alloy-sol-types = "1.5.7"
-anyhow = "1.0.100"
-async-broadcast = "0.7.2"
-async-compression = "0.4.30"
-async-graphql = { version = "7.0.14", features = ["chrono", "dataloader"] }
-async-lock = "3.4.1"
-async-signal = "0.2.12"
-async-stream = "0.3.6"
-async-tar = "0.5.0"
-async-trait = "0.1.89"
-axum = { version = "0.8.4", features = ["http2", "ws"] }
-backon = { version = "1.5.2", default-features = false }
-base64ct = "1.6"
-blokli-api = { path = "api" }
-blokli-api-types = { path = "types" }
-blokli-chain-api = { path = "chain/api" }
+alloy-sol-types      = "1.5.7"
+anyhow               = "1.0.100"
+async-broadcast      = "0.7.2"
+async-compression    = "0.4.30"
+async-graphql        = { version = "7.0.14", features = ["chrono", "dataloader"] }
+async-lock           = "3.4.1"
+async-signal         = "0.2.12"
+async-stream         = "0.3.6"
+async-tar            = "0.5.0"
+async-trait          = "0.1.89"
+axum                 = { version = "0.8.4", features = ["http2", "ws"] }
+backon               = { version = "1.5.2", default-features = false }
+base64ct             = "1.6"
+blokli-api           = { path = "api" }
+blokli-api-types     = { path = "types" }
+blokli-chain-api     = { path = "chain/api" }
 blokli-chain-indexer = { path = "chain/indexer" }
-blokli-chain-rpc = { path = "chain/rpc" }
-blokli-chain-types = { path = "chain/types" }
-blokli-client = { path = "client" }
-blokli-db = { path = "db/core" }
-blokli-db-entity = { path = "db/entity" }
-blokli-db-migration = { path = "db/migration" }
-chrono = "0.4.44"
-clap = { version = "4.5.47", features = ["derive", "env", "string"] }
-config = "0.15.19"
-cynic = "3.12.0"
-cynic-codegen = "3.12.0"
-dashmap = "6.1.0"
-env_logger = "0.11.8"
-eventsource-client = { version = "0.17.0", default-features = false }
-futures = "0.3.31"
-futures-time = "3.0.1"
-futures-timer = "3.0.3"
-futures-util = "0.3.31"
-hex = "0.4.3"
-hex-literal = "1.1.0"
-hopli = { git = "https://github.com/hoprnet/hopli", branch = "main" }
-hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet" }
-hopr-bindings = { git = "https://github.com/hoprnet/contracts", branch = "main" }
-hopr-types = { git = "https://github.com/hoprnet/hopr-types", branch = "main", features = [
-  "serde",
-] }
-
-hopr-metrics = { git = "https://github.com/hoprnet/hoprnet" }
+blokli-chain-rpc     = { path = "chain/rpc" }
+blokli-chain-types   = { path = "chain/types" }
+blokli-client        = { path = "client" }
+blokli-db            = { path = "db/core" }
+blokli-db-entity     = { path = "db/entity" }
+blokli-db-migration  = { path = "db/migration" }
+chrono               = "0.4.44"
+clap                 = { version = "4.5.47", features = ["derive", "env", "string"] }
+config               = "0.15.19"
+cynic                = "3.12.0"
+cynic-codegen        = "3.12.0"
+dashmap              = "6.1.0"
+env_logger           = "0.11.8"
+eventsource-client   = { version = "0.17.0", default-features = false }
+flagset              = "0.4.7"
+futures              = "0.3.31"
+futures-time         = "3.0.1"
+futures-timer        = "3.0.3"
+futures-util         = "0.3.31"
+hex                  = "0.4.3"
+hex-literal          = "1.1.0"
+hopli                = { git = "https://github.com/hoprnet/hopli", branch = "main" }
+hopr-async-runtime   = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-bindings        = "4.7.3"
+hopr-metrics         = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-types           = "1.5.3"
 
 http = "1.3.1"
 humantime-serde = "1.1"
@@ -82,6 +80,10 @@ mockall = "0.13.1"
 mockito = "1.7.0"
 moka = { version = "0.12.10", features = ["future"] }
 multiaddr = "0.18.2"
+opentelemetry = "0.31.0"
+opentelemetry-otlp = { version = "0.31.0", default-features = false }
+opentelemetry-prometheus-text-exporter = "0.2.1"
+opentelemetry_sdk = "0.31.0"
 parking_lot = "0.12.5"
 pem-rfc7468 = "1.0"
 primitive-types = { version = "0.14.0", features = ["serde"] }
@@ -145,6 +147,7 @@ tower-http = { version = "0.6.2", features = [
   "trace",
 ] }
 tracing = { version = "0.1.41" }
+tracing-opentelemetry = "0.32.1"
 tracing-subscriber = { version = "0.3.20", features = [
   "env-filter",
   "fmt",

@@ -62,28 +62,28 @@ use validator::Validate;
 pub const EIP1559_FEE_ESTIMATION_DEFAULT_MAX_FEE_GNOSIS: u128 = 3_000_000_000;
 pub const EIP1559_FEE_ESTIMATION_DEFAULT_PRIORITY_FEE_GNOSIS: u128 = 100_000_000;
 
-#[cfg(all(feature = "prometheus", not(test)))]
+#[cfg(all(feature = "telemetry", not(test)))]
 use hopr_metrics::{MultiCounter, MultiHistogram};
 
 use crate::{rpc::DEFAULT_GAS_ORACLE_URL, transport::HttpRequestor};
 
-#[cfg(all(feature = "prometheus", not(test)))]
+#[cfg(all(feature = "telemetry", not(test)))]
 lazy_static::lazy_static! {
     static ref METRIC_COUNT_RPC_CALLS: MultiCounter = MultiCounter::new(
-        "hopr_rpc_call_count",
+        "blokli_rpc_call_count",
         "Number of Ethereum RPC calls over HTTP and their result",
         &["call", "result"]
     )
     .unwrap();
     static ref METRIC_RPC_CALLS_TIMING: MultiHistogram = MultiHistogram::new(
-        "hopr_rpc_call_time_sec",
+        "blokli_rpc_call_time_sec",
         "Timing of RPC calls over HTTP in seconds",
         vec![0.1, 0.5, 1.0, 2.0, 5.0, 7.0, 10.0],
         &["call"]
     )
     .unwrap();
     static ref METRIC_RETRIES_PER_RPC_CALL: MultiHistogram = MultiHistogram::new(
-        "hopr_retries_per_rpc_call",
+        "blokli_retries_per_rpc_call",
         "Number of retries per RPC call",
         vec![0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0],
         &["call"]
@@ -550,7 +550,7 @@ where
             let req_duration = start.elapsed();
             method_names.iter().for_each(|method| {
                 trace!(method, duration_in_ms = req_duration.as_millis(), "rpc request took");
-                #[cfg(all(feature = "prometheus", not(test)))]
+                #[cfg(all(feature = "telemetry", not(test)))]
                 METRIC_RPC_CALLS_TIMING.observe(&[method], req_duration.as_secs_f64());
             });
 
@@ -559,22 +559,22 @@ where
                 Ok(result) => match result {
                     ResponsePacket::Single(a) => match a.payload {
                         ResponsePayload::Success(_) => {
-                            #[cfg(all(feature = "prometheus", not(test)))]
+                            #[cfg(all(feature = "telemetry", not(test)))]
                             METRIC_COUNT_RPC_CALLS.increment(&[&method_names[0], "success"]);
                         }
                         ResponsePayload::Failure(_) => {
-                            #[cfg(all(feature = "prometheus", not(test)))]
+                            #[cfg(all(feature = "telemetry", not(test)))]
                             METRIC_COUNT_RPC_CALLS.increment(&[&method_names[0], "failure"]);
                         }
                     },
                     ResponsePacket::Batch(b) => {
                         b.iter().enumerate().for_each(|(i, _)| match b[i].payload {
                             ResponsePayload::Success(_) => {
-                                #[cfg(all(feature = "prometheus", not(test)))]
+                                #[cfg(all(feature = "telemetry", not(test)))]
                                 METRIC_COUNT_RPC_CALLS.increment(&[&method_names[i], "success"]);
                             }
                             ResponsePayload::Failure(_) => {
-                                #[cfg(all(feature = "prometheus", not(test)))]
+                                #[cfg(all(feature = "telemetry", not(test)))]
                                 METRIC_COUNT_RPC_CALLS.increment(&[&method_names[i], "failure"]);
                             }
                         });
@@ -584,7 +584,7 @@ where
                     // Error details may contain sensitive URL information - avoid logging
                     error!("RPC request failed");
                     method_names.iter().for_each(|_m| {
-                        #[cfg(all(feature = "prometheus", not(test)))]
+                        #[cfg(all(feature = "telemetry", not(test)))]
                         METRIC_COUNT_RPC_CALLS.increment(&[_m, "failure"]);
                     });
                 }

@@ -18,8 +18,10 @@ use hopr_bindings::{
     exports::alloy::{primitives::Address as AlloyAddress, rpc::types::Filter, sol_types::SolEvent},
     hopr_token::HoprToken::{Approval, Transfer},
 };
-#[cfg(all(feature = "prometheus", not(test)))]
-use hopr_types::primitive::prelude::U256;
+#[cfg(all(feature = "telemetry", not(test)))]
+use hopr_metrics::{MultiGauge, SimpleGauge};
+#[cfg(all(feature = "telemetry", not(test)))]
+use hopr_types::primitive::prelude::ToHex;
 use hopr_types::{
     crypto::types::Hash,
     primitive::prelude::{Address, SerializableLog},
@@ -34,26 +36,26 @@ use crate::{
     traits::ChainLogHandler,
 };
 
-#[cfg(all(feature = "prometheus", not(test)))]
+#[cfg(all(feature = "telemetry", not(test)))]
 lazy_static::lazy_static! {
-    static ref METRIC_INDEXER_CURRENT_BLOCK: hopr_metrics::metrics::SimpleGauge =
-        hopr_metrics::metrics::SimpleGauge::new(
-            "hopr_indexer_block_number",
+    static ref METRIC_INDEXER_CURRENT_BLOCK: SimpleGauge =
+        SimpleGauge::new(
+            "blokli_indexer_block_number",
             "Current last processed block number by the indexer",
     ).unwrap();
-    static ref METRIC_INDEXER_CHECKSUM: hopr_metrics::metrics::SimpleGauge =
-        hopr_metrics::metrics::SimpleGauge::new(
-            "hopr_indexer_checksum",
+    static ref METRIC_INDEXER_CHECKSUM: SimpleGauge =
+        SimpleGauge::new(
+            "blokli_indexer_checksum",
             "Contains an unsigned integer that represents the low 32-bits of the Indexer checksum"
     ).unwrap();
-    static ref METRIC_INDEXER_SYNC_PROGRESS: hopr_metrics::metrics::SimpleGauge =
-        hopr_metrics::metrics::SimpleGauge::new(
-            "hopr_indexer_sync_progress",
+    static ref METRIC_INDEXER_SYNC_PROGRESS: SimpleGauge =
+        SimpleGauge::new(
+            "blokli_indexer_sync_progress",
             "Sync progress of the historical data by the indexer",
     ).unwrap();
-    static ref METRIC_INDEXER_SYNC_SOURCE: hopr_metrics::metrics::MultiGauge =
-        hopr_metrics::metrics::MultiGauge::new(
-            "hopr_indexer_data_source",
+    static ref METRIC_INDEXER_SYNC_SOURCE: MultiGauge =
+        MultiGauge::new(
+            "blokli_indexer_data_source",
             "Current data source of the Indexer",
             &["source"],
     ).unwrap();
@@ -69,6 +71,16 @@ pub struct ReorgInfo {
     pub affected_block_range: (u64, u64),
     /// Number of logs that were marked as removed
     pub removed_log_count: usize,
+}
+
+#[cfg(any(test, feature = "telemetry"))]
+fn checksum_low_32_bits(checksum_hash: &Hash) -> u32 {
+    let checksum_bytes: &[u8] = checksum_hash.as_ref();
+    u32::from_be_bytes(
+        checksum_bytes[checksum_bytes.len() - 4..]
+            .try_into()
+            .expect("checksum hash should be 32 bytes"),
+    )
 }
 
 /// Indexer
@@ -233,7 +245,7 @@ where
                 _ => unreachable!(),
             };
 
-            #[cfg(all(feature = "prometheus", not(test)))]
+            #[cfg(all(feature = "telemetry", not(test)))]
             {
                 METRIC_INDEXER_SYNC_SOURCE.set(&["fast-sync"], 1.0);
                 METRIC_INDEXER_SYNC_SOURCE.set(&["rpc"], 0.0);
@@ -259,7 +271,7 @@ where
                 )
                 .await?;
 
-                #[cfg(all(feature = "prometheus", not(test)))]
+                #[cfg(all(feature = "telemetry", not(test)))]
                 {
                     let progress =
                         (block_number - _first_log_block_number) as f64 / (_head - _first_log_block_number) as f64;
@@ -305,7 +317,7 @@ where
             debug!("Updating chain head at indexer startup");
             Self::update_chain_head(&rpc, chain_head.clone()).await;
 
-            #[cfg(all(feature = "prometheus", not(test)))]
+            #[cfg(all(feature = "telemetry", not(test)))]
             {
                 METRIC_INDEXER_SYNC_SOURCE.set(&["fast-sync"], 0.0);
                 METRIC_INDEXER_SYNC_SOURCE.set(&["rpc"], 1.0);
@@ -677,11 +689,10 @@ where
                         log_count, last_log_checksum = ?checksum, "Indexer state update",
                     );
 
-                    #[cfg(all(feature = "prometheus", not(test)))]
+                    #[cfg(all(feature = "telemetry", not(test)))]
                     {
                         if let Ok(checksum_hash) = Hash::from_hex(checksum.as_str()) {
-                            let low_4_bytes = U256::from_big_endian(checksum_hash.as_ref()).low_u32();
-                            METRIC_INDEXER_CHECKSUM.set(low_4_bytes.into());
+                            METRIC_INDEXER_CHECKSUM.set(checksum_low_32_bits(&checksum_hash).into());
                         } else {
                             error!("Invalid checksum generated from logs");
                         }
@@ -997,7 +1008,7 @@ where
         T: HoprIndexerRpcOperations + 'static,
         Db: BlokliDbInfoOperations + Clone + Send + Sync + 'static,
     {
-        #[cfg(all(feature = "prometheus", not(test)))]
+        #[cfg(all(feature = "telemetry", not(test)))]
         {
             METRIC_INDEXER_CURRENT_BLOCK.set(current_block as f64);
         }
@@ -1030,7 +1041,7 @@ where
                 "Sync progress to last known head"
             );
 
-            #[cfg(all(feature = "prometheus", not(test)))]
+            #[cfg(all(feature = "telemetry", not(test)))]
             METRIC_INDEXER_SYNC_PROGRESS.set(progress);
 
             if current_block >= head {
@@ -1157,6 +1168,14 @@ mod tests {
             address: hex!("2f4b7662a192b8125bbf51cfbf1bf5cc00b2c8e5").into(),
             multiaddresses: vec![Multiaddr::empty()],
         };
+    }
+
+    #[test]
+    fn test_checksum_low_32_bits_uses_last_four_bytes() {
+        let checksum_hash = Hash::from_hex("0x0102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f20")
+            .expect("valid checksum hash");
+
+        assert_eq!(checksum_low_32_bits(&checksum_hash), 0x1d1e1f20);
     }
 
     fn build_announcement_logs(

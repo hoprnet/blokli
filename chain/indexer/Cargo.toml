@@ -6,22 +6,22 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0"
 name        = "blokli-chain-indexer"
 repository  = "https://github.com/hoprnet/hoprnet"
-version     = "0.15.0"
+version     = "0.15.1"
 
 [lib]
 crate-type = ["rlib"]
 
 [features]
 default = []
-prometheus = [
-  "blokli-chain-rpc/prometheus",
-  "blokli-db/prometheus",
-  "dep:hopr-metrics",
-]
 runtime-tokio = [
   "blokli-chain-rpc/runtime-tokio",
   "blokli-db/runtime-tokio",
   "hopr-async-runtime/runtime-tokio",
+]
+telemetry = [
+  "blokli-chain-rpc/telemetry",
+  "blokli-db/telemetry",
+  "dep:hopr-metrics",
 ]
 
 [dependencies]
