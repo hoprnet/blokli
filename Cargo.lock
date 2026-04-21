@@ -1989,7 +1989,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-client"
-version = "0.23.1"
+version = "0.24.0"
 dependencies = [
  "anyhow",
  "async-broadcast",

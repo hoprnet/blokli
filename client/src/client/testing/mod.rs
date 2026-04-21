@@ -6,6 +6,7 @@ use std::{
 
 use async_broadcast::TrySendError;
 use futures::{Stream, StreamExt};
+use futures_time::{stream::StreamExt as TimeStreamExt, time::Duration as Duration2};
 use hopr_types::{crypto::types::Hash, primitive::prelude::HoprBalance as PrimitiveHoprBalance};
 use indexmap::IndexMap;
 
@@ -738,6 +739,20 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliSubscriptionClient for Blokl
         Ok(futures::stream::iter(safes.into_values())
             .chain(self.safe_deployed_channel.1.activate_cloned())
             .map(Ok))
+    }
+
+    fn subscribe_track_transaction(
+        &self,
+        tx_id: TxId,
+    ) -> Result<impl futures::Stream<Item = Result<types::Transaction>> + Send> {
+        let tx = self
+            .state
+            .write()
+            .active_txs
+            .shift_remove(&tx_id)
+            .ok_or_else(|| BlokliClientError::from(ErrorKind::NoData))?;
+
+        Ok(futures::stream::once(futures::future::ok(tx)).delay(Duration2::from(self.tx_simulation_delay)))
     }
 }
 
