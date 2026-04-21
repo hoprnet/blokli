@@ -125,6 +125,14 @@ enum ChannelStatus {
   PENDINGTOCLOSE
 }
 
+"""Compatibility contract for blokli-client consumers"""
+type Compatibility {
+  "The blokli-api package version serving this schema"
+  apiVersion: String!
+  "Semver requirement describing which blokli-client versions are supported"
+  supportedClientVersions: String!
+}
+
 """
 Map of contract identifier to contract address (hexadecimal format).
 Keys: token, channels, announcements, module_implementation, node_safe_migration, node_safe_registry, ticket_price_oracle, winning_probability_oracle, node_stake_factory
@@ -424,6 +432,12 @@ type QueryRoot {
     "Filter by channel status (optional, combine with identity filters)"
     status: ChannelStatus
   ): ChannelsResult!
+  """
+  Client compatibility information
+  
+  Returns the API version and a semver requirement for compatible blokli-client releases.
+  """
+  compatibility: Compatibility!
   """
   Health check endpoint
   

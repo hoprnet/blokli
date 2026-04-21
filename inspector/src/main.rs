@@ -1,3 +1,4 @@
+mod compatibility;
 mod queries;
 mod subscriptions;
 
@@ -20,7 +21,10 @@ use queries::QueryTarget;
 use tokio::io::AsyncReadExt;
 use tracing_subscriber::{EnvFilter, fmt};
 
-use crate::subscriptions::{ChannelAllowedStates, SubscriptionTarget};
+use crate::{
+    compatibility::ensure_client_compatibility,
+    subscriptions::{ChannelAllowedStates, SubscriptionTarget},
+};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -274,6 +278,8 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     let blokli_client = BlokliClient::new(cli.url, BlokliClientConfig::default());
+
+    ensure_client_compatibility(&blokli_client).await?;
 
     let exit_fut = tokio::signal::ctrl_c().inspect_ok(|_| {
         eprintln!("\nInterrupted.");

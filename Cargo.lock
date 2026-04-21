@@ -2099,6 +2099,7 @@ dependencies = [
  "futures",
  "hex",
  "hopr-types",
+ "semver 1.0.27",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -3996,8 +3997,6 @@ dependencies = [
  "opentelemetry",
  "opentelemetry-prometheus-text-exporter",
  "opentelemetry_sdk",
- "generic-array 1.3.5",
- "rand 0.10.1",
 ]
 
 [[package]]
