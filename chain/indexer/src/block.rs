@@ -58,8 +58,8 @@ lazy_static::lazy_static! {
             "blokli_indexer_checksum",
             "Contains an unsigned integer that represents the low 32-bits of the Indexer checksum"
     ).unwrap();
-    static ref METRIC_INDEXER_SYNC_PROGRESS: hopr_metrics::metrics::MultiGauge =
-        hopr_metrics::metrics::MultiGauge::new(
+    static ref METRIC_INDEXER_SYNC_PROGRESS: MultiGauge =
+        MultiGauge::new(
             "blokli_indexer_sync_progress",
             "Sync progress of the indexer",
             &["phase"],
@@ -347,9 +347,9 @@ where
             {
                 METRIC_INDEXER_SYNC_SOURCE.set(&["fast-sync"], 0.0);
                 METRIC_INDEXER_SYNC_SOURCE.set(&["rpc"], 1.0);
-                METRIC_INDEXER_SYNC_PROGRESS.set(&[LogFilterPhase::HistoricalDiscovery.to_string()], 0.0);
-                METRIC_INDEXER_SYNC_PROGRESS.set(&[LogFilterPhase::HistoricalSafeBackfill.to_string()], 0.0);
-                METRIC_INDEXER_SYNC_PROGRESS.set(&[LogFilterPhase::Continuous.to_string()], 0.0);
+                METRIC_INDEXER_SYNC_PROGRESS.set(&[&LogFilterPhase::HistoricalDiscovery.to_string()], 0.0);
+                METRIC_INDEXER_SYNC_PROGRESS.set(&[&LogFilterPhase::HistoricalSafeBackfill.to_string()], 0.0);
+                METRIC_INDEXER_SYNC_PROGRESS.set(&[&LogFilterPhase::Continuous.to_string()], 0.0);
             }
 
             let mut stream_start_block = next_block_to_process;
@@ -412,8 +412,8 @@ where
             if let Err(error) = tx.try_send(()) {
                 error!(%error, "failed to notify about achieving indexer synchronization")
             }
-            #[cfg(all(feature = "prometheus", not(test)))]
-            METRIC_INDEXER_SYNC_PROGRESS.set(&[LogFilterPhase::Continuous.to_string()], 1.0);
+            #[cfg(all(feature = "telemetry", not(test)))]
+            METRIC_INDEXER_SYNC_PROGRESS.set(&[&LogFilterPhase::Continuous.to_string()], 1.0);
             let mut safe_filter_epoch = indexer_state.safe_filter_epoch();
 
             'stream_refresh: loop {
@@ -747,10 +747,10 @@ where
                 ((block.block_id.saturating_sub(start_block)) as f64 / (end_block.saturating_sub(start_block)) as f64)
                     * 100_f64
             };
-            #[cfg(all(feature = "prometheus", not(test)))]
+            #[cfg(all(feature = "telemetry", not(test)))]
             {
                 METRIC_INDEXER_CURRENT_BLOCK.set(block.block_id as f64);
-                METRIC_INDEXER_SYNC_PROGRESS.set(&[filter_phase.to_string()], progress / 100_f64);
+                METRIC_INDEXER_SYNC_PROGRESS.set(&[&filter_phase.to_string()], progress / 100_f64);
             }
             info!(
                 phase = phase_name,
