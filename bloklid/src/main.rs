@@ -1,305 +1,40 @@
+mod args;
 mod config;
 mod constants;
 mod errors;
 mod network;
+mod telemetry;
+mod telemetry_common;
 
 use std::{
-    path::PathBuf,
     process::ExitCode,
     sync::{Arc, RwLock},
     time::Duration,
 };
 
-// Import config crate to avoid conflict with module `config`
-use ::config as config_rs;
+use args::{Args, Command, generate_config_template, peek_verbosity_from_env_args};
 use async_signal::{Signal, Signals};
 use blokli_chain_api::BlokliChain;
 use blokli_chain_indexer::{startup, utils::redact_url};
-use blokli_chain_types::{AlloyAddressExt, ChainConfig};
 use blokli_db::db::{BlokliDb, BlokliDbConfig};
-use clap::{Parser, Subcommand};
+use clap::Parser;
 use futures::TryStreamExt;
 use sea_orm::Database;
 use tokio::net::TcpListener;
-use tracing::{error, info, warn};
-use tracing_subscriber::{EnvFilter, prelude::*};
-use validator::Validate;
 
 use crate::{
     config::{Config, redact_database_url},
-    errors::{BloklidError, ConfigError},
-    network::Network,
+    errors::BloklidError,
 };
-
-/// Bloklid: Daemon for indexing HOPR on-chain events and executing HOPR-related on-chain transactions
-#[derive(Debug, Parser)]
-#[command(
-    name = "bloklid",
-    about = "Daemon for indexing HOPR on-chain events and executing HOPR-related on-chain transactions",
-    version = crate::constants::APP_VERSION_COERCED
-)]
-struct Args {
-    /// Increase output verbosity (-v, -vv)
-    #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count, global = true)]
-    verbose: u8,
-
-    /// Optional path to a configuration file
-    #[arg(short = 'c', long = "config", value_name = "FILE", global = true)]
-    config: Option<PathBuf>,
-
-    /// Command to execute
-    #[command(subcommand)]
-    command: Option<Command>,
-}
-
-#[derive(Debug, Subcommand)]
-enum Command {
-    /// Generate a template configuration file
-    GenerateConfig {
-        /// Path where the configuration file should be created
-        #[arg(value_name = "FILE")]
-        output: PathBuf,
-    },
-}
-
-/// Generates a template configuration file using the embedded example config
-fn generate_config_template() -> String {
-    // Embed the example config file at compile time
-    include_str!("../example-config.toml").to_string()
-}
-
-impl Args {
-    /// Loads the configuration file specified by `config` command line argument.
-    ///
-    /// If no configuration file is specified,
-    /// the default configuration is loaded if `use_default` is set.
-    pub fn load_config(&self, use_default: bool) -> errors::Result<Config> {
-        let mut builder = config_rs::Config::builder();
-
-        // Layer 1: File (if provided)
-        if let Some(config_path) = &self.config {
-            builder = builder.add_source(config_rs::File::from(config_path.clone()));
-        } else if use_default {
-            warn!("no configuration file specified; using defaults and environment variables");
-        } else {
-            return Err(ConfigError::NoConfiguration.into());
-        }
-
-        // Layer 2: Environment Variables (Manual Mapping)
-        // We manually map env vars to config keys to ensure precedence and specific naming
-        let env_mappings = [
-            ("BLOKLI_DATA_DIRECTORY", "data_directory"),
-            ("BLOKLI_NETWORK", "network"),
-            ("BLOKLI_RPC_URL", "rpc_url"),
-            ("BLOKLI_MAX_RPC_REQUESTS_PER_SEC", "max_rpc_requests_per_sec"),
-            ("BLOKLI_MAX_BLOCK_RANGE", "max_block_range"),
-            // Database - Canonical
-            ("DATABASE_URL", "database.url"),
-            ("PGHOST", "database.host"),
-            ("POSTGRES_HOST", "database.host"),
-            ("PGPORT", "database.port"),
-            ("POSTGRES_PORT", "database.port"),
-            ("PGUSER", "database.username"),
-            ("POSTGRES_USER", "database.username"),
-            ("PGPASSWORD", "database.password"),
-            ("POSTGRES_PASSWORD", "database.password"),
-            ("PGDATABASE", "database.database"),
-            ("POSTGRES_DB", "database.database"),
-            // Database - BLOKLI
-            ("BLOKLI_DATABASE_TYPE", "database.type"),
-            ("BLOKLI_DATABASE_URL", "database.url"),
-            ("BLOKLI_DATABASE_HOST", "database.host"),
-            ("BLOKLI_DATABASE_PORT", "database.port"),
-            ("BLOKLI_DATABASE_USERNAME", "database.username"),
-            ("BLOKLI_DATABASE_PASSWORD", "database.password"),
-            ("BLOKLI_DATABASE_DATABASE", "database.database"),
-            ("BLOKLI_DATABASE_MAX_CONNECTIONS", "database.max_connections"),
-            ("BLOKLI_DATABASE_INDEX_PATH", "database.index_path"),
-            ("BLOKLI_DATABASE_LOGS_PATH", "database.logs_path"),
-            // Indexer
-            ("BLOKLI_INDEXER_FAST_SYNC", "indexer.fast_sync"),
-            ("BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT", "indexer.enable_logs_snapshot"),
-            ("BLOKLI_INDEXER_LOGS_SNAPSHOT_URL", "indexer.logs_snapshot_url"),
-            // Indexer Subscription
-            (
-                "BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY",
-                "indexer.subscription.event_bus_capacity",
-            ),
-            (
-                "BLOKLI_INDEXER_SUBSCRIPTION_SHUTDOWN_SIGNAL_CAPACITY",
-                "indexer.subscription.shutdown_signal_capacity",
-            ),
-            (
-                "BLOKLI_INDEXER_SUBSCRIPTION_BATCH_SIZE",
-                "indexer.subscription.batch_size",
-            ),
-            // API
-            ("BLOKLI_API_ENABLED", "api.enabled"),
-            ("BLOKLI_API_BIND_ADDRESS", "api.bind_address"),
-            ("BLOKLI_API_PLAYGROUND_ENABLED", "api.playground_enabled"),
-            ("BLOKLI_API_GAS_MULTIPLIER", "api.gas_multiplier"),
-            ("BLOKLI_API_SSE_KEEPALIVE_ENABLED", "api.sse_keepalive.enabled"),
-            ("BLOKLI_API_SSE_KEEPALIVE_INTERVAL", "api.sse_keepalive.interval"),
-            ("BLOKLI_API_SSE_KEEPALIVE_TEXT", "api.sse_keepalive.text"),
-            // API Health
-            ("BLOKLI_API_HEALTH_MAX_INDEXER_LAG", "api.health.max_indexer_lag"),
-            ("BLOKLI_API_HEALTH_TIMEOUT", "api.health.timeout"),
-            (
-                "BLOKLI_API_HEALTH_READINESS_CHECK_INTERVAL",
-                "api.health.readiness_check_interval",
-            ),
-        ];
-
-        // Keys that should be parsed as boolean values
-        let boolean_keys = [
-            "indexer.fast_sync",
-            "indexer.enable_logs_snapshot",
-            "api.enabled",
-            "api.playground_enabled",
-            "api.sse_keepalive.enabled",
-        ];
-
-        for (env_var, config_key) in env_mappings {
-            if let Ok(val) = std::env::var(env_var) {
-                // Try to parse the value as a more specific type if needed.
-                // For boolean config keys, attempt bool parsing first (before u64)
-                // so that "1"/"0" are interpreted as booleans, not integers.
-                // For other keys, try u64 first, then bool, then fall back to string.
-                let override_val: config_rs::Value = if boolean_keys.contains(&config_key) {
-                    // For boolean keys, prioritize bool parsing
-                    if let Ok(flag) = val.parse::<bool>() {
-                        flag.into()
-                    } else if let Ok(num) = val.parse::<u64>() {
-                        // Support "1"/"0" as booleans by converting to bool
-                        (num != 0).into()
-                    } else {
-                        val.into()
-                    }
-                } else {
-                    // For non-boolean keys, try numeric first, then bool, then string
-                    if let Ok(num) = val.parse::<u64>() {
-                        num.into()
-                    } else if let Ok(num) = val.parse::<f64>() {
-                        num.into()
-                    } else if let Ok(flag) = val.parse::<bool>() {
-                        flag.into()
-                    } else {
-                        val.into()
-                    }
-                };
-                builder = builder
-                    .set_override(config_key, override_val)
-                    .map_err(|e| ConfigError::Parse(e.to_string()))?;
-            }
-        }
-
-        let config_rs_config = builder.build().map_err(|e| ConfigError::Parse(e.to_string()))?;
-        let mut config: Config = config_rs_config
-            .try_deserialize()
-            .map_err(|e| ConfigError::Parse(e.to_string()))?;
-
-        if !config.api.gas_multiplier.is_finite() || config.api.gas_multiplier < 1.0 {
-            return Err(ConfigError::Parse(
-                "api.gas_multiplier must be a finite number greater than or equal to 1".to_string(),
-            )
-            .into());
-        }
-
-        // Validate that database configuration is provided either in config file or environment variables
-        if config.database.is_none() {
-            return Err(ConfigError::NoDatabaseConfiguration.into());
-        }
-
-        config.validate().map_err(ConfigError::Validation)?;
-
-        // Resolve network configuration from hopr-bindings
-        let network_config = config.network.resolve().ok_or_else(|| {
-            BloklidError::NonSpecific(format!(
-                "Network '{}' is not defined in hopr-bindings.\n\nSupported networks: {}",
-                config.network,
-                Network::all_names().join(", ")
-            ))
-        })?;
-
-        let chain_config = ChainConfig {
-            chain_id: network_config.chain_id,
-            tx_polling_interval: config.network.tx_polling_interval(),
-            confirmations: config.network.confirmations(),
-            max_block_range: config.max_block_range,
-            channel_contract_deploy_block: network_config.indexer_start_block_number,
-            max_requests_per_sec: config.max_rpc_requests_per_sec,
-            expected_block_time: config.network.expected_block_time(),
-        };
-
-        // Store resolved config and contracts
-        config.chain_network = Some(chain_config.clone());
-        let mut contracts = blokli_chain_types::ContractAddresses {
-            token: network_config.addresses.token.to_hopr_address(),
-            channels: network_config.addresses.channels.to_hopr_address(),
-            announcements: network_config.addresses.announcements.to_hopr_address(),
-            module_implementation: network_config.addresses.module_implementation.to_hopr_address(),
-            node_safe_migration: network_config.addresses.node_safe_migration.to_hopr_address(),
-            node_safe_registry: network_config.addresses.node_safe_registry.to_hopr_address(),
-            ticket_price_oracle: network_config.addresses.ticket_price_oracle.to_hopr_address(),
-            winning_probability_oracle: network_config.addresses.winning_probability_oracle.to_hopr_address(),
-            node_stake_factory: network_config.addresses.node_stake_factory.to_hopr_address(),
-        };
-
-        if let Some(override_contracts) = config.contracts_override {
-            contracts = override_contracts;
-        }
-
-        config.contracts = contracts;
-
-        info!(
-            contract_addresses = ?config.contracts,
-            "Resolved contract addresses",
-        );
-
-        config.validate().map_err(ConfigError::Validation)?;
-        Ok(config)
-    }
-}
-
-fn init_logger(verbosity: u8) -> errors::Result<()> {
-    // Initialize tracing subscriber. Precedence: RUST_LOG env > -v flag > default info
-    let env_filter = if std::env::var(EnvFilter::DEFAULT_ENV).is_ok() {
-        EnvFilter::from_default_env()
-    } else {
-        match verbosity {
-            0 => EnvFilter::new("info"),
-            1 => EnvFilter::new("debug"),
-            _ => EnvFilter::new("trace"),
-        }
-    };
-
-    let registry = tracing_subscriber::Registry::default().with(env_filter);
-
-    let format = tracing_subscriber::fmt::layer()
-        .with_level(true)
-        .with_target(true)
-        .with_thread_ids(true)
-        .with_thread_names(false);
-
-    let format = if std::env::var("BLOKLI_LOG_FORMAT")
-        .map(|v| v.to_lowercase() == "json")
-        .unwrap_or(false)
-    {
-        format.json().boxed()
-    } else {
-        format.boxed()
-    };
-
-    let registry = registry.with(format);
-
-    tracing::subscriber::set_global_default(registry).map_err(|e| BloklidError::NonSpecific(e.to_string()))?;
-
-    Ok(())
-}
 
 #[tokio::main]
 async fn main() -> ExitCode {
     const BIN_NAME: &str = env!("CARGO_PKG_NAME");
+    let verbosity = peek_verbosity_from_env_args();
+
+    if telemetry_common::install_base_subscriber(verbosity).is_err() {
+        return ExitCode::FAILURE;
+    }
 
     let args = match Args::try_parse() {
         Ok(args) => args,
@@ -308,33 +43,51 @@ async fn main() -> ExitCode {
                 error.kind(),
                 clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
             ) {
-                let _ = error.print();
+                tracing::info!("{error}");
                 return ExitCode::SUCCESS;
             }
-            eprintln!("error parsing '{BIN_NAME}' arguments: {error}");
+            tracing::error!(%error, "error parsing '{BIN_NAME}' arguments");
             return ExitCode::FAILURE;
         }
     };
 
-    if let Err(error) = init_logger(args.verbose) {
-        eprintln!("error initializing '{BIN_NAME}' logger: {error}");
-        return ExitCode::FAILURE;
-    }
+    if !matches!(args.command, Some(Command::GenerateConfig { .. })) {
+        let config = match args.load_config(true) {
+            Ok(config) => config,
+            Err(error) => {
+                tracing::error!(%error, "error loading '{BIN_NAME}' config");
+                return ExitCode::FAILURE;
+            }
+        };
 
-    if let Err(error) = run(args).await {
+        let telemetry_handles = match telemetry::init(args.verbose, &config.telemetry) {
+            Ok(handles) => handles,
+            Err(error) => {
+                tracing::error!(%error, "error initializing '{BIN_NAME}' telemetry");
+                return ExitCode::FAILURE;
+            }
+        };
+
+        let run_result = run(args, Some(config)).await;
+        drop(telemetry_handles);
+
+        if let Err(error) = run_result {
+            tracing::error!(%error, "error while running '{BIN_NAME}'");
+            return ExitCode::FAILURE;
+        }
+    } else if let Err(error) = run(args, None).await {
         tracing::error!(%error, "error while running '{BIN_NAME}'");
         return ExitCode::FAILURE;
     }
-
     ExitCode::SUCCESS
 }
 
-async fn run(args: Args) -> errors::Result<()> {
+async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
     // Handle subcommands
     if let Some(command) = args.command {
         match command {
             Command::GenerateConfig { output } => {
-                info!("Generating configuration template at: {}", output.display());
+                tracing::info!("Generating configuration template at: {}", output.display());
 
                 // Generate the template content
                 let template = generate_config_template();
@@ -350,28 +103,31 @@ async fn run(args: Args) -> errors::Result<()> {
                 std::fs::write(&output, template)
                     .map_err(|e| BloklidError::NonSpecific(format!("Failed to write configuration template: {}", e)))?;
 
-                info!("Configuration template successfully written to: {}", output.display());
+                tracing::info!("Configuration template successfully written to: {}", output.display());
                 return Ok(());
             }
         }
     }
 
     // Normal daemon operation
-    info!(
+    tracing::info!(
         verbosity = args.verbose,
         config = args.config.as_ref().map(|p| p.display().to_string()).as_deref(),
         "bloklid starting"
     );
 
     // Initial config load
-    let config = Arc::new(RwLock::new(args.load_config(true)?));
+    let config = Arc::new(RwLock::new(match initial_config {
+        Some(config) => config,
+        None => args.load_config(true)?,
+    }));
 
     // Log the final configuration with redacted secrets
     {
         let cfg = config
             .read()
             .map_err(|_| BloklidError::NonSpecific("failed to lock config for logging".into()))?;
-        info!("{}", cfg.display_redacted());
+        tracing::info!("{}", cfg.display_redacted());
     }
 
     // Initialize components
@@ -417,11 +173,11 @@ async fn run(args: Args) -> errors::Result<()> {
         };
 
         if let Some(logs_path) = &logs_database_path {
-            info!("Initializing dual-database setup:");
-            info!("  Index database: {}", redact_database_url(&database_path));
-            info!("  Logs database: {}", redact_database_url(logs_path));
+            tracing::info!("Initializing dual-database setup:");
+            tracing::info!("  Index database: {}", redact_database_url(&database_path));
+            tracing::info!("  Logs database: {}", redact_database_url(logs_path));
         } else {
-            info!("Initializing single database: {}", redact_database_url(&database_path));
+            tracing::info!("Initializing single database: {}", redact_database_url(&database_path));
         }
 
         // Initialize database
@@ -472,7 +228,7 @@ async fn run(args: Args) -> errors::Result<()> {
             .await
             .map_err(|e| BloklidError::NonSpecific(format!("Failed to initialize database singletons: {e}")))?;
 
-        info!("Connecting to RPC endpoint: {}", redact_url(&rpc_url));
+        tracing::info!("Connecting to RPC endpoint: {}", redact_url(&rpc_url));
 
         // Extract chain_id and network name for configuration
         let chain_id = chain_network.chain_id;
@@ -497,7 +253,7 @@ async fn run(args: Args) -> errors::Result<()> {
         // Start API server if enabled (before starting indexer processes)
         // This ensures the API is available immediately even if indexer initialization takes time
         let api_handle = if api_config.enabled {
-            info!("Starting blokli-api server on {}", api_config.bind_address);
+            tracing::info!("Starting blokli-api server on {}", api_config.bind_address);
 
             // Connect to database for API server
             let api_db = Database::connect(&database_path)
@@ -564,9 +320,9 @@ async fn run(args: Args) -> errors::Result<()> {
                 .await
                 .map_err(|e| BloklidError::NonSpecific(format!("Failed to bind API server: {}", e)))?;
 
-            info!("API server listening on {}", api_config.bind_address);
+            tracing::info!("API server listening on {}", api_config.bind_address);
             if api_config.playground_enabled {
-                info!(
+                tracing::info!(
                     "GraphQL Playground available at http://{}/graphql",
                     api_config.bind_address
                 );
@@ -577,842 +333,68 @@ async fn run(args: Args) -> errors::Result<()> {
                 axum::serve(listener, api_app).await.expect("API server failed");
             });
 
-            info!("API server started successfully");
+            tracing::info!("API server started successfully");
             Some(handle)
         } else {
-            info!("API server disabled in configuration");
+            tracing::info!("API server disabled in configuration");
             None
         };
 
-        info!("Starting BlokliChain processes");
+        tracing::info!("Starting BlokliChain processes");
 
         // Start all chain processes
         let process_handles = blokli_chain.start().await?;
 
-        info!("BlokliChain started successfully");
+        tracing::info!("BlokliChain started successfully");
 
         (process_handles, api_handle)
     };
 
-    info!("daemon running; send SIGHUP to reload config, SIGINT/SIGTERM to stop");
+    tracing::info!("daemon running; send SIGHUP to reload config, SIGINT/SIGTERM to stop");
 
     let mut signals = Signals::new([Signal::Hup, Signal::Int, Signal::Term])?;
     while let Some(signal) = signals.try_next().await? {
         match signal {
             Signal::Hup => {
-                info!("received SIGHUP; reloading configuration");
+                tracing::info!("received SIGHUP; reloading configuration");
                 match args.load_config(false) {
                     Ok(new_cfg) => {
                         let mut cfg_guard = config
                             .write()
                             .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
                         *cfg_guard = new_cfg;
-                        warn!("Configuration reloaded, but indexer continues with original settings");
+                        tracing::warn!(
+                            "Configuration reloaded, but running indexer, API, and telemetry continue with original \
+                             settings"
+                        );
                     }
-                    Err(error) => error!(%error, "failed to reload configuration"),
+                    Err(error) => tracing::error!(%error, "failed to reload configuration"),
                 }
             }
             Signal::Int | Signal::Term => {
-                info!("received SIGINT/SIGTERM; shutting down");
+                tracing::info!("received SIGINT/SIGTERM; shutting down");
                 break;
             }
             _ => {
-                warn!("received unknown signal; ignoring");
+                tracing::warn!("received unknown signal; ignoring");
             }
         }
     }
 
     // Abort all chain processes
     for (process_type, handle) in process_handles {
-        info!("Stopping {:?} process", process_type);
+        tracing::info!("Stopping {:?} process", process_type);
         handle.abort();
     }
-    info!("All BlokliChain processes stopped");
+    tracing::info!("All BlokliChain processes stopped");
 
     // Stop API server if it was started
     if let Some(handle) = api_handle {
-        info!("Stopping API server");
+        tracing::info!("Stopping API server");
         handle.abort();
-        info!("API server stopped");
+        tracing::info!("API server stopped");
     }
 
-    info!("bloklid stopped gracefully");
+    tracing::info!("bloklid stopped gracefully");
     Ok(())
-}
-
-#[cfg(test)]
-mod tests {
-    use std::io::Write;
-
-    use super::*;
-
-    #[test]
-    fn test_env_var_override() {
-        // Create a temp config file
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-            [database]
-            type = "postgresql"
-            url = "postgres://file:5432/db"
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        // Set env vars that should override config file
-        temp_env::with_vars([("BLOKLI_DATABASE_URL", Some("postgres://env:5432/db"))], || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            let config = args.load_config(false).expect("Failed to load config");
-
-            // Environment variables should override config file
-            match config.database {
-                Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
-                    assert_eq!(c.url.as_deref(), Some("postgres://env:5432/db"));
-                }
-                _ => panic!("Expected PostgreSQL database config"),
-            }
-        });
-    }
-
-    #[test]
-    fn test_canonical_env_var_override() {
-        // Create a temp config file
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-            [database]
-            type = "postgresql"
-            url = "postgres://file:5432/db"
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        // Set canonical DATABASE_URL env var
-        temp_env::with_var("DATABASE_URL", Some("postgres://canonical:5432/db"), || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            let config = args.load_config(false).expect("Failed to load config");
-
-            // Canonical env var should override config file
-            match config.database {
-                Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
-                    assert_eq!(c.url.as_deref(), Some("postgres://canonical:5432/db"));
-                }
-                _ => panic!("Expected PostgreSQL database config"),
-            }
-        });
-    }
-
-    #[test]
-    fn test_env_only_database_config() {
-        // Create config file without [database] section
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        // Database config must come entirely from environment variables
-        temp_env::with_vars(
-            [
-                ("BLOKLI_DATABASE_TYPE", Some("postgresql")),
-                ("BLOKLI_DATABASE_URL", Some("postgresql://user:pass@localhost/db")),
-            ],
-            || {
-                let args = Args {
-                    verbose: 0,
-                    config: Some(path),
-                    command: None,
-                };
-
-                let config = args
-                    .load_config(false)
-                    .expect("Should load database config from environment");
-
-                // Should successfully load database config from environment variables
-                match config.database {
-                    Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
-                        assert_eq!(c.url.as_deref(), Some("postgresql://user:pass@localhost/db"));
-                        assert_eq!(c.max_connections, 10); // Default value
-                    }
-                    _ => panic!("Expected PostgreSQL database config"),
-                }
-            },
-        );
-    }
-
-    #[test]
-    fn test_missing_database_config_fails() {
-        // Create config file without [database] section
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        // Don't set any database environment variables
-        temp_env::with_var("BLOKLI_DATABASE_TYPE", None::<&str>, || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            // Should fail when database config is missing from both file and environment
-            let result = args.load_config(false);
-            assert!(result.is_err(), "Should fail when database config is missing");
-
-            let err_msg = result.unwrap_err().to_string();
-            assert!(
-                err_msg.contains("database configuration"),
-                "Error message should mention database configuration"
-            );
-        });
-    }
-
-    #[test]
-    fn test_env_var_string_values_are_parsed_by_config_rs() {
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-            [database]
-            type = "postgresql"
-            url = "postgres://file:5432/db"
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        temp_env::with_var("BLOKLI_NETWORK", Some("rotsee"), || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            let config = args.load_config(false).expect("Failed to load config");
-
-            // String environment variables should be properly parsed to their target types
-            assert_eq!(config.network, Network::Rotsee, "String env var should override config");
-        });
-    }
-
-    #[test]
-    fn test_database_config_defaults_max_connections_to_10() {
-        // Create a temp config file with PostgreSQL configuration
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-            [database]
-            type = "postgresql"
-            url = "postgres://file:5432/db"
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        temp_env::with_var("BLOKLI_DATABASE_MAX_CONNECTIONS", None::<&str>, || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            let config = args.load_config(false).expect("Failed to load config");
-
-            // Verify max_connections defaults to 10 (u32) when not specified
-            match config.database {
-                Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
-                    assert_eq!(c.max_connections, 10, "PostgreSQL max_connections should default to 10");
-                }
-                _ => panic!("Expected PostgreSQL database config"),
-            }
-        });
-    }
-
-    #[test]
-    fn test_database_config_max_connections_from_config_file() {
-        // Create a temp config file with explicit max_connections
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-            [database]
-            type = "postgresql"
-            url = "postgres://file:5432/db"
-            max_connections = 50
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        temp_env::with_var("BLOKLI_DATABASE_MAX_CONNECTIONS", None::<&str>, || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            let config = args.load_config(false).expect("Failed to load config");
-
-            // Verify max_connections is correctly read as u32 from config file
-            match config.database {
-                Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
-                    assert_eq!(
-                        c.max_connections, 50,
-                        "max_connections should be parsed as u32 from config file"
-                    );
-                }
-                _ => panic!("Expected PostgreSQL database config"),
-            }
-        });
-    }
-
-    #[test]
-    fn test_sqlite_database_config_max_connections_defaults() {
-        // Create a temp config file with SQLite database configuration
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-            [database]
-            type = "sqlite"
-            index_path = "data/index.db"
-            logs_path = "data/logs.db"
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        temp_env::with_var("BLOKLI_DATABASE_MAX_CONNECTIONS", None::<&str>, || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            let config = args.load_config(false).expect("Failed to load config");
-
-            // Verify SQLite max_connections defaults to 10 (u32)
-            match config.database {
-                Some(crate::config::DatabaseConfig::Sqlite(c)) => {
-                    assert_eq!(c.max_connections, 10, "SQLite max_connections should default to 10");
-                }
-                _ => panic!("Expected SQLite database config"),
-            }
-        });
-    }
-
-    #[test]
-    fn test_env_var_blokli_database_max_connections_integer_casting() {
-        // Create a temp config file with PostgreSQL configuration
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-            [database]
-            type = "postgresql"
-            url = "postgres://file:5432/db"
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        // Override max_connections with environment variable (string in env, should be parsed to u32)
-        temp_env::with_var("BLOKLI_DATABASE_MAX_CONNECTIONS", Some("75"), || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            let config = args.load_config(false).expect("Failed to load config");
-
-            // Verify max_connections was correctly parsed from string to u64 then to u32
-            match config.database {
-                Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
-                    assert_eq!(
-                        c.max_connections, 75,
-                        "BLOKLI_DATABASE_MAX_CONNECTIONS should be parsed as u32 from env var"
-                    );
-                }
-                _ => panic!("Expected PostgreSQL database config"),
-            }
-        });
-    }
-
-    #[test]
-    fn test_env_var_blokli_database_max_connections_for_sqlite() {
-        // Create a temp config file with SQLite configuration
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-            [database]
-            type = "sqlite"
-            index_path = "data/index.db"
-            logs_path = "data/logs.db"
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        // Override max_connections with environment variable for SQLite
-        temp_env::with_var("BLOKLI_DATABASE_MAX_CONNECTIONS", Some("40"), || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            let config = args.load_config(false).expect("Failed to load config");
-
-            // Verify max_connections was correctly parsed from string to u64 then to u32 for SQLite
-            match config.database {
-                Some(crate::config::DatabaseConfig::Sqlite(c)) => {
-                    assert_eq!(
-                        c.max_connections, 40,
-                        "BLOKLI_DATABASE_MAX_CONNECTIONS should be parsed as u32 from env var for SQLite"
-                    );
-                }
-                _ => panic!("Expected SQLite database config"),
-            }
-        });
-    }
-
-    #[test]
-    fn test_boolean_env_var_with_true_string() {
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-            [database]
-            type = "postgresql"
-            url = "postgres://file:5432/db"
-            [indexer]
-            fast_sync = false
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        temp_env::with_var("BLOKLI_INDEXER_FAST_SYNC", Some("true"), || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            let config = args.load_config(false).expect("Failed to load config");
-            assert!(
-                config.indexer.fast_sync,
-                "BLOKLI_INDEXER_FAST_SYNC should be parsed as bool"
-            );
-        });
-    }
-
-    #[test]
-    fn test_boolean_env_var_with_digit_one() {
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-            [database]
-            type = "postgresql"
-            url = "postgres://file:5432/db"
-            [indexer]
-            fast_sync = false
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        // "1" should be parsed as boolean true, not integer 1
-        temp_env::with_var("BLOKLI_INDEXER_FAST_SYNC", Some("1"), || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            let config = args.load_config(false).expect("Failed to load config");
-            assert!(
-                config.indexer.fast_sync,
-                "BLOKLI_INDEXER_FAST_SYNC='1' should be parsed as boolean true"
-            );
-        });
-    }
-
-    #[test]
-    fn test_boolean_env_var_with_digit_zero() {
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-            [database]
-            type = "postgresql"
-            url = "postgres://file:5432/db"
-            [indexer]
-            fast_sync = true
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        // "0" should be parsed as boolean false, not integer 0
-        temp_env::with_var("BLOKLI_INDEXER_FAST_SYNC", Some("0"), || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            let config = args.load_config(false).expect("Failed to load config");
-            assert!(
-                !config.indexer.fast_sync,
-                "BLOKLI_INDEXER_FAST_SYNC='0' should be parsed as boolean false"
-            );
-        });
-    }
-
-    #[test]
-    fn test_boolean_env_var_false_string() {
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-            [database]
-            type = "postgresql"
-            url = "postgres://file:5432/db"
-            [indexer]
-            fast_sync = true
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        temp_env::with_var("BLOKLI_INDEXER_FAST_SYNC", Some("false"), || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            let config = args.load_config(false).expect("Failed to load config");
-            assert!(
-                !config.indexer.fast_sync,
-                "BLOKLI_INDEXER_FAST_SYNC should be parsed as bool"
-            );
-        });
-    }
-
-    #[test]
-    fn test_numeric_env_var_still_parsed_as_integer() {
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-            [database]
-            type = "postgresql"
-            url = "postgres://file:5432/db"
-            [api.health]
-            max_indexer_lag = 5
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        // Non-boolean numeric config should still parse as u64
-        temp_env::with_var("BLOKLI_API_HEALTH_MAX_INDEXER_LAG", Some("20"), || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(
-                config.api.health.max_indexer_lag, 20,
-                "Non-boolean numeric config should parse as u64"
-            );
-        });
-    }
-
-    #[test]
-    fn test_float_env_var_parsed_as_f64() {
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-            [database]
-            type = "postgresql"
-            url = "postgres://file:5432/db"
-            [api]
-            gas_multiplier = 1.0
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        temp_env::with_var("BLOKLI_API_GAS_MULTIPLIER", Some("1.5"), || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(
-                config.api.gas_multiplier, 1.5,
-                "BLOKLI_API_GAS_MULTIPLIER should be parsed as f64"
-            );
-        });
-    }
-
-    #[test]
-    fn test_invalid_gas_multiplier_rejected() {
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-            [database]
-            type = "postgresql"
-            url = "postgres://file:5432/db"
-            [api]
-            gas_multiplier = 0.5
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        temp_env::with_var("BLOKLI_API_GAS_MULTIPLIER", None::<&str>, || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-            let error = args
-                .load_config(false)
-                .expect_err("gas multiplier 0.0 should be invalid");
-            assert!(
-                error
-                    .to_string()
-                    .contains("api.gas_multiplier must be a finite number greater than or equal to 1"),
-                "unexpected error: {error}"
-            );
-        });
-    }
-
-    #[test]
-    fn test_max_block_range_default() {
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-            [database]
-            type = "postgresql"
-            url = "postgres://file:5432/db"
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        temp_env::with_var("BLOKLI_MAX_BLOCK_RANGE", None::<&str>, || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(config.max_block_range, 10000, "max_block_range should default to 10000");
-        });
-    }
-
-    #[test]
-    fn test_max_block_range_from_config_file() {
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-            max_block_range = 5000
-            [database]
-            type = "postgresql"
-            url = "postgres://file:5432/db"
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        temp_env::with_var("BLOKLI_MAX_BLOCK_RANGE", None::<&str>, || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(
-                config.max_block_range, 5000,
-                "max_block_range should be parsed from config file"
-            );
-        });
-    }
-
-    #[test]
-    fn test_max_block_range_env_override() {
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-            max_block_range = 5000
-            [database]
-            type = "postgresql"
-            url = "postgres://file:5432/db"
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        temp_env::with_var("BLOKLI_MAX_BLOCK_RANGE", Some("2500"), || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(
-                config.max_block_range, 2500,
-                "BLOKLI_MAX_BLOCK_RANGE env var should override config file"
-            );
-        });
-    }
-
-    #[test]
-    fn test_max_rpc_requests_per_sec_zero_from_config() {
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-            max_rpc_requests_per_sec = 0
-            [database]
-            type = "postgresql"
-            url = "postgres://file:5432/db"
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        temp_env::with_var("BLOKLI_MAX_RPC_REQUESTS_PER_SEC", None::<&str>, || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(
-                config.max_rpc_requests_per_sec,
-                Some(0),
-                "max_rpc_requests_per_sec should preserve explicit 0 from config"
-            );
-        });
-    }
-
-    #[test]
-    fn test_max_rpc_requests_per_sec_env_override_zero() {
-        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
-        writeln!(
-            file,
-            r#"
-            network = "rotsee"
-            rpc_url = "http://localhost:8545"
-            max_rpc_requests_per_sec = 250
-            [database]
-            type = "postgresql"
-            url = "postgres://file:5432/db"
-        "#
-        )
-        .unwrap();
-        let path = file.path().to_path_buf();
-
-        temp_env::with_var("BLOKLI_MAX_RPC_REQUESTS_PER_SEC", Some("0"), || {
-            let args = Args {
-                verbose: 0,
-                config: Some(path),
-                command: None,
-            };
-
-            let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(
-                config.max_rpc_requests_per_sec,
-                Some(0),
-                "BLOKLI_MAX_RPC_REQUESTS_PER_SEC should override config file value"
-            );
-        });
-    }
 }

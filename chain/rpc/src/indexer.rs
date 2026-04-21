@@ -18,7 +18,7 @@ use hopr_bindings::exports::alloy::{
     providers::Provider,
     rpc::types::Filter,
 };
-#[cfg(all(feature = "prometheus", not(test)))]
+#[cfg(all(feature = "telemetry", not(test)))]
 use hopr_metrics::SimpleGauge;
 use hopr_types::{crypto::types::Hash, primitive::prelude::*};
 use rust_stream_ext_concurrent::then_concurrent::StreamThenConcurrentExt;
@@ -31,7 +31,7 @@ use crate::{
     transport::HttpRequestor,
 };
 
-#[cfg(all(feature = "prometheus", not(test)))]
+#[cfg(all(feature = "telemetry", not(test)))]
 lazy_static::lazy_static! {
     static ref METRIC_RPC_CHAIN_HEAD: SimpleGauge =
         SimpleGauge::new(
@@ -238,7 +238,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
                         }
 
 
-                        #[cfg(all(feature = "prometheus", not(test)))]
+                        #[cfg(all(feature = "telemetry", not(test)))]
                         METRIC_RPC_CHAIN_HEAD.set(latest_block as f64);
 
                         let mut retrieved_logs = self.stream_logs(log_filters.clone(), from_block, latest_block);

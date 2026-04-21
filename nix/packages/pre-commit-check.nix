@@ -68,6 +68,15 @@ pre-commit.lib.${system}.run {
       pass_filenames = false;
     };
 
+    generate-metrics-docs = {
+      enable = true;
+      name = "METRICS.md must stay in sync with code";
+      entry = "bash .github/scripts/generate-metrics-docs.sh --fix";
+      files = "(METRICS\\.md|\\.rs)$";
+      pass_filenames = false;
+      language = "system";
+    };
+
     # Custom immutable files check (disabled by default)
     immutable-files = {
       enable = false;

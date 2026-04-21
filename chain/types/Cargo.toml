@@ -26,6 +26,7 @@ hopr-types = { workspace = true, features = [
   "crypto",
   "internal",
   "primitive",
+  "serde",
 ] }
 
 [features]

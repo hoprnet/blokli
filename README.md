@@ -89,6 +89,11 @@ just docker-run-anvil trace
 
 Once running, access the GraphQL playground at: <http://localhost:8080/graphql>
 
+Prometheus metrics are available at: <http://localhost:8080/metrics>
+
+To push daemon telemetry to an OpenTelemetry collector, configure the `[telemetry]` section in `bloklid/example-config.toml`. See
+[OTLP.md](OTLP.md) for transport rules, signal selection, environment overrides, and example configurations.
+
 ## Testing
 
 Blokli has comprehensive test coverage for temporal queries, blockchain reorganization handling, subscriptions, and edge cases.

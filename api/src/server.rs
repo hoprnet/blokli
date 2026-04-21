@@ -1,6 +1,6 @@
 //! Axum HTTP server configuration with GraphQL support
 
-use std::{pin::Pin, sync::Arc};
+use std::{pin::Pin, sync::Arc, time::Instant};
 
 use async_graphql::{
     Schema,
@@ -42,6 +42,7 @@ use uuid::Uuid;
 use crate::{
     config::{ApiConfig, HealthConfig},
     errors::ApiResult,
+    metrics,
     mutation::MutationRoot,
     query::QueryRoot,
     readiness::{ReadinessChecker, ReadinessState},
@@ -238,6 +239,7 @@ pub async fn build_app(
     Ok(Router::new()
         // GraphQL endpoint (queries, mutations, and SSE subscriptions)
         .route("/graphql", get(graphql_playground).post(graphql_handler))
+        .route("/metrics", get(metrics_handler))
         // Health check endpoints for Kubernetes probes
         .route("/healthz", get(healthz_handler))
         .route("/readyz", get(readyz_handler))
@@ -277,6 +279,7 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
     let request = match serde_json::from_value::<async_graphql::Request>(request) {
         Ok(req) => req,
         Err(e) => {
+            metrics::increment_errors("invalid_request");
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({
@@ -299,6 +302,18 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
     // Check if the request is a subscription
     let is_subscription = request.query.trim_start().starts_with("subscription");
 
+    // Determine request type label for metrics
+    let request_type = if is_subscription {
+        "subscription"
+    } else if request.query.trim_start().starts_with("mutation") {
+        "mutation"
+    } else {
+        "query"
+    };
+
+    // Track request count
+    metrics::increment_request_count(request_type);
+
     // Handle subscription requests via SSE
     if accepts_sse && is_subscription {
         // Generate unique identifier for this SSE connection
@@ -318,6 +333,9 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
             Box::pin(stream! {
                 let mut response_stream = schema.as_ref().execute_stream(request);
                 while let Some(response) = response_stream.next().await {
+                    if !response.errors.is_empty() {
+                        metrics::increment_errors(request_type);
+                    }
                     let json = serde_json::to_string(&response)
                         .unwrap_or_else(|_| r#"{"errors":[{"message":"Failed to serialize response"}]}"#.to_string());
                     yield Ok::<_, std::convert::Infallible>(Event::default().event("next").data(json));
@@ -333,8 +351,20 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
         return Sse::new(sse_stream).into_response();
     }
 
+    // Start timer for request duration. Intentionnaly after the subscription check, as timing a
+    // subscription is not meaningful - it's a long-lived connection, not a single request.
+    let start_time = Instant::now();
+
     // Execute regular query/mutation
     let response = state.schema.execute(request).await;
+
+    // Record request duration
+    metrics::observe_request_duration(request_type, start_time.elapsed().as_secs_f64());
+
+    // Count any errors returned in the response
+    if !response.errors.is_empty() {
+        metrics::increment_errors(request_type);
+    }
 
     // Serialize and return the response
     Json(serde_json::to_value(response).unwrap_or_else(|_| {
@@ -343,6 +373,29 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
         })
     }))
     .into_response()
+}
+
+async fn metrics_handler() -> impl IntoResponse {
+    #[cfg(feature = "telemetry")]
+    {
+        match hopr_metrics::gather_all_metrics().map_err(|error| error.to_string()) {
+            Ok(metrics) => (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+                metrics,
+            )
+                .into_response(),
+            Err(error) => {
+                tracing::error!(%error, "failed to gather metrics");
+                (StatusCode::INTERNAL_SERVER_ERROR, "Failed to gather metrics").into_response()
+            }
+        }
+    }
+
+    #[cfg(not(feature = "telemetry"))]
+    {
+        (StatusCode::NOT_FOUND, "Metrics endpoint is disabled").into_response()
+    }
 }
 
 /// GraphQL Playground UI (only enabled if playground_enabled config is true)
@@ -465,7 +518,13 @@ async fn readyz_handler(State(state): State<AppState>) -> impl IntoResponse {
 
 #[cfg(test)]
 mod tests {
-    use axum::http::{HeaderValue, Response, StatusCode};
+    use axum::{
+        Router,
+        body::Body,
+        http::{HeaderValue, Request, Response, StatusCode},
+        routing::get,
+    };
+    use tower::ServiceExt;
 
     use super::*;
 
@@ -837,5 +896,56 @@ mod tests {
             extract_subscription_name("subscription SafeDeployed($id: ID!) { address }"),
             "safe-deployed"
         );
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[tokio::test]
+    async fn test_metrics_handler_returns_prometheus_text() {
+        let metric_name = format!("blokli_metrics_handler_test_{}", Uuid::new_v4().simple());
+        let metric = hopr_metrics::MultiCounter::new(&metric_name, "metrics endpoint test", &["kind"])
+            .expect("metric should be created");
+
+        metric.increment(&["test-kind"]);
+
+        let app = Router::new().route("/metrics", get(metrics_handler));
+        let request = Request::builder()
+            .uri("/metrics")
+            .body(Body::empty())
+            .expect("request should be built");
+
+        let response = app.oneshot(request).await.expect("request should succeed");
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let body = String::from_utf8(body.to_vec()).expect("metrics response should be UTF-8");
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            headers.get(header::CONTENT_TYPE).and_then(|value| value.to_str().ok()),
+            Some("text/plain; version=0.0.4; charset=utf-8")
+        );
+        assert!(body.contains(&metric_name));
+    }
+
+    #[cfg(not(feature = "telemetry"))]
+    #[tokio::test]
+    async fn test_metrics_handler_returns_not_found_when_disabled() {
+        let app = Router::new().route("/metrics", get(metrics_handler));
+        let request = Request::builder()
+            .uri("/metrics")
+            .body(Body::empty())
+            .expect("request should be built");
+
+        let response = app.oneshot(request).await.expect("request should succeed");
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let body = String::from_utf8(body.to_vec()).expect("metrics response should be UTF-8");
+
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body, "Metrics endpoint is disabled");
     }
 }

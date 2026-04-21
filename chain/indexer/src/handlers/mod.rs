@@ -46,17 +46,22 @@ mod stake_factory;
 mod test_utils;
 mod tokens;
 
-#[cfg(all(feature = "prometheus", not(test)))]
+#[cfg(all(feature = "telemetry", not(test)))]
 use hopr_metrics::MultiCounter;
 
-#[cfg(all(feature = "prometheus", not(test)))]
+#[cfg(all(feature = "telemetry", not(test)))]
 lazy_static::lazy_static! {
     static ref METRIC_INDEXER_LOG_COUNTERS: MultiCounter =
         MultiCounter::new(
-            "hopr_indexer_contract_log_count",
+            "blokli_indexer_contract_log_count",
             "Counts of different HOPR contract logs processed by the Indexer",
             &["contract"]
     ).unwrap();
+}
+
+#[cfg(all(feature = "telemetry", not(test)))]
+fn increment_indexer_contract_log_count(contract: &str) {
+    METRIC_INDEXER_LOG_COUNTERS.increment(&[contract]);
 }
 
 /// Event handling an object for on-chain operations
@@ -127,8 +132,8 @@ where
         _event: HoprNodeManagementModuleEvents,
         _is_synced: bool,
     ) -> Result<()> {
-        #[cfg(all(feature = "prometheus", not(test)))]
-        METRIC_INDEXER_LOG_COUNTERS.increment(&["node_management_module"]);
+        #[cfg(all(feature = "telemetry", not(test)))]
+        increment_indexer_contract_log_count("node_management_module");
         // Don't care at the moment
         Ok(())
     }
@@ -247,8 +252,8 @@ where
             self.on_ticket_winning_probability_oracle_event(tx, event.data, is_synced)
                 .await
         } else {
-            #[cfg(all(feature = "prometheus", not(test)))]
-            METRIC_INDEXER_LOG_COUNTERS.increment(&["unknown"]);
+            #[cfg(all(feature = "telemetry", not(test)))]
+            increment_indexer_contract_log_count("unknown");
 
             error!(
                 address = %log.address, log = ?log,
