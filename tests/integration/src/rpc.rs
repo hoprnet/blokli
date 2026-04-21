@@ -24,6 +24,14 @@ impl RpcClient {
         })
     }
 
+    pub async fn block_number(&self) -> Result<u64> {
+        let value = self
+            .call_raw("eth_blockNumber", Vec::new())
+            .await?
+            .context("eth_blockNumber returned no result")?;
+        parse_hex_quantity(value.as_str().context("eth_blockNumber returned non-string result")?)
+    }
+
     pub async fn chain_id(&self) -> Result<u64> {
         let value = self
             .call_raw("eth_chainId", Vec::new())

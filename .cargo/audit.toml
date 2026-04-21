@@ -38,4 +38,10 @@ ignore = [
   # Status: Macro library for Solidity type generation. No runtime impact.
   # Review by: 2026-06-30
   "RUSTSEC-2024-0436",
+
+  # RUSTSEC-2026-0097: rand is unsound with custom logger
+  # Crate: rand 0.8.5
+  # Status: Unsound with custom logger
+  # Review by: 2026-06-30
+  "RUSTSEC-2026-0097",
 ]

@@ -39,7 +39,7 @@ use hopr_types::{
     crypto::prelude::{ChainKeypair, Keypair, OffchainKeypair},
     internal::channels::{ChannelEntry, ChannelStatus},
     primitive::{
-        prelude::{Balance as PrimitiveBalance, HoprBalance, ToHex, WxHOPR},
+        prelude::{Address, Balance as PrimitiveBalance, HoprBalance, ToHex, WxHOPR},
         traits::IntoEndian,
     },
 };
@@ -53,6 +53,24 @@ fn random_keypair() -> ChainKeypair {
 /// Helper to generate random offchain keypair
 fn random_offchain_keypair() -> OffchainKeypair {
     OffchainKeypair::random()
+}
+
+fn build_channel_entry(
+    source: Address,
+    destination: Address,
+    balance: HoprBalance,
+    ticket_index: u64,
+    status: ChannelStatus,
+    channel_epoch: u32,
+) -> ChannelEntry {
+    ChannelEntry::builder()
+        .between(source, destination)
+        .balance(balance)
+        .ticket_index(ticket_index)
+        .status(status)
+        .epoch(channel_epoch)
+        .build()
+        .expect("valid channel entry")
 }
 
 /// Helper to create a ChannelUpdate event from database data for testing
@@ -236,7 +254,7 @@ async fn test_opened_channel_graph_subscription_emits_initial_entry() {
 
     // Create an open channel
     let balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
     // Update watermark to include all test data
@@ -329,11 +347,11 @@ async fn test_opened_channel_graph_subscription_emits_multiple_entries() {
 
     // Create two open channels
     let balance1 = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel1 = ChannelEntry::new(addr1, addr2, balance1, 0, ChannelStatus::Open, 1);
+    let channel1 = build_channel_entry(addr1, addr2, balance1, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel1, 100, 0, 0).await.unwrap();
 
     let balance2 = HoprBalance::from_str("2000 wxHOPR").unwrap();
-    let channel2 = ChannelEntry::new(addr2, addr3, balance2, 0, ChannelStatus::Open, 1);
+    let channel2 = build_channel_entry(addr2, addr3, balance2, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel2, 101, 0, 0).await.unwrap();
 
     // Update watermark to include all test data
@@ -415,11 +433,11 @@ async fn test_opened_channel_graph_subscription_excludes_closed_channels() {
 
     // Create one OPEN channel and one CLOSED channel
     let balance1 = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let open_channel = ChannelEntry::new(addr1, addr2, balance1, 0, ChannelStatus::Open, 1);
+    let open_channel = build_channel_entry(addr1, addr2, balance1, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, open_channel, 100, 0, 0).await.unwrap();
 
     let balance2 = HoprBalance::from_str("2000 wxHOPR").unwrap();
-    let closed_channel = ChannelEntry::new(addr2, addr3, balance2, 0, ChannelStatus::Closed, 1);
+    let closed_channel = build_channel_entry(addr2, addr3, balance2, 0, ChannelStatus::Closed, 1);
     db.upsert_channel(None, closed_channel, 101, 0, 0).await.unwrap();
 
     // Update watermark to include all test data
@@ -486,7 +504,7 @@ async fn test_opened_channel_graph_subscription_receives_new_channel_entry() {
 
     // Create initial channel
     let balance1 = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel1 = ChannelEntry::new(addr1, addr2, balance1, 0, ChannelStatus::Open, 1);
+    let channel1 = build_channel_entry(addr1, addr2, balance1, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel1, 100, 0, 0).await.unwrap();
 
     // Update watermark to include all test data
@@ -521,7 +539,7 @@ async fn test_opened_channel_graph_subscription_receives_new_channel_entry() {
 
     // Add a new open channel
     let balance2 = HoprBalance::from_str("2000 wxHOPR").unwrap();
-    let channel2 = ChannelEntry::new(addr2, addr3, balance2, 0, ChannelStatus::Open, 1);
+    let channel2 = build_channel_entry(addr2, addr3, balance2, 0, ChannelStatus::Open, 1);
     let channel2_id = channel2.get_id().to_hex();
     db.upsert_channel(None, channel2, 110, 0, 0).await.unwrap();
 
@@ -565,7 +583,7 @@ async fn test_opened_channel_graph_subscription_receives_channel_closure_update(
 
     // Create open channel
     let balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
     // Update watermark to include all test data
@@ -595,7 +613,7 @@ async fn test_opened_channel_graph_subscription_receives_channel_closure_update(
     assert!(initial.errors.is_empty());
 
     // Close the channel
-    let closed_channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Closed, 1);
+    let closed_channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Closed, 1);
     db.upsert_channel(None, closed_channel, 110, 0, 0).await.unwrap();
 
     // Update watermark to include the channel closure
@@ -663,7 +681,7 @@ async fn test_opened_channel_graph_subscription_includes_channel_balance() {
 
     // Create channel with specific balance
     let balance = HoprBalance::from_str("1234 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
     // Update watermark to include all test data
@@ -717,7 +735,7 @@ async fn test_opened_channel_graph_subscription_balance_update() {
 
     // Create channel
     let initial_balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, initial_balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, initial_balance, 0, ChannelStatus::Open, 1);
     let channel_id = channel.get_id().to_hex();
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
@@ -753,7 +771,7 @@ async fn test_opened_channel_graph_subscription_balance_update() {
 
     // Update channel balance
     let updated_balance = HoprBalance::from_str("2000 wxHOPR").unwrap();
-    let updated_channel = ChannelEntry::new(addr1, addr2, updated_balance, 0, ChannelStatus::Open, 1);
+    let updated_channel = build_channel_entry(addr1, addr2, updated_balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, updated_channel, 110, 0, 0).await.unwrap();
 
     // Publish event for the updated channel to the event bus

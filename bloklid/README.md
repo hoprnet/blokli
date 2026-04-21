@@ -8,6 +8,9 @@ Bloklid is a daemon for indexing HOPR on-chain events and executing HOPR-related
 - **Database Storage**: Stores indexed data in SQLite databases for efficient querying
 - **Signal Handling**: Supports SIGHUP for configuration reload and SIGINT/SIGTERM for graceful shutdown
 - **Fast Sync**: Supports fast synchronization through pre-built logs database snapshots
+- **OTLP Telemetry Export**: Pushes selected metrics, traces, and/or logs to an OpenTelemetry collector when `telemetry.otlp_endpoint` is
+  configured
+- **Operational Endpoints**: Exposes embedded API health and readiness endpoints when the API server is enabled
 
 ## Usage
 
@@ -31,6 +34,13 @@ See `example-config.toml` for a complete configuration example. Key settings inc
 - `database_path`: Path to SQLite database file
 - `private_key`: Ethereum private key for chain operations
 - `rpc_url`: Ethereum JSON-RPC endpoint
+- `telemetry`: OTLP metrics export configuration
+  - `otlp_endpoint`: Collector endpoint for OTLP telemetry; if unset, OTLP export is disabled
+  - `otlp_signals`: Comma-separated OTLP signals to export (`metrics`, `traces`, `logs`)
+  - `metric_export_interval`: Push interval for OTLP metrics when `metrics` export is enabled
+
+For the complete OTLP setup guide, including environment overrides and endpoint examples, see [OTLP.md](../OTLP.md).
+
 - `indexer`: Indexer-specific configuration
   - `start_block_number`: Block to start indexing from
   - `fast_sync`: Enable fast synchronization
