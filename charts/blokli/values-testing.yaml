@@ -42,3 +42,7 @@ config:
     gasMultiplier: 1.2
   logging:
     level: "info"
+  telemetry:
+    otlpEndpoint: "http://otel-collector:4318"
+    otlpSignals: "metrics"
+    metricExportInterval: "15s"

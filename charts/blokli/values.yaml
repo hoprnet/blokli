@@ -344,3 +344,14 @@ config:
     ## @param config.logging.format Log output format ("json" or empty for plain text)
     ##
     format: json
+  # Telemetry configuration
+  telemetry:
+    ## @param config.telemetry.otlpEndpoint OTLP endpoint for telemetry data
+    ##
+    otlpEndpoint: ""
+    ## @param config.telemetry.otlpSignals OTLP signals to export (e.g., "metrics", "traces")
+    ##
+    otlpSignals: "metrics"
+    ## @param config.telemetry.metricExportInterval Interval for exporting metrics
+    ##
+    metricExportInterval: "15s"
