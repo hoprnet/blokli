@@ -101,10 +101,10 @@ metric_export_interval = "60s"
 # Enable fast sync mode for initial synchronization
 fast_sync = true
 
-# Enable downloading logs snapshot for faster initial sync
+# Enable downloading a `hopr_logs.sql` snapshot archive for faster initial sync
 enable_logs_snapshot = false
 
-# URL to download logs snapshot from (optional)
+# URL to download a `.tar.xz` archive containing `hopr_logs.sql`
 logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
 
 # GraphQL subscription behavior configuration

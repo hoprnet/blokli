@@ -11,6 +11,7 @@ use std::{
 
 use async_compression::futures::bufread::XzDecoder;
 use async_tar::Archive;
+use blokli_db::snapshot::SNAPSHOT_SQL_FILE;
 use futures_util::{
     StreamExt,
     io::{AllowStdIo, BufReader as FuturesBufReader},
@@ -31,11 +32,10 @@ pub struct SnapshotExtractor {
 impl SnapshotExtractor {
     /// Creates a new extractor with predefined expected files.
     ///
-    /// Expected files include PostgreSQL SQL dump:
-    /// - `hopr_logs.sql` - SQL dump file from pg_dump
+    /// Expected files include a single PostgreSQL-style SQL dump.
     pub fn new() -> Self {
         Self {
-            expected_files: vec!["hopr_logs.sql".to_string()],
+            expected_files: vec![SNAPSHOT_SQL_FILE.to_string()],
         }
     }
 
@@ -119,8 +119,9 @@ impl SnapshotExtractor {
             }
         }
 
+
         // Verify we got the SQL dump file
-        if !extracted_files.contains(&"hopr_logs.sql".to_string()) {
+        if !extracted_files.contains(&SNAPSHOT_SQL_FILE.to_string()) {
             return Err(SnapshotError::InvalidFormat(
                 "Archive does not contain hopr_logs.sql".to_string(),
             ));
@@ -174,6 +175,7 @@ impl Default for SnapshotExtractor {
 
 #[cfg(test)]
 mod tests {
+    use blokli_db::snapshot::SNAPSHOT_SQL_FILE;
     use tempfile::TempDir;
 
     use super::*;
@@ -193,8 +195,8 @@ mod tests {
 
         assert!(result.is_ok(), "Extraction should succeed");
         let files = result.unwrap();
-        assert!(files.contains(&"hopr_logs.sql".to_string()));
-        assert!(extract_dir.join("hopr_logs.sql").exists());
+        assert!(files.contains(&SNAPSHOT_SQL_FILE.to_string()));
+        assert!(extract_dir.join(SNAPSHOT_SQL_FILE).exists());
     }
 
     #[tokio::test]
@@ -216,8 +218,8 @@ mod tests {
 
         // verify files after extraction
         let extracted_files = result.unwrap();
-        assert!(extracted_files.contains(&"hopr_logs.sql".to_string()));
-        assert!(!extract_dir.parent().unwrap().join("hopr_logs.sql").exists());
+        assert!(extracted_files.contains(&SNAPSHOT_SQL_FILE.to_string()));
+        assert!(!extract_dir.parent().unwrap().join(SNAPSHOT_SQL_FILE).exists());
     }
 
     #[tokio::test]

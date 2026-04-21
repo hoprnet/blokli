@@ -15,7 +15,7 @@ use std::{
 use args::{Args, Command, generate_config_template, peek_verbosity_from_env_args};
 use async_signal::{Signal, Signals};
 use blokli_chain_api::BlokliChain;
-use blokli_chain_indexer::{startup, utils::redact_url};
+use blokli_chain_indexer::{snapshot::SnapshotManager, startup, utils::redact_url};
 use blokli_db::db::{BlokliDb, BlokliDbConfig};
 use clap::Parser;
 use futures::TryStreamExt;
@@ -84,28 +84,73 @@ async fn main() -> ExitCode {
 
 async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
     // Handle subcommands
-    if let Some(command) = args.command {
-        match command {
-            Command::GenerateConfig { output } => {
-                tracing::info!("Generating configuration template at: {}", output.display());
+    match args.command {
+        Some(Command::GenerateConfig { output }) => {
+            tracing::info!("Generating configuration template at: {}", output.display());
 
-                // Generate the template content
-                let template = generate_config_template();
+            // Generate the template content
+            let template = generate_config_template();
 
-                // Create parent directories if they don't exist
-                if let Some(parent) = output.parent() {
-                    std::fs::create_dir_all(parent).map_err(|e| {
-                        BloklidError::NonSpecific(format!("Failed to create parent directories: {}", e))
-                    })?;
-                }
-
-                // Write the template to the specified file
-                std::fs::write(&output, template)
-                    .map_err(|e| BloklidError::NonSpecific(format!("Failed to write configuration template: {}", e)))?;
-
-                tracing::info!("Configuration template successfully written to: {}", output.display());
-                return Ok(());
+            // Create parent directories if they don't exist
+            if let Some(parent) = output.parent() {
+                std::fs::create_dir_all(parent).map_err(|e| {
+                    BloklidError::NonSpecific(format!("Failed to create parent directories: {}", e))
+                })?;
             }
+
+            // Write the template to the specified file
+            std::fs::write(&output, template)
+                .map_err(|e| BloklidError::NonSpecific(format!("Failed to write configuration template: {}", e)))?;
+
+            tracing::info!("Configuration template successfully written to: {}", output.display());
+            return Ok(());
+        }
+        Some(Command::ExportLogsSnapshot { output }) => {
+            let config = match initial_config {
+                Some(config) => config,
+                None => args.load_config(true)?,
+            };
+
+            let database = config.database.as_ref().ok_or_else(|| {
+                BloklidError::DatabaseNotConfigured(
+                    "Database configuration is missing. Ensure either [database] section is present in config \
+                        file or BLOKLI_DATABASE_TYPE and BLOKLI_DATABASE_URL are set"
+                        .to_string(),
+                )
+            })?;
+
+            let db_config = BlokliDbConfig {
+                max_connections: database.max_connections(),
+                log_slow_queries: Duration::from_secs(1),
+                network_name: config.network.to_string(),
+            };
+
+            let db = if database.is_in_memory() {
+                BlokliDb::new_in_memory().await?
+            } else {
+                BlokliDb::new(&database.to_url(), database.to_logs_url().as_deref(), db_config).await?
+            };
+
+            let snapshot_manager = SnapshotManager::with_db(db).map_err(|error| {
+                BloklidError::NonSpecific(format!("Failed to create snapshot manager: {error}"))
+            })?;
+
+            let info = snapshot_manager
+                .export_snapshot(&output)
+                .await
+                .map_err(|error| BloklidError::NonSpecific(format!("Failed to export logs snapshot: {error}")))?;
+
+            tracing::info!(
+                path = %output.display(),
+                logs = info.log_count.unwrap_or(0),
+                latest_block = info.latest_block.unwrap_or(0),
+                "Logs snapshot exported successfully"
+            );
+
+            return Ok(());
+        }
+        None => {
+            // No subcommand, continue with normal daemon operation
         }
     }
 

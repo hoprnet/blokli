@@ -8,7 +8,7 @@
 //! - **HTTP/HTTPS Downloads**: Secure download with retry logic and progress tracking
 //! - **Local File Support**: Direct installation from local `file://` URLs
 //! - **Archive Extraction**: Safe tar.xz extraction with path traversal protection
-//! - **SQL Validation**: PostgreSQL SQL dump integrity and content verification
+//! - **SQL Validation**: PostgreSQL-style `COPY ... FROM stdin` dump verification
 //! - **Disk Space Management**: Cross-platform space validation before operations
 //! - **Comprehensive Errors**: Actionable error messages with recovery suggestions
 //!
@@ -46,10 +46,13 @@ pub mod validate;
 pub(crate) mod test_utils;
 
 // Re-export commonly used types
-use std::{fs, path::Path};
+use std::{fs, io::Cursor, path::Path};
 
-use blokli_db::BlokliDbGeneralModelOperations;
+use async_compression::futures::bufread::XzEncoder;
+use async_tar::Builder;
+use blokli_db::{BlokliDbGeneralModelOperations, snapshot::SNAPSHOT_SQL_FILE};
 pub use error::{SnapshotError, SnapshotResult};
+use futures_util::io::{AllowStdIo, AsyncReadExt, BufReader as FuturesBufReader};
 use tracing::{debug, error, info};
 pub use validate::SnapshotInfo;
 
@@ -133,9 +136,7 @@ impl SnapshotWorkflow {
         let extracted_files = self.extractor.extract_snapshot(&archive_path, &temp_dir).await?;
         debug!("Extracted snapshot files: {:?}", extracted_files);
 
-        // Validate extracted SQL dump
-        let sql_path = temp_dir.join("hopr_logs.sql");
-        let snapshot_info = self.validator.validate_snapshot(&sql_path).await?;
+        let snapshot_info = self.validator.validate_snapshot(&temp_dir).await?;
 
         // Install using the provided installer
         installer
@@ -164,8 +165,8 @@ impl SnapshotWorkflow {
 ///
 /// - [`SnapshotDownloader`] - HTTP/HTTPS and file:// URL handling with retry logic
 /// - [`SnapshotExtractor`] - Secure tar.xz extraction with path validation
-/// - [`SnapshotValidator`] - SQLite integrity and content verification
-/// - Database integration via [`BlokliDbGeneralModelOperations::import_logs_db`]
+/// - [`SnapshotValidator`] - SQL dump integrity verification
+/// - Database integration via [`BlokliDbGeneralModelOperations::import_logs_snapshot`]
 pub struct SnapshotManager<Db>
 where
     Db: BlokliDbGeneralModelOperations + Clone + Send + Sync + 'static,
@@ -206,8 +207,8 @@ where
     /// Performs the complete snapshot setup workflow:
     /// 1. Downloads archive from URL (HTTP/HTTPS/file://)
     /// 2. Extracts tar.xz archive safely
-    /// 3. Validates database integrity
-    /// 4. Installs via [`BlokliDbGeneralModelOperations::import_logs_db`]
+    /// 3. Validates SQL dump integrity
+    /// 4. Installs via [`BlokliDbGeneralModelOperations::import_logs_snapshot`]
     /// 5. Cleans up temporary files
     ///
     /// # Arguments
@@ -244,6 +245,29 @@ where
     pub async fn download_and_setup_snapshot(&self, url: &str, data_dir: &Path) -> SnapshotResult<SnapshotInfo> {
         self.workflow.execute_workflow(self, url, data_dir, true).await
     }
+
+    pub async fn export_snapshot(&self, output_path: &Path) -> SnapshotResult<SnapshotInfo> {
+        let parent_dir = output_path.parent().ok_or_else(|| {
+            SnapshotError::Configuration("snapshot output path must have a parent directory".to_string())
+        })?;
+        fs::create_dir_all(parent_dir)?;
+
+        let temp_guard = tempfile::tempdir_in(parent_dir)?;
+        let temp_dir = temp_guard.path().to_path_buf();
+        let info = self
+            .db
+            .export_logs_snapshot(temp_dir.clone())
+            .await
+            .map_err(|error| SnapshotError::Installation(error.to_string()))?;
+
+        archive_snapshot_dir(&temp_dir, output_path).await?;
+
+        Ok(SnapshotInfo {
+            log_count: Some(info.log_count),
+            latest_block: info.latest_block,
+            tables: 3,
+        })
+    }
 }
 
 #[async_trait::async_trait]
@@ -260,7 +284,7 @@ where
         // Update database using the imported logs database
         self.db
             .clone()
-            .import_logs_db(temp_dir.to_path_buf())
+            .import_logs_snapshot(temp_dir.to_path_buf())
             .await
             .map_err(|e| SnapshotError::Installation(e.to_string()))?;
 
@@ -268,8 +292,28 @@ where
     }
 }
 
+async fn archive_snapshot_dir(source_dir: &Path, output_path: &Path) -> SnapshotResult<()> {
+    let mut tar_data = Vec::new();
+    {
+        let mut builder = Builder::new(&mut tar_data);
+        let sql_path = source_dir.join(SNAPSHOT_SQL_FILE);
+        builder.append_path_with_name(&sql_path, SNAPSHOT_SQL_FILE).await?;
+
+        builder.into_inner().await?;
+    }
+
+    let cursor = Cursor::new(tar_data);
+    let reader = FuturesBufReader::new(AllowStdIo::new(cursor));
+    let mut encoder = XzEncoder::new(reader);
+    let mut compressed = Vec::new();
+    encoder.read_to_end(&mut compressed).await?;
+    fs::write(output_path, compressed)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use blokli_db::snapshot::SNAPSHOT_SQL_FILE;
     use tempfile::TempDir;
 
     use super::{test_utils::*, *};
@@ -294,8 +338,7 @@ mod tests {
         let info = result.unwrap();
         assert_eq!(info.log_count, Some(2));
 
-        // Verify the SQL dump file was installed
-        assert!(data_dir.join("hopr_logs.sql").exists());
+        assert!(data_dir.join(SNAPSHOT_SQL_FILE).exists());
     }
 
     #[tokio::test]
@@ -321,7 +364,7 @@ mod tests {
         assert_eq!(info.log_count, Some(2));
 
         // Verify the SQL dump file exists in the data directory
-        assert!(data_dir.join("hopr_logs.sql").exists());
+        assert!(data_dir.join(SNAPSHOT_SQL_FILE).exists());
 
         // Also test individual component access
         let downloader = manager.workflow.downloader;
