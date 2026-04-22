@@ -214,13 +214,13 @@
             builtins.readFile ./docker/blokli-anvil-entrypoint.sh
           );
 
-          # Helper: create a /usr/local/bin symlink to a Nix store binary.
+          # Helper: create a /bin symlink to a Nix store binary.
           # The store path is part of the image closure so the symlink resolves inside the container.
           mkStaticEntrypoint =
             { pkgs, binary, name }:
             pkgs.runCommand "${name}-entrypoint" { } ''
-              mkdir -p $out/usr/local/bin
-              ln -s ${binary}/bin/${name} $out/usr/local/bin/${name}
+              mkdir -p $out/bin
+              ln -s ${binary}/bin/${name} $out/bin/${name}
             '';
 
           # Docker images using nix-lib
@@ -228,12 +228,13 @@
             # x86_64-linux Docker images
             docker-blokli-x86_64-linux = nixLib.mkDockerImage {
               name = "bloklid";
-              Entrypoint = [ "/usr/local/bin/bloklid" ];
+              Entrypoint = [ "/bin/bloklid" ];
               pkgsLinux = pkgsLinux;
               env = [
                 "SSL_CERT_FILE=${pkgsLinux.cacert}/etc/ssl/certs/ca-bundle.crt"
               ];
               extraContents = [
+                bloklidPackages.binary-blokli-x86_64-linux
                 (mkStaticEntrypoint {
                   pkgs = pkgsLinux;
                   binary = bloklidPackages.binary-blokli-x86_64-linux;
@@ -243,12 +244,13 @@
             };
             docker-blokli-x86_64-linux-dev = nixLib.mkDockerImage {
               name = "bloklid-dev";
-              Entrypoint = [ "/usr/local/bin/bloklid" ];
+              Entrypoint = [ "/bin/bloklid" ];
               pkgsLinux = pkgsLinux;
               env = [
                 "SSL_CERT_FILE=${pkgsLinux.cacert}/etc/ssl/certs/ca-bundle.crt"
               ];
               extraContents = [
+                bloklidPackages.binary-blokli-x86_64-linux-dev
                 (mkStaticEntrypoint {
                   pkgs = pkgsLinux;
                   binary = bloklidPackages.binary-blokli-x86_64-linux-dev;
@@ -258,12 +260,13 @@
             };
             docker-blokli-x86_64-linux-profile = nixLib.mkDockerImage {
               name = "bloklid-profile";
-              Entrypoint = [ "/usr/local/bin/bloklid" ];
+              Entrypoint = [ "/bin/bloklid" ];
               pkgsLinux = pkgsLinux;
               env = [
                 "SSL_CERT_FILE=${pkgsLinux.cacert}/etc/ssl/certs/ca-bundle.crt"
               ];
               extraContents = [
+                bloklidPackages.binary-blokli-x86_64-linux-profile
                 (mkStaticEntrypoint {
                   pkgs = pkgsLinux;
                   binary = bloklidPackages.binary-blokli-x86_64-linux-profile;
@@ -273,7 +276,7 @@
             };
             docker-blokli-anvil-x86_64-linux = nixLib.mkDockerImage {
               name = "bloklid-anvil";
-              Entrypoint = [ "/usr/local/bin/blokli-anvil-entrypoint" ];
+              Entrypoint = [ "/bin/blokli-anvil-entrypoint" ];
               pkgsLinux = pkgsLinux;
               env = [
                 "SSL_CERT_FILE=${pkgsLinux.cacert}/etc/ssl/certs/ca-bundle.crt"
@@ -293,12 +296,13 @@
             # aarch64-linux Docker images
             docker-blokli-aarch64-linux = nixLib.mkDockerImage {
               name = "bloklid";
-              Entrypoint = [ "/usr/local/bin/bloklid" ];
+              Entrypoint = [ "/bin/bloklid" ];
               pkgsLinux = pkgsLinuxAarch64;
               env = [
                 "SSL_CERT_FILE=${pkgsLinuxAarch64.cacert}/etc/ssl/certs/ca-bundle.crt"
               ];
               extraContents = [
+                bloklidPackages.binary-blokli-aarch64-linux
                 (mkStaticEntrypoint {
                   pkgs = pkgsLinuxAarch64;
                   binary = bloklidPackages.binary-blokli-aarch64-linux;
@@ -308,12 +312,13 @@
             };
             docker-blokli-aarch64-linux-dev = nixLib.mkDockerImage {
               name = "bloklid-dev";
-              Entrypoint = [ "/usr/local/bin/bloklid" ];
+              Entrypoint = [ "/bin/bloklid" ];
               pkgsLinux = pkgsLinuxAarch64;
               env = [
                 "SSL_CERT_FILE=${pkgsLinuxAarch64.cacert}/etc/ssl/certs/ca-bundle.crt"
               ];
               extraContents = [
+                bloklidPackages.binary-blokli-aarch64-linux-dev
                 (mkStaticEntrypoint {
                   pkgs = pkgsLinuxAarch64;
                   binary = bloklidPackages.binary-blokli-aarch64-linux-dev;
@@ -323,12 +328,13 @@
             };
             docker-blokli-aarch64-linux-profile = nixLib.mkDockerImage {
               name = "bloklid-profile";
-              Entrypoint = [ "/usr/local/bin/bloklid" ];
+              Entrypoint = [ "/bin/bloklid" ];
               pkgsLinux = pkgsLinuxAarch64;
               env = [
                 "SSL_CERT_FILE=${pkgsLinuxAarch64.cacert}/etc/ssl/certs/ca-bundle.crt"
               ];
               extraContents = [
+                bloklidPackages.binary-blokli-aarch64-linux-profile
                 (mkStaticEntrypoint {
                   pkgs = pkgsLinuxAarch64;
                   binary = bloklidPackages.binary-blokli-aarch64-linux-profile;
@@ -338,7 +344,7 @@
             };
             docker-blokli-anvil-aarch64-linux = nixLib.mkDockerImage {
               name = "bloklid-anvil";
-              Entrypoint = [ "/usr/local/bin/blokli-anvil-entrypoint" ];
+              Entrypoint = [ "/bin/blokli-anvil-entrypoint" ];
               pkgsLinux = pkgsLinuxAarch64;
               env = [
                 "SSL_CERT_FILE=${pkgsLinuxAarch64.cacert}/etc/ssl/certs/ca-bundle.crt"
