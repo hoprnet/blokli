@@ -1428,6 +1428,8 @@ mod tests {
         let mut rpc = MockHoprIndexerOps::new();
         let db = BlokliDb::new_in_memory().await?;
         let indexer_state = IndexerState::default();
+        let mut cfg = IndexerConfig::default();
+        cfg.enable_safe_indexing = true;
 
         let primary_address = Address::new(b"my address 123456789");
         let primary_topic = B256::from_slice(Hash::create(&[b"my topic"]).as_ref());
@@ -1481,7 +1483,7 @@ mod tests {
         rpc.expect_try_stream_logs()
             .once()
             .withf(move |start: &u64, filters: &FilterSet, is_synced: &bool| {
-                *start == 2
+                *start == 0
                     && !*is_synced
                     && filters
                         .no_token
@@ -1489,16 +1491,25 @@ mod tests {
                         .any(|filter| filter.matches_address(AlloyAddress::from_hopr_address(safe_address)))
             })
             .return_once(move |_, _, _| Ok(Box::pin(futures::stream::iter(vec![second_block]))));
+        rpc.expect_try_stream_logs()
+            .once()
+            .withf(move |start: &u64, filters: &FilterSet, is_synced: &bool| {
+                *start == 11
+                    && *is_synced
+                    && filters
+                        .no_token
+                        .iter()
+                        .any(|filter| filter.matches_address(AlloyAddress::from_hopr_address(safe_address)))
+            })
+            .return_once(move |_, _, _| Ok(Box::pin(futures::stream::empty())));
 
-        let indexer = Indexer::new(rpc, handlers, db.clone(), IndexerConfig::default(), indexer_state)
+        let indexer = Indexer::new(rpc, handlers, db.clone(), cfg, indexer_state)
             .without_panic_on_completion();
 
         let start_result = indexer.start().await;
-        assert!(
-            start_result.is_err(),
-            "stream should terminate after the test streams complete"
-        );
+        let abort_handle = start_result.expect("indexer should start successfully");
         assert_eq!(db.get_safe_contract_addresses(None).await?, vec![safe_address]);
+        abort_handle.abort();
 
         Ok(())
     }
