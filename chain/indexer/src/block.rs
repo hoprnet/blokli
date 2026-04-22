@@ -369,6 +369,7 @@ where
                     historical_sync_head,
                     LogFilterPhase::HistoricalDiscovery,
                     "discover-safes",
+                    self.cfg.enable_safe_indexing,
                 )
                 .await
                 .expect("historical discovery phase should complete");
@@ -387,6 +388,7 @@ where
                     historical_sync_head,
                     LogFilterPhase::HistoricalSafeBackfill,
                     "backfill-safe-logs",
+                    self.cfg.enable_safe_indexing,
                 )
                 .await
                 .expect("historical Safe backfill phase should complete");
@@ -417,9 +419,14 @@ where
             let mut safe_filter_epoch = indexer_state.safe_filter_epoch();
 
             'stream_refresh: loop {
-                let log_filters = Self::generate_log_filters(&db, &logs_handler, LogFilterPhase::Continuous)
-                    .await
-                    .expect("log filters should be constructible");
+                let log_filters = Self::generate_log_filters(
+                    &db,
+                    &logs_handler,
+                    LogFilterPhase::Continuous,
+                    self.cfg.enable_safe_indexing,
+                )
+                .await
+                .expect("log filters should be constructible");
                 let mut event_stream = rpc
                     .try_stream_logs(stream_start_block, log_filters, true)
                     .expect("block stream should be constructible");
@@ -550,7 +557,12 @@ where
         address_topics
     }
 
-    async fn generate_log_filters(db: &Db, logs_handler: &U, phase: LogFilterPhase) -> Result<FilterSet> {
+    async fn generate_log_filters(
+        db: &Db,
+        logs_handler: &U,
+        phase: LogFilterPhase,
+        enable_safe_indexing: bool,
+    ) -> Result<FilterSet> {
         let static_addresses = logs_handler.contract_addresses();
         let addresses_no_token = static_addresses
             .iter()
@@ -580,17 +592,21 @@ where
 
         let filter_token_approval = filter_token.event_signature(Approval::SIGNATURE_HASH);
 
-        let safe_addresses = db.get_safe_contract_addresses(None).await?;
-        let safe_filter = (!safe_addresses.is_empty()).then(|| {
-            Filter::new()
-                .address(
-                    safe_addresses
-                        .into_iter()
-                        .map(AlloyAddress::from_hopr_address)
-                        .collect::<Vec<_>>(),
-                )
-                .event_signature(crate::constants::topics::safe_contract())
-        });
+        let safe_filter = if enable_safe_indexing {
+            let safe_addresses = db.get_safe_contract_addresses(None).await?;
+            (!safe_addresses.is_empty()).then(|| {
+                Filter::new()
+                    .address(
+                        safe_addresses
+                            .into_iter()
+                            .map(AlloyAddress::from_hopr_address)
+                            .collect::<Vec<_>>(),
+                    )
+                    .event_signature(crate::constants::topics::safe_contract())
+            })
+        } else {
+            None
+        };
 
         match phase {
             LogFilterPhase::HistoricalDiscovery => Ok(FilterSet {
@@ -712,6 +728,7 @@ where
         end_block: u64,
         filter_phase: LogFilterPhase,
         phase_name: &str,
+        enable_safe_indexing: bool,
     ) -> Result<()>
     where
         T: HoprIndexerRpcOperations + 'static,
@@ -722,7 +739,7 @@ where
             return Ok(());
         }
 
-        let log_filters = Self::generate_log_filters(db, logs_handler, filter_phase).await?;
+        let log_filters = Self::generate_log_filters(db, logs_handler, filter_phase, enable_safe_indexing).await?;
         if log_filters.no_token.is_empty() {
             info!(
                 phase = phase_name,
@@ -1740,7 +1757,7 @@ mod tests {
                 .expect_contract_addresses_map()
                 .return_const(ContractAddresses::default());
 
-            let indexer_cfg = IndexerConfig::new(0, true, false, None, "/tmp/test_data".to_string(), 1000, 10);
+            let indexer_cfg = IndexerConfig::new(0, true, false, false, None, "/tmp/test_data".to_string(), 1000, 10);
             let indexer = Indexer::new(rpc, handlers, db.clone(), indexer_cfg, IndexerState::default())
                 .without_panic_on_completion();
             let (indexing, _) = join!(indexer.start(), async move {
@@ -1831,7 +1848,7 @@ mod tests {
                 .expect_contract_addresses_map()
                 .return_const(ContractAddresses::default());
 
-            let indexer_cfg = IndexerConfig::new(0, true, false, None, "/tmp/test_data".to_string(), 1000, 10);
+            let indexer_cfg = IndexerConfig::new(0, true, false, false, None, "/tmp/test_data".to_string(), 1000, 10);
             let indexer = Indexer::new(rpc, handlers, db.clone(), indexer_cfg, IndexerState::default())
                 .without_panic_on_completion();
             let (indexing, _) = join!(indexer.start(), async move {
@@ -2001,7 +2018,7 @@ mod tests {
             .withf(move |l, _| l.block_number == last_processed_block + 1)
             .returning(|_, _| Ok(()));
 
-        let indexer_cfg = IndexerConfig::new(0, false, false, None, "/tmp/test_data".to_string(), 1000, 10);
+        let indexer_cfg = IndexerConfig::new(0, false, false, false, None, "/tmp/test_data".to_string(), 1000, 10);
 
         let indexer =
             Indexer::new(rpc, handlers, db.clone(), indexer_cfg, IndexerState::default()).without_panic_on_completion();

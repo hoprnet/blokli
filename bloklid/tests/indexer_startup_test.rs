@@ -145,7 +145,13 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
     let indexer_state = blokli_chain_indexer::IndexerState::new(1000, 10);
 
     // Create event handlers
-    let handlers = ContractEventHandlers::new(contract_addresses, db.clone(), mock_rpc.clone(), indexer_state.clone());
+    let handlers = ContractEventHandlers::new(
+        contract_addresses,
+        db.clone(),
+        mock_rpc.clone(),
+        indexer_state.clone(),
+        false,
+    );
 
     // Initialize logs origin data using the proper contract addresses and topics
     let mut address_topics = vec![];
@@ -164,6 +170,7 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         start_block_number: 0,
         fast_sync: false, // Disable fast sync for testing
         enable_logs_snapshot: false,
+        enable_safe_indexing: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
@@ -220,7 +227,13 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
     let indexer_state = blokli_chain_indexer::IndexerState::new(1000, 10);
 
     // Create event handlers
-    let handlers = ContractEventHandlers::new(contract_addresses, db.clone(), mock_rpc.clone(), indexer_state.clone());
+    let handlers = ContractEventHandlers::new(
+        contract_addresses,
+        db.clone(),
+        mock_rpc.clone(),
+        indexer_state.clone(),
+        false,
+    );
 
     // Initialize logs origin data using the proper contract addresses and topics
     let mut address_topics = vec![];
@@ -239,6 +252,7 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         start_block_number: 100, // Start from a later block
         fast_sync: true,
         enable_logs_snapshot: false, // Don't try to download snapshots
+        enable_safe_indexing: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
@@ -396,6 +410,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         db.clone(),
         tracking_rpc.clone(),
         indexer_state.clone(),
+        false,
     );
 
     // Initialize logs origin data using the proper contract addresses and topics
@@ -416,6 +431,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         start_block_number: expected_start_block,
         fast_sync: false,
         enable_logs_snapshot: false,
+        enable_safe_indexing: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
@@ -493,7 +509,13 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
     let indexer_state = blokli_chain_indexer::IndexerState::new(1000, 10);
 
     // Create event handlers
-    let handlers = ContractEventHandlers::new(contract_addresses, db.clone(), mock_rpc.clone(), indexer_state.clone());
+    let handlers = ContractEventHandlers::new(
+        contract_addresses,
+        db.clone(),
+        mock_rpc.clone(),
+        indexer_state.clone(),
+        false,
+    );
 
     // Initialize logs origin data
     let mut address_topics = vec![];
@@ -512,6 +534,7 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         start_block_number: 0,
         fast_sync: false,
         enable_logs_snapshot: false,
+        enable_safe_indexing: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
