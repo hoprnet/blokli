@@ -41,8 +41,16 @@ in
     }
   );
 
-  # Blokli inspector
-  blokli-inspector = builders.local.callPackage nixLib.mkRustPackage {
+  # Production builds for blokli-inspector
+  binary-blokli-inspector-x86_64-linux = builders.x86_64-linux.callPackage nixLib.mkRustPackage {
+    inherit rev;
+    src = sources.main;
+    depsSrc = sources.deps;
+    cargoToml = ./../../inspector/Cargo.toml;
+    cargoExtraArgs = "--bins";
+  };
+
+  binary-blokli-inspector-aarch64-linux = builders.aarch64-linux.callPackage nixLib.mkRustPackage {
     inherit rev;
     src = sources.main;
     depsSrc = sources.deps;

@@ -131,7 +131,7 @@ jobs:
         run: nix develop --command uv run scripts/check_schema.py
   # ── Build: binaries ─────────────────────────────────────────────────────────
   build-binaries:
-    name: Binary ${{ matrix.architecture }}
+    name: Binary ${{ matrix.binary }} ${{ matrix.architecture }}
     strategy:
       fail-fast: false
       matrix:
@@ -139,10 +139,26 @@ jobs:
           - architecture: x86_64-linux
             runner: self-hosted-hoprnet-bigger
             build_command: nix build -L .#binary-blokli-x86_64-linux
+            build_file: bloklid/Cargo.toml
+            binary: bloklid
             required_label: ""
           - architecture: aarch64-linux
             runner: self-hosted-hoprnet-bigger
             build_command: nix build -L .#binary-blokli-aarch64-linux
+            build_file: bloklid/Cargo.toml
+            binary: bloklid
+            required_label: "binary:aarch64-linux"
+          - architecture: x86_64-linux
+            runner: self-hosted-hoprnet-bigger
+            build_command: nix build -L .#binary-blokli-inspector-x86_64-linux
+            build_file: inspector/Cargo.toml
+            binary: blokli-inspector
+            required_label: ""
+          - architecture: aarch64-linux
+            runner: self-hosted-hoprnet-bigger
+            build_command: nix build -L .#binary-blokli-inspector-aarch64-linux
+            build_file: inspector/Cargo.toml
+            binary: blokli-inspector
             required_label: "binary:aarch64-linux"
     uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@60486fe4eb9f78ed754c666b9c70c8545361e7c8 # build-binaries-v2
     permissions:
@@ -152,9 +168,9 @@ jobs:
       version_type: commit
       architecture: ${{ matrix.architecture }}
       cachix_cache_name: blokli
-      build_file: bloklid/Cargo.toml
+      build_file: ${{ matrix.build_file }}
       build_command: ${{ matrix.build_command }}
-      binary: bloklid
+      binary: ${{ matrix.binary }}
       runner: ${{ matrix.runner }}
       enabled: ${{ matrix.required_label == '' || contains(github.event.pull_request.labels.*.name, matrix.required_label) }}
     secrets:
