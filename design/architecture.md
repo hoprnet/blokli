@@ -731,6 +731,34 @@ Blockchain RPC
 - **Fan-out Pattern**: Single database update triggers multiple subscription notifications
 - **Batch Loading**: Account lookups for channels use batch-fetch with HashMap to avoid N+1 query patterns
 
+### Historical Sync Phases
+
+Historical catch-up uses a phased strategy instead of a single monolithic filter set.
+
+**Phase 1: Discovery**
+
+- The indexer fetches historical logs only for the static HOPR contracts needed to discover Safe contracts and node registrations.
+- Safe-address filters are intentionally excluded during this pass.
+- New Safes found during historical sync are recorded in the database, but do not trigger live filter refreshes yet.
+
+**Phase 2: Safe Backfill**
+
+- After the discovery pass reaches the current historical head, the indexer runs a second historical pass using only address-scoped Safe
+  filters for the Safes already known in the database.
+- This phase reconstructs Safe-specific history such as setup, owner changes, threshold changes, and execution activity without broad
+  topic-only Safe scans.
+- Historical phase finalization updates log checksums and advances the persisted indexer position only after the phase completes.
+
+**Phase 3: Continuous Mode**
+
+- Once both historical phases complete, the indexer switches to continuous streaming mode.
+- Continuous mode combines the static HOPR contract filters with the current Safe-address filters.
+- When a new Safe is discovered in continuous mode, the indexer performs a targeted backfill for that Safe on the discovery block, then
+  refreshes the active Safe filter set from the next block onward.
+
+This split reduces the cost of historical syncing on Safe-heavy chains by avoiding repeated filter refreshes and repeated Safe backfills
+while the indexer is still catching up.
+
 ### Transaction Submission Flow
 
 This diagram illustrates outbound transaction flow from clients to blockchain:
@@ -860,6 +888,25 @@ account of the redeemed channel and resolves the account's current `safe_address
 
 The unique constraint on `(deployed_block, deployed_tx_index, deployed_log_index)` ensures that processing the same event multiple times
 (due to retries or reorgs) will not create duplicate Safe entries.
+
+**Safe Contract Event Indexing**:
+
+In addition to HOPR contract events, the indexer subscribes to the Safe event topics `SafeSetup`, `AddedOwner`, `RemovedOwner`,
+`ChangedThreshold`, `ExecutionSuccess`, and `ExecutionFailure` through address-scoped filters built from the current set of indexed Safe
+contracts. Unknown Safe addresses are not streamed globally.
+
+When a Safe becomes known during block processing, the indexer refreshes its Safe-address filter set and performs a targeted RPC backfill
+for the discovery block so setup and owner-management events emitted earlier in that same block are still indexed. Historical Safe backfill
+for already-known Safes is also run as a dedicated sync phase using the current indexed Safe address set.
+
+Decoded Safe events are persisted into dedicated index tables:
+
+- `hopr_safe_owner_state` stores temporal owner membership changes
+- `safe_owner_current` exposes the current owner set
+- `hopr_safe_event` stores the shared event header and ordering metadata for all indexed Safe events
+- `hopr_safe_setup_event`, `hopr_safe_setup_owner`, `hopr_safe_owner_change_event`, `hopr_safe_threshold_change_event`, and
+  `hopr_safe_execution_event` store typed Safe event payloads without sparse nullable columns
+- `hopr_safe_threshold_state` stores temporal threshold state, and `safe_threshold_current` exposes the latest threshold per Safe
 
 ### Subscription Event Bus
 

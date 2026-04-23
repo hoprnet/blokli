@@ -126,6 +126,10 @@ impl Default for BlokliTestState {
 }
 
 impl BlokliTestState {
+    fn safe_matches_owner(safe: &Safe, owner_hex: &str) -> bool {
+        safe.chain_key == owner_hex || safe.owners.iter().any(|owner| owner == owner_hex)
+    }
+
     /// Convenience method to return a reference to an [`Account`] with a given [`ChainAddress`].
     pub fn get_account(&self, chain_key: &ChainAddress) -> Option<&Account> {
         self.accounts
@@ -190,16 +194,18 @@ impl BlokliTestState {
 
     /// Convenience method to return a reference to an [`Safe`] with the given owner's [`ChainAddress`].
     pub fn get_safe_by_owner(&self, owner: &ChainAddress) -> Option<&Safe> {
+        let owner_hex = hex::encode(owner);
         self.deployed_safes
             .values()
-            .find(|safe| safe.chain_key == hex::encode(owner))
+            .find(|safe| Self::safe_matches_owner(safe, &owner_hex))
     }
 
     /// Convenience method to return a mutable reference to an [`Safe`] with the given owner's [`ChainAddress`].
     pub fn get_safe_by_owner_mut(&mut self, owner: &ChainAddress) -> Option<&mut Safe> {
+        let owner_hex = hex::encode(owner);
         self.deployed_safes
             .values_mut()
-            .find(|safe| safe.chain_key == hex::encode(owner))
+            .find(|safe| Self::safe_matches_owner(safe, &owner_hex))
     }
 }
 
@@ -535,10 +541,10 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
         let state = self.state.read();
         match selector {
             SafeSelector::SafeAddress(addr) => Ok(state.deployed_safes.get(&hex::encode(addr)).cloned()),
-            SafeSelector::ChainKey(chain_key) => Ok(state
+            SafeSelector::Owner(owner_address) | SafeSelector::ChainKey(owner_address) => Ok(state
                 .deployed_safes
                 .values()
-                .find(|s| s.chain_key == hex::encode(chain_key))
+                .find(|s| BlokliTestState::safe_matches_owner(s, &hex::encode(owner_address)))
                 .cloned()),
             SafeSelector::RegisteredNode(node_address) => Ok(state
                 .deployed_safes
@@ -595,7 +601,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
             state
                 .deployed_safes
                 .values()
-                .filter(|s| s.chain_key == owner_hex)
+                .filter(|s| BlokliTestState::safe_matches_owner(s, &owner_hex))
                 .collect()
         } else {
             state.deployed_safes.values().collect()

@@ -100,6 +100,41 @@ CREATE TABLE "hopr_safe_contract_state" (
     FOREIGN KEY ("hopr_safe_contract_id") REFERENCES "hopr_safe_contract" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
+CREATE TABLE "hopr_safe_event" (
+    "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "hopr_safe_contract_id" integer NOT NULL,
+    "event_kind" varchar NOT NULL,
+    "chain_tx_hash" blob (32) NOT NULL,
+    "published_block" integer NOT NULL,
+    "published_tx_index" integer NOT NULL,
+    "published_log_index" integer NOT NULL,
+    FOREIGN KEY ("hopr_safe_contract_id") REFERENCES "hopr_safe_contract" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE TABLE "hopr_safe_execution_event" (
+    "hopr_safe_event_id" integer NOT NULL PRIMARY KEY,
+    "safe_tx_hash" blob (32) NOT NULL,
+    "payment" varchar NOT NULL,
+    FOREIGN KEY ("hopr_safe_event_id") REFERENCES "hopr_safe_event" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE TABLE "hopr_safe_owner_change_event" (
+    "hopr_safe_event_id" integer NOT NULL PRIMARY KEY,
+    "owner_address" blob (20) NOT NULL,
+    FOREIGN KEY ("hopr_safe_event_id") REFERENCES "hopr_safe_event" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE TABLE "hopr_safe_owner_state" (
+    "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "hopr_safe_contract_id" integer NOT NULL,
+    "owner_address" blob (20) NOT NULL,
+    "is_current_owner" boolean NOT NULL,
+    "published_block" integer NOT NULL,
+    "published_tx_index" integer NOT NULL,
+    "published_log_index" integer NOT NULL,
+    FOREIGN KEY ("hopr_safe_contract_id") REFERENCES "hopr_safe_contract" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
 CREATE TABLE "hopr_safe_redeemed_stats" (
     "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
     "safe_address" blob (20) NOT NULL,
@@ -109,6 +144,37 @@ CREATE TABLE "hopr_safe_redeemed_stats" (
     "last_redeemed_block" integer NOT NULL DEFAULT 0,
     "last_redeemed_tx_index" integer NOT NULL DEFAULT 0,
     "last_redeemed_log_index" integer NOT NULL DEFAULT 0
+);
+
+CREATE TABLE "hopr_safe_setup_event" (
+    "hopr_safe_event_id" integer NOT NULL PRIMARY KEY,
+    "initiator_address" blob (20),
+    "threshold" varchar NOT NULL,
+    FOREIGN KEY ("hopr_safe_event_id") REFERENCES "hopr_safe_event" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE TABLE "hopr_safe_setup_owner" (
+    "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "hopr_safe_event_id" integer NOT NULL,
+    "owner_position" integer NOT NULL,
+    "owner_address" blob (20) NOT NULL,
+    FOREIGN KEY ("hopr_safe_event_id") REFERENCES "hopr_safe_setup_event" ("hopr_safe_event_id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE TABLE "hopr_safe_threshold_change_event" (
+    "hopr_safe_event_id" integer NOT NULL PRIMARY KEY,
+    "threshold" varchar NOT NULL,
+    FOREIGN KEY ("hopr_safe_event_id") REFERENCES "hopr_safe_event" ("id") ON DELETE CASCADE ON UPDATE CASCADE
+);
+
+CREATE TABLE "hopr_safe_threshold_state" (
+    "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "hopr_safe_contract_id" integer NOT NULL,
+    "threshold" varchar NOT NULL,
+    "published_block" integer NOT NULL,
+    "published_tx_index" integer NOT NULL,
+    "published_log_index" integer NOT NULL,
+    FOREIGN KEY ("hopr_safe_contract_id") REFERENCES "hopr_safe_contract" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
 CREATE TABLE "log" (
@@ -230,6 +296,58 @@ WHERE
             s2.published_log_index DESC
         LIMIT 1);
 
+CREATE VIEW safe_owner_current AS
+SELECT
+    sc.id AS safe_contract_id,
+    sc.address AS safe_address,
+    sos.owner_address,
+    sos.published_block,
+    sos.published_tx_index,
+    sos.published_log_index
+FROM
+    hopr_safe_contract sc
+    JOIN hopr_safe_owner_state sos ON sos.hopr_safe_contract_id = sc.id
+WHERE
+    sos.is_current_owner = TRUE
+    AND sos.id = (
+        SELECT
+            s2.id
+        FROM
+            hopr_safe_owner_state s2
+        WHERE
+            s2.hopr_safe_contract_id = sc.id
+            AND s2.owner_address = sos.owner_address
+        ORDER BY
+            s2.published_block DESC,
+            s2.published_tx_index DESC,
+            s2.published_log_index DESC
+        LIMIT 1);
+
+CREATE VIEW safe_threshold_current AS
+SELECT
+    sc.id AS safe_contract_id,
+    sc.address AS safe_address,
+    sts.threshold,
+    sts.published_block,
+    sts.published_tx_index,
+    sts.published_log_index
+FROM
+    hopr_safe_contract sc
+    JOIN hopr_safe_threshold_state sts ON sts.hopr_safe_contract_id = sc.id
+WHERE
+    sts.id = (
+        SELECT
+            s2.id
+        FROM
+            hopr_safe_threshold_state s2
+        WHERE
+            s2.hopr_safe_contract_id = sc.id
+        ORDER BY
+            s2.published_block DESC,
+            s2.published_tx_index DESC,
+            s2.published_log_index DESC
+        LIMIT 1);
+
 CREATE INDEX "idx_account_chain_key" ON "account" ("chain_key");
 
 CREATE UNIQUE INDEX "idx_account_chain_packet_key" ON "account" ("chain_key", "packet_key");
@@ -285,6 +403,28 @@ CREATE INDEX "idx_native_balance_last_changed_block" ON "native_balance" ("last_
 CREATE INDEX "idx_safe_contract_state_position" ON "hopr_safe_contract_state" ("hopr_safe_contract_id", "published_block" DESC, "published_tx_index" DESC, "published_log_index" DESC);
 
 CREATE UNIQUE INDEX "idx_safe_contract_state_unique_position" ON "hopr_safe_contract_state" ("hopr_safe_contract_id", "published_block", "published_tx_index", "published_log_index");
+
+CREATE INDEX "idx_safe_event_chain_tx_hash" ON "hopr_safe_event" ("chain_tx_hash");
+
+CREATE INDEX "idx_safe_event_safe_position" ON "hopr_safe_event" ("hopr_safe_contract_id", "published_block" DESC, "published_tx_index" DESC, "published_log_index" DESC);
+
+CREATE UNIQUE INDEX "idx_safe_event_unique_position" ON "hopr_safe_event" ("hopr_safe_contract_id", "published_block", "published_tx_index", "published_log_index");
+
+CREATE INDEX "idx_safe_execution_safe_tx_hash" ON "hopr_safe_execution_event" ("safe_tx_hash");
+
+CREATE INDEX "idx_safe_owner_state_current_lookup" ON "hopr_safe_owner_state" ("hopr_safe_contract_id", "owner_address", "published_block" DESC, "published_tx_index" DESC, "published_log_index" DESC);
+
+CREATE INDEX "idx_safe_owner_state_owner_lookup" ON "hopr_safe_owner_state" ("owner_address", "published_block" DESC, "published_tx_index" DESC, "published_log_index" DESC);
+
+CREATE UNIQUE INDEX "idx_safe_owner_state_unique_position" ON "hopr_safe_owner_state" ("hopr_safe_contract_id", "owner_address", "published_block", "published_tx_index", "published_log_index");
+
+CREATE INDEX "idx_safe_setup_owner_event_lookup" ON "hopr_safe_setup_owner" ("hopr_safe_event_id", "owner_position");
+
+CREATE UNIQUE INDEX "idx_safe_setup_owner_unique_position" ON "hopr_safe_setup_owner" ("hopr_safe_event_id", "owner_position");
+
+CREATE INDEX "idx_safe_threshold_state_current_lookup" ON "hopr_safe_threshold_state" ("hopr_safe_contract_id", "published_block" DESC, "published_tx_index" DESC, "published_log_index" DESC);
+
+CREATE UNIQUE INDEX "idx_safe_threshold_state_unique_position" ON "hopr_safe_threshold_state" ("hopr_safe_contract_id", "published_block", "published_tx_index", "published_log_index");
 
 CREATE INDEX "idx_unprocessed_log_status" ON "log_status" ("processed", "block_number", "tx_index", "log_index");
 

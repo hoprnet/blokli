@@ -291,6 +291,9 @@ config:
     ## @param config.indexer.enableLogsSnapshot Enable logs snapshot feature
     ##
     enableLogsSnapshot: false
+    ## @param config.indexer.enableSafeIndexing Enable Safe contract event indexing for discovered Safes
+    ##
+    enableSafeIndexing: false
     ## @param config.indexer.logsSnapshotUrl URL for logs snapshot download (required when enableLogsSnapshot is true)
     ##
     logsSnapshotUrl: ""

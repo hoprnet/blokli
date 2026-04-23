@@ -29,6 +29,7 @@ data:
     [indexer]
     fast_sync = {{ .Values.config.indexer.fastSync }}
     enable_logs_snapshot = {{ .Values.config.indexer.enableLogsSnapshot }}
+    enable_safe_indexing = {{ .Values.config.indexer.enableSafeIndexing }}
     {{- if .Values.config.indexer.enableLogsSnapshot }}
     logs_snapshot_url = "{{ required "config.indexer.logsSnapshotUrl is required" .Values.config.indexer.logsSnapshotUrl }}"
     {{- end }}

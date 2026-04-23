@@ -385,6 +385,7 @@
               foundry-bin
               pkgs.solc
               kubernetes-helm
+              cargo-insta
               cargo-machete
               cargo-shear
               yq
