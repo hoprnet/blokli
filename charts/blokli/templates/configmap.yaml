@@ -52,3 +52,9 @@ data:
     max_indexer_lag = {{ .Values.config.api.health.maxIndexerLag }}
     timeout = {{ .Values.config.api.health.timeout | quote }}
     readiness_check_interval = {{ .Values.config.api.health.readinessCheckInterval | quote }}
+
+    # Telemetry configuration
+    [telemetry]
+    otlp_endpoint = {{ .Values.config.telemetry.otlpEndpoint | quote }}
+    otlp_signals = {{ .Values.config.telemetry.otlpSignals | quote }}
+    metric_export_interval = {{ .Values.config.telemetry.metricExportInterval | quote }}

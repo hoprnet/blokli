@@ -299,8 +299,7 @@ helm-package:
 # Authenticate with Google Artifact Registry for Helm
 helm-login:
     #!/usr/bin/env bash
-    token=$(gcloud auth print-access-token)
-    helm registry login -u oauth2accesstoken --password "$token" https://europe-west3-docker.pkg.dev
+    gcloud auth print-access-token | helm registry login -u oauth2accesstoken --password-stdin europe-west3-docker.pkg.dev
 
 # Push Helm chart to Google Artifact Registry
 helm-push:
