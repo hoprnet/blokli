@@ -25,6 +25,10 @@ pub mod topics {
         hopr_winning_probability_oracle_events::HoprWinningProbabilityOracleEvents::WinProbUpdated,
     };
 
+    use crate::custom_abis::safe_contract_events::SafeContract::{
+        AddedOwner, ChangedThreshold, ExecutionFailure, ExecutionSuccess, RemovedOwner, SafeSetup,
+    };
+
     pub fn channel() -> Vec<B256> {
         vec![
             ChannelBalanceDecreased::SIGNATURE_HASH,
@@ -106,6 +110,17 @@ pub mod topics {
     /// ```
     pub fn stake_factory() -> Vec<B256> {
         vec![NewHoprNodeStakeModuleForSafe::SIGNATURE_HASH]
+    }
+
+    pub fn safe_contract() -> Vec<B256> {
+        vec![
+            SafeSetup::SIGNATURE_HASH,
+            AddedOwner::SIGNATURE_HASH,
+            RemovedOwner::SIGNATURE_HASH,
+            ChangedThreshold::SIGNATURE_HASH,
+            ExecutionSuccess::SIGNATURE_HASH,
+            ExecutionFailure::SIGNATURE_HASH,
+        ]
     }
 
     /// Lists the event signature hashes for module implementation topics.

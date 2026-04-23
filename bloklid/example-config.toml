@@ -104,6 +104,10 @@ fast_sync = true
 # Enable downloading logs snapshot for faster initial sync
 enable_logs_snapshot = false
 
+# Enable indexing of Safe contract events after a Safe has been discovered
+# Safe discovery via registry/stake-factory events remains enabled regardless
+enable_safe_indexing = false
+
 # URL to download logs snapshot from (optional)
 logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
 
