@@ -1801,7 +1801,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api"
-version = "0.19.1"
+version = "0.20.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1852,7 +1852,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api-types"
-version = "0.11.1"
+version = "0.12.0"
 dependencies = [
  "async-graphql",
  "blokli-chain-types",
@@ -1894,7 +1894,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-indexer"
-version = "0.15.1"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1934,7 +1934,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-rpc"
-version = "0.9.0"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1989,7 +1989,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-client"
-version = "0.24.0"
+version = "0.25.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -2022,7 +2022,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db"
-version = "0.15.0"
+version = "0.16.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -2069,7 +2069,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db-migration"
-version = "0.11.0"
+version = "0.12.0"
 dependencies = [
  "hopr-types",
  "sea-orm",
@@ -2091,7 +2091,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-inspector"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "anyhow",
  "blokli-client",
@@ -2110,7 +2110,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-integration-tests"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "blokli-client",
@@ -2141,7 +2141,7 @@ dependencies = [
 
 [[package]]
 name = "bloklid"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "anyhow",
  "async-signal",
@@ -6606,9 +6606,9 @@ dependencies = [
 
 [[package]]
 name = "rustls-webpki"
-version = "0.103.12"
+version = "0.103.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8279bb85272c9f10811ae6a6c547ff594d6a7f3c6c6b02ee9726d1d0dcfcdd06"
+checksum = "61c429a8649f110dddef65e2a5ad240f747e85f7758a6bccc7e5777bd33f756e"
 dependencies = [
  "ring",
  "rustls-pki-types",
@@ -7772,7 +7772,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32497e9a4c7b38532efcdebeef879707aa9f794296a4f0244f6f69e9bc8574bd"
 dependencies = [
  "fastrand",
- "getrandom 0.3.4",
+ "getrandom 0.4.2",
  "once_cell",
  "rustix",
  "windows-sys 0.61.2",

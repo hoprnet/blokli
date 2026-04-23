@@ -111,6 +111,7 @@ impl Args {
             ("BLOKLI_DATABASE_LOGS_PATH", "database.logs_path"),
             ("BLOKLI_INDEXER_FAST_SYNC", "indexer.fast_sync"),
             ("BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT", "indexer.enable_logs_snapshot"),
+            ("BLOKLI_INDEXER_ENABLE_SAFE_INDEXING", "indexer.enable_safe_indexing"),
             ("BLOKLI_INDEXER_LOGS_SNAPSHOT_URL", "indexer.logs_snapshot_url"),
             (
                 "BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY",
@@ -145,6 +146,7 @@ impl Args {
         let boolean_keys = [
             "indexer.fast_sync",
             "indexer.enable_logs_snapshot",
+            "indexer.enable_safe_indexing",
             "api.enabled",
             "api.playground_enabled",
             "api.sse_keepalive.enabled",
@@ -800,6 +802,39 @@ mod tests {
             assert_eq!(
                 config.indexer.fast_sync, false,
                 "BLOKLI_INDEXER_FAST_SYNC should be parsed as bool"
+            );
+        });
+    }
+
+    #[test]
+    fn test_enable_safe_indexing_env_var_true_string() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://localhost:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+            [indexer]
+            enable_safe_indexing = false
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_var("BLOKLI_INDEXER_ENABLE_SAFE_INDEXING", Some("true"), || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
+
+            let config = args.load_config(false).expect("Failed to load config");
+            assert!(
+                config.indexer.enable_safe_indexing,
+                "BLOKLI_INDEXER_ENABLE_SAFE_INDEXING should be parsed as bool"
             );
         });
     }

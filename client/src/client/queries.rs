@@ -272,6 +272,7 @@ impl BlokliQueryClient for BlokliClient {
     async fn query_safe(&self, selector: SafeSelector) -> Result<Option<Safe>> {
         let (gql_selector, addr) = match selector {
             SafeSelector::SafeAddress(addr) => (SafeSelectorInput::Address, addr),
+            SafeSelector::Owner(addr) => (SafeSelectorInput::Owner, addr),
             SafeSelector::ChainKey(addr) => (SafeSelectorInput::ChainKey, addr),
             SafeSelector::RegisteredNode(addr) => (SafeSelectorInput::RegisteredNode, addr),
         };
