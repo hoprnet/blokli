@@ -478,30 +478,40 @@
                 ".github/labeler.yml"
                 ".github/workflows/*.yaml"
               ];
-              # GraphQL formatter
+              # GraphQL formatter — uses prettier (nix-packaged) instead of bunx
               settings.formatter.format-graphql = {
                 command = pkgs.writeShellApplication {
                   name = "format-graphql";
                   runtimeInputs = with pkgs; [
-                    bun
+                    nodePackages.prettier
                   ];
                   text = ''
-                    bunx format-graphql --sort-fields false --write=true "$@"
+                    prettier --parser graphql --write "$@"
                   '';
                 };
                 includes = [ "design/*.graphql" ];
               };
-              # GraphQL linter
+              # GraphQL linter — built as a nix derivation so no runtime npm download needed
               settings.formatter.graphql-schema-linter = {
-                command = pkgs.writeShellApplication {
-                  name = "graphql-schema-linter";
-                  runtimeInputs = with pkgs; [
-                    bun
-                  ];
-                  text = ''
-                    bunx graphql-schema-linter "$@"
-                  '';
-                };
+                command =
+                  let
+                    graphqlSchemaLinter = pkgs.buildNpmPackage {
+                      pname = "graphql-schema-linter";
+                      version = "3.0.1";
+                      src = pkgs.fetchurl {
+                        url = "https://registry.npmjs.org/graphql-schema-linter/-/graphql-schema-linter-3.0.1.tgz";
+                        hash = "sha256-SBOMty2GDUJSb3n+gwRbWbipNywMi6+vXR6+QrGE9pk=";
+                      };
+                      npmDepsHash = "sha256-69OMO426Zg+dLRutF1S9yCd6H5aHqyWfHldN75/TX4s=";
+                      dontNpmBuild = true;
+                    };
+                  in
+                  pkgs.writeShellApplication {
+                    name = "graphql-schema-linter";
+                    text = ''
+                      ${graphqlSchemaLinter}/bin/graphql-schema-linter "$@"
+                    '';
+                  };
                 includes = [ "design/*.graphql" ];
               };
               # Markdown formatter
