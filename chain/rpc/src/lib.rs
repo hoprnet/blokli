@@ -391,6 +391,18 @@ pub trait HoprIndexerRpcOperations {
         is_synced: bool,
     ) -> Result<Pin<Box<dyn Stream<Item = BlockWithLogs> + Send + 'a>>>;
 
+    /// Retrieves logs for a single address within an inclusive block range.
+    ///
+    /// This is used for targeted backfills when the indexer discovers a Safe
+    /// after its address-scoped stream filters were built.
+    async fn get_logs_for_address(
+        &self,
+        address: Address,
+        topics: Vec<B256>,
+        from_block: u64,
+        to_block: u64,
+    ) -> Result<Vec<Log>>;
+
     /// Retrieves on-chain xdai balance of the given address.
     async fn get_xdai_balance(&self, address: Address) -> Result<XDaiBalance>;
 

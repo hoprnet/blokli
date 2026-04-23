@@ -16,6 +16,7 @@ pub mod info;
 pub mod logs;
 pub mod node_safe_registrations;
 pub mod safe_contracts;
+pub mod safe_history;
 pub mod safe_redeemed_stats;
 pub mod snapshot;
 pub mod state_queries;
@@ -38,6 +39,7 @@ use crate::{
     info::BlokliDbInfoOperations,
     node_safe_registrations::BlokliDbNodeSafeRegistrationOperations,
     safe_contracts::BlokliDbSafeContractOperations,
+    safe_history::BlokliDbSafeHistoryOperations,
     safe_redeemed_stats::BlokliDbSafeRedeemedStatsOperations,
     snapshot::LogsSnapshotInfo,
 };
@@ -251,6 +253,7 @@ pub trait BlokliDbAllOperations:
     + BlokliDbNodeSafeRegistrationOperations
     + BlokliDbSafeRedeemedStatsOperations
     + BlokliDbSafeContractOperations
+    + BlokliDbSafeHistoryOperations
 {
 }
 
@@ -267,6 +270,7 @@ pub mod prelude {
         events::*,
         info::*,
         safe_contracts::*,
+        safe_history::*,
         safe_redeemed_stats::*,
         state_queries::*,
     };

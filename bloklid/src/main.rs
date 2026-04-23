@@ -198,6 +198,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 start_block_number: chain_network.channel_contract_deploy_block as u64,
                 fast_sync: cfg.indexer.fast_sync,
                 enable_logs_snapshot: cfg.indexer.enable_logs_snapshot,
+                enable_safe_indexing: cfg.indexer.enable_safe_indexing,
                 logs_snapshot_url: cfg.indexer.logs_snapshot_url.clone(),
                 data_directory: cfg.data_directory.clone(),
                 event_bus_capacity: cfg.indexer.subscription.event_bus_capacity,
@@ -283,12 +284,15 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
         };
 
         // Create BlokliChain instance
+        let enable_safe_indexing = indexer_config.enable_safe_indexing;
         let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, rpc_url)?;
 
         // Verify RPC supports required capabilities (debug tracing)
         blokli_chain.verify_rpc_capabilities().await?;
 
-        startup::refresh_preseeded_safe_modules(blokli_chain.db(), blokli_chain.rpc()).await?;
+        if enable_safe_indexing {
+            startup::refresh_preseeded_safe_modules(blokli_chain.db(), blokli_chain.rpc()).await?;
+        }
 
         // Get IndexerState for API subscriptions
         let indexer_state = blokli_chain.indexer_state();

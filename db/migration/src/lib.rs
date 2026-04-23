@@ -3,6 +3,7 @@ pub use sea_orm_migration::{MigrationTrait, MigratorTrait};
 
 mod m001_initial_schema;
 mod m002_initial_log_schema;
+mod m003_safe_history_schema;
 
 /// This is a special block ID that even pre-dates the v3 contract deployment on Gnosis chain,
 /// and therefore could be safely used to mark data added via the migration.
@@ -35,6 +36,7 @@ impl<const NETWORK: u8> Migrator<NETWORK> {
         vec![
             Box::new(m001_initial_schema::Migration),
             Box::new(m002_initial_log_schema::Migration),
+            Box::new(m003_safe_history_schema::Migration),
         ]
     }
 }
@@ -62,7 +64,10 @@ pub struct MigratorIndex<const NETWORK: u8>;
 
 impl<const NETWORK: u8> MigratorIndex<NETWORK> {
     fn base_migrations() -> Vec<Box<dyn MigrationTrait>> {
-        vec![Box::new(m001_initial_schema::Migration)]
+        vec![
+            Box::new(m001_initial_schema::Migration),
+            Box::new(m003_safe_history_schema::Migration),
+        ]
     }
 }
 
