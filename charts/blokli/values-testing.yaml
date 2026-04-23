@@ -33,6 +33,7 @@ config:
   indexer:
     fastSync: true
     enableLogsSnapshot: false
+    enableSafeIndexing: true
     subscription:
       eventBusCapacity: 1000
       shutdownSignalCapacity: 10

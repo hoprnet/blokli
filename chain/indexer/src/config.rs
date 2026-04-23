@@ -26,6 +26,12 @@ pub struct IndexerConfig {
     #[default(false)]
     pub enable_logs_snapshot: bool,
 
+    /// Whether to index Safe contract events for discovered Safes.
+    ///
+    /// Default is `false`.
+    #[default(false)]
+    pub enable_safe_indexing: bool,
+
     /// URL to download logs snapshot from.
     /// This should point to a publicly accessible tar.xz file containing
     /// the SQLite logs database files.
@@ -63,6 +69,7 @@ impl IndexerConfig {
     /// * `start_block_number` - The block number from which to start indexing
     /// * `fast_sync` - Whether to enable fast synchronization during startup
     /// * `enable_logs_snapshot` - Whether to enable logs snapshot download
+    /// * `enable_safe_indexing` - Whether to index Safe contract events for discovered Safes
     /// * `logs_snapshot_url` - URL to download logs snapshot from
     /// * `data_directory` - Path to the data directory where databases are stored
     /// * `event_bus_capacity` - Capacity of the event bus buffer
@@ -71,10 +78,12 @@ impl IndexerConfig {
     /// # Returns
     ///
     /// A new instance of `IndexerConfig`
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         start_block_number: u64,
         fast_sync: bool,
         enable_logs_snapshot: bool,
+        enable_safe_indexing: bool,
         logs_snapshot_url: Option<String>,
         data_directory: String,
         event_bus_capacity: usize,
@@ -84,6 +93,7 @@ impl IndexerConfig {
             start_block_number,
             fast_sync,
             enable_logs_snapshot,
+            enable_safe_indexing,
             logs_snapshot_url,
             data_directory,
             event_bus_capacity,
@@ -113,6 +123,7 @@ impl IndexerConfig {
     ///     100,
     ///     true,
     ///     true,
+    ///     false,
     ///     Some("https://example.com/snapshot.tar.xz".to_string()),
     ///     "/tmp/hopr_data".to_string(),
     ///     100,
@@ -161,9 +172,18 @@ mod tests {
     #[test]
     fn test_full_valid_config() {
         let data_directory = "/tmp/hopr_test_data";
-        let logs_snapshot_url = format!("file:///tmp/snapshot.tar.xz");
+        let logs_snapshot_url = "file:///tmp/snapshot.tar.xz".to_string();
 
-        let cfg = IndexerConfig::new(0, true, true, Some(logs_snapshot_url), data_directory.into(), 1000, 10);
+        let cfg = IndexerConfig::new(
+            0,
+            true,
+            true,
+            false,
+            Some(logs_snapshot_url),
+            data_directory.into(),
+            1000,
+            10,
+        );
 
         cfg.validate().expect("Failed to validate snapshot configuration");
         assert!(cfg.is_valid(), "Valid configuration should return true for is_valid()");
@@ -171,7 +191,7 @@ mod tests {
 
     #[test]
     fn test_disabled_snapshot_config() {
-        let cfg = IndexerConfig::new(0, true, false, Some("".to_string()), "".to_string(), 1000, 10);
+        let cfg = IndexerConfig::new(0, true, false, false, Some("".to_string()), "".to_string(), 1000, 10);
 
         assert!(
             cfg.validate().is_ok(),
@@ -181,7 +201,7 @@ mod tests {
 
     #[test]
     fn test_missing_snapshot_url() {
-        let cfg = IndexerConfig::new(0, true, true, None, "".to_string(), 1000, 10);
+        let cfg = IndexerConfig::new(0, true, true, false, None, "".to_string(), 1000, 10);
 
         assert!(
             cfg.validate().is_err(),

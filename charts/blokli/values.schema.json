@@ -106,6 +106,10 @@
               "type": "boolean",
               "description": "Enable logs snapshot feature"
             },
+            "enableSafeIndexing": {
+              "type": "boolean",
+              "description": "Enable Safe contract event indexing for discovered Safes"
+            },
             "logsSnapshotUrl": {
               "type": "string",
               "description": "URL for logs snapshot download"

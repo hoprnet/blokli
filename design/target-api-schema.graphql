@@ -654,12 +654,16 @@ type RpcError {
 type Safe {
   "Safe contract address (hexadecimal format)"
   address: String!
-  "Chain key (owner address, hexadecimal format)"
-  chainKey: String!
+  "Legacy chain key field retained for backward compatibility"
+  chainKey: String! @deprecated(reason: "Use owners instead. chainKey is legacy Safe metadata and may not reflect the current owner set.")
   "HOPR Node Management Module address (hexadecimal format)"
   moduleAddress: String!
+  "Current owner addresses reconstructed from indexed Safe events"
+  owners: [String!]!
   "List of registered node addresses (hexadecimal format) for this Safe"
   registeredNodes: [String!]!
+  "Current signer threshold reconstructed from indexed Safe events"
+  threshold: String
 }
 
 """Internal Safe contract execution result"""
@@ -701,8 +705,10 @@ union SafesBalanceResult = InvalidAddressError | QueryFailedError | SafesBalance
 enum SafeSelectorInput {
   "Filter by safe contract address"
   ADDRESS
-  "Filter by chain key (owner address)"
-  CHAIN_KEY
+  "Legacy alias for owner address filtering"
+  CHAIN_KEY @deprecated(reason: "Use OWNER instead. CHAIN_KEY is a legacy alias for Safe owner lookup.")
+  "Filter by current safe owner address"
+  OWNER
   "Filter by registered node address"
   REGISTERED_NODE
 }

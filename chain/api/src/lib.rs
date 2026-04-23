@@ -254,6 +254,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
                     self.db.clone(),
                     self.rpc_operations.clone(),
                     self.indexer_state.clone(),
+                    self.indexer_cfg.enable_safe_indexing,
                 ),
                 self.db.clone(),
                 self.indexer_cfg.clone(),

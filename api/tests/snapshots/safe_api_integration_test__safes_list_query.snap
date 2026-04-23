@@ -6,3 +6,4 @@ data:
   safes:
     safes:
       - address: "0x1111111111111111111111111111111111111111"
+        threshold: "4"
