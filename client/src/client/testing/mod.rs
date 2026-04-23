@@ -232,6 +232,12 @@ impl BlokliTestStateMutator for NopStateMutator {
     }
 }
 
+impl<F: Fn(&[u8], &mut BlokliTestState) -> Result<()>> BlokliTestStateMutator for F {
+    fn update_state(&self, signed_tx: &[u8], state: &mut BlokliTestState) -> Result<()> {
+        self(signed_tx, state)
+    }
+}
+
 type AccountEvents = (
     async_broadcast::Sender<Account>,
     async_broadcast::InactiveReceiver<Account>,

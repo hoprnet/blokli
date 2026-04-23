@@ -1503,8 +1503,7 @@ mod tests {
             })
             .return_once(move |_, _, _| Ok(Box::pin(futures::stream::empty())));
 
-        let indexer = Indexer::new(rpc, handlers, db.clone(), cfg, indexer_state)
-            .without_panic_on_completion();
+        let indexer = Indexer::new(rpc, handlers, db.clone(), cfg, indexer_state).without_panic_on_completion();
 
         let start_result = indexer.start().await;
         let abort_handle = start_result.expect("indexer should start successfully");
