@@ -52,7 +52,7 @@ jobs:
             build_command: nix build -L .#binary-blokli-inspector-aarch64-darwin
             build_file: inspector/Cargo.toml
             binary: blokli-inspector
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@60486fe4eb9f78ed754c666b9c70c8545361e7c8 # build-binaries-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v2
     permissions:
       contents: read
     with:
