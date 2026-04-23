@@ -69,7 +69,7 @@ pub(crate) enum QueryTarget {
     Channel(ChannelArgs),
     /// Gets total wxHOPR balance held across indexed safe contracts.
     SafesBalance {
-        /// Restrict to safes associated with the given chain key (owner address).
+        /// Restrict to safes whose current owner set contains the given address.
         #[arg(long, value_parser = clap::value_parser!(Address))]
         owner: Option<Address>,
     },
@@ -97,7 +97,7 @@ impl QueryTarget {
                 client
                     .query_safe(match (address, owner, registered_node) {
                         (Some(address), None, None) => SafeSelector::SafeAddress(address.into()),
-                        (None, Some(owner), None) => SafeSelector::ChainKey(owner.into()),
+                        (None, Some(owner), None) => SafeSelector::Owner(owner.into()),
                         (None, None, Some(registered_node)) => SafeSelector::RegisteredNode(registered_node.into()),
                         _ => {
                             return Err(anyhow::anyhow!(

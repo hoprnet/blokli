@@ -8,6 +8,8 @@ use crate::{
 pub enum SafeSelectorInput {
     #[cynic(rename = "ADDRESS")]
     Address,
+    #[cynic(rename = "OWNER")]
+    Owner,
     #[cynic(rename = "CHAIN_KEY")]
     ChainKey,
     #[cynic(rename = "REGISTERED_NODE")]
@@ -25,8 +27,10 @@ pub struct SafeByVariables {
 pub struct Safe {
     pub address: String,
     pub chain_key: String,
+    pub owners: Vec<String>,
     pub module_address: String,
     pub registered_nodes: Vec<String>,
+    pub threshold: Option<String>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]

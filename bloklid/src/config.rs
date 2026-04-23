@@ -328,6 +328,10 @@ impl Config {
             "  indexer.enable_logs_snapshot: {}\n",
             self.indexer.enable_logs_snapshot
         ));
+        output.push_str(&format!(
+            "  indexer.enable_safe_indexing: {}\n",
+            self.indexer.enable_safe_indexing
+        ));
 
         if let Some(snapshot_url) = &self.indexer.logs_snapshot_url {
             output.push_str(&format!("  indexer.logs_snapshot_url: {}\n", redact_url(snapshot_url)));
@@ -393,6 +397,10 @@ pub struct IndexerConfig {
     #[default(false)]
     #[serde(default = "default_false")]
     pub enable_logs_snapshot: bool,
+
+    #[default(false)]
+    #[serde(default = "default_false")]
+    pub enable_safe_indexing: bool,
 
     #[serde(default)]
     pub logs_snapshot_url: Option<String>,
@@ -758,6 +766,7 @@ mod tests {
 
         // Check indexer config
         assert!(config.indexer.fast_sync);
+        assert!(!config.indexer.enable_safe_indexing);
         assert_eq!(config.indexer.subscription.event_bus_capacity, 1000);
 
         // Check API config
@@ -787,6 +796,7 @@ mod tests {
         let cfg = res.unwrap();
         assert!(!cfg.indexer.fast_sync);
         assert!(!cfg.indexer.enable_logs_snapshot); // Default
+        assert!(!cfg.indexer.enable_safe_indexing); // Default
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 1000); // Default
         assert_eq!(cfg.indexer.subscription.batch_size, 100); // Default
     }

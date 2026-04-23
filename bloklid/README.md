@@ -45,6 +45,7 @@ For the complete OTLP setup guide, including environment overrides and endpoint 
   - `start_block_number`: Block to start indexing from
   - `fast_sync`: Enable fast synchronization
   - `enable_logs_snapshot`: Enable snapshot download for faster initial sync
+  - `enable_safe_indexing`: Enable Safe contract event indexing for discovered Safes
 
 ## Architecture
 
