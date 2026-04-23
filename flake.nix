@@ -384,7 +384,7 @@
 
             '';
             extraPackages = with pkgs; [
-              bun
+              nodejs
               ast-grep
               foundry-bin
               pkgs.solc
@@ -491,27 +491,14 @@
                 };
                 includes = [ "design/*.graphql" ];
               };
-              # GraphQL linter — built as a nix derivation so no runtime npm download needed
               settings.formatter.graphql-schema-linter = {
-                command =
-                  let
-                    graphqlSchemaLinter = pkgs.buildNpmPackage {
-                      pname = "graphql-schema-linter";
-                      version = "3.0.1";
-                      src = pkgs.fetchurl {
-                        url = "https://registry.npmjs.org/graphql-schema-linter/-/graphql-schema-linter-3.0.1.tgz";
-                        hash = "sha256-SBOMty2GDUJSb3n+gwRbWbipNywMi6+vXR6+QrGE9pk=";
-                      };
-                      npmDepsHash = "sha256-69OMO426Zg+dLRutF1S9yCd6H5aHqyWfHldN75/TX4s=";
-                      dontNpmBuild = true;
-                    };
-                  in
-                  pkgs.writeShellApplication {
-                    name = "graphql-schema-linter";
-                    text = ''
-                      ${graphqlSchemaLinter}/bin/graphql-schema-linter "$@"
-                    '';
-                  };
+                command = pkgs.writeShellApplication {
+                  name = "graphql-schema-linter";
+                  runtimeInputs = [ pkgs.nodejs ];
+                  text = ''
+                    npx --yes graphql-schema-linter "$@"
+                  '';
+                };
                 includes = [ "design/*.graphql" ];
               };
               # Markdown formatter
