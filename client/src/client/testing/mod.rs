@@ -403,6 +403,12 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
         }
     }
 
+    /// Performs arbitrary update to the state which is not notified in an event broadcast.
+    pub fn hidden_state_update(&self, update: impl FnOnce(&mut BlokliTestState)) {
+        let mut state = self.state.write();
+        update(&mut state);
+    }
+
     /// Allows updating the minimum ticket price and minimum ticket-winning probability.
     ///
     /// These changes are also broadcasted as events and take effect on the shared state
