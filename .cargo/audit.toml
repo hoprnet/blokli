@@ -44,4 +44,10 @@ ignore = [
   # Status: Unsound with custom logger
   # Review by: 2026-06-30
   "RUSTSEC-2026-0097",
+  # RUSTSEC-2026-0104
+  # Crate:     rustls-webpki
+  # Version:   0.103.12
+  # Title:     Reachable panic in certificate revocation list parsing
+  # Date:      2026-04-22
+  "RUSTSEC-2026-0104",
 ]
