@@ -12,7 +12,7 @@ use indexmap::IndexMap;
 
 use crate::{
     api::{types::*, *},
-    errors::{BlokliClientError, ErrorKind, TrackingErrorKind},
+    errors::{BlokliClientError, ErrorKind, InternalTxError, TrackingErrorKind},
 };
 
 fn serialize_as_empty_map<K, V, S>(_: &IndexMap<K, V>, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -296,6 +296,7 @@ pub struct BlokliTestClient<M> {
     ticket_channel: TicketParamEvents,
     safe_deployed_channel: SafeDeployEvents,
     tx_simulation_delay: Duration,
+    use_internal_txs: bool,
 }
 
 fn channel_matches(channel: &Channel, selector: &ChannelSelector, accounts: &IndexMap<u32, Account>) -> bool {
@@ -356,6 +357,7 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
             ticket_channel: (tickets_tx, tickets_rx.deactivate()),
             safe_deployed_channel: (safes_tx, safes_rx.deactivate()),
             tx_simulation_delay: Duration::from_secs(1),
+            use_internal_txs: false,
         }
     }
 
@@ -363,6 +365,15 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
     #[must_use]
     pub fn with_mutator(mut self, mutator: M) -> Self {
         self.mutator = mutator;
+        self
+    }
+
+    /// Enables or disables usage of internal (Safe) transactions.
+    ///
+    /// Default is disabled.
+    #[must_use]
+    pub fn with_use_internal_txs(mut self, use_internal_txs: bool) -> Self {
+        self.use_internal_txs = use_internal_txs;
         self
     }
 
@@ -925,6 +936,8 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
 
         let mut state = self.state.write();
 
+        let mut internal_tx_failure_reason: Option<String> = None;
+
         let status = simulate_tx_execution(
             signed_tx,
             &mut state,
@@ -938,6 +951,9 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
             tracing::debug!("transaction execution succeeded");
             TransactionStatus::Confirmed
         })
+        .inspect_err(|e| if let ErrorKind::MockClientError(int_err) = e.kind() {
+            internal_tx_failure_reason = int_err.downcast_ref::<InternalTxError>().map(|err| err.0.to_string());
+        })
         .unwrap_or_else(|error| {
             tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction, state reverted");
             TransactionStatus::Reverted
@@ -947,10 +963,19 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
             tx_id.clone(),
             Transaction {
                 id: tx_id.clone().into(),
-                status,
+                status: if self.use_internal_txs && internal_tx_failure_reason.is_some() {
+                    // Make the outer transaction confirmed if there was an internal transaction failure
+                    TransactionStatus::Confirmed
+                } else {
+                    status
+                },
                 submitted_at: DateTime(chrono::DateTime::<chrono::Utc>::from(SystemTime::now()).to_rfc3339()),
-                transaction_hash: Hex32(tx_hash),
-                safe_execution: None,
+                transaction_hash: Hex32(tx_hash.clone()),
+                safe_execution: self.use_internal_txs.then(|| SafeExecution {
+                    success: internal_tx_failure_reason.is_none(),
+                    safe_tx_hash: Some(Hex32(tx_hash)),
+                    revert_reason: internal_tx_failure_reason,
+                }),
             },
         );
 
