@@ -172,7 +172,7 @@ jobs:
             build_file: inspector/Cargo.toml
             binary: blokli-inspector
             required_label: "binary:aarch64-darwin"
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@60486fe4eb9f78ed754c666b9c70c8545361e7c8 # build-binaries-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@ausias/fix-concurrency # build-binaries-v2
     permissions:
       contents: read
     with:
