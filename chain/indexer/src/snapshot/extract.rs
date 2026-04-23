@@ -119,7 +119,6 @@ impl SnapshotExtractor {
             }
         }
 
-
         // Verify we got the SQL dump file
         if !extracted_files.contains(&SNAPSHOT_SQL_FILE.to_string()) {
             return Err(SnapshotError::InvalidFormat(

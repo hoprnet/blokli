@@ -84,7 +84,7 @@ async fn main() -> ExitCode {
 
 async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
     // Handle subcommands
-    match args.command {
+    match &args.command {
         Some(Command::GenerateConfig { output }) => {
             tracing::info!("Generating configuration template at: {}", output.display());
 
@@ -93,13 +93,12 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
             // Create parent directories if they don't exist
             if let Some(parent) = output.parent() {
-                std::fs::create_dir_all(parent).map_err(|e| {
-                    BloklidError::NonSpecific(format!("Failed to create parent directories: {}", e))
-                })?;
+                std::fs::create_dir_all(parent)
+                    .map_err(|e| BloklidError::NonSpecific(format!("Failed to create parent directories: {}", e)))?;
             }
 
             // Write the template to the specified file
-            std::fs::write(&output, template)
+            std::fs::write(output, template)
                 .map_err(|e| BloklidError::NonSpecific(format!("Failed to write configuration template: {}", e)))?;
 
             tracing::info!("Configuration template successfully written to: {}", output.display());
@@ -113,8 +112,8 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
             let database = config.database.as_ref().ok_or_else(|| {
                 BloklidError::DatabaseNotConfigured(
-                    "Database configuration is missing. Ensure either [database] section is present in config \
-                        file or BLOKLI_DATABASE_TYPE and BLOKLI_DATABASE_URL are set"
+                    "Database configuration is missing. Ensure either [database] section is present in config file or \
+                     BLOKLI_DATABASE_TYPE and BLOKLI_DATABASE_URL are set"
                         .to_string(),
                 )
             })?;
@@ -131,12 +130,11 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 BlokliDb::new(&database.to_url(), database.to_logs_url().as_deref(), db_config).await?
             };
 
-            let snapshot_manager = SnapshotManager::with_db(db).map_err(|error| {
-                BloklidError::NonSpecific(format!("Failed to create snapshot manager: {error}"))
-            })?;
+            let snapshot_manager = SnapshotManager::with_db(db)
+                .map_err(|error| BloklidError::NonSpecific(format!("Failed to create snapshot manager: {error}")))?;
 
             let info = snapshot_manager
-                .export_snapshot(&output)
+                .export_snapshot(output)
                 .await
                 .map_err(|error| BloklidError::NonSpecific(format!("Failed to export logs snapshot: {error}")))?;
 
