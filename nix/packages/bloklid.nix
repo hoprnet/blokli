@@ -58,6 +58,22 @@ in
     cargoExtraArgs = "--bins";
   };
 
+  binary-blokli-inspector-x86_64-darwin = builders.x86_64-darwin.callPackage nixLib.mkRustPackage {
+    inherit rev;
+    src = sources.main;
+    depsSrc = sources.deps;
+    cargoToml = ./../../inspector/Cargo.toml;
+    cargoExtraArgs = "--bins";
+  };
+
+  binary-blokli-inspector-aarch64-darwin = builders.aarch64-darwin.callPackage nixLib.mkRustPackage {
+    inherit rev;
+    src = sources.main;
+    depsSrc = sources.deps;
+    cargoToml = ./../../inspector/Cargo.toml;
+    cargoExtraArgs = "--bins";
+  };
+
   # Production builds - optimized for deployment
   # x86_64 Linux builds with static linking for maximum portability
   binary-blokli-x86_64-linux =
