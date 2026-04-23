@@ -3,3 +3,7 @@ self-hosted-runner:
   labels:
     - self-hosted-hoprnet-bigger
     - self-hosted-hoprnet-small
+    - depot-ubuntu-22.04-4
+    - depot-ubuntu-22.04-arm-4
+    - depot-macos-15
+    - depot-ubuntu-22.04-2
