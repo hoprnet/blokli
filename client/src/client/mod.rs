@@ -17,7 +17,8 @@ pub use testing::{
 };
 
 use crate::{
-    api::VERSION,
+    CLIENT_VERSION,
+    api::{BlokliQueryClient, VERSION},
     errors::{BlokliClientError, ErrorKind},
 };
 
@@ -169,6 +170,19 @@ impl BlokliClient {
     /// Returns the client's configuration.
     pub fn config(&self) -> &BlokliClientConfig {
         &self.cfg
+    }
+
+    pub async fn check_compatibility(&self) -> Result<(), BlokliClientError> {
+        let compatibility = self.query_compatibility().await?;
+
+        match crate::compatibility::validate_client_compatibility(&compatibility) {
+            Ok(()) => Ok(()),
+            Err(_) => Err(ErrorKind::VersionMismatch {
+                client_version: CLIENT_VERSION.to_string(),
+                supported_version: compatibility.supported_client_versions,
+            }
+            .into()),
+        }
     }
 
     fn graphql_url(&self) -> Result<url::Url, BlokliClientError> {

@@ -1,4 +1,3 @@
-mod compatibility;
 mod queries;
 mod subscriptions;
 
@@ -21,10 +20,7 @@ use queries::QueryTarget;
 use tokio::io::AsyncReadExt;
 use tracing_subscriber::{EnvFilter, fmt};
 
-use crate::{
-    compatibility::ensure_client_compatibility,
-    subscriptions::{ChannelAllowedStates, SubscriptionTarget},
-};
+use crate::subscriptions::{ChannelAllowedStates, SubscriptionTarget};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -35,6 +31,9 @@ struct Cli {
     /// Output format.
     #[arg(short, long, env, value_enum, default_value = "json")]
     format: Formats,
+    /// Skip the startup client/server compatibility check.
+    #[arg(long)]
+    skip_check: bool,
 
     #[clap(subcommand)]
     command: Commands,
@@ -279,7 +278,9 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let blokli_client = BlokliClient::new(cli.url, BlokliClientConfig::default());
 
-    ensure_client_compatibility(&blokli_client).await?;
+    if !cli.skip_check {
+        blokli_client.check_compatibility().await?;
+    }
 
     let exit_fut = tokio::signal::ctrl_c().inspect_ok(|_| {
         eprintln!("\nInterrupted.");

@@ -215,7 +215,11 @@
           # Helper: create a /bin symlink to a Nix store binary.
           # The store path is part of the image closure so the symlink resolves inside the container.
           mkStaticEntrypoint =
-            { pkgs, binary, name }:
+            {
+              pkgs,
+              binary,
+              name,
+            }:
             pkgs.runCommand "${name}-entrypoint" { } ''
               mkdir -p $out/bin
               ln -s ${binary}/bin/${name} $out/bin/${name}
