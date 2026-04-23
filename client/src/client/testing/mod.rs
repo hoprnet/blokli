@@ -956,25 +956,27 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
         })
         .unwrap_or_else(|error| {
             tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction, state reverted");
-            TransactionStatus::Reverted
+            // Make the outer transaction confirmed if there was an internal transaction failure
+            if self.use_internal_txs && internal_tx_failure_reason.is_some() {
+                TransactionStatus::Confirmed
+            } else {
+                TransactionStatus::Reverted
+            }
         });
 
         state.active_txs.insert(
             tx_id.clone(),
             Transaction {
                 id: tx_id.clone().into(),
-                status: if self.use_internal_txs && internal_tx_failure_reason.is_some() {
-                    // Make the outer transaction confirmed if there was an internal transaction failure
-                    TransactionStatus::Confirmed
-                } else {
-                    status
-                },
+                status,
                 submitted_at: DateTime(chrono::DateTime::<chrono::Utc>::from(SystemTime::now()).to_rfc3339()),
                 transaction_hash: Hex32(tx_hash.clone()),
-                safe_execution: self.use_internal_txs.then(|| SafeExecution {
-                    success: internal_tx_failure_reason.is_none(),
-                    safe_tx_hash: Some(Hex32(tx_hash)),
-                    revert_reason: internal_tx_failure_reason,
+                safe_execution: (self.use_internal_txs && status == TransactionStatus::Confirmed).then(|| {
+                    SafeExecution {
+                        success: internal_tx_failure_reason.is_none(),
+                        safe_tx_hash: Some(Hex32(tx_hash)),
+                        revert_reason: internal_tx_failure_reason,
+                    }
                 }),
             },
         );
