@@ -24,13 +24,33 @@ jobs:
       matrix:
         include:
           - architecture: x86_64-linux
-            runner: self-hosted-hoprnet-bigger
+            runner: depot-ubuntu-22.04-4
             build_command: nix build -L .#binary-blokli-x86_64-linux
             build_file: bloklid/Cargo.toml
             binary: bloklid
           - architecture: x86_64-linux
-            runner: self-hosted-hoprnet-bigger
+            runner: depot-ubuntu-22.04-4
             build_command: nix build -L .#binary-blokli-inspector-x86_64-linux
+            build_file: inspector/Cargo.toml
+            binary: blokli-inspector
+          - architecture: aarch64-linux
+            runner: depot-ubuntu-22.04-arm-4
+            build_command: nix build -L .#binary-blokli-aarch64-linux
+            build_file: bloklid/Cargo.toml
+            binary: bloklid
+          - architecture: aarch64-linux
+            runner: depot-ubuntu-22.04-arm-4
+            build_command: nix build -L .#binary-blokli-inspector-aarch64-linux
+            build_file: inspector/Cargo.toml
+            binary: blokli-inspector
+          - architecture: aarch64-darwin
+            runner: depot-macos-15
+            build_command: nix build -L .#binary-blokli-aarch64-darwin
+            build_file: bloklid/Cargo.toml
+            binary: bloklid
+          - architecture: aarch64-darwin
+            runner: depot-macos-15
+            build_command: nix build -L .#binary-blokli-inspector-aarch64-darwin
             build_file: inspector/Cargo.toml
             binary: blokli-inspector
     uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@60486fe4eb9f78ed754c666b9c70c8545361e7c8 # build-binaries-v2
@@ -62,12 +82,15 @@ jobs:
       version_type: release
       build_matrix: >-
         [
-
-
           {
-            "runner": "self-hosted-hoprnet-bigger",
+            "runner": "depot-ubuntu-22.04-4",
             "architecture": "x86_64-linux",
             "build_command": "nix build -L .#docker-blokli-x86_64-linux"
+          },
+          {
+            "runner": "depot-ubuntu-22.04-arm-4",
+            "architecture": "aarch64-linux",
+            "build_command": "nix build -L .#docker-blokli-aarch64-linux"
           }
         ]
       cachix_cache_name: blokli
@@ -86,7 +109,7 @@ jobs:
     needs:
       - build-binaries
       - build-docker
-    runs-on: self-hosted-hoprnet-small
+    runs-on: depot-ubuntu-22.04-2
     permissions:
       contents: write
     steps:
@@ -107,7 +130,7 @@ jobs:
           github_token: ${{ secrets.GH_RUNNER_TOKEN }}
   deploy-staging:
     name: Deploy Gnosis Staging
-    runs-on: self-hosted-hoprnet-small
+    runs-on: depot-ubuntu-22.04-2
     needs:
       - build-binaries
       - build-docker
