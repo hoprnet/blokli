@@ -200,16 +200,17 @@ mod tests {
 
     #[tokio::test]
     async fn test_archive_security_validation() {
-        let temp_dir = TempDir::new().unwrap();
+        let archive_temp_dir = TempDir::new().unwrap();
+        let extraction_temp_dir = TempDir::new().unwrap();
         let extractor = SnapshotExtractor::new();
 
         // Test with valid archive
-        let archive_path = create_test_archive(&temp_dir, None).await.unwrap();
+        let archive_path = create_test_archive(&archive_temp_dir, None).await.unwrap();
 
-        let extract_dir = temp_dir.path().join("extract");
+        let extract_dir = extraction_temp_dir.path().join("extract");
 
         // verify files before extraction
-        assert!(!extract_dir.parent().unwrap().join("hopr_logs.sql").exists());
+        assert!(!extract_dir.parent().unwrap().join(SNAPSHOT_SQL_FILE).exists());
 
         let result = extractor.extract_snapshot(&archive_path, &extract_dir).await;
 
