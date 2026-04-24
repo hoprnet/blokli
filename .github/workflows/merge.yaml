@@ -16,16 +16,43 @@ permissions:
   id-token: write
 jobs:
   build-binaries:
-    name: Binary ${{ matrix.architecture }}
+    name: Binary ${{ matrix.binary }} ${{ matrix.architecture }}
     if: github.event.pull_request.merged == true
     strategy:
       fail-fast: false
       matrix:
         include:
           - architecture: x86_64-linux
-            runner: self-hosted-hoprnet-bigger
+            runner: depot-ubuntu-22.04-4
             build_command: nix build -L .#binary-blokli-x86_64-linux
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@60486fe4eb9f78ed754c666b9c70c8545361e7c8 # build-binaries-v2
+            build_file: bloklid/Cargo.toml
+            binary: bloklid
+          - architecture: x86_64-linux
+            runner: depot-ubuntu-22.04-4
+            build_command: nix build -L .#binary-blokli-inspector-x86_64-linux
+            build_file: inspector/Cargo.toml
+            binary: blokli-inspector
+          - architecture: aarch64-linux
+            runner: depot-ubuntu-22.04-arm-4
+            build_command: nix build -L .#binary-blokli-aarch64-linux
+            build_file: bloklid/Cargo.toml
+            binary: bloklid
+          - architecture: aarch64-linux
+            runner: depot-ubuntu-22.04-arm-4
+            build_command: nix build -L .#binary-blokli-inspector-aarch64-linux
+            build_file: inspector/Cargo.toml
+            binary: blokli-inspector
+          - architecture: aarch64-darwin
+            runner: depot-macos-15
+            build_command: nix build -L .#binary-blokli-aarch64-darwin
+            build_file: bloklid/Cargo.toml
+            binary: bloklid
+          - architecture: aarch64-darwin
+            runner: depot-macos-15
+            build_command: nix build -L .#binary-blokli-inspector-aarch64-darwin
+            build_file: inspector/Cargo.toml
+            binary: blokli-inspector
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v2
     permissions:
       contents: read
     with:
@@ -33,9 +60,9 @@ jobs:
       version_type: pr
       architecture: ${{ matrix.architecture }}
       cachix_cache_name: blokli
-      build_file: bloklid/Cargo.toml
+      build_file: ${{ matrix.build_file }}
       build_command: ${{ matrix.build_command }}
-      binary: bloklid
+      binary: ${{ matrix.binary }}
       runner: ${{ matrix.runner }}
     secrets:
       gcp_service_account: ${{ secrets.GCP_SA_GITHUB_RUNNER }}
@@ -55,12 +82,15 @@ jobs:
       version_type: pr
       build_matrix: >-
         [
-
-
           {
-            "runner": "self-hosted-hoprnet-bigger",
+            "runner": "depot-ubuntu-22.04-4",
             "architecture": "x86_64-linux",
             "build_command": "nix build -L .#docker-blokli-x86_64-linux"
+          },
+          {
+            "runner": "depot-ubuntu-22.04-arm-4",
+            "architecture": "aarch64-linux",
+            "build_command": "nix build -L .#docker-blokli-aarch64-linux"
           }
         ]
       cachix_cache_name: blokli
@@ -87,10 +117,8 @@ jobs:
       version_type: pr
       build_matrix: >-
         [
-
-
           {
-            "runner": "self-hosted-hoprnet-bigger",
+            "runner": "depot-ubuntu-22.04-4",
             "architecture": "x86_64-linux",
             "build_command": "nix build -L .#docker-blokli-anvil-x86_64-linux"
           }
@@ -107,7 +135,7 @@ jobs:
       docker_hub_token: ${{ secrets.DOCKER_HUB_TOKEN }}
   deploy-dev:
     name: Deploy Gnosis Dev
-    runs-on: self-hosted-hoprnet-small
+    runs-on: depot-ubuntu-22.04-2
     needs: build-docker
     permissions:
       contents: read
@@ -141,7 +169,7 @@ jobs:
       - build-docker-with-anvil
       - deploy-dev
     if: ${{ always() && github.event.pull_request.merged == true && !success() }}
-    runs-on: ubuntu-latest
+    runs-on: depot-ubuntu-22.04-2
     steps:
       - name: Notify failed merge pipeline
         uses: zulip/github-actions-zulip/send-message@e4c8f27c732ba9bd98ac6be0583096dea82feea5 # v1.0.2
