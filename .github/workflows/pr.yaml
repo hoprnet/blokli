@@ -190,11 +190,6 @@ jobs:
             "architecture": "x86_64-linux",
             "build_command": "nix build -L .#docker-blokli-x86_64-linux",
             "smoke_test_command": "nix develop -c just smoke-test"
-          },
-          {
-            "runner": "depot-ubuntu-22.04-arm-4",
-            "architecture": "aarch64-linux",
-            "build_command": "nix build -L .#docker-blokli-aarch64-linux"
           }
         ]
       cachix_cache_name: blokli
