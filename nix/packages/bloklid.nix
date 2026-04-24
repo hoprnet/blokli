@@ -22,30 +22,17 @@ let
       cargoToml = ./../../bloklid/Cargo.toml;
     };
 
-  inspectorBuildArgs = {
-    inherit rev;
-    src = sources.main;
-    depsSrc = sources.deps;
-    cargoToml = ./../../inspector/Cargo.toml;
-    cargoExtraArgs = "--bins";
-  };
-
-  # Production builds for blokli-inspector across all supported platforms
-  inspectorPackages = builtins.listToAttrs (
-    map (platform: {
-      name = "binary-blokli-inspector-${platform}";
-      value = builders.${platform}.callPackage nixLib.mkRustPackage inspectorBuildArgs;
-    }) [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ]
-  );
-
-  # Production builds for bloklid across all supported platforms
-  # Linux platforms additionally include a dev variant
+  # Production builds include blokli-inspector alongside bloklid in each platform derivation.
+  # prependPackageName = false lets us specify both packages explicitly via cargoExtraArgs.
   mkBloklidPlatformPackages =
     platform:
     let
-      args = mkbloklidBuildArgs {
+      args = (mkbloklidBuildArgs {
         src = sources.main;
         depsSrc = sources.deps;
+      }) // {
+        prependPackageName = false;
+        cargoExtraArgs = "-p bloklid -p blokli-inspector --bins";
       };
       name = "binary-blokli-${platform}";
     in
@@ -80,7 +67,6 @@ in
     }
   );
 }
-// inspectorPackages
 // bloklidPackages
 // {
   # Test and quality assurance builds

@@ -154,24 +154,6 @@ jobs:
             build_file: bloklid/Cargo.toml
             binary: bloklid
             required_label: "binary:aarch64-darwin"
-          - architecture: x86_64-linux
-            runner: depot-ubuntu-22.04-4
-            build_command: nix build -L .#binary-blokli-inspector-x86_64-linux
-            build_file: inspector/Cargo.toml
-            binary: blokli-inspector
-            required_label: ""
-          - architecture: aarch64-linux
-            runner: depot-ubuntu-22.04-arm-4
-            build_command: nix build -L .#binary-blokli-inspector-aarch64-linux
-            build_file: inspector/Cargo.toml
-            binary: blokli-inspector
-            required_label: "binary:aarch64-linux"
-          - architecture: aarch64-darwin
-            runner: depot-macos-15
-            build_command: nix build -L .#binary-blokli-inspector-aarch64-darwin
-            build_file: inspector/Cargo.toml
-            binary: blokli-inspector
-            required_label: "binary:aarch64-darwin"
     uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v2
     permissions:
       contents: read
