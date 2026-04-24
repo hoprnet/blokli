@@ -28,31 +28,16 @@ jobs:
             build_command: nix build -L .#binary-blokli-x86_64-linux
             build_file: bloklid/Cargo.toml
             binary: bloklid
-          - architecture: x86_64-linux
-            runner: depot-ubuntu-22.04-4
-            build_command: nix build -L .#binary-blokli-inspector-x86_64-linux
-            build_file: inspector/Cargo.toml
-            binary: blokli-inspector
           - architecture: aarch64-linux
             runner: depot-ubuntu-22.04-arm-4
             build_command: nix build -L .#binary-blokli-aarch64-linux
             build_file: bloklid/Cargo.toml
             binary: bloklid
-          - architecture: aarch64-linux
-            runner: depot-ubuntu-22.04-arm-4
-            build_command: nix build -L .#binary-blokli-inspector-aarch64-linux
-            build_file: inspector/Cargo.toml
-            binary: blokli-inspector
           - architecture: aarch64-darwin
             runner: depot-macos-15
             build_command: nix build -L .#binary-blokli-aarch64-darwin
             build_file: bloklid/Cargo.toml
             binary: bloklid
-          - architecture: aarch64-darwin
-            runner: depot-macos-15
-            build_command: nix build -L .#binary-blokli-inspector-aarch64-darwin
-            build_file: inspector/Cargo.toml
-            binary: blokli-inspector
     uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v2
     permissions:
       contents: read
@@ -114,12 +99,11 @@ jobs:
       contents: write
     steps:
       - name: Release version
-        uses: hoprnet/hopr-workflows/actions/release-version@0d6e82b5bfb948c58ac2f850a331443054486565 # release-version-v2
+        uses: hoprnet/hopr-workflows/actions/release-version@release-version-v3
         with:
           source_branch: ${{ github.ref_name }}
           file: bloklid/Cargo.toml
           release_type: ${{ inputs.release_type }}
-          package_name: bloklid
           cachix_cache_name: blokli
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
           zulip_api_key: ${{ secrets.ZULIP_API_KEY }}
@@ -127,6 +111,7 @@ jobs:
           zulip_channel: Blokli
           zulip_topic: Releases
           gcp_service_account: ${{ secrets.GCP_SA_GITHUB_RUNNER }}
+          gcp_artifact_package: bloklid
           github_token: ${{ secrets.GH_RUNNER_TOKEN }}
   deploy-staging:
     name: Deploy Gnosis Staging
