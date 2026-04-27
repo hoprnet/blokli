@@ -307,6 +307,68 @@ async fn query_safe_redeemed_stats_after_ticket_redeem(#[future(awt)] fixture: I
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
+async fn query_safe_redeemed_stats_after_failed_ticket_redeem(
+    #[future(awt)] fixture: IntegrationFixture,
+) -> Result<()> {
+    let ticket_amount: HoprBalance = "1 wei wxHOPR".parse().expect("failed to parse ticket amount");
+
+    let [src, dst] = fixture.sample_accounts::<2>();
+    let (_, dst_safe) = tokio::try_join!(
+        fixture.deploy_safe_and_announce(src, parsed_safe_balance()),
+        fixture.deploy_safe_and_announce(dst, parsed_safe_balance()),
+    )?;
+
+    let dst_safe_address = Address::from_str(&dst_safe.address)?;
+    let initial_stats = fixture
+        .client()
+        .query_redeemed_stats(RedeemedStatsSelector::SafeAddress(dst_safe_address.into()))
+        .await?;
+
+    fixture
+        .redeem_ticket(src, dst, ticket_amount, &dst_safe.module_address, 0, 1)
+        .await?;
+
+    let expected_count = initial_stats.rejection_count.0.parse::<u64>()? + 1;
+    let stats_selector = RedeemedStatsSelector::SafeAddress(dst_safe_address.into());
+    let client = fixture.client().clone();
+    let stats = poll_until(
+        "ticket rejection indexed",
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+        || {
+            let client = client.clone();
+            async move {
+                let s = client.query_redeemed_stats(stats_selector).await?;
+                let count: u64 =
+                    s.rejection_count.0.parse().map_err(|e| {
+                        anyhow::anyhow!("failed to parse rejection_count '{}': {}", s.rejection_count.0, e)
+                    })?;
+                Ok(if count >= expected_count { Some(s) } else { None })
+            }
+        },
+    )
+    .await?;
+
+    assert_eq!(
+        initial_stats.redemption_count.0.parse::<u64>()?,
+        stats.redemption_count.0.parse::<u64>()?
+    );
+    assert_eq!(
+        initial_stats.redeemed_amount.0.parse::<HoprBalance>()?,
+        stats.redeemed_amount.0.parse::<HoprBalance>()?
+    );
+    assert_eq!(expected_count, stats.rejection_count.0.parse::<u64>()?);
+    assert_eq!(
+        initial_stats.rejected_amount.0.parse::<HoprBalance>()? + ticket_amount,
+        stats.rejected_amount.0.parse::<HoprBalance>()?
+    );
+
+    Ok(())
+}
+
+#[rstest]
+#[test_log::test(tokio::test)]
+#[serial]
 /// verifies that the transaction count of a given account increases by one after submitting a transaction.
 async fn query_transaction_count(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [sender, recipient] = fixture.sample_accounts::<2>();

@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use blokli_chain_types::AlloyAddressExt;
 use futures::{Stream, StreamExt, stream::BoxStream};
 use hopr_bindings::exports::alloy::{
+    eips::eip2718::Encodable2718,
     primitives::{Address as AlloyAddress, B256, U256},
     providers::Provider,
     rpc::types::Filter,
@@ -164,6 +165,16 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
             .ok_or_else(|| RpcError::TransactionNotFound(tx_hash))?;
 
         Ok(tx.inner.signer().to_hopr_address())
+    }
+
+    async fn get_transaction_bytes(&self, tx_hash: Hash) -> Result<Vec<u8>> {
+        let tx = self
+            .provider
+            .get_transaction_by_hash(B256::from_slice(tx_hash.as_ref()))
+            .await?
+            .ok_or_else(|| RpcError::TransactionNotFound(tx_hash))?;
+
+        Ok(tx.inner.encoded_2718())
     }
 
     /// Produces an incremental stream of completed block log batches starting from a given block.

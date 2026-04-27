@@ -715,12 +715,18 @@ pub enum SafeSelectorInput {
 /// Aggregated redeemed ticket statistics
 #[derive(SimpleObject, Clone, Debug)]
 pub struct RedeemedStats {
-    /// Total amount redeemed from matching TicketRedeemed events
+    /// Total amount redeemed from matching ticket redemption events
     #[graphql(name = "redeemedAmount")]
     pub redeemed_amount: TokenValueString,
-    /// Total number of matching TicketRedeemed events
+    /// Total number of matching ticket redemption events
     #[graphql(name = "redemptionCount")]
     pub redemption_count: UInt64,
+    /// Total amount from matching rejected ticket redemption attempts
+    #[graphql(name = "rejectedAmount")]
+    pub rejected_amount: TokenValueString,
+    /// Total number of matching rejected ticket redemption attempts
+    #[graphql(name = "rejectionCount")]
+    pub rejection_count: UInt64,
 }
 
 /// Transaction count information for any Ethereum address

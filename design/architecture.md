@@ -874,11 +874,12 @@ Clients can query Safe contracts through three methods:
 1. **By Safe Address**: `safe(address: "0x...")` - Direct lookup by Safe contract address
 2. **By Chain Key**: `safeByChainKey(chainKey: "0x...")` - Find Safe by owner's address
 3. **List All**: `safes()` - Retrieve all indexed Safe contracts
-4. **Redeemed Ticket Aggregates**: `ticketRedemptionStats(filter: {safeAddress, nodeAddress})` - Retrieve total redeemed amount and
-   redemption count derived from `TicketRedeemed` events
+4. **Redeemed Ticket Aggregates**: `ticketRedemptionStats(filter: {safeAddress, nodeAddress})` - Retrieve total redeemed and rejected ticket
+   redemption amounts and counts for the selected Safe and/or node
 
-`TicketRedeemed` processing updates a dedicated aggregate table keyed by `(safe_address, node_address)`. Attribution uses the destination
-account of the redeemed channel and resolves the account's current `safe_address` when the event is processed. Query behavior is:
+Successful ticket redemptions update a dedicated aggregate table keyed by `(safe_address, node_address)` during `ChannelBalanceDecreased`
+processing. Failed Safe module ticket redemptions update the same aggregate table when the indexer observes `ExecutionFromModuleFailure` and
+decodes the rejected outer transaction as a `redeemTicket` call. Query behavior is:
 
 - safe-only filter aggregates all rows for that safe
 - node-only filter aggregates all rows for that node
@@ -892,8 +893,8 @@ The unique constraint on `(deployed_block, deployed_tx_index, deployed_log_index
 **Safe Contract Event Indexing**:
 
 In addition to HOPR contract events, the indexer subscribes to the Safe event topics `SafeSetup`, `AddedOwner`, `RemovedOwner`,
-`ChangedThreshold`, `ExecutionSuccess`, and `ExecutionFailure` through address-scoped filters built from the current set of indexed Safe
-contracts. Unknown Safe addresses are not streamed globally.
+`ChangedThreshold`, `ExecutionSuccess`, `ExecutionFailure`, `ExecutionFromModuleSuccess`, and `ExecutionFromModuleFailure` through
+address-scoped filters built from the current set of indexed Safe contracts. Unknown Safe addresses are not streamed globally.
 
 When a Safe becomes known during block processing, the indexer refreshes its Safe-address filter set and performs a targeted RPC backfill
 for the discovery block so setup and owner-management events emitted earlier in that same block are still indexed. Historical Safe backfill

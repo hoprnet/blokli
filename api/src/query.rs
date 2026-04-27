@@ -842,6 +842,8 @@ impl QueryRoot {
         Ok(RedeemedStatsResult::RedeemedStats(RedeemedStats {
             redeemed_amount: TokenValueString(stats.redeemed_amount.to_string()),
             redemption_count: UInt64(stats.redemption_count),
+            rejected_amount: TokenValueString(stats.rejected_amount.to_string()),
+            rejection_count: UInt64(stats.rejection_count),
         }))
     }
 

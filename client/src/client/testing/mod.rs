@@ -551,6 +551,8 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
                     __typename: "RedeemedStats".to_string(),
                     redeemed_amount: TokenValueString("0 wxHOPR".into()),
                     redemption_count: Uint64("0".into()),
+                    rejected_amount: TokenValueString("0 wxHOPR".into()),
+                    rejection_count: Uint64("0".into()),
                 };
                 state.safe_redeem_stats.insert(safe_address_hex, stats.clone());
                 Ok(stats)
