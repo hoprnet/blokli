@@ -24,11 +24,7 @@ jobs:
       unit_coverage: true
       unconditional: true
       unit_coverage_command: "nix run .#coverage-unit"
-<<<<<<< kauki/ci/publish
-      runner: self-hosted-hoprnet-bigger
-=======
       runner: depot-ubuntu-22.04-4
->>>>>>> main
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       codecov_token: ${{ secrets.CODECOV_TOKEN }}
