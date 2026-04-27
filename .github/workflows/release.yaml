@@ -73,6 +73,40 @@ jobs:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
       docker_hub_token: ${{ secrets.DOCKER_HUB_TOKEN }}
+  publish:
+    name: Publish
+    needs: [build-binaries]
+    uses: hoprnet/hopr-workflows/.github/workflows/publish-crates.yaml@e4fadaa70234b9d734d5c51b6900602e55492ce2 # workflow-publish-crates-v3
+    permissions:
+      contents: read
+    with:
+      source_branch: ${{ github.ref_name }}
+      package: blokli-client
+      version_type: release
+      runner: self-hosted-hoprnet-bigger
+    secrets:
+      cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      cargo_registry_token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+  release:
+    name: Close release
+    needs:
+      - publish
+    runs-on: self-hosted-hoprnet-small
+    permissions:
+      contents: write
+    steps:
+      - name: Release version
+        uses: hoprnet/hopr-workflows/actions/release-version@4e3c270b51ed1817bc0b0f6996dfc8a7b0e757c1 # release-version-v2
+        with:
+          source_branch: ${{ github.ref_name }}
+          release_type: ${{ inputs.release_type }}
+          cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+          zulip_api_key: ${{ secrets.ZULIP_API_KEY }}
+          zulip_email: ${{ secrets.ZULIP_EMAIL }}
+          zulip_channel: HOPRd
+          zulip_topic: Releases
+          gcp_service_account: ${{ secrets.GCP_SA_GITHUB_RUNNER }}
+          github_token: ${{ secrets.GH_RUNNER_TOKEN }}
   release:
     name: Close release
     needs:
