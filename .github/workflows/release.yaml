@@ -108,6 +108,7 @@ jobs:
     needs:
       - build-binaries
       - build-docker
+      - publish
     runs-on: depot-ubuntu-22.04-2
     permissions:
       contents: write
