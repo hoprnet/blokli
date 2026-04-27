@@ -56,7 +56,7 @@ data:
     timeout = {{ .Values.config.api.health.timeout | quote }}
     readiness_check_interval = {{ .Values.config.api.health.readinessCheckInterval | quote }}
 
-    {{- if not (empty .Values.config.telemetry.otlpEndpoint) }}
+    {{- if not (empty (.Values.config.telemetry.otlpEndpoint | default "" | trim)) }}
     # Telemetry configuration
     [telemetry]
     otlp_endpoint = {{ .Values.config.telemetry.otlpEndpoint | quote }}
