@@ -27,7 +27,7 @@ jobs:
   validate-pr-title:
     name: Validate title
     if: github.event_name == 'pull_request'
-    runs-on: self-hosted-hoprnet-small
+    runs-on: depot-ubuntu-22.04-2
     permissions:
       pull-requests: read
     steps:
@@ -52,7 +52,7 @@ jobs:
   label:
     name: Add labels
     if: github.event_name == 'pull_request'
-    runs-on: self-hosted-hoprnet-small
+    runs-on: depot-ubuntu-22.04-2
     permissions:
       contents: read
       issues: write
@@ -89,8 +89,8 @@ jobs:
       lint_command: "nix develop --command just quick"
       audit_command: "nix run -L .#audit"
       deps: true
-      runner_small: self-hosted-hoprnet-small
-      runner_large: self-hosted-hoprnet-bigger
+      runner_small: depot-ubuntu-22.04-2
+      runner_large: depot-ubuntu-22.04-4
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
   # ── Shared tests (unit) ─────────────────────────────────────────────────────
@@ -103,7 +103,7 @@ jobs:
       unit_test_command: "nix run -L .#test"
       unit_coverage: true
       unit_coverage_command: "nix run .#coverage-unit"
-      runner: self-hosted-hoprnet-bigger
+      runner: depot-ubuntu-22.04-4
       test_timeout: 30
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
@@ -111,7 +111,7 @@ jobs:
   # ── Repo-specific: schema validation ────────────────────────────────────────
   schema-validation:
     name: Schema Validation
-    runs-on: self-hosted-hoprnet-bigger
+    runs-on: depot-ubuntu-22.04-4
     timeout-minutes: 30
     needs: checks
     if: github.event.pull_request.head.repo.full_name == github.repository
@@ -131,20 +131,30 @@ jobs:
         run: nix develop --command uv run scripts/check_schema.py
   # ── Build: binaries ─────────────────────────────────────────────────────────
   build-binaries:
-    name: Binary ${{ matrix.architecture }}
+    name: Binary ${{ matrix.binary }} ${{ matrix.architecture }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - architecture: x86_64-linux
-            runner: self-hosted-hoprnet-bigger
+            runner: depot-ubuntu-22.04-4
             build_command: nix build -L .#binary-blokli-x86_64-linux
+            build_file: bloklid/Cargo.toml
+            binary: bloklid
             required_label: ""
           - architecture: aarch64-linux
-            runner: self-hosted-hoprnet-bigger
+            runner: depot-ubuntu-22.04-arm-4
             build_command: nix build -L .#binary-blokli-aarch64-linux
+            build_file: bloklid/Cargo.toml
+            binary: bloklid
             required_label: "binary:aarch64-linux"
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@60486fe4eb9f78ed754c666b9c70c8545361e7c8 # build-binaries-v2
+          - architecture: aarch64-darwin
+            runner: depot-macos-15
+            build_command: nix build -L .#binary-blokli-aarch64-darwin
+            build_file: bloklid/Cargo.toml
+            binary: bloklid
+            required_label: "binary:aarch64-darwin"
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v2
     permissions:
       contents: read
     with:
@@ -152,9 +162,9 @@ jobs:
       version_type: commit
       architecture: ${{ matrix.architecture }}
       cachix_cache_name: blokli
-      build_file: bloklid/Cargo.toml
+      build_file: ${{ matrix.build_file }}
       build_command: ${{ matrix.build_command }}
-      binary: bloklid
+      binary: ${{ matrix.binary }}
       runner: ${{ matrix.runner }}
       enabled: ${{ matrix.required_label == '' || contains(github.event.pull_request.labels.*.name, matrix.required_label) }}
     secrets:
@@ -176,7 +186,7 @@ jobs:
       build_matrix: >-
         [
           {
-            "runner": "self-hosted-hoprnet-bigger",
+            "runner": "depot-ubuntu-22.04-4",
             "architecture": "x86_64-linux",
             "build_command": "nix build -L .#docker-blokli-x86_64-linux",
             "smoke_test_command": "nix develop -c just smoke-test"
@@ -194,7 +204,7 @@ jobs:
   # ── Build: blokli-client ────────────────────────────────────────────────────
   build-client:
     name: Build blokli-client
-    runs-on: self-hosted-hoprnet-bigger
+    runs-on: depot-ubuntu-22.04-4
     timeout-minutes: 30
     steps:
       - name: Checkout repository

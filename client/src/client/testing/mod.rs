@@ -12,7 +12,7 @@ use indexmap::IndexMap;
 
 use crate::{
     api::{types::*, *},
-    errors::{BlokliClientError, ErrorKind, TrackingErrorKind},
+    errors::{BlokliClientError, ErrorKind, InternalTxError, TrackingErrorKind},
 };
 
 fn serialize_as_empty_map<K, V, S>(_: &IndexMap<K, V>, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -239,6 +239,12 @@ impl BlokliTestStateMutator for NopStateMutator {
     }
 }
 
+impl<F: Fn(&[u8], &mut BlokliTestState) -> Result<()>> BlokliTestStateMutator for F {
+    fn update_state(&self, signed_tx: &[u8], state: &mut BlokliTestState) -> Result<()> {
+        self(signed_tx, state)
+    }
+}
+
 type AccountEvents = (
     async_broadcast::Sender<Account>,
     async_broadcast::InactiveReceiver<Account>,
@@ -309,6 +315,7 @@ pub struct BlokliTestClient<M> {
     ticket_channel: TicketParamEvents,
     safe_deployed_channel: SafeDeployEvents,
     tx_simulation_delay: Duration,
+    use_internal_txs: bool,
 }
 
 fn channel_matches(channel: &Channel, selector: &ChannelSelector, accounts: &IndexMap<u32, Account>) -> bool {
@@ -369,6 +376,7 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
             ticket_channel: (tickets_tx, tickets_rx.deactivate()),
             safe_deployed_channel: (safes_tx, safes_rx.deactivate()),
             tx_simulation_delay: Duration::from_secs(1),
+            use_internal_txs: false,
         }
     }
 
@@ -376,6 +384,15 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
     #[must_use]
     pub fn with_mutator(mut self, mutator: M) -> Self {
         self.mutator = mutator;
+        self
+    }
+
+    /// Enables or disables usage of internal (Safe) transactions.
+    ///
+    /// Default is disabled.
+    #[must_use]
+    pub fn with_use_internal_txs(mut self, use_internal_txs: bool) -> Self {
+        self.use_internal_txs = use_internal_txs;
         self
     }
 
@@ -397,6 +414,12 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
             state: self.state.clone(),
             snapshot: state.clone(),
         }
+    }
+
+    /// Performs arbitrary update to the state which is not notified in an event broadcast.
+    pub fn hidden_state_update(&self, update: impl FnOnce(&mut BlokliTestState)) {
+        let mut state = self.state.write();
+        update(&mut state);
     }
 
     /// Allows updating the minimum ticket price and minimum ticket-winning probability.
@@ -942,6 +965,8 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
 
         let mut state = self.state.write();
 
+        let mut internal_tx_failure_reason: Option<String> = None;
+
         let status = simulate_tx_execution(
             signed_tx,
             &mut state,
@@ -955,9 +980,17 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
             tracing::debug!("transaction execution succeeded");
             TransactionStatus::Confirmed
         })
+        .inspect_err(|e| if let ErrorKind::MockClientError(int_err) = e.kind() {
+            internal_tx_failure_reason = int_err.downcast_ref::<InternalTxError>().map(|err| err.0.to_string());
+        })
         .unwrap_or_else(|error| {
             tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction, state reverted");
-            TransactionStatus::Reverted
+            // Make the outer transaction confirmed if there was an internal transaction failure
+            if self.use_internal_txs && internal_tx_failure_reason.is_some() {
+                TransactionStatus::Confirmed
+            } else {
+                TransactionStatus::Reverted
+            }
         });
 
         state.active_txs.insert(
@@ -966,8 +999,14 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
                 id: tx_id.clone().into(),
                 status,
                 submitted_at: DateTime(chrono::DateTime::<chrono::Utc>::from(SystemTime::now()).to_rfc3339()),
-                transaction_hash: Hex32(tx_hash),
-                safe_execution: None,
+                transaction_hash: Hex32(tx_hash.clone()),
+                safe_execution: (self.use_internal_txs && status == TransactionStatus::Confirmed).then(|| {
+                    SafeExecution {
+                        success: internal_tx_failure_reason.is_none(),
+                        safe_tx_hash: Some(Hex32(tx_hash)),
+                        revert_reason: internal_tx_failure_reason,
+                    }
+                }),
             },
         );
 

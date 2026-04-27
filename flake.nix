@@ -384,7 +384,7 @@
 
             '';
             extraPackages = with pkgs; [
-              bun
+              nodejs
               ast-grep
               foundry-bin
               pkgs.solc
@@ -478,28 +478,25 @@
                 ".github/labeler.yml"
                 ".github/workflows/*.yaml"
               ];
-              # GraphQL formatter
+              # GraphQL formatter — uses prettier (nix-packaged) instead of bunx
               settings.formatter.format-graphql = {
                 command = pkgs.writeShellApplication {
                   name = "format-graphql";
                   runtimeInputs = with pkgs; [
-                    bun
+                    nodePackages.prettier
                   ];
                   text = ''
-                    bunx format-graphql --sort-fields false --write=true "$@"
+                    prettier --parser graphql --write "$@"
                   '';
                 };
                 includes = [ "design/*.graphql" ];
               };
-              # GraphQL linter
               settings.formatter.graphql-schema-linter = {
                 command = pkgs.writeShellApplication {
                   name = "graphql-schema-linter";
-                  runtimeInputs = with pkgs; [
-                    bun
-                  ];
+                  runtimeInputs = [ pkgs.nodejs ];
                   text = ''
-                    bunx graphql-schema-linter "$@"
+                    npx --yes graphql-schema-linter "$@"
                   '';
                 };
                 includes = [ "design/*.graphql" ];

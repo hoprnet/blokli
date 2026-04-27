@@ -24,19 +24,30 @@ type Account {
   safeAddress: String
 }
 
-"""Success response for accounts query"""
+"""
+Success response for accounts query
+"""
 type AccountsList {
   "List of accounts"
   accounts: [Account!]!
 }
 
-"""Result type for accounts list query"""
+"""
+Result type for accounts list query
+"""
 union AccountsResult = AccountsList | MissingFilterError | QueryFailedError
 
-"""Result type for module address calculation"""
-union CalculateModuleAddressResult = ModuleAddress | InvalidAddressError | QueryFailedError
+"""
+Result type for module address calculation
+"""
+union CalculateModuleAddressResult =
+  | ModuleAddress
+  | InvalidAddressError
+  | QueryFailedError
 
-"""Blockchain and HOPR network information"""
+"""
+Blockchain and HOPR network information
+"""
 type ChainInfo {
   "Current block number of the blockchain"
   blockNumber: Int!
@@ -72,10 +83,14 @@ type ChainInfo {
   ticketPrice: TokenValueString!
 }
 
-"""Result type for chain info queries"""
+"""
+Result type for chain info queries
+"""
 union ChainInfoResult = ChainInfo | QueryFailedError
 
-"""Payment channel between two nodes"""
+"""
+Payment channel between two nodes
+"""
 type Channel {
   "Total amount of HOPR tokens allocated to the channel"
   balance: TokenValueString!
@@ -95,16 +110,26 @@ type Channel {
   ticketIndex: UInt64!
 }
 
-"""Success response for channels query"""
+"""
+Success response for channels query
+"""
 type ChannelsList {
   "List of channels"
   channels: [Channel!]!
 }
 
-"""Result type for channels list query"""
-union ChannelsResult = ChannelsList | InvalidAddressError | MissingFilterError | QueryFailedError
+"""
+Result type for channels list query
+"""
+union ChannelsResult =
+  | ChannelsList
+  | InvalidAddressError
+  | MissingFilterError
+  | QueryFailedError
 
-"""Aggregated channel statistics: count and total wxHOPR balance"""
+"""
+Aggregated channel statistics: count and total wxHOPR balance
+"""
 type ChannelStats {
   "Total wxHOPR balance across all matching channels"
   balance: TokenValueString!
@@ -112,10 +137,14 @@ type ChannelStats {
   count: Int!
 }
 
-"""Result type for channel statistics query"""
+"""
+Result type for channel statistics query
+"""
 union ChannelStatsResult = ChannelStats | InvalidAddressError | QueryFailedError
 
-"""Status of a payment channel"""
+"""
+Status of a payment channel
+"""
 enum ChannelStatus {
   "Channel has been closed"
   CLOSED
@@ -140,7 +169,9 @@ Example: {"token": "0x123...", "channels": "0x456...", "node_safe_registry": "0x
 """
 scalar ContractAddressMap
 
-"""Target contract not in allowlist"""
+"""
+Target contract not in allowlist
+"""
 type ContractNotAllowedError {
   "Error code"
   code: String!
@@ -150,19 +181,27 @@ type ContractNotAllowedError {
   message: String!
 }
 
-"""Success response for count queries"""
+"""
+Success response for count queries
+"""
 type Count {
   "Count value"
   count: Int!
 }
 
-"""Result type for count queries"""
+"""
+Result type for count queries
+"""
 union CountResult = Count | MissingFilterError | QueryFailedError
 
-"""ISO 8601 datetime string (e.g., "2024-01-15T10:30:00Z")"""
+"""
+ISO 8601 datetime string (e.g., "2024-01-15T10:30:00Z")
+"""
 scalar DateTime
 
-"""Function selector not allowed"""
+"""
+Function selector not allowed
+"""
 type FunctionNotAllowedError {
   "Error code"
   code: String!
@@ -174,10 +213,14 @@ type FunctionNotAllowedError {
   message: String!
 }
 
-"""32-byte value as 64-character hexadecimal string (with or without 0x prefix)"""
+"""
+32-byte value as 64-character hexadecimal string (with or without 0x prefix)
+"""
 scalar Hex32
 
-"""HOPR token balance information for a specific address"""
+"""
+HOPR token balance information for a specific address
+"""
 type HoprBalance {
   "Address holding the HOPR token balance"
   address: String!
@@ -185,10 +228,14 @@ type HoprBalance {
   balance: TokenValueString!
 }
 
-"""Result type for HOPR balance queries"""
+"""
+Result type for HOPR balance queries
+"""
 union HoprBalanceResult = HoprBalance | InvalidAddressError | QueryFailedError
 
-"""Address format is invalid"""
+"""
+Address format is invalid
+"""
 type InvalidAddressError {
   "The invalid address that was provided"
   address: String!
@@ -198,7 +245,9 @@ type InvalidAddressError {
   message: String!
 }
 
-"""Transaction ID format is invalid"""
+"""
+Transaction ID format is invalid
+"""
 type InvalidTransactionIdError {
   "Error code"
   code: String!
@@ -208,7 +257,9 @@ type InvalidTransactionIdError {
   transactionId: String!
 }
 
-"""Required filter parameter(s) not provided"""
+"""
+Required filter parameter(s) not provided
+"""
 type MissingFilterError {
   "Error code"
   code: String!
@@ -216,17 +267,21 @@ type MissingFilterError {
   message: String!
 }
 
-"""Calculated module address"""
+"""
+Calculated module address
+"""
 type ModuleAddress {
   "Predicted module address (hexadecimal format)"
   moduleAddress: String!
 }
 
-"""Root mutation type providing transaction submission capabilities"""
+"""
+Root mutation type providing transaction submission capabilities
+"""
 type MutationRoot {
   """
   Submit a transaction with fire-and-forget mode
-  
+
   Validates the pre-signed raw transaction data and submits it to the chain.
   Returns the transaction hash immediately after submission.
   Does not wait for confirmation and does not track transaction status.
@@ -238,7 +293,7 @@ type MutationRoot {
   ): SendTransactionResult!
   """
   Submit a transaction asynchronously
-  
+
   Validates the pre-signed raw transaction data and submits it to the chain immediately.
   Returns the transaction ID that can be used to query status later.
   Does not wait for on-chain confirmation. Background monitor tracks confirmation.
@@ -249,7 +304,7 @@ type MutationRoot {
   ): SendTransactionAsyncResult!
   """
   Submit a transaction synchronously
-  
+
   Validates the pre-signed raw transaction data, submits it to the chain, and waits for
   the specified number of confirmations (default: 3 blocks) before returning.
   Transaction can be queried later.
@@ -262,7 +317,9 @@ type MutationRoot {
   ): SendTransactionSyncResult!
 }
 
-"""Native token balance information for a specific address"""
+"""
+Native token balance information for a specific address
+"""
 type NativeBalance {
   "Address holding the native token balance"
   address: String!
@@ -270,8 +327,13 @@ type NativeBalance {
   balance: TokenValueString!
 }
 
-"""Result type for native balance queries"""
-union NativeBalanceResult = NativeBalance | InvalidAddressError | QueryFailedError
+"""
+Result type for native balance queries
+"""
+union NativeBalanceResult =
+  | NativeBalance
+  | InvalidAddressError
+  | QueryFailedError
 
 """
 A single edge in the opened payment channels graph
@@ -299,7 +361,9 @@ type OpenedChannelsGraphEntry {
   source: Account!
 }
 
-"""Internal query error"""
+"""
+Internal query error
+"""
 type QueryFailedError {
   "Error code"
   code: String!
@@ -307,11 +371,13 @@ type QueryFailedError {
   message: String!
 }
 
-"""Root query type providing read-only access to indexed blockchain data"""
+"""
+Root query type providing read-only access to indexed blockchain data
+"""
 type QueryRoot {
   """
   Count accounts matching optional filters
-  
+
   If no filters are provided, returns total account count.
   Filters can be combined to narrow results.
   Returns Error if query fails.
@@ -326,12 +392,12 @@ type QueryRoot {
   ): CountResult!
   """
   Retrieve accounts with required filtering
-  
+
   **At least one filter parameter must be provided** (keyid, packetKey, or chainKey).
   Returns Error with code MISSING_REQUIRED_FILTER if no filters are specified.
-  
+
   Filters can be combined to narrow results further.
-  
+
   Example: accounts(keyid: 1) or accounts(chainKey: "0x1234...")
   """
   accounts(
@@ -344,13 +410,13 @@ type QueryRoot {
   ): AccountsResult!
   """
   Calculate the predicted module address for a Safe deployment
-  
+
   Calls the HoprNodeStakeFactory.predictModuleAddress_1 function to compute
   the deterministic CREATE2 address for a HOPR node management module.
-  
+
   The channels contract address and capability permissions are automatically
   obtained from the system configuration.
-  
+
   Returns Error with code INVALID_ADDRESS if owner or safeAddress format is invalid.
   Returns Error with code QUERY_FAILED if RPC call fails.
   """
@@ -362,15 +428,17 @@ type QueryRoot {
     "Predicted Safe contract address (hexadecimal format)"
     safeAddress: String!
   ): CalculateModuleAddressResult!
-  """Retrieve chain information"""
+  """
+  Retrieve chain information
+  """
   chainInfo: ChainInfoResult!
   """
   Count channels matching optional filters
-  
+
   If no filters are provided, returns total channels count.
   Filters can be combined to narrow results.
   Returns Error if query fails.
-  
+
   **Deprecated**: Use `channelStats` instead, which also returns the total wxHOPR balance.
   """
   channelCount(
@@ -384,10 +452,13 @@ type QueryRoot {
     sourceKeyId: Int
     "Filter by channel status"
     status: ChannelStatus
-  ): CountResult! @deprecated(reason: "Use channelStats instead, which also returns the total wxHOPR balance.")
+  ): CountResult!
+    @deprecated(
+      reason: "Use channelStats instead, which also returns the total wxHOPR balance."
+    )
   """
   Retrieve channel count and total wxHOPR balance matching optional filters
-  
+
   If no filters are provided, returns stats across all channels.
   The safeAddress filter restricts results to channels where the source account is associated
   with the given safe contract.
@@ -408,16 +479,16 @@ type QueryRoot {
   ): ChannelStatsResult!
   """
   Retrieve channels with required filtering
-  
+
   **At least one identity filter must be provided** (sourceKeyId, destinationKeyId, concreteChannelId, or safeAddress).
   The status filter is optional and can be used in combination with identity filters.
   The safeAddress filter restricts results to channels where the source account is associated
   with the given safe contract.
   Returns Error with code INVALID_ADDRESS if safeAddress format is invalid.
   Returns Error with code MISSING_REQUIRED_FILTER if no identity filters are specified.
-  
+
   Filters can be combined to narrow results further.
-  
+
   Example: channels(sourceKeyId: 1) or channels(safeAddress: "0x...") or channels(sourceKeyId: 1, status: OPEN)
   """
   channels(
@@ -440,22 +511,22 @@ type QueryRoot {
   compatibility: Compatibility!
   """
   Health check endpoint
-  
+
   Returns "ok" to indicate the service is running
   """
   health: String!
   """
   Retrieve HOPR token balance for a specific address
-  
+
   This query can be used to get balances for any on-chain address, including:
   - Account chain keys (Account.chainKey)
   - Safe contract addresses (Account.safeAddress)
   - Any other Ethereum-compatible address
-  
+
   Returns Error with code INVALID_ADDRESS if address format is invalid.
   Returns Error with code QUERY_FAILED if query fails.
   Returns None if no balance exists for the address.
-  
+
   Example (querying a Safe balance requires two separate requests):
   ```graphql
   # Request 1: Get the account's Safe address
@@ -468,7 +539,7 @@ type QueryRoot {
       }
     }
   }
-  
+
   # Request 2: Query the Safe's HOPR balance using address from first response
   query GetSafeHoprBalance($safeAddress: String!) {
     hoprBalance(address: $safeAddress) {
@@ -486,12 +557,12 @@ type QueryRoot {
   ): HoprBalanceResult!
   """
   Retrieve native token balance for a specific address
-  
+
   This query can be used to get balances for any on-chain address, including:
   - Account chain keys (Account.chainKey)
   - Safe contract addresses (Account.safeAddress)
   - Any other Ethereum-compatible address
-  
+
   Returns Error with code INVALID_ADDRESS if address format is invalid.
   Returns Error with code QUERY_FAILED if query fails.
   Returns None if no balance exists for the address.
@@ -502,7 +573,7 @@ type QueryRoot {
   ): NativeBalanceResult!
   """
   Retrieve safe by contract address
-  
+
   Returns Error with code INVALID_ADDRESS if address format is invalid.
   Returns Error with code QUERY_FAILED if query fails.
   Returns None if safe is not found.
@@ -513,7 +584,7 @@ type QueryRoot {
   ): SafeResult @deprecated(reason: "Use safeBy(selector: ...)")
   """
   Retrieve safe by selector.
-  
+
   The selector enum identifies the lookup type using the provided selected address.
   """
   safeBy(
@@ -524,7 +595,7 @@ type QueryRoot {
   ): SafeResult
   """
   Retrieve safe by chain key (owner address)
-  
+
   Returns Error with code INVALID_ADDRESS if address format is invalid.
   Returns Error with code QUERY_FAILED if query fails.
   Returns None if safe is not found.
@@ -535,7 +606,7 @@ type QueryRoot {
   ): SafeResult @deprecated(reason: "Use safeBy(selector: ...)")
   """
   Retrieve safe by registered node address
-  
+
   Returns the safe that a given node is registered to.
   Returns Error with code INVALID_ADDRESS if chainKey format is invalid.
   Returns Error with code QUERY_FAILED if query fails.
@@ -547,10 +618,10 @@ type QueryRoot {
   ): SafeResult @deprecated(reason: "Use safeBy(selector: ...)")
   """
   Retrieve Safe HOPR token allowance for a specific Safe address
-  
+
   This query returns the wxHOPR token allowance that the specified Safe contract
   has granted to the HOPR channels contract.
-  
+
   Returns Error with code INVALID_ADDRESS if address format is invalid.
   Returns Error with code QUERY_FAILED if query fails.
   Returns None if no allowance data exists for the address.
@@ -561,14 +632,14 @@ type QueryRoot {
   ): SafeHoprAllowanceResult!
   """
   Retrieve all safes
-  
+
   Returns all safe contracts indexed by the system.
   Returns Error with code QUERY_FAILED if query fails.
   """
   safes: SafesResult!
   """
   Retrieve total aggregated wxHOPR balance across indexed safe contracts
-  
+
   Sums the wxHOPR token balances for safe contract addresses indexed by the system.
   When ownerAddress is provided, restricts to safes whose registered accounts have that chain key.
   Returns Error with code INVALID_ADDRESS if ownerAddress is malformed.
@@ -580,7 +651,7 @@ type QueryRoot {
   ): SafesBalanceResult!
   """
   Retrieve aggregated TicketRedeemed statistics filtered by safe and/or node address
-  
+
   At least one filter field must be provided: safeAddress, nodeAddress, or both.
   If only safeAddress is provided, all rows for that safe are aggregated.
   If only nodeAddress is provided, all rows for that node are aggregated.
@@ -596,26 +667,23 @@ type QueryRoot {
   ): RedeemedStatsResult!
   """
   Retrieve transaction status by ID
-  
+
   Returns the current status of a previously submitted transaction.
   Returns Error with code INVALID_TRANSACTION_ID if ID format is invalid.
   Returns Error with code QUERY_FAILED if query fails.
   Returns None if transaction ID is not found.
   """
-  transaction(
-    "Transaction ID to query (UUID)"
-    id: ID!
-  ): TransactionResult
+  transaction("Transaction ID to query (UUID)" id: ID!): TransactionResult
   """
   Retrieve transaction count for any Ethereum address
-  
+
   This query returns the transaction count for any address type:
   - For EOAs (Externally Owned Accounts): Returns the transaction count via eth_getTransactionCount
   - For Safe contracts: Returns the Safe's internal nonce via nonce() function
   - For other contracts: Attempts nonce() call, falls back to eth_getTransactionCount
-  
+
   The transaction count increments with each transaction sent or executed by the address.
-  
+
   Returns Error with code INVALID_ADDRESS if address format is invalid.
   Returns Error with code QUERY_FAILED if blockchain query fails.
   """
@@ -625,13 +693,15 @@ type QueryRoot {
   ): TransactionCountResult!
   """
   API version information
-  
+
   Returns the current version of the blokli-api package
   """
   version: String!
 }
 
-"""Aggregated redeemed ticket statistics"""
+"""
+Aggregated redeemed ticket statistics
+"""
 type RedeemedStats {
   "Total redeemed amount from matching TicketRedeemed events"
   redeemedAmount: TokenValueString!
@@ -653,10 +723,18 @@ input RedeemedStatsFilter {
   safeAddress: String
 }
 
-"""Result type for redeemed statistics queries with filters"""
-union RedeemedStatsResult = RedeemedStats | MissingFilterError | InvalidAddressError | QueryFailedError
+"""
+Result type for redeemed statistics queries with filters
+"""
+union RedeemedStatsResult =
+  | RedeemedStats
+  | MissingFilterError
+  | InvalidAddressError
+  | QueryFailedError
 
-"""RPC or blockchain error during transaction submission"""
+"""
+RPC or blockchain error during transaction submission
+"""
 type RpcError {
   "Error code"
   code: String!
@@ -664,12 +742,17 @@ type RpcError {
   message: String!
 }
 
-"""HOPR Safe contract deployment information"""
+"""
+HOPR Safe contract deployment information
+"""
 type Safe {
   "Safe contract address (hexadecimal format)"
   address: String!
   "Legacy chain key field retained for backward compatibility"
-  chainKey: String! @deprecated(reason: "Use owners instead. chainKey is legacy Safe metadata and may not reflect the current owner set.")
+  chainKey: String!
+    @deprecated(
+      reason: "Use owners instead. chainKey is legacy Safe metadata and may not reflect the current owner set."
+    )
   "HOPR Node Management Module address (hexadecimal format)"
   moduleAddress: String!
   "Current owner addresses reconstructed from indexed Safe events"
@@ -680,7 +763,9 @@ type Safe {
   threshold: String
 }
 
-"""Internal Safe contract execution result"""
+"""
+Internal Safe contract execution result
+"""
 type SafeExecution {
   "Revert reason if execution failed and reason is decodable (null if succeeded or reason unavailable)"
   revertReason: String
@@ -690,7 +775,9 @@ type SafeExecution {
   success: Boolean!
 }
 
-"""Safe HOPR token allowance information for a specific Safe address"""
+"""
+Safe HOPR token allowance information for a specific Safe address
+"""
 type SafeHoprAllowance {
   "Safe contract address"
   address: String!
@@ -698,13 +785,22 @@ type SafeHoprAllowance {
   allowance: TokenValueString!
 }
 
-"""Result type for Safe HOPR allowance queries"""
-union SafeHoprAllowanceResult = SafeHoprAllowance | InvalidAddressError | QueryFailedError
+"""
+Result type for Safe HOPR allowance queries
+"""
+union SafeHoprAllowanceResult =
+  | SafeHoprAllowance
+  | InvalidAddressError
+  | QueryFailedError
 
-"""Result type for single safe queries"""
+"""
+Result type for single safe queries
+"""
 union SafeResult = Safe | InvalidAddressError | QueryFailedError
 
-"""Aggregated wxHOPR holdings across all indexed safe contracts"""
+"""
+Aggregated wxHOPR holdings across all indexed safe contracts
+"""
 type SafesBalance {
   "Sum of wxHOPR balances for all safe contract addresses"
   balance: TokenValueString!
@@ -712,50 +808,84 @@ type SafesBalance {
   count: Int!
 }
 
-"""Result type for total safe HOPR balance query"""
+"""
+Result type for total safe HOPR balance query
+"""
 union SafesBalanceResult = InvalidAddressError | QueryFailedError | SafesBalance
 
-"""Selector type for safe lookup queries."""
+"""
+Selector type for safe lookup queries.
+"""
 enum SafeSelectorInput {
   "Filter by safe contract address"
   ADDRESS
   "Legacy alias for owner address filtering"
-  CHAIN_KEY @deprecated(reason: "Use OWNER instead. CHAIN_KEY is a legacy alias for Safe owner lookup.")
+  CHAIN_KEY
+    @deprecated(
+      reason: "Use OWNER instead. CHAIN_KEY is a legacy alias for Safe owner lookup."
+    )
   "Filter by current safe owner address"
   OWNER
   "Filter by registered node address"
   REGISTERED_NODE
 }
 
-"""Success response for safes list query"""
+"""
+Success response for safes list query
+"""
 type SafesList {
   "List of safes"
   safes: [Safe!]!
 }
 
-"""Result type for safes list query"""
+"""
+Result type for safes list query
+"""
 union SafesResult = SafesList | QueryFailedError
 
-"""Result type for asynchronous transaction submission"""
-union SendTransactionAsyncResult = Transaction | ContractNotAllowedError | FunctionNotAllowedError | RpcError
+"""
+Result type for asynchronous transaction submission
+"""
+union SendTransactionAsyncResult =
+  | Transaction
+  | ContractNotAllowedError
+  | FunctionNotAllowedError
+  | RpcError
 
-"""Result type for fire-and-forget transaction submission"""
-union SendTransactionResult = SendTransactionSuccess | ContractNotAllowedError | FunctionNotAllowedError | RpcError
+"""
+Result type for fire-and-forget transaction submission
+"""
+union SendTransactionResult =
+  | SendTransactionSuccess
+  | ContractNotAllowedError
+  | FunctionNotAllowedError
+  | RpcError
 
-"""Success response for fire-and-forget transaction submission"""
+"""
+Success response for fire-and-forget transaction submission
+"""
 type SendTransactionSuccess {
   "Transaction hash after successful submission"
   transactionHash: Hex32!
 }
 
-"""Result type for synchronous transaction submission"""
-union SendTransactionSyncResult = Transaction | ContractNotAllowedError | FunctionNotAllowedError | RpcError | TimeoutError
+"""
+Result type for synchronous transaction submission
+"""
+union SendTransactionSyncResult =
+  | Transaction
+  | ContractNotAllowedError
+  | FunctionNotAllowedError
+  | RpcError
+  | TimeoutError
 
-"""Root subscription type providing real-time updates via Server-Sent Events (SSE)"""
+"""
+Root subscription type providing real-time updates via Server-Sent Events (SSE)
+"""
 type SubscriptionRoot {
   """
   Subscribe to real-time updates of account information
-  
+
   Provides updates whenever there is a change in account information, including
   balance changes, Safe address linking, and multiaddress announcements.
   Optional filters can be applied to only receive updates for specific accounts.
@@ -770,7 +900,7 @@ type SubscriptionRoot {
   ): Account!
   """
   Subscribe to real-time updates of payment channels
-  
+
   Provides updates whenever there is a change in the state of any payment channel,
   including channel opening, balance updates, status changes, and channel closure.
   Optional filters can be applied to only receive updates for specific channels.
@@ -787,49 +917,49 @@ type SubscriptionRoot {
   ): Channel!
   """
   Subscribe to real-time updates of key binding fee
-  
+
   Emits the current fee once on subscription, then streams updates whenever
   the indexer processes a KeyBindingFeeUpdate event.
   """
   keyBindingFeeUpdated: TokenValueString!
   """
   Subscribe to the opened payment channels graph with real-time updates
-  
+
   **Streaming Behavior:**
   - Emits one OpenedChannelsGraphEntry per open channel
   - Each entry contains a single channel with its source and destination accounts
   - On subscription start, emits all existing open channels as separate entries
   - Subsequently, emits updates when any channel changes
-  
+
   **Building the Graph:**
   Clients receive entries incrementally (one per channel) and should accumulate
   them to build the complete network topology. The full graph is the union of all entries.
-  
+
   **Update Triggers:**
   An entry is re-emitted for a channel when:
   - The channel's status changes (e.g., OPEN → PENDINGTOCLOSE)
   - The channel's balance changes
   - The channel closes (no longer emitted)
   - A new channel opens (new entry emitted)
-  
+
   **Example:**
   If the network has three open channels: channelA (A→B), channelB (B→A), channelC (A→C),
   the subscription emits three separate OpenedChannelsGraphEntry objects, each containing
   one channel with its source and destination accounts.
-  
+
   **Note:** This is a directed graph. Bidirectional communication requires
   channels in both directions, each emitted as a separate entry.
   """
   openedChannelGraphUpdated: OpenedChannelsGraphEntry!
   """
   Subscribe to newly deployed safes
-  
+
   Emits Safe deployment events in real-time as they are indexed.
   """
   safeDeployed: Safe!
   """
   Subscribe to real-time updates of ticket price and winning probability
-  
+
   Provides updates whenever there is a change in the ticket price or minimum
   winning probability on-chain. These values are essential for ticket validation
   and payment channel operation.
@@ -837,17 +967,16 @@ type SubscriptionRoot {
   ticketParametersUpdated: TicketParameters!
   """
   Subscribe to real-time updates of a specific transaction
-  
+
   Provides updates whenever the status of the specified transaction changes,
   including validation, submission, confirmation, revert, and failure events.
   """
-  transactionUpdated(
-    "Transaction ID to monitor (UUID)"
-    id: ID!
-  ): Transaction!
+  transactionUpdated("Transaction ID to monitor (UUID)" id: ID!): Transaction!
 }
 
-"""Ticket price and winning probability parameters"""
+"""
+Ticket price and winning probability parameters
+"""
 type TicketParameters {
   "Current minimum ticket winning probability (decimal value between 0.0 and 1.0)"
   minTicketWinningProbability: Float!
@@ -855,7 +984,9 @@ type TicketParameters {
   ticketPrice: TokenValueString!
 }
 
-"""Operation timed out"""
+"""
+Operation timed out
+"""
 type TimeoutError {
   "Error code"
   code: String!
@@ -874,7 +1005,9 @@ Examples:
 """
 scalar TokenValueString
 
-"""Transaction submission result"""
+"""
+Transaction submission result
+"""
 type Transaction {
   "Unique identifier for the transaction (UUID)"
   id: ID!
@@ -888,7 +1021,9 @@ type Transaction {
   transactionHash: Hex32!
 }
 
-"""Transaction count information for any Ethereum address"""
+"""
+Transaction count information for any Ethereum address
+"""
 type TransactionCount {
   "Address queried (hexadecimal format)"
   address: String!
@@ -896,24 +1031,38 @@ type TransactionCount {
   count: UInt64!
 }
 
-"""Result type for transaction count queries"""
-union TransactionCountResult = TransactionCount | InvalidAddressError | QueryFailedError
+"""
+Result type for transaction count queries
+"""
+union TransactionCountResult =
+  | TransactionCount
+  | InvalidAddressError
+  | QueryFailedError
 
-"""Input for transaction submission"""
+"""
+Input for transaction submission
+"""
 input TransactionInput {
   "Raw signed transaction data in hexadecimal format (with or without 0x prefix)"
   rawTransaction: String!
 }
 
-"""Result type for transaction operations"""
+"""
+Result type for transaction operations
+"""
 union TransactionResult = Transaction | InvalidTransactionIdError
 
-"""Status of a submitted transaction"""
+"""
+Status of a submitted transaction
+"""
 enum TransactionStatus {
   "Transaction has been confirmed on-chain with success"
   CONFIRMED
   "Transactions are never emitted in this state; they go directly to SUBMITTED"
-  PENDING @deprecated(reason: "Transactions go directly to SUBMITTED. This variant exists only for backwards compatibility and will be removed in a future release.")
+  PENDING
+    @deprecated(
+      reason: "Transactions go directly to SUBMITTED. This variant exists only for backwards compatibility and will be removed in a future release."
+    )
   "Transaction was included on-chain but reverted (receipt.status = 0)"
   REVERTED
   "Transaction submission failed"
