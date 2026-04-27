@@ -18,7 +18,7 @@ use hopr_bindings::exports::alloy::{
     providers::Provider,
     rpc::types::Filter,
 };
-#[cfg(all(feature = "prometheus", not(test)))]
+#[cfg(all(feature = "telemetry", not(test)))]
 use hopr_metrics::SimpleGauge;
 use hopr_types::{crypto::types::Hash, primitive::prelude::*};
 use rust_stream_ext_concurrent::then_concurrent::StreamThenConcurrentExt;
@@ -31,7 +31,7 @@ use crate::{
     transport::HttpRequestor,
 };
 
-#[cfg(all(feature = "prometheus", not(test)))]
+#[cfg(all(feature = "telemetry", not(test)))]
 lazy_static::lazy_static! {
     static ref METRIC_RPC_CHAIN_HEAD: SimpleGauge =
         SimpleGauge::new(
@@ -118,18 +118,13 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
                     .collect::<Vec<_>>()
                     .await;
 
-                // at this point we need to ensure logs are ordered by block number since that is
-                // expected by the indexer
-                results.sort_by(|a, b| {
-                    if let Ok(a) = a {
-                        if let Ok(b) = b {
-                            a.block_number.cmp(&b.block_number)
-                        } else {
-                            Ordering::Greater
-                        }
-                    } else {
-                        Ordering::Less
-                    }
+                // Keep live-stream ordering aligned with targeted backfills by using
+                // the same canonical ordering as `Log::Ord`.
+                results.sort_by(|a, b| match (a, b) {
+                    (Ok(a), Ok(b)) => a.cmp(b),
+                    (Err(_), Ok(_)) => Ordering::Less,
+                    (Ok(_), Err(_)) => Ordering::Greater,
+                    (Err(_), Err(_)) => Ordering::Equal,
                 });
 
                 futures::stream::iter(results)
@@ -243,7 +238,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
                         }
 
 
-                        #[cfg(all(feature = "prometheus", not(test)))]
+                        #[cfg(all(feature = "telemetry", not(test)))]
                         METRIC_RPC_CHAIN_HEAD.set(latest_block as f64);
 
                         let mut retrieved_logs = self.stream_logs(log_filters.clone(), from_block, latest_block);
@@ -316,6 +311,31 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
                 futures_timer::Delay::new(self.cfg.expected_block_time).await;
             }
         }))
+    }
+
+    async fn get_logs_for_address(
+        &self,
+        address: Address,
+        topics: Vec<B256>,
+        from_block: u64,
+        to_block: u64,
+    ) -> Result<Vec<Log>> {
+        let filter = Filter::new()
+            .address(AlloyAddress::from_hopr_address(address))
+            .event_signature(topics)
+            .from_block(from_block)
+            .to_block(to_block);
+
+        let mut logs = self
+            .provider
+            .get_logs(&filter)
+            .await?
+            .into_iter()
+            .map(Log::try_from)
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+
+        logs.sort();
+        Ok(logs)
     }
 
     async fn get_xdai_balance(&self, address: Address) -> Result<XDaiBalance> {

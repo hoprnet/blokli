@@ -4,7 +4,7 @@ use anyhow::{Result, anyhow};
 use blokli_client::api::{BlokliQueryClient, SafeSelector};
 use blokli_integration_tests::{
     constants::parsed_safe_balance,
-    fixtures::{IntegrationFixture, integration_fixture as fixture},
+    fixtures::{IntegrationFixture, integration_fixture as fixture, poll_until},
 };
 use rstest::*;
 use serial_test::serial;
@@ -28,9 +28,27 @@ async fn open_multiple_channels_simultaneously(#[future(awt)] fixture: Integrati
         .into_iter()
         .collect::<Result<Vec<_>>>()?;
 
-    tokio::time::sleep(Duration::from_secs(8)).await;
+    // Wait for all safes to be indexed rather than sleeping a fixed duration
+    let safe_poll_futs = accounts.iter().map(|account| {
+        let client = fixture.client().clone();
+        let selector = SafeSelector::ChainKey(account.to_alloy_address().into());
+        async move {
+            poll_until(
+                "safe module indexing",
+                Duration::from_secs(30),
+                Duration::from_millis(500),
+                || {
+                    let client = client.clone();
+                    let selector = selector.clone();
+                    async move { Ok(client.query_safe(selector).await?) }
+                },
+            )
+            .await
+        }
+    });
+    let _ = futures::future::try_join_all(safe_poll_futs).await?;
 
-    // Verify that all safes has been deployed and announced simultaneously
+    // Collect module addresses for all safes
     let safes_futures = accounts.iter().map(|account| {
         fixture
             .client()
@@ -55,8 +73,6 @@ async fn open_multiple_channels_simultaneously(#[future(awt)] fixture: Integrati
     let fixture_ref = &fixture;
 
     let approve_futs = accounts.iter().map(|account| {
-        let fixture_ref = &fixture_ref;
-
         let src_chain_key: String = account.address.to_string();
         let module_address = modules_by_chain_key
             .get(&src_chain_key)
@@ -77,12 +93,9 @@ async fn open_multiple_channels_simultaneously(#[future(awt)] fixture: Integrati
     let _ = futures::future::try_join_all(approve_futs).await?;
 
     // Get the tx counts for each accounts and store them as hashmap of chain_key to tx_count
-    let nonce_futures = accounts.iter().map(|account| {
-        let fixture_ref = fixture_ref;
-        async move {
-            let nonce = fixture_ref.rpc().transaction_count(&account.address).await?;
-            Ok::<(String, u64), anyhow::Error>((account.address.to_string(), nonce))
-        }
+    let nonce_futures = accounts.iter().map(|account| async move {
+        let nonce = fixture_ref.rpc().transaction_count(&account.address).await?;
+        Ok::<(String, u64), anyhow::Error>((account.address.to_string(), nonce))
     });
     let nonces = futures::future::try_join_all(nonce_futures)
         .await?
@@ -91,7 +104,6 @@ async fn open_multiple_channels_simultaneously(#[future(awt)] fixture: Integrati
 
     let nonces_ref = Arc::new(Mutex::new(nonces));
     let open_channel_futs = pairs.map(|(src, dst)| {
-        let fixture_ref = fixture_ref;
         let nonces_ref = Arc::clone(&nonces_ref);
         let src_chain_key = src.address.to_string();
         let module_address = modules_by_chain_key

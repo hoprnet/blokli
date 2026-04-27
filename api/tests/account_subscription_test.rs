@@ -9,6 +9,7 @@
 
 use std::{sync::Arc, time::Duration};
 
+use anyhow::Context;
 use async_graphql::Schema;
 use blokli_api::{mutation::MutationRoot, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot};
 use blokli_api_types::Account;
@@ -744,8 +745,14 @@ async fn test_account_subscription_handles_account_with_multiple_announcements()
     // Add multiple announcements
     let multiaddr1: Multiaddr = "/ip4/127.0.0.1/tcp/9091".parse().unwrap();
     let multiaddr2: Multiaddr = "/ip4/127.0.0.1/tcp/9092".parse().unwrap();
-    db.insert_announcement(None, chain_key, multiaddr1, 101).await.unwrap();
-    db.insert_announcement(None, chain_key, multiaddr2, 102).await.unwrap();
+    let _ = db
+        .insert_announcement(None, chain_key, multiaddr1, 101)
+        .await
+        .context("should be able to insert a multiaddress");
+    let _ = db
+        .insert_announcement(None, chain_key, multiaddr2.clone(), 102)
+        .await
+        .context("should be able to insert a multiaddress");
 
     let (schema, _indexer_state) = create_test_schema(&db);
 
@@ -760,7 +767,7 @@ async fn test_account_subscription_handles_account_with_multiple_announcements()
 
     let mut stream = schema.execute_stream(query).boxed();
 
-    // Should receive account with multiple announcements
+    // Should receive only the latest announced multiaddress
     let result = tokio::time::timeout(Duration::from_secs(2), stream.next())
         .await
         .unwrap()
@@ -769,7 +776,8 @@ async fn test_account_subscription_handles_account_with_multiple_announcements()
     assert!(result.errors.is_empty());
     let data = result.data.into_json().unwrap();
     let multi_addresses = data["accountUpdated"]["multiAddresses"].as_array().unwrap();
-    assert_eq!(multi_addresses.len(), 2);
+    assert_eq!(multi_addresses.len(), 1);
+    assert_eq!(multi_addresses[0].as_str().unwrap(), multiaddr2.to_string());
 }
 
 #[tokio::test]

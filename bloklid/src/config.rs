@@ -275,7 +275,7 @@ pub struct Config {
     pub rpc_url: String,
 
     #[serde(default)]
-    pub max_rpc_requests_per_sec: u32,
+    pub max_rpc_requests_per_sec: Option<u32>,
 
     #[validate(range(min = 1))]
     #[default(10000)]
@@ -287,6 +287,9 @@ pub struct Config {
 
     #[serde(default)]
     pub api: ApiConfig,
+
+    #[serde(default)]
+    pub telemetry: TelemetryConfig,
 
     #[serde(default, rename = "contracts")]
     pub contracts_override: Option<ContractAddresses>,
@@ -309,7 +312,7 @@ impl Config {
         output.push_str(&format!("  rpc_url: {}\n", redact_url(&self.rpc_url)));
         output.push_str(&format!("  data_directory: {}\n", self.data_directory));
         output.push_str(&format!(
-            "  max_rpc_requests_per_sec: {}\n",
+            "  max_rpc_requests_per_sec: {:?}\n",
             self.max_rpc_requests_per_sec
         ));
         output.push_str(&format!("  max_block_range: {}\n", self.max_block_range));
@@ -324,6 +327,10 @@ impl Config {
         output.push_str(&format!(
             "  indexer.enable_logs_snapshot: {}\n",
             self.indexer.enable_logs_snapshot
+        ));
+        output.push_str(&format!(
+            "  indexer.enable_safe_indexing: {}\n",
+            self.indexer.enable_safe_indexing
         ));
 
         if let Some(snapshot_url) = &self.indexer.logs_snapshot_url {
@@ -352,9 +359,32 @@ impl Config {
             "  api.health.readiness_check_interval: {:?}\n",
             self.api.health.readiness_check_interval
         ));
+        output.push_str(&format!(
+            "  telemetry.metric_export_interval: {:?}\n",
+            self.telemetry.metric_export_interval
+        ));
+        output.push_str(&format!("  telemetry.otlp_signals: {}\n", self.telemetry.otlp_signals));
+        if let Some(otlp_endpoint) = &self.telemetry.otlp_endpoint {
+            output.push_str(&format!("  telemetry.otlp_endpoint: {}\n", redact_url(otlp_endpoint)));
+        }
 
         output
     }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryConfig {
+    #[serde(default)]
+    pub otlp_endpoint: Option<String>,
+
+    #[default(_code = "Duration::from_secs(15)")]
+    #[serde(default = "default_metric_export_interval", with = "humantime_serde")]
+    pub metric_export_interval: Duration,
+
+    #[default(_code = "default_otlp_signals()")]
+    #[serde(default = "default_otlp_signals")]
+    pub otlp_signals: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
@@ -367,6 +397,10 @@ pub struct IndexerConfig {
     #[default(false)]
     #[serde(default = "default_false")]
     pub enable_logs_snapshot: bool,
+
+    #[default(false)]
+    #[serde(default = "default_false")]
+    pub enable_safe_indexing: bool,
 
     #[serde(default)]
     pub logs_snapshot_url: Option<String>,
@@ -514,6 +548,14 @@ fn default_readiness_check_interval() -> Duration {
     Duration::from_secs(60)
 }
 
+fn default_metric_export_interval() -> Duration {
+    Duration::from_secs(15)
+}
+
+fn default_otlp_signals() -> String {
+    "metrics".to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs, path::PathBuf};
@@ -615,6 +657,21 @@ mod tests {
     }
 
     #[test]
+    fn test_telemetry_strict() {
+        let config = r#"
+         [telemetry]
+         otlp_endpoint = "http://localhost:4318/v1/metrics"
+         unknown_telemetry_field = "bad"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let res: Result<Config, _> = toml::from_str(config);
+        assert!(res.is_err(), "Should fail on unknown telemetry field");
+    }
+
+    #[test]
     fn test_valid_postgres_config() {
         let config = r#"
          [database]
@@ -691,8 +748,6 @@ mod tests {
         let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let config_path = project_root.join("example-config.toml");
 
-        println!("Loading config from: {:?}", config_path);
-
         let config_content = fs::read_to_string(&config_path).expect("Failed to read example-config.toml");
 
         let config: Config = toml::from_str(&config_content).expect("Failed to parse example-config.toml");
@@ -711,12 +766,17 @@ mod tests {
 
         // Check indexer config
         assert!(config.indexer.fast_sync);
+        assert!(!config.indexer.enable_safe_indexing);
         assert_eq!(config.indexer.subscription.event_bus_capacity, 1000);
 
         // Check API config
         assert!(config.api.enabled);
         assert_eq!(config.api.bind_address.to_string(), "0.0.0.0:8080");
         assert_eq!(config.api.gas_multiplier, 1.0);
+
+        assert!(config.telemetry.otlp_endpoint.is_some());
+        assert_eq!(config.telemetry.metric_export_interval, Duration::from_secs(60));
+        assert_eq!(config.telemetry.otlp_signals, "metrics");
     }
 
     #[test]
@@ -736,6 +796,7 @@ mod tests {
         let cfg = res.unwrap();
         assert!(!cfg.indexer.fast_sync);
         assert!(!cfg.indexer.enable_logs_snapshot); // Default
+        assert!(!cfg.indexer.enable_safe_indexing); // Default
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 1000); // Default
         assert_eq!(cfg.indexer.subscription.batch_size, 100); // Default
     }

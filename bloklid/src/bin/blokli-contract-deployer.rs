@@ -42,6 +42,12 @@ struct ContractsOutput {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    tracing_subscriber::fmt()
+        .with_writer(std::io::stdout)
+        .with_target(true)
+        .with_level(true)
+        .init();
+
     let args = Args::parse();
 
     let signer = PrivateKeySigner::from_str(&args.private_key)?;
@@ -78,7 +84,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?
         .watch()
         .await?;
-    eprintln!("Minter role granted to Anvil account {signer_address}");
+    tracing::info!("Minter role granted to Anvil account {signer_address}");
 
     // Mint 10M tokens to Anvil account 0
     instances
@@ -93,7 +99,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?
         .watch()
         .await?;
-    eprintln!("10M tokens minted to Anvil account {signer_address}");
+    tracing::info!("10M tokens minted to Anvil account {signer_address}");
 
     // Update the stake factory to use correct addresses
     let network = instances.stake_factory.defaultHoprNetwork().call().await?;
@@ -108,7 +114,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?
         .watch()
         .await?;
-    eprintln!("updated stake factory contract");
+    tracing::info!("updated stake factory contract");
 
     if let Some(path) = args.output {
         fs::write(path, toml_output)?;

@@ -1,3 +1,4 @@
+---
 id: no-inline-qualified-paths
 language: rust
 severity: error

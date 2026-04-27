@@ -9,7 +9,7 @@ use std::sync::Arc;
 use async_broadcast::{Receiver, Sender, broadcast};
 use chrono::{DateTime, Utc};
 use dashmap::{DashMap, mapref::entry::Entry};
-use hopr_types::crypto::types::Hash;
+use hopr_types::{crypto::types::Hash, primitive::traits::ToHex};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -22,11 +22,38 @@ pub enum TransactionStoreError {
     AlreadyExists(Uuid),
 }
 
+/// Result of internal Safe contract execution
+///
+/// Populated after a transaction targeting a Safe contract is confirmed on-chain.
+/// Extracted from ExecutionSuccess/ExecutionFailure events in the receipt logs.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SafeExecutionResult {
+    /// Whether the internal Safe transaction succeeded
+    pub success: bool,
+    /// Safe internal transaction hash (bytes32 from event).
+    /// `None` for module-executed transactions (the standard HOPR path) since
+    /// module events do not carry a txHash. For direct `execTransaction` calls,
+    /// `None` only if the event data was malformed.
+    #[serde(serialize_with = "serialize_optional_hash")]
+    pub safe_tx_hash: Option<Hash>,
+    /// Revert reason string (if execution failed and reason is decodable)
+    pub revert_reason: Option<String>,
+}
+
+fn serialize_optional_hash<S: serde::Serializer>(hash: &Option<Hash>, s: S) -> Result<S::Ok, S::Error> {
+    match hash {
+        Some(h) => s.serialize_some(&h.to_hex()),
+        None => s.serialize_none(),
+    }
+}
+
+fn serialize_hash<S: serde::Serializer>(hash: &Hash, s: S) -> Result<S::Ok, S::Error> {
+    s.serialize_str(&hash.to_hex())
+}
+
 /// Status of a submitted transaction
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum TransactionStatus {
-    /// Transaction is pending submission to the chain
-    Pending,
     /// Transaction has been submitted and is awaiting confirmation
     Submitted,
     /// Transaction has been confirmed on-chain with success
@@ -45,7 +72,7 @@ pub enum TransactionStatus {
 ///
 /// Represents transaction status changes that should be broadcast to subscribers.
 /// Uses delta fields to keep copied data minimal.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, serde::Serialize)]
 pub enum TransactionEvent {
     /// Transaction status was updated
     ///
@@ -59,13 +86,14 @@ pub enum TransactionEvent {
 }
 
 /// Record of a submitted transaction
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct TransactionRecord {
     /// Unique identifier for the transaction
     pub id: Uuid,
     /// Raw signed transaction data
     pub raw_transaction: Vec<u8>,
     /// Transaction hash from successful blockchain submission
+    #[serde(serialize_with = "serialize_hash")]
     pub transaction_hash: Hash,
     /// Current status of the transaction
     pub status: TransactionStatus,
@@ -75,6 +103,8 @@ pub struct TransactionRecord {
     pub confirmed_at: Option<DateTime<Utc>>,
     /// Error message (if submission or confirmation failed)
     pub error_message: Option<String>,
+    /// Internal Safe execution result (populated after confirmation for Safe transactions)
+    pub safe_execution: Option<SafeExecutionResult>,
 }
 
 /// Thread-safe in-memory store for transaction records
@@ -213,6 +243,44 @@ impl TransactionStore {
         Ok(())
     }
 
+    /// Atomically confirm a transaction and set its Safe execution result.
+    ///
+    /// Sets `status = Confirmed`, `confirmed_at = Some(Utc::now())`, and
+    /// `safe_execution` in a single operation, preventing a window where
+    /// subscribers see `Confirmed` with `safeExecution: null`.
+    ///
+    /// # Errors
+    /// Returns `TransactionStoreError::NotFound` if the transaction doesn't exist
+    pub fn confirm_with_safe_execution(
+        &self,
+        id: Uuid,
+        safe_execution: Option<SafeExecutionResult>,
+    ) -> Result<(), TransactionStoreError> {
+        let confirmed_at = self
+            .transactions
+            .get_mut(&id)
+            .map(|mut entry| {
+                let record = entry.value_mut();
+                record.status = TransactionStatus::Confirmed;
+                if record.confirmed_at.is_none() {
+                    record.confirmed_at = Some(Utc::now());
+                }
+                record.safe_execution = safe_execution;
+                record.confirmed_at
+            })
+            .ok_or(TransactionStoreError::NotFound(id))?;
+
+        // Broadcast event so subscribers are notified of the confirmation
+        let _ = self.event_bus.try_broadcast(TransactionEvent::StatusUpdated {
+            id,
+            status: TransactionStatus::Confirmed,
+            error_message: None,
+            confirmed_at,
+        });
+
+        Ok(())
+    }
+
     /// List all transactions with a specific status
     pub fn list_by_status(&self, status: TransactionStatus) -> Vec<TransactionRecord> {
         self.transactions
@@ -254,18 +322,31 @@ mod tests {
 
     use super::*;
 
+    const TEST_UUID: Uuid = Uuid::from_bytes([
+        0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10,
+    ]);
+
+    fn test_tx_hash() -> Hash {
+        Hash::from([0xABu8; 32])
+    }
+
+    fn test_timestamp() -> DateTime<Utc> {
+        DateTime::from_timestamp(1_700_000_000, 0).unwrap()
+    }
+
     #[test]
     fn test_create_store_and_insert_transaction() {
         let store = TransactionStore::new();
 
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: Hash::default(),
+            transaction_hash: test_tx_hash(),
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: test_timestamp(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id = record.id;
@@ -274,23 +355,23 @@ mod tests {
 
         // Verify we can retrieve it
         let retrieved = store.get(id).unwrap();
-        assert_eq!(retrieved.id, id);
-        assert_eq!(retrieved.status, TransactionStatus::Submitted);
+        insta::assert_yaml_snapshot!(retrieved);
     }
 
     #[test]
     fn test_insert_duplicate_transaction_fails() {
         let store = TransactionStore::new();
 
-        let id = Uuid::new_v4();
+        let id = TEST_UUID;
         let record = TransactionRecord {
             id,
             raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: Hash::default(),
+            transaction_hash: test_tx_hash(),
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: test_timestamp(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         assert!(store.insert(record.clone()).is_ok());
@@ -303,7 +384,7 @@ mod tests {
     #[test]
     fn test_retrieve_nonexistent_transaction() {
         let store = TransactionStore::new();
-        let id = Uuid::new_v4();
+        let id = TEST_UUID;
 
         let result = store.get(id);
         assert!(matches!(result, Err(TransactionStoreError::NotFound(_))));
@@ -314,13 +395,14 @@ mod tests {
         let store = TransactionStore::new();
 
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: Hash::default(),
+            transaction_hash: test_tx_hash(),
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: test_timestamp(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id = record.id;
@@ -328,21 +410,21 @@ mod tests {
 
         // Verify initial status
         let retrieved = store.get(id).unwrap();
-        assert_eq!(retrieved.status, TransactionStatus::Submitted);
-        assert!(retrieved.confirmed_at.is_none());
+        insta::assert_yaml_snapshot!(retrieved);
 
         // Update status to Confirmed
         store.update_status(id, TransactionStatus::Confirmed, None).unwrap();
 
         let retrieved = store.get(id).unwrap();
-        assert_eq!(retrieved.status, TransactionStatus::Confirmed);
-        assert!(retrieved.confirmed_at.is_some());
+        insta::assert_yaml_snapshot!(retrieved, {
+            ".confirmed_at" => "[timestamp]",
+        });
     }
 
     #[test]
     fn test_update_nonexistent_transaction_fails() {
         let store = TransactionStore::new();
-        let id = Uuid::new_v4();
+        let id = TEST_UUID;
 
         let result = store.update_status(id, TransactionStatus::Confirmed, None);
         assert!(matches!(result, Err(TransactionStoreError::NotFound(_))));
@@ -353,7 +435,7 @@ mod tests {
         let store = TransactionStore::new();
 
         // Insert transactions with different statuses
-        for i in 0..5 {
+        for i in 0..5u128 {
             let status = if i % 2 == 0 {
                 TransactionStatus::Submitted
             } else {
@@ -361,13 +443,14 @@ mod tests {
             };
 
             let record = TransactionRecord {
-                id: Uuid::new_v4(),
+                id: Uuid::from_u128(i + 1),
                 raw_transaction: vec![i as u8],
-                transaction_hash: Hash::default(),
+                transaction_hash: test_tx_hash(),
                 status,
-                submitted_at: Utc::now(),
+                submitted_at: test_timestamp(),
                 confirmed_at: None,
                 error_message: None,
+                safe_execution: None,
             };
 
             store.insert(record).unwrap();
@@ -388,15 +471,16 @@ mod tests {
 
         // Thread 1: Insert 5 transactions
         let handle1 = thread::spawn(move || {
-            for i in 0..5 {
+            for i in 0..5u128 {
                 let record = TransactionRecord {
-                    id: Uuid::new_v4(),
-                    raw_transaction: vec![i],
-                    transaction_hash: Hash::default(),
+                    id: Uuid::from_u128(i + 1),
+                    raw_transaction: vec![i as u8],
+                    transaction_hash: test_tx_hash(),
                     status: TransactionStatus::Submitted,
-                    submitted_at: Utc::now(),
+                    submitted_at: test_timestamp(),
                     confirmed_at: None,
                     error_message: None,
+                    safe_execution: None,
                 };
                 store_clone1.insert(record).unwrap();
             }
@@ -404,15 +488,16 @@ mod tests {
 
         // Thread 2: Insert 5 more transactions
         let handle2 = thread::spawn(move || {
-            for i in 5..10 {
+            for i in 5..10u128 {
                 let record = TransactionRecord {
-                    id: Uuid::new_v4(),
-                    raw_transaction: vec![i],
-                    transaction_hash: Hash::default(),
+                    id: Uuid::from_u128(i + 1),
+                    raw_transaction: vec![i as u8],
+                    transaction_hash: test_tx_hash(),
                     status: TransactionStatus::Submitted,
-                    submitted_at: Utc::now(),
+                    submitted_at: test_timestamp(),
                     confirmed_at: None,
                     error_message: None,
+                    safe_execution: None,
                 };
                 store_clone2.insert(record).unwrap();
             }
@@ -430,13 +515,14 @@ mod tests {
         let store = TransactionStore::new();
 
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: Hash::default(),
+            transaction_hash: test_tx_hash(),
             status: TransactionStatus::Submitted,
-            submitted_at: Utc::now(),
+            submitted_at: test_timestamp(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id = record.id;
@@ -446,19 +532,18 @@ mod tests {
         let updated_record = TransactionRecord {
             id,
             raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: Hash::default(),
+            transaction_hash: test_tx_hash(),
             status: TransactionStatus::Confirmed,
-            submitted_at: Utc::now(),
-            confirmed_at: Some(Utc::now()),
+            submitted_at: test_timestamp(),
+            confirmed_at: Some(test_timestamp()),
             error_message: None,
+            safe_execution: None,
         };
 
         store.update(updated_record.clone()).unwrap();
 
         let retrieved = store.get(id).unwrap();
-        assert_eq!(retrieved.status, TransactionStatus::Confirmed);
-        assert_eq!(retrieved.transaction_hash, Hash::default());
-        assert!(retrieved.confirmed_at.is_some());
+        insta::assert_yaml_snapshot!(retrieved);
     }
 
     #[tokio::test]
@@ -470,13 +555,14 @@ mod tests {
 
         // Insert a transaction
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: Hash::default(),
-            status: TransactionStatus::Pending,
-            submitted_at: Utc::now(),
+            transaction_hash: test_tx_hash(),
+            status: TransactionStatus::Submitted,
+            submitted_at: test_timestamp(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id = record.id;
@@ -487,38 +573,32 @@ mod tests {
 
         // Verify event was published
         let event = receiver.recv().await.unwrap();
-        match event {
-            TransactionEvent::StatusUpdated {
-                id: event_id,
-                status: event_status,
-                error_message,
-                confirmed_at,
-            } => {
-                assert_eq!(event_id, id);
-                assert_eq!(event_status, TransactionStatus::Submitted);
-                assert_eq!(error_message, None);
-                assert_eq!(confirmed_at, None);
-            }
-        }
+        let TransactionEvent::StatusUpdated {
+            id: event_id,
+            status,
+            error_message,
+            confirmed_at,
+        } = event;
+        assert_eq!(event_id, id);
+        assert_eq!(status, TransactionStatus::Submitted);
+        assert!(error_message.is_none());
+        assert!(confirmed_at.is_none());
 
         // Update status to Confirmed
         store.update_status(id, TransactionStatus::Confirmed, None).unwrap();
 
         // Verify second event was published
         let event = receiver.recv().await.unwrap();
-        match event {
-            TransactionEvent::StatusUpdated {
-                id: event_id,
-                status: event_status,
-                error_message,
-                confirmed_at,
-            } => {
-                assert_eq!(event_id, id);
-                assert_eq!(event_status, TransactionStatus::Confirmed);
-                assert_eq!(error_message, None);
-                assert!(confirmed_at.is_some());
-            }
-        }
+        let TransactionEvent::StatusUpdated {
+            id: event_id,
+            status,
+            error_message,
+            confirmed_at,
+        } = event;
+        assert_eq!(event_id, id);
+        assert_eq!(status, TransactionStatus::Confirmed);
+        assert!(error_message.is_none());
+        assert!(confirmed_at.is_some());
     }
 
     #[tokio::test]
@@ -531,13 +611,14 @@ mod tests {
 
         // Insert a transaction
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: Hash::default(),
-            status: TransactionStatus::Pending,
-            submitted_at: Utc::now(),
+            transaction_hash: test_tx_hash(),
+            status: TransactionStatus::Submitted,
+            submitted_at: test_timestamp(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id = record.id;
@@ -550,31 +631,17 @@ mod tests {
         let event1 = receiver1.recv().await.unwrap();
         let event2 = receiver2.recv().await.unwrap();
 
-        match (event1, event2) {
-            (
-                TransactionEvent::StatusUpdated {
-                    id: id1,
-                    status: status1,
-                    error_message: error1,
-                    confirmed_at: confirmed1,
-                },
-                TransactionEvent::StatusUpdated {
-                    id: id2,
-                    status: status2,
-                    error_message: error2,
-                    confirmed_at: confirmed2,
-                },
-            ) => {
-                assert_eq!(id1, id);
-                assert_eq!(id2, id);
-                assert_eq!(status1, TransactionStatus::Confirmed);
-                assert_eq!(status2, TransactionStatus::Confirmed);
-                assert_eq!(error1, None);
-                assert_eq!(error2, None);
-                assert!(confirmed1.is_some());
-                assert!(confirmed2.is_some());
-            }
-        }
+        let TransactionEvent::StatusUpdated {
+            id: event_id, status, ..
+        } = event1;
+        assert_eq!(event_id, id);
+        assert_eq!(status, TransactionStatus::Confirmed);
+
+        let TransactionEvent::StatusUpdated {
+            id: event_id, status, ..
+        } = event2;
+        assert_eq!(event_id, id);
+        assert_eq!(status, TransactionStatus::Confirmed);
     }
 
     #[tokio::test]
@@ -583,13 +650,14 @@ mod tests {
 
         // Insert and update a transaction before subscribing
         let record = TransactionRecord {
-            id: Uuid::new_v4(),
+            id: TEST_UUID,
             raw_transaction: vec![0x01, 0x02, 0x03],
-            transaction_hash: Hash::default(),
-            status: TransactionStatus::Pending,
-            submitted_at: Utc::now(),
+            transaction_hash: test_tx_hash(),
+            status: TransactionStatus::Submitted,
+            submitted_at: test_timestamp(),
             confirmed_at: None,
             error_message: None,
+            safe_execution: None,
         };
 
         let id = record.id;
@@ -604,18 +672,79 @@ mod tests {
 
         // Should only receive the Confirmed event, not the Submitted one
         let event = receiver.recv().await.unwrap();
-        match event {
-            TransactionEvent::StatusUpdated {
-                id: event_id,
-                status: event_status,
-                error_message,
-                confirmed_at,
-            } => {
-                assert_eq!(event_id, id);
-                assert_eq!(event_status, TransactionStatus::Confirmed);
-                assert_eq!(error_message, None);
-                assert!(confirmed_at.is_some());
-            }
-        }
+        let TransactionEvent::StatusUpdated {
+            id: event_id, status, ..
+        } = event;
+        assert_eq!(event_id, id);
+        assert_eq!(status, TransactionStatus::Confirmed);
+    }
+
+    #[test]
+    fn test_confirm_with_safe_execution() {
+        let store = TransactionStore::new();
+
+        let record = TransactionRecord {
+            id: TEST_UUID,
+            raw_transaction: vec![0x01],
+            transaction_hash: test_tx_hash(),
+            status: TransactionStatus::Submitted,
+            submitted_at: test_timestamp(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        };
+
+        let id = record.id;
+        store.insert(record).unwrap();
+
+        // Atomically confirm with safe execution
+        let safe_exec = SafeExecutionResult {
+            success: false,
+            safe_tx_hash: Some(Hash::from([0xAB; 32])),
+            revert_reason: Some("revert reason".to_string()),
+        };
+
+        store.confirm_with_safe_execution(id, Some(safe_exec)).unwrap();
+
+        let retrieved = store.get(id).unwrap();
+        insta::assert_yaml_snapshot!(retrieved, {
+            ".confirmed_at" => "[timestamp]",
+        });
+    }
+
+    #[test]
+    fn test_confirm_with_safe_execution_none() {
+        let store = TransactionStore::new();
+
+        let record = TransactionRecord {
+            id: TEST_UUID,
+            raw_transaction: vec![0x01],
+            transaction_hash: test_tx_hash(),
+            status: TransactionStatus::Submitted,
+            submitted_at: test_timestamp(),
+            confirmed_at: None,
+            error_message: None,
+            safe_execution: None,
+        };
+
+        let id = record.id;
+        store.insert(record).unwrap();
+
+        // Confirm without safe execution (non-Safe transaction)
+        store.confirm_with_safe_execution(id, None).unwrap();
+
+        let retrieved = store.get(id).unwrap();
+        insta::assert_yaml_snapshot!(retrieved, {
+            ".confirmed_at" => "[timestamp]",
+        });
+    }
+
+    #[test]
+    fn test_confirm_with_safe_execution_not_found() {
+        let store = TransactionStore::new();
+        let id = TEST_UUID;
+
+        let result = store.confirm_with_safe_execution(id, None);
+        assert!(matches!(result, Err(TransactionStoreError::NotFound(_))));
     }
 }

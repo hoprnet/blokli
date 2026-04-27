@@ -5,21 +5,17 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-db"
 repository  = "https://github.com/hoprnet/blokli"
-version     = "0.14.0"
+version     = "0.16.0"
 
 [lints]
 workspace = true
 
 [features]
-default = ["sqlite", "traits"]
-prometheus = ["dep:hopr-metrics", "dep:lazy_static"]
-runtime-tokio = [
-  "hopr-async-runtime/runtime-tokio",
-  "sea-orm/runtime-tokio",
-  "sea-orm/runtime-tokio-rustls",
-]
-sqlite = ["sea-orm/sqlx-sqlite", "sea-query/backend-sqlite"]
-traits = []
+default       = ["sqlite", "traits"]
+runtime-tokio = ["sea-orm/runtime-tokio", "sea-orm/runtime-tokio-rustls"]
+sqlite        = ["sea-orm/sqlx-sqlite", "sea-query/backend-sqlite"]
+telemetry     = ["dep:lazy_static"]
+traits        = []
 
 [dependencies]
 async-broadcast = { workspace = true }
@@ -45,11 +41,6 @@ validator = { workspace = true }
 
 blokli-db-entity = { workspace = true }
 blokli-db-migration = { workspace = true }
-hopr-async-runtime = { workspace = true }
-hopr-crypto-packet = { workspace = true }
-hopr-metrics = { workspace = true, optional = true }
-hopr-network-types = { workspace = true }
-hopr-platform = { workspace = true }
 hopr-types = { workspace = true, features = [
   "crypto",
   "internal",
@@ -65,7 +56,6 @@ sea-orm     = { workspace = true }
 tempfile    = { workspace = true }
 tokio       = { workspace = true }
 
-hopr-async-runtime = { workspace = true, features = ["runtime-tokio"] }
 hopr-types = { workspace = true, features = [
   "crypto",
   "internal",

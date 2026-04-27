@@ -1,15 +1,22 @@
+---
 # Docker Compose configuration for integration testing blokli
 #
+# Each test binary gets its own isolated stack via STACK_ID, which parameterizes
+# container names, network, and host port mappings to allow parallel execution.
+#
 # Environment variables:
-#   REGISTRY_PORT       - Local registry port (default: 1)
-#   BLOKLID_IMAGE       - Docker image to test (default: localhost:5001/bloklid:integration-test)
-#   INTEGRATION_CONFIG  - Path to blokli config file (default: config-integration-anvil.toml)
+#   STACK_ID            - Unique stack identifier (default: "default")
+#   REGISTRY_PORT       - Local registry host port (default: 5001)
+#   ANVIL_PORT          - Anvil host port (default: 8546)
+#   BLOKLID_PORT        - bloklid API host port (default: 8081)
+#   BLOKLID_IMAGE       - Docker image to test
+#   INTEGRATION_CONFIG  - Path to blokli config file
 services:
   registry:
     build:
       context: .
       dockerfile: Dockerfile.registry
-    container_name: blokli-integration-registry
+    container_name: blokli-${STACK_ID:-default}-registry
     ports:
       - "${REGISTRY_PORT:-5001}:5001"
     healthcheck:
@@ -18,10 +25,10 @@ services:
       timeout: 5s
       retries: 5
     networks:
-      - integration-test
+      - integration
   postgres:
     image: postgres:18-alpine
-    container_name: blokli-integration-postgres
+    container_name: blokli-${STACK_ID:-default}-postgres
     environment:
       POSTGRES_USER: bloklid
       POSTGRES_PASSWORD: bloklid_integration_test
@@ -32,10 +39,10 @@ services:
       timeout: 5s
       retries: 10
     networks:
-      - integration-test
+      - integration
   anvil:
     image: ghcr.io/foundry-rs/foundry:latest
-    container_name: blokli-integration-anvil
+    container_name: blokli-${STACK_ID:-default}-anvil
     entrypoint: ["anvil"]
     command:
       - "--host"
@@ -56,25 +63,45 @@ services:
       timeout: 5s
       retries: 10
     ports:
-      - "8546:8546"
+      - "${ANVIL_PORT:-8546}:8546"
     networks:
-      - integration-test
+      - integration
+  # One-shot service that sends a seed transaction on Anvil so that
+  # bloklid's verify_rpc_capabilities() can find a tx to trace.
+  seed-tx:
+    image: ghcr.io/foundry-rs/foundry:latest
+    container_name: blokli-${STACK_ID:-default}-seed-tx
+    entrypoint: ["cast"]
+    command:
+      - "send"
+      - "--rpc-url"
+      - "http://anvil:8546"
+      - "--private-key"
+      - "0x7b47dca8772f76990ac12f3eea327481ddc40fad1aa745d4d8d3013c1706c167"
+      - "0xa64AA16c6946129AA2BE8b69cb025f295E6aac83"
+      - "--value"
+      - "1"
+    depends_on:
+      anvil:
+        condition: service_healthy
+    networks:
+      - integration
   bloklid:
     image: ${BLOKLID_IMAGE:-localhost:5000/bloklid:integration-test}
-    container_name: blokli-integration-bloklid
+    container_name: blokli-${STACK_ID:-default}-bloklid
     depends_on:
       registry:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      anvil:
-        condition: service_healthy
+      seed-tx:
+        condition: service_completed_successfully
     environment:
       RUST_LOG: trace
     volumes:
       - ./${INTEGRATION_CONFIG:-config-integration-anvil.toml}:/config.toml:ro
     ports:
-      - "8081:8081"
+      - "${BLOKLID_PORT:-8081}:8081"
     command: ["-c", "/config.toml"]
     healthcheck:
       test: ["CMD", "sh", "-c", "curl -sf http://localhost:8081/healthz && curl -sf http://localhost:8081/readyz | grep -q '\"status\":\"ready\"'"]
@@ -83,7 +110,7 @@ services:
       retries: 30
       start_period: 30s
     networks:
-      - integration-test
+      - integration
 networks:
-  integration-test:
+  integration:
     driver: bridge

@@ -14,8 +14,6 @@
 }:
 
 let
-  # Common build arguments for all bloklid variants
-  # These are shared across all build configurations
   mkbloklidBuildArgs =
     { src, depsSrc }:
     {
@@ -23,6 +21,34 @@ let
       cargoExtraArgs = "--bins"; # Build all binary targets
       cargoToml = ./../../bloklid/Cargo.toml;
     };
+
+  # Production builds include blokli-inspector alongside bloklid in each platform derivation.
+  # prependPackageName = false lets us specify both packages explicitly via cargoExtraArgs.
+  mkBloklidPlatformPackages =
+    platform:
+    let
+      args = (mkbloklidBuildArgs {
+        src = sources.main;
+        depsSrc = sources.deps;
+      }) // {
+        prependPackageName = false;
+        cargoExtraArgs = "-p bloklid -p blokli-inspector --bins";
+      };
+      name = "binary-blokli-${platform}";
+    in
+    {
+      "${name}" = builders.${platform}.callPackage nixLib.mkRustPackage args;
+      "${name}-profile" = builders.${platform}.callPackage nixLib.mkRustPackage args;
+    }
+    // lib.optionalAttrs (lib.hasSuffix "-linux" platform) {
+      "${name}-dev" = builders.${platform}.callPackage nixLib.mkRustPackage (
+        args // { CARGO_PROFILE = "dev"; }
+      );
+    };
+
+  bloklidPackages = builtins.foldl' (a: b: a // b) { } (
+    map mkBloklidPlatformPackages [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ]
+  );
 in
 {
   # Development builds - for local testing and debugging
@@ -40,89 +66,9 @@ in
       CARGO_PROFILE = "dev";
     }
   );
-
-  # Production builds - optimized for deployment
-  # x86_64 Linux builds with static linking for maximum portability
-  binary-blokli-x86_64-linux =
-    builders.x86_64-linux.callPackage nixLib.mkRustPackage
-      (mkbloklidBuildArgs {
-        src = sources.main;
-        depsSrc = sources.deps;
-      });
-
-  binary-blokli-x86_64-linux-profile = builders.x86_64-linux.callPackage nixLib.mkRustPackage (
-    (mkbloklidBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-    })
-  );
-
-  binary-blokli-x86_64-linux-dev = builders.x86_64-linux.callPackage nixLib.mkRustPackage (
-    (mkbloklidBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-    })
-    // {
-      CARGO_PROFILE = "dev";
-    }
-  );
-
-  # ARM64 Linux builds for ARM servers and devices
-  binary-blokli-aarch64-linux =
-    builders.aarch64-linux.callPackage nixLib.mkRustPackage
-      (mkbloklidBuildArgs {
-        src = sources.main;
-        depsSrc = sources.deps;
-      });
-
-  binary-blokli-aarch64-linux-profile = builders.aarch64-linux.callPackage nixLib.mkRustPackage (
-    (mkbloklidBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-    })
-  );
-
-  binary-blokli-aarch64-linux-dev = builders.aarch64-linux.callPackage nixLib.mkRustPackage (
-    (mkbloklidBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-    })
-    // {
-      CARGO_PROFILE = "dev";
-    }
-  );
-
-  # macOS builds - require building from Darwin systems
-  # x86_64 macOS (Intel Macs)
-  binary-blokli-x86_64-darwin =
-    builders.x86_64-darwin.callPackage nixLib.mkRustPackage
-      (mkbloklidBuildArgs {
-        src = sources.main;
-        depsSrc = sources.deps;
-      });
-
-  binary-blokli-x86_64-darwin-profile = builders.x86_64-darwin.callPackage nixLib.mkRustPackage (
-    (mkbloklidBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-    })
-  );
-
-  # ARM64 macOS (Apple Silicon)
-  binary-blokli-aarch64-darwin =
-    builders.aarch64-darwin.callPackage nixLib.mkRustPackage
-      (mkbloklidBuildArgs {
-        src = sources.main;
-        depsSrc = sources.deps;
-      });
-
-  binary-blokli-aarch64-darwin-profile = builders.aarch64-darwin.callPackage nixLib.mkRustPackage (
-    (mkbloklidBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-    })
-  );
-
+}
+// bloklidPackages
+// {
   # Test and quality assurance builds
   bloklid-test = builders.local.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {

@@ -6,17 +6,18 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-api"
 repository  = "https://github.com/hoprnet/hoprnet"
-version     = "0.18.0"
+version     = "0.20.0"
 
 [lints]
 workspace = true
 
 [features]
-default = ["runtime-tokio"]
+default = ["runtime-tokio", "telemetry"]
 runtime-tokio = [
   "blokli-chain-indexer/runtime-tokio",
   "blokli-db/runtime-tokio",
 ]
+telemetry = ["dep:hopr-metrics", "dep:lazy_static"]
 
 [dependencies]
 # Async runtime
@@ -26,19 +27,17 @@ futures         = { workspace = true }
 tokio           = { workspace = true }
 
 # TLS
-rustls         = { workspace = true }
-rustls-pemfile = { workspace = true }
-tokio-rustls   = { workspace = true }
+pem-rfc7468  = { workspace = true, features = ["alloc"] }
+rustls       = { workspace = true }
+tokio-rustls = { workspace = true }
 
 # Web framework
 axum       = { workspace = true }
-axum-extra = { workspace = true }
 tower      = { workspace = true }
 tower-http = { workspace = true }
 
 # GraphQL
-async-graphql      = { workspace = true }
-async-graphql-axum = { workspace = true }
+async-graphql = { workspace = true }
 
 # Serialization
 serde      = { workspace = true }
@@ -50,7 +49,6 @@ thiserror = { workspace = true }
 
 # Database
 sea-orm = { workspace = true }
-sqlx    = { workspace = true }
 
 # Encoding
 chrono          = { workspace = true }
@@ -82,15 +80,28 @@ tracing-subscriber = { workspace = true }
 # CLI
 clap = { workspace = true }
 
+# Metrics
+hopr-metrics = { workspace = true, optional = true }
+lazy_static  = { workspace = true, optional = true }
+
 [dev-dependencies]
+base64ct            = { workspace = true, features = ["alloc"] }
 blokli-db-migration = { path = "../db/migration" }
 env_logger          = { workspace = true }
 hopr-types          = { workspace = true, features = ["internal"] }
-mockall             = { workspace = true }
+insta               = { workspace = true, features = ["redactions", "yaml"] }
 multiaddr           = { workspace = true }
 rand                = { workspace = true }
 regex               = { workspace = true }
 temp-env            = { workspace = true }
+tempfile            = { workspace = true }
 test-log            = { workspace = true }
-tokio-test          = { workspace = true }
 tower               = { workspace = true, features = ["util"] }
+
+
+[package.metadata.cargo-machete]
+ignored = ["humantime-serde"]
+
+
+[package.metadata.cargo-shear]
+ignored = ["humantime-serde"]

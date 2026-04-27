@@ -7,7 +7,7 @@ use async_graphql::{Context, ID, Result, Subscription};
 use async_stream::stream;
 use blokli_api_types::{
     Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, Safe, TicketParameters, TokenValueString,
-    Transaction, TransactionStatus as GqlTransactionStatus, UInt64,
+    Transaction, UInt64,
 };
 use blokli_chain_api::transaction_store::{
     TransactionEvent, TransactionStatus as StoreTransactionStatus, TransactionStore,
@@ -17,7 +17,10 @@ use blokli_db_entity::{
     chain_info,
     chain_info::Entity as ChainInfoEntity,
     channel, channel_state,
-    conversions::account_aggregation::{fetch_accounts_by_keyids, fetch_accounts_with_filters},
+    conversions::{
+        account_aggregation::{fetch_accounts_by_keyids, fetch_accounts_with_filters},
+        safe_aggregation::{CurrentSafe, fetch_safe_by_address, fetch_safe_threshold_by_address},
+    },
     hopr_node_safe_registration,
 };
 use chrono::Utc;
@@ -28,34 +31,15 @@ use hopr_types::primitive::{
     traits::{IntoEndian, ToHex},
 };
 use rand::seq::SliceRandom;
-use sea_orm::{
-    ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
-    Statement,
-};
+use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use crate::errors;
-
-#[derive(Debug)]
-struct SafeContractCurrentRow {
-    address: Vec<u8>,
-    module_address: Vec<u8>,
-    chain_key: Vec<u8>,
-}
-
-fn current_row_statement(backend: DatabaseBackend, value: Vec<u8>) -> Statement {
-    let placeholder = if backend == DatabaseBackend::Postgres {
-        "$1"
-    } else {
-        "?"
-    };
-    let sql = format!(
-        "SELECT address, module_address, chain_key FROM safe_contract_current WHERE address = {}",
-        placeholder
-    );
-    Statement::from_sql_and_values(backend, sql, vec![value.into()])
-}
+use crate::{
+    conversions::{convert_safe_execution, convert_transaction_status},
+    errors,
+    query::owners_for_safe,
+};
 
 /// Watermark representing the last fully processed blockchain position
 ///
@@ -397,22 +381,6 @@ async fn query_channels_at_watermark_with_filters(
     }
 
     Ok(results)
-}
-
-/// Convert StoreTransactionStatus to GraphQL TransactionStatus
-///
-/// Provides a single source of truth for status conversion, eliminating
-/// duplicated match expressions throughout the codebase.
-fn convert_transaction_status(status: StoreTransactionStatus) -> GqlTransactionStatus {
-    match status {
-        StoreTransactionStatus::Pending => GqlTransactionStatus::Pending,
-        StoreTransactionStatus::Submitted => GqlTransactionStatus::Submitted,
-        StoreTransactionStatus::Confirmed => GqlTransactionStatus::Confirmed,
-        StoreTransactionStatus::Reverted => GqlTransactionStatus::Reverted,
-        StoreTransactionStatus::Timeout => GqlTransactionStatus::Timeout,
-        StoreTransactionStatus::ValidationFailed => GqlTransactionStatus::ValidationFailed,
-        StoreTransactionStatus::SubmissionFailed => GqlTransactionStatus::SubmissionFailed,
-    }
 }
 
 /// Builds SeaORM condition for filtering channel_state by watermark
@@ -1047,9 +1015,8 @@ impl SubscriptionRoot {
                             Ok(IndexerEvent::SafeDeployed(safe_addr)) => {
                                 let safe_addr_bytes = safe_addr.as_ref().to_vec();
                                 debug!(?safe_addr_bytes, "safe address");
-                                let stmt = current_row_statement(db.get_database_backend(), safe_addr_bytes);
-                                let row = match db.query_one_raw(stmt).await {
-                                    Ok(Some(row)) => row,
+                                let current = match fetch_safe_by_address(&db, &safe_addr_bytes).await {
+                                    Ok(Some(current)) => current,
                                     Ok(None) => {
                                         error!("Safe deployed event received but safe not found in DB: {}", safe_addr);
                                         continue;
@@ -1060,32 +1027,24 @@ impl SubscriptionRoot {
                                     }
                                 };
 
-                                let address: Vec<u8> = match row.try_get("", "address") {
-                                    Ok(value) => value,
+                                let current_safe_address = current.address.clone();
+                                let threshold = match fetch_safe_threshold_by_address(&db, &current_safe_address).await {
+                                    Ok(threshold) => threshold,
                                     Err(e) => {
-                                        error!("Failed to parse safe address from view: {}", e);
-                                        continue;
-                                    }
-                                };
-                                let module_address: Vec<u8> = match row.try_get("", "module_address") {
-                                    Ok(value) => value,
-                                    Err(e) => {
-                                        error!("Failed to parse module address from view: {}", e);
-                                        continue;
-                                    }
-                                };
-                                let chain_key: Vec<u8> = match row.try_get("", "chain_key") {
-                                    Ok(value) => value,
-                                    Err(e) => {
-                                        error!("Failed to parse chain key from view: {}", e);
-                                        continue;
+                                        warn!(
+                                            safe_address = ?current_safe_address,
+                                            error = %e,
+                                            "Failed to fetch threshold for safe, returning null"
+                                        );
+                                        None
                                     }
                                 };
 
-                                let current = SafeContractCurrentRow {
-                                    address,
-                                    module_address,
-                                    chain_key,
+                                let current = CurrentSafe {
+                                    threshold,
+                                    address: current.address,
+                                    module_address: current.module_address,
+                                    chain_key: current.chain_key,
                                 };
 
                                 debug!(safe_address = ?current.address, "processing SafeDeployed event");
@@ -1109,10 +1068,25 @@ impl SubscriptionRoot {
                                     }
                                 };
                                 debug!(?current, "yielding Safe from SafeDeployed event");
+                                let owners = match owners_for_safe(&db, current.address.clone()).await {
+                                    Ok(owners) => owners,
+                                    Err(e) => {
+                                        warn!(
+                                            safe_address = ?current.address,
+                                            code = %e.code,
+                                            message = %e.message,
+                                            "Failed to fetch safe owners, skipping subscription payload"
+                                        );
+                                        continue;
+                                    }
+                                };
+
                                 yield Safe {
                                     address: Address::new(&current.address).to_hex(),
                                     module_address: Address::new(&current.module_address).to_hex(),
                                     chain_key: Address::new(&current.chain_key).to_hex(),
+                                    threshold: current.threshold,
+                                    owners,
                                     registered_nodes,
                                 };
                             }
@@ -1158,32 +1132,56 @@ impl SubscriptionRoot {
         let mut event_receiver = transaction_store.subscribe();
 
         Ok(stream! {
+            let is_terminal_status = |s: &StoreTransactionStatus| {
+                matches!(
+                    s,
+                    StoreTransactionStatus::Confirmed
+                        | StoreTransactionStatus::Reverted
+                        | StoreTransactionStatus::Timeout
+                        | StoreTransactionStatus::ValidationFailed
+                        | StoreTransactionStatus::SubmissionFailed
+                )
+            };
+
             // Phase 1: Emit current state if transaction exists
             if let Ok(record) = transaction_store.get(transaction_id) {
+                let is_terminal = is_terminal_status(&record.status);
+
                 yield Transaction {
                     id: ID::from(record.id.to_string()),
                     status: convert_transaction_status(record.status),
                     submitted_at: record.submitted_at,
                     transaction_hash: Hex32(record.transaction_hash.to_hex()),
+                    safe_execution: convert_safe_execution(record.safe_execution),
                 };
+
+                if is_terminal {
+                    return;
+                }
             }
 
             // Phase 2: Listen for future status update events
             loop {
                 match event_receiver.recv().await {
                     // Use pattern matching guard to filter for matching transaction ID
-                    Ok(TransactionEvent::StatusUpdated { id, status, .. })
+                    Ok(TransactionEvent::StatusUpdated { id, .. })
                         if id == transaction_id =>
                     {
-                        // Fetch full record to get transaction_hash and submitted_at
-                        // (event only contains delta fields)
+                        // Fetch full record to get consistent status + safe_execution
                         if let Ok(record) = transaction_store.get(transaction_id) {
+                            let is_terminal = is_terminal_status(&record.status);
+
                             yield Transaction {
                                 id: ID::from(id.to_string()),
-                                status: convert_transaction_status(status),
+                                status: convert_transaction_status(record.status),
                                 submitted_at: record.submitted_at,
                                 transaction_hash: Hex32(record.transaction_hash.to_hex()),
+                                safe_execution: convert_safe_execution(record.safe_execution),
                             };
+
+                            if is_terminal {
+                                break;
+                            }
                         }
                     }
                     Ok(_) => {

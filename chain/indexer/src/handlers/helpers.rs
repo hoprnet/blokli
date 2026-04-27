@@ -6,6 +6,7 @@ use chrono::Utc;
 use hopr_bindings::exports::alloy::hex;
 use hopr_types::{
     crypto::prelude::Hash,
+    internal::channels::{ChannelBuilder, ChannelEntry, ChannelStatus},
     primitive::prelude::{Address, HoprBalance, IntoEndian, ToHex},
 };
 use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
@@ -170,4 +171,22 @@ where
         safe_address: aggregated.safe_address,
         multi_addresses: aggregated.multi_addresses,
     })
+}
+
+pub(super) fn build_channel_entry(
+    source: Address,
+    destination: Address,
+    balance: hopr_types::primitive::prelude::HoprBalance,
+    ticket_index: u64,
+    status: ChannelStatus,
+    channel_epoch: u32,
+) -> Result<ChannelEntry> {
+    ChannelBuilder::default()
+        .between(source, destination)
+        .balance(balance)
+        .ticket_index(ticket_index)
+        .status(status)
+        .epoch(channel_epoch)
+        .build()
+        .map_err(|error| CoreEthereumIndexerError::ProcessError(format!("invalid channel entry: {error}")))
 }

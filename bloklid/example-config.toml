@@ -15,8 +15,7 @@ network = "rotsee"
 rpc_url = "http://localhost:8545"
 
 # Maximum number of RPC requests per second (0 for unlimited)
-# Overrides the default rate limit for the selected network
-# If not specified, uses the network's default rate limit
+# If omitted, defaults to 100 req/sec. Set to 0 for unlimited, or a positive value to override the default.
 max_rpc_requests_per_sec = 0
 
 # Maximum block range for RPC queries when fetching logs (default: 10000)
@@ -71,6 +70,32 @@ url = "postgresql://bloklid:password@localhost:5432/bloklid"
 # logs_path = "data/bloklid-logs.db"    # Use ":memory:" for in-memory database
 # max_connections = 10
 
+# OpenTelemetry export configuration
+[telemetry]
+# OTLP collector endpoint.
+# Leave this unset to disable OTLP export.
+# Transport is inferred from the scheme:
+# - http:// or https:// -> OTLP/HTTP
+# - grpc:// -> OTLP/gRPC
+# For OTLP/HTTP, use the collector base URL.
+# bloklid appends /v1/traces, /v1/logs, or /v1/metrics internally per signal.
+# For multi-signal export, prefer the collector gRPC endpoint
+# (for example "grpc://localhost:4317").
+otlp_endpoint = "http://localhost:4318"
+
+# Comma-separated OTLP signals to export (default: "metrics")
+# Supported values: "metrics", "traces", "logs"
+# Examples:
+# otlp_signals = "metrics"
+# otlp_signals = "metrics,traces,logs"
+otlp_signals = "metrics"
+
+# Interval between OTLP metric exports (default: 60s)
+# Must be greater than 0. Supports humantime syntax like "15s", "1m", or "500ms".
+# Runtime use is limited to OTLP metrics export. Current config validation still
+# requires a value greater than 0 whenever otlp_endpoint is set.
+metric_export_interval = "60s"
+
 # Indexer configuration
 [indexer]
 # Enable fast sync mode for initial synchronization
@@ -78,6 +103,10 @@ fast_sync = true
 
 # Enable downloading logs snapshot for faster initial sync
 enable_logs_snapshot = false
+
+# Enable indexing of Safe contract events after a Safe has been discovered
+# Safe discovery via registry/stake-factory events remains enabled regardless
+enable_safe_indexing = false
 
 # URL to download logs snapshot from (optional)
 logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"

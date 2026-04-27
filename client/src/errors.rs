@@ -62,7 +62,7 @@ pub enum ErrorKind {
     #[error("operation timed out at the client")]
     Timeout,
     #[error(transparent)]
-    Subscription(#[from] eventsource_client::Error),
+    Subscription(#[from] Box<eventsource_client::Error>),
     #[error(transparent)]
     UrlParse(#[from] url::ParseError),
     #[error(transparent)]
@@ -77,3 +77,18 @@ pub enum ErrorKind {
     #[error(transparent)]
     MockClientError(#[from] anyhow::Error),
 }
+
+/// A special kind of error type that is used to wrap errors simulates internal Safe TX failures.
+#[cfg(feature = "testing")]
+#[derive(Debug)]
+pub struct InternalTxError(pub anyhow::Error);
+
+#[cfg(feature = "testing")]
+impl std::fmt::Display for InternalTxError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "internal TX error: {}", self.0)
+    }
+}
+
+#[cfg(feature = "testing")]
+impl std::error::Error for InternalTxError {}

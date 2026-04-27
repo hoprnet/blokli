@@ -1,5 +1,5 @@
 #[cfg(test)]
-mod tests {
+mod contract_address_map_tests {
     use std::collections::HashMap;
 
     use async_graphql::{ScalarType, Value};

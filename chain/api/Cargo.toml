@@ -4,30 +4,34 @@ description = "Implements the main HOPR chain interface"
 edition     = "2021"
 license     = "GPL-3.0-only"
 name        = "blokli-chain-api"
-version     = "0.6.1"
+version     = "0.7.0"
 
 [lib]
 crate-type = ["rlib"]
 
 [features]
 default = []
-prometheus = [
-  "blokli-chain-indexer/prometheus",
-  "blokli-chain-rpc/prometheus",
-  "blokli-db/prometheus",
-]
 runtime-tokio = [
   "blokli-chain-indexer/runtime-tokio",
   "blokli-db/runtime-tokio",
   "hopr-async-runtime/runtime-tokio",
 ]
+telemetry = [
+  "blokli-chain-indexer/telemetry",
+  "blokli-chain-rpc/telemetry",
+  "blokli-db/telemetry",
+]
 
 [dependencies]
+alloy-sol-types = { workspace = true }
 async-broadcast = { workspace = true }
 async-trait     = { workspace = true }
 chrono          = { workspace = true }
 dashmap         = { workspace = true }
 futures         = { workspace = true }
+hex             = { workspace = true }
+serde           = { workspace = true }
+serde_json      = { workspace = true }
 thiserror       = { workspace = true }
 tokio           = { workspace = true }
 tracing         = { workspace = true }
@@ -52,7 +56,6 @@ anyhow             = { workspace = true }
 blokli-chain-types = { workspace = true }
 blokli-db          = { workspace = true, features = ["runtime-tokio"] }
 env_logger         = { workspace = true }
-hex-literal        = { workspace = true }
+insta              = { workspace = true, features = ["redactions", "yaml"] }
 rand               = { workspace = true }
-tempfile           = { workspace = true }
 tokio              = { workspace = true }

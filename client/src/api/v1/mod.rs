@@ -10,7 +10,7 @@ pub mod types {
         graph::OpenedChannelsGraphEntry,
         info::{ChainInfo, ContractAddressMap, TicketParameters},
         safe::{ModuleAddress, Safe},
-        txs::{Transaction, TransactionStatus},
+        txs::{SafeExecution, Transaction, TransactionStatus},
     };
 }
 
@@ -118,12 +118,14 @@ impl std::fmt::Debug for ChannelFilter {
     }
 }
 
-/// Allows querying existing [`Safes`](types::Safe) by their address or chain key.
+/// Allows querying existing [`Safes`](types::Safe) by their address, owner, or registered node.
 #[derive(Clone)]
 pub enum SafeSelector {
     /// Select a safe by its address.
     SafeAddress(ChainAddress),
-    /// Select a safe by the owner's chain key.
+    /// Select a safe by a current owner address.
+    Owner(ChainAddress),
+    /// Select a safe by the owner's chain key legacy alias.
     ChainKey(ChainAddress),
     /// Select a safe by any of the registered nodes.
     RegisteredNode(ChainAddress),
@@ -133,6 +135,7 @@ impl std::fmt::Debug for SafeSelector {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::SafeAddress(address) => write!(f, "SafeAddress({})", hex::encode(address)),
+            Self::Owner(address) => write!(f, "Owner({})", hex::encode(address)),
             Self::ChainKey(address) => write!(f, "ChainKey({})", hex::encode(address)),
             Self::RegisteredNode(address) => write!(f, "RegisteredNode({})", hex::encode(address)),
         }
@@ -266,6 +269,11 @@ pub trait BlokliSubscriptionClient {
     fn subscribe_ticket_params(&self) -> Result<impl futures::Stream<Item = Result<types::TicketParameters>> + Send>;
     /// Subscribes to on-chain Safe deployments.
     fn subscribe_safe_deployments(&self) -> Result<impl futures::Stream<Item = Result<types::Safe>> + Send>;
+    /// Subscribes to status updates of a tracked transaction.
+    fn subscribe_track_transaction(
+        &self,
+        tx_id: TxId,
+    ) -> Result<impl futures::Stream<Item = Result<types::Transaction>> + Send>;
 }
 
 /// Trait defining Blokli API for signed transaction submission to the chain.

@@ -7,7 +7,7 @@ const INITIAL_SAFE_BALANCE: &str = "0.5 wxHOPR";
 const SUBSCRIPTION_TIMEOUT_SECS: u64 = 60;
 
 pub const EPSILON: f64 = 1e-5;
-pub const STACK_STARTUP_WAIT: StdDuration = StdDuration::from_secs(8);
+pub const STACK_STARTUP_WAIT: StdDuration = StdDuration::from_secs(120);
 
 pub fn subscription_timeout() -> Duration {
     Duration::from_secs(SUBSCRIPTION_TIMEOUT_SECS)
