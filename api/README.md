@@ -41,6 +41,7 @@ cargo run --release -p blokli-api
 
 - `health`: Health check endpoint
 - `version`: Get API version
+- `compatibility`: Get the API version plus the supported `blokli-client` semver range
 - `blocks(limit: Int)`: Get indexed blocks (placeholder)
 
 ### Mutations
@@ -108,6 +109,17 @@ query {
 ```graphql
 query {
   version
+}
+```
+
+### Get Client Compatibility
+
+```graphql
+query {
+  compatibility {
+    apiVersion
+    supportedClientVersions
+  }
 }
 ```
 
