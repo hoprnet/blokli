@@ -154,7 +154,9 @@ enum ChannelStatus {
   PENDINGTOCLOSE
 }
 
-"""Compatibility contract for blokli-client consumers"""
+"""
+Compatibility contract for blokli-client consumers
+"""
 type Compatibility {
   "The blokli-api package version serving this schema"
   apiVersion: String!
@@ -505,7 +507,7 @@ type QueryRoot {
   ): ChannelsResult!
   """
   Client compatibility information
-  
+
   Returns the API version and a semver requirement for compatible blokli-client releases.
   """
   compatibility: Compatibility!
