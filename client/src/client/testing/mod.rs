@@ -124,7 +124,7 @@ impl Default for BlokliTestState {
             version: "1".to_string(),
             compatibility: Compatibility {
                 api_version: "1".to_string(),
-                supported_client_versions: "^0.24".to_string(),
+                supported_client_versions: "^0.26".to_string(),
             },
             health: "OK".to_string(),
             active_txs: Default::default(),
