@@ -89,7 +89,7 @@ where
                     node_address = %signer,
                     amount = %ticket_amount,
                     tx_hash = %tx_hash,
-                    "Recorded rejected ticket redemption stats from Safe execution failure"
+                    "Counted failed ticket redemption attempt in Safe rejection aggregates"
                 );
             }
             Ok((action, signer)) => {
@@ -98,7 +98,7 @@ where
                     signer = %signer,
                     ?action,
                     tx_hash = %tx_hash,
-                    "Safe execution failure was not a ticket redemption"
+                    "Safe execution failure did not correspond to a ticket redemption attempt"
                 );
             }
             Err(error) => {
@@ -106,7 +106,7 @@ where
                     safe_address = %safe_address,
                     tx_hash = %tx_hash,
                     error = %error,
-                    "Failed to parse Safe execution failure transaction"
+                    "Failed to decode Safe execution failure while checking rejection aggregates"
                 );
             }
         }

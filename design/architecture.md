@@ -874,12 +874,12 @@ Clients can query Safe contracts through three methods:
 1. **By Safe Address**: `safe(address: "0x...")` - Direct lookup by Safe contract address
 2. **By Chain Key**: `safeByChainKey(chainKey: "0x...")` - Find Safe by owner's address
 3. **List All**: `safes()` - Retrieve all indexed Safe contracts
-4. **Redeemed Ticket Aggregates**: `ticketRedemptionStats(filter: {safeAddress, nodeAddress})` - Retrieve total redeemed and rejected ticket
-   redemption amounts and counts for the selected Safe and/or node
+4. **Ticket Redemption Attempt Aggregates**: `ticketRedemptionStats(filter: {safeAddress, nodeAddress})` - Retrieve total redeemed and
+   failed redemption amounts and counts for the selected Safe and/or node
 
 Successful ticket redemptions update a dedicated aggregate table keyed by `(safe_address, node_address)` during `ChannelBalanceDecreased`
-processing. Failed Safe module ticket redemptions update the same aggregate table when the indexer observes `ExecutionFromModuleFailure` and
-decodes the rejected outer transaction as a `redeemTicket` call. Query behavior is:
+processing. Failed Safe module ticket redemptions update the same aggregate table only by incrementing aggregate counters and amounts when
+the indexer observes `ExecutionFromModuleFailure` and decodes the rejected outer transaction as a `redeemTicket` call. Query behavior is:
 
 - safe-only filter aggregates all rows for that safe
 - node-only filter aggregates all rows for that node

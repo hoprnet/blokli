@@ -712,7 +712,7 @@ pub enum SafeSelectorInput {
     RegisteredNode,
 }
 
-/// Aggregated redeemed ticket statistics
+/// Aggregated ticket redemption attempt statistics
 #[derive(SimpleObject, Clone, Debug)]
 pub struct RedeemedStats {
     /// Total amount redeemed from matching ticket redemption events
@@ -721,10 +721,10 @@ pub struct RedeemedStats {
     /// Total number of matching ticket redemption events
     #[graphql(name = "redemptionCount")]
     pub redemption_count: UInt64,
-    /// Total amount from matching rejected ticket redemption attempts
+    /// Total amount from matching failed ticket redemption attempts
     #[graphql(name = "rejectedAmount")]
     pub rejected_amount: TokenValueString,
-    /// Total number of matching rejected ticket redemption attempts
+    /// Total number of matching failed ticket redemption attempts
     #[graphql(name = "rejectionCount")]
     pub rejection_count: UInt64,
 }
