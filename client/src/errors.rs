@@ -53,6 +53,11 @@ pub enum ErrorKind {
         code: String,
         message: String,
     },
+    #[error("client version {client_version}, should be {supported_version}")]
+    VersionMismatch {
+        client_version: String,
+        supported_version: String,
+    },
     #[error("invalid query input: {0}")]
     InvalidInput(&'static str),
     #[error("transaction tracking error: {0:?}")]

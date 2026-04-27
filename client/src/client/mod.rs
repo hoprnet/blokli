@@ -17,7 +17,8 @@ pub use testing::{
 };
 
 use crate::{
-    api::VERSION,
+    CLIENT_VERSION,
+    api::{BlokliQueryClient, VERSION},
     errors::{BlokliClientError, ErrorKind},
 };
 
@@ -169,6 +170,19 @@ impl BlokliClient {
     /// Returns the client's configuration.
     pub fn config(&self) -> &BlokliClientConfig {
         &self.cfg
+    }
+
+    pub async fn check_compatibility(&self) -> Result<(), BlokliClientError> {
+        let compatibility = self.query_compatibility().await?;
+
+        match crate::compatibility::validate_client_compatibility(&compatibility) {
+            Ok(()) => Ok(()),
+            Err(_) => Err(ErrorKind::VersionMismatch {
+                client_version: CLIENT_VERSION.to_string(),
+                supported_version: compatibility.supported_client_versions,
+            }
+            .into()),
+        }
     }
 
     fn graphql_url(&self) -> Result<url::Url, BlokliClientError> {
@@ -335,10 +349,11 @@ mod tests {
     use cynic::GraphQlResponse;
     use futures::TryStreamExt;
     use launchdarkly_sdk_transport::HttpTransport;
+    use mockito::Server;
     use serde_json::json;
 
     use super::{BlokliClient, BlokliClientConfig, ReqwestTransport, response_to_data};
-    use crate::errors::ErrorKind;
+    use crate::{CLIENT_VERSION, api::BlokliQueryClient, errors::ErrorKind};
 
     #[tokio::test]
     async fn reqwest_transport_returns_streaming_response_body() {
@@ -472,5 +487,97 @@ mod tests {
         let error = response_to_data(response).expect_err("empty response should fail");
 
         assert!(matches!(error.kind(), ErrorKind::NoData));
+    }
+
+    #[tokio::test]
+    async fn query_compatibility_returns_compatibility_payload() {
+        let mut server = Server::new_async().await;
+        let client = BlokliClient::new(server.url().parse().expect("valid URL"), BlokliClientConfig::default());
+        let _mock = server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                  "data": {
+                    "compatibility": {
+                      "apiVersion": "0.19.1",
+                      "supportedClientVersions": "^0.26"
+                    }
+                  }
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        let compatibility = client
+            .query_compatibility()
+            .await
+            .expect("compatibility query should succeed");
+
+        assert_eq!(compatibility.api_version, "0.19.1");
+        assert_eq!(compatibility.supported_client_versions, "^0.26");
+    }
+
+    #[tokio::test]
+    async fn check_compatibility_accepts_supported_client_version() {
+        let mut server = Server::new_async().await;
+        let client = BlokliClient::new(server.url().parse().expect("valid URL"), BlokliClientConfig::default());
+        let _mock = server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(format!(
+                r#"{{
+                  "data": {{
+                    "compatibility": {{
+                      "apiVersion": "0.19.1",
+                      "supportedClientVersions": "={CLIENT_VERSION}"
+                    }}
+                  }}
+                }}"#
+            ))
+            .create_async()
+            .await;
+
+        client
+            .check_compatibility()
+            .await
+            .expect("compatibility check should succeed");
+    }
+
+    #[tokio::test]
+    async fn check_compatibility_rejects_unsupported_client_version() {
+        let mut server = Server::new_async().await;
+        let client = BlokliClient::new(server.url().parse().expect("valid URL"), BlokliClientConfig::default());
+        let _mock = server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                  "data": {
+                    "compatibility": {
+                      "apiVersion": "0.19.1",
+                      "supportedClientVersions": "<0.0.0"
+                    }
+                  }
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        let error = client
+            .check_compatibility()
+            .await
+            .expect_err("compatibility check should fail");
+
+        assert!(matches!(
+            error.kind(),
+            ErrorKind::VersionMismatch {
+                client_version,
+                supported_version,
+            } if client_version == CLIENT_VERSION && supported_version == "<0.0.0"
+        ));
     }
 }

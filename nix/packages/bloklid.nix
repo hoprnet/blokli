@@ -27,13 +27,15 @@ let
   mkBloklidPlatformPackages =
     platform:
     let
-      args = (mkbloklidBuildArgs {
-        src = sources.main;
-        depsSrc = sources.deps;
-      }) // {
-        prependPackageName = false;
-        cargoExtraArgs = "-p bloklid -p blokli-inspector --bins";
-      };
+      args =
+        (mkbloklidBuildArgs {
+          src = sources.main;
+          depsSrc = sources.deps;
+        })
+        // {
+          prependPackageName = false;
+          cargoExtraArgs = "-p bloklid -p blokli-inspector --bins";
+        };
       name = "binary-blokli-${platform}";
     in
     {
@@ -47,7 +49,12 @@ let
     };
 
   bloklidPackages = builtins.foldl' (a: b: a // b) { } (
-    map mkBloklidPlatformPackages [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ]
+    map mkBloklidPlatformPackages [
+      "x86_64-linux"
+      "aarch64-linux"
+      "x86_64-darwin"
+      "aarch64-darwin"
+    ]
   );
 in
 {
