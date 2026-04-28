@@ -1801,7 +1801,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api"
-version = "0.21.0"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1989,7 +1989,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-client"
-version = "0.26.0"
+version = "0.27.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -2008,6 +2008,7 @@ dependencies = [
  "insta",
  "launchdarkly-sdk-transport",
  "mockito",
+ "moka",
  "parking_lot",
  "rand 0.9.4",
  "reqwest 0.12.28",
@@ -2092,7 +2093,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-inspector"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "blokli-client",
@@ -2141,7 +2142,7 @@ dependencies = [
 
 [[package]]
 name = "bloklid"
-version = "0.10.2"
+version = "0.10.3"
 dependencies = [
  "anyhow",
  "async-signal",

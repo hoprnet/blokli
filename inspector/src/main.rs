@@ -32,7 +32,7 @@ struct Cli {
     #[arg(short, long, env, value_enum, default_value = "json")]
     format: Formats,
     /// Skip the startup client/server compatibility check.
-    #[arg(long)]
+    #[arg(long, default_value_t = false)]
     skip_check: bool,
 
     #[clap(subcommand)]
@@ -276,11 +276,11 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let blokli_client = BlokliClient::new(cli.url, BlokliClientConfig::default());
-
-    if !cli.skip_check {
-        blokli_client.check_compatibility().await?;
-    }
+    let client_config = BlokliClientConfig {
+        auto_compatibility_check: !cli.skip_check,
+        ..Default::default()
+    };
+    let blokli_client = BlokliClient::new(cli.url, client_config);
 
     let exit_fut = tokio::signal::ctrl_c().inspect_ok(|_| {
         eprintln!("\nInterrupted.");

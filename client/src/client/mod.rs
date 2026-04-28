@@ -10,6 +10,7 @@ use cynic::GraphQlResponse;
 use eventsource_client::{Client, ReconnectOptionsBuilder, SSE};
 use futures::{StreamExt, TryFutureExt, TryStreamExt};
 use launchdarkly_sdk_transport::{ByteStream, HttpTransport, ResponseFuture, TransportError};
+use moka::future::Cache;
 use reqwest::redirect::Policy as RedirectPolicy;
 #[cfg(feature = "testing")]
 pub use testing::{
@@ -18,15 +19,20 @@ pub use testing::{
 
 use crate::{
     CLIENT_VERSION,
-    api::{BlokliQueryClient, VERSION},
+    api::{VERSION, types::Compatibility},
     errors::{BlokliClientError, ErrorKind},
 };
 
+const COMPATIBILITY_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
+const COMPATIBILITY_CACHE_KEY: &str = "compatibility";
 const MIN_RECONNECTION_DELAY: Duration = Duration::from_millis(1);
 
 /// Configuration for the [`BlokliClient`].
 #[derive(Clone, Debug, PartialEq, Eq, smart_default::SmartDefault)]
 pub struct BlokliClientConfig {
+    /// Whether requests should automatically preflight the server compatibility contract.
+    #[default(true)]
+    pub auto_compatibility_check: bool,
     /// General timeout for non-streaming requests and SSE connection establishment.
     #[default(Duration::from_secs(10))]
     pub timeout: Duration,
@@ -149,6 +155,7 @@ impl HttpTransport for ReqwestTransport {
 pub struct BlokliClient {
     base_url: url::Url,
     cfg: BlokliClientConfig,
+    compatibility_cache: Cache<&'static str, Compatibility>,
 }
 
 const REDIRECT_LIMIT: usize = 3;
@@ -159,7 +166,14 @@ pub struct GraphQlQueries;
 impl BlokliClient {
     /// Creates a new instance given Blokli base URL and configuration.
     pub fn new(base_url: url::Url, cfg: BlokliClientConfig) -> Self {
-        Self { base_url, cfg }
+        Self {
+            base_url,
+            cfg,
+            compatibility_cache: Cache::builder()
+                .max_capacity(1)
+                .time_to_live(COMPATIBILITY_CACHE_TTL)
+                .build(),
+        }
     }
 
     /// Returns the client's base Blokli URL.
@@ -173,16 +187,51 @@ impl BlokliClient {
     }
 
     pub async fn check_compatibility(&self) -> Result<(), BlokliClientError> {
-        let compatibility = self.query_compatibility().await?;
+        let compatibility = self.query_compatibility_uncached().await?;
+        self.validate_compatibility(&compatibility)
+    }
 
-        match crate::compatibility::validate_client_compatibility(&compatibility) {
-            Ok(()) => Ok(()),
-            Err(_) => Err(ErrorKind::VersionMismatch {
+    fn validate_compatibility(&self, compatibility: &Compatibility) -> Result<(), BlokliClientError> {
+        if crate::compatibility::validate_client_compatibility(compatibility).is_err() {
+            return Err(ErrorKind::VersionMismatch {
                 client_version: CLIENT_VERSION.to_string(),
-                supported_version: compatibility.supported_client_versions,
+                supported_version: compatibility.supported_client_versions.clone(),
             }
-            .into()),
+            .into());
         }
+
+        if compatibility.indexes_safe_events {
+            return Ok(());
+        }
+
+        Err(ErrorKind::SafeEventIndexingDisabled {
+            api_version: compatibility.api_version.clone(),
+        }
+        .into())
+    }
+
+    async fn ensure_compatibility(&self) -> Result<(), BlokliClientError> {
+        if !self.cfg.auto_compatibility_check {
+            return Ok(());
+        }
+
+        if let Some(compatibility) = self.compatibility_cache.get(COMPATIBILITY_CACHE_KEY).await {
+            return self.validate_compatibility(&compatibility);
+        }
+
+        let compatibility = self.query_compatibility_uncached().await?;
+        let validation = self.validate_compatibility(&compatibility);
+        self.compatibility_cache
+            .insert(COMPATIBILITY_CACHE_KEY, compatibility)
+            .await;
+
+        validation
+    }
+
+    async fn query_compatibility_uncached(&self) -> Result<Compatibility, BlokliClientError> {
+        let resp = self.build_raw_operation(GraphQlQueries::query_compatibility())?.await?;
+
+        response_to_data(resp).map(|data| data.compatibility)
     }
 
     fn graphql_url(&self) -> Result<url::Url, BlokliClientError> {
@@ -237,10 +286,46 @@ impl BlokliClient {
         let graphql_url = self.graphql_url()?;
         let reqwest_client = self.build_subscription_reqwest_client()?;
 
+        struct PendingSubscriptionState {
+            client: BlokliClient,
+            graphql_url: url::Url,
+            query: String,
+            cfg: BlokliClientConfig,
+            reqwest_client: reqwest::Client,
+        }
+
+        enum SubscriptionState {
+            Pending(Box<PendingSubscriptionState>),
+            Active(Box<SubscriptionStreamState>),
+        }
+
         Ok(futures::stream::try_unfold(
-            SubscriptionStreamState::new(graphql_url, query, self.cfg.clone(), reqwest_client)?,
-            move |mut stream_state| async move {
+            SubscriptionState::Pending(Box::new(PendingSubscriptionState {
+                client: self.clone(),
+                graphql_url,
+                query,
+                cfg: self.cfg.clone(),
+                reqwest_client,
+            })),
+            move |state| async move {
+                let mut state = state;
+
                 loop {
+                    if let SubscriptionState::Pending(pending_state) = state {
+                        pending_state.client.ensure_compatibility().await?;
+                        state = SubscriptionState::Active(Box::new(SubscriptionStreamState::new(
+                            pending_state.graphql_url,
+                            pending_state.query,
+                            pending_state.cfg,
+                            pending_state.reqwest_client,
+                        )?));
+                        continue;
+                    }
+
+                    let SubscriptionState::Active(mut stream_state) = state else {
+                        unreachable!("subscription state must be active after compatibility check");
+                    };
+
                     if let Some(stream) = &mut stream_state.stream {
                         match stream.next().await {
                             Some(Ok(SSE::Event(event))) => {
@@ -248,16 +333,19 @@ impl BlokliClient {
                                 let response = serde_json::from_str::<GraphQlResponse<Q>>(&event.data)
                                     .map_err(BlokliClientError::from)
                                     .and_then(response_to_data)?;
-                                return Ok(Some((response, stream_state)));
+                                return Ok(Some((response, SubscriptionState::Active(stream_state))));
                             }
                             Some(Ok(SSE::Comment(comment))) => {
                                 tracing::debug!(comment, "SSE comment");
+                                state = SubscriptionState::Active(stream_state);
                             }
                             Some(Ok(SSE::Connected(details))) => {
                                 tracing::debug!(?details, "SSE connection details");
+                                state = SubscriptionState::Active(stream_state);
                             }
                             Some(Err(error)) => {
                                 tracing::warn!(%error, "SSE transport issue detected, continuing subscription");
+                                state = SubscriptionState::Active(stream_state);
                             }
                             None => {
                                 if let Some(delay) = stream_state.cfg.subscription_stream_restart_delay {
@@ -271,6 +359,7 @@ impl BlokliClient {
                                         tracing::error!(%error, "Failed to restart SSE stream, stopping subscription");
                                         return Ok(None);
                                     }
+                                    state = SubscriptionState::Active(stream_state);
                                 } else {
                                     tracing::warn!(
                                         "SSE stream ended and no restart delay configured, stopping subscription"
@@ -289,7 +378,7 @@ impl BlokliClient {
         .boxed())
     }
 
-    fn build_query<Q, V>(
+    fn build_raw_operation<Q, V>(
         &self,
         op: cynic::Operation<Q, V>,
     ) -> Result<impl Future<Output = Result<GraphQlResponse<Q>, BlokliClientError>>, BlokliClientError>
@@ -312,6 +401,22 @@ impl BlokliClient {
                 serde_json::from_slice(&body).map_err(BlokliClientError::from)
             })
             .inspect_ok(|resp| tracing::debug!(?resp, "decoded Blokli response")))
+    }
+
+    fn build_query<Q, V>(
+        &self,
+        op: cynic::Operation<Q, V>,
+    ) -> Result<impl Future<Output = Result<GraphQlResponse<Q>, BlokliClientError>>, BlokliClientError>
+    where
+        Q: cynic::QueryFragment + cynic::serde::de::DeserializeOwned + Debug + 'static,
+        V: cynic::QueryVariables + cynic::serde::Serialize,
+    {
+        let client = self.clone();
+
+        Ok(async move {
+            client.ensure_compatibility().await?;
+            client.build_raw_operation(op)?.await
+        })
     }
 }
 
@@ -349,11 +454,15 @@ mod tests {
     use cynic::GraphQlResponse;
     use futures::TryStreamExt;
     use launchdarkly_sdk_transport::HttpTransport;
-    use mockito::Server;
+    use mockito::{Matcher, Server};
     use serde_json::json;
 
     use super::{BlokliClient, BlokliClientConfig, ReqwestTransport, response_to_data};
-    use crate::{CLIENT_VERSION, api::BlokliQueryClient, errors::ErrorKind};
+    use crate::{
+        CLIENT_VERSION,
+        api::{BlokliQueryClient, BlokliTransactionClient},
+        errors::ErrorKind,
+    };
 
     #[tokio::test]
     async fn reqwest_transport_returns_streaming_response_body() {
@@ -502,7 +611,8 @@ mod tests {
                   "data": {
                     "compatibility": {
                       "apiVersion": "0.19.1",
-                      "supportedClientVersions": "^0.26"
+                      "supportedClientVersions": "^0.26",
+                      "indexesSafeEvents": true
                     }
                   }
                 }"#,
@@ -517,6 +627,7 @@ mod tests {
 
         assert_eq!(compatibility.api_version, "0.19.1");
         assert_eq!(compatibility.supported_client_versions, "^0.26");
+        assert!(compatibility.indexes_safe_events);
     }
 
     #[tokio::test]
@@ -532,7 +643,8 @@ mod tests {
                   "data": {{
                     "compatibility": {{
                       "apiVersion": "0.19.1",
-                      "supportedClientVersions": "={CLIENT_VERSION}"
+                      "supportedClientVersions": "={CLIENT_VERSION}",
+                      "indexesSafeEvents": true
                     }}
                   }}
                 }}"#
@@ -559,7 +671,8 @@ mod tests {
                   "data": {
                     "compatibility": {
                       "apiVersion": "0.19.1",
-                      "supportedClientVersions": "<0.0.0"
+                      "supportedClientVersions": "<0.0.0",
+                      "indexesSafeEvents": true
                     }
                   }
                 }"#,
@@ -579,5 +692,175 @@ mod tests {
                 supported_version,
             } if client_version == CLIENT_VERSION && supported_version == "<0.0.0"
         ));
+    }
+
+    #[tokio::test]
+    async fn check_compatibility_rejects_server_without_safe_event_indexing() {
+        let mut server = Server::new_async().await;
+        let client = BlokliClient::new(server.url().parse().expect("valid URL"), BlokliClientConfig::default());
+        let _mock = server
+            .mock("POST", "/graphql")
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                  "data": {
+                    "compatibility": {
+                      "apiVersion": "0.19.1",
+                      "supportedClientVersions": "^0.26",
+                      "indexesSafeEvents": false
+                    }
+                  }
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        let error = client
+            .check_compatibility()
+            .await
+            .expect_err("compatibility check should fail");
+
+        assert!(matches!(
+            error.kind(),
+            ErrorKind::SafeEventIndexingDisabled { api_version } if api_version == "0.19.1"
+        ));
+    }
+
+    #[tokio::test]
+    async fn queries_reuse_cached_compatibility_within_ttl() {
+        let mut server = Server::new_async().await;
+        let client = BlokliClient::new(server.url().parse().expect("valid URL"), BlokliClientConfig::default());
+
+        let compatibility_mock = server
+            .mock("POST", "/graphql")
+            .match_body(Matcher::Regex("QueryCompatibility".into()))
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                  "data": {
+                    "compatibility": {
+                      "apiVersion": "0.19.1",
+                      "supportedClientVersions": "^0.26",
+                      "indexesSafeEvents": true
+                    }
+                  }
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        let version_mock = server
+            .mock("POST", "/graphql")
+            .match_body(Matcher::Regex("QueryVersion".into()))
+            .expect(2)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                  "data": {
+                    "version": "0.19.1"
+                  }
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        client.query_version().await.expect("first query should succeed");
+        client.query_version().await.expect("second query should succeed");
+
+        compatibility_mock.assert_async().await;
+        version_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn submit_transaction_checks_compatibility_by_default() {
+        let mut server = Server::new_async().await;
+        let client = BlokliClient::new(server.url().parse().expect("valid URL"), BlokliClientConfig::default());
+
+        let compatibility_mock = server
+            .mock("POST", "/graphql")
+            .match_body(Matcher::Regex("QueryCompatibility".into()))
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                  "data": {
+                    "compatibility": {
+                      "apiVersion": "0.19.1",
+                      "supportedClientVersions": "^0.26",
+                      "indexesSafeEvents": true
+                    }
+                  }
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        let mutation_mock = server
+            .mock("POST", "/graphql")
+            .match_body(Matcher::Regex("MutateSendTransaction".into()))
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                  "data": {
+                    "sendTransaction": {
+                      "__typename": "SendTransactionSuccess",
+                      "transactionHash": "0x0101010101010101010101010101010101010101010101010101010101010101"
+                    }
+                  }
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        client
+            .submit_transaction(&[0x42; 4])
+            .await
+            .expect("transaction submission should succeed");
+
+        compatibility_mock.assert_async().await;
+        mutation_mock.assert_async().await;
+    }
+
+    #[tokio::test]
+    async fn auto_compatibility_check_can_be_disabled() {
+        let mut server = Server::new_async().await;
+        let client = BlokliClient::new(
+            server.url().parse().expect("valid URL"),
+            BlokliClientConfig {
+                auto_compatibility_check: false,
+                ..BlokliClientConfig::default()
+            },
+        );
+
+        let version_mock = server
+            .mock("POST", "/graphql")
+            .match_body(Matcher::Regex("QueryVersion".into()))
+            .expect(1)
+            .with_status(200)
+            .with_header("content-type", "application/json")
+            .with_body(
+                r#"{
+                  "data": {
+                    "version": "0.19.1"
+                  }
+                }"#,
+            )
+            .create_async()
+            .await;
+
+        let version = client
+            .query_version()
+            .await
+            .expect("query should succeed without compatibility preflight");
+
+        assert_eq!(version, "0.19.1");
+        version_mock.assert_async().await;
     }
 }

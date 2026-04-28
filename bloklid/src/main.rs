@@ -311,6 +311,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 blokli_api_config,
                 expected_block_time,
                 finality,
+                enable_safe_indexing,
                 indexer_state,
                 blokli_chain.transaction_executor(),
                 blokli_chain.transaction_store(),

@@ -34,6 +34,10 @@ pub struct ChainId(pub u64);
 #[derive(Debug, Clone)]
 pub struct NetworkName(pub String);
 
+/// Wrapper type describing whether the server indexes Safe events
+#[derive(Debug, Clone, Copy)]
+pub struct SafeEventIndexingEnabled(pub bool);
+
 /// Build the async-graphql schema with database connection, chain ID, network, indexer state, and transaction
 /// components
 ///
@@ -63,6 +67,7 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
     expected_block_time: u64,
     finality: u16,
     gas_multiplier: f64,
+    indexes_safe_events: bool,
     indexer_state: IndexerState,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
@@ -78,6 +83,7 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
         .data(ExpectedBlockTime(expected_block_time))
         .data(Finality(finality))
         .data(GasMultiplier(gas_multiplier))
+        .data(SafeEventIndexingEnabled(indexes_safe_events))
         .data(indexer_state)
         .data(transaction_executor)
         .data(transaction_store)
@@ -94,6 +100,7 @@ pub fn export_schema_sdl<R: HttpRequestor + 'static + Clone>(
     db: DatabaseConnection,
     chain_id: u64,
     contract_addresses: ContractAddresses,
+    indexes_safe_events: bool,
     indexer_state: IndexerState,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
@@ -107,6 +114,7 @@ pub fn export_schema_sdl<R: HttpRequestor + 'static + Clone>(
         5,   // Placeholder expected block time
         8,   // Placeholder finality
         1.0, // Placeholder gas multiplier
+        indexes_safe_events,
         indexer_state,
         transaction_executor,
         transaction_store,

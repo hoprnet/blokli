@@ -1,4 +1,5 @@
 use blokli_client::{BlokliClient, api::BlokliQueryClient};
+use mockito::Matcher;
 use serde_json::json;
 
 use crate::common::{Body, RequestRecorder};
@@ -13,8 +14,30 @@ async fn query_native_balance() -> anyhow::Result<()> {
 
     let recorder = RequestRecorder::default();
 
-    let mock = server
+    let compatibility_mock = server
         .mock("POST", "/graphql")
+        .match_body(Matcher::Regex("QueryCompatibility".into()))
+        .with_status(200)
+        .match_request(recorder.as_matcher())
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+              "data": {
+                "compatibility": {
+                  "apiVersion": "0.19.1",
+                  "supportedClientVersions": "^0.26",
+                  "indexesSafeEvents": true
+                }
+              }
+            }
+        "#,
+        )
+        .create_async()
+        .await;
+
+    let balance_mock = server
+        .mock("POST", "/graphql")
+        .match_body(Matcher::Regex("QueryNativeBalance".into()))
         .with_status(200)
         .match_request(recorder.as_matcher())
         .with_header("content-type", "application/json")
@@ -35,7 +58,8 @@ async fn query_native_balance() -> anyhow::Result<()> {
     let balance = cli.query_native_balance(&[1u8; 20]).await?;
     assert_eq!("1234567890", balance.balance.0);
 
-    mock.assert_async().await;
+    compatibility_mock.assert_async().await;
+    balance_mock.assert_async().await;
 
     insta::assert_yaml_snapshot!(recorder.requests());
 
@@ -50,8 +74,30 @@ async fn query_token_balance() -> anyhow::Result<()> {
 
     let recorder = RequestRecorder::default();
 
-    let mock = server
+    let compatibility_mock = server
         .mock("POST", "/graphql")
+        .match_body(Matcher::Regex("QueryCompatibility".into()))
+        .with_status(200)
+        .match_request(recorder.as_matcher())
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+              "data": {
+                "compatibility": {
+                  "apiVersion": "0.19.1",
+                  "supportedClientVersions": "^0.26",
+                  "indexesSafeEvents": true
+                }
+              }
+            }
+        "#,
+        )
+        .create_async()
+        .await;
+
+    let balance_mock = server
+        .mock("POST", "/graphql")
+        .match_body(Matcher::Regex("QueryHoprBalance".into()))
         .with_status(200)
         .match_request(recorder.as_matcher())
         .with_header("content-type", "application/json")
@@ -72,7 +118,8 @@ async fn query_token_balance() -> anyhow::Result<()> {
     let balance = cli.query_token_balance(&[1u8; 20]).await?;
     assert_eq!("1234567890", balance.balance.0);
 
-    mock.assert_async().await;
+    compatibility_mock.assert_async().await;
+    balance_mock.assert_async().await;
 
     insta::assert_yaml_snapshot!(recorder.requests());
 
@@ -97,7 +144,8 @@ async fn query_compatibility() -> anyhow::Result<()> {
               "data": {
                 "compatibility": {
                   "apiVersion": "0.19.1",
-                  "supportedClientVersions": "^0.24"
+                  "supportedClientVersions": "^0.24",
+                  "indexesSafeEvents": true
                 }
               }
             }
@@ -109,6 +157,7 @@ async fn query_compatibility() -> anyhow::Result<()> {
     let compatibility = cli.query_compatibility().await?;
     assert_eq!(compatibility.api_version, "0.19.1");
     assert_eq!(compatibility.supported_client_versions, "^0.24");
+    assert!(compatibility.indexes_safe_events);
 
     mock.assert_async().await;
 
@@ -120,7 +169,7 @@ async fn query_compatibility() -> anyhow::Result<()> {
         requests[0].body,
         Some(Body::Json(json!({
             "operationName": "QueryCompatibility",
-            "query": "query QueryCompatibility {\n  compatibility {\n    apiVersion\n    supportedClientVersions\n  }\n}\n",
+            "query": "query QueryCompatibility {\n  compatibility {\n    apiVersion\n    supportedClientVersions\n    indexesSafeEvents\n  }\n}\n",
             "variables": null
         })))
     );

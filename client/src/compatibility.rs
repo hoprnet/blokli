@@ -31,6 +31,7 @@ mod tests {
         validate_client_compatibility(&Compatibility {
             api_version: "0.19.1".to_string(),
             supported_client_versions: format!("={CLIENT_VERSION}"),
+            indexes_safe_events: true,
         })
         .expect("compatibility check should pass");
     }
@@ -41,6 +42,7 @@ mod tests {
         let error = validate_client_compatibility(&Compatibility {
             api_version: "0.19.1".to_string(),
             supported_client_versions: supported_versions.clone(),
+            indexes_safe_events: true,
         })
         .expect_err("compatibility check should fail");
 

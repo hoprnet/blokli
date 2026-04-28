@@ -50,6 +50,7 @@ async fn subscribe_ticket_params_recreates_stream_without_loss_or_duplication() 
     let client = BlokliClient::new(
         base_url,
         BlokliClientConfig {
+            auto_compatibility_check: true,
             timeout: Duration::from_secs(2),
             stream_reconnect_timeout: Duration::from_secs(2),
             subscription_read_timeout: Some(Duration::from_secs(2)),
@@ -96,6 +97,7 @@ async fn subscribe_ticket_params_stays_open_beyond_non_streaming_timeout() -> Re
     let client = BlokliClient::new(
         base_url,
         BlokliClientConfig {
+            auto_compatibility_check: true,
             timeout: Duration::from_millis(100),
             stream_reconnect_timeout: Duration::from_secs(2),
             subscription_read_timeout: Some(Duration::from_secs(2)),
@@ -129,6 +131,7 @@ async fn subscribe_ticket_params_reconnects_after_read_timeout() -> Result<()> {
     let client = BlokliClient::new(
         base_url,
         BlokliClientConfig {
+            auto_compatibility_check: true,
             timeout: Duration::from_secs(2),
             stream_reconnect_timeout: Duration::from_millis(250),
             subscription_read_timeout: Some(Duration::from_millis(100)),
@@ -159,6 +162,12 @@ async fn spawn_reconnecting_server(
     let base_url = Url::parse(&format!("http://{}", listener.local_addr()?))?;
 
     let server = tokio::spawn(async move {
+        let (mut compatibility_conn, _) = listener.accept().await?;
+        compatibility_conn
+            .write_all(format_json_response(compatibility_response_body()).as_bytes())
+            .await?;
+        compatibility_conn.shutdown().await?;
+
         let responses = event_batches
             .iter()
             .map(|events| format_sse_response(&format_ticket_params_events(events)));
@@ -183,6 +192,12 @@ async fn spawn_delayed_streaming_server(
     let base_url = Url::parse(&format!("http://{}", listener.local_addr()?))?;
 
     let server = tokio::spawn(async move {
+        let (mut compatibility_conn, _) = listener.accept().await?;
+        compatibility_conn
+            .write_all(format_json_response(compatibility_response_body()).as_bytes())
+            .await?;
+        compatibility_conn.shutdown().await?;
+
         let response_headers = format!(concat!(
             "HTTP/1.1 200 OK\r\n",
             "content-type: text/event-stream\r\n",
@@ -209,6 +224,12 @@ async fn spawn_timed_out_then_reconnecting_server(
     let base_url = Url::parse(&format!("http://{}", listener.local_addr()?))?;
 
     let server = tokio::spawn(async move {
+        let (mut compatibility_conn, _) = listener.accept().await?;
+        compatibility_conn
+            .write_all(format_json_response(compatibility_response_body()).as_bytes())
+            .await?;
+        compatibility_conn.shutdown().await?;
+
         let response_headers = format!(concat!(
             "HTTP/1.1 200 OK\r\n",
             "content-type: text/event-stream\r\n",
@@ -257,4 +278,24 @@ fn format_sse_response(body: &str) -> String {
         body.len(),
         body,
     )
+}
+
+fn format_json_response(body: &str) -> String {
+    format!(
+        concat!(
+            "HTTP/1.1 200 OK\r\n",
+            "content-type: application/json\r\n",
+            "cache-control: no-cache\r\n",
+            "connection: close\r\n",
+            "content-length: {}\r\n",
+            "\r\n",
+            "{}",
+        ),
+        body.len(),
+        body,
+    )
+}
+
+fn compatibility_response_body() -> &'static str {
+    r#"{"data":{"compatibility":{"apiVersion":"0.19.1","supportedClientVersions":"^0.26","indexesSafeEvents":true}}}"#
 }

@@ -146,6 +146,7 @@ pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> 
         config.clone(),
         config.expected_block_time,
         finality,
+        false,
         indexer_state,
         transaction_executor,
         transaction_store,

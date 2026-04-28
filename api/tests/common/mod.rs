@@ -330,6 +330,7 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
         api_config,
         expected_block_time,
         3, // Test finality value
+        false,
         indexer_state,
         ctx.transaction_executor.clone(),
         ctx.transaction_store.clone(),
