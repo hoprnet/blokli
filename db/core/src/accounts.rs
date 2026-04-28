@@ -279,8 +279,40 @@ impl BlokliDbAccountOperations for BlokliDb {
                             published_tx_index: Set(tx_index_i64),
                             published_log_index: Set(log_index_i64),
                         };
-                        let inserted = account_model.insert(tx.as_ref()).await?;
-                        inserted.id
+                        match Account::insert(account_model)
+                            .on_conflict(
+                                OnConflict::columns([account::Column::ChainKey, account::Column::PacketKey])
+                                    .do_nothing()
+                                    .to_owned(),
+                            )
+                            .exec(tx.as_ref())
+                            .await
+                        {
+                            Ok(_insert_result) => {
+                                // Look up by natural key instead of last_insert_id, which is
+                                // unreliable with ON CONFLICT DO NOTHING (Postgres returns 0)
+                                account::Entity::find()
+                                    .filter(account::Column::ChainKey.eq(chain_key.as_ref().to_vec()))
+                                    .filter(account::Column::PacketKey.eq(hex::encode(packet_key.as_ref())))
+                                    .one(tx.as_ref())
+                                    .await?
+                                    .ok_or_else(|| DbSqlError::LogicalError("Inserted account not found".to_string()))?
+                                    .id
+                            }
+                            Err(DbErr::RecordNotInserted) => {
+                                // Race condition: account was inserted between find and insert
+                                account::Entity::find()
+                                    .filter(account::Column::ChainKey.eq(chain_key.as_ref().to_vec()))
+                                    .filter(account::Column::PacketKey.eq(hex::encode(packet_key.as_ref())))
+                                    .one(tx.as_ref())
+                                    .await?
+                                    .ok_or_else(|| {
+                                        DbSqlError::LogicalError("Account not found after conflict".to_string())
+                                    })?
+                                    .id
+                            }
+                            Err(e) => return Err(e.into()),
+                        }
                     };
 
                     // Step 2: Insert account_state record with state information
@@ -294,7 +326,26 @@ impl BlokliDbAccountOperations for BlokliDb {
                         ..Default::default()
                     };
 
-                    AccountState::insert(state_model).exec(tx.as_ref()).await?;
+                    match AccountState::insert(state_model)
+                        .on_conflict(
+                            OnConflict::columns([
+                                account_state::Column::AccountId,
+                                account_state::Column::PublishedBlock,
+                                account_state::Column::PublishedTxIndex,
+                                account_state::Column::PublishedLogIndex,
+                            ])
+                            .do_nothing()
+                            .to_owned(),
+                        )
+                        .exec(tx.as_ref())
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(DbErr::RecordNotInserted) => {
+                            // Idempotent: record already exists from a previous incomplete sync
+                        }
+                        Err(e) => return Err(e.into()),
+                    }
 
                     Ok::<_, DbSqlError>(())
                 })
@@ -1569,6 +1620,33 @@ mod tests {
             no_safe.key_id,
             0.into(),
             "key_id should still be set even without safe_address"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upsert_account_idempotent_on_same_position() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let chain_key = ChainKeypair::random().public().to_address();
+        let packet_key = *OffchainKeypair::random().public();
+        let safe_addr = Address::from(hopr_types::crypto_random::random_bytes());
+
+        // Insert account state at (block=100, tx_index=5, log_index=3)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr), 100, 5, 3)
+            .await?;
+
+        // Insert again with the same position - should succeed (idempotent)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr), 100, 5, 3)
+            .await?;
+
+        // Verify only one state record exists
+        let history = db.get_account_history(None, chain_key).await?;
+        assert_eq!(
+            1,
+            history.len(),
+            "should have exactly 1 state record despite double insert"
         );
 
         Ok(())
