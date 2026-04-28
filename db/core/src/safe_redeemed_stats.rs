@@ -143,7 +143,7 @@ impl BlokliDbSafeRedeemedStatsOperations for BlokliDb {
 
 #[cfg(test)]
 mod tests {
-    use rand::RngCore;
+    use rand::Rng;
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
     use super::*;
