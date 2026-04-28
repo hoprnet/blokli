@@ -7,7 +7,7 @@
 //! historical blockchain data.
 //!
 //! For details on the Indexer see the `chain-indexer` crate.
-use std::{cmp::Ordering, pin::Pin, time::Duration};
+use std::{cmp::Ordering, future::Future, pin::Pin, time::Duration};
 
 use async_stream::stream;
 use async_trait::async_trait;
@@ -79,6 +79,33 @@ fn split_range<'a>(
     .boxed()
 }
 
+async fn fetch_subrange_logs_concurrently<F, Fut, E>(filters: Vec<Filter>, fetch_logs: F) -> Vec<Result<Log>>
+where
+    F: FnMut(Filter) -> Fut,
+    Fut: Future<Output = std::result::Result<Vec<Log>, E>>,
+    E: Into<RpcError>,
+{
+    let mut results = futures::stream::iter(filters)
+        .then_concurrent(fetch_logs, None)
+        .flat_map(|result| {
+            futures::stream::iter(match result {
+                Ok(logs) => logs.into_iter().map(Ok).collect::<Vec<_>>(),
+                Err(error) => vec![Err(error.into())],
+            })
+        })
+        .collect::<Vec<_>>()
+        .await;
+
+    results.sort_by(|a, b| match (a, b) {
+        (Ok(a), Ok(b)) => a.cmp(b),
+        (Err(_), Ok(_)) => Ordering::Less,
+        (Ok(_), Err(_)) => Ordering::Greater,
+        (Err(_), Err(_)) => Ordering::Equal,
+    });
+
+    results
+}
+
 // impl<P: JsonRpcClient + 'static, R: HttpRequestor + 'static> RpcOperations<P, R> {
 impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
     /// Retrieves logs in the given range (`from_block` and `to_block` are inclusive).
@@ -92,43 +119,27 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
 
         fetch_ranges
             .then(move |subrange_filters| async move {
-                let mut results = futures::stream::iter(subrange_filters)
-                    .then_concurrent(
-                        |filter| async move {
-                            let prov_clone = self.provider.clone();
+                let results = fetch_subrange_logs_concurrently(subrange_filters, |filter| async move {
+                    let prov_clone = self.provider.clone();
 
-                            match prov_clone.get_logs(&filter).await {
-                                Ok(logs) => Ok(logs),
-                                Err(e) => {
-                                    error!(
-                                        from = ?filter.get_from_block(),
-                                        to = ?filter.get_to_block(),
-                                        error = %e,
-                                        "failed to fetch logs in block subrange"
-                                    );
-                                    Err(e)
-                                }
-                            }
-                        },
-                        None,
-                    )
-                    .flat_map(|result| {
-                        futures::stream::iter(match result {
-                            Ok(logs) => logs.into_iter().map(|log| Ok(Log::try_from(log)?)).collect::<Vec<_>>(),
-                            Err(e) => vec![Err(RpcError::from(e))],
-                        })
-                    })
-                    .collect::<Vec<_>>()
-                    .await;
-
-                // Keep live-stream ordering aligned with targeted backfills by using
-                // the same canonical ordering as `Log::Ord`.
-                results.sort_by(|a, b| match (a, b) {
-                    (Ok(a), Ok(b)) => a.cmp(b),
-                    (Err(_), Ok(_)) => Ordering::Less,
-                    (Ok(_), Err(_)) => Ordering::Greater,
-                    (Err(_), Err(_)) => Ordering::Equal,
-                });
+                    match prov_clone.get_logs(&filter).await {
+                        Ok(logs) => logs
+                            .into_iter()
+                            .map(Log::try_from)
+                            .collect::<std::result::Result<Vec<_>, _>>()
+                            .map_err(RpcError::from),
+                        Err(error) => {
+                            error!(
+                                from = ?filter.get_from_block(),
+                                to = ?filter.get_to_block(),
+                                error = %error,
+                                "failed to fetch logs in block subrange"
+                            );
+                            Err(RpcError::from(error))
+                        }
+                    }
+                })
+                .await;
 
                 futures::stream::iter(results)
             })
@@ -454,11 +465,19 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use anyhow::Context;
     use futures::StreamExt;
     use hopr_bindings::exports::alloy::rpc::types::Filter;
+    use hopr_types::{crypto::types::Hash, primitive::prelude::Address};
+    use tokio::time::sleep;
 
-    use crate::indexer::split_range;
+    use crate::{
+        Log,
+        errors::{Result, RpcError},
+        indexer::{fetch_subrange_logs_concurrently, split_range},
+    };
 
     fn filter_bounds(filters: &[Filter]) -> anyhow::Result<(u64, u64)> {
         let bounds = filters.iter().try_fold((0, 0), |acc, filter| {
@@ -517,6 +536,50 @@ mod tests {
         let ranges = split_range(filters.clone(), 0, 3, 10).collect::<Vec<_>>().await;
         assert_eq!(1, ranges.len());
         assert_eq!((0, 3), filter_bounds(&ranges[0])?);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_fetch_subrange_logs_concurrently_sorts_results_after_concurrent_completion() -> anyhow::Result<()> {
+        fn create_test_log(block_number: u64, tx_index: u64, log_index: u64) -> Log {
+            Log {
+                address: Address::default(),
+                topics: vec![Hash::default()],
+                data: vec![1, 2, 3].into(),
+                tx_index,
+                block_number,
+                block_hash: Hash::default(),
+                log_index: log_index.into(),
+                tx_hash: Hash::default(),
+                removed: false,
+            }
+        }
+
+        let early_filter = Filter::new().from_block(1_u64).to_block(1_u64);
+        let late_filter = Filter::new().from_block(2_u64).to_block(2_u64);
+        let results: Vec<Result<Log>> =
+            fetch_subrange_logs_concurrently(vec![late_filter, early_filter], |filter| async move {
+                let from_block = filter.get_from_block().expect("from block should be present");
+
+                match from_block {
+                    1 => {
+                        sleep(Duration::from_millis(20)).await;
+                        Ok::<_, RpcError>(vec![create_test_log(7, 3, 9)])
+                    }
+                    2 => {
+                        sleep(Duration::from_millis(1)).await;
+                        Ok::<_, RpcError>(vec![create_test_log(5, 1, 4), create_test_log(5, 0, 2)])
+                    }
+                    _ => Err(RpcError::Other("unexpected filter".to_string())),
+                }
+            })
+            .await;
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].as_ref().expect("first log should succeed").tx_index, 0);
+        assert_eq!(results[1].as_ref().expect("second log should succeed").tx_index, 1);
+        assert_eq!(results[2].as_ref().expect("third log should succeed").block_number, 7);
 
         Ok(())
     }
