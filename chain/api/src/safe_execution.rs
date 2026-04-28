@@ -23,7 +23,6 @@ use crate::{
 sol! {
     event ExecutionSuccess(bytes32 txHash, uint256 payment);
     event ExecutionFailure(bytes32 txHash, uint256 payment);
-    event ExecutionFromModuleSuccess(address indexed module);
     event ExecutionFromModuleFailure(address indexed module);
 }
 
@@ -67,17 +66,6 @@ pub fn inspect_safe_execution_logs(safe_address: &[u8; 20], logs: &[ReceiptLog])
                 // Revert reason is not available from Safe events directly.
                 // The Safe contract catches the revert internally and only
                 // emits the txHash and payment in the event data.
-                revert_reason: None,
-            });
-        }
-
-        // Module execution events: ExecutionFromModuleSuccess/ExecutionFromModuleFailure
-        // These have signature `event ExecutionFromModule{Success,Failure}(address indexed module)`
-        // and do not contain a Safe txHash parameter.
-        if topic0 == ExecutionFromModuleSuccess::SIGNATURE_HASH.as_slice() {
-            return Some(SafeExecutionResult {
-                success: true,
-                safe_tx_hash: None,
                 revert_reason: None,
             });
         }
@@ -278,21 +266,6 @@ mod tests {
     }
 
     #[test]
-    fn test_inspect_safe_execution_logs_module_success_event() {
-        let safe_address = [0xAA; 20];
-        let module_address = [0xBB; 32]; // indexed module address in topics[1]
-
-        let logs = vec![ReceiptLog {
-            address: safe_address,
-            topics: vec![ExecutionFromModuleSuccess::SIGNATURE_HASH.0, module_address],
-            data: vec![],
-        }];
-
-        let result = inspect_safe_execution_logs(&safe_address, &logs);
-        insta::assert_yaml_snapshot!(&result);
-    }
-
-    #[test]
     fn test_inspect_safe_execution_logs_module_failure_event() {
         let safe_address = [0xAA; 20];
         let module_address = [0xBB; 32]; // indexed module address in topics[1]
@@ -312,10 +285,10 @@ mod tests {
         let safe_address = [0xAA; 20];
         let other_address = [0xCC; 20];
 
-        // Module success event from a different contract address should be ignored
+        // Module failure event from a different contract address should be ignored
         let logs = vec![ReceiptLog {
             address: other_address,
-            topics: vec![ExecutionFromModuleSuccess::SIGNATURE_HASH.0],
+            topics: vec![ExecutionFromModuleFailure::SIGNATURE_HASH.0],
             data: vec![],
         }];
 

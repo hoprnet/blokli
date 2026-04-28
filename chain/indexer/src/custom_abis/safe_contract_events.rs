@@ -3,8 +3,7 @@
 //! Event definitions here are derived from Safe's official Smart Account contract
 //! documentation and ABI surface, reduced to the subset currently indexed by Blokli:
 //! `SafeSetup`, `AddedOwner`, `RemovedOwner`, `ChangedThreshold`,
-//! `ExecutionSuccess`, `ExecutionFailure`, `ExecutionFromModuleSuccess`,
-//! and `ExecutionFromModuleFailure`.
+//! `ExecutionSuccess`, `ExecutionFailure`, and `ExecutionFromModuleFailure`.
 //!
 //! Reference docs:
 //! - https://docs.safe.global/reference-smart-account/events/SafeSetup
@@ -33,7 +32,6 @@ sol!(
         event ChangedThreshold(uint256 threshold);
         event ExecutionSuccess(bytes32 indexed txHash, uint256 payment);
         event ExecutionFailure(bytes32 indexed txHash, uint256 payment);
-        event ExecutionFromModuleSuccess(address indexed module);
         event ExecutionFromModuleFailure(address indexed module);
     }
 );

@@ -382,7 +382,6 @@ where
                     "Persisted Safe ExecutionFailure event"
                 );
             }
-            SafeContractEvents::ExecutionFromModuleSuccess(_execution) => {}
             SafeContractEvents::ExecutionFromModuleFailure(_execution) => {
                 self.maybe_record_rejected_ticket_redemption(tx, safe_address, log)
                     .await?;
