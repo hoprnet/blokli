@@ -2092,7 +2092,7 @@ dependencies = [
 
 [[package]]
 name = "bloklid"
-version = "0.10.3"
+version = "0.10.4"
 dependencies = [
  "anyhow",
  "async-signal",

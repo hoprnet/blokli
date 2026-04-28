@@ -36,6 +36,26 @@ impl MigrationTrait for Migration {
             )
             .await
     }
+
+    async fn down(&self, manager: &SchemaManager) -> Result<(), DbErr> {
+        manager
+            .alter_table(
+                Table::alter()
+                    .table(HoprSafeRedeemedStats::Table)
+                    .drop_column(HoprSafeRedeemedStats::RejectedAmount)
+                    .to_owned(),
+            )
+            .await?;
+
+        manager
+            .alter_table(
+                Table::alter()
+                    .table(HoprSafeRedeemedStats::Table)
+                    .drop_column(HoprSafeRedeemedStats::RejectionCount)
+                    .to_owned(),
+            )
+            .await
+    }
 }
 
 #[derive(DeriveIden)]
