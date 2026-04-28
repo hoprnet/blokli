@@ -5,13 +5,13 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-client"
 repository  = "https://github.com/hoprnet/blokli"
-version     = "0.25.0"
+version     = "0.26.0"
 
 [dependencies]
 anyhow          = { workspace = true }
 async-broadcast = { workspace = true, optional = true }
 async-trait     = { workspace = true }
-bytes           = "1"
+bytes           = { workspace = true }
 chrono          = { workspace = true, optional = true }
 cynic           = { workspace = true, features = ["http-reqwest"] }
 # Use custom reqwest transport (no built-in hyper transport).
@@ -32,6 +32,7 @@ reqwest = { workspace = true, features = [
   "stream",
   "zstd",
 ] }
+semver = { workspace = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true }
 smart-default = { workspace = true }

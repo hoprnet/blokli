@@ -59,7 +59,7 @@ jobs:
       pull-requests: write
     steps:
       - name: Harden Runner
-        uses: step-security/harden-runner@fa2e9d605c4eeb9fcad4c99c224cee0c6c7f3594 # v2.16.0
+        uses: step-security/harden-runner@8d3c67de8e2fe68ef647c8db1e6a09f647780f40 # v2.19.0
         with:
           disable-sudo: true
           egress-policy: audit
@@ -226,3 +226,16 @@ jobs:
     with:
       image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid:${{ needs.build-docker.outputs.docker_build_version }}
     secrets: inherit
+  publish-dry-run:
+    name: Publish (dry run)
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    uses: hoprnet/hopr-workflows/.github/workflows/publish-crates.yaml@e4fadaa70234b9d734d5c51b6900602e55492ce2 # workflow-publish-crates-v3
+    permissions:
+      contents: read
+    with:
+      source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
+      package: blokli-client
+      version_type: commit
+      runner: depot-ubuntu-22.04-4
+    secrets:
+      cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}

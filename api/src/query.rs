@@ -44,6 +44,8 @@ use crate::{
     conversions::transaction_from_record, errors, mutation::TransactionResult, validation::validate_eth_address,
 };
 
+const SUPPORTED_CLIENT_VERSIONS: &str = "^0.26";
+
 /// Result type for HOPR balance queries
 #[derive(Union)]
 pub enum HoprBalanceResult {
@@ -113,6 +115,12 @@ pub enum CalculateModuleAddressResult {
     ModuleAddress(ModuleAddress),
     InvalidAddress(InvalidAddressError),
     QueryFailed(QueryFailedError),
+}
+
+#[derive(SimpleObject)]
+pub struct Compatibility {
+    pub api_version: String,
+    pub supported_client_versions: String,
 }
 
 /// Validate and parse an Ethereum hex address.
@@ -1433,6 +1441,17 @@ impl QueryRoot {
             expected_block_time: UInt64(expected_block_time.0),
             finality: UInt64(finality.0 as u64),
         }))
+    }
+
+    /// Client compatibility information
+    ///
+    /// Returns the API version and a semver requirement for compatible
+    /// blokli-client releases.
+    async fn compatibility(&self) -> Compatibility {
+        Compatibility {
+            api_version: env!("CARGO_PKG_VERSION").to_string(),
+            supported_client_versions: SUPPORTED_CLIENT_VERSIONS.to_string(),
+        }
     }
 
     /// Health check endpoint

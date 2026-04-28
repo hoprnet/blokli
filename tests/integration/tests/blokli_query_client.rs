@@ -721,6 +721,25 @@ async fn query_version_should_be_parsable(#[future(awt)] fixture: IntegrationFix
 
 #[rstest]
 #[test_log::test(tokio::test)]
+/// verifies that the client compatibility contract exposes a parsable API version and
+/// a semver requirement for supported blokli-client releases.
+async fn query_compatibility_should_be_parsable(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    let compatibility = fixture.client().query_compatibility().await?;
+
+    let _api_version =
+        semver::Version::parse(&compatibility.api_version).context("failed to parse api version as semver")?;
+    let supported_versions = semver::VersionReq::parse(&compatibility.supported_client_versions)
+        .context("failed to parse client compatibility requirement")?;
+    let client_version =
+        semver::Version::parse(blokli_client::CLIENT_VERSION).expect("blokli-client version should parse");
+
+    assert!(supported_versions.matches(&client_version));
+
+    Ok(())
+}
+
+#[rstest]
+#[test_log::test(tokio::test)]
 /// verifies that the health status returned by blokli is "ok".
 async fn query_health_should_be_ok(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     assert_eq!(fixture.client().query_health().await?, "ok");

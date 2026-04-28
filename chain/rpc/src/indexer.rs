@@ -7,7 +7,7 @@
 //! historical blockchain data.
 //!
 //! For details on the Indexer see the `chain-indexer` crate.
-use std::{cmp::Ordering, pin::Pin, time::Duration};
+use std::{cmp::Ordering, future::Future, pin::Pin, time::Duration};
 
 use async_stream::stream;
 use async_trait::async_trait;
@@ -17,7 +17,7 @@ use hopr_bindings::exports::alloy::{
     eips::eip2718::Encodable2718,
     primitives::{Address as AlloyAddress, B256, U256},
     providers::Provider,
-    rpc::types::Filter,
+    rpc::types::{Filter, Log as AlloyLog},
 };
 #[cfg(all(feature = "telemetry", not(test)))]
 use hopr_metrics::SimpleGauge;
@@ -80,6 +80,36 @@ fn split_range<'a>(
     .boxed()
 }
 
+async fn fetch_subrange_logs_concurrently<F, Fut, E>(filters: Vec<Filter>, fetch_logs: F) -> Vec<Result<Log>>
+where
+    F: FnMut(Filter) -> Fut,
+    Fut: Future<Output = std::result::Result<Vec<AlloyLog>, E>>,
+    E: Into<RpcError>,
+{
+    let mut results = futures::stream::iter(filters)
+        .then_concurrent(fetch_logs, None)
+        .flat_map(|result| {
+            futures::stream::iter(match result {
+                Ok(logs) => logs
+                    .into_iter()
+                    .map(|log| Log::try_from(log).map_err(RpcError::from))
+                    .collect::<Vec<_>>(),
+                Err(error) => vec![Err(error.into())],
+            })
+        })
+        .collect::<Vec<_>>()
+        .await;
+
+    results.sort_by(|a, b| match (a, b) {
+        (Ok(a), Ok(b)) => a.cmp(b),
+        (Err(_), Ok(_)) => Ordering::Less,
+        (Ok(_), Err(_)) => Ordering::Greater,
+        (Err(_), Err(_)) => Ordering::Equal,
+    });
+
+    results
+}
+
 // impl<P: JsonRpcClient + 'static, R: HttpRequestor + 'static> RpcOperations<P, R> {
 impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
     /// Retrieves logs in the given range (`from_block` and `to_block` are inclusive).
@@ -93,40 +123,23 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
 
         fetch_ranges
             .then(move |subrange_filters| async move {
-                let mut results = futures::stream::iter(subrange_filters)
-                    .then_concurrent(|filter| async move {
-                        let prov_clone = self.provider.clone();
+                let results = fetch_subrange_logs_concurrently(subrange_filters, |filter| async move {
+                    let prov_clone = self.provider.clone();
 
-                        match prov_clone.get_logs(&filter).await {
-                            Ok(logs) => Ok(logs),
-                            Err(e) => {
-                                error!(
-                                    from = ?filter.get_from_block(),
-                                    to = ?filter.get_to_block(),
-                                    error = %e,
-                                    "failed to fetch logs in block subrange"
-                                );
-                                Err(e)
-                            }
+                    match prov_clone.get_logs(&filter).await {
+                        Ok(logs) => Ok(logs),
+                        Err(error) => {
+                            error!(
+                                from = ?filter.get_from_block(),
+                                to = ?filter.get_to_block(),
+                                error = %error,
+                                "failed to fetch logs in block subrange"
+                            );
+                            Err(RpcError::from(error))
                         }
-                    })
-                    .flat_map(|result| {
-                        futures::stream::iter(match result {
-                            Ok(logs) => logs.into_iter().map(|log| Ok(Log::try_from(log)?)).collect::<Vec<_>>(),
-                            Err(e) => vec![Err(RpcError::from(e))],
-                        })
-                    })
-                    .collect::<Vec<_>>()
-                    .await;
-
-                // Keep live-stream ordering aligned with targeted backfills by using
-                // the same canonical ordering as `Log::Ord`.
-                results.sort_by(|a, b| match (a, b) {
-                    (Ok(a), Ok(b)) => a.cmp(b),
-                    (Err(_), Ok(_)) => Ordering::Less,
-                    (Ok(_), Err(_)) => Ordering::Greater,
-                    (Err(_), Err(_)) => Ordering::Equal,
-                });
+                    }
+                })
+                .await;
 
                 futures::stream::iter(results)
             })
@@ -462,11 +475,54 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
 
 #[cfg(test)]
 mod tests {
-    use anyhow::Context;
-    use futures::StreamExt;
-    use hopr_bindings::exports::alloy::rpc::types::Filter;
+    use std::time::Duration;
 
-    use crate::indexer::split_range;
+    use anyhow::Context;
+    use async_trait::async_trait;
+    use blokli_chain_types::ContractAddresses;
+    use futures::StreamExt;
+    use hopr_bindings::exports::alloy::{
+        primitives::{Address as AlloyAddress, B256, Log as AlloyPrimitiveLog, LogData},
+        rpc::{
+            client::ClientBuilder,
+            types::{Filter, Log as AlloyLog},
+        },
+        transports::http::ReqwestTransport,
+    };
+    use serde_json::json;
+    use tokio::time::sleep;
+    use url::Url;
+
+    use crate::{
+        errors::{HttpRequestError, RpcError},
+        indexer::{fetch_subrange_logs_concurrently, split_range},
+        rpc::{RpcOperations, RpcOperationsConfig},
+        transport::HttpRequestor,
+    };
+
+    #[derive(Clone, Debug, Default)]
+    struct TestRequestor;
+
+    #[async_trait]
+    impl HttpRequestor for TestRequestor {
+        async fn http_get(&self, _url: &str) -> std::result::Result<Box<[u8]>, HttpRequestError> {
+            unreachable!("gas oracle should not be used in indexer log streaming tests")
+        }
+    }
+
+    fn create_test_rpc_operations(server_url: &str) -> anyhow::Result<RpcOperations<TestRequestor>> {
+        let transport_client = ReqwestTransport::new(Url::parse(server_url)?);
+        let rpc_client = ClientBuilder::default().transport(transport_client.clone(), transport_client.guess_local());
+        let cfg = RpcOperationsConfig {
+            contract_addrs: ContractAddresses::default(),
+            gas_oracle_url: None,
+            tx_polling_interval: Duration::from_secs(1),
+            max_block_range_fetch_size: 10,
+            ..RpcOperationsConfig::default()
+        };
+
+        RpcOperations::new(rpc_client, TestRequestor, cfg, Some(true)).map_err(Into::into)
+    }
 
     fn filter_bounds(filters: &[Filter]) -> anyhow::Result<(u64, u64)> {
         let bounds = filters.iter().try_fold((0, 0), |acc, filter| {
@@ -525,6 +581,145 @@ mod tests {
         let ranges = split_range(filters.clone(), 0, 3, 10).collect::<Vec<_>>().await;
         assert_eq!(1, ranges.len());
         assert_eq!((0, 3), filter_bounds(&ranges[0])?);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_fetch_subrange_logs_concurrently_sorts_results_after_concurrent_completion() -> anyhow::Result<()> {
+        fn create_test_log(block_number: Option<u64>, tx_index: Option<u64>, log_index: Option<u64>) -> AlloyLog {
+            AlloyLog {
+                inner: AlloyPrimitiveLog {
+                    address: AlloyAddress::ZERO,
+                    data: LogData::new_unchecked(vec![B256::ZERO], vec![1, 2, 3].into()),
+                },
+                block_hash: Some(B256::ZERO),
+                block_number,
+                block_timestamp: None,
+                transaction_hash: Some(B256::ZERO),
+                transaction_index: tx_index,
+                log_index,
+                removed: false,
+            }
+        }
+
+        let early_filter = Filter::new().from_block(1_u64).to_block(1_u64);
+        let late_filter = Filter::new().from_block(2_u64).to_block(2_u64);
+        let results = fetch_subrange_logs_concurrently(vec![late_filter, early_filter], |filter| async move {
+            let from_block = filter.get_from_block().expect("from block should be present");
+
+            match from_block {
+                1 => {
+                    sleep(Duration::from_millis(20)).await;
+                    Ok::<_, RpcError>(vec![create_test_log(Some(7), Some(3), Some(9))])
+                }
+                2 => {
+                    sleep(Duration::from_millis(1)).await;
+                    Ok::<_, RpcError>(vec![
+                        create_test_log(Some(5), Some(1), Some(4)),
+                        create_test_log(Some(5), Some(0), Some(2)),
+                    ])
+                }
+                _ => Err(RpcError::Other("unexpected filter".to_string())),
+            }
+        })
+        .await;
+
+        assert_eq!(results.len(), 3);
+        assert_eq!(results[0].as_ref().expect("first log should succeed").tx_index, 0);
+        assert_eq!(results[1].as_ref().expect("second log should succeed").tx_index, 1);
+        assert_eq!(results[2].as_ref().expect("third log should succeed").block_number, 7);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_fetch_subrange_logs_concurrently_surfaces_fetch_errors() {
+        let results = fetch_subrange_logs_concurrently(vec![Filter::new()], |_filter| async {
+            Err::<Vec<AlloyLog>, _>(RpcError::Other("boom".to_string()))
+        })
+        .await;
+
+        assert!(matches!(results.as_slice(), [Err(RpcError::Other(message))] if message == "boom"));
+    }
+
+    #[tokio::test]
+    async fn test_fetch_subrange_logs_concurrently_surfaces_conversion_errors() {
+        let results = fetch_subrange_logs_concurrently(vec![Filter::new()], |_filter| async {
+            Ok::<_, RpcError>(vec![AlloyLog {
+                inner: AlloyPrimitiveLog {
+                    address: AlloyAddress::ZERO,
+                    data: LogData::new_unchecked(vec![B256::ZERO], vec![1, 2, 3].into()),
+                },
+                block_hash: Some(B256::ZERO),
+                block_number: None,
+                block_timestamp: None,
+                transaction_hash: Some(B256::ZERO),
+                transaction_index: Some(0),
+                log_index: Some(0),
+                removed: false,
+            }])
+        })
+        .await;
+
+        assert!(matches!(results.as_slice(), [Err(RpcError::LogConversionError(_))]));
+    }
+
+    #[tokio::test]
+    async fn test_stream_logs_fetches_logs_via_provider() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let rpc = create_test_rpc_operations(&server.url())?;
+
+        let response = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": [{
+                "address": format!("{:#x}", AlloyAddress::ZERO),
+                "topics": [format!("{:#x}", B256::ZERO)],
+                "data": "0x010203",
+                "blockNumber": "0x5",
+                "transactionHash": format!("{:#x}", B256::ZERO),
+                "transactionIndex": "0x1",
+                "blockHash": format!("{:#x}", B256::ZERO),
+                "logIndex": "0x2",
+                "removed": false
+            }]
+        });
+
+        let mock = server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::PartialJson(json!({"method": "eth_getLogs"})))
+            .with_status(200)
+            .with_body(response.to_string())
+            .expect(1)
+            .create();
+
+        let results = rpc.stream_logs(vec![Filter::new()], 5, 5).collect::<Vec<_>>().await;
+
+        mock.assert();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].as_ref().expect("log fetch should succeed").block_number, 5);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stream_logs_surfaces_provider_errors() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let rpc = create_test_rpc_operations(&server.url())?;
+
+        let mock = server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::PartialJson(json!({"method": "eth_getLogs"})))
+            .with_status(500)
+            .with_body("{}")
+            .expect(1)
+            .create();
+
+        let results = rpc.stream_logs(vec![Filter::new()], 5, 5).collect::<Vec<_>>().await;
+
+        mock.assert();
+        assert!(matches!(results.as_slice(), [Err(RpcError::AlloyRpcError(_))]));
 
         Ok(())
     }

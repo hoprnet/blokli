@@ -243,7 +243,7 @@ async fn record_safe_ticket_stats(
 
 #[cfg(test)]
 mod tests {
-    use rand::RngCore;
+    use rand::Rng;
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
     use super::*;

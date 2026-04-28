@@ -192,7 +192,9 @@ async fn submit_and_confirm_transaction(#[future(awt)] fixture: IntegrationFixtu
     let block_number = fixture.client().query_chain_info().await?.block_number;
     fixture.submit_and_confirm_tx(&signed_bytes, confirmations).await?;
 
-    assert!(fixture.client().query_chain_info().await?.block_number >= block_number + (confirmations as i32));
+    // +1 to account for the acceptabled indexer lag. As the chain_info endpoint might be slightly lagging behind the
+    // latest block.
+    assert!(fixture.client().query_chain_info().await?.block_number + 1 >= block_number + (confirmations as i32));
 
     let final_balance = fixture.rpc().get_balance(&recipient.address).await?;
     let delta = final_balance
