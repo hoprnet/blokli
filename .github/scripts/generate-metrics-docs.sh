@@ -15,7 +15,7 @@ METRICS_DOC="$REPO_ROOT/METRICS.md"
 # Outputs tab-separated rows:  name \t type \t description \t detail
 # Requires 8 lines of trailing context to capture buckets/keys on later lines.
 extract_metrics() {
-  (cd "$REPO_ROOT" && grep -hrA8 -E '(Simple|Multi)(Counter|Gauge|Histogram)::new\(' --exclude-dir='.git' --exclude-dir='target' --exclude-dir='.cargo' --include='*.rs' .) |
+  (cd "$REPO_ROOT" && grep -hrA8 -E '(Simple|Multi)(Counter|Gauge|Histogram)::new\(' --exclude-dir='.git' --exclude-dir='.claude' --exclude-dir='target' --exclude-dir='.cargo' --include='*.rs' .) |
     gawk '
     function flush_metric(    detail, escaped_desc, escaped_detail) {
       if (name != "") {
