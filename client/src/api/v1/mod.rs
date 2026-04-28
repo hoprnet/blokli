@@ -8,7 +8,7 @@ pub mod types {
         balances::{HoprBalance, NativeBalance, RedeemedStats, SafeHoprAllowance},
         channels::{Channel, ChannelStats, ChannelsList, SafesBalance},
         graph::OpenedChannelsGraphEntry,
-        info::{ChainInfo, ContractAddressMap, TicketParameters},
+        info::{ChainInfo, Compatibility, ContractAddressMap, TicketParameters},
         safe::{ModuleAddress, Safe},
         txs::{SafeExecution, Transaction, TransactionStatus},
     };
@@ -28,7 +28,7 @@ pub(crate) mod internal {
             QuerySafesBalance, SafesBalanceVariables, SubscribeChannels,
         },
         graph::SubscribeGraph,
-        info::{QueryChainInfo, QueryHealth, QueryVersion, SubscribeTicketParams},
+        info::{QueryChainInfo, QueryCompatibility, QueryHealth, QueryVersion, SubscribeTicketParams},
         safe::{
             ModuleAddressVariables, QueryModuleAddress, QuerySafeBy, SafeByVariables, SafeSelectorInput,
             SubscribeSafeDeployment,
@@ -243,6 +243,8 @@ pub trait BlokliQueryClient {
     async fn query_chain_info(&self) -> Result<types::ChainInfo>;
     /// Queries the version of the Blokli API.
     async fn query_version(&self) -> Result<String>;
+    /// Queries the client compatibility contract exposed by the Blokli API.
+    async fn query_compatibility(&self) -> Result<types::Compatibility>;
     /// Queries the health of the Blokli server.
     async fn query_health(&self) -> Result<String>;
 }

@@ -50,5 +50,5 @@ text     = "keep-alive"
 # Health check configuration
 [api.health]
 # Allow higher lag for integration tests since we're starting from scratch
-max_indexer_lag = 100
+max_indexer_lag = 1
 timeout         = "5s"

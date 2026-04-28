@@ -1,8 +1,11 @@
 /// Current Blokli client API.
 pub mod api;
 mod client;
+pub mod compatibility;
 /// Errors returned by the Blokli client.
 pub mod errors;
+
+pub const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub use client::{BlokliClient, BlokliClientConfig, ReqwestTransport};
 #[cfg(feature = "testing")]
