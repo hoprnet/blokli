@@ -91,7 +91,7 @@ rand = "0.9.2" # ignored in renovate, cannot be updated, dependencies reference 
 regex = "1.11.1"
 reqwest = { version = "0.12.23", features = ["json"] }
 rstest = "0.26.1"
-rust-stream-ext-concurrent = "1.0.0"
+rust-stream-ext-concurrent = "2.0.0"
 rustls = { version = "0.23", default-features = false, features = ["std"] }
 sea-orm = { version = "2.0.0-rc.37", default-features = false, features = [
   "debug-print",
