@@ -6,7 +6,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0"
 name        = "blokli-chain-indexer"
 repository  = "https://github.com/hoprnet/hoprnet"
-version     = "0.16.1"
+version     = "0.16.2"
 
 [lib]
 crate-type = ["rlib"]
@@ -58,9 +58,11 @@ hopr-async-runtime = { workspace = true }
 hopr-bindings = { workspace = true }
 hopr-metrics = { workspace = true, optional = true }
 hopr-types = { workspace = true, features = [
+  "chain",
   "crypto",
   "internal",
   "primitive",
+  "use-bindings",
 ] }
 
 [dev-dependencies]
@@ -74,8 +76,10 @@ tokio           = { workspace = true }
 blokli-chain-rpc = { workspace = true, features = ["runtime-tokio"] }
 blokli-db = { workspace = true, features = ["runtime-tokio"] }
 hopr-types = { workspace = true, features = [
+  "chain",
   "crypto",
   "internal",
   "primitive",
   "random",
+  "use-bindings",
 ] }

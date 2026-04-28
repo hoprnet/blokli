@@ -702,13 +702,17 @@ type QueryRoot {
 }
 
 """
-Aggregated redeemed ticket statistics
+Aggregated ticket redemption attempt statistics
 """
 type RedeemedStats {
-  "Total redeemed amount from matching TicketRedeemed events"
+  "Total redeemed amount from matching ticket redemption events"
   redeemedAmount: TokenValueString!
-  "Total number of matching TicketRedeemed events"
+  "Total number of matching ticket redemption events"
   redemptionCount: UInt64!
+  "Total amount from matching failed ticket redemption attempts"
+  rejectedAmount: TokenValueString!
+  "Total number of matching failed ticket redemption attempts"
+  rejectionCount: UInt64!
 }
 
 """

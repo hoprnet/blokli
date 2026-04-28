@@ -44,7 +44,7 @@ use crate::{
     conversions::transaction_from_record, errors, mutation::TransactionResult, validation::validate_eth_address,
 };
 
-const SUPPORTED_CLIENT_VERSIONS: &str = "^0.26";
+const SUPPORTED_CLIENT_VERSIONS: &str = "^0.27";
 
 /// Result type for HOPR balance queries
 #[derive(Union)]
@@ -850,6 +850,8 @@ impl QueryRoot {
         Ok(RedeemedStatsResult::RedeemedStats(RedeemedStats {
             redeemed_amount: TokenValueString(stats.redeemed_amount.to_string()),
             redemption_count: UInt64(stats.redemption_count),
+            rejected_amount: TokenValueString(stats.rejected_amount.to_string()),
+            rejection_count: UInt64(stats.rejection_count),
         }))
     }
 

@@ -1,11 +1,12 @@
 use blokli_chain_rpc::Log;
-use blokli_chain_types::AlloyAddressExt;
+use blokli_chain_types::{AlloyAddressExt, ContractAddresses as BlokliContractAddresses};
 use blokli_db::{BlokliDbAllOperations, OpenTransaction, safe_history::SafeActivityKind};
 use hopr_bindings::exports::alloy::{
     primitives::{Address as AlloyAddress, B256, Log as AlloyLog},
     sol_types::SolEventInterface,
 };
 use hopr_types::{
+    chain::{ContractAddresses as HoprContractAddresses, ParsedHoprChainAction},
     crypto::types::Hash,
     primitive::prelude::{Address, SerializableLog},
 };
@@ -14,11 +15,121 @@ use tracing::{debug, info, warn};
 use super::ContractEventHandlers;
 use crate::{custom_abis::safe_contract_events::SafeContract::SafeContractEvents, errors::Result, state::IndexerEvent};
 
+fn to_hopr_contract_addresses(addresses: &BlokliContractAddresses) -> HoprContractAddresses {
+    HoprContractAddresses {
+        token: AlloyAddress::from_hopr_address(addresses.token),
+        channels: AlloyAddress::from_hopr_address(addresses.channels),
+        announcements: AlloyAddress::from_hopr_address(addresses.announcements),
+        module_implementation: AlloyAddress::from_hopr_address(addresses.module_implementation),
+        node_safe_migration: AlloyAddress::from_hopr_address(addresses.node_safe_migration),
+        node_safe_registry: AlloyAddress::from_hopr_address(addresses.node_safe_registry),
+        ticket_price_oracle: AlloyAddress::from_hopr_address(addresses.ticket_price_oracle),
+        winning_probability_oracle: AlloyAddress::from_hopr_address(addresses.winning_probability_oracle),
+        node_stake_factory: AlloyAddress::from_hopr_address(addresses.node_stake_factory),
+    }
+}
+
 impl<T, Db> ContractEventHandlers<T, Db>
 where
     T: blokli_chain_rpc::HoprIndexerRpcOperations + Clone + Send + 'static,
     Db: BlokliDbAllOperations + Clone,
 {
+    async fn maybe_record_rejected_ticket_redemption(
+        &self,
+        tx: &OpenTransaction,
+        safe_address: Address,
+        log: &Log,
+    ) -> Result<()> {
+        let Some(safe_contract) = self.db.get_safe_contract_by_address(Some(tx), safe_address).await? else {
+            warn!(safe_address = %safe_address, "Safe execution failure observed for unknown safe");
+            return Ok(());
+        };
+
+        let module_address = Address::try_from(safe_contract.module_address.as_slice()).map_err(|_| {
+            crate::errors::CoreEthereumIndexerError::ProcessError(format!(
+                "invalid module address bytes for safe {}",
+                safe_address
+            ))
+        })?;
+        let tx_hash = Hash::from(log.tx_hash);
+        let tx_bytes = match self._rpc_operations.get_transaction_bytes(tx_hash).await {
+            Ok(tx_bytes) => Some(tx_bytes),
+            Err(error) => {
+                warn!(
+                    safe_address = %safe_address,
+                    tx_hash = %tx_hash,
+                    error = %error,
+                    "Failed to fetch Safe transaction bytes"
+                );
+                None
+            }
+        };
+
+        let Some(tx_bytes) = tx_bytes else {
+            return Ok(());
+        };
+
+        let contract_addresses = to_hopr_contract_addresses(self.addresses.as_ref());
+
+        match ParsedHoprChainAction::parse_from_eip2718(&tx_bytes, &module_address, &contract_addresses) {
+            Ok((ParsedHoprChainAction::RedeemTicket { ticket_amount, .. }, signer)) => {
+                self.db
+                    .record_safe_ticket_rejected(
+                        Some(tx),
+                        safe_address,
+                        signer,
+                        ticket_amount,
+                        u32::try_from(log.block_number).map_err(|_| {
+                            crate::errors::CoreEthereumIndexerError::ProcessError(format!(
+                                "block number {} does not fit into u32",
+                                log.block_number
+                            ))
+                        })?,
+                        u32::try_from(log.tx_index).map_err(|_| {
+                            crate::errors::CoreEthereumIndexerError::ProcessError(format!(
+                                "tx index {} does not fit into u32",
+                                log.tx_index
+                            ))
+                        })?,
+                        u32::try_from(log.log_index.as_u64()).map_err(|_| {
+                            crate::errors::CoreEthereumIndexerError::ProcessError(format!(
+                                "log index {} does not fit into u32",
+                                log.log_index
+                            ))
+                        })?,
+                    )
+                    .await?;
+
+                warn!(
+                    safe_address = %safe_address,
+                    node_address = %signer,
+                    amount = %ticket_amount,
+                    tx_hash = %tx_hash,
+                    "Counted failed ticket redemption attempt in Safe rejection aggregates"
+                );
+            }
+            Ok((action, signer)) => {
+                debug!(
+                    safe_address = %safe_address,
+                    signer = %signer,
+                    ?action,
+                    tx_hash = %tx_hash,
+                    "Safe execution failure did not correspond to a ticket redemption attempt"
+                );
+            }
+            Err(error) => {
+                warn!(
+                    safe_address = %safe_address,
+                    tx_hash = %tx_hash,
+                    error = %error,
+                    "Failed to decode Safe execution failure"
+                );
+            }
+        }
+
+        Ok(())
+    }
+
     pub(super) async fn backfill_safe_logs_in_discovery_block(
         &self,
         tx: &OpenTransaction,
@@ -287,6 +398,11 @@ where
                     "Persisted Safe ExecutionFailure event"
                 );
             }
+            SafeContractEvents::ExecutionFromModuleSuccess(_execution) => {}
+            SafeContractEvents::ExecutionFromModuleFailure(_execution) => {
+                self.maybe_record_rejected_ticket_redemption(tx, safe_address, log)
+                    .await?;
+            }
         }
 
         Ok(Vec::new())
@@ -297,20 +413,33 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use blokli_chain_rpc::Log;
+    use blokli_chain_rpc::{Log, errors::RpcError};
     use blokli_db::{
         BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations,
-        safe_history::BlokliDbSafeHistoryOperations,
+        safe_history::BlokliDbSafeHistoryOperations, safe_redeemed_stats::BlokliDbSafeRedeemedStatsOperations,
     };
     use blokli_db_entity::hopr_safe_contract::{Column as SafeContractColumn, Entity as SafeContractEntity};
     use hopr_bindings::exports::alloy::primitives::U256 as AlloyU256;
+    use hopr_types::{
+        chain::prelude::{PayloadGenerator, SafePayloadGenerator, SignableTransaction},
+        crypto::{
+            keypairs::{ChainKeypair, Keypair},
+            types::{HalfKey, Response},
+        },
+        internal::tickets::TicketBuilder,
+        primitive::prelude::HoprBalance,
+    };
     use primitive_types::U256 as PrimitiveU256;
     use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
     use super::*;
     use crate::{
         custom_abis::safe_contract_events::SafeContract,
-        handlers::test_utils::test_helpers::{ClonableMockOperations, MockIndexerRpcOperations, init_handlers},
+        handlers::test_utils::test_helpers::{
+            ANNOUNCEMENTS_ADDR, CHANNELS_ADDR, ClonableMockOperations, MockIndexerRpcOperations,
+            NODE_SAFE_REGISTRY_ADDR, SELF_CHAIN_KEYPAIR, TICKET_PRICE_ORACLE_ADDR, TOKEN_ADDR, WIN_PROB_ORACLE_ADDR,
+            init_handlers,
+        },
     };
 
     fn address_with_byte(byte: u8) -> Address {
@@ -319,6 +448,53 @@ mod tests {
 
     fn hash_with_byte(byte: u8) -> Hash {
         Hash::from([byte; 32])
+    }
+
+    fn alloy_address_with_byte(byte: u8) -> AlloyAddress {
+        AlloyAddress::from_hopr_address(address_with_byte(byte))
+    }
+
+    fn test_contract_addresses() -> HoprContractAddresses {
+        HoprContractAddresses {
+            channels: AlloyAddress::from_hopr_address(*CHANNELS_ADDR),
+            token: AlloyAddress::from_hopr_address(*TOKEN_ADDR),
+            node_safe_registry: AlloyAddress::from_hopr_address(*NODE_SAFE_REGISTRY_ADDR),
+            announcements: AlloyAddress::from_hopr_address(*ANNOUNCEMENTS_ADDR),
+            module_implementation: alloy_address_with_byte(0),
+            node_safe_migration: alloy_address_with_byte(0),
+            ticket_price_oracle: AlloyAddress::from_hopr_address(*TICKET_PRICE_ORACLE_ADDR),
+            winning_probability_oracle: AlloyAddress::from_hopr_address(*WIN_PROB_ORACLE_ADDR),
+            node_stake_factory: alloy_address_with_byte(0),
+        }
+    }
+
+    async fn build_redeem_ticket_tx_bytes(
+        issuer: &ChainKeypair,
+        redeemer: &ChainKeypair,
+        module_address: Address,
+        contract_addresses: HoprContractAddresses,
+        amount: u32,
+        ticket_index: u64,
+    ) -> anyhow::Result<Vec<u8>> {
+        let issuer_half_key = HalfKey::try_from(issuer.secret().as_ref())?;
+        let redeemer_half_key = HalfKey::try_from(redeemer.secret().as_ref())?;
+        let response = Response::from_half_keys(&issuer_half_key, &redeemer_half_key)?;
+
+        let ticket = TicketBuilder::default()
+            .counterparty(redeemer.public().to_address())
+            .amount(amount)
+            .index(ticket_index)
+            .challenge(response.to_challenge()?)
+            .build_signed(issuer, &Hash::default())?
+            .into_acknowledged(response)
+            .into_redeemable(redeemer, &Hash::default())?;
+
+        let payload = SafePayloadGenerator::new(redeemer, contract_addresses, module_address).redeem_ticket(ticket)?;
+
+        Ok(payload
+            .sign_and_encode_to_eip2718(1, 1, None, redeemer)
+            .await?
+            .into_vec())
     }
 
     fn test_rpc_log(safe_address: Address, block_number: u64, tx_index: u64, log_index: u64) -> Log {
@@ -484,6 +660,127 @@ mod tests {
             .count(db.conn(TargetDb::Index))
             .await?;
         assert_eq!(safe_count, 1, "event handling should not duplicate the safe identity");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_on_safe_contract_event_records_rejected_ticket_redemption_from_module_failure() -> anyhow::Result<()>
+    {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = address_with_byte(31);
+        let module_address = address_with_byte(32);
+        let issuer = ChainKeypair::from_secret(&[41_u8; 32])?;
+        let redeemer = SELF_CHAIN_KEYPAIR.clone();
+        let contract_addresses = test_contract_addresses();
+        let tx_bytes =
+            build_redeem_ticket_tx_bytes(&issuer, &redeemer, module_address, contract_addresses, 7, 3).await?;
+
+        let mut rpc = MockIndexerRpcOperations::new();
+        rpc.expect_get_transaction_bytes()
+            .once()
+            .return_once(move |_| Ok(tx_bytes));
+
+        let handlers = init_handlers(ClonableMockOperations { inner: Arc::new(rpc) }, db.clone());
+
+        db.create_safe_contract(
+            None,
+            safe_address,
+            module_address,
+            redeemer.public().to_address(),
+            100,
+            0,
+            0,
+        )
+        .await?;
+
+        let log = test_rpc_log(safe_address, 105, 2, 9);
+        db.begin_transaction()
+            .await?
+            .perform(|tx| {
+                Box::pin(async move {
+                    handlers
+                        .on_safe_contract_event(
+                            tx,
+                            safe_address,
+                            &log,
+                            SafeContractEvents::ExecutionFromModuleFailure(SafeContract::ExecutionFromModuleFailure {
+                                module: AlloyAddress::from_hopr_address(module_address),
+                            }),
+                            true,
+                        )
+                        .await
+                })
+            })
+            .await?;
+
+        let stats = db
+            .get_aggregated_redeemed_stats(Some(safe_address), Some(redeemer.public().to_address()))
+            .await?;
+        assert_eq!(stats.redemption_count, 0);
+        assert_eq!(stats.redeemed_amount, HoprBalance::zero());
+        assert_eq!(stats.rejection_count, 1);
+        assert_eq!(stats.rejected_amount, HoprBalance::from(7_u64));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_on_safe_contract_event_ignores_rejected_ticket_redemption_rpc_miss() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = address_with_byte(33);
+        let module_address = address_with_byte(34);
+        let redeemer = SELF_CHAIN_KEYPAIR.clone();
+        let tx_hash = Hash::from([91_u8; 32]);
+
+        let mut rpc = MockIndexerRpcOperations::new();
+        rpc.expect_get_transaction_bytes()
+            .once()
+            .with(mockall::predicate::eq(tx_hash))
+            .return_once(move |_| Err(RpcError::TransactionNotFound(tx_hash)));
+
+        let handlers = init_handlers(ClonableMockOperations { inner: Arc::new(rpc) }, db.clone());
+
+        db.create_safe_contract(
+            None,
+            safe_address,
+            module_address,
+            redeemer.public().to_address(),
+            100,
+            0,
+            0,
+        )
+        .await?;
+
+        let mut log = test_rpc_log(safe_address, 105, 2, 9);
+        log.tx_hash = tx_hash.into();
+
+        db.begin_transaction()
+            .await?
+            .perform(|tx| {
+                Box::pin(async move {
+                    handlers
+                        .on_safe_contract_event(
+                            tx,
+                            safe_address,
+                            &log,
+                            SafeContractEvents::ExecutionFromModuleFailure(SafeContract::ExecutionFromModuleFailure {
+                                module: AlloyAddress::from_hopr_address(module_address),
+                            }),
+                            true,
+                        )
+                        .await
+                })
+            })
+            .await?;
+
+        let stats = db
+            .get_aggregated_redeemed_stats(Some(safe_address), Some(redeemer.public().to_address()))
+            .await?;
+        assert_eq!(stats.redemption_count, 0);
+        assert_eq!(stats.redeemed_amount, HoprBalance::zero());
+        assert_eq!(stats.rejection_count, 0);
+        assert_eq!(stats.rejected_amount, HoprBalance::zero());
 
         Ok(())
     }

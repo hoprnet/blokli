@@ -15,6 +15,10 @@ pub struct AggregatedRedeemedStats {
     pub redeemed_amount: HoprBalance,
     /// Total number of ticket redemptions across matching rows.
     pub redemption_count: u64,
+    /// Sum of all rejected HOPR token amounts across matching rows.
+    pub rejected_amount: HoprBalance,
+    /// Total number of rejected ticket redemptions across matching rows.
+    pub rejection_count: u64,
 }
 
 /// Fetch aggregated redeemed ticket statistics with optional safe/node filters.
@@ -47,15 +51,33 @@ where
     let rows = query.all(conn).await?;
 
     let mut total_amount = HoprBalance::zero();
-    let mut total_count: u64 = 0;
+    let mut total_redeemed_count: u64 = 0;
+    let mut total_rejected_amount = HoprBalance::zero();
+    let mut total_rejected_count: u64 = 0;
 
     for row in rows {
         total_amount = total_amount + HoprBalance::from_be_bytes(row.redeemed_amount.as_slice());
-        total_count = total_count.saturating_add(u64::try_from(row.redemption_count).unwrap_or(u64::MAX));
+        total_redeemed_count =
+            total_redeemed_count.saturating_add(u64::try_from(row.redemption_count).map_err(|_| {
+                sea_orm::DbErr::Type(format!(
+                    "invalid redemption_count value '{}' in hopr_safe_redeemed_stats",
+                    row.redemption_count
+                ))
+            })?);
+        total_rejected_amount = total_rejected_amount + HoprBalance::from_be_bytes(row.rejected_amount.as_slice());
+        total_rejected_count =
+            total_rejected_count.saturating_add(u64::try_from(row.rejection_count).map_err(|_| {
+                sea_orm::DbErr::Type(format!(
+                    "invalid rejection_count value '{}' in hopr_safe_redeemed_stats",
+                    row.rejection_count
+                ))
+            })?);
     }
 
     Ok(AggregatedRedeemedStats {
         redeemed_amount: total_amount,
-        redemption_count: total_count,
+        redemption_count: total_redeemed_count,
+        rejected_amount: total_rejected_amount,
+        rejection_count: total_rejected_count,
     })
 }
