@@ -89,11 +89,26 @@ jobs:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
       docker_hub_token: ${{ secrets.DOCKER_HUB_TOKEN }}
+  publish:
+    name: Publish
+    needs: [build-binaries]
+    uses: hoprnet/hopr-workflows/.github/workflows/publish-crates.yaml@e4fadaa70234b9d734d5c51b6900602e55492ce2 # workflow-publish-crates-v3
+    permissions:
+      contents: read
+    with:
+      source_branch: ${{ github.ref_name }}
+      package: blokli-client
+      version_type: release
+      runner: self-hosted-hoprnet-bigger
+    secrets:
+      cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
+      cargo_registry_token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
   release:
     name: Close release
     needs:
       - build-binaries
       - build-docker
+      - publish
     runs-on: depot-ubuntu-22.04-2
     permissions:
       contents: write
