@@ -44,7 +44,7 @@ use crate::{
     conversions::transaction_from_record, errors, mutation::TransactionResult, validation::validate_eth_address,
 };
 
-const SUPPORTED_CLIENT_VERSIONS: &str = "^0.26";
+const SUPPORTED_CLIENT_VERSIONS: &str = "^0.27";
 
 /// Result type for HOPR balance queries
 #[derive(Union)]
