@@ -38,7 +38,7 @@ jobs:
             build_command: nix build -L .#binary-blokli-aarch64-darwin
             build_file: bloklid/Cargo.toml
             binary: bloklid
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@a178becb8c3711ae955bad477861bfefe6feceae # build-binaries-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v2
     permissions:
       contents: read
     with:
@@ -114,7 +114,7 @@ jobs:
       contents: write
     steps:
       - name: Release version
-        uses: hoprnet/hopr-workflows/actions/release-version@2cae201c4f92e86cf40480704bdc5c2d53bce772 # release-version-v3
+        uses: hoprnet/hopr-workflows/actions/release-version@release-version-v3
         with:
           source_branch: ${{ github.ref_name }}
           file: bloklid/Cargo.toml

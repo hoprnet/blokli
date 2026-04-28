@@ -37,7 +37,7 @@ jobs:
             build_command: nix build -L .#binary-blokli-aarch64-darwin
             build_file: bloklid/Cargo.toml
             binary: bloklid
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@a178becb8c3711ae955bad477861bfefe6feceae # build-binaries-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v2
     permissions:
       contents: read
     with:

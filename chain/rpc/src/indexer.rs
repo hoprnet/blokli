@@ -93,22 +93,25 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         fetch_ranges
             .then(move |subrange_filters| async move {
                 let mut results = futures::stream::iter(subrange_filters)
-                    .then_concurrent(|filter| async move {
-                        let prov_clone = self.provider.clone();
+                    .then_concurrent(
+                        |filter| async move {
+                            let prov_clone = self.provider.clone();
 
-                        match prov_clone.get_logs(&filter).await {
-                            Ok(logs) => Ok(logs),
-                            Err(e) => {
-                                error!(
-                                    from = ?filter.get_from_block(),
-                                    to = ?filter.get_to_block(),
-                                    error = %e,
-                                    "failed to fetch logs in block subrange"
-                                );
-                                Err(e)
+                            match prov_clone.get_logs(&filter).await {
+                                Ok(logs) => Ok(logs),
+                                Err(e) => {
+                                    error!(
+                                        from = ?filter.get_from_block(),
+                                        to = ?filter.get_to_block(),
+                                        error = %e,
+                                        "failed to fetch logs in block subrange"
+                                    );
+                                    Err(e)
+                                }
                             }
-                        }
-                    })
+                        },
+                        None,
+                    )
                     .flat_map(|result| {
                         futures::stream::iter(match result {
                             Ok(logs) => logs.into_iter().map(|log| Ok(Log::try_from(log)?)).collect::<Vec<_>>(),
