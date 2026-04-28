@@ -56,6 +56,7 @@ async fn subscribe_ticket_params_recreates_stream_without_loss_or_duplication() 
             subscription_read_timeout: Some(Duration::from_secs(2)),
             subscription_tcp_keepalive: Duration::from_secs(15),
             subscription_stream_restart_delay: Some(Duration::from_millis(100)),
+            ..Default::default()
         },
     );
 
@@ -103,6 +104,7 @@ async fn subscribe_ticket_params_stays_open_beyond_non_streaming_timeout() -> Re
             subscription_read_timeout: Some(Duration::from_secs(2)),
             subscription_tcp_keepalive: Duration::from_secs(15),
             subscription_stream_restart_delay: Some(Duration::from_millis(100)),
+            ..Default::default()
         },
     );
 
@@ -137,6 +139,7 @@ async fn subscribe_ticket_params_reconnects_after_read_timeout() -> Result<()> {
             subscription_read_timeout: Some(Duration::from_millis(100)),
             subscription_tcp_keepalive: Duration::from_secs(15),
             subscription_stream_restart_delay: Some(Duration::from_millis(100)),
+            ..Default::default()
         },
     );
 

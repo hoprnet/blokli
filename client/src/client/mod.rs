@@ -23,7 +23,6 @@ use crate::{
     errors::{BlokliClientError, ErrorKind},
 };
 
-const COMPATIBILITY_CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 const COMPATIBILITY_CACHE_KEY: &str = "compatibility";
 const MIN_RECONNECTION_DELAY: Duration = Duration::from_millis(1);
 
@@ -33,6 +32,9 @@ pub struct BlokliClientConfig {
     /// Whether requests should automatically preflight the server compatibility contract.
     #[default(true)]
     pub auto_compatibility_check: bool,
+    /// TTL for the compatibility check cache.
+    #[default(Duration::from_mins(5))]
+    pub compatibility_cache_ttl: Duration,
     /// General timeout for non-streaming requests and SSE connection establishment.
     #[default(Duration::from_secs(10))]
     pub timeout: Duration,
@@ -168,10 +170,10 @@ impl BlokliClient {
     pub fn new(base_url: url::Url, cfg: BlokliClientConfig) -> Self {
         Self {
             base_url,
-            cfg,
+            cfg: cfg.clone(),
             compatibility_cache: Cache::builder()
                 .max_capacity(1)
-                .time_to_live(COMPATIBILITY_CACHE_TTL)
+                .time_to_live(cfg.compatibility_cache_ttl)
                 .build(),
         }
     }
