@@ -226,6 +226,7 @@ fn create_test_schema_with_state(
         1,
         3, // Test finality value
         1.0,
+        true,
         indexer_state,
         transaction_executor,
         transaction_store,
