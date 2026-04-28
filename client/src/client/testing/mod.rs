@@ -122,7 +122,7 @@ impl Default for BlokliTestState {
             },
 
             version: "1".to_string(),
-            compatibility: Compatibility {
+            client_compatibility: Compatibility {
                 api_version: "1".to_string(),
                 supported_client_versions: "^0.26".to_string(),
             },
@@ -670,7 +670,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
     }
 
     async fn query_compatibility(&self) -> Result<Compatibility> {
-        Ok(self.state.read().compatibility.clone())
+        Ok(self.state.read().client_compatibility.clone())
     }
 
     async fn query_health(&self) -> Result<String> {
