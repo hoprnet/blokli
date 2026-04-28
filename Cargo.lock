@@ -1752,7 +1752,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1803,7 +1803,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api-types"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "async-graphql",
  "blokli-chain-types",
@@ -1814,7 +1814,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-api"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "alloy-sol-types",
  "anyhow",
@@ -1845,7 +1845,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-indexer"
-version = "0.16.1"
+version = "0.16.2"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1885,7 +1885,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-rpc"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1940,7 +1940,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-client"
-version = "0.26.0"
+version = "0.27.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1974,7 +1974,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db"
-version = "0.16.1"
+version = "0.16.2"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -2003,7 +2003,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db-entity"
-version = "0.5.1"
+version = "0.5.2"
 dependencies = [
  "anyhow",
  "blokli-db-migration",
@@ -2021,7 +2021,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db-migration"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "hopr-types",
  "sea-orm",
