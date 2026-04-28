@@ -18,6 +18,7 @@ pub mod node_safe_registrations;
 pub mod safe_contracts;
 pub mod safe_history;
 pub mod safe_redeemed_stats;
+pub mod snapshot;
 pub mod state_queries;
 pub mod version;
 
@@ -25,7 +26,7 @@ use std::{path::PathBuf, time::Instant};
 
 use async_trait::async_trait;
 use futures::future::BoxFuture;
-use sea_orm::{ConnectionTrait, TransactionTrait};
+use sea_orm::TransactionTrait;
 pub use sea_orm::{DatabaseConnection, DatabaseTransaction};
 
 use crate::{
@@ -40,6 +41,7 @@ use crate::{
     safe_contracts::BlokliDbSafeContractOperations,
     safe_history::BlokliDbSafeHistoryOperations,
     safe_redeemed_stats::BlokliDbSafeRedeemedStatsOperations,
+    snapshot::LogsSnapshotInfo,
 };
 
 /// Primary key used in tables that contain only a single row.
@@ -133,16 +135,17 @@ pub trait BlokliDbGeneralModelOperations {
     /// Creates a new transaction.
     async fn begin_transaction_in_db(&self, target: TargetDb) -> Result<OpenTransaction>;
 
-    /// Import logs database from a snapshot directory.
+    /// Import logs snapshot SQL data from a snapshot directory.
     ///
     /// Replaces all data in the current logs database with data from a snapshot's
     /// `hopr_logs.sql` file. This is used for fast synchronization during node startup.
     ///
     /// # Process
     ///
-    /// 1. Reads the SQL dump file from the snapshot directory
-    /// 2. Clears existing data from all logs-related tables (TRUNCATE CASCADE)
-    /// 3. Executes all SQL statements from the dump file
+    /// 1. Reads `hopr_logs.sql` from the snapshot directory
+    /// 2. Clears existing data from all logs-related tables
+    /// 3. Parses the `COPY ... FROM stdin` sections for `log`, `log_status`, and `log_topic_info`
+    /// 4. Inserts the parsed rows into the logs tables
     /// 4. Commits the transaction
     ///
     /// All operations are performed within a single transaction for atomicity.
@@ -153,13 +156,12 @@ pub trait BlokliDbGeneralModelOperations {
     ///
     /// # Returns
     ///
-    /// `Ok(())` on successful import, or [`DbSqlError::Construction`] if the source
-    /// SQL dump file doesn't exist or the import operation fails.
+    /// [`LogsSnapshotInfo`] on successful import.
     ///
     /// # Errors
     ///
     /// - Returns error if `hopr_logs.sql` is not found in the source directory
-    /// - Returns error if reading or executing SQL statements fails
+    /// - Returns error if reading or inserting snapshot rows fails
     /// - All database errors are wrapped in [`DbSqlError::Construction`]
     ///
     /// # Example
@@ -169,11 +171,16 @@ pub trait BlokliDbGeneralModelOperations {
     /// # use blokli_db::BlokliDbGeneralModelOperations;
     /// # async fn example(db: impl BlokliDbGeneralModelOperations) -> Result<(), Box<dyn std::error::Error>> {
     /// let snapshot_dir = PathBuf::from("/tmp/snapshot_extracted");
-    /// db.import_logs_db(snapshot_dir).await?;
+    /// db.import_logs_snapshot(snapshot_dir).await?;
     /// # Ok(())
     /// # }
     /// ```
-    async fn import_logs_db(self, src_dir: PathBuf) -> Result<()>;
+    async fn import_logs_snapshot(self, src_dir: PathBuf) -> Result<LogsSnapshotInfo>;
+
+    /// Export logs snapshot SQL data into a target directory.
+    ///
+    /// Writes `hopr_logs.sql` into `target_dir`.
+    async fn export_logs_snapshot(&self, target_dir: PathBuf) -> Result<LogsSnapshotInfo>;
 
     /// Same as [`BlokliDbGeneralModelOperations::begin_transaction_in_db`] with default [TargetDb].
     async fn begin_transaction(&self) -> Result<OpenTransaction> {
@@ -226,46 +233,12 @@ impl BlokliDbGeneralModelOperations for BlokliDb {
         Ok(OpenTransaction(db_conn.begin_with_config(None, None).await?, target_db))
     }
 
-    async fn import_logs_db(self, src_dir: PathBuf) -> Result<()> {
-        let sql_path = src_dir.join("hopr_logs.sql");
+    async fn import_logs_snapshot(self, src_dir: PathBuf) -> Result<LogsSnapshotInfo> {
+        snapshot::import_logs_snapshot_from_dir(&self, &src_dir).await
+    }
 
-        if !sql_path.exists() {
-            return Err(DbSqlError::Construction(format!(
-                "SQL dump file not found: {}",
-                sql_path.display()
-            )));
-        }
-
-        // Read the SQL dump file
-        let sql_content = std::fs::read_to_string(&sql_path)
-            .map_err(|e| DbSqlError::Construction(format!("Failed to read SQL dump file: {}", e)))?;
-
-        // Execute within a transaction for atomicity
-        let txn = self.db.begin().await?;
-
-        // Clear existing data from log tables
-        txn.execute_unprepared("TRUNCATE TABLE log, log_status, log_topic_info CASCADE")
-            .await?;
-
-        // Execute the SQL dump
-        // Split on empty lines or statement terminators to handle multi-statement SQL
-        for statement in sql_content.split(';') {
-            let trimmed = statement.trim();
-            if trimmed.is_empty() || trimmed.starts_with("--") {
-                continue;
-            }
-
-            // Execute the statement
-            let sql = format!("{};", trimmed);
-            txn.execute_unprepared(&sql)
-                .await
-                .map_err(|e| DbSqlError::Construction(format!("Failed to execute SQL statement: {}", e)))?;
-        }
-
-        // Commit the transaction
-        txn.commit().await?;
-
-        Ok(())
+    async fn export_logs_snapshot(&self, target_dir: PathBuf) -> Result<LogsSnapshotInfo> {
+        snapshot::export_logs_snapshot_to_dir(self, &target_dir).await
     }
 }
 

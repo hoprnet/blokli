@@ -481,14 +481,8 @@ where
         if fast_sync_configured && index_empty && !logs_db_has_data && self.cfg.enable_logs_snapshot {
             info!("Logs database is empty, attempting to download logs snapshot...");
 
-            match self.download_snapshot().await {
-                Ok(snapshot_info) => {
-                    info!("Logs snapshot downloaded successfully: {:?}", snapshot_info);
-                }
-                Err(e) => {
-                    error!("Failed to download logs snapshot: {}. Continuing with regular sync.", e);
-                }
-            }
+            let snapshot_info = self.download_snapshot().await?;
+            info!("Logs snapshot downloaded successfully: {:?}", snapshot_info);
         }
 
         // Initialize channel closure grace period from contract
@@ -1870,6 +1864,39 @@ mod tests {
             assert_eq!(db.get_logs_block_numbers(None, None, Some(true)).await?.len(), 4);
             assert_eq!(db.get_logs_block_numbers(None, None, Some(false)).await?.len(), 0);
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_pre_start_fails_when_configured_snapshot_restore_fails() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let rpc = MockHoprIndexerOps::new();
+        let handlers = MockChainLogHandler::new();
+        let temp_dir = tempfile::tempdir()?;
+
+        let indexer = Indexer::new(
+            rpc,
+            handlers,
+            db,
+            IndexerConfig::new(
+                0,
+                true,
+                true,
+                false,
+                Some("file:///definitely/missing/snapshot.tar.xz".to_string()),
+                temp_dir.path().display().to_string(),
+                1000,
+                10,
+            ),
+            IndexerState::default(),
+        );
+
+        let result = indexer.pre_start().await;
+        assert!(
+            result.is_err(),
+            "configured snapshot bootstrap failures must abort startup"
+        );
 
         Ok(())
     }

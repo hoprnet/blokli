@@ -28,9 +28,13 @@ pub(crate) struct Args {
     pub(crate) command: Option<Command>,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub(crate) enum Command {
     GenerateConfig {
+        #[arg(value_name = "FILE")]
+        output: PathBuf,
+    },
+    ExportLogsSnapshot {
         #[arg(value_name = "FILE")]
         output: PathBuf,
     },
