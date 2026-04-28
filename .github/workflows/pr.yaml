@@ -227,8 +227,9 @@ jobs:
       image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid:${{ needs.build-docker.outputs.docker_build_version }}
     secrets: inherit
   publish-dry-run:
-    name: Publish
+    name: Publish (dry run)
     needs: [tests]
+    if: github.event.pull_request.head.repo.full_name == github.repository
     uses: hoprnet/hopr-workflows/.github/workflows/publish-crates.yaml@e4fadaa70234b9d734d5c51b6900602e55492ce2 # workflow-publish-crates-v3
     permissions:
       contents: read
@@ -236,6 +237,6 @@ jobs:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       package: blokli-client
       version_type: commit
-      runner: self-hosted-hoprnet-bigger
+      runner: depot-ubuntu-22.04-4
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
