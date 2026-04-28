@@ -13,11 +13,12 @@ The call chain looks like this:
 EOA tx  ->  Module (execTransactionFromModule)  ->  Safe  ->  Target contract (e.g., HoprChannels)
 ```
 
-The outer transaction targets the **module address**, not the Safe. For the
-internal failure case Blokli cares about, the Safe emits:
+The outer transaction targets the **module address**, not the Safe. The Safe emits
+one of these events depending on the internal outcome:
 
 | Internal Result | Event Emitted by Safe                                | Topic0 Hash (first 10 chars) |
 |-----------------|------------------------------------------------------|------------------------------|
+| Success         | `ExecutionFromModuleSuccess(address indexed module)`  | `0x6895c136...`              |
 | Failure         | `ExecutionFromModuleFailure(address indexed module)`  | `0xacd2c870...`              |
 
 The outer transaction **typically succeeds** (status=1) even when the internal call
@@ -86,6 +87,13 @@ Alternatively, query logs for a specific event in a block range:
 ```bash
 BLOCK=$(cast receipt <TX_HASH> blockNumber)
 
+# Module success events from a specific Safe address
+cast logs \
+  --from-block $BLOCK \
+  --to-block $BLOCK \
+  --address <SAFE_ADDRESS> \
+  "ExecutionFromModuleSuccess(address)"
+
 # Module failure events
 cast logs \
   --from-block $BLOCK \
@@ -103,7 +111,8 @@ the execution event:
 ```bash
 cast receipt <TX_HASH> --json \
   | jq '.logs[] | select(
-      .topics[0] == "0xacd2c8702804128fdb0db2bb49f6d127dd0181c13fd45dbfe16de0930e2bd375"
+      .topics[0] == "0x6895c13664aa4f67288b25d7a21d7aaa34916e355fb9b6fae0a139a9085becb8"
+      or .topics[0] == "0xacd2c8702804128fdb0db2bb49f6d127dd0181c13fd45dbfe16de0930e2bd375"
     ) | {safe_address: .address, event_topic: .topics[0], module_topic: .topics[1]}'
 ```
 
@@ -122,7 +131,7 @@ left-padded address. Extract the last 20 bytes:
 # Get the raw topic
 TOPIC=$(cast receipt <TX_HASH> --json \
   | jq -r '.logs[] | select(
-      .topics[0] == "0xacd2c8702804128fdb0db2bb49f6d127dd0181c13fd45dbfe16de0930e2bd375"
+      .topics[0] == "0x6895c13664aa4f67288b25d7a21d7aaa34916e355fb9b6fae0a139a9085becb8"
     ) | .topics[1]')
 
 # The module address is the last 40 hex chars (20 bytes)
@@ -179,6 +188,13 @@ cast 4byte-event <TOPIC_0_HASH>
 This queries [openchain.xyz](https://openchain.xyz) for the event signature
 matching that topic hash.
 
+You can also compute topic hashes yourself to verify:
+
+```bash
+cast keccak "ExecutionFromModuleSuccess(address)"
+# 0x6895c13664aa4f67288b25d7a21d7aaa34916e355fb9b6fae0a139a9085becb8
+```
+
 ## Complete Example
 
 Investigating a failed Safe module transaction end-to-end:
@@ -223,6 +239,7 @@ and a `uint256 payment` parameter.
 
 | Event                                              | Topic0                                                               |
 |----------------------------------------------------|----------------------------------------------------------------------|
+| `ExecutionFromModuleSuccess(address indexed module)` | `0x6895c13664aa4f67288b25d7a21d7aaa34916e355fb9b6fae0a139a9085becb8` |
 | `ExecutionFromModuleFailure(address indexed module)` | `0xacd2c8702804128fdb0db2bb49f6d127dd0181c13fd45dbfe16de0930e2bd375` |
 
 These events only contain the calling module address. There is no Safe `txHash`

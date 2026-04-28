@@ -26,8 +26,8 @@ pub mod topics {
     };
 
     use crate::custom_abis::safe_contract_events::SafeContract::{
-        AddedOwner, ChangedThreshold, ExecutionFailure, ExecutionFromModuleFailure, ExecutionSuccess, RemovedOwner,
-        SafeSetup,
+        AddedOwner, ChangedThreshold, ExecutionFailure, ExecutionFromModuleFailure, ExecutionFromModuleSuccess,
+        ExecutionSuccess, RemovedOwner, SafeSetup,
     };
 
     pub fn channel() -> Vec<B256> {
@@ -121,6 +121,7 @@ pub mod topics {
             ChangedThreshold::SIGNATURE_HASH,
             ExecutionSuccess::SIGNATURE_HASH,
             ExecutionFailure::SIGNATURE_HASH,
+            ExecutionFromModuleSuccess::SIGNATURE_HASH,
             ExecutionFromModuleFailure::SIGNATURE_HASH,
         ]
     }

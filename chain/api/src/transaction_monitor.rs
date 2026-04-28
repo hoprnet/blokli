@@ -315,7 +315,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        safe_execution::{ExecutionFailure, ExecutionFromModuleFailure, ExecutionSuccess},
+        safe_execution::{ExecutionFailure, ExecutionFromModuleSuccess, ExecutionSuccess},
         transaction_store::TransactionRecord,
     };
 
@@ -854,12 +854,12 @@ mod tests {
         let store = Arc::new(TransactionStore::new());
         let provider = MockReceiptProvider::new();
 
-        // Set up receipt logs with ExecutionFromModuleFailure event emitted by the Safe
+        // Set up receipt logs with ExecutionFromModuleSuccess event emitted by the Safe
         provider.set_receipt_logs(
             tx_hash,
             vec![ReceiptLog {
                 address: safe_address,
-                topics: vec![ExecutionFromModuleFailure::SIGNATURE_HASH.0, {
+                topics: vec![ExecutionFromModuleSuccess::SIGNATURE_HASH.0, {
                     // module address padded to 32 bytes (indexed address parameter)
                     let mut topic = [0u8; 32];
                     topic[12..].copy_from_slice(&module_address);

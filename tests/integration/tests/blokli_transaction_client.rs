@@ -207,6 +207,61 @@ async fn submit_and_confirm_transaction(#[future(awt)] fixture: IntegrationFixtu
 #[rstest]
 #[test_log::test(tokio::test)]
 #[serial]
+/// Test that a Safe module transaction (via execTransactionFromModule) that succeeds internally
+/// is correctly detected and enriched with safe_execution data.
+///
+/// Uses `fund_channel` which calls `execTransactionFromModule` on the Safe module,
+/// triggering an `ExecutionFromModuleSuccess` event from the Safe contract.
+async fn test_safe_module_transaction_execution_success(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    let [owner, counterparty] = fixture.sample_accounts::<2>();
+    let safe = fixture.deploy_safe_and_announce(owner, parsed_safe_balance()).await?;
+    fixture
+        .deploy_safe_and_announce(counterparty, parsed_safe_balance())
+        .await?;
+
+    // Approve the channels contract to spend tokens on behalf of the Safe (setup).
+    // This is a direct token call, not a module transaction.
+    fixture
+        .approve(
+            owner,
+            "1 wxHOPR".parse().expect("failed to parse amount"),
+            &safe.module_address,
+        )
+        .await?;
+
+    // Build a fund_channel transaction via the Safe module.
+    // This goes through execTransactionFromModule → Safe → channels.fundChannel,
+    // emitting ExecutionFromModuleSuccess from the Safe.
+    let nonce = fixture.rpc().transaction_count(&owner.address).await?;
+    let payload_generator = SafePayloadGenerator::new(
+        &owner.keypair,
+        *fixture.contract_addresses(),
+        HoprAddress::from_str(&safe.module_address)?,
+    );
+    let amount = "0.01 wxHOPR".parse().expect("failed to parse amount");
+    let payload = payload_generator.fund_channel(counterparty.address, amount)?;
+    let payload_bytes = payload
+        .sign_and_encode_to_eip2718(nonce, fixture.rpc().chain_id().await?, None, &owner.keypair)
+        .await?;
+
+    let txid = fixture.submit_and_track_tx(&payload_bytes).await?;
+
+    let res = fixture
+        .client()
+        .track_transaction(txid, Duration::from_secs(60))
+        .await?;
+    insta::assert_yaml_snapshot!(res, {
+        ".id" => "[uuid]",
+        ".submitted_at" => "[timestamp]",
+        ".transaction_hash" => "[tx_hash]",
+    });
+
+    Ok(())
+}
+
+#[rstest]
+#[test_log::test(tokio::test)]
+#[serial]
 /// Test that a Safe module transaction that fails internally (inner revert) is correctly
 /// detected with safe_execution.success = false while the outer transaction still confirms.
 async fn test_safe_module_transaction_execution_failure(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
