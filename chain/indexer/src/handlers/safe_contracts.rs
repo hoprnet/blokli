@@ -52,7 +52,23 @@ where
             ))
         })?;
         let tx_hash = Hash::from(log.tx_hash);
-        let tx_bytes = self._rpc_operations.get_transaction_bytes(tx_hash).await?;
+        let tx_bytes = match self._rpc_operations.get_transaction_bytes(tx_hash).await {
+            Ok(tx_bytes) => Some(tx_bytes),
+            Err(error) => {
+                warn!(
+                    safe_address = %safe_address,
+                    tx_hash = %tx_hash,
+                    error = %error,
+                    "Failed to fetch Safe transaction bytes"
+                );
+                None
+            }
+        };
+
+        let Some(tx_bytes) = tx_bytes else {
+            return Ok(());
+        };
+
         let contract_addresses = to_hopr_contract_addresses(self.addresses.as_ref());
 
         match ParsedHoprChainAction::parse_from_eip2718(&tx_bytes, &module_address, &contract_addresses) {
@@ -106,7 +122,7 @@ where
                     safe_address = %safe_address,
                     tx_hash = %tx_hash,
                     error = %error,
-                    "Failed to decode Safe execution failure while checking rejection aggregates"
+                    "Failed to decode Safe execution failure"
                 );
             }
         }
@@ -397,7 +413,7 @@ where
 mod tests {
     use std::sync::Arc;
 
-    use blokli_chain_rpc::Log;
+    use blokli_chain_rpc::{Log, errors::RpcError};
     use blokli_db::{
         BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations,
         safe_history::BlokliDbSafeHistoryOperations, safe_redeemed_stats::BlokliDbSafeRedeemedStatsOperations,
@@ -705,6 +721,66 @@ mod tests {
         assert_eq!(stats.redeemed_amount, HoprBalance::zero());
         assert_eq!(stats.rejection_count, 1);
         assert_eq!(stats.rejected_amount, HoprBalance::from(7_u64));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_on_safe_contract_event_ignores_rejected_ticket_redemption_rpc_miss() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = address_with_byte(33);
+        let module_address = address_with_byte(34);
+        let redeemer = SELF_CHAIN_KEYPAIR.clone();
+        let tx_hash = Hash::from([91_u8; 32]);
+
+        let mut rpc = MockIndexerRpcOperations::new();
+        rpc.expect_get_transaction_bytes()
+            .once()
+            .with(mockall::predicate::eq(tx_hash))
+            .return_once(move |_| Err(RpcError::TransactionNotFound(tx_hash)));
+
+        let handlers = init_handlers(ClonableMockOperations { inner: Arc::new(rpc) }, db.clone());
+
+        db.create_safe_contract(
+            None,
+            safe_address,
+            module_address,
+            redeemer.public().to_address(),
+            100,
+            0,
+            0,
+        )
+        .await?;
+
+        let mut log = test_rpc_log(safe_address, 105, 2, 9);
+        log.tx_hash = tx_hash.into();
+
+        db.begin_transaction()
+            .await?
+            .perform(|tx| {
+                Box::pin(async move {
+                    handlers
+                        .on_safe_contract_event(
+                            tx,
+                            safe_address,
+                            &log,
+                            SafeContractEvents::ExecutionFromModuleFailure(SafeContract::ExecutionFromModuleFailure {
+                                module: AlloyAddress::from_hopr_address(module_address),
+                            }),
+                            true,
+                        )
+                        .await
+                })
+            })
+            .await?;
+
+        let stats = db
+            .get_aggregated_redeemed_stats(Some(safe_address), Some(redeemer.public().to_address()))
+            .await?;
+        assert_eq!(stats.redemption_count, 0);
+        assert_eq!(stats.redeemed_amount, HoprBalance::zero());
+        assert_eq!(stats.rejection_count, 0);
+        assert_eq!(stats.rejected_amount, HoprBalance::zero());
 
         Ok(())
     }
