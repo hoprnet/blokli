@@ -67,6 +67,7 @@ mod tests {
     use blokli_chain_rpc::{BlockWithLogs, FilterSet, errors::RpcError};
     use blokli_db::{db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations};
     use futures::Stream;
+    use hopr_bindings::exports::alloy::primitives::B256;
     use hopr_types::{
         crypto::types::Hash,
         primitive::prelude::{Address, HoprBalance, XDaiBalance},
@@ -99,6 +100,16 @@ mod tests {
             _is_synced: bool,
         ) -> blokli_chain_rpc::errors::Result<std::pin::Pin<Box<dyn Stream<Item = BlockWithLogs> + Send + 'a>>>
         {
+            Err(RpcError::Other("unused".into()))
+        }
+
+        async fn get_logs_for_address(
+            &self,
+            _address: Address,
+            _topics: Vec<B256>,
+            _from_block: u64,
+            _to_block: u64,
+        ) -> blokli_chain_rpc::errors::Result<Vec<blokli_chain_rpc::Log>> {
             Err(RpcError::Other("unused".into()))
         }
 

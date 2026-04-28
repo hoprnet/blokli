@@ -6,12 +6,13 @@ use std::{
 
 use async_broadcast::TrySendError;
 use futures::{Stream, StreamExt};
+use futures_time::{stream::StreamExt as TimeStreamExt, time::Duration as Duration2};
 use hopr_types::{crypto::types::Hash, primitive::prelude::HoprBalance as PrimitiveHoprBalance};
 use indexmap::IndexMap;
 
 use crate::{
     api::{types::*, *},
-    errors::{BlokliClientError, ErrorKind, TrackingErrorKind},
+    errors::{BlokliClientError, ErrorKind, InternalTxError, TrackingErrorKind},
 };
 
 fn serialize_as_empty_map<K, V, S>(_: &IndexMap<K, V>, serializer: S) -> std::result::Result<S::Ok, S::Error>
@@ -46,6 +47,8 @@ pub struct BlokliTestState {
     pub chain_info: ChainInfo,
     /// Version of the Blokli server.
     pub version: String,
+    /// Client compatibility contract exposed by the Blokli server.
+    pub client_compatibility: Compatibility,
     /// Health of the Blokli server.
     pub health: String,
     /// Active transactions.
@@ -69,6 +72,7 @@ impl PartialEq for BlokliTestState {
             && self.channels == other.channels
             && self.chain_info == other.chain_info
             && self.version == other.version
+            && self.client_compatibility == other.client_compatibility
             && self.health == other.health
     }
 }
@@ -118,6 +122,10 @@ impl Default for BlokliTestState {
             },
 
             version: "1".to_string(),
+            client_compatibility: Compatibility {
+                api_version: "1".to_string(),
+                supported_client_versions: "^0.26".to_string(),
+            },
             health: "OK".to_string(),
             active_txs: Default::default(),
         }
@@ -125,6 +133,10 @@ impl Default for BlokliTestState {
 }
 
 impl BlokliTestState {
+    fn safe_matches_owner(safe: &Safe, owner_hex: &str) -> bool {
+        safe.chain_key == owner_hex || safe.owners.iter().any(|owner| owner == owner_hex)
+    }
+
     /// Convenience method to return a reference to an [`Account`] with a given [`ChainAddress`].
     pub fn get_account(&self, chain_key: &ChainAddress) -> Option<&Account> {
         self.accounts
@@ -189,16 +201,18 @@ impl BlokliTestState {
 
     /// Convenience method to return a reference to an [`Safe`] with the given owner's [`ChainAddress`].
     pub fn get_safe_by_owner(&self, owner: &ChainAddress) -> Option<&Safe> {
+        let owner_hex = hex::encode(owner);
         self.deployed_safes
             .values()
-            .find(|safe| safe.chain_key == hex::encode(owner))
+            .find(|safe| Self::safe_matches_owner(safe, &owner_hex))
     }
 
     /// Convenience method to return a mutable reference to an [`Safe`] with the given owner's [`ChainAddress`].
     pub fn get_safe_by_owner_mut(&mut self, owner: &ChainAddress) -> Option<&mut Safe> {
+        let owner_hex = hex::encode(owner);
         self.deployed_safes
             .values_mut()
-            .find(|safe| safe.chain_key == hex::encode(owner))
+            .find(|safe| Self::safe_matches_owner(safe, &owner_hex))
     }
 }
 
@@ -222,6 +236,12 @@ pub struct NopStateMutator;
 impl BlokliTestStateMutator for NopStateMutator {
     fn update_state(&self, _: &[u8], _: &mut BlokliTestState) -> Result<()> {
         Ok(())
+    }
+}
+
+impl<F: Fn(&[u8], &mut BlokliTestState) -> Result<()>> BlokliTestStateMutator for F {
+    fn update_state(&self, signed_tx: &[u8], state: &mut BlokliTestState) -> Result<()> {
+        self(signed_tx, state)
     }
 }
 
@@ -295,6 +315,7 @@ pub struct BlokliTestClient<M> {
     ticket_channel: TicketParamEvents,
     safe_deployed_channel: SafeDeployEvents,
     tx_simulation_delay: Duration,
+    use_internal_txs: bool,
 }
 
 fn channel_matches(channel: &Channel, selector: &ChannelSelector, accounts: &IndexMap<u32, Account>) -> bool {
@@ -355,6 +376,7 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
             ticket_channel: (tickets_tx, tickets_rx.deactivate()),
             safe_deployed_channel: (safes_tx, safes_rx.deactivate()),
             tx_simulation_delay: Duration::from_secs(1),
+            use_internal_txs: false,
         }
     }
 
@@ -362,6 +384,15 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
     #[must_use]
     pub fn with_mutator(mut self, mutator: M) -> Self {
         self.mutator = mutator;
+        self
+    }
+
+    /// Enables or disables usage of internal (Safe) transactions.
+    ///
+    /// Default is disabled.
+    #[must_use]
+    pub fn with_use_internal_txs(mut self, use_internal_txs: bool) -> Self {
+        self.use_internal_txs = use_internal_txs;
         self
     }
 
@@ -383,6 +414,12 @@ impl<M: BlokliTestStateMutator> BlokliTestClient<M> {
             state: self.state.clone(),
             snapshot: state.clone(),
         }
+    }
+
+    /// Performs arbitrary update to the state which is not notified in an event broadcast.
+    pub fn hidden_state_update(&self, update: impl FnOnce(&mut BlokliTestState)) {
+        let mut state = self.state.write();
+        update(&mut state);
     }
 
     /// Allows updating the minimum ticket price and minimum ticket-winning probability.
@@ -534,10 +571,10 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
         let state = self.state.read();
         match selector {
             SafeSelector::SafeAddress(addr) => Ok(state.deployed_safes.get(&hex::encode(addr)).cloned()),
-            SafeSelector::ChainKey(chain_key) => Ok(state
+            SafeSelector::Owner(owner_address) | SafeSelector::ChainKey(owner_address) => Ok(state
                 .deployed_safes
                 .values()
-                .find(|s| s.chain_key == hex::encode(chain_key))
+                .find(|s| BlokliTestState::safe_matches_owner(s, &hex::encode(owner_address)))
                 .cloned()),
             SafeSelector::RegisteredNode(node_address) => Ok(state
                 .deployed_safes
@@ -594,7 +631,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
             state
                 .deployed_safes
                 .values()
-                .filter(|s| s.chain_key == owner_hex)
+                .filter(|s| BlokliTestState::safe_matches_owner(s, &owner_hex))
                 .collect()
         } else {
             state.deployed_safes.values().collect()
@@ -630,6 +667,10 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
 
     async fn query_version(&self) -> Result<String> {
         Ok(self.state.read().version.clone())
+    }
+
+    async fn query_compatibility(&self) -> Result<Compatibility> {
+        Ok(self.state.read().client_compatibility.clone())
     }
 
     async fn query_health(&self) -> Result<String> {
@@ -738,6 +779,20 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliSubscriptionClient for Blokl
         Ok(futures::stream::iter(safes.into_values())
             .chain(self.safe_deployed_channel.1.activate_cloned())
             .map(Ok))
+    }
+
+    fn subscribe_track_transaction(
+        &self,
+        tx_id: TxId,
+    ) -> Result<impl futures::Stream<Item = Result<types::Transaction>> + Send> {
+        let tx = self
+            .state
+            .write()
+            .active_txs
+            .shift_remove(&tx_id)
+            .ok_or_else(|| BlokliClientError::from(ErrorKind::NoData))?;
+
+        Ok(futures::stream::once(futures::future::ok(tx)).delay(Duration2::from(self.tx_simulation_delay)))
     }
 }
 
@@ -910,6 +965,8 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
 
         let mut state = self.state.write();
 
+        let mut internal_tx_failure_reason: Option<String> = None;
+
         let status = simulate_tx_execution(
             signed_tx,
             &mut state,
@@ -923,9 +980,17 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
             tracing::debug!("transaction execution succeeded");
             TransactionStatus::Confirmed
         })
+        .inspect_err(|e| if let ErrorKind::MockClientError(int_err) = e.kind() {
+            internal_tx_failure_reason = int_err.downcast_ref::<InternalTxError>().map(|err| err.0.to_string());
+        })
         .unwrap_or_else(|error| {
             tracing::error!(%error, signed_tx_data = hex::encode(signed_tx), "failed to execute transaction, state reverted");
-            TransactionStatus::Reverted
+            // Make the outer transaction confirmed if there was an internal transaction failure
+            if self.use_internal_txs && internal_tx_failure_reason.is_some() {
+                TransactionStatus::Confirmed
+            } else {
+                TransactionStatus::Reverted
+            }
         });
 
         state.active_txs.insert(
@@ -934,8 +999,14 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliTransactionClient for Blokli
                 id: tx_id.clone().into(),
                 status,
                 submitted_at: DateTime(chrono::DateTime::<chrono::Utc>::from(SystemTime::now()).to_rfc3339()),
-                transaction_hash: Hex32(tx_hash),
-                safe_execution: None,
+                transaction_hash: Hex32(tx_hash.clone()),
+                safe_execution: (self.use_internal_txs && status == TransactionStatus::Confirmed).then(|| {
+                    SafeExecution {
+                        success: internal_tx_failure_reason.is_none(),
+                        safe_tx_hash: Some(Hex32(tx_hash)),
+                        revert_reason: internal_tx_failure_reason,
+                    }
+                }),
             },
         );
 

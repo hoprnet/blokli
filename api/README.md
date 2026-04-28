@@ -31,7 +31,9 @@ cargo run --release -p blokli-api
 
 - **GraphQL API**: `http://localhost:8080/graphql` (GET for playground, POST for queries)
 - **GraphQL Subscriptions**: `http://localhost:8080/graphql/subscriptions` (SSE)
-- **Health Check**: `http://localhost:8080/health`
+- **Metrics**: `http://localhost:8080/metrics` (Prometheus text format)
+- **Liveness Check**: `http://localhost:8080/healthz`
+- **Readiness Check**: `http://localhost:8080/readyz`
 
 ## GraphQL Schema
 
@@ -39,6 +41,7 @@ cargo run --release -p blokli-api
 
 - `health`: Health check endpoint
 - `version`: Get API version
+- `compatibility`: Get the API version plus the supported `blokli-client` semver range
 - `blocks(limit: Int)`: Get indexed blocks (placeholder)
 
 ### Mutations
@@ -106,6 +109,17 @@ query {
 ```graphql
 query {
   version
+}
+```
+
+### Get Client Compatibility
+
+```graphql
+query {
+  compatibility {
+    apiVersion
+    supportedClientVersions
+  }
 }
 ```
 

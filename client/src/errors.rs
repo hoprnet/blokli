@@ -53,6 +53,11 @@ pub enum ErrorKind {
         code: String,
         message: String,
     },
+    #[error("client version {client_version}, should be {supported_version}")]
+    VersionMismatch {
+        client_version: String,
+        supported_version: String,
+    },
     #[error("invalid query input: {0}")]
     InvalidInput(&'static str),
     #[error("transaction tracking error: {0:?}")]
@@ -77,3 +82,18 @@ pub enum ErrorKind {
     #[error(transparent)]
     MockClientError(#[from] anyhow::Error),
 }
+
+/// A special kind of error type that is used to wrap errors simulates internal Safe TX failures.
+#[cfg(feature = "testing")]
+#[derive(Debug)]
+pub struct InternalTxError(pub anyhow::Error);
+
+#[cfg(feature = "testing")]
+impl std::fmt::Display for InternalTxError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "internal TX error: {}", self.0)
+    }
+}
+
+#[cfg(feature = "testing")]
+impl std::error::Error for InternalTxError {}

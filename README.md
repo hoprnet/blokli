@@ -89,6 +89,11 @@ just docker-run-anvil trace
 
 Once running, access the GraphQL playground at: <http://localhost:8080/graphql>
 
+Prometheus metrics are available at: <http://localhost:8080/metrics>
+
+To push daemon telemetry to an OpenTelemetry collector, configure the `[telemetry]` section in `bloklid/example-config.toml`. See
+[OTLP.md](OTLP.md) for transport rules, signal selection, environment overrides, and example configurations.
+
 ## Testing
 
 Blokli has comprehensive test coverage for temporal queries, blockchain reorganization handling, subscriptions, and edge cases.
@@ -250,6 +255,7 @@ You can override any configuration setting using environment variables.
 | :---------------------------------------------- | :----------------------------------------------------- |
 | `indexer.fast_sync`                             | `BLOKLI_INDEXER_FAST_SYNC`                             |
 | `indexer.enable_logs_snapshot`                  | `BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT`                  |
+| `indexer.enable_safe_indexing`                  | `BLOKLI_INDEXER_ENABLE_SAFE_INDEXING`                  |
 | `indexer.logs_snapshot_url`                     | `BLOKLI_INDEXER_LOGS_SNAPSHOT_URL`                     |
 | `indexer.subscription.event_bus_capacity`       | `BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY`       |
 | `indexer.subscription.shutdown_signal_capacity` | `BLOKLI_INDEXER_SUBSCRIPTION_SHUTDOWN_SIGNAL_CAPACITY` |

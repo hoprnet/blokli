@@ -20,12 +20,12 @@ use serial_test::serial;
 
 const TX_VALUE: u128 = 1_000_000; // 0.000000000001 ETH
 enum ClientType {
-    RPC,
+    Rpc,
     Blokli,
 }
 
 #[rstest]
-#[case(ClientType::RPC)]
+#[case(ClientType::Rpc)]
 #[case(ClientType::Blokli)]
 #[test_log::test(tokio::test)]
 #[serial]
@@ -44,7 +44,7 @@ async fn submit_transaction(#[future(awt)] fixture: IntegrationFixture, #[case] 
     let initial_balance = fixture.rpc().get_balance(&recipient.address).await?;
 
     match client_type {
-        ClientType::RPC => {
+        ClientType::Rpc => {
             fixture.rpc().execute_transaction(&raw_tx).await?;
         }
         ClientType::Blokli => {
@@ -84,7 +84,7 @@ async fn submit_transaction(#[future(awt)] fixture: IntegrationFixture, #[case] 
 }
 
 #[rstest]
-#[case(ClientType::RPC)]
+#[case(ClientType::Rpc)]
 #[case(ClientType::Blokli)]
 #[test_log::test(tokio::test)]
 #[serial]
@@ -104,7 +104,7 @@ async fn submit_transaction_with_incorrect_payload(
         Vec::from_hex(raw_tx.trim_start_matches("0x")).context("failed to decode raw transaction payload")?;
 
     let res = match client_type {
-        ClientType::RPC => fixture.rpc().execute_transaction(&raw_tx).await,
+        ClientType::Rpc => fixture.rpc().execute_transaction(&raw_tx).await,
         ClientType::Blokli => fixture.submit_tx(&signed_bytes).await,
     };
     assert!(res.is_err(), "transaction with incorrect payload should fail");
@@ -113,7 +113,7 @@ async fn submit_transaction_with_incorrect_payload(
 }
 
 #[rstest]
-#[case(ClientType::RPC)]
+#[case(ClientType::Rpc)]
 #[case(ClientType::Blokli)]
 #[test_log::test(tokio::test)]
 #[serial]
@@ -132,7 +132,7 @@ async fn submit_transaction_with_too_much_value(
         Vec::from_hex(raw_tx.trim_start_matches("0x")).context("failed to decode raw transaction payload")?;
 
     let res = match client_type {
-        ClientType::RPC => fixture.rpc().execute_transaction(&raw_tx).await,
+        ClientType::Rpc => fixture.rpc().execute_transaction(&raw_tx).await,
         ClientType::Blokli => fixture.submit_tx(&signed_bytes).await,
     };
     assert!(res.is_err(), "transaction with incorrect payload should fail");
@@ -192,7 +192,9 @@ async fn submit_and_confirm_transaction(#[future(awt)] fixture: IntegrationFixtu
     let block_number = fixture.client().query_chain_info().await?.block_number;
     fixture.submit_and_confirm_tx(&signed_bytes, confirmations).await?;
 
-    assert!(fixture.client().query_chain_info().await?.block_number >= block_number + (confirmations as i32));
+    // +1 to account for the acceptabled indexer lag. As the chain_info endpoint might be slightly lagging behind the
+    // latest block.
+    assert!(fixture.client().query_chain_info().await?.block_number + 1 >= block_number + (confirmations as i32));
 
     let final_balance = fixture.rpc().get_balance(&recipient.address).await?;
     let delta = final_balance

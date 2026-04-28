@@ -745,10 +745,12 @@ async fn test_account_subscription_handles_account_with_multiple_announcements()
     // Add multiple announcements
     let multiaddr1: Multiaddr = "/ip4/127.0.0.1/tcp/9091".parse().unwrap();
     let multiaddr2: Multiaddr = "/ip4/127.0.0.1/tcp/9092".parse().unwrap();
-    db.insert_announcement(None, chain_key, multiaddr1, 101)
+    let _ = db
+        .insert_announcement(None, chain_key, multiaddr1, 101)
         .await
         .context("should be able to insert a multiaddress");
-    db.insert_announcement(None, chain_key, multiaddr2.clone(), 102)
+    let _ = db
+        .insert_announcement(None, chain_key, multiaddr2.clone(), 102)
         .await
         .context("should be able to insert a multiaddress");
 

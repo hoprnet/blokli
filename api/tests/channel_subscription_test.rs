@@ -42,7 +42,7 @@ use hopr_types::{
     crypto::prelude::{ChainKeypair, Keypair, OffchainKeypair},
     internal::channels::{ChannelEntry, ChannelStatus},
     primitive::{
-        prelude::HoprBalance,
+        prelude::{Address, HoprBalance},
         traits::{IntoEndian, ToHex},
     },
 };
@@ -56,6 +56,24 @@ fn random_keypair() -> ChainKeypair {
 /// Helper to generate random offchain keypair
 fn random_offchain_keypair() -> OffchainKeypair {
     OffchainKeypair::random()
+}
+
+fn build_channel_entry(
+    source: Address,
+    destination: Address,
+    balance: HoprBalance,
+    ticket_index: u64,
+    status: ChannelStatus,
+    channel_epoch: u32,
+) -> ChannelEntry {
+    ChannelEntry::builder()
+        .between(source, destination)
+        .balance(balance)
+        .ticket_index(ticket_index)
+        .status(status)
+        .epoch(channel_epoch)
+        .build()
+        .expect("valid channel entry")
 }
 
 /// Create a minimal GraphQL schema for testing subscriptions
@@ -242,7 +260,7 @@ async fn test_channel_subscription_emits_initial_channel_with_source_filter() {
 
     // Create channel
     let balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
     // Update watermark to include all test data
@@ -311,7 +329,7 @@ async fn test_channel_subscription_emits_initial_channel_with_destination_filter
 
     // Create channel
     let balance = HoprBalance::from_str("500 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
     // Update watermark to include all test data
@@ -368,7 +386,7 @@ async fn test_channel_subscription_emits_initial_channel_with_concrete_channel_i
 
     // Create channel
     let balance = HoprBalance::from_str("500 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     let channel_id = channel.get_id().to_hex();
 
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
@@ -429,7 +447,7 @@ async fn test_channel_subscription_emits_initial_channel_with_status_filter() {
 
     // Create OPEN channel
     let balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
     // Update watermark to include all test data
@@ -489,11 +507,11 @@ async fn test_channel_subscription_without_filters_emits_all_channels() {
 
     // Create two channels
     let balance1 = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel1 = ChannelEntry::new(addr1, addr2, balance1, 0, ChannelStatus::Open, 1);
+    let channel1 = build_channel_entry(addr1, addr2, balance1, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel1, 100, 0, 0).await.unwrap();
 
     let balance2 = HoprBalance::from_str("2000 wxHOPR").unwrap();
-    let channel2 = ChannelEntry::new(addr2, addr3, balance2, 0, ChannelStatus::Open, 1);
+    let channel2 = build_channel_entry(addr2, addr3, balance2, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel2, 101, 0, 0).await.unwrap();
 
     // Update watermark to include all test data
@@ -565,7 +583,7 @@ async fn test_channel_subscription_receives_balance_update() {
 
     // Create channel with initial balance
     let initial_balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, initial_balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, initial_balance, 0, ChannelStatus::Open, 1);
     let channel_id = channel.get_id().to_hex();
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
@@ -602,7 +620,7 @@ async fn test_channel_subscription_receives_balance_update() {
 
     // Update channel balance
     let updated_balance = HoprBalance::from_str("2000 wxHOPR").unwrap();
-    let updated_channel = ChannelEntry::new(addr1, addr2, updated_balance, 0, ChannelStatus::Open, 1);
+    let updated_channel = build_channel_entry(addr1, addr2, updated_balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, updated_channel, 110, 0, 0).await.unwrap();
 
     // Publish event to trigger Phase 2 update
@@ -646,7 +664,7 @@ async fn test_channel_subscription_receives_status_transition_open_to_pending() 
 
     // Create OPEN channel
     let balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     let channel_id = channel.get_id().to_hex();
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
@@ -679,7 +697,7 @@ async fn test_channel_subscription_receives_status_transition_open_to_pending() 
 
     // Transition to PENDINGTOCLOSE
     let closure_time = SystemTime::now() + Duration::from_secs(1000);
-    let pending_channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::PendingToClose(closure_time), 1);
+    let pending_channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::PendingToClose(closure_time), 1);
     db.upsert_channel(None, pending_channel, 110, 0, 0).await.unwrap();
 
     // Publish event to trigger Phase 2 update
@@ -724,7 +742,7 @@ async fn test_channel_subscription_receives_status_transition_pending_to_closed(
     // Create PENDINGTOCLOSE channel
     let balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
     let closure_time = SystemTime::now() + Duration::from_secs(1000);
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::PendingToClose(closure_time), 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::PendingToClose(closure_time), 1);
     let channel_id = channel.get_id().to_hex();
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
@@ -757,7 +775,7 @@ async fn test_channel_subscription_receives_status_transition_pending_to_closed(
     );
 
     // Transition to CLOSED
-    let closed_channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Closed, 1);
+    let closed_channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Closed, 1);
     db.upsert_channel(None, closed_channel, 110, 0, 0).await.unwrap();
 
     // Publish event to trigger Phase 2 update
@@ -797,7 +815,7 @@ async fn test_channel_subscription_receives_epoch_update() {
 
     // Create channel with epoch 1
     let balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     let channel_id = channel.get_id().to_hex();
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
@@ -827,7 +845,7 @@ async fn test_channel_subscription_receives_epoch_update() {
     assert_eq!(initial_data["channelUpdated"]["epoch"].as_i64().unwrap(), 1);
 
     // Update channel to epoch 2
-    let updated_channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 2);
+    let updated_channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 2);
     db.upsert_channel(None, updated_channel, 110, 0, 0).await.unwrap();
 
     // Publish event to trigger Phase 2 update
@@ -873,12 +891,12 @@ async fn test_channel_subscription_filter_excludes_non_matching_channels() {
 
     // Create two channels
     let balance1 = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel1 = ChannelEntry::new(addr1, addr2, balance1, 0, ChannelStatus::Open, 1);
+    let channel1 = build_channel_entry(addr1, addr2, balance1, 0, ChannelStatus::Open, 1);
     let channel1_id = channel1.get_id().to_hex();
     db.upsert_channel(None, channel1, 100, 0, 0).await.unwrap();
 
     let balance2 = HoprBalance::from_str("2000 wxHOPR").unwrap();
-    let channel2 = ChannelEntry::new(addr2, addr3, balance2, 0, ChannelStatus::Open, 1);
+    let channel2 = build_channel_entry(addr2, addr3, balance2, 0, ChannelStatus::Open, 1);
     let channel2_id = channel2.get_id().to_hex();
     db.upsert_channel(None, channel2, 101, 0, 0).await.unwrap();
 
@@ -911,7 +929,7 @@ async fn test_channel_subscription_filter_excludes_non_matching_channels() {
 
     // Update channel 2 and publish event - should NOT appear in subscription (filtered out)
     let updated_balance2 = HoprBalance::from_str("3000 wxHOPR").unwrap();
-    let updated_channel2 = ChannelEntry::new(addr2, addr3, updated_balance2, 0, ChannelStatus::Open, 1);
+    let updated_channel2 = build_channel_entry(addr2, addr3, updated_balance2, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, updated_channel2, 110, 0, 0).await.unwrap();
 
     let channel2_update = create_channel_update_event(&db, &channel2_id).await.unwrap();
@@ -919,7 +937,7 @@ async fn test_channel_subscription_filter_excludes_non_matching_channels() {
 
     // Update channel 1 and publish event - should appear in subscription
     let updated_balance1 = HoprBalance::from_str("1500 wxHOPR").unwrap();
-    let updated_channel1 = ChannelEntry::new(addr1, addr2, updated_balance1, 0, ChannelStatus::Open, 1);
+    let updated_channel1 = build_channel_entry(addr1, addr2, updated_balance1, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, updated_channel1, 111, 0, 0).await.unwrap();
 
     let channel1_update = create_channel_update_event(&db, &channel1_id).await.unwrap();
@@ -985,7 +1003,7 @@ async fn test_channel_subscription_multiple_concurrent_subscribers() {
 
     // Create channel
     let balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     let channel_id = channel.get_id().to_hex();
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
@@ -1022,7 +1040,7 @@ async fn test_channel_subscription_multiple_concurrent_subscribers() {
 
     // Update channel balance
     let updated_balance = HoprBalance::from_str("2000 wxHOPR").unwrap();
-    let updated_channel = ChannelEntry::new(addr1, addr2, updated_balance, 0, ChannelStatus::Open, 1);
+    let updated_channel = build_channel_entry(addr1, addr2, updated_balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, updated_channel, 110, 0, 0).await.unwrap();
 
     // Publish event to trigger Phase 2 update for both subscribers
@@ -1072,7 +1090,7 @@ async fn test_channel_subscription_with_combined_filters() {
 
     // Create channel
     let balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
     // Update watermark to include all test data

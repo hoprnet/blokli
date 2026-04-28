@@ -15,7 +15,7 @@ use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 use hopr_types::{
     crypto::types::Hash,
-    internal::channels::{ChannelDirection, ChannelEntry, ChannelStatus},
+    internal::channels::{ChannelBuilder, ChannelDirection, ChannelEntry, ChannelStatus},
     primitive::{
         prelude::{Address, HoprBalance},
         traits::{IntoEndian, ToHex},
@@ -139,14 +139,16 @@ fn reconstruct_channel_entry(
         _ => return Err(DbSqlError::DecodingError),
     };
 
-    Ok(ChannelEntry::new(
-        source_addr,
-        dest_addr,
-        balance,
-        u64::try_from(state.ticket_index).map_err(|_| DbSqlError::DecodingError)?,
-        status,
-        u32::try_from(state.epoch).map_err(|_| DbSqlError::DecodingError)?,
-    ))
+    let building = ChannelBuilder::default()
+        .source(source_addr)
+        .destination(dest_addr)
+        .balance(balance)
+        .ticket_index(u64::try_from(state.ticket_index).map_err(|_| DbSqlError::DecodingError)?)
+        .epoch(u32::try_from(state.epoch).map_err(|_| DbSqlError::DecodingError)?)
+        .status(status)
+        .build()?;
+
+    Ok(building)
 }
 
 /// Helper function to reconstruct a ChannelEntry from a channel_current view model
@@ -187,14 +189,16 @@ fn reconstruct_channel_entry_from_view(
         _ => return Err(DbSqlError::DecodingError),
     };
 
-    Ok(ChannelEntry::new(
-        source_addr,
-        dest_addr,
-        balance,
-        u64::try_from(view_row.ticket_index).map_err(|_| DbSqlError::DecodingError)?,
-        status,
-        u32::try_from(view_row.epoch).map_err(|_| DbSqlError::DecodingError)?,
-    ))
+    let building = ChannelBuilder::default()
+        .source(source_addr)
+        .destination(dest_addr)
+        .balance(balance)
+        .ticket_index(u64::try_from(view_row.ticket_index).map_err(|_| DbSqlError::DecodingError)?)
+        .epoch(u32::try_from(view_row.epoch).map_err(|_| DbSqlError::DecodingError)?)
+        .status(status)
+        .build()?;
+
+    Ok(building)
 }
 
 /// Helper function to insert a channel state record and emit event
@@ -893,16 +897,46 @@ mod tests {
         db::BlokliDb,
     };
 
+    fn build_channel_entry(
+        source: Address,
+        destination: Address,
+        balance: HoprBalance,
+        ticket_index: u64,
+        status: ChannelStatus,
+        channel_epoch: u32,
+    ) -> ChannelEntry {
+        ChannelEntry::builder()
+            .between(source, destination)
+            .balance(balance)
+            .ticket_index(ticket_index)
+            .status(status)
+            .epoch(channel_epoch)
+            .build()
+            .expect("valid channel entry")
+    }
+
     #[tokio::test]
     async fn test_insert_get_by_id() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
 
         // Create accounts first (required before channels can be created)
-        let addr = Address::default();
-        let packet_key = *OffchainKeypair::random().public();
-        db.upsert_account(None, 1, addr, packet_key, None, 1, 0, 0).await?;
+        let source = Address::default();
+        let destination = Address::from(random_bytes());
+        let source_packet_key = *OffchainKeypair::random().public();
+        let destination_packet_key = *OffchainKeypair::random().public();
+        db.upsert_account(None, 1, source, source_packet_key, None, 1, 0, 0)
+            .await?;
+        db.upsert_account(None, 2, destination, destination_packet_key, None, 1, 0, 1)
+            .await?;
 
-        let ce = ChannelEntry::new(addr, addr, 0.into(), 0_u32.into(), ChannelStatus::Open, 0_u32.into());
+        let ce = build_channel_entry(
+            source,
+            destination,
+            0.into(),
+            0_u32.into(),
+            ChannelStatus::Open,
+            0_u32.into(),
+        );
 
         db.upsert_channel(None, ce, 1, 0, 0).await?;
 
@@ -929,7 +963,7 @@ mod tests {
         db.upsert_account(None, 1, a, packet_key_a, None, 1, 0, 0).await?;
         db.upsert_account(None, 2, b, packet_key_b, None, 2, 0, 0).await?;
 
-        let ce = ChannelEntry::new(a, b, 0.into(), 0_u32.into(), ChannelStatus::Open, 0_u32.into());
+        let ce = build_channel_entry(a, b, 0.into(), 0_u32.into(), ChannelStatus::Open, 0_u32.into());
 
         db.upsert_channel(None, ce, 1, 0, 0).await?;
         let from_db = db
@@ -961,34 +995,21 @@ mod tests {
     async fn test_channel_get_for_destination_that_exists_should_be_returned() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
 
-        let expected_destination = Address::default();
+        let src = ChainKeypair::random().public().to_address();
+        let dst = ChainKeypair::random().public().to_address();
 
-        // Create account first (required before channels can be created)
-        let packet_key_expected_destination = *OffchainKeypair::random().public();
-        db.upsert_account(
-            None,
-            1,
-            expected_destination,
-            packet_key_expected_destination,
-            None,
-            1,
-            0,
-            0,
-        )
-        .await?;
+        // Create accounts first (required before channels can be created)
+        let packet_key_src = *OffchainKeypair::random().public();
+        let packet_key_dst: hopr_types::crypto::types::OffchainPublicKey = *OffchainKeypair::random().public();
 
-        let ce = ChannelEntry::new(
-            expected_destination,
-            expected_destination,
-            0.into(),
-            0_u32.into(),
-            ChannelStatus::Open,
-            0_u32.into(),
-        );
+        db.upsert_account(None, 1, src, packet_key_src, None, 1, 0, 0).await?;
+        db.upsert_account(None, 2, dst, packet_key_dst, None, 2, 0, 0).await?;
+
+        let ce = build_channel_entry(src, dst, 0.into(), 0_u32.into(), ChannelStatus::Open, 0_u32.into());
 
         db.upsert_channel(None, ce, 1, 0, 0).await?;
         let from_db = db
-            .get_channels_via(None, ChannelDirection::Incoming, &Address::default())
+            .get_channels_via(None, ChannelDirection::Incoming, &dst)
             .await?
             .first()
             .cloned();
@@ -1000,8 +1021,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_incoming_outgoing_channels() -> anyhow::Result<()> {
-        let ckp = ChainKeypair::random();
-        let addr_1 = ckp.public().to_address();
+        let addr_1 = ChainKeypair::random().public().to_address();
         let addr_2 = ChainKeypair::random().public().to_address();
 
         let db = BlokliDb::new_in_memory().await?;
@@ -1014,7 +1034,7 @@ mod tests {
         db.upsert_account(None, 2, addr_2, packet_key_addr_2, None, 2, 0, 0)
             .await?;
 
-        let ce_1 = ChannelEntry::new(
+        let ce_1 = build_channel_entry(
             addr_1,
             addr_2,
             0.into(),
@@ -1023,7 +1043,7 @@ mod tests {
             0_u32.into(),
         );
 
-        let ce_2 = ChannelEntry::new(
+        let ce_2 = build_channel_entry(
             addr_2,
             addr_1,
             0.into(),
@@ -1079,7 +1099,7 @@ mod tests {
 
         // Create channel with initial state at block 100
         let initial_balance = HoprBalance::from(1000u32);
-        let ce = ChannelEntry::new(
+        let ce = build_channel_entry(
             addr_1,
             addr_2,
             initial_balance,
@@ -1118,7 +1138,7 @@ mod tests {
 
         // Create channel with initial state at block 100
         let initial_balance = HoprBalance::from(1000u32);
-        let ce_initial = ChannelEntry::new(
+        let ce_initial = build_channel_entry(
             addr_1,
             addr_2,
             initial_balance,
@@ -1131,7 +1151,7 @@ mod tests {
 
         // Update channel with new balance at block 200
         let new_balance = HoprBalance::from(2000u32);
-        let ce_updated = ChannelEntry::new(
+        let ce_updated = build_channel_entry(
             addr_1,
             addr_2,
             new_balance,
@@ -1192,12 +1212,12 @@ mod tests {
         let balance = HoprBalance::from(1000u32);
 
         // State 1: Open at block 100
-        let ce_open = ChannelEntry::new(addr_1, addr_2, balance, 0_u32.into(), ChannelStatus::Open, 1_u32.into());
+        let ce_open = build_channel_entry(addr_1, addr_2, balance, 0_u32.into(), ChannelStatus::Open, 1_u32.into());
         db.upsert_channel(None, ce_open, 100, 0, 0).await?;
 
         // State 2: PendingToClose at block 200
         let closure_time = SystemTime::now() + Duration::from_secs(3600);
-        let ce_pending = ChannelEntry::new(
+        let ce_pending = build_channel_entry(
             addr_1,
             addr_2,
             balance,
@@ -1208,7 +1228,7 @@ mod tests {
         db.upsert_channel(None, ce_pending, 200, 0, 0).await?;
 
         // State 3: Closed at block 300
-        let ce_closed = ChannelEntry::new(
+        let ce_closed = build_channel_entry(
             addr_1,
             addr_2,
             balance,
@@ -1269,11 +1289,11 @@ mod tests {
         let balance = HoprBalance::from(1000u32);
 
         // Initial state: ticket_index = 0
-        let ce_initial = ChannelEntry::new(addr_1, addr_2, balance, 0_u32.into(), ChannelStatus::Open, 1_u32.into());
+        let ce_initial = build_channel_entry(addr_1, addr_2, balance, 0_u32.into(), ChannelStatus::Open, 1_u32.into());
         db.upsert_channel(None, ce_initial, 100, 0, 0).await?;
 
         // Update: ticket_index = 5
-        let ce_updated = ChannelEntry::new(addr_1, addr_2, balance, 5_u32.into(), ChannelStatus::Open, 1_u32.into());
+        let ce_updated = build_channel_entry(addr_1, addr_2, balance, 5_u32.into(), ChannelStatus::Open, 1_u32.into());
         db.upsert_channel(None, ce_updated, 200, 0, 0).await?;
 
         // Verify history preserved
@@ -1302,7 +1322,7 @@ mod tests {
             .await?;
 
         // Create multiple states at different blocks
-        let ce_block_100 = ChannelEntry::new(
+        let ce_block_100 = build_channel_entry(
             addr_1,
             addr_2,
             HoprBalance::from(1000u32),
@@ -1312,7 +1332,7 @@ mod tests {
         );
         db.upsert_channel(None, ce_block_100, 100, 0, 0).await?;
 
-        let ce_block_200 = ChannelEntry::new(
+        let ce_block_200 = build_channel_entry(
             addr_1,
             addr_2,
             HoprBalance::from(2000u32),
@@ -1322,7 +1342,7 @@ mod tests {
         );
         db.upsert_channel(None, ce_block_200, 200, 0, 0).await?;
 
-        let ce_block_300 = ChannelEntry::new(
+        let ce_block_300 = build_channel_entry(
             addr_1,
             addr_2,
             HoprBalance::from(3000u32),
@@ -1403,7 +1423,7 @@ mod tests {
             .await?;
 
         // Create 5 state changes across different blocks
-        let base_channel = ChannelEntry::new(
+        let base_channel = build_channel_entry(
             addr_1,
             addr_2,
             HoprBalance::from(1000u32),
@@ -1415,7 +1435,7 @@ mod tests {
 
         for i in 0..5 {
             let balance = HoprBalance::from((i + 1) * 1000);
-            let ce = ChannelEntry::new(addr_1, addr_2, balance, i as u64, ChannelStatus::Open, 1u32);
+            let ce = build_channel_entry(addr_1, addr_2, balance, i as u64, ChannelStatus::Open, 1u32);
             db.upsert_channel(None, ce, (i + 1) * 100, 0, 0).await?;
         }
 
@@ -1458,7 +1478,7 @@ mod tests {
             .await?;
 
         // Create channel with state at block 100
-        let ce = ChannelEntry::new(
+        let ce = build_channel_entry(
             addr_1,
             addr_2,
             HoprBalance::from(1000u32),
@@ -1494,7 +1514,7 @@ mod tests {
             .await?;
 
         // Create initial channel
-        let ce_initial = ChannelEntry::new(
+        let ce_initial = build_channel_entry(
             addr_1,
             addr_2,
             HoprBalance::from(1000u32),
@@ -1511,7 +1531,7 @@ mod tests {
             let _channel_id = ce_initial.get_id();
             let handle = tokio::spawn(async move {
                 let balance = HoprBalance::from((i + 2) * 1000);
-                let ce = ChannelEntry::new(
+                let ce = build_channel_entry(
                     addr_1,
                     addr_2,
                     balance,

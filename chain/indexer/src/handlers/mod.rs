@@ -29,6 +29,7 @@ use tracing::{debug, error, trace};
 
 use crate::{
     IndexerState,
+    custom_abis::safe_contract_events::SafeContract::SafeContractEvents,
     errors::{CoreEthereumIndexerError, Result},
     state::IndexerEvent,
 };
@@ -39,22 +40,28 @@ mod channels;
 mod helpers;
 mod node_safe_registry;
 mod oracles;
+mod safe_contracts;
 mod stake_factory;
 #[cfg(test)]
 mod test_utils;
 mod tokens;
 
-#[cfg(all(feature = "prometheus", not(test)))]
+#[cfg(all(feature = "telemetry", not(test)))]
 use hopr_metrics::MultiCounter;
 
-#[cfg(all(feature = "prometheus", not(test)))]
+#[cfg(all(feature = "telemetry", not(test)))]
 lazy_static::lazy_static! {
     static ref METRIC_INDEXER_LOG_COUNTERS: MultiCounter =
         MultiCounter::new(
-            "hopr_indexer_contract_log_count",
+            "blokli_indexer_contract_log_count",
             "Counts of different HOPR contract logs processed by the Indexer",
             &["contract"]
     ).unwrap();
+}
+
+#[cfg(all(feature = "telemetry", not(test)))]
+fn increment_indexer_contract_log_count(contract: &str) {
+    METRIC_INDEXER_LOG_COUNTERS.increment(&[contract]);
 }
 
 /// Event handling an object for on-chain operations
@@ -72,6 +79,7 @@ pub struct ContractEventHandlers<T, Db> {
     _rpc_operations: T,
     /// indexer state for publishing events to subscribers
     pub(super) indexer_state: IndexerState,
+    pub(super) enable_safe_indexing: bool,
 }
 
 impl<T, Db> Debug for ContractEventHandlers<T, Db> {
@@ -103,13 +111,26 @@ where
     ///
     /// # Returns
     /// * `Self` - New instance of `ContractEventHandlers`
-    pub fn new(addresses: ContractAddresses, db: Db, rpc_operations: T, indexer_state: IndexerState) -> Self {
+    pub fn new(
+        addresses: ContractAddresses,
+        db: Db,
+        rpc_operations: T,
+        indexer_state: IndexerState,
+        enable_safe_indexing: bool,
+    ) -> Self {
         Self {
             addresses: Arc::new(addresses),
             db,
             _rpc_operations: rpc_operations,
             indexer_state,
+            enable_safe_indexing,
         }
+    }
+
+    fn is_safe_contract_topic(topic: &[u8; 32]) -> bool {
+        crate::constants::topics::safe_contract()
+            .iter()
+            .any(|safe_topic| safe_topic.as_slice() == topic.as_slice())
     }
 
     #[allow(dead_code)]
@@ -119,8 +140,8 @@ where
         _event: HoprNodeManagementModuleEvents,
         _is_synced: bool,
     ) -> Result<()> {
-        #[cfg(all(feature = "prometheus", not(test)))]
-        METRIC_INDEXER_LOG_COUNTERS.increment(&["node_management_module"]);
+        #[cfg(all(feature = "telemetry", not(test)))]
+        increment_indexer_contract_log_count("node_management_module");
         // Don't care at the moment
         Ok(())
     }
@@ -216,6 +237,25 @@ where
         } else if log.address.eq(&self.addresses.node_safe_registry) {
             let event = HoprNodeSafeRegistryEvents::decode_log(&primitive_log)?;
             self.on_node_safe_registry_event(tx, &log, event.data, is_synced).await
+        } else if self
+            .db
+            .get_safe_contract_by_address(Some(tx), log.address)
+            .await?
+            .is_some()
+        {
+            if !self.enable_safe_indexing {
+                debug!(address = %log.address, "Ignoring Safe contract event because Safe indexing is disabled");
+                return Ok(vec![]);
+            }
+            let event = SafeContractEvents::decode_log(&primitive_log)?;
+            self.on_safe_contract_event(tx, log.address, &log, event.data, is_synced)
+                .await
+        } else if slog.topics.first().is_some_and(Self::is_safe_contract_topic) {
+            debug!(
+                address = %log.address,
+                "Ignoring Safe contract event for address not yet indexed as a Safe"
+            );
+            Ok(vec![])
         } else if log.address.eq(&self.addresses.ticket_price_oracle) {
             let event = HoprTicketPriceOracleEvents::decode_log(&primitive_log)?;
             self.on_ticket_price_oracle_event(tx, event.data, is_synced).await
@@ -224,8 +264,8 @@ where
             self.on_ticket_winning_probability_oracle_event(tx, event.data, is_synced)
                 .await
         } else {
-            #[cfg(all(feature = "prometheus", not(test)))]
-            METRIC_INDEXER_LOG_COUNTERS.increment(&["unknown"]);
+            #[cfg(all(feature = "telemetry", not(test)))]
+            increment_indexer_contract_log_count("unknown");
 
             error!(
                 address = %log.address, log = ?log,
@@ -387,6 +427,9 @@ mod tests {
         rpc_operations
             .expect_get_hopr_module_from_safe()
             .returning(move |_| Ok(Some(module_addr)));
+        rpc_operations
+            .expect_get_logs_for_address()
+            .returning(|_, _, _, _| Ok(vec![]));
 
         let clonable_rpc = ClonableMockOperations {
             inner: Arc::new(rpc_operations),

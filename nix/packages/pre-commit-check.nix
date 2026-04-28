@@ -14,6 +14,20 @@
 let
   lib = pkgs.lib;
 
+  # pre-commit in nixpkgs bundles heavyweight test-only dependencies
+  # (dotnet-sdk, nodejs, go, coursier, …) into nativeBuildInputs via
+  # its preCheck string interpolation, even though doCheck is already
+  # false on Darwin. Filter them out so `direnv allow` / `nix develop`
+  # doesn't have to build dotnet from source.
+  pre-commit-lightweight = pkgs.pre-commit.overridePythonAttrs {
+    nativeCheckInputs = [ ];
+    doCheck = false;
+    doInstallCheck = false;
+    dontUsePytestCheck = true;
+    preCheck = "";
+    postCheck = "";
+  };
+
   # Wrapper script that provides cargo and other tools to the export-db-schema hook.
   # Pre-commit system hooks run outside the devshell, so tools must be explicitly
   # added to PATH.
@@ -38,6 +52,7 @@ in
 
 pre-commit.lib.${system}.run {
   src = ./../..; # Root of the project
+  package = pre-commit-lightweight;
 
   # Configure the pre-commit hooks to run
   hooks = {
@@ -68,6 +83,15 @@ pre-commit.lib.${system}.run {
       pass_filenames = false;
     };
 
+    generate-metrics-docs = {
+      enable = true;
+      name = "METRICS.md must stay in sync with code";
+      entry = "bash .github/scripts/generate-metrics-docs.sh --fix";
+      files = "(METRICS\\.md|\\.rs)$";
+      pass_filenames = false;
+      language = "system";
+    };
+
     # Custom immutable files check (disabled by default)
     immutable-files = {
       enable = false;
@@ -77,9 +101,6 @@ pre-commit.lib.${system}.run {
       language = "system";
     };
   };
-
-  # Tools available to the pre-commit environment
-  tools = pkgs;
 
   # Exclude certain paths from pre-commit checks
   excludes = [
