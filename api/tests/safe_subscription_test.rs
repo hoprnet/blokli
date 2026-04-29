@@ -5,7 +5,7 @@ use blokli_api::{query::QueryRoot, subscription::SubscriptionRoot};
 use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
 use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb, safe_contracts::BlokliDbSafeContractOperations};
 use hopr_types::primitive::{prelude::Address, traits::ToHex};
-use rand::RngCore;
+use rand::Rng;
 use sea_orm::ActiveModelTrait;
 
 // Helper to generate random address

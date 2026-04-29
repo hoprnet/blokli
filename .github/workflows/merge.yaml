@@ -127,7 +127,7 @@ jobs:
       id-token: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@1af3b93b6815bc44a9784bd300feb67ff0d1eeb3 # v6.0.0
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Compute revision suffix
         id: revision
         run: echo "suffix=v$(echo '${{ needs.build-docker.outputs.docker_build_version }}' | tr '.' '-')" | tee -a "$GITHUB_OUTPUT"

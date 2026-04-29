@@ -102,7 +102,7 @@ impl IntegrationFixture {
     pub fn sample_accounts<const N: usize>(&self) -> [&AnvilAccount; N] {
         assert!(self.inner.accounts.len() >= N, "not enough accounts available");
 
-        let selected = self.inner.accounts.choose_multiple(&mut rand::rng(), N);
+        let selected = self.inner.accounts.sample(&mut rand::rng(), N);
         let mut iter = selected.into_iter();
         let result: [&AnvilAccount; N] = std::array::from_fn(|_| iter.next().unwrap());
         result
