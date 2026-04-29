@@ -107,7 +107,7 @@ pub fn create_test_schema(db: &BlokliDb) -> (Schema<QueryRoot, MutationRoot, Sub
     (schema, indexer_state)
 }
 
-pub fn build_subscription_test_schema(
+fn build_subscription_test_schema(
     db: &BlokliDb,
     indexer_state: IndexerState,
 ) -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
