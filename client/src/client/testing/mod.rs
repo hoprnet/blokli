@@ -774,6 +774,10 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliSubscriptionClient for Blokl
         .map(Ok))
     }
 
+    fn subscribe_health(&self) -> Result<impl Stream<Item = Result<ReadinessState>> + Send> {
+        Ok(futures::stream::once(futures::future::ready(Ok(ReadinessState::Ready))).boxed())
+    }
+
     fn subscribe_safe_deployments(&self) -> Result<impl Stream<Item = Result<Safe>> + Send> {
         let safes = self.state.read().deployed_safes.clone();
         Ok(futures::stream::iter(safes.into_values())

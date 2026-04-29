@@ -23,6 +23,14 @@ pub enum ChannelStatus {
     Closed,
 }
 
+#[derive(cynic::Enum, Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadinessState {
+    #[cynic(rename = "READY")]
+    Ready,
+    #[cynic(rename = "NOT_READY")]
+    NotReady,
+}
+
 #[derive(cynic::Scalar, Debug, Clone, PartialEq, Eq)]
 pub struct DateTime(pub String);
 

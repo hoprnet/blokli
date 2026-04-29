@@ -8,8 +8,12 @@ use std::{
 use anyhow::{Context, Result};
 use blokli_client::{
     BlokliClient, BlokliClientConfig,
-    api::{AccountSelector, BlokliQueryClient, BlokliTransactionClient, SafeSelector, types::Safe},
+    api::{
+        AccountSelector, BlokliQueryClient, BlokliSubscriptionClient, BlokliTransactionClient, SafeSelector,
+        types::{ReadinessState, Safe},
+    },
 };
+use futures::StreamExt;
 use hopli_lib::{
     methods::transfer_or_mint_tokens,
     utils::{ContractInstances, a2h},
@@ -43,7 +47,6 @@ use hopr_types::{
 };
 use libc::atexit;
 use rand::seq::IndexedRandom;
-use reqwest::StatusCode;
 use rstest::fixture;
 use tokio::sync::OnceCell;
 use tracing::{debug, info, warn};
@@ -582,42 +585,48 @@ impl IntegrationFixtureInner {
     }
 }
 
-async fn wait_for_blokli_ready(config: &TestConfig) -> Result<()> {
-    let client = reqwest::Client::builder()
-        .timeout(config.http_timeout)
-        .build()
-        .context("failed to build readiness HTTP client")?;
-    let readyz_url = config
-        .bloklid_url()
-        .join("readyz")
-        .context("failed to construct blokli readiness URL")?;
+async fn wait_for_blokli_ready(client: &BlokliClient) -> Result<()> {
+    let mut health_stream = client
+        .subscribe_health()
+        .context("failed to subscribe to blokli health readiness stream")?;
     let deadline = Instant::now() + STACK_STARTUP_WAIT;
+    let mut last_observation = "no readiness event received".to_string();
 
     loop {
-        let last_observation = match client.get(readyz_url.clone()).send().await {
-            Ok(response) => {
-                let status = response.status();
-
-                if status == StatusCode::OK {
-                    info!(url = %readyz_url, "integration stack is ready");
-                    return Ok(());
-                }
-
-                format!("HTTP {}", status)
-            }
-            Err(error) => error.to_string(),
-        };
-
-        if Instant::now() >= deadline {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
             return Err(anyhow::anyhow!(
-                "timed out waiting for blokli readiness at {} after {}s (last observation: {})",
-                readyz_url,
+                "timed out waiting for blokli readiness via health subscription after {}s (last observation: {})",
                 STACK_STARTUP_WAIT.as_secs(),
                 last_observation
             ));
         }
 
-        tokio::time::sleep(READY_POLL_INTERVAL).await;
+        match tokio::time::timeout(remaining, health_stream.next()).await {
+            Ok(Some(Ok(ReadinessState::Ready))) => {
+                info!(base_url = %client.base_url(), "integration stack is ready");
+                return Ok(());
+            }
+            Ok(Some(Ok(ReadinessState::NotReady))) => {
+                last_observation = "received NOT_READY".to_string();
+            }
+            Ok(Some(Err(error))) => {
+                last_observation = format!("subscription error: {error}");
+            }
+            Ok(None) => {
+                return Err(anyhow::anyhow!(
+                    "blokli health subscription closed before READY (last observation: {})",
+                    last_observation
+                ));
+            }
+            Err(_) => {
+                return Err(anyhow::anyhow!(
+                    "timed out waiting for blokli readiness via health subscription after {}s (last observation: {})",
+                    STACK_STARTUP_WAIT.as_secs(),
+                    last_observation
+                ));
+            }
+        }
     }
 }
 
@@ -696,21 +705,16 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
 
     docker.ensure_image_available()?;
     docker.compose_up()?;
-    let readiness_url = config
-        .bloklid_url()
-        .join("readyz")
-        .context("failed to construct blokli readiness URL")?;
+    let client = BlokliClient::new(config.bloklid_url().clone(), BlokliClientConfig::default());
     info!(
         seconds = STACK_STARTUP_WAIT.as_secs(),
-        readiness_url = %readiness_url,
+        base_url = %client.base_url(),
         "waiting for integration stack readiness"
     );
-    wait_for_blokli_ready(&config).await?;
+    wait_for_blokli_ready(&client).await?;
     let accounts = docker.fetch_anvil_accounts()?;
 
     let rpc = RpcClient::new(config.rpc_url().as_str(), config.http_timeout)?;
-
-    let client = BlokliClient::new(config.bloklid_url().clone(), BlokliClientConfig::default());
 
     let deployer: ChainKeypair = accounts[0].keypair.clone();
     let wallet = PrivateKeySigner::from_slice(deployer.secret().as_ref()).expect("failed to construct wallet");

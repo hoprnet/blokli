@@ -1,7 +1,10 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use blokli_client::{BlokliClient, BlokliClientConfig, api::BlokliSubscriptionClient};
+use blokli_client::{
+    BlokliClient, BlokliClientConfig,
+    api::{BlokliSubscriptionClient, types::ReadinessState},
+};
 use futures::StreamExt;
 use tokio::{io::AsyncWriteExt, net::TcpListener};
 use url::Url;
@@ -10,6 +13,23 @@ use url::Url;
 struct TicketParams {
     ticket_price: String,
     min_ticket_winning_probability: f64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ReadinessEvent(ReadinessState);
+
+impl ReadinessEvent {
+    fn format_event(&self) -> String {
+        let payload = serde_json::json!({
+            "data": {
+                "health": match self.0 {
+                    ReadinessState::Ready => "READY",
+                    ReadinessState::NotReady => "NOT_READY",
+                }
+            }
+        });
+        format!("event: next\ndata: {payload}\n\n")
+    }
 }
 
 impl TicketParams {
@@ -147,6 +167,39 @@ async fn subscribe_ticket_params_reconnects_after_read_timeout() -> Result<()> {
         update.min_ticket_winning_probability,
         expected_ticket_params.min_ticket_winning_probability
     );
+
+    server.await??;
+    Ok(())
+}
+
+#[tokio::test]
+async fn subscribe_health_streams_state_updates() -> Result<()> {
+    let events = [
+        ReadinessEvent(ReadinessState::NotReady),
+        ReadinessEvent(ReadinessState::Ready),
+    ];
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let base_url = Url::parse(&format!("http://{}", listener.local_addr()?))?;
+
+    let server = tokio::spawn(async move {
+        let body = events.iter().map(ReadinessEvent::format_event).collect::<String>();
+        let response = format_sse_response(&body);
+        let (mut conn, _) = listener.accept().await?;
+        conn.write_all(response.as_bytes()).await?;
+        conn.shutdown().await?;
+        Ok::<_, anyhow::Error>(())
+    });
+
+    let client = BlokliClient::new(base_url, BlokliClientConfig::default());
+    let updates = client
+        .subscribe_health()?
+        .take(2)
+        .collect::<Vec<_>>()
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?;
+
+    assert_eq!(updates, events.iter().map(|event| event.0).collect::<Vec<_>>());
 
     server.await??;
     Ok(())

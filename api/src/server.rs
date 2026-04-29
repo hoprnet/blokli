@@ -163,6 +163,15 @@ fn extract_subscription_name(query: &str) -> String {
     "unknown".to_string()
 }
 
+/// Helper function to determine if a GraphQL query is a readiness subscription
+///
+/// This is used to allow certain subscriptions (e.g. health checks) to be accepted even when the API is not fully
+/// ready,
+fn is_readiness_subscription(query: &str) -> bool {
+    let trimmed = query.trim_start();
+    trimmed.starts_with("subscription") && query.contains("health")
+}
+
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
@@ -188,6 +197,8 @@ pub async fn build_app(
     transaction_store: Arc<TransactionStore>,
     rpc_operations: Arc<RpcOperations<ReqwestClient>>,
 ) -> ApiResult<Router> {
+    let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), config.health.clone());
+
     let schema = build_schema(
         db.clone(),
         config.chain_id,
@@ -200,9 +211,8 @@ pub async fn build_app(
         transaction_executor,
         transaction_store,
         rpc_operations.clone(),
+        readiness_checker.clone(),
     );
-
-    let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), config.health.clone());
 
     // Start periodic readiness updates in background
     readiness_checker.clone().start_periodic_updates();
@@ -262,19 +272,6 @@ pub async fn build_app(
 
 /// GraphQL query/mutation/subscription handler
 async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json(request): Json<Value>) -> Response {
-    // Check if server is ready before processing GraphQL requests
-    if state.readiness_checker.get().await == ReadinessState::NotReady {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "errors": [{
-                    "message": "GraphQL API is not ready yet. Indexer is still catching up. Please try again later."
-                }]
-            })),
-        )
-            .into_response();
-    }
-
     // Parse the GraphQL request
     let request = match serde_json::from_value::<async_graphql::Request>(request) {
         Ok(req) => req,
@@ -301,6 +298,21 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
 
     // Check if the request is a subscription
     let is_subscription = request.query.trim_start().starts_with("subscription");
+
+    // Check if the query should be allowed before readiness. Only allowed if it's a health subscription
+    let allows_pre_ready = accepts_sse && is_readiness_subscription(&request.query);
+
+    if state.readiness_checker.get().await == ReadinessState::NotReady && !allows_pre_ready {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "errors": [{
+                    "message": "GraphQL API is not ready yet. Indexer is still catching up. Please try again later."
+                }]
+            })),
+        )
+            .into_response();
+    }
 
     // Determine request type label for metrics
     let request_type = if is_subscription {

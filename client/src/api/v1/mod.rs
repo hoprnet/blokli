@@ -3,7 +3,7 @@ use std::{fmt::Formatter, time::Duration};
 mod graphql;
 pub mod types {
     pub use super::graphql::{
-        ChannelStatus, DateTime, Hex32, TokenValueString, Uint64,
+        ChannelStatus, DateTime, Hex32, ReadinessState, TokenValueString, Uint64,
         accounts::Account,
         balances::{HoprBalance, NativeBalance, RedeemedStats, SafeHoprAllowance},
         channels::{Channel, ChannelStats, ChannelsList, SafesBalance},
@@ -28,7 +28,7 @@ pub(crate) mod internal {
             QuerySafesBalance, SafesBalanceVariables, SubscribeChannels,
         },
         graph::SubscribeGraph,
-        info::{QueryChainInfo, QueryCompatibility, QueryHealth, QueryVersion, SubscribeTicketParams},
+        info::{QueryChainInfo, QueryCompatibility, QueryHealth, QueryVersion, SubscribeHealth, SubscribeTicketParams},
         safe::{
             ModuleAddressVariables, QueryModuleAddress, QuerySafeBy, SafeByVariables, SafeSelectorInput,
             SubscribeSafeDeployment,
@@ -269,6 +269,8 @@ pub trait BlokliSubscriptionClient {
     fn subscribe_graph(&self) -> Result<impl futures::Stream<Item = Result<types::OpenedChannelsGraphEntry>> + Send>;
     /// Subscribes to updates of the ticket parameters.
     fn subscribe_ticket_params(&self) -> Result<impl futures::Stream<Item = Result<types::TicketParameters>> + Send>;
+    /// Subscribes to health updates for the Blokli instance.
+    fn subscribe_health(&self) -> Result<impl futures::Stream<Item = Result<types::ReadinessState>> + Send>;
     /// Subscribes to on-chain Safe deployments.
     fn subscribe_safe_deployments(&self) -> Result<impl futures::Stream<Item = Result<types::Safe>> + Send>;
     /// Subscribes to status updates of a tracked transaction.

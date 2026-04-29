@@ -39,6 +39,7 @@ use crate::{
     conversions::{convert_safe_execution, convert_transaction_status},
     errors,
     query::owners_for_safe,
+    readiness::{ReadinessChecker, ReadinessState},
 };
 
 /// Watermark representing the last fully processed blockchain position
@@ -399,6 +400,43 @@ pub struct SubscriptionRoot;
 
 #[Subscription]
 impl SubscriptionRoot {
+    /// Subscribe to health status updates of the API
+    ///
+    /// Provides updates whenever the server state changes.
+    #[graphql(name = "health")]
+    async fn health(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = ReadinessState>> {
+        let readiness_checker = ctx
+            .data::<ReadinessChecker>()
+            .map_err(|e| async_graphql::Error::new(errors::messages::context_error("ReadinessChecker", e.message)))?
+            .clone();
+
+        Ok(stream! {
+            let mut updates = readiness_checker.subscribe();
+            readiness_checker.trigger_update().await;
+
+            let mut last_state = readiness_checker.get().await;
+            yield last_state;
+
+            loop {
+                match updates.recv().await {
+                    Ok(state) if state != last_state => {
+                        last_state = state;
+                        yield state;
+                    }
+                    Ok(_) => {}
+                    Err(async_broadcast::RecvError::Closed) => return,
+                    Err(async_broadcast::RecvError::Overflowed(_)) => {
+                        let current = readiness_checker.get().await;
+                        if current != last_state {
+                            last_state = current;
+                            yield current;
+                        }
+                    }
+                }
+            }
+        })
+    }
+
     /// Subscribe to real-time updates of payment channels
     ///
     /// **Streaming Behavior:**

@@ -1,26 +1,14 @@
 //! Integration tests for ticketParametersUpdated subscription
 
-use std::{sync::Arc, time::Duration};
+mod common;
 
-use async_graphql::Schema;
-use blokli_api::{mutation::MutationRoot, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot};
+use std::time::Duration;
+
 use blokli_api_types::{TicketParameters, TokenValueString};
-use blokli_chain_api::{
-    rpc_adapter::RpcAdapter,
-    transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
-    transaction_store::TransactionStore,
-    transaction_validator::TransactionValidator,
-};
-use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
-use blokli_chain_rpc::{
-    rpc::{RpcOperations, RpcOperationsConfig},
-    transport::ReqwestClient,
-};
-use blokli_chain_types::ContractAddresses;
+use blokli_chain_indexer::state::IndexerEvent;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 use blokli_db_entity::chain_info::{ActiveModel as ChainInfoActiveModel, Entity as ChainInfoEntity};
 use futures::StreamExt;
-use hopr_bindings::exports::alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
 use hopr_types::primitive::{prelude::HoprBalance, traits::IntoEndian};
 use sea_orm::{ActiveModelTrait, EntityTrait, Set};
 
@@ -55,58 +43,6 @@ async fn init_chain_info_with_params(
     Ok(())
 }
 
-/// Create a minimal GraphQL schema for testing subscriptions
-/// Returns both the schema and the IndexerState for publishing test events
-fn create_test_schema(db: &BlokliDb) -> (Schema<QueryRoot, MutationRoot, SubscriptionRoot>, IndexerState) {
-    let indexer_state = IndexerState::new(10, 100);
-    let transaction_store = Arc::new(TransactionStore::new());
-    let transaction_validator = Arc::new(TransactionValidator::new());
-
-    // Create mock RPC client for testing (won't actually connect)
-    let transport = ReqwestTransport::new("http://localhost:8545".parse().unwrap());
-    let rpc_client = ClientBuilder::default().transport(transport.clone(), transport.guess_local());
-    let transport_client = ReqwestClient::new();
-
-    // Create stub RPC operations (not used for subscription tests)
-    let rpc_ops = Arc::new(
-        RpcOperations::new(
-            rpc_client.clone(),
-            transport_client.clone(),
-            RpcOperationsConfig::default(),
-            None,
-        )
-        .expect("Failed to create RPC operations"),
-    );
-
-    let rpc_adapter = Arc::new(RpcAdapter::new(
-        RpcOperations::new(rpc_client, transport_client, RpcOperationsConfig::default(), None)
-            .expect("Failed to create RPC adapter operations"),
-    ));
-
-    let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
-        rpc_adapter,
-        transaction_store.clone(),
-        transaction_validator,
-        RawTransactionExecutorConfig::default(),
-    ));
-
-    let schema = build_schema(
-        db.conn(TargetDb::Index).clone(),
-        1,
-        "test-network".to_string(),
-        ContractAddresses::default(),
-        1,
-        3, // Test finality value
-        1.0,
-        indexer_state.clone(),
-        transaction_executor,
-        transaction_store,
-        rpc_ops,
-    );
-
-    (schema, indexer_state)
-}
-
 #[tokio::test]
 async fn test_ticket_parameters_subscription_emits_initial_values() {
     let db = BlokliDb::new_in_memory().await.unwrap();
@@ -120,7 +56,7 @@ async fn test_ticket_parameters_subscription_emits_initial_values() {
         .unwrap();
 
     // Create GraphQL schema and get IndexerState
-    let (schema, _indexer_state) = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     // Execute subscription query
     let query = r#"
@@ -186,7 +122,7 @@ async fn test_ticket_parameters_subscription_handles_missing_ticket_price() {
     chain_info.insert(db.conn(TargetDb::Index)).await.unwrap();
 
     // Create GraphQL schema and get IndexerState
-    let (schema, _indexer_state) = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     // Execute subscription query
     let query = r#"
@@ -227,7 +163,7 @@ async fn test_ticket_parameters_subscription_handles_zero_values() {
         .unwrap();
 
     // Create GraphQL schema and get IndexerState
-    let (schema, _indexer_state) = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     // Execute subscription query
     let query = r#"
@@ -267,7 +203,7 @@ async fn test_ticket_parameters_subscription_handles_max_values() {
         .unwrap();
 
     // Create GraphQL schema and get IndexerState
-    let (schema, _indexer_state) = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     // Execute subscription query
     let query = r#"
@@ -306,7 +242,7 @@ async fn test_subscription_receives_ticket_price_update() {
         .await
         .unwrap();
 
-    let (schema, indexer_state) = create_test_schema(&db);
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -378,7 +314,7 @@ async fn test_subscription_receives_winning_probability_update() {
         .await
         .unwrap();
 
-    let (schema, indexer_state) = create_test_schema(&db);
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -444,7 +380,7 @@ async fn test_subscription_receives_both_parameters_update() {
         .await
         .unwrap();
 
-    let (schema, indexer_state) = create_test_schema(&db);
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -503,7 +439,7 @@ async fn test_subscription_receives_multiple_updates() {
         .await
         .unwrap();
 
-    let (schema, indexer_state) = create_test_schema(&db);
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {

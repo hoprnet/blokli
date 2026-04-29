@@ -17,6 +17,7 @@ use axum::{
     http::{Request, StatusCode},
 };
 use blokli_db_entity::chain_info;
+use futures::StreamExt;
 use sea_orm::{DatabaseConnection, EntityTrait, Set, sea_query::OnConflict};
 use serde_json::json;
 use tower::ServiceExt;
@@ -46,6 +47,41 @@ async fn make_graphql_request(app: Router, query: &str) -> (StatusCode, serde_js
     let json: serde_json::Value = serde_json::from_slice(&body).expect("Failed to parse JSON");
 
     (status, json)
+}
+
+async fn make_graphql_sse_request(app: Router, query: &str) -> (StatusCode, String) {
+    let request_body = json!({
+        "query": query
+    });
+
+    let request = Request::builder()
+        .method("POST")
+        .uri("/graphql")
+        .header("content-type", "application/json")
+        .header("accept", "text/event-stream")
+        .body(Body::from(
+            serde_json::to_string(&request_body).expect("Failed to serialize JSON"),
+        ))
+        .expect("Failed to build request");
+
+    let response = app.oneshot(request).await.expect("Failed to execute request");
+    let status = response.status();
+
+    if status != StatusCode::OK {
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("Failed to read body");
+        return (status, String::from_utf8_lossy(&body).into_owned());
+    }
+
+    let mut stream = response.into_body().into_data_stream();
+    let frame = stream
+        .next()
+        .await
+        .expect("SSE stream closed before the first frame")
+        .expect("SSE stream returned error");
+
+    (status, String::from_utf8_lossy(&frame).into_owned())
 }
 
 /// Update chain_info record with current RPC block number
@@ -191,6 +227,36 @@ async fn test_graphql_all_request_types_blocked_when_not_ready() -> anyhow::Resu
             query
         );
     }
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_readiness_subscription_allowed_when_not_ready() -> anyhow::Result<()> {
+    let ctx = common::setup_http_test_environment().await?;
+
+    delete_chain_info(&ctx.db).await?;
+
+    let (status, payload) = make_graphql_sse_request(ctx.app, r#"subscription health { health }"#).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(payload.contains("health"));
+    assert!(payload.contains("NOT_READY"));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_non_readiness_subscription_blocked_when_not_ready() -> anyhow::Result<()> {
+    let ctx = common::setup_http_test_environment().await?;
+
+    delete_chain_info(&ctx.db).await?;
+
+    let (status, payload) =
+        make_graphql_sse_request(ctx.app, r#"subscription SafeDeployed { safeDeployed { address } }"#).await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(payload.contains("not ready yet"));
 
     Ok(())
 }

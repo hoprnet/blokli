@@ -6,81 +6,20 @@
 //! - No duplicate emissions for same value
 //! - Edge cases (zero fee, very large fee)
 
-use std::{str::FromStr, sync::Arc, time::Duration};
+mod common;
 
-use async_graphql::Schema;
-use blokli_api::{mutation::MutationRoot, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot};
+use std::{str::FromStr, time::Duration};
+
 use blokli_api_types::{Account, TokenValueString};
-use blokli_chain_api::{
-    rpc_adapter::RpcAdapter,
-    transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
-    transaction_store::TransactionStore,
-    transaction_validator::TransactionValidator,
-};
 use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
-use blokli_chain_rpc::{
-    rpc::{RpcOperations, RpcOperationsConfig},
-    transport::ReqwestClient,
-};
-use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 use futures::StreamExt;
-use hopr_bindings::exports::alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
 use hopr_types::primitive::{prelude::HoprBalance, primitives::Address, traits::IntoEndian};
 use sea_orm::{ActiveModelTrait, Set};
-
-/// Create a minimal GraphQL schema for testing subscriptions
-fn create_test_schema(db: &BlokliDb, indexer_state: IndexerState) -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
-    let transaction_store = Arc::new(TransactionStore::new());
-    let transaction_validator = Arc::new(TransactionValidator::new());
-
-    // Create mock RPC client for testing (won't actually connect)
-    let transport = ReqwestTransport::new("http://localhost:8545".parse().unwrap());
-    let rpc_client = ClientBuilder::default().transport(transport.clone(), transport.guess_local());
-    let transport_client = ReqwestClient::new();
-
-    // Create stub RPC operations (not used for subscription tests)
-    let rpc_ops = Arc::new(
-        RpcOperations::new(
-            rpc_client.clone(),
-            transport_client.clone(),
-            RpcOperationsConfig::default(),
-            None,
-        )
-        .expect("Failed to create RPC operations"),
-    );
-
-    let rpc_adapter = Arc::new(RpcAdapter::new(
-        RpcOperations::new(rpc_client, transport_client, RpcOperationsConfig::default(), None)
-            .expect("Failed to create RPC adapter operations"),
-    ));
-
-    let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
-        rpc_adapter,
-        transaction_store.clone(),
-        transaction_validator,
-        RawTransactionExecutorConfig::default(),
-    ));
-
-    build_schema(
-        db.conn(TargetDb::Index).clone(),
-        1,
-        "test-network".to_string(),
-        ContractAddresses::default(),
-        1,
-        3, // Test finality value
-        1.0,
-        indexer_state,
-        transaction_executor,
-        transaction_store,
-        rpc_ops,
-    )
-}
 
 #[tokio::test]
 async fn test_key_binding_fee_subscription_emits_initial_fee() {
     let db = BlokliDb::new_in_memory().await.unwrap();
-    let indexer_state = IndexerState::new(10, 100);
 
     // Set initial key binding fee in chain_info
     let fee = HoprBalance::from_str("100 wxHOPR").unwrap();
@@ -92,7 +31,7 @@ async fn test_key_binding_fee_subscription_emits_initial_fee() {
     chain_info.update(db.conn(TargetDb::Index)).await.unwrap();
 
     // Create GraphQL schema
-    let schema = create_test_schema(&db, indexer_state);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     // Execute subscription query
     let query = r#"
@@ -127,7 +66,6 @@ async fn test_key_binding_fee_subscription_emits_initial_fee() {
 #[tokio::test]
 async fn test_key_binding_fee_subscription_receives_update_event() {
     let db = BlokliDb::new_in_memory().await.unwrap();
-    let indexer_state = IndexerState::new(10, 100);
 
     // Set initial key binding fee
     let initial_fee = HoprBalance::from_str("100 wxHOPR").unwrap();
@@ -138,7 +76,7 @@ async fn test_key_binding_fee_subscription_receives_update_event() {
     };
     chain_info.update(db.conn(TargetDb::Index)).await.unwrap();
 
-    let schema = create_test_schema(&db, indexer_state.clone());
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -176,7 +114,6 @@ async fn test_key_binding_fee_subscription_receives_update_event() {
 #[tokio::test]
 async fn test_key_binding_fee_subscription_no_duplicate_emissions() {
     let db = BlokliDb::new_in_memory().await.unwrap();
-    let indexer_state = IndexerState::new(10, 100);
 
     // Set initial key binding fee
     let initial_fee = HoprBalance::from_str("100 wxHOPR").unwrap();
@@ -187,7 +124,7 @@ async fn test_key_binding_fee_subscription_no_duplicate_emissions() {
     };
     chain_info.update(db.conn(TargetDb::Index)).await.unwrap();
 
-    let schema = create_test_schema(&db, indexer_state.clone());
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -217,7 +154,6 @@ async fn test_key_binding_fee_subscription_no_duplicate_emissions() {
 #[tokio::test]
 async fn test_key_binding_fee_subscription_multiple_updates() {
     let db = BlokliDb::new_in_memory().await.unwrap();
-    let indexer_state = IndexerState::new(10, 100);
 
     // Set initial key binding fee
     let initial_fee = HoprBalance::from_str("100 wxHOPR").unwrap();
@@ -228,7 +164,7 @@ async fn test_key_binding_fee_subscription_multiple_updates() {
     };
     chain_info.update(db.conn(TargetDb::Index)).await.unwrap();
 
-    let schema = create_test_schema(&db, indexer_state.clone());
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -294,7 +230,6 @@ async fn test_key_binding_fee_subscription_multiple_updates() {
 #[tokio::test]
 async fn test_key_binding_fee_subscription_zero_fee() {
     let db = BlokliDb::new_in_memory().await.unwrap();
-    let indexer_state = IndexerState::new(10, 100);
 
     // Set zero fee
     let zero_fee = HoprBalance::from_str("0 wxHOPR").unwrap();
@@ -305,7 +240,7 @@ async fn test_key_binding_fee_subscription_zero_fee() {
     };
     chain_info.update(db.conn(TargetDb::Index)).await.unwrap();
 
-    let schema = create_test_schema(&db, indexer_state);
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -328,7 +263,6 @@ async fn test_key_binding_fee_subscription_zero_fee() {
 #[tokio::test]
 async fn test_key_binding_fee_subscription_large_fee() {
     let db = BlokliDb::new_in_memory().await.unwrap();
-    let indexer_state = IndexerState::new(10, 100);
 
     // Set very large fee (1 million HOPR)
     let large_fee = HoprBalance::from_str("1000000 wxHOPR").unwrap();
@@ -339,7 +273,7 @@ async fn test_key_binding_fee_subscription_large_fee() {
     };
     chain_info.update(db.conn(TargetDb::Index)).await.unwrap();
 
-    let schema = create_test_schema(&db, indexer_state);
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -363,12 +297,11 @@ async fn test_key_binding_fee_subscription_large_fee() {
 #[tokio::test]
 async fn test_key_binding_fee_subscription_no_initial_fee() {
     let db = BlokliDb::new_in_memory().await.unwrap();
-    let indexer_state = IndexerState::new(10, 100);
 
     // Don't set any initial fee (chain_info has None)
     // chain_info row exists by default from BlokliDb::new_in_memory() but key_binding_fee is None
 
-    let schema = create_test_schema(&db, indexer_state.clone());
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -403,7 +336,6 @@ async fn test_key_binding_fee_subscription_no_initial_fee() {
 #[tokio::test]
 async fn test_key_binding_fee_subscription_ignores_other_events() {
     let db = BlokliDb::new_in_memory().await.unwrap();
-    let indexer_state = IndexerState::new(10, 100);
 
     // Set initial fee
     let initial_fee = HoprBalance::from_str("100 wxHOPR").unwrap();
@@ -414,7 +346,7 @@ async fn test_key_binding_fee_subscription_ignores_other_events() {
     };
     chain_info.update(db.conn(TargetDb::Index)).await.unwrap();
 
-    let schema = create_test_schema(&db, indexer_state.clone());
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
