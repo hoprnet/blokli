@@ -382,7 +382,7 @@ async fn subscribe_safe_deployments(#[future(awt)] fixture: IntegrationFixture) 
             .client()
             .query_safe(SafeSelector::ChainKey(maybe_account.to_alloy_address().into()))
             .await?;
-        if safe.is_none() {
+        if safe.is_empty() {
             break maybe_account;
         }
     };

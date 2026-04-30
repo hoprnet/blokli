@@ -248,6 +248,89 @@ async fn test_safe_by_chain_key_query() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
+async fn test_safe_by_chain_key_query_returns_multiple_safes_for_same_owner() -> anyhow::Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+
+    let safe_address_0 = safe_address();
+    let module_address_0 = module_address();
+    let chain_key_0 = chain_key_address();
+
+    let safe_address_1 = secondary_safe_address();
+    let module_address_1 = secondary_module_address();
+    let chain_key_1 = secondary_chain_key_address();
+
+    let owner = owner_address();
+
+    db.create_safe_contract(None, safe_address_0, module_address_0, chain_key_0, 100, 0, 0)
+        .await?;
+    db.create_safe_contract(None, safe_address_1, module_address_1, chain_key_1, 101, 0, 1)
+        .await?;
+    db.upsert_safe_owner_state(None, safe_address_0, owner, true, 102, 0, 0)
+        .await?;
+    db.upsert_safe_owner_state(None, safe_address_1, owner, true, 103, 0, 1)
+        .await?;
+
+    let schema = build_test_schema(&db);
+    let query = format!(
+        r#"
+        query {{
+            safeByChainKey(chainKey: "{}") {{
+                ... on Safe {{
+                    address
+                }}
+                ... on QueryFailedError {{
+                    message
+                }}
+            }}
+        }}
+        "#,
+        owner.to_hex()
+    );
+
+    let response = schema.execute(query).await;
+    insta::assert_yaml_snapshot!(response);
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_safe_by_selector_chain_key_returns_safes_list_for_single_match() -> anyhow::Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+
+    let safe_address = safe_address();
+    let module_address = module_address();
+    let chain_key = chain_key_address();
+    let owner = owner_address();
+
+    db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+        .await?;
+    db.upsert_safe_owner_state(None, safe_address, owner, true, 101, 0, 0)
+        .await?;
+
+    let schema = build_test_schema(&db);
+    let query = format!(
+        r#"
+        query {{
+            safeBy(selector: CHAIN_KEY, address: "{}") {{
+                ... on SafesList {{
+                    safes {{
+                        address
+                    }}
+                }}
+                ... on QueryFailedError {{
+                    message
+                }}
+            }}
+        }}
+        "#,
+        owner.to_hex()
+    );
+
+    let response = schema.execute(query).await;
+    insta::assert_yaml_snapshot!(response);
+    Ok(())
+}
+
+#[tokio::test]
 async fn test_safes_list_query() -> anyhow::Result<()> {
     let db = BlokliDb::new_in_memory().await?;
 

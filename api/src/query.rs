@@ -21,8 +21,8 @@ use blokli_db_entity::{
         redemptions_aggregation::fetch_aggregated_redeemed_stats,
         safe_aggregation::{
             CurrentSafe, fetch_all_current_safes, fetch_safe_addresses as fetch_safe_addresses_db,
-            fetch_safe_by_address as fetch_safe_by_address_db, fetch_safe_by_owner as fetch_safe_by_owner_db,
-            fetch_safe_owners, fetch_safe_owners_by_safe,
+            fetch_safe_by_address as fetch_safe_by_address_db, fetch_safe_owners, fetch_safe_owners_by_safe,
+            fetch_safes_by_owner as fetch_safes_by_owner_db,
         },
     },
     hopr_node_safe_registration,
@@ -87,10 +87,18 @@ pub enum TransactionCountResult {
     QueryFailed(QueryFailedError),
 }
 
-/// Result type for single safe queries
+/// Result type for deprecated single-safe queries (`safe`, `safeByChainKey`, `safeByRegisteredNode`).
 #[derive(Union)]
 pub enum SafeResult {
     Safe(Safe),
+    InvalidAddress(InvalidAddressError),
+    QueryFailed(QueryFailedError),
+}
+
+/// Result type for safe-by-selector query
+#[derive(Union)]
+pub enum SafeByResult {
+    Safes(SafesList),
     InvalidAddress(InvalidAddressError),
     QueryFailed(QueryFailedError),
 }
@@ -264,10 +272,20 @@ async fn owners_by_safe(
         .collect())
 }
 
-fn safe_result_from_row(current: CurrentSafe, registered_nodes: Vec<String>, owners: Vec<String>) -> SafeResult {
-    match safe_from_current_row(current, registered_nodes, owners) {
-        Ok(safe_data) => SafeResult::Safe(safe_data),
-        Err(e) => SafeResult::QueryFailed(errors::invalid_db_data("safe addresses", &e)),
+async fn build_safe_from_current(
+    db: &DatabaseConnection,
+    current: CurrentSafe,
+) -> std::result::Result<Safe, QueryFailedError> {
+    let safe_address = current.address.clone();
+    let owners = owners_for_safe(db, safe_address.clone()).await?;
+    safe_from_current_row(current, registered_nodes_for_safe(db, safe_address).await, owners)
+        .map_err(|e| errors::invalid_db_data("safe addresses", &e))
+}
+
+async fn build_single_safe_by_result_from_current(db: &DatabaseConnection, current: CurrentSafe) -> SafeByResult {
+    match build_safe_from_current(db, current).await {
+        Ok(safe) => SafeByResult::Safes(SafesList { safes: vec![safe] }),
+        Err(e) => SafeByResult::QueryFailed(e),
     }
 }
 
@@ -929,50 +947,57 @@ impl QueryRoot {
         ctx: &Context<'_>,
         #[graphql(desc = "Selector type for safe lookup")] selector: SafeSelectorInput,
         #[graphql(desc = "Address value for the selector (hexadecimal format)")] address: String,
-    ) -> Result<Option<SafeResult>> {
+    ) -> Result<Option<SafeByResult>> {
         let db = ctx.data::<DatabaseConnection>()?;
 
         match selector {
             SafeSelectorInput::Address => {
                 let safe_address = match parse_eth_address(address) {
                     Ok(addr) => addr.as_ref().to_vec(),
-                    Err(e) => return Ok(Some(SafeResult::InvalidAddress(e))),
+                    Err(e) => return Ok(Some(SafeByResult::InvalidAddress(e))),
                 };
 
                 match fetch_safe_by_address_db(db, &safe_address).await {
-                    Ok(Some(current)) => match owners_for_safe(db, safe_address.clone()).await {
-                        Ok(owners) => Ok(Some(safe_result_from_row(
-                            current,
-                            registered_nodes_for_safe(db, safe_address).await,
-                            owners,
-                        ))),
-                        Err(e) => Ok(Some(SafeResult::QueryFailed(e))),
-                    },
+                    Ok(Some(current)) => Ok(Some(build_single_safe_by_result_from_current(db, current).await)),
                     Ok(None) => Ok(None),
-                    Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed("fetch safe", e)))),
+                    Err(e) => Ok(Some(SafeByResult::QueryFailed(errors::query_failed("fetch safe", e)))),
                 }
             }
 
             SafeSelectorInput::Owner | SafeSelectorInput::ChainKey => {
                 let owner_address = match parse_eth_address(address) {
                     Ok(addr) => addr.as_ref().to_vec(),
-                    Err(e) => return Ok(Some(SafeResult::InvalidAddress(e))),
+                    Err(e) => return Ok(Some(SafeByResult::InvalidAddress(e))),
                 };
 
-                match fetch_safe_by_owner_db(db, &owner_address).await {
-                    Ok(Some(current)) => {
-                        let safe_address = current.address.clone();
-                        match owners_for_safe(db, safe_address.clone()).await {
-                            Ok(owners) => Ok(Some(safe_result_from_row(
+                match fetch_safes_by_owner_db(db, &owner_address).await {
+                    Ok(safes) if safes.is_empty() => Ok(None),
+                    Ok(safes) => {
+                        let mut safe_list = Vec::with_capacity(safes.len());
+                        for current in safes {
+                            let safe_address = current.address.clone();
+                            let owners = match owners_for_safe(db, safe_address.clone()).await {
+                                Ok(owners) => owners,
+                                Err(e) => return Ok(Some(SafeByResult::QueryFailed(e))),
+                            };
+                            let safe = match safe_from_current_row(
                                 current,
                                 registered_nodes_for_safe(db, safe_address).await,
                                 owners,
-                            ))),
-                            Err(e) => Ok(Some(SafeResult::QueryFailed(e))),
+                            ) {
+                                Ok(safe) => safe,
+                                Err(e) => {
+                                    return Ok(Some(SafeByResult::QueryFailed(errors::invalid_db_data(
+                                        "safe addresses",
+                                        &e,
+                                    ))));
+                                }
+                            };
+                            safe_list.push(safe);
                         }
+                        Ok(Some(SafeByResult::Safes(SafesList { safes: safe_list })))
                     }
-                    Ok(None) => Ok(None),
-                    Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed(
+                    Err(e) => Ok(Some(SafeByResult::QueryFailed(errors::query_failed(
                         "fetch safe by owner",
                         e,
                     )))),
@@ -982,7 +1007,7 @@ impl QueryRoot {
             SafeSelectorInput::RegisteredNode => {
                 let node_address = match parse_eth_address(address) {
                     Ok(addr) => addr.as_ref().to_vec(),
-                    Err(e) => return Ok(Some(SafeResult::InvalidAddress(e))),
+                    Err(e) => return Ok(Some(SafeByResult::InvalidAddress(e))),
                 };
 
                 let registration = match hopr_node_safe_registration::Entity::find()
@@ -993,7 +1018,7 @@ impl QueryRoot {
                     Ok(Some(reg)) => reg,
                     Ok(None) => return Ok(None),
                     Err(e) => {
-                        return Ok(Some(SafeResult::QueryFailed(errors::query_failed(
+                        return Ok(Some(SafeByResult::QueryFailed(errors::query_failed(
                             "fetch safe by registered node",
                             e,
                         ))));
@@ -1001,19 +1026,12 @@ impl QueryRoot {
                 };
 
                 match fetch_safe_by_address_db(db, &registration.safe_address).await {
-                    Ok(Some(current)) => match owners_for_safe(db, registration.safe_address.clone()).await {
-                        Ok(owners) => Ok(Some(safe_result_from_row(
-                            current,
-                            registered_nodes_for_safe(db, registration.safe_address).await,
-                            owners,
-                        ))),
-                        Err(e) => Ok(Some(SafeResult::QueryFailed(e))),
-                    },
-                    Ok(None) => Ok(Some(SafeResult::QueryFailed(errors::query_failed(
+                    Ok(Some(current)) => Ok(Some(build_single_safe_by_result_from_current(db, current).await)),
+                    Ok(None) => Ok(Some(SafeByResult::QueryFailed(errors::query_failed(
                         "fetch safe by registered node",
                         "Safe not found for registered node",
                     )))),
-                    Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed(
+                    Err(e) => Ok(Some(SafeByResult::QueryFailed(errors::query_failed(
                         "fetch safe by registered node",
                         e,
                     )))),
@@ -1053,7 +1071,12 @@ impl QueryRoot {
         ctx: &Context<'_>,
         #[graphql(desc = "Safe contract address to query (hexadecimal format)")] address: String,
     ) -> Result<Option<SafeResult>> {
-        self.safe_by(ctx, SafeSelectorInput::Address, address).await
+        match self.safe_by(ctx, SafeSelectorInput::Address, address).await? {
+            Some(SafeByResult::Safes(mut safes)) => Ok(safes.safes.drain(..).next().map(SafeResult::Safe)),
+            Some(SafeByResult::InvalidAddress(e)) => Ok(Some(SafeResult::InvalidAddress(e))),
+            Some(SafeByResult::QueryFailed(e)) => Ok(Some(SafeResult::QueryFailed(e))),
+            None => Ok(None),
+        }
     }
 
     /// Finds a Safe by owner address using the deprecated `CHAIN_KEY` selector alias.
@@ -1094,7 +1117,12 @@ impl QueryRoot {
         #[graphql(desc = "Owner address to query via the deprecated CHAIN_KEY alias (hexadecimal format)")]
         chain_key: String,
     ) -> Result<Option<SafeResult>> {
-        self.safe_by(ctx, SafeSelectorInput::ChainKey, chain_key).await
+        match self.safe_by(ctx, SafeSelectorInput::ChainKey, chain_key).await? {
+            Some(SafeByResult::Safes(mut safes)) => Ok(safes.safes.drain(..).next().map(SafeResult::Safe)),
+            Some(SafeByResult::InvalidAddress(e)) => Ok(Some(SafeResult::InvalidAddress(e))),
+            Some(SafeByResult::QueryFailed(e)) => Ok(Some(SafeResult::QueryFailed(e))),
+            None => Ok(None),
+        }
     }
 
     /// Fetches a Safe contract by registered node address.
@@ -1139,7 +1167,12 @@ impl QueryRoot {
         ctx: &Context<'_>,
         #[graphql(name = "chainKey")] chain_key: String,
     ) -> Result<Option<SafeResult>> {
-        self.safe_by(ctx, SafeSelectorInput::RegisteredNode, chain_key).await
+        match self.safe_by(ctx, SafeSelectorInput::RegisteredNode, chain_key).await? {
+            Some(SafeByResult::Safes(mut safes)) => Ok(safes.safes.drain(..).next().map(SafeResult::Safe)),
+            Some(SafeByResult::InvalidAddress(e)) => Ok(Some(SafeResult::InvalidAddress(e))),
+            Some(SafeByResult::QueryFailed(e)) => Ok(Some(SafeResult::QueryFailed(e))),
+            None => Ok(None),
+        }
     }
 
     /// Fetches all indexed Safe contracts.
@@ -1643,7 +1676,7 @@ mod tests {
         safe_history::{BlokliDbSafeHistoryOperations, SafeActivityKind},
     };
     use blokli_db_entity::conversions::safe_aggregation::{
-        CurrentSafe, fetch_safe_addresses, fetch_safe_by_owner, fetch_safe_threshold_by_address,
+        CurrentSafe, fetch_safe_addresses, fetch_safe_threshold_by_address, fetch_safes_by_owner,
     };
     use hopr_types::{
         crypto::types::Hash,
@@ -1852,15 +1885,20 @@ mod tests {
             .map_err(|error| anyhow!("fetch_safe_addresses failed: {}", error))?;
         assert_eq!(safe_addresses, vec![safe_address.as_ref().to_vec()]);
 
-        let current_safe = fetch_safe_by_owner(conn, owner.as_ref())
+        let current_safe = fetch_safes_by_owner(conn, owner.as_ref())
             .await?
+            .into_iter()
+            .next()
             .expect("safe should exist for current owner");
         assert_eq!(current_safe.address, safe_address.as_ref().to_vec());
         assert_eq!(current_safe.module_address, module_address.as_ref().to_vec());
         assert_eq!(current_safe.chain_key, chain_key.as_ref().to_vec());
 
-        let no_safe = fetch_safe_by_owner(conn, unrelated_owner.as_ref()).await?;
-        assert!(no_safe.is_none(), "former owners should not match current-owner lookup");
+        let no_safe = fetch_safes_by_owner(conn, unrelated_owner.as_ref()).await?;
+        assert!(
+            no_safe.is_empty(),
+            "former owners should not match current-owner lookup"
+        );
 
         Ok(())
     }

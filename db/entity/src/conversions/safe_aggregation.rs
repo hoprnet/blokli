@@ -52,20 +52,32 @@ where
     Ok(current_safe.map(|safe| current_safe_from_model(safe, &thresholds_by_address)))
 }
 
-pub async fn fetch_safe_by_owner<C>(conn: &C, owner_address: &[u8]) -> Result<Option<CurrentSafe>, sea_orm::DbErr>
+pub async fn fetch_safes_by_owner<C>(conn: &C, owner_address: &[u8]) -> Result<Vec<CurrentSafe>, sea_orm::DbErr>
 where
     C: ConnectionTrait,
 {
-    let safe_owner = safe_owner_current::Entity::find()
+    let thresholds_by_address = fetch_thresholds_by_safe_address(conn).await?;
+    let safe_addresses = safe_owner_current::Entity::find()
         .filter(safe_owner_current::Column::OwnerAddress.eq(owner_address.to_vec()))
         .order_by_asc(safe_owner_current::Column::SafeAddress)
-        .one(conn)
-        .await?;
+        .all(conn)
+        .await?
+        .into_iter()
+        .map(|row| row.safe_address)
+        .collect::<Vec<_>>();
 
-    match safe_owner {
-        Some(safe_owner) => fetch_safe_by_address(conn, &safe_owner.safe_address).await,
-        None => Ok(None),
+    if safe_addresses.is_empty() {
+        return Ok(Vec::new());
     }
+
+    Ok(safe_contract_current::Entity::find()
+        .filter(safe_contract_current::Column::Address.is_in(safe_addresses))
+        .order_by_asc(safe_contract_current::Column::Address)
+        .all(conn)
+        .await?
+        .into_iter()
+        .map(|safe| current_safe_from_model(safe, &thresholds_by_address))
+        .collect())
 }
 
 pub async fn fetch_safe_addresses<C>(conn: &C, owner_address: Option<&[u8]>) -> Result<Vec<Vec<u8>>, sea_orm::DbErr>

@@ -40,7 +40,7 @@ async fn open_multiple_channels_simultaneously(#[future(awt)] fixture: Integrati
                 || {
                     let client = client.clone();
                     let selector = selector.clone();
-                    async move { Ok(client.query_safe(selector).await?) }
+                    async move { Ok(client.query_safe(selector).await?.into_iter().next()) }
                 },
             )
             .await
@@ -58,7 +58,7 @@ async fn open_multiple_channels_simultaneously(#[future(awt)] fixture: Integrati
     let modules_by_chain_key = futures::future::try_join_all(safes_futures)
         .await?
         .iter()
-        .flatten()
+        .flat_map(|safes| safes.iter())
         .map(|safe| (safe.chain_key.clone(), safe.module_address.clone()))
         .collect::<HashMap<String, String>>();
 
