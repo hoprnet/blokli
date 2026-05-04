@@ -6,6 +6,7 @@ use blokli_chain_types::ContractAddresses;
 use blokli_db::{
     BlokliDbGeneralModelOperations,
     db::BlokliDb,
+    node_safe_registrations::BlokliDbNodeSafeRegistrationOperations,
     safe_contracts::BlokliDbSafeContractOperations,
     safe_history::{BlokliDbSafeHistoryOperations, SafeActivityKind},
     safe_redeemed_stats::BlokliDbSafeRedeemedStatsOperations,
@@ -248,7 +249,7 @@ async fn test_safe_by_chain_key_query() -> anyhow::Result<()> {
 }
 
 #[tokio::test]
-async fn test_safe_by_chain_key_query_returns_multiple_safes_for_same_owner() -> anyhow::Result<()> {
+async fn test_safe_by_chain_key_query_returns_single_safe_for_deprecated_field() -> anyhow::Result<()> {
     let db = BlokliDb::new_in_memory().await?;
 
     let safe_address_0 = safe_address();
@@ -499,6 +500,45 @@ async fn test_safe_by_chain_key_not_found() -> anyhow::Result<()> {
         }}
         "#,
         nonexistent_key
+    );
+
+    let response = schema.execute(query).await;
+    insta::assert_yaml_snapshot!(response);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_safe_by_registered_node_query() -> anyhow::Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+
+    let safe_address = safe_address();
+    let module_address = module_address();
+    let chain_key = chain_key_address();
+    let owner = owner_address();
+    let registered_node = Address::new(&[0x88; 20]);
+
+    db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+        .await?;
+    db.upsert_safe_owner_state(None, safe_address, owner, true, 101, 0, 0)
+        .await?;
+    db.register_node_to_safe(None, safe_address, registered_node, 102, 0, 0)
+        .await?;
+
+    let schema = build_test_schema(&db);
+    let query = format!(
+        r#"
+        query {{
+            safeByRegisteredNode(chainKey: "{}") {{
+                ... on Safe {{
+                    address
+                    owners
+                    registeredNodes
+                }}
+            }}
+        }}
+        "#,
+        registered_node.to_hex()
     );
 
     let response = schema.execute(query).await;

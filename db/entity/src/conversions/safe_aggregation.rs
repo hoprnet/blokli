@@ -148,6 +148,34 @@ where
     Ok(owners_by_safe)
 }
 
+pub async fn fetch_safe_owners_for_safes<C>(
+    conn: &C,
+    safe_addresses: &[Vec<u8>],
+) -> Result<HashMap<Vec<u8>, Vec<Address>>, sea_orm::DbErr>
+where
+    C: ConnectionTrait,
+{
+    if safe_addresses.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let rows = safe_owner_current::Entity::find()
+        .filter(safe_owner_current::Column::SafeAddress.is_in(safe_addresses.to_vec()))
+        .order_by_asc(safe_owner_current::Column::SafeAddress)
+        .order_by_asc(safe_owner_current::Column::OwnerAddress)
+        .all(conn)
+        .await?;
+
+    let mut owners_by_safe: HashMap<Vec<u8>, Vec<Address>> = HashMap::new();
+    for row in rows {
+        if let Ok(owner_address) = Address::try_from(row.owner_address.as_slice()) {
+            owners_by_safe.entry(row.safe_address).or_default().push(owner_address);
+        }
+    }
+
+    Ok(owners_by_safe)
+}
+
 pub async fn fetch_all_current_safes<C>(conn: &C) -> Result<Vec<CurrentSafe>, sea_orm::DbErr>
 where
     C: ConnectionTrait,

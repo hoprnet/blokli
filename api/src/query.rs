@@ -21,7 +21,7 @@ use blokli_db_entity::{
         redemptions_aggregation::fetch_aggregated_redeemed_stats,
         safe_aggregation::{
             CurrentSafe, fetch_all_current_safes, fetch_safe_addresses as fetch_safe_addresses_db,
-            fetch_safe_by_address as fetch_safe_by_address_db, fetch_safe_owners, fetch_safe_owners_by_safe,
+            fetch_safe_by_address as fetch_safe_by_address_db, fetch_safe_owners, fetch_safe_owners_for_safes,
             fetch_safes_by_owner as fetch_safes_by_owner_db,
         },
     },
@@ -288,8 +288,9 @@ pub(crate) async fn owners_for_safe(
 
 async fn owners_by_safe(
     db: &DatabaseConnection,
+    safe_addresses: &[Vec<u8>],
 ) -> std::result::Result<HashMap<Vec<u8>, Vec<String>>, QueryFailedError> {
-    Ok(fetch_safe_owners_by_safe(db)
+    Ok(fetch_safe_owners_for_safes(db, safe_addresses)
         .await
         .map_err(|e| errors::query_failed("fetch safe owners for list query", e))?
         .into_iter()
@@ -999,7 +1000,7 @@ impl QueryRoot {
                     Ok(safes) if safes.is_empty() => Ok(None),
                     Ok(safes) => {
                         let safe_addresses = safes.iter().map(|current| current.address.clone()).collect::<Vec<_>>();
-                        let owners_by_safe = match owners_by_safe(db).await {
+                        let owners_by_safe = match owners_by_safe(db, &safe_addresses).await {
                             Ok(owners_by_safe) => owners_by_safe,
                             Err(e) => return Ok(Some(SafeByResult::QueryFailed(e))),
                         };
@@ -1269,7 +1270,11 @@ impl QueryRoot {
             }
         }
 
-        let owners_by_safe = match owners_by_safe(db).await {
+        let safe_addresses = current_rows
+            .iter()
+            .map(|current| current.address.clone())
+            .collect::<Vec<_>>();
+        let owners_by_safe = match owners_by_safe(db, &safe_addresses).await {
             Ok(owners_by_safe) => owners_by_safe,
             Err(e) => return Ok(SafesResult::QueryFailed(e)),
         };
