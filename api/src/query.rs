@@ -44,7 +44,7 @@ use crate::{
     conversions::transaction_from_record, errors, mutation::TransactionResult, validation::validate_eth_address,
 };
 
-const SUPPORTED_CLIENT_VERSIONS: &str = "^0.26";
+const SUPPORTED_CLIENT_VERSIONS: &str = "^0.27";
 
 /// Result type for HOPR balance queries
 #[derive(Union)]
@@ -1707,9 +1707,12 @@ impl QueryRoot {
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
+    use async_graphql::Schema;
+    use blokli_chain_types::ContractAddresses;
     use blokli_db::{
         BlokliDbGeneralModelOperations, TargetDb,
         db::BlokliDb,
+        node_safe_registrations::BlokliDbNodeSafeRegistrationOperations,
         safe_contracts::BlokliDbSafeContractOperations,
         safe_history::{BlokliDbSafeHistoryOperations, SafeActivityKind},
     };
@@ -1721,7 +1724,8 @@ mod tests {
         primitive::{prelude::Address, traits::ToHex},
     };
 
-    use super::{owners_for_safe, safe_from_current_row, scale_wei_by_multiplier};
+    use super::{QueryRoot, owners_for_safe, safe_from_current_row, scale_wei_by_multiplier};
+    use crate::schema::{ChainId, GasMultiplier, NetworkName};
 
     fn random_address() -> Address {
         Address::from(rand::random::<[u8; 20]>())
@@ -1729,6 +1733,22 @@ mod tests {
 
     fn random_hash() -> Hash {
         Hash::from(rand::random::<[u8; 32]>())
+    }
+
+    fn build_test_schema(
+        db: &BlokliDb,
+    ) -> Schema<QueryRoot, async_graphql::EmptyMutation, async_graphql::EmptySubscription> {
+        Schema::build(
+            QueryRoot,
+            async_graphql::EmptyMutation,
+            async_graphql::EmptySubscription,
+        )
+        .data(db.conn(TargetDb::Index).clone())
+        .data(ContractAddresses::default())
+        .data(ChainId(100))
+        .data(NetworkName("test".to_string()))
+        .data(GasMultiplier(1.0))
+        .finish()
     }
 
     #[test]
@@ -1936,6 +1956,92 @@ mod tests {
         assert!(
             no_safe.is_empty(),
             "former owners should not match current-owner lookup"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_safe_by_owner_returns_prefetched_owners_and_registered_nodes() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let safe_one = random_address();
+        let safe_two = random_address();
+        let module_one = random_address();
+        let module_two = random_address();
+        let chain_key_one = random_address();
+        let chain_key_two = random_address();
+        let owner = random_address();
+        let extra_owner = random_address();
+        let node_one = random_address();
+        let node_two = random_address();
+
+        db.create_safe_contract(None, safe_one, module_one, chain_key_one, 100, 0, 0)
+            .await?;
+        db.create_safe_contract(None, safe_two, module_two, chain_key_two, 101, 0, 1)
+            .await?;
+        db.upsert_safe_owner_state(None, safe_one, owner, true, 102, 0, 0)
+            .await?;
+        db.upsert_safe_owner_state(None, safe_one, extra_owner, true, 103, 0, 0)
+            .await?;
+        db.upsert_safe_owner_state(None, safe_two, owner, true, 104, 0, 1)
+            .await?;
+        db.register_node_to_safe(None, safe_one, node_one, 105, 0, 0).await?;
+        db.register_node_to_safe(None, safe_two, node_two, 106, 0, 1).await?;
+
+        let schema = build_test_schema(&db);
+        let query = format!(
+            r#"
+            query {{
+              safeBy(selector: OWNER, address: "{}") {{
+                ... on SafesList {{
+                  safes {{
+                    address
+                    owners
+                    registeredNodes
+                  }}
+                }}
+              }}
+            }}
+            "#,
+            owner.to_hex()
+        );
+
+        let response = schema.execute(query).await;
+        let body = response.data.into_json()?;
+        let safes = body["safeBy"]["safes"]
+            .as_array()
+            .ok_or_else(|| anyhow!("expected safeBy.safes array"))?;
+        assert_eq!(safes.len(), 2);
+
+        let safe_one_hex = safe_one.to_hex();
+        let safe_two_hex = safe_two.to_hex();
+        let node_one_hex = node_one.to_hex();
+        let node_two_hex = node_two.to_hex();
+        let owner_hex = owner.to_hex();
+
+        let safe_one_result = safes
+            .iter()
+            .find(|safe| safe["address"] == safe_one_hex)
+            .ok_or_else(|| anyhow!("safe one not found in response"))?;
+        let safe_two_result = safes
+            .iter()
+            .find(|safe| safe["address"] == safe_two_hex)
+            .ok_or_else(|| anyhow!("safe two not found in response"))?;
+
+        assert!(
+            safe_one_result["owners"]
+                .as_array()
+                .is_some_and(|owners| owners.iter().any(|value| value == &owner_hex)),
+            "safe one should include owner in owners list"
+        );
+        assert_eq!(
+            safe_one_result["registeredNodes"].as_array(),
+            Some(&vec![serde_json::Value::String(node_one_hex)])
+        );
+        assert_eq!(
+            safe_two_result["registeredNodes"].as_array(),
+            Some(&vec![serde_json::Value::String(node_two_hex)])
         );
 
         Ok(())
