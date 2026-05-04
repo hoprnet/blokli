@@ -17,7 +17,7 @@ use blokli_db_entity::{
     conversions::{
         account_aggregation::fetch_accounts_with_filters,
         channel_aggregation::{fetch_channel_stats as fetch_channel_stats_db, fetch_channels_with_state},
-        node_safe_registration::fetch_registered_nodes_for_safe,
+        node_safe_registration::{fetch_registered_nodes_for_safe, fetch_registered_nodes_for_safes},
         redemptions_aggregation::fetch_aggregated_redeemed_stats,
         safe_aggregation::{
             CurrentSafe, fetch_all_current_safes, fetch_safe_addresses as fetch_safe_addresses_db,
@@ -245,6 +245,31 @@ async fn registered_nodes_for_safe(db: &DatabaseConnection, safe_address: Vec<u8
                 "Failed to fetch registered nodes for safe, returning empty list"
             );
             Vec::new()
+        }
+    }
+}
+
+async fn registered_nodes_by_safe(
+    db: &DatabaseConnection,
+    safe_addresses: &[Vec<u8>],
+) -> HashMap<Vec<u8>, Vec<String>> {
+    match fetch_registered_nodes_for_safes(db, safe_addresses).await {
+        Ok(by_safe) => {
+            let mut registered_nodes_by_safe = HashMap::with_capacity(safe_addresses.len());
+            for (safe_address, nodes) in by_safe {
+                registered_nodes_by_safe.insert(
+                    safe_address,
+                    nodes.into_iter().map(|node_address| node_address.to_hex()).collect(),
+                );
+            }
+            registered_nodes_by_safe
+        }
+        Err(e) => {
+            warn!(
+                error = %e,
+                "Failed to batch-fetch registered nodes for safes, returning empty lists"
+            );
+            HashMap::with_capacity(safe_addresses.len())
         }
     }
 }
@@ -973,18 +998,31 @@ impl QueryRoot {
                 match fetch_safes_by_owner_db(db, &owner_address).await {
                     Ok(safes) if safes.is_empty() => Ok(None),
                     Ok(safes) => {
+                        let safe_addresses = safes.iter().map(|current| current.address.clone()).collect::<Vec<_>>();
+                        let owners_by_safe = match owners_by_safe(db).await {
+                            Ok(owners_by_safe) => owners_by_safe,
+                            Err(e) => return Ok(Some(SafeByResult::QueryFailed(e))),
+                        };
+                        let registered_nodes_by_safe = registered_nodes_by_safe(db, &safe_addresses).await;
                         let mut safe_list = Vec::with_capacity(safes.len());
+                        let mut owners_by_safe_map = HashMap::with_capacity(safes.len());
+                        for safe_address in &safe_addresses {
+                            if let Some(owners) = owners_by_safe.get(safe_address) {
+                                owners_by_safe_map.insert(safe_address.clone(), owners.clone());
+                            }
+                        }
+                        let mut registered_nodes_by_safe_map = HashMap::with_capacity(safes.len());
+                        for safe_address in &safe_addresses {
+                            if let Some(registered_nodes) = registered_nodes_by_safe.get(safe_address) {
+                                registered_nodes_by_safe_map.insert(safe_address.clone(), registered_nodes.clone());
+                            }
+                        }
                         for current in safes {
                             let safe_address = current.address.clone();
-                            let owners = match owners_for_safe(db, safe_address.clone()).await {
-                                Ok(owners) => owners,
-                                Err(e) => return Ok(Some(SafeByResult::QueryFailed(e))),
-                            };
-                            let safe = match safe_from_current_row(
-                                current,
-                                registered_nodes_for_safe(db, safe_address).await,
-                                owners,
-                            ) {
+                            let owners = owners_by_safe_map.remove(&safe_address).unwrap_or_default();
+                            let registered_nodes =
+                                registered_nodes_by_safe_map.remove(&safe_address).unwrap_or_default();
+                            let safe = match safe_from_current_row(current, registered_nodes, owners) {
                                 Ok(safe) => safe,
                                 Err(e) => {
                                     return Ok(Some(SafeByResult::QueryFailed(errors::invalid_db_data(
