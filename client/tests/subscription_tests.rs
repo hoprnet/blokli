@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use anyhow::Result;
-use blokli_client::{BlokliClient, BlokliClientConfig, api::BlokliSubscriptionClient};
+use blokli_client::{BlokliClient, BlokliClientConfig, CLIENT_VERSION, api::BlokliSubscriptionClient};
 use futures::StreamExt;
 use tokio::{io::AsyncWriteExt, net::TcpListener};
 use url::Url;
@@ -167,7 +167,7 @@ async fn spawn_reconnecting_server(
     let server = tokio::spawn(async move {
         let (mut compatibility_conn, _) = listener.accept().await?;
         compatibility_conn
-            .write_all(format_json_response(compatibility_response_body()).as_bytes())
+            .write_all(format_json_response(&compatibility_response_body()).as_bytes())
             .await?;
         compatibility_conn.shutdown().await?;
 
@@ -197,7 +197,7 @@ async fn spawn_delayed_streaming_server(
     let server = tokio::spawn(async move {
         let (mut compatibility_conn, _) = listener.accept().await?;
         compatibility_conn
-            .write_all(format_json_response(compatibility_response_body()).as_bytes())
+            .write_all(format_json_response(&compatibility_response_body()).as_bytes())
             .await?;
         compatibility_conn.shutdown().await?;
 
@@ -229,7 +229,7 @@ async fn spawn_timed_out_then_reconnecting_server(
     let server = tokio::spawn(async move {
         let (mut compatibility_conn, _) = listener.accept().await?;
         compatibility_conn
-            .write_all(format_json_response(compatibility_response_body()).as_bytes())
+            .write_all(format_json_response(&compatibility_response_body()).as_bytes())
             .await?;
         compatibility_conn.shutdown().await?;
 
@@ -299,6 +299,8 @@ fn format_json_response(body: &str) -> String {
     )
 }
 
-fn compatibility_response_body() -> &'static str {
-    r#"{"data":{"compatibility":{"apiVersion":"0.19.1","supportedClientVersions":"^0.26","indexesSafeEvents":true}}}"#
+fn compatibility_response_body() -> String {
+    format!(
+        r#"{{"data":{{"compatibility":{{"apiVersion":"0.19.1","supportedClientVersions":"={CLIENT_VERSION}","indexesSafeEvents":true}}}}}}"#
+    )
 }

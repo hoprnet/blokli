@@ -4,11 +4,11 @@ mod subscriptions;
 mod testing;
 mod transactions;
 
-use std::{fmt::Debug, future::Future, time::Duration};
+use std::{fmt::Debug, future::Future, sync::Arc, time::Duration};
 
 use cynic::GraphQlResponse;
 use eventsource_client::{Client, ReconnectOptionsBuilder, SSE};
-use futures::{StreamExt, TryFutureExt, TryStreamExt};
+use futures::{StreamExt, TryFutureExt, TryStreamExt, lock::Mutex};
 use launchdarkly_sdk_transport::{ByteStream, HttpTransport, ResponseFuture, TransportError};
 use moka::future::Cache;
 use reqwest::redirect::Policy as RedirectPolicy;
@@ -158,6 +158,7 @@ pub struct BlokliClient {
     base_url: url::Url,
     cfg: BlokliClientConfig,
     compatibility_cache: Cache<&'static str, Compatibility>,
+    compatibility_refresh_lock: Arc<Mutex<()>>,
 }
 
 const REDIRECT_LIMIT: usize = 3;
@@ -175,6 +176,7 @@ impl BlokliClient {
                 .max_capacity(1)
                 .time_to_live(cfg.compatibility_cache_ttl)
                 .build(),
+            compatibility_refresh_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -221,11 +223,19 @@ impl BlokliClient {
             return self.validate_compatibility(&compatibility);
         }
 
+        let _guard = self.compatibility_refresh_lock.lock().await;
+        if let Some(compatibility) = self.compatibility_cache.get(COMPATIBILITY_CACHE_KEY).await {
+            return self.validate_compatibility(&compatibility);
+        }
+
         let compatibility = self.query_compatibility_uncached().await?;
         let validation = self.validate_compatibility(&compatibility);
-        self.compatibility_cache
-            .insert(COMPATIBILITY_CACHE_KEY, compatibility)
-            .await;
+
+        if validation.is_ok() {
+            self.compatibility_cache
+                .insert(COMPATIBILITY_CACHE_KEY, compatibility)
+                .await;
+        }
 
         validation
     }
@@ -357,11 +367,13 @@ impl BlokliClient {
                                         "SSE stream ended, sleeping before attempting to restart"
                                     );
                                     futures_time::task::sleep(actual_delay.into()).await;
-                                    if let Err(error) = stream_state.start_stream() {
-                                        tracing::error!(%error, "Failed to restart SSE stream, stopping subscription");
-                                        return Ok(None);
-                                    }
-                                    state = SubscriptionState::Active(stream_state);
+                                    state = SubscriptionState::Pending(Box::new(PendingSubscriptionState {
+                                        client: self.clone(),
+                                        graphql_url: stream_state.graphql_url,
+                                        query: stream_state.query,
+                                        cfg: stream_state.cfg,
+                                        reqwest_client: stream_state.reqwest_client,
+                                    }));
                                 } else {
                                     tracing::warn!(
                                         "SSE stream ended and no restart delay configured, stopping subscription"
@@ -609,15 +621,16 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(
-                r#"{
+                json!({
                   "data": {
                     "compatibility": {
                       "apiVersion": "0.19.1",
-                      "supportedClientVersions": "^0.26",
+                      "supportedClientVersions": format!("={CLIENT_VERSION}"),
                       "indexesSafeEvents": true
                     }
                   }
-                }"#,
+                })
+                .to_string(),
             )
             .create_async()
             .await;
@@ -628,7 +641,7 @@ mod tests {
             .expect("compatibility query should succeed");
 
         assert_eq!(compatibility.api_version, "0.19.1");
-        assert_eq!(compatibility.supported_client_versions, "^0.26");
+        assert_eq!(compatibility.supported_client_versions, format!("={CLIENT_VERSION}"));
         assert!(compatibility.indexes_safe_events);
     }
 
@@ -705,15 +718,16 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(
-                r#"{
+                json!({
                   "data": {
                     "compatibility": {
                       "apiVersion": "0.19.1",
-                      "supportedClientVersions": "^0.26",
+                      "supportedClientVersions": format!("={CLIENT_VERSION}"),
                       "indexesSafeEvents": false
                     }
                   }
-                }"#,
+                })
+                .to_string(),
             )
             .create_async()
             .await;
@@ -741,15 +755,16 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(
-                r#"{
+                json!({
                   "data": {
                     "compatibility": {
                       "apiVersion": "0.19.1",
-                      "supportedClientVersions": "^0.26",
+                      "supportedClientVersions": format!("={CLIENT_VERSION}"),
                       "indexesSafeEvents": true
                     }
                   }
-                }"#,
+                })
+                .to_string(),
             )
             .create_async()
             .await;
@@ -789,15 +804,16 @@ mod tests {
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(
-                r#"{
+                json!({
                   "data": {
                     "compatibility": {
                       "apiVersion": "0.19.1",
-                      "supportedClientVersions": "^0.26",
+                      "supportedClientVersions": format!("={CLIENT_VERSION}"),
                       "indexesSafeEvents": true
                     }
                   }
-                }"#,
+                })
+                .to_string(),
             )
             .create_async()
             .await;

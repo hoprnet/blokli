@@ -1,4 +1,4 @@
-use blokli_client::{BlokliClient, api::BlokliQueryClient};
+use blokli_client::{BlokliClient, CLIENT_VERSION, api::BlokliQueryClient};
 use mockito::Matcher;
 use serde_json::json;
 
@@ -21,16 +21,16 @@ async fn query_native_balance() -> anyhow::Result<()> {
         .match_request(recorder.as_matcher())
         .with_header("content-type", "application/json")
         .with_body(
-            r#"{
+            json!({
               "data": {
                 "compatibility": {
                   "apiVersion": "0.19.1",
-                  "supportedClientVersions": "^0.26",
+                  "supportedClientVersions": format!("={CLIENT_VERSION}"),
                   "indexesSafeEvents": true
                 }
               }
-            }
-        "#,
+            })
+            .to_string(),
         )
         .create_async()
         .await;
@@ -81,16 +81,16 @@ async fn query_token_balance() -> anyhow::Result<()> {
         .match_request(recorder.as_matcher())
         .with_header("content-type", "application/json")
         .with_body(
-            r#"{
+            json!({
               "data": {
                 "compatibility": {
                   "apiVersion": "0.19.1",
-                  "supportedClientVersions": "^0.26",
+                  "supportedClientVersions": format!("={CLIENT_VERSION}"),
                   "indexesSafeEvents": true
                 }
               }
-            }
-        "#,
+            })
+            .to_string(),
         )
         .create_async()
         .await;
