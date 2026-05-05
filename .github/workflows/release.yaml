@@ -110,7 +110,6 @@ jobs:
           github_token: ${{ secrets.GH_RUNNER_TOKEN }}
   deploy-staging:
     name: Deploy Gnosis Staging
-    if: github.event.inputs.binary == 'bloklid'
     runs-on: depot-ubuntu-24.04-2
     needs:
       - build-binaries

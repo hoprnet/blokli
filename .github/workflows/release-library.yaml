@@ -18,7 +18,7 @@ concurrency:
   cancel-in-progress: false
 jobs:
   build-library:
-    name: Library ${{ matrix.architecture }}
+    name: Build Library
     uses: hoprnet/hopr-workflows/.github/workflows/build-library.yaml@ausias/publish-library # build-library-v2
     permissions:
       contents: read
