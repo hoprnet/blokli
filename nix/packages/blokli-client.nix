@@ -9,7 +9,6 @@
   sources,
   blokliClientCrateInfo,
   rev,
-  buildPlatform,
   nixLib,
 }:
 
@@ -19,7 +18,6 @@ let
     { src, depsSrc }:
     {
       inherit src depsSrc rev;
-      cargoExtraArgs = "-p blokli-client";
       cargoToml = ./../../client/Cargo.toml;
     };
 
@@ -30,14 +28,14 @@ let
         src = sources.main;
         depsSrc = sources.deps;
       };
-      name = "binary-blokli-client-${platform}";
+      name = "lib-blokli-client-${platform}";
     in
     {
-      "${name}" = builders.${platform}.callPackage nixLib.mkRustPackage args;
-      "${name}-profile" = builders.${platform}.callPackage nixLib.mkRustPackage args;
+      "${name}" = builders.${platform}.callPackage nixLib.mkRustLibrary args;
+      "${name}-profile" = builders.${platform}.callPackage nixLib.mkRustLibrary args;
     }
     // lib.optionalAttrs (lib.hasSuffix "-linux" platform) {
-      "${name}-dev" = builders.${platform}.callPackage nixLib.mkRustPackage (
+      "${name}-dev" = builders.${platform}.callPackage nixLib.mkRustLibrary (
         args // { CARGO_PROFILE = "dev"; }
       );
     };
@@ -51,21 +49,4 @@ let
     ]
   );
 in
-{
-  # Development builds - for local testing and debugging
-  blokli-client = builders.local.callPackage nixLib.mkRustPackage (mkblokliClientBuildArgs {
-    src = sources.main;
-    depsSrc = sources.deps;
-  });
-
-  blokli-client-dev = builders.local.callPackage nixLib.mkRustPackage (
-    (mkblokliClientBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-    })
-    // {
-      CARGO_PROFILE = "dev";
-    }
-  );
-}
-// blokliClientPlatformPackages
+{ } // blokliClientPlatformPackages

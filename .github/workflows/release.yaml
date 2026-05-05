@@ -1,16 +1,8 @@
 ---
-name: Close release
+name: Close release Bloklid
 on:
   workflow_dispatch:
     inputs:
-      binary:
-        description: Artifact to release
-        required: true
-        type: choice
-        default: "bloklid"
-        options:
-          - bloklid
-          - blokli-client
       release_type:
         description: Version type after release
         required: true
@@ -33,16 +25,13 @@ jobs:
         include:
           - architecture: x86_64-linux
             runner: depot-ubuntu-24.04-4
-            build_command: nix build -L .#binary-${{ github.event.inputs.binary }}-x86_64-linux
-            build_file: ${{ github.event.inputs.binary == 'bloklid' && 'bloklid' || 'client' }}/Cargo.toml
+            build_command: nix build -L .#binary-bloklid-x86_64-linux
           - architecture: aarch64-linux
             runner: depot-ubuntu-24.04-arm-4
-            build_command: nix build -L .#binary-${{ github.event.inputs.binary }}-aarch64-linux
-            build_file: ${{ github.event.inputs.binary == 'bloklid' && 'bloklid' || 'client' }}/Cargo.toml
+            build_command: nix build -L .#binary-bloklid-aarch64-linux
           - architecture: aarch64-darwin
             runner: depot-macos-15
-            build_command: nix build -L .#binary-${{ github.event.inputs.binary }}-aarch64-darwin
-            build_file: ${{ github.event.inputs.binary == 'bloklid' && 'bloklid' || 'client' }}/Cargo.toml
+            build_command: nix build -L .#binary-bloklid-aarch64-darwin
     uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v2
     permissions:
       contents: read
@@ -51,9 +40,9 @@ jobs:
       version_type: release
       architecture: ${{ matrix.architecture }}
       cachix_cache_name: blokli
-      build_file: ${{ matrix.build_file }}
+      build_file: bloklid/Cargo.toml
       build_command: ${{ matrix.build_command }}
-      binary: ${{ github.event.inputs.binary }}
+      binary: bloklid
       runner: ${{ matrix.runner }}
     secrets:
       gcp_service_account: ${{ secrets.GCP_SA_GITHUB_RUNNER }}
@@ -61,7 +50,6 @@ jobs:
       gpg_private_key: ${{ secrets.GPG_HOPRNET_PRIVATE_KEY }}
   build-docker:
     name: Docker
-    if: ${{ inputs.binary == 'bloklid' }}
     uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@43b03a7b5df777770d95c6524f48be34184b26fa # build-docker-v1
     needs: build-binaries
     permissions:
@@ -95,50 +83,30 @@ jobs:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
       docker_hub_token: ${{ secrets.DOCKER_HUB_TOKEN }}
-  publish:
-    name: Publish
-    needs: [build-binaries]
-    if: ${{ inputs.binary == 'blokli-client' }}
-    uses: hoprnet/hopr-workflows/.github/workflows/publish-crates.yaml@e4fadaa70234b9d734d5c51b6900602e55492ce2 # workflow-publish-crates-v3
-    permissions:
-      contents: read
-    with:
-      source_branch: ${{ github.ref_name }}
-      package: blokli-client
-      version_type: release
-      runner: depot-ubuntu-24.04-4
-    secrets:
-      cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      cargo_registry_token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
   release:
     name: Close release
     needs:
       - build-binaries
       - build-docker
-      - publish
-    if: |
-      always() &&
-      needs.build-binaries.result == 'success' &&
-      (needs.build-docker.result == 'success' || needs.build-docker.result == 'skipped') &&
-      (needs.publish.result == 'success' || needs.publish.result == 'skipped')
     runs-on: depot-ubuntu-24.04-2
     permissions:
       contents: write
     steps:
       - name: Release version
-        uses: hoprnet/hopr-workflows/actions/release-version@release-version-v3
+        uses: hoprnet/hopr-workflows/actions/release-version@release-version-v4
         with:
           source_branch: ${{ github.ref_name }}
-          file: ${{ github.event.inputs.binary == 'bloklid' && 'bloklid' || 'client' }}/Cargo.toml
+          file: bloklid/Cargo.toml
           release_type: ${{ inputs.release_type }}
           cachix_cache_name: blokli
+          release_tag_prefix: bloklid-v
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
           zulip_api_key: ${{ secrets.ZULIP_API_KEY }}
           zulip_email: ${{ secrets.ZULIP_EMAIL }}
           zulip_channel: Blokli
           zulip_topic: Releases
           gcp_service_account: ${{ secrets.GCP_SA_GITHUB_RUNNER }}
-          gcp_artifact_package: ${{ github.event.inputs.binary }}
+          gcp_artifact_package: bloklid
           github_token: ${{ secrets.GH_RUNNER_TOKEN }}
   deploy-staging:
     name: Deploy Gnosis Staging

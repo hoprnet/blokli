@@ -190,7 +190,6 @@
               sources
               blokliClientCrateInfo
               rev
-              buildPlatform
               nixLib
               ;
           };
