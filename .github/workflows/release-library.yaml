@@ -19,7 +19,7 @@ concurrency:
 jobs:
   build-library:
     name: Build Library
-    uses: hoprnet/hopr-workflows/.github/workflows/build-library.yaml@ausias/publish-library # build-library-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-library.yaml@build-library-v2
     permissions:
       contents: read
     with:
