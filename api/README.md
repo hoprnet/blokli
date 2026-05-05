@@ -119,7 +119,7 @@ query {
   compatibility {
     apiVersion
     supportedClientVersions
-    indexesSafeEvents
+    features
   }
 }
 ```

@@ -22,7 +22,6 @@ hex = { workspace = true }
 http = { workspace = true }
 indexmap = { workspace = true, optional = true }
 launchdarkly-sdk-transport = { workspace = true }
-moka = { workspace = true, features = ["future"] }
 parking_lot = { workspace = true, optional = true }
 rand = { workspace = true, optional = true }
 reqwest = { workspace = true, features = [
@@ -37,6 +36,7 @@ semver = { workspace = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true }
 smart-default = { workspace = true }
+strum = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true, features = ["release_max_level_debug"] }
 url = { workspace = true }

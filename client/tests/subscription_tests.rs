@@ -301,6 +301,6 @@ fn format_json_response(body: &str) -> String {
 
 fn compatibility_response_body() -> String {
     format!(
-        r#"{{"data":{{"compatibility":{{"apiVersion":"0.19.1","supportedClientVersions":"={CLIENT_VERSION}","indexesSafeEvents":true}}}}}}"#
+        r#"{{"data":{{"compatibility":{{"apiVersion":"0.19.1","supportedClientVersions":"={CLIENT_VERSION}","features":["indexes_safe_events"]}}}}}}"#
     )
 }

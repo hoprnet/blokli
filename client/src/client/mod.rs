@@ -4,13 +4,17 @@ mod subscriptions;
 mod testing;
 mod transactions;
 
-use std::{fmt::Debug, future::Future, sync::Arc, time::Duration};
+use std::{
+    fmt::Debug,
+    future::Future,
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use cynic::GraphQlResponse;
 use eventsource_client::{Client, ReconnectOptionsBuilder, SSE};
 use futures::{StreamExt, TryFutureExt, TryStreamExt, lock::Mutex};
 use launchdarkly_sdk_transport::{ByteStream, HttpTransport, ResponseFuture, TransportError};
-use moka::future::Cache;
 use reqwest::redirect::Policy as RedirectPolicy;
 #[cfg(feature = "testing")]
 pub use testing::{
@@ -23,8 +27,33 @@ use crate::{
     errors::{BlokliClientError, ErrorKind},
 };
 
-const COMPATIBILITY_CACHE_KEY: &str = "compatibility";
 const MIN_RECONNECTION_DELAY: Duration = Duration::from_millis(1);
+
+#[derive(strum::AsRefStr, Debug, Clone, Copy, PartialEq, Eq)]
+#[strum(serialize_all = "snake_case")]
+enum Feature {
+    IndexesSafeEvents,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct CompatibilityFeatures {
+    indexes_safe_events: bool,
+}
+
+impl CompatibilityFeatures {
+    fn from_wire(features: &[String]) -> Self {
+        let indexes_safe_events = Feature::IndexesSafeEvents.as_ref();
+        Self {
+            indexes_safe_events: features.iter().any(|feature| feature == indexes_safe_events),
+        }
+    }
+
+    fn has(self, feature: Feature) -> bool {
+        match feature {
+            Feature::IndexesSafeEvents => self.indexes_safe_events,
+        }
+    }
+}
 
 /// Configuration for the [`BlokliClient`].
 #[derive(Clone, Debug, PartialEq, Eq, smart_default::SmartDefault)]
@@ -157,8 +186,14 @@ impl HttpTransport for ReqwestTransport {
 pub struct BlokliClient {
     base_url: url::Url,
     cfg: BlokliClientConfig,
-    compatibility_cache: Cache<&'static str, Compatibility>,
+    compatibility_cache: Arc<Mutex<CompatibilityCache>>,
     compatibility_refresh_lock: Arc<Mutex<()>>,
+}
+
+#[derive(Debug, Default)]
+struct CompatibilityCache {
+    value: Option<Compatibility>,
+    cached_at: Option<Instant>,
 }
 
 const REDIRECT_LIMIT: usize = 3;
@@ -172,10 +207,7 @@ impl BlokliClient {
         Self {
             base_url,
             cfg: cfg.clone(),
-            compatibility_cache: Cache::builder()
-                .max_capacity(1)
-                .time_to_live(cfg.compatibility_cache_ttl)
-                .build(),
+            compatibility_cache: Arc::new(Mutex::new(CompatibilityCache::default())),
             compatibility_refresh_lock: Arc::new(Mutex::new(())),
         }
     }
@@ -204,7 +236,8 @@ impl BlokliClient {
             .into());
         }
 
-        if compatibility.indexes_safe_events {
+        let features = CompatibilityFeatures::from_wire(&compatibility.features);
+        if features.has(Feature::IndexesSafeEvents) {
             return Ok(());
         }
 
@@ -219,12 +252,12 @@ impl BlokliClient {
             return Ok(());
         }
 
-        if let Some(compatibility) = self.compatibility_cache.get(COMPATIBILITY_CACHE_KEY).await {
+        if let Some(compatibility) = self.cached_compatibility().await {
             return self.validate_compatibility(&compatibility);
         }
 
         let _guard = self.compatibility_refresh_lock.lock().await;
-        if let Some(compatibility) = self.compatibility_cache.get(COMPATIBILITY_CACHE_KEY).await {
+        if let Some(compatibility) = self.cached_compatibility().await {
             return self.validate_compatibility(&compatibility);
         }
 
@@ -232,12 +265,24 @@ impl BlokliClient {
         let validation = self.validate_compatibility(&compatibility);
 
         if validation.is_ok() {
-            self.compatibility_cache
-                .insert(COMPATIBILITY_CACHE_KEY, compatibility)
-                .await;
+            let mut cache = self.compatibility_cache.lock().await;
+            cache.value = Some(compatibility);
+            cache.cached_at = Some(Instant::now());
         }
 
         validation
+    }
+
+    async fn cached_compatibility(&self) -> Option<Compatibility> {
+        let cache = self.compatibility_cache.lock().await;
+        let value = cache.value.clone()?;
+        let cached_at = cache.cached_at?;
+
+        if cached_at.elapsed() <= self.cfg.compatibility_cache_ttl {
+            return Some(value);
+        }
+
+        None
     }
 
     async fn query_compatibility_uncached(&self) -> Result<Compatibility, BlokliClientError> {
@@ -626,7 +671,7 @@ mod tests {
                     "compatibility": {
                       "apiVersion": "0.19.1",
                       "supportedClientVersions": format!("={CLIENT_VERSION}"),
-                      "indexesSafeEvents": true
+                      "features": ["indexes_safe_events"]
                     }
                   }
                 })
@@ -642,7 +687,7 @@ mod tests {
 
         assert_eq!(compatibility.api_version, "0.19.1");
         assert_eq!(compatibility.supported_client_versions, format!("={CLIENT_VERSION}"));
-        assert!(compatibility.indexes_safe_events);
+        assert_eq!(compatibility.features, vec!["indexes_safe_events"]);
     }
 
     #[tokio::test]
@@ -659,7 +704,7 @@ mod tests {
                     "compatibility": {{
                       "apiVersion": "0.19.1",
                       "supportedClientVersions": "={CLIENT_VERSION}",
-                      "indexesSafeEvents": true
+                      "features": ["indexes_safe_events"]
                     }}
                   }}
                 }}"#
@@ -687,7 +732,7 @@ mod tests {
                     "compatibility": {
                       "apiVersion": "0.19.1",
                       "supportedClientVersions": "<0.0.0",
-                      "indexesSafeEvents": true
+                      "features": ["indexes_safe_events"]
                     }
                   }
                 }"#,
@@ -723,7 +768,7 @@ mod tests {
                     "compatibility": {
                       "apiVersion": "0.19.1",
                       "supportedClientVersions": format!("={CLIENT_VERSION}"),
-                      "indexesSafeEvents": false
+                      "features": []
                     }
                   }
                 })
@@ -760,7 +805,7 @@ mod tests {
                     "compatibility": {
                       "apiVersion": "0.19.1",
                       "supportedClientVersions": format!("={CLIENT_VERSION}"),
-                      "indexesSafeEvents": true
+                      "features": ["indexes_safe_events"]
                     }
                   }
                 })
@@ -809,7 +854,7 @@ mod tests {
                     "compatibility": {
                       "apiVersion": "0.19.1",
                       "supportedClientVersions": format!("={CLIENT_VERSION}"),
-                      "indexesSafeEvents": true
+                      "features": ["indexes_safe_events"]
                     }
                   }
                 })

@@ -121,7 +121,28 @@ pub enum CalculateModuleAddressResult {
 pub struct Compatibility {
     pub api_version: String,
     pub supported_client_versions: String,
-    pub indexes_safe_events: bool,
+    pub features: Vec<String>,
+}
+
+#[derive(strum::AsRefStr, Debug, Clone, Copy, PartialEq, Eq)]
+#[strum(serialize_all = "snake_case")]
+enum Feature {
+    IndexesSafeEvents,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct CompatibilityFeatures {
+    indexes_safe_events: bool,
+}
+
+impl CompatibilityFeatures {
+    fn to_wire(self) -> Vec<String> {
+        let mut features = Vec::new();
+        if self.indexes_safe_events {
+            features.push(Feature::IndexesSafeEvents);
+        }
+        features.iter().map(|f| f.as_ref().to_string()).collect()
+    }
 }
 
 /// Validate and parse an Ethereum hex address.
@@ -1444,18 +1465,19 @@ impl QueryRoot {
 
     /// Client compatibility information
     ///
-    /// Returns the API version, a semver requirement for compatible
-    /// blokli-client releases, and whether the server indexes Safe events.
+    /// Returns the API version, a semver requirement for compatible blokli-client releases,
+    /// and feature flags supported by this server.
     async fn compatibility(&self, ctx: &Context<'_>) -> Compatibility {
         let indexes_safe_events = ctx
             .data::<crate::schema::SafeEventIndexingEnabled>()
             .map(|value| value.0)
             .unwrap_or(false);
+        let features = CompatibilityFeatures { indexes_safe_events }.to_wire();
 
         Compatibility {
             api_version: env!("CARGO_PKG_VERSION").to_string(),
             supported_client_versions: SUPPORTED_CLIENT_VERSIONS.to_string(),
-            indexes_safe_events,
+            features,
         }
     }
 

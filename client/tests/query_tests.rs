@@ -26,7 +26,7 @@ async fn query_native_balance() -> anyhow::Result<()> {
                 "compatibility": {
                   "apiVersion": "0.19.1",
                   "supportedClientVersions": format!("={CLIENT_VERSION}"),
-                  "indexesSafeEvents": true
+                  "features": ["indexes_safe_events"]
                 }
               }
             })
@@ -86,7 +86,7 @@ async fn query_token_balance() -> anyhow::Result<()> {
                 "compatibility": {
                   "apiVersion": "0.19.1",
                   "supportedClientVersions": format!("={CLIENT_VERSION}"),
-                  "indexesSafeEvents": true
+                  "features": ["indexes_safe_events"]
                 }
               }
             })
@@ -145,7 +145,7 @@ async fn query_compatibility() -> anyhow::Result<()> {
                 "compatibility": {
                   "apiVersion": "0.19.1",
                   "supportedClientVersions": "^0.24",
-                  "indexesSafeEvents": true
+                  "features": ["indexes_safe_events"]
                 }
               }
             }
@@ -157,7 +157,7 @@ async fn query_compatibility() -> anyhow::Result<()> {
     let compatibility = cli.query_compatibility().await?;
     assert_eq!(compatibility.api_version, "0.19.1");
     assert_eq!(compatibility.supported_client_versions, "^0.24");
-    assert!(compatibility.indexes_safe_events);
+    assert_eq!(compatibility.features, vec!["indexes_safe_events"]);
 
     mock.assert_async().await;
 
@@ -169,7 +169,7 @@ async fn query_compatibility() -> anyhow::Result<()> {
         requests[0].body,
         Some(Body::Json(json!({
             "operationName": "QueryCompatibility",
-            "query": "query QueryCompatibility {\n  compatibility {\n    apiVersion\n    supportedClientVersions\n    indexesSafeEvents\n  }\n}\n",
+            "query": "query QueryCompatibility {\n  compatibility {\n    apiVersion\n    supportedClientVersions\n    features\n  }\n}\n",
             "variables": null
         })))
     );

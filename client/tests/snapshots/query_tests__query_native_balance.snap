@@ -8,7 +8,7 @@ expression: recorder.requests()
   body:
     Json:
       operationName: QueryCompatibility
-      query: "query QueryCompatibility {\n  compatibility {\n    apiVersion\n    supportedClientVersions\n    indexesSafeEvents\n  }\n}\n"
+      query: "query QueryCompatibility {\n  compatibility {\n    apiVersion\n    supportedClientVersions\n    features\n  }\n}\n"
       variables: ~
 - method: POST
   path_and_query: /graphql

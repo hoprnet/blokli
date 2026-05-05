@@ -78,7 +78,7 @@ pub struct QueryCompatibility {
 pub struct Compatibility {
     pub api_version: String,
     pub supported_client_versions: String,
-    pub indexes_safe_events: bool,
+    pub features: Vec<String>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]
