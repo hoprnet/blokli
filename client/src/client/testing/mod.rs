@@ -124,7 +124,7 @@ impl Default for BlokliTestState {
             version: "1".to_string(),
             client_compatibility: Compatibility {
                 api_version: "1".to_string(),
-                supported_client_versions: "^0.26".to_string(),
+                supported_client_versions: format!("^{CLIENT_VERSION}"),
                 features: vec!["indexes_safe_events".to_string()],
             },
             health: "OK".to_string(),
