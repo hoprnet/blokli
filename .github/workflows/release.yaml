@@ -116,6 +116,11 @@ jobs:
       - build-binaries
       - build-docker
       - publish
+    if: |
+      always() &&
+      needs.build-binaries.result == 'success' &&
+      (needs.build-docker.result == 'success' || needs.build-docker.result == 'skipped') &&
+      (needs.publish.result == 'success' || needs.publish.result == 'skipped')
     runs-on: depot-ubuntu-24.04-2
     permissions:
       contents: write

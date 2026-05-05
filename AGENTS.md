@@ -166,7 +166,7 @@ on-chain confirmation for permanent records.
 Full-stack tests against real blockchain (Anvil) + PostgreSQL in Docker.
 
 ```bash
-nix build .#docker-bloklid-dev   # Build Docker image first
+nix build .#docker-bloklid-x86_64-linux-dev   # Build Docker image first
 just test-indexer                # Run integration tests
 ```
 
