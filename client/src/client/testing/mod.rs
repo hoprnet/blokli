@@ -5,6 +5,7 @@ use std::{
 };
 
 use async_broadcast::TrySendError;
+use blokli_client::CLIENT_VERSION;
 use futures::{Stream, StreamExt};
 use futures_time::{stream::StreamExt as TimeStreamExt, time::Duration as Duration2};
 use hopr_types::{crypto::types::Hash, primitive::prelude::HoprBalance as PrimitiveHoprBalance};
