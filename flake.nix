@@ -190,6 +190,7 @@
               sources
               blokliClientCrateInfo
               rev
+              buildPlatform
               nixLib
               ;
           };
@@ -240,7 +241,7 @@
               platformPkgs = platformPkgsMap.${targetPlatform};
               binarySuffix = if variant == null then "" else "-${variant}";
               dockerName = "bloklid${if variant == null then "" else "-${variant}"}";
-              binary = bloklidPackages."binary-blokli-${targetPlatform}${binarySuffix}";
+              binary = bloklidPackages."binary-bloklid-${targetPlatform}${binarySuffix}";
             in
             nixLib.mkDockerImage {
               name = dockerName;
@@ -262,7 +263,7 @@
             targetPlatform:
             let
               platformPkgs = platformPkgsMap.${targetPlatform};
-              binary = bloklidPackages."binary-blokli-${targetPlatform}";
+              binary = bloklidPackages."binary-bloklid-${targetPlatform}";
               anvilEntrypoint = mkBlokliAnvilEntrypoint targetPlatform;
             in
             nixLib.mkDockerImage {
@@ -284,14 +285,14 @@
 
           # Docker images using nix-lib
           bloklidDocker = {
-            docker-blokli-x86_64-linux = mkBloklidDocker "x86_64-linux" null;
-            docker-blokli-x86_64-linux-dev = mkBloklidDocker "x86_64-linux" "dev";
-            docker-blokli-x86_64-linux-profile = mkBloklidDocker "x86_64-linux" "profile";
-            docker-blokli-anvil-x86_64-linux = mkBloklidAnvilDocker "x86_64-linux";
-            docker-blokli-aarch64-linux = mkBloklidDocker "aarch64-linux" null;
-            docker-blokli-aarch64-linux-dev = mkBloklidDocker "aarch64-linux" "dev";
-            docker-blokli-aarch64-linux-profile = mkBloklidDocker "aarch64-linux" "profile";
-            docker-blokli-anvil-aarch64-linux = mkBloklidAnvilDocker "aarch64-linux";
+            docker-bloklid-x86_64-linux = mkBloklidDocker "x86_64-linux" null;
+            docker-bloklid-x86_64-linux-dev = mkBloklidDocker "x86_64-linux" "dev";
+            docker-bloklid-x86_64-linux-profile = mkBloklidDocker "x86_64-linux" "profile";
+            docker-bloklid-anvil-x86_64-linux = mkBloklidAnvilDocker "x86_64-linux";
+            docker-bloklid-aarch64-linux = mkBloklidDocker "aarch64-linux" null;
+            docker-bloklid-aarch64-linux-dev = mkBloklidDocker "aarch64-linux" "dev";
+            docker-bloklid-aarch64-linux-profile = mkBloklidDocker "aarch64-linux" "profile";
+            docker-bloklid-anvil-aarch64-linux = mkBloklidAnvilDocker "aarch64-linux";
           };
 
           # Combine all packages

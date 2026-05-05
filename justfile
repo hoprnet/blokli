@@ -226,12 +226,12 @@ docker-logs service="":
 
 # Build bloklid Docker image from Nix
 docker-build:
-    nix build .#docker-blokli-x86_64-linux
+    nix build .#docker-bloklid-x86_64-linux
     docker load < result
 
 # Build bloklid + anvil Docker image from Nix
 docker-build-anvil:
-    nix build .#docker-blokli-anvil-x86_64-linux
+    nix build .#docker-bloklid-anvil-x86_64-linux
     docker load < result
 
 # Run bloklid + anvil container (GraphQL API on port 8080)

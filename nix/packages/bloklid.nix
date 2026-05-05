@@ -36,7 +36,7 @@ let
           prependPackageName = false;
           cargoExtraArgs = "-p bloklid -p blokli-inspector --bins";
         };
-      name = "binary-blokli-${platform}";
+      name = "binary-bloklid-${platform}";
     in
     {
       "${name}" = builders.${platform}.callPackage nixLib.mkRustPackage args;
