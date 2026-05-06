@@ -222,7 +222,7 @@ Debug: container logs saved to `/tmp/blokli-integration/<timestamp>/`, use `RUST
 
 ## Docker Images
 
-Three variants: `docker-bloklid` (production), `docker-bloklid-dev` (development), `docker-bloklid-profile` (with debug symbols).
+Three variants: `docker-bloklid` (production), `docker-bloklid-dev` (development).
 
 ```bash
 nix build -L .#docker-bloklid-x86_64-linux    # amd64

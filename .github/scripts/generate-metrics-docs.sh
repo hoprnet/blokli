@@ -8,11 +8,6 @@
 
 set -euo pipefail
 
-if ! command -v gawk &>/dev/null; then
-  echo "SKIP: gawk not found — run inside 'nix develop' to enforce METRICS.md sync."
-  exit 0
-fi
-
 REPO_ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 METRICS_DOC="$REPO_ROOT/METRICS.md"
 
