@@ -1,4 +1,7 @@
-use blokli_client::{BlokliClient, CLIENT_VERSION, api::BlokliQueryClient};
+use blokli_client::{
+    BlokliClient, CLIENT_VERSION,
+    api::{BlokliQueryClient, SafeSelector},
+};
 use mockito::Matcher;
 use serde_json::json;
 
