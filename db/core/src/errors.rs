@@ -3,6 +3,7 @@ use std::sync::Arc;
 use blokli_db_entity::errors::DbEntityError;
 use hopr_crypto_types::{prelude::CryptoError, types::Hash};
 use hopr_internal_types::errors::CoreTypesError;
+use hopr_primitive_types::prelude::Address;
 use sea_orm::TransactionError;
 use thiserror::Error;
 
@@ -46,6 +47,9 @@ pub enum DbSqlError {
 
     #[error("logical error: {0}")]
     LogicalError(String),
+
+    #[error("channel party not found: {0}")]
+    MissingChannelAccount(Address),
 
     #[error("ack validation error: {0}")]
     AcknowledgementValidationError(String),
