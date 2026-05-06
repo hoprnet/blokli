@@ -46,6 +46,9 @@ pub enum DbSqlError {
     #[error("logical error: {0}")]
     LogicalError(String),
 
+    #[error("channel party not found: {0}")]
+    MissingChannelAccount(Address),
+
     #[error("ack validation error: {0}")]
     AcknowledgementValidationError(String),
 

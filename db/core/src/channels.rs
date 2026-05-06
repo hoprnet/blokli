@@ -47,7 +47,6 @@ const DB_STATUS_PENDING_TO_CLOSE: i16 = 2;
 ///
 /// The account's database ID (primary key)
 async fn get_or_create_account_id(tx: &sea_orm::DatabaseTransaction, address: &Address) -> Result<i64> {
-    // Try to find existing account
     if let Some(existing) = Account::find()
         .filter(account::Column::ChainKey.eq(address.as_ref().to_vec()))
         .one(tx)
@@ -56,13 +55,7 @@ async fn get_or_create_account_id(tx: &sea_orm::DatabaseTransaction, address: &A
         return Ok(existing.id);
     }
 
-    // Account doesn't exist - this shouldn't happen in normal operation
-    // as accounts should be created when processing account-related events.
-    // For now, return an error indicating the account needs to be created first.
-    Err(DbSqlError::LogicalError(format!(
-        "Account with address {} not found - accounts must be created via account events before channel operations",
-        address.to_hex()
-    )))
+    Err(DbSqlError::MissingChannelAccount(*address))
 }
 
 /// Helper function to lookup account addresses by their database IDs

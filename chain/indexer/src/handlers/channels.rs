@@ -1,6 +1,6 @@
 use blokli_chain_rpc::HoprIndexerRpcOperations;
 use blokli_chain_types::AlloyAddressExt;
-use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator};
+use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator, errors::DbSqlError};
 use hopr_bindings::hopr_channels::HoprChannels::HoprChannelsEvents;
 use hopr_types::{
     internal::channels::{ChannelStatus, generate_channel_id},
@@ -319,9 +319,24 @@ where
                         decoded.epoch,
                     )?;
 
-                    self.db
+                    match self
+                        .db
                         .upsert_channel(tx.into(), reopened_channel, block, tx_index, log_index)
-                        .await?;
+                        .await
+                    {
+                        Ok(()) => {}
+                        Err(DbSqlError::MissingChannelAccount(missing_account)) => {
+                            warn!(
+                                %source,
+                                %destination,
+                                %channel_id,
+                                %missing_account,
+                                "ignoring ChannelOpened event because destination account is unknown"
+                            );
+                            return Err(CoreEthereumIndexerError::ChannelDoesNotExist);
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
                 } else {
                     // Channel doesn't exist - create new one with state from decoded event payload
                     trace!(%source, %destination, %channel_id, "on_channel_opened_event");
@@ -335,9 +350,24 @@ where
                         decoded.epoch,
                     )?;
 
-                    self.db
+                    match self
+                        .db
                         .upsert_channel(tx.into(), new_channel, block, tx_index, log_index)
-                        .await?;
+                        .await
+                    {
+                        Ok(()) => {}
+                        Err(DbSqlError::MissingChannelAccount(missing_account)) => {
+                            warn!(
+                                %source,
+                                %destination,
+                                %channel_id,
+                                %missing_account,
+                                "ignoring ChannelOpened event because destination account is unknown"
+                            );
+                            return Err(CoreEthereumIndexerError::ChannelDoesNotExist);
+                        }
+                        Err(error) => return Err(error.into()),
+                    }
                 }
 
                 // Publish event if synced
