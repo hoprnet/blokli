@@ -67,7 +67,7 @@ hopr-chain-connector = { git = "https://github.com/hoprnet/hoprnet", rev = "d4a5
 hopr-chain-types = { git = "https://github.com/hoprnet/hoprnet", rev = "d4a52ba761bb5e787f2ddd27369fef613a1878b8" }
 hopr-crypto-packet = { git = "https://github.com/hoprnet/hoprnet", rev = "d4a52ba761bb5e787f2ddd27369fef613a1878b8" }
 hopr-crypto-random = { git = "https://github.com/hoprnet/hoprnet", rev = "d4a52ba761bb5e787f2ddd27369fef613a1878b8" }
-hopr-crypto-types = { git = "https://github.com/hoprnet/hoprnet",rev = "d4a52ba761bb5e787f2ddd27369fef613a1878b8" }
+hopr-crypto-types = { git = "https://github.com/hoprnet/hoprnet", rev = "d4a52ba761bb5e787f2ddd27369fef613a1878b8" }
 hopr-internal-types = { git = "https://github.com/hoprnet/hoprnet", rev = "d4a52ba761bb5e787f2ddd27369fef613a1878b8", features = [
   "serde",
 ] }
