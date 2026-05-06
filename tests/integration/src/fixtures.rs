@@ -257,7 +257,9 @@ impl IntegrationFixture {
         let maybe_safe = self
             .client()
             .query_safe(SafeSelector::ChainKey(owner.to_alloy_address().into()))
-            .await?;
+            .await?
+            .into_iter()
+            .next();
 
         match maybe_safe {
             Some(s) => Ok(s),
@@ -273,7 +275,7 @@ impl IntegrationFixture {
                     || {
                         let client = client.clone();
                         let selector = selector.clone();
-                        async move { Ok(client.query_safe(selector).await?) }
+                        async move { Ok(client.query_safe(selector).await?.into_iter().next()) }
                     },
                 )
                 .await?;
