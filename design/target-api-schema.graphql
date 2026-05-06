@@ -160,6 +160,8 @@ Compatibility contract for blokli-client consumers
 type Compatibility {
   "The blokli-api package version serving this schema"
   apiVersion: String!
+  "Feature flags exposed by this server, e.g. indexes_safe_events"
+  features: [String!]!
   "Semver requirement describing which blokli-client versions are supported"
   supportedClientVersions: String!
 }
@@ -594,7 +596,7 @@ type QueryRoot {
     address: String!
     "Selector type for safe lookup"
     selector: SafeSelectorInput!
-  ): SafeResult
+  ): SafeByResult
   """
   Retrieve safe by chain key (owner address)
 
@@ -803,6 +805,10 @@ union SafeHoprAllowanceResult =
 Result type for single safe queries
 """
 union SafeResult = Safe | InvalidAddressError | QueryFailedError
+"""
+Result union for selector-based safe lookups that always return safe vectors on success.
+"""
+union SafeByResult = SafesList | InvalidAddressError | QueryFailedError
 
 """
 Aggregated wxHOPR holdings across all indexed safe contracts

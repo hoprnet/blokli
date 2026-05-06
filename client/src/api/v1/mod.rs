@@ -216,8 +216,8 @@ pub trait BlokliQueryClient {
     async fn query_safe_allowance(&self, address: &ChainAddress) -> Result<types::SafeHoprAllowance>;
     /// Queries redeemed ticket stats filtered by safe, node, or both.
     async fn query_redeemed_stats(&self, selector: RedeemedStatsSelector) -> Result<types::RedeemedStats>;
-    /// Queries the deployed Safe by the given [`selector`](SafeSelector).
-    async fn query_safe(&self, selector: SafeSelector) -> Result<Option<types::Safe>>;
+    /// Queries deployed Safes matching the given [`selector`](SafeSelector).
+    async fn query_safe(&self, selector: SafeSelector) -> Result<Vec<types::Safe>>;
     /// Queries the module address prediction of the given [Safe deployment data](ModulePredictionInput).
     async fn query_module_address_prediction(&self, input: ModulePredictionInput) -> Result<ChainAddress>;
     /// Counts the number of channels matching the given [`selector`](ChannelSelector).

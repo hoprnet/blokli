@@ -37,7 +37,7 @@ pub struct Safe {
 #[cynic(graphql_type = "QueryRoot", variables = "SafeByVariables")]
 pub struct QuerySafeBy {
     #[arguments(selector: $selector, address: $address)]
-    pub safe_by: Option<SafeResult>,
+    pub safe_by: Option<SafeByResult>,
 }
 
 #[derive(cynic::QueryFragment, Debug)]
@@ -66,6 +66,7 @@ pub struct QueryModuleAddress {
     pub calculate_module_address: CalculateModuleAddressResult,
 }
 
+/// Result union for deprecated single-safe GraphQL fields (`safe`, `safeByChainKey`, `safeByRegisteredNode`).
 #[derive(cynic::InlineFragments, Debug)]
 pub enum SafeResult {
     Safe(Safe),
@@ -82,6 +83,31 @@ impl From<SafeResult> for Result<Option<Safe>, BlokliClientError> {
             SafeResult::InvalidAddressError(e) => Err(e.into()),
             SafeResult::QueryFailedError(e) => Err(e.into()),
             SafeResult::Unknown => Err(ErrorKind::NoData.into()),
+        }
+    }
+}
+
+#[derive(cynic::QueryFragment, Debug, Clone, PartialEq, Eq)]
+pub struct SafesList {
+    pub safes: Vec<Safe>,
+}
+
+#[derive(cynic::InlineFragments, Debug)]
+pub enum SafeByResult {
+    SafesList(SafesList),
+    InvalidAddressError(InvalidAddressError),
+    QueryFailedError(QueryFailedError),
+    #[cynic(fallback)]
+    Unknown,
+}
+
+impl From<SafeByResult> for Result<Vec<Safe>, BlokliClientError> {
+    fn from(value: SafeByResult) -> Self {
+        match value {
+            SafeByResult::SafesList(safes) => Ok(safes.safes),
+            SafeByResult::InvalidAddressError(e) => Err(e.into()),
+            SafeByResult::QueryFailedError(e) => Err(e.into()),
+            SafeByResult::Unknown => Err(ErrorKind::NoData.into()),
         }
     }
 }
