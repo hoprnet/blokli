@@ -1,5 +1,5 @@
 use blokli_client::{
-    BlokliClient, CLIENT_VERSION,
+    BlokliClient, BlokliClientConfig, CLIENT_VERSION,
     api::{BlokliQueryClient, SafeSelector},
 };
 use mockito::Matcher;
@@ -183,7 +183,11 @@ async fn query_compatibility() -> anyhow::Result<()> {
 #[tokio::test]
 async fn query_safe_returns_safes_list() -> anyhow::Result<()> {
     let mut server = mockito::Server::new_async().await;
-    let cli = BlokliClient::new(server.url().parse()?, Default::default());
+    let cfg = BlokliClientConfig {
+        auto_compatibility_check: false,
+        ..Default::default()
+    };
+    let cli = BlokliClient::new(server.url().parse()?, cfg);
 
     let mock = server
         .mock("POST", "/graphql")
@@ -223,7 +227,11 @@ async fn query_safe_returns_safes_list() -> anyhow::Result<()> {
 #[tokio::test]
 async fn query_safe_returns_empty_vec_when_safe_by_is_null() -> anyhow::Result<()> {
     let mut server = mockito::Server::new_async().await;
-    let cli = BlokliClient::new(server.url().parse()?, Default::default());
+    let cfg = BlokliClientConfig {
+        auto_compatibility_check: false,
+        ..Default::default()
+    };
+    let cli = BlokliClient::new(server.url().parse()?, cfg);
 
     let mock = server
         .mock("POST", "/graphql")
