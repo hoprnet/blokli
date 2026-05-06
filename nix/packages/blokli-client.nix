@@ -1,6 +1,6 @@
 # blokli-client.nix - Blokli client library package definitions
 #
-# Defines the development variant of the blokli-client Rust crate.
+# Defines all variants of the blokli-client library for different platforms and profiles.
 # Blokli client is a GraphQL client library for connecting to the Blokli API.
 
 {
@@ -18,19 +18,34 @@ let
     { src, depsSrc }:
     {
       inherit src depsSrc rev;
-      cargoExtraArgs = "";
       cargoToml = ./../../client/Cargo.toml;
     };
-in
-{
-  # Development build - for local testing and debugging
-  blokli-client-dev = builders.local.callPackage nixLib.mkRustPackage (
-    (mkblokliClientBuildArgs {
-      src = sources.main;
-      depsSrc = sources.deps;
-    })
-    // {
-      CARGO_PROFILE = "dev";
+
+  mkBlokliClientPlatformPackages =
+    platform:
+    let
+      args = mkblokliClientBuildArgs {
+        src = sources.main;
+        depsSrc = sources.deps;
+      };
+      name = "lib-blokli-client-${platform}";
+    in
+    {
+      "${name}" = builders.${platform}.callPackage nixLib.mkRustLibrary args;
     }
+    // lib.optionalAttrs (lib.hasSuffix "-linux" platform) {
+      "${name}-dev" = builders.${platform}.callPackage nixLib.mkRustLibrary (
+        args // { CARGO_PROFILE = "dev"; }
+      );
+    };
+
+  blokliClientPlatformPackages = builtins.foldl' (a: b: a // b) { } (
+    map mkBlokliClientPlatformPackages [
+      "x86_64-linux"
+      "aarch64-linux"
+      "x86_64-darwin"
+      "aarch64-darwin"
+    ]
   );
-}
+in
+{ } // blokliClientPlatformPackages

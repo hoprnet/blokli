@@ -28,6 +28,12 @@ let
     postCheck = "";
   };
 
+  # Wrapper script that provides gawk to the generate-metrics-docs hook.
+  generateMetricsDocsWrapper = pkgs.writeShellScript "generate-metrics-docs-hook" ''
+    export PATH="${lib.makeBinPath [ pkgs.gawk ]}:$PATH"
+    exec bash .github/scripts/generate-metrics-docs.sh --fix
+  '';
+
   # Wrapper script that provides cargo and other tools to the export-db-schema hook.
   # Pre-commit system hooks run outside the devshell, so tools must be explicitly
   # added to PATH.
@@ -86,7 +92,7 @@ pre-commit.lib.${system}.run {
     generate-metrics-docs = {
       enable = true;
       name = "METRICS.md must stay in sync with code";
-      entry = "bash .github/scripts/generate-metrics-docs.sh --fix";
+      entry = toString generateMetricsDocsWrapper;
       files = "(METRICS\\.md|\\.rs)$";
       pass_filenames = false;
       language = "system";

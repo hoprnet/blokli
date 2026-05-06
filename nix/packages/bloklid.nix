@@ -36,11 +36,10 @@ let
           prependPackageName = false;
           cargoExtraArgs = "-p bloklid -p blokli-inspector --bins";
         };
-      name = "binary-blokli-${platform}";
+      name = "binary-bloklid-${platform}";
     in
     {
       "${name}" = builders.${platform}.callPackage nixLib.mkRustPackage args;
-      "${name}-profile" = builders.${platform}.callPackage nixLib.mkRustPackage args;
     }
     // lib.optionalAttrs (lib.hasSuffix "-linux" platform) {
       "${name}-dev" = builders.${platform}.callPackage nixLib.mkRustPackage (
