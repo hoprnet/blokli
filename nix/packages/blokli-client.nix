@@ -32,7 +32,6 @@ let
     in
     {
       "${name}" = builders.${platform}.callPackage nixLib.mkRustLibrary args;
-      "${name}-profile" = builders.${platform}.callPackage nixLib.mkRustLibrary args;
     }
     // lib.optionalAttrs (lib.hasSuffix "-linux" platform) {
       "${name}-dev" = builders.${platform}.callPackage nixLib.mkRustLibrary (
