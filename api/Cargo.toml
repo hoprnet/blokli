@@ -6,7 +6,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-api"
 repository  = "https://github.com/hoprnet/hoprnet"
-version     = "0.21.1"
+version     = "0.22.0"
 
 [lints]
 workspace = true
@@ -42,6 +42,7 @@ async-graphql = { workspace = true }
 # Serialization
 serde      = { workspace = true }
 serde_json = { workspace = true }
+strum      = { workspace = true }
 
 # Error handling
 anyhow    = { workspace = true }

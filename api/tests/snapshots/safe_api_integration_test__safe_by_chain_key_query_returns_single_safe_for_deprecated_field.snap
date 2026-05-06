@@ -1,0 +1,8 @@
+---
+source: api/tests/safe_api_integration_test.rs
+assertion_line: 292
+expression: response
+---
+data:
+  safeByChainKey:
+    address: "0x1111111111111111111111111111111111111111"

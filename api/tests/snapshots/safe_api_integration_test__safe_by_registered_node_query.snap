@@ -1,0 +1,12 @@
+---
+source: api/tests/safe_api_integration_test.rs
+assertion_line: 545
+expression: response
+---
+data:
+  safeByRegisteredNode:
+    address: "0x1111111111111111111111111111111111111111"
+    owners:
+      - "0x7777777777777777777777777777777777777777"
+    registeredNodes:
+      - "0x8888888888888888888888888888888888888888"

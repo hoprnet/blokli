@@ -22,8 +22,8 @@ impl BlokliClient {
 
         let safe: Option<Safe> = match response_to_data(safe_response)?.safe_by {
             Some(safe_result) => {
-                let parsed_safe: Result<Option<Safe>> = safe_result.into();
-                parsed_safe?
+                let parsed_safes: Result<Vec<Safe>> = safe_result.into();
+                parsed_safes?.into_iter().next()
             }
             None => None,
         };
@@ -269,7 +269,7 @@ impl BlokliQueryClient for BlokliClient {
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
-    async fn query_safe(&self, selector: SafeSelector) -> Result<Option<Safe>> {
+    async fn query_safe(&self, selector: SafeSelector) -> Result<Vec<Safe>> {
         let (gql_selector, addr) = match selector {
             SafeSelector::SafeAddress(addr) => (SafeSelectorInput::Address, addr),
             SafeSelector::Owner(addr) => (SafeSelectorInput::Owner, addr),
@@ -283,7 +283,7 @@ impl BlokliQueryClient for BlokliClient {
 
         match response_to_data(res)?.safe_by {
             Some(result) => result.into(),
-            None => Ok(None),
+            None => Ok(Vec::new()),
         }
     }
 
@@ -362,9 +362,7 @@ impl BlokliQueryClient for BlokliClient {
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn query_compatibility(&self) -> Result<Compatibility> {
-        let resp = self.build_query(GraphQlQueries::query_compatibility())?.await?;
-
-        response_to_data(resp).map(|data| data.compatibility)
+        self.query_compatibility_uncached().await
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
