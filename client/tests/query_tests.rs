@@ -1,7 +1,8 @@
 use blokli_client::{
-    BlokliClient,
+    BlokliClient, BlokliClientConfig, CLIENT_VERSION,
     api::{BlokliQueryClient, SafeSelector},
 };
+use mockito::Matcher;
 use serde_json::json;
 
 use crate::common::{Body, RequestRecorder};
@@ -16,8 +17,30 @@ async fn query_native_balance() -> anyhow::Result<()> {
 
     let recorder = RequestRecorder::default();
 
-    let mock = server
+    let compatibility_mock = server
         .mock("POST", "/graphql")
+        .match_body(Matcher::Regex("QueryCompatibility".into()))
+        .with_status(200)
+        .match_request(recorder.as_matcher())
+        .with_header("content-type", "application/json")
+        .with_body(
+            json!({
+              "data": {
+                "compatibility": {
+                  "apiVersion": "0.19.1",
+                  "supportedClientVersions": format!("={CLIENT_VERSION}"),
+                  "features": ["indexes_safe_events"]
+                }
+              }
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let balance_mock = server
+        .mock("POST", "/graphql")
+        .match_body(Matcher::Regex("QueryNativeBalance".into()))
         .with_status(200)
         .match_request(recorder.as_matcher())
         .with_header("content-type", "application/json")
@@ -38,7 +61,8 @@ async fn query_native_balance() -> anyhow::Result<()> {
     let balance = cli.query_native_balance(&[1u8; 20]).await?;
     assert_eq!("1234567890", balance.balance.0);
 
-    mock.assert_async().await;
+    compatibility_mock.assert_async().await;
+    balance_mock.assert_async().await;
 
     insta::assert_yaml_snapshot!(recorder.requests());
 
@@ -53,8 +77,30 @@ async fn query_token_balance() -> anyhow::Result<()> {
 
     let recorder = RequestRecorder::default();
 
-    let mock = server
+    let compatibility_mock = server
         .mock("POST", "/graphql")
+        .match_body(Matcher::Regex("QueryCompatibility".into()))
+        .with_status(200)
+        .match_request(recorder.as_matcher())
+        .with_header("content-type", "application/json")
+        .with_body(
+            json!({
+              "data": {
+                "compatibility": {
+                  "apiVersion": "0.19.1",
+                  "supportedClientVersions": format!("={CLIENT_VERSION}"),
+                  "features": ["indexes_safe_events"]
+                }
+              }
+            })
+            .to_string(),
+        )
+        .create_async()
+        .await;
+
+    let balance_mock = server
+        .mock("POST", "/graphql")
+        .match_body(Matcher::Regex("QueryHoprBalance".into()))
         .with_status(200)
         .match_request(recorder.as_matcher())
         .with_header("content-type", "application/json")
@@ -75,7 +121,8 @@ async fn query_token_balance() -> anyhow::Result<()> {
     let balance = cli.query_token_balance(&[1u8; 20]).await?;
     assert_eq!("1234567890", balance.balance.0);
 
-    mock.assert_async().await;
+    compatibility_mock.assert_async().await;
+    balance_mock.assert_async().await;
 
     insta::assert_yaml_snapshot!(recorder.requests());
 
@@ -100,7 +147,8 @@ async fn query_compatibility() -> anyhow::Result<()> {
               "data": {
                 "compatibility": {
                   "apiVersion": "0.19.1",
-                  "supportedClientVersions": "^0.24"
+                  "supportedClientVersions": "^0.24",
+                  "features": ["indexes_safe_events"]
                 }
               }
             }
@@ -112,6 +160,7 @@ async fn query_compatibility() -> anyhow::Result<()> {
     let compatibility = cli.query_compatibility().await?;
     assert_eq!(compatibility.api_version, "0.19.1");
     assert_eq!(compatibility.supported_client_versions, "^0.24");
+    assert_eq!(compatibility.features, vec!["indexes_safe_events"]);
 
     mock.assert_async().await;
 
@@ -123,7 +172,7 @@ async fn query_compatibility() -> anyhow::Result<()> {
         requests[0].body,
         Some(Body::Json(json!({
             "operationName": "QueryCompatibility",
-            "query": "query QueryCompatibility {\n  compatibility {\n    apiVersion\n    supportedClientVersions\n  }\n}\n",
+            "query": "query QueryCompatibility {\n  compatibility {\n    apiVersion\n    supportedClientVersions\n    features\n  }\n}\n",
             "variables": null
         })))
     );
@@ -134,7 +183,11 @@ async fn query_compatibility() -> anyhow::Result<()> {
 #[tokio::test]
 async fn query_safe_returns_safes_list() -> anyhow::Result<()> {
     let mut server = mockito::Server::new_async().await;
-    let cli = BlokliClient::new(server.url().parse()?, Default::default());
+    let cfg = BlokliClientConfig {
+        auto_compatibility_check: false,
+        ..Default::default()
+    };
+    let cli = BlokliClient::new(server.url().parse()?, cfg);
 
     let mock = server
         .mock("POST", "/graphql")
@@ -174,7 +227,11 @@ async fn query_safe_returns_safes_list() -> anyhow::Result<()> {
 #[tokio::test]
 async fn query_safe_returns_empty_vec_when_safe_by_is_null() -> anyhow::Result<()> {
     let mut server = mockito::Server::new_async().await;
-    let cli = BlokliClient::new(server.url().parse()?, Default::default());
+    let cfg = BlokliClientConfig {
+        auto_compatibility_check: false,
+        ..Default::default()
+    };
+    let cli = BlokliClient::new(server.url().parse()?, cfg);
 
     let mock = server
         .mock("POST", "/graphql")

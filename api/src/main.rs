@@ -123,6 +123,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     db,
                     chain_id,
                     ContractAddresses::default(),
+                    false,
                     indexer_state,
                     transaction_executor,
                     transaction_store,

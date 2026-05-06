@@ -5,6 +5,7 @@ use std::{
 };
 
 use async_broadcast::TrySendError;
+use blokli_client::CLIENT_VERSION;
 use futures::{Stream, StreamExt};
 use futures_time::{stream::StreamExt as TimeStreamExt, time::Duration as Duration2};
 use hopr_types::{crypto::types::Hash, primitive::prelude::HoprBalance as PrimitiveHoprBalance};
@@ -124,7 +125,8 @@ impl Default for BlokliTestState {
             version: "1".to_string(),
             client_compatibility: Compatibility {
                 api_version: "1".to_string(),
-                supported_client_versions: "^0.26".to_string(),
+                supported_client_versions: format!("^{CLIENT_VERSION}"),
+                features: vec!["indexes_safe_events".to_string()],
             },
             health: "OK".to_string(),
             active_txs: Default::default(),

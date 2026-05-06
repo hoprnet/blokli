@@ -160,6 +160,8 @@ Compatibility contract for blokli-client consumers
 type Compatibility {
   "The blokli-api package version serving this schema"
   apiVersion: String!
+  "Feature flags exposed by this server, e.g. indexes_safe_events"
+  features: [String!]!
   "Semver requirement describing which blokli-client versions are supported"
   supportedClientVersions: String!
 }

@@ -362,9 +362,7 @@ impl BlokliQueryClient for BlokliClient {
 
     #[tracing::instrument(level = "debug", skip(self))]
     async fn query_compatibility(&self) -> Result<Compatibility> {
-        let resp = self.build_query(GraphQlQueries::query_compatibility())?.await?;
-
-        response_to_data(resp).map(|data| data.compatibility)
+        self.query_compatibility_uncached().await
     }
 
     #[tracing::instrument(level = "debug", skip(self))]

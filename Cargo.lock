@@ -1787,6 +1787,7 @@ dependencies = [
  "sea-orm",
  "serde",
  "serde_json",
+ "strum 0.28.0",
  "temp-env",
  "tempfile",
  "test-log",
@@ -1940,7 +1941,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-client"
-version = "0.27.0"
+version = "0.29.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1966,6 +1967,7 @@ dependencies = [
  "serde",
  "serde_json",
  "smart-default",
+ "strum 0.28.0",
  "thiserror 2.0.18",
  "tokio",
  "tracing",
@@ -2043,7 +2045,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-inspector"
-version = "0.11.0"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "blokli-client",
@@ -2092,7 +2094,7 @@ dependencies = [
 
 [[package]]
 name = "bloklid"
-version = "0.10.3"
+version = "0.10.4"
 dependencies = [
  "anyhow",
  "async-signal",
