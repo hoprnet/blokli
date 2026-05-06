@@ -194,7 +194,11 @@ impl BlokliDb {
                 .await
                 .map_err(|e| DbSqlError::Construction(format!("cannot apply index migrations: {e}")))?;
 
-            MigratorChainLogs::up(logs_db.as_ref().unwrap(), None)
+            let logs_db_ref = logs_db
+                .as_ref()
+                .ok_or_else(|| DbSqlError::Construction("missing logs database for sqlite migration".to_string()))?;
+
+            MigratorChainLogs::up(logs_db_ref, None)
                 .await
                 .map_err(|e| DbSqlError::Construction(format!("cannot apply logs migrations: {e}")))?;
         } else if is_sqlite {
