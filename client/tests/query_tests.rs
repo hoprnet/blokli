@@ -176,3 +176,69 @@ async fn query_compatibility() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn query_safe_returns_safes_list() -> anyhow::Result<()> {
+    let mut server = mockito::Server::new_async().await;
+    let cli = BlokliClient::new(server.url().parse()?, Default::default());
+
+    let mock = server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+              "data": {
+                "safeBy": {
+                  "__typename": "SafesList",
+                  "safes": [
+                    {
+                      "address": "0x1111111111111111111111111111111111111111",
+                      "chainKey": "0x3333333333333333333333333333333333333333",
+                      "owners": ["0x7777777777777777777777777777777777777777"],
+                      "moduleAddress": "0x2222222222222222222222222222222222222222",
+                      "registeredNodes": ["0x8888888888888888888888888888888888888888"],
+                      "threshold": "2"
+                    }
+                  ]
+                }
+              }
+            }"#,
+        )
+        .create_async()
+        .await;
+
+    let safes = cli.query_safe(SafeSelector::Owner([0x77; 20])).await?;
+    assert_eq!(safes.len(), 1);
+    assert_eq!(safes[0].address, "0x1111111111111111111111111111111111111111");
+    assert_eq!(safes[0].owners, vec!["0x7777777777777777777777777777777777777777"]);
+
+    mock.assert_async().await;
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_safe_returns_empty_vec_when_safe_by_is_null() -> anyhow::Result<()> {
+    let mut server = mockito::Server::new_async().await;
+    let cli = BlokliClient::new(server.url().parse()?, Default::default());
+
+    let mock = server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"{
+              "data": {
+                "safeBy": null
+              }
+            }"#,
+        )
+        .create_async()
+        .await;
+
+    let safes = cli.query_safe(SafeSelector::Owner([0x77; 20])).await?;
+    assert!(safes.is_empty());
+
+    mock.assert_async().await;
+    Ok(())
+}

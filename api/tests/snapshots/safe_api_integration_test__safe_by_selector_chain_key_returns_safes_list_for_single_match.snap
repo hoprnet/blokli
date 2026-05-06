@@ -1,0 +1,9 @@
+---
+source: api/tests/safe_api_integration_test.rs
+assertion_line: 329
+expression: response
+---
+data:
+  safeBy:
+    safes:
+      - address: "0x1111111111111111111111111111111111111111"

@@ -201,20 +201,22 @@ impl BlokliTestState {
         self.safe_redeem_stats.get_mut(&hex::encode(chain_address))
     }
 
-    /// Convenience method to return a reference to an [`Safe`] with the given owner's [`ChainAddress`].
-    pub fn get_safe_by_owner(&self, owner: &ChainAddress) -> Option<&Safe> {
+    /// Convenience method to return references to [`Safe`]s with the given owner's [`ChainAddress`].
+    pub fn get_safe_by_owner(&self, owner: &ChainAddress) -> Vec<&Safe> {
         let owner_hex = hex::encode(owner);
         self.deployed_safes
             .values()
-            .find(|safe| Self::safe_matches_owner(safe, &owner_hex))
+            .filter(|safe| Self::safe_matches_owner(safe, &owner_hex))
+            .collect()
     }
 
-    /// Convenience method to return a mutable reference to an [`Safe`] with the given owner's [`ChainAddress`].
-    pub fn get_safe_by_owner_mut(&mut self, owner: &ChainAddress) -> Option<&mut Safe> {
+    /// Convenience method to return mutable references to [`Safe`]s with the given owner's [`ChainAddress`].
+    pub fn get_safe_by_owner_mut(&mut self, owner: &ChainAddress) -> Vec<&mut Safe> {
         let owner_hex = hex::encode(owner);
         self.deployed_safes
             .values_mut()
-            .find(|safe| Self::safe_matches_owner(safe, &owner_hex))
+            .filter(|safe| Self::safe_matches_owner(safe, &owner_hex))
+            .collect()
     }
 }
 
@@ -569,20 +571,27 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
         }
     }
 
-    async fn query_safe(&self, selector: SafeSelector) -> Result<Option<Safe>> {
+    async fn query_safe(&self, selector: SafeSelector) -> Result<Vec<Safe>> {
         let state = self.state.read();
         match selector {
-            SafeSelector::SafeAddress(addr) => Ok(state.deployed_safes.get(&hex::encode(addr)).cloned()),
+            SafeSelector::SafeAddress(addr) => Ok(state
+                .deployed_safes
+                .get(&hex::encode(addr))
+                .cloned()
+                .into_iter()
+                .collect()),
             SafeSelector::Owner(owner_address) | SafeSelector::ChainKey(owner_address) => Ok(state
                 .deployed_safes
                 .values()
-                .find(|s| BlokliTestState::safe_matches_owner(s, &hex::encode(owner_address)))
-                .cloned()),
+                .filter(|s| BlokliTestState::safe_matches_owner(s, &hex::encode(owner_address)))
+                .cloned()
+                .collect()),
             SafeSelector::RegisteredNode(node_address) => Ok(state
                 .deployed_safes
                 .values()
-                .find(|s| s.registered_nodes.contains(&hex::encode(node_address)))
-                .cloned()),
+                .filter(|s| s.registered_nodes.contains(&hex::encode(node_address)))
+                .cloned()
+                .collect()),
         }
     }
 
