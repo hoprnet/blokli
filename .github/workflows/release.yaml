@@ -14,7 +14,7 @@ on:
           - minor
           - major
 concurrency:
-  group: release-bloklid
+  group: release
   cancel-in-progress: false
 jobs:
   build-binaries:

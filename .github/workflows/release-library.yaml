@@ -14,7 +14,7 @@ on:
           - minor
           - major
 concurrency:
-  group: release-blokli-client
+  group: release
   cancel-in-progress: false
 jobs:
   build-library:
