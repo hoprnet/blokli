@@ -18,7 +18,7 @@ use hopr_types::{
     internal::channels::{ChannelBuilder, ChannelDirection, ChannelEntry, ChannelStatus},
     primitive::{
         prelude::{Address, HoprBalance},
-        traits::{IntoEndian},
+        traits::IntoEndian,
     },
 };
 use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
