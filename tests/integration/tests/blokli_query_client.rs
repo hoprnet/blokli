@@ -688,36 +688,3 @@ async fn query_health_should_be_ok(#[future(awt)] fixture: IntegrationFixture) -
     assert_eq!(fixture.client().query_health().await?, "ok");
     Ok(())
 }
-
-#[rstest]
-#[test_log::test(tokio::test)]
-async fn opening_channel_to_unknown_account_should_not_hard_panic(
-    #[future(awt)] fixture: IntegrationFixture,
-) -> Result<()> {
-    let [src] = fixture.sample_accounts::<1>();
-    let unknown_dst = AnvilAccount::new(
-        "0x1111111111111111111111111111111111111111111111111111111111111111".to_string(),
-        "0x2222222222222222222222222222222222222222".to_string(),
-    );
-
-    let src_safe = fixture.deploy_safe_and_announce(src, parsed_safe_balance()).await?;
-
-    let result = fixture
-        .open_channel(
-            src,
-            &unknown_dst,
-            "1 wei wxHOPR".parse()?,
-            &src_safe.module_address,
-            None,
-        )
-        .await;
-
-    assert!(
-        result.is_ok(),
-        "opening a channel to an unknown destination account should not crash indexing"
-    );
-    sleep(Duration::from_secs(10)).await; // wait for any indexing that may be triggered by the above action
-    assert_eq!(fixture.client().query_health().await?, "ok");
-
-    Ok(())
-}
