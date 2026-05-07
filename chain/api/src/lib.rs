@@ -14,7 +14,6 @@ use blokli_chain_rpc::{
     HoprIndexerRpcOperations, HoprRpcOperations,
     client::DefaultRetryPolicy,
     rpc::{RpcOperations, RpcOperationsConfig},
-    transport::ReqwestClient,
 };
 use blokli_chain_types::{ChainConfig, ContractAddresses};
 use blokli_db::BlokliDbAllOperations;
@@ -22,10 +21,7 @@ use futures::future::AbortHandle;
 use hopr_async_runtime::spawn_as_abortable;
 use hopr_bindings::exports::alloy::{
     rpc::client::ClientBuilder,
-    transports::{
-        http::{Http, ReqwestTransport},
-        layers::RetryBackoffLayer,
-    },
+    transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
 pub use hopr_internal_types::channels::ChannelEntry;
 use hopr_internal_types::{
@@ -49,7 +45,7 @@ use crate::{
 
 pub type DefaultHttpRequestor = blokli_chain_rpc::transport::ReqwestClient;
 
-fn build_transport_client(url: &str) -> Result<Http<ReqwestClient>> {
+fn build_transport_client(url: &str) -> Result<ReqwestTransport> {
     let parsed_url = url::Url::parse(url).unwrap_or_else(|_| panic!("failed to parse URL: {url}"));
     Ok(ReqwestTransport::new(parsed_url))
 }
@@ -86,12 +82,6 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         indexer_cfg: IndexerConfig,
         rpc_url: String,
     ) -> Result<Self> {
-        // TODO: extract this from the global config type
-        let mut rpc_http_config = blokli_chain_rpc::HttpPostRequestorConfig::default();
-        if let Some(max_rpc_req) = chain_config.max_requests_per_sec {
-            rpc_http_config.max_requests_per_sec = Some(max_rpc_req); // override the default if set
-        }
-
         // TODO(#7140): replace this DefaultRetryPolicy with a custom one that computes backoff with the number of
         // retries
         let rpc_http_retry_policy = DefaultRetryPolicy::default();
