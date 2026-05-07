@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use blokli_db_entity::errors::DbEntityError;
-use hopr_types::crypto::types::Hash;
+use hopr_types::{crypto::types::Hash, primitive::prelude::Address};
 use sea_orm::TransactionError;
 use thiserror::Error;
 
