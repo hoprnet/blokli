@@ -1,5 +1,5 @@
 ---
-name: Close release
+name: Close release Bloklid
 on:
   workflow_dispatch:
     inputs:
@@ -18,26 +18,20 @@ concurrency:
   cancel-in-progress: false
 jobs:
   build-binaries:
-    name: Binary ${{ matrix.binary }} ${{ matrix.architecture }}
+    name: Binary ${{ matrix.architecture }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - architecture: x86_64-linux
-            runner: depot-ubuntu-22.04-4
-            build_command: nix build -L .#binary-blokli-x86_64-linux
-            build_file: bloklid/Cargo.toml
-            binary: bloklid
+            runner: depot-ubuntu-24.04-4
+            build_command: nix build -L .#binary-bloklid-x86_64-linux
           - architecture: aarch64-linux
-            runner: depot-ubuntu-22.04-arm-4
-            build_command: nix build -L .#binary-blokli-aarch64-linux
-            build_file: bloklid/Cargo.toml
-            binary: bloklid
+            runner: depot-ubuntu-24.04-arm-4
+            build_command: nix build -L .#binary-bloklid-aarch64-linux
           - architecture: aarch64-darwin
             runner: depot-macos-15
-            build_command: nix build -L .#binary-blokli-aarch64-darwin
-            build_file: bloklid/Cargo.toml
-            binary: bloklid
+            build_command: nix build -L .#binary-bloklid-aarch64-darwin
     uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v2
     permissions:
       contents: read
@@ -46,9 +40,9 @@ jobs:
       version_type: release
       architecture: ${{ matrix.architecture }}
       cachix_cache_name: blokli
-      build_file: ${{ matrix.build_file }}
+      build_file: bloklid/Cargo.toml
       build_command: ${{ matrix.build_command }}
-      binary: ${{ matrix.binary }}
+      binary: bloklid
       runner: ${{ matrix.runner }}
     secrets:
       gcp_service_account: ${{ secrets.GCP_SA_GITHUB_RUNNER }}
@@ -68,14 +62,14 @@ jobs:
       build_matrix: >-
         [
           {
-            "runner": "depot-ubuntu-22.04-4",
+            "runner": "depot-ubuntu-24.04-4",
             "architecture": "x86_64-linux",
-            "build_command": "nix build -L .#docker-blokli-x86_64-linux"
+            "build_command": "nix build -L .#docker-bloklid-x86_64-linux"
           },
           {
-            "runner": "depot-ubuntu-22.04-arm-4",
+            "runner": "depot-ubuntu-24.04-arm-4",
             "architecture": "aarch64-linux",
-            "build_command": "nix build -L .#docker-blokli-aarch64-linux"
+            "build_command": "nix build -L .#docker-bloklid-aarch64-linux"
           }
         ]
       cachix_cache_name: blokli
@@ -89,37 +83,23 @@ jobs:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
       docker_hub_token: ${{ secrets.DOCKER_HUB_TOKEN }}
-  publish:
-    name: Publish
-    needs: [build-binaries]
-    uses: hoprnet/hopr-workflows/.github/workflows/publish-crates.yaml@e4fadaa70234b9d734d5c51b6900602e55492ce2 # workflow-publish-crates-v3
-    permissions:
-      contents: read
-    with:
-      source_branch: ${{ github.ref_name }}
-      package: blokli-client
-      version_type: release
-      runner: self-hosted-hoprnet-bigger
-    secrets:
-      cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      cargo_registry_token: ${{ secrets.CARGO_REGISTRY_TOKEN }}
   release:
     name: Close release
     needs:
       - build-binaries
       - build-docker
-      - publish
-    runs-on: depot-ubuntu-22.04-2
+    runs-on: depot-ubuntu-24.04-2
     permissions:
       contents: write
     steps:
       - name: Release version
-        uses: hoprnet/hopr-workflows/actions/release-version@release-version-v3
+        uses: hoprnet/hopr-workflows/actions/release-version@release-version-v4
         with:
           source_branch: ${{ github.ref_name }}
           file: bloklid/Cargo.toml
           release_type: ${{ inputs.release_type }}
           cachix_cache_name: blokli
+          release_tag_prefix: bloklid-v
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
           zulip_api_key: ${{ secrets.ZULIP_API_KEY }}
           zulip_email: ${{ secrets.ZULIP_EMAIL }}
@@ -130,7 +110,7 @@ jobs:
           github_token: ${{ secrets.GH_RUNNER_TOKEN }}
   deploy-staging:
     name: Deploy Gnosis Staging
-    runs-on: depot-ubuntu-22.04-2
+    runs-on: depot-ubuntu-24.04-2
     needs:
       - build-binaries
       - build-docker

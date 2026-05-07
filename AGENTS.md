@@ -166,7 +166,7 @@ on-chain confirmation for permanent records.
 Full-stack tests against real blockchain (Anvil) + PostgreSQL in Docker.
 
 ```bash
-nix build .#docker-blokli-dev   # Build Docker image first
+nix build .#docker-bloklid-x86_64-linux-dev   # Build Docker image first
 just test-indexer                # Run integration tests
 ```
 
@@ -222,11 +222,11 @@ Debug: container logs saved to `/tmp/blokli-integration/<timestamp>/`, use `RUST
 
 ## Docker Images
 
-Three variants: `docker-blokli` (production), `docker-blokli-dev` (development), `docker-blokli-profile` (with debug symbols).
+Three variants: `docker-bloklid` (production), `docker-bloklid-dev` (development).
 
 ```bash
-nix build -L .#docker-blokli-x86_64-linux    # amd64
-nix build -L .#docker-blokli-aarch64-linux   # arm64 (local only, CI disabled)
+nix build -L .#docker-bloklid-x86_64-linux    # amd64
+nix build -L .#docker-bloklid-aarch64-linux   # arm64 (local only, CI disabled)
 ```
 
 CI builds on every PR commit and merge. Trivy scans for vulnerabilities. Version formats: `version-commit.hash`, `version-pr.number`,
