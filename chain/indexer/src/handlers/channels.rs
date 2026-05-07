@@ -881,6 +881,41 @@ mod tests {
         Ok(())
     }
 
+    #[test_log::test(tokio::test)]
+    async fn test_on_channel_opened_with_unknown_destination_account_is_ignored() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let rpc_operations = MockIndexerRpcOperations::new();
+        let clonable_rpc_operations = ClonableMockOperations {
+            inner: Arc::new(rpc_operations),
+        };
+        let handlers = init_handlers(clonable_rpc_operations, db.clone());
+
+        db.upsert_account(None, 1, *SELF_CHAIN_ADDRESS, *SELF_PRIV_KEY.public(), None, 1, 0, 0)
+            .await?;
+
+        let unknown_destination: Address = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".parse()?;
+        let channel_id = generate_channel_id(&SELF_CHAIN_ADDRESS, &unknown_destination);
+        let channel_state = encode_channel_state(HoprBalance::zero(), 0, 0, 1, ChannelStatus::Open);
+
+        let event = ChannelOpened {
+            channelId: FixedBytes::from_slice(channel_id.as_ref()),
+            source: AlloyAddress::from_hopr_address(*SELF_CHAIN_ADDRESS),
+            destination: AlloyAddress::from_hopr_address(unknown_destination),
+            channel: channel_state,
+        };
+
+        let channel_opened_log = event_to_log(event, handlers.addresses.channels);
+
+        db.begin_transaction()
+            .await?
+            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, channel_opened_log, true).await }))
+            .await?;
+
+        assert!(db.get_channel_by_id(None, &channel_id).await?.is_none());
+
+        Ok(())
+    }
+
     #[tokio::test]
     async fn test_on_channel_reopened() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
