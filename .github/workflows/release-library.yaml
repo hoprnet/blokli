@@ -28,7 +28,6 @@ jobs:
       architecture: x86_64-linux
       cachix_cache_name: blokli
       build_file: client/Cargo.toml
-      build_command: nix build -L .#lib-blokli-client-x86_64-linux
       package_name: blokli-client
       runner: depot-ubuntu-24.04-4
     secrets:

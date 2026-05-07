@@ -6,6 +6,7 @@ use blokli_client::api::{
     types::{ChannelStatus, TransactionStatus},
 };
 use blokli_integration_tests::{
+    anvil::AnvilAccount,
     constants::parsed_safe_balance,
     fixtures::{IntegrationFixture, integration_fixture as fixture, poll_until},
 };

@@ -56,13 +56,10 @@ jobs:
         include:
           - architecture: x86_64-linux
             runner: depot-ubuntu-24.04-4
-            build_command: nix build -L .#lib-blokli-client-x86_64-linux
           - architecture: aarch64-linux
             runner: depot-ubuntu-24.04-arm-4
-            build_command: nix build -L .#lib-blokli-client-aarch64-linux
           - architecture: aarch64-darwin
             runner: depot-macos-15
-            build_command: nix build -L .#lib-blokli-client-aarch64-darwin
     uses: hoprnet/hopr-workflows/.github/workflows/build-library.yaml@build-library-v2
     permissions:
       contents: read
@@ -72,7 +69,6 @@ jobs:
       architecture: ${{ matrix.architecture }}
       cachix_cache_name: blokli
       build_file: client/Cargo.toml
-      build_command: ${{ matrix.build_command }}
       package_name: blokli-client
       runner: ${{ matrix.runner }}
     secrets:
