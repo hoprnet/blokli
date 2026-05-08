@@ -283,11 +283,14 @@ impl BlokliDbAccountOperations for BlokliDb {
                         Err(DbErr::RecordNotInserted) => {
                             account::Entity::find()
                                 .filter(account::Column::ChainKey.eq(chain_key.as_ref().to_vec()))
+                                .filter(account::Column::PacketKey.eq(hex::encode(packet_key.as_ref())))
                                 .one(tx.as_ref())
                                 .await?
                                 .ok_or_else(|| {
                                     DbSqlError::LogicalError(
-                                        "Account insert was skipped but account record was not found".to_string(),
+                                        "Account insert was skipped but account record was not found for chain_key \
+                                         and packet_key"
+                                            .to_string(),
                                     )
                                 })?
                                 .id
@@ -1657,6 +1660,58 @@ mod tests {
         let history = db.get_account_history(None, chain_key).await?;
         assert_eq!(2, history.len(), "both state records should be present");
         assert_eq!(Some(safe_addr_2), history.last().and_then(|entry| entry.safe_address));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upsert_account_conflict_lookup_uses_chain_and_packet_key() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let chain_key = ChainKeypair::random().public().to_address();
+        let packet_key_1 = *OffchainKeypair::random().public();
+        let packet_key_2 = *OffchainKeypair::random().public();
+        let safe_addr_1 = Address::from(hopr_types::crypto_random::random_bytes());
+        let safe_addr_2 = Address::from(hopr_types::crypto_random::random_bytes());
+
+        db.upsert_account(None, 1, chain_key, packet_key_1, Some(safe_addr_1), 100, 0, 0)
+            .await?;
+        db.upsert_account(None, 2, chain_key, packet_key_2, Some(safe_addr_2), 101, 0, 0)
+            .await?;
+
+        let initial_1 = db
+            .get_account(None, packet_key_1)
+            .await?
+            .expect("account for packet key 1 should exist");
+        let initial_2 = db
+            .get_account(None, packet_key_2)
+            .await?
+            .expect("account for packet key 2 should exist");
+
+        // Trigger RecordNotInserted path for packet_key_2 by replaying same identity
+        db.upsert_account(None, 999, chain_key, packet_key_2, Some(safe_addr_2), 200, 0, 0)
+            .await?;
+
+        let account_1 = db
+            .get_account(None, packet_key_1)
+            .await?
+            .expect("account for packet key 1 should exist");
+        let account_2 = db
+            .get_account(None, packet_key_2)
+            .await?
+            .expect("account for packet key 2 should exist");
+
+        assert_eq!(
+            initial_1.key_id, account_1.key_id,
+            "packet_key_1 identity must remain unchanged"
+        );
+        assert_eq!(
+            initial_2.key_id, account_2.key_id,
+            "packet_key_2 identity must remain unchanged"
+        );
+
+        let history_2 = db.get_account_history(None, packet_key_2).await?;
+        assert_eq!(2, history_2.len(), "packet_key_2 should have its own two state records");
 
         Ok(())
     }
