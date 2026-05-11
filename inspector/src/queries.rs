@@ -43,6 +43,9 @@ pub(crate) enum QueryTarget {
         /// Safe owner address.
         #[arg(short, long, value_parser = clap::value_parser!(Address), group = "selector")]
         owner: Option<Address>,
+        /// Safe chain key address.
+        #[arg(long, value_parser = clap::value_parser!(Address), group = "selector")]
+        chain_key: Option<Address>,
         /// Registered node address.
         #[arg(short, long, value_parser = clap::value_parser!(Address), group = "selector")]
         registered_node: Option<Address>,
@@ -92,16 +95,21 @@ impl QueryTarget {
             QueryTarget::Safe {
                 address,
                 owner,
+                chain_key,
                 registered_node,
             } => format.serialize(
                 client
-                    .query_safe(match (address, owner, registered_node) {
-                        (Some(address), None, None) => SafeSelector::SafeAddress(address.into()),
-                        (None, Some(owner), None) => SafeSelector::Owner(owner.into()),
-                        (None, None, Some(registered_node)) => SafeSelector::RegisteredNode(registered_node.into()),
+                    .query_safe(match (address, owner, chain_key, registered_node) {
+                        (Some(address), None, None, None) => SafeSelector::SafeAddress(address.into()),
+                        (None, Some(owner), None, None) => SafeSelector::Owner(owner.into()),
+                        (None, None, Some(chain_key), None) => SafeSelector::ChainKey(chain_key.into()),
+                        (None, None, None, Some(registered_node)) => {
+                            SafeSelector::RegisteredNode(registered_node.into())
+                        }
                         _ => {
                             return Err(anyhow::anyhow!(
-                                "Exactly one of --address, --owner or --registered-node must be specified."
+                                "Exactly one of --address, --owner, --chain-key or --registered-node must be \
+                                 specified."
                             ));
                         }
                     })
