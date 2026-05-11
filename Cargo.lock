@@ -1752,7 +1752,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api"
-version = "0.22.0"
+version = "0.22.1"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -2005,7 +2005,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db-entity"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
  "blokli-db-migration",

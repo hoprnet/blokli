@@ -240,7 +240,7 @@ async fn test_safe_by_chain_key_query() -> anyhow::Result<()> {
             }}
         }}
         "#,
-        owner_address.to_hex()
+        chain_key.to_hex()
     );
 
     let response = schema.execute(query).await;
@@ -285,7 +285,7 @@ async fn test_safe_by_chain_key_query_returns_single_safe_for_deprecated_field()
             }}
         }}
         "#,
-        owner.to_hex()
+        chain_key_0.to_hex()
     );
 
     let response = schema.execute(query).await;
@@ -323,7 +323,7 @@ async fn test_safe_by_selector_chain_key_returns_safes_list_for_single_match() -
             }}
         }}
         "#,
-        owner.to_hex()
+        chain_key.to_hex()
     );
 
     let response = schema.execute(query).await;
@@ -539,6 +539,54 @@ async fn test_safe_by_registered_node_query() -> anyhow::Result<()> {
         }}
         "#,
         registered_node.to_hex()
+    );
+
+    let response = schema.execute(query).await;
+    insta::assert_yaml_snapshot!(response);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_safe_by_registered_node_invalid_address() -> anyhow::Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+    let schema = build_test_schema(&db);
+
+    let query = r#"
+        query {
+            safeByRegisteredNode(chainKey: "invalid_key") {
+                ... on InvalidAddressError {
+                    code
+                    message
+                    address
+                }
+            }
+        }
+    "#;
+
+    let response = schema.execute(query).await;
+    insta::assert_yaml_snapshot!(response);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_safe_by_registered_node_not_found() -> anyhow::Result<()> {
+    let db = BlokliDb::new_in_memory().await?;
+    let schema = build_test_schema(&db);
+
+    let nonexistent_node = Address::new(&[0x99; 20]).to_hex();
+    let query = format!(
+        r#"
+        query {{
+            safeByRegisteredNode(chainKey: "{}") {{
+                ... on Safe {{
+                    address
+                }}
+            }}
+        }}
+        "#,
+        nonexistent_node
     );
 
     let response = schema.execute(query).await;

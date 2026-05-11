@@ -80,6 +80,21 @@ where
         .collect())
 }
 
+pub async fn fetch_safes_by_chain_key<C>(conn: &C, chain_key: &[u8]) -> Result<Vec<CurrentSafe>, sea_orm::DbErr>
+where
+    C: ConnectionTrait,
+{
+    let thresholds_by_address = fetch_thresholds_by_safe_address(conn).await?;
+    Ok(safe_contract_current::Entity::find()
+        .filter(safe_contract_current::Column::ChainKey.eq(chain_key.to_vec()))
+        .order_by_asc(safe_contract_current::Column::Address)
+        .all(conn)
+        .await?
+        .into_iter()
+        .map(|safe| current_safe_from_model(safe, &thresholds_by_address))
+        .collect())
+}
+
 pub async fn fetch_safe_addresses<C>(conn: &C, owner_address: Option<&[u8]>) -> Result<Vec<Vec<u8>>, sea_orm::DbErr>
 where
     C: ConnectionTrait,

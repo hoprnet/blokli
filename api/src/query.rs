@@ -22,7 +22,7 @@ use blokli_db_entity::{
         safe_aggregation::{
             CurrentSafe, fetch_all_current_safes, fetch_safe_addresses as fetch_safe_addresses_db,
             fetch_safe_by_address as fetch_safe_by_address_db, fetch_safe_owners, fetch_safe_owners_for_safes,
-            fetch_safes_by_owner as fetch_safes_by_owner_db,
+            fetch_safes_by_chain_key as fetch_safes_by_chain_key_db, fetch_safes_by_owner as fetch_safes_by_owner_db,
         },
     },
     hopr_node_safe_registration,
@@ -1012,7 +1012,7 @@ impl QueryRoot {
                 }
             }
 
-            SafeSelectorInput::Owner | SafeSelectorInput::ChainKey => {
+            SafeSelectorInput::Owner => {
                 let owner_address = match parse_eth_address(address) {
                     Ok(addr) => addr.as_ref().to_vec(),
                     Err(e) => return Ok(Some(SafeByResult::InvalidAddress(e))),
@@ -1060,6 +1060,59 @@ impl QueryRoot {
                     }
                     Err(e) => Ok(Some(SafeByResult::QueryFailed(errors::query_failed(
                         "fetch safe by owner",
+                        e,
+                    )))),
+                }
+            }
+
+            SafeSelectorInput::ChainKey => {
+                let chain_key = match parse_eth_address(address) {
+                    Ok(addr) => addr.as_ref().to_vec(),
+                    Err(e) => return Ok(Some(SafeByResult::InvalidAddress(e))),
+                };
+
+                match fetch_safes_by_chain_key_db(db, &chain_key).await {
+                    Ok(safes) if safes.is_empty() => Ok(None),
+                    Ok(safes) => {
+                        let safe_addresses = safes.iter().map(|current| current.address.clone()).collect::<Vec<_>>();
+                        let owners_by_safe = match owners_by_safe(db, &safe_addresses).await {
+                            Ok(owners_by_safe) => owners_by_safe,
+                            Err(e) => return Ok(Some(SafeByResult::QueryFailed(e))),
+                        };
+                        let registered_nodes_by_safe = registered_nodes_by_safe(db, &safe_addresses).await;
+                        let mut safe_list = Vec::with_capacity(safes.len());
+                        let mut owners_by_safe_map = HashMap::with_capacity(safes.len());
+                        for safe_address in &safe_addresses {
+                            if let Some(owners) = owners_by_safe.get(safe_address) {
+                                owners_by_safe_map.insert(safe_address.clone(), owners.clone());
+                            }
+                        }
+                        let mut registered_nodes_by_safe_map = HashMap::with_capacity(safes.len());
+                        for safe_address in &safe_addresses {
+                            if let Some(registered_nodes) = registered_nodes_by_safe.get(safe_address) {
+                                registered_nodes_by_safe_map.insert(safe_address.clone(), registered_nodes.clone());
+                            }
+                        }
+                        for current in safes {
+                            let safe_address = current.address.clone();
+                            let owners = owners_by_safe_map.remove(&safe_address).unwrap_or_default();
+                            let registered_nodes =
+                                registered_nodes_by_safe_map.remove(&safe_address).unwrap_or_default();
+                            let safe = match safe_from_current_row(current, registered_nodes, owners) {
+                                Ok(safe) => safe,
+                                Err(e) => {
+                                    return Ok(Some(SafeByResult::QueryFailed(errors::invalid_db_data(
+                                        "safe addresses",
+                                        &e,
+                                    ))));
+                                }
+                            };
+                            safe_list.push(safe);
+                        }
+                        Ok(Some(SafeByResult::Safes(SafesList { safes: safe_list })))
+                    }
+                    Err(e) => Ok(Some(SafeByResult::QueryFailed(errors::query_failed(
+                        "fetch safe by chain key",
                         e,
                     )))),
                 }
