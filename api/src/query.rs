@@ -261,26 +261,18 @@ fn safe_from_current_row(
 async fn registered_nodes_by_safe(
     db: &DatabaseConnection,
     safe_addresses: &[Vec<u8>],
-) -> HashMap<Vec<u8>, Vec<String>> {
-    match fetch_registered_nodes_for_safes(db, safe_addresses).await {
-        Ok(by_safe) => {
-            let mut registered_nodes_by_safe = HashMap::with_capacity(safe_addresses.len());
-            for (safe_address, nodes) in by_safe {
-                registered_nodes_by_safe.insert(
-                    safe_address,
-                    nodes.into_iter().map(|node_address| node_address.to_hex()).collect(),
-                );
-            }
-            registered_nodes_by_safe
-        }
-        Err(e) => {
-            warn!(
-                error = %e,
-                "Failed to batch-fetch registered nodes for safes, returning empty lists"
-            );
-            HashMap::with_capacity(safe_addresses.len())
-        }
-    }
+) -> std::result::Result<HashMap<Vec<u8>, Vec<String>>, QueryFailedError> {
+    Ok(fetch_registered_nodes_for_safes(db, safe_addresses)
+        .await
+        .map_err(|e| errors::query_failed("fetch registered nodes for list query", e))?
+        .into_iter()
+        .map(|(safe_address, nodes)| {
+            (
+                safe_address,
+                nodes.into_iter().map(|node_address| node_address.to_hex()).collect(),
+            )
+        })
+        .collect())
 }
 
 pub(crate) async fn owners_for_safe(
@@ -316,7 +308,7 @@ async fn build_safes_list_from_current_rows(
         .map(|current| current.address.clone())
         .collect::<Vec<_>>();
     let owners_by_safe = owners_by_safe(db, &safe_addresses).await?;
-    let registered_nodes_by_safe = registered_nodes_by_safe(db, &safe_addresses).await;
+    let registered_nodes_by_safe = registered_nodes_by_safe(db, &safe_addresses).await?;
     let safes = current_rows
         .into_iter()
         .map(|current| {
