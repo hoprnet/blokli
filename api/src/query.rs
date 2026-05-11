@@ -1804,7 +1804,8 @@ mod tests {
         safe_history::{BlokliDbSafeHistoryOperations, SafeActivityKind},
     };
     use blokli_db_entity::conversions::safe_aggregation::{
-        CurrentSafe, fetch_safe_addresses, fetch_safe_threshold_by_address, fetch_safes_by_owner,
+        CurrentSafe, fetch_safe_addresses, fetch_safe_threshold_by_address, fetch_safes_by_chain_key,
+        fetch_safes_by_owner,
     };
     use hopr_types::{
         crypto::types::Hash,
@@ -2129,6 +2130,69 @@ mod tests {
         assert_eq!(
             safe_two_result["registeredNodes"].as_array(),
             Some(&vec![serde_json::Value::String(node_two_hex)])
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_safe_by_chain_key_uses_chain_key_lookup() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let safe = random_address();
+        let module = random_address();
+        let chain_key = random_address();
+        let owner = random_address();
+        let node = random_address();
+
+        db.create_safe_contract(None, safe, module, chain_key, 100, 0, 0)
+            .await?;
+        db.upsert_safe_owner_state(None, safe, owner, true, 101, 0, 0).await?;
+        db.register_node_to_safe(None, safe, node, 102, 0, 0).await?;
+
+        let conn = db.conn(TargetDb::Index);
+        let fetched = fetch_safes_by_chain_key(conn, chain_key.as_ref()).await?;
+        assert_eq!(fetched.len(), 1, "chain-key lookup should match one safe");
+        assert_eq!(fetched[0].address, safe.as_ref().to_vec());
+
+        let schema = build_test_schema(&db);
+        let query = format!(
+            r#"
+            query {{
+              safeBy(selector: CHAIN_KEY, address: "{}") {{
+                ... on SafesList {{
+                  safes {{
+                    address
+                    chainKey
+                    owners
+                    registeredNodes
+                  }}
+                }}
+              }}
+            }}
+            "#,
+            chain_key.to_hex()
+        );
+
+        let response = schema.execute(query).await;
+        let body = response.data.into_json()?;
+        let safes = body["safeBy"]["safes"]
+            .as_array()
+            .ok_or_else(|| anyhow!("expected safeBy.safes array"))?;
+        assert_eq!(safes.len(), 1);
+
+        let safe_item = &safes[0];
+        assert_eq!(safe_item["address"], safe.to_hex());
+        assert_eq!(safe_item["chainKey"], chain_key.to_hex());
+        assert!(
+            safe_item["owners"].as_array().is_some_and(|owners| owners
+                .iter()
+                .any(|value| value == &serde_json::Value::String(owner.to_hex()))),
+            "owners should include current owner"
+        );
+        assert_eq!(
+            safe_item["registeredNodes"].as_array(),
+            Some(&vec![serde_json::Value::String(node.to_hex())])
         );
 
         Ok(())
