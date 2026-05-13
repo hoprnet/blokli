@@ -94,7 +94,7 @@ pub struct ChainConfig {
 /// Holds addresses of all smart contracts.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ContractAddresses {
-    /// Token contract
+    /// wxHOPR token contract
     pub token: Address,
     /// Channels contract
     pub channels: Address,
@@ -112,6 +112,8 @@ pub struct ContractAddresses {
     pub winning_probability_oracle: Address,
     /// Stake factory contract
     pub node_stake_factory: Address,
+    /// xHOPR token contract
+    pub xhopr_token: Address,
 }
 
 /// Holds instances to contracts.
@@ -169,7 +171,7 @@ where
             node_stake_factory: HoprNodeStakeFactoryInstance::new(
                 AlloyAddress::from_hopr_address(contract_addresses.node_stake_factory),
                 provider.clone(),
-            ),
+            )
         }
     }
 
@@ -275,6 +277,7 @@ where
             ticket_price_oracle: instances.ticket_price_oracle.address().to_hopr_address(),
             winning_probability_oracle: instances.winning_probability_oracle.address().to_hopr_address(),
             node_stake_factory: instances.node_stake_factory.address().to_hopr_address(),
+            xhopr_token: Address::default(),
         }
     }
 }

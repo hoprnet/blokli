@@ -62,7 +62,7 @@ async fn test_client_should_use_fallback_for_eip1559_tx() -> anyhow::Result<()> 
             EIP1559_FEE_ESTIMATION_DEFAULT_MAX_FEE_GNOSIS,
             EIP1559_FEE_ESTIMATION_DEFAULT_PRIORITY_FEE_GNOSIS,
         ))
-        .filler(GasFiller)
+        .filler(GasFiller::default())
         .connect_client(rpc_client);
 
     let tx = TransactionRequest::default()
@@ -110,7 +110,7 @@ async fn test_client_should_call_on_gas_oracle_for_legacy_tx() -> anyhow::Result
             EIP1559_FEE_ESTIMATION_DEFAULT_MAX_FEE_GNOSIS,
             EIP1559_FEE_ESTIMATION_DEFAULT_PRIORITY_FEE_GNOSIS,
         ))
-        .filler(GasFiller)
+        .filler(GasFiller::default())
         .filler(BlobGasFiller::default())
         .connect_client(rpc_client);
 
@@ -120,7 +120,7 @@ async fn test_client_should_call_on_gas_oracle_for_legacy_tx() -> anyhow::Result
         .with_value(U256::from(100))
         .with_gas_price(1000000000);
 
-    let receipt = provider.send_transaction(tx).await?.get_receipt().await?;
+    let receipt: hopr_bindings::exports::alloy::rpc::types::TransactionReceipt = provider.send_transaction(tx).await?.get_receipt().await?;
 
     m.assert();
     assert_eq!(receipt.gas_used, 21000);

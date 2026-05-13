@@ -2,21 +2,20 @@ use std::{error::Error, fs, path::PathBuf, str::FromStr};
 
 use blokli_chain_types::ContractAddresses as BlokliContractAddresses;
 use clap::Parser;
-use hopli_lib::utils::{ContractInstances, h2a};
+use hopli_lib::utils::{a2h, h2a};
 use hopr_bindings::{
-    exports::alloy::{
+    config::ContractInstances, exports::alloy::{
         primitives::{U256, aliases::U56},
         providers::ProviderBuilder,
         rpc::client::ClientBuilder,
         signers::local::PrivateKeySigner,
-    },
-    hopr_node_stake_factory::HoprNodeStakeFactory::HoprNetwork,
+    }, hopr_node_stake_factory::HoprNodeStakeFactory::HoprNetwork
 };
 use hopr_types::{
     chain::ContractAddresses,
     crypto::keypairs::{ChainKeypair, Keypair},
     internal::prelude::WinningProbability,
-    primitive::{prelude::HoprBalance, traits::IntoEndian},
+    primitive::{prelude::HoprBalance, primitives::Address, traits::IntoEndian},
 };
 use serde::Serialize;
 use url::Url;
@@ -80,7 +79,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let rpc_client = ClientBuilder::default().http(rpc_url);
     let provider = ProviderBuilder::new().wallet(signer).connect_client(rpc_client);
 
-    let instances = ContractInstances::deploy_for_testing(provider, &signer_chain_key).await?;
+    let instances = ContractInstances::deploy_for_testing(provider, a2h(signer_chain_key.public().to_address())).await?;
     let contracts = ContractAddresses::from(&instances);
     let output = ContractsOutput {
         contracts: BlokliContractAddresses {
@@ -93,6 +92,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             ticket_price_oracle: h2a(contracts.ticket_price_oracle),
             winning_probability_oracle: h2a(contracts.winning_probability_oracle),
             node_stake_factory: h2a(contracts.node_stake_factory),
+            xhopr_token: Address::default(), // xHOPR is not deployed by this script, so we set it to zero address
         },
     };
     let toml_output = toml::to_string(&output)?;
