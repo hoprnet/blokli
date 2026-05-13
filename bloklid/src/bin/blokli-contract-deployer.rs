@@ -31,7 +31,7 @@ const DEFAULT_TICKET_PRICE_WEI: &str = "100";
 /// `cast call 0x5136Bac09C78af89bDA56F5086A3F3E2Ee4EAfCa "currentWinProb()(uint56)" \
 ///   --rpc-url https://rpc.gnosischain.com`
 /// Override with `1.0` to restore the legacy "always wins" behaviour.
-const DEFAULT_WINNING_PROBABILITY: f64 = 0.00012499999999993072;
+const DEFAULT_WINNING_PROBABILITY: f64 = 0.000125;
 
 #[derive(Debug, Parser)]
 #[command(
