@@ -16,7 +16,10 @@ use hopr_bindings::exports::alloy::{
         Provider, ProviderBuilder,
         fillers::{BlobGasFiller, CachedNonceManager, ChainIdFiller, GasFiller, NonceFiller},
     },
-    rpc::{client::ClientBuilder, types::TransactionRequest},
+    rpc::{
+        client::ClientBuilder,
+        types::{TransactionReceipt, TransactionRequest},
+    },
     signers::local::PrivateKeySigner,
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
@@ -120,7 +123,7 @@ async fn test_client_should_call_on_gas_oracle_for_legacy_tx() -> anyhow::Result
         .with_value(U256::from(100))
         .with_gas_price(1000000000);
 
-    let receipt: hopr_bindings::exports::alloy::rpc::types::TransactionReceipt = provider.send_transaction(tx).await?.get_receipt().await?;
+    let receipt: TransactionReceipt = provider.send_transaction(tx).await?.get_receipt().await?;
 
     m.assert();
     assert_eq!(receipt.gas_used, 21000);

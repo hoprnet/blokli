@@ -4,12 +4,14 @@ use blokli_chain_types::ContractAddresses as BlokliContractAddresses;
 use clap::Parser;
 use hopli_lib::utils::{a2h, h2a};
 use hopr_bindings::{
-    config::ContractInstances, exports::alloy::{
+    config::ContractInstances,
+    exports::alloy::{
         primitives::{U256, aliases::U56},
         providers::ProviderBuilder,
         rpc::client::ClientBuilder,
         signers::local::PrivateKeySigner,
-    }, hopr_node_stake_factory::HoprNodeStakeFactory::HoprNetwork
+    },
+    hopr_node_stake_factory::HoprNodeStakeFactory::HoprNetwork,
 };
 use hopr_types::{
     chain::ContractAddresses,
@@ -79,7 +81,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let rpc_client = ClientBuilder::default().http(rpc_url);
     let provider = ProviderBuilder::new().wallet(signer).connect_client(rpc_client);
 
-    let instances = ContractInstances::deploy_for_testing(provider, a2h(signer_chain_key.public().to_address())).await?;
+    let instances =
+        ContractInstances::deploy_for_testing(provider, a2h(signer_chain_key.public().to_address())).await?;
     let contracts = ContractAddresses::from(&instances);
     let output = ContractsOutput {
         contracts: BlokliContractAddresses {

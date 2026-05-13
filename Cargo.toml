@@ -90,9 +90,7 @@ pem-rfc7468 = "1.0"
 primitive-types = { version = "0.14.0", features = ["serde"] }
 rand = "0.10.1"
 regex = "1.12.3"
-reqwest = { version = "0.13.3", features = [
-  "json",
-] }
+reqwest = { version = "0.13.3", features = ["json"] }
 rstest = "0.26.1"
 rust-stream-ext-concurrent = "2.0.0"
 rustls = { version = "0.23.39", default-features = false, features = ["std"] }

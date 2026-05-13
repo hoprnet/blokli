@@ -10,19 +10,18 @@ use blokli_client::{
     BlokliClient, BlokliClientConfig,
     api::{AccountSelector, BlokliQueryClient, BlokliTransactionClient, SafeSelector, types::Safe},
 };
-use hopli_lib::{
-    methods::transfer_or_mint_tokens,
-    utils::{a2h},
-};
+use hopli_lib::{methods::transfer_or_mint_tokens, utils::a2h};
 use hopr_bindings::{
-    config::ContractInstances, exports::alloy::{
+    config::ContractInstances,
+    exports::alloy::{
         primitives::{Address, U256, keccak256},
         providers::{
             ProviderBuilder,
             fillers::{BlobGasFiller, CachedNonceManager, ChainIdFiller, GasFiller, NonceFiller},
         },
         signers::local::PrivateKeySigner,
-    }, hopr_token::HoprToken::HoprTokenInstance
+    },
+    hopr_token::HoprToken::HoprTokenInstance,
 };
 use hopr_types::{
     chain::{

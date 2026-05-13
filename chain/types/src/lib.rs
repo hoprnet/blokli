@@ -171,7 +171,7 @@ where
             node_stake_factory: HoprNodeStakeFactoryInstance::new(
                 AlloyAddress::from_hopr_address(contract_addresses.node_stake_factory),
                 provider.clone(),
-            )
+            ),
         }
     }
 
