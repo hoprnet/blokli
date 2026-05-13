@@ -168,3 +168,25 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use std::str::FromStr;
+
+    use hopr_types::{internal::prelude::WinningProbability, primitive::prelude::HoprBalance};
+
+    #[test]
+    fn ticket_price_parses_from_wxhopr_string() {
+        let balance = HoprBalance::from_str("1 wxHOPR").expect("valid balance string");
+        // 1 wxHOPR = 10^18 wei
+        assert_eq!(balance.to_string(), "1 wxHOPR");
+    }
+
+    #[test]
+    fn winning_probability_parses_from_float_string() {
+        let prob = WinningProbability::from_str("0.00000125").expect("valid probability string");
+        let roundtrip = prob.as_f64();
+        // Allow epsilon from the reduced-precision IEEE-754 encoding
+        assert!((roundtrip - 0.00000125_f64).abs() < WinningProbability::EPSILON);
+    }
+}
