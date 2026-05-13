@@ -113,6 +113,7 @@ pub struct ContractAddresses {
     /// Stake factory contract
     pub node_stake_factory: Address,
     /// xHOPR token contract
+    #[serde(default)]
     pub xhopr_token: Address,
 }
 
