@@ -199,7 +199,7 @@ jobs:
   # ── Build: Docker ───────────────────────────────────────────────────────────
   build-docker:
     name: Docker
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@43b03a7b5df777770d95c6524f48be34184b26fa # build-docker-v1
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@build-docker-v2
     needs: build-binaries
     permissions:
       contents: read
