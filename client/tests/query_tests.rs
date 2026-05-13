@@ -1,6 +1,6 @@
 use blokli_client::{
     BlokliClient, BlokliClientConfig, CLIENT_VERSION,
-    api::{BlokliQueryClient, SafeSelector},
+    api::{AccountSelector, BlokliQueryClient, SafeSelector},
 };
 use mockito::Matcher;
 use serde_json::json;
@@ -8,6 +8,138 @@ use serde_json::json;
 use crate::common::{Body, RequestRecorder};
 
 mod common;
+
+#[tokio::test]
+async fn query_batch_combines_account_queries_into_one_http_call() -> anyhow::Result<()> {
+    let mut server = mockito::Server::new_async().await;
+    let cfg = BlokliClientConfig {
+        auto_compatibility_check: false,
+        ..Default::default()
+    };
+    let cli = BlokliClient::new(server.url().parse()?, cfg);
+
+    let recorder = RequestRecorder::default();
+    let mock = server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .match_request(recorder.as_matcher())
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"[
+              {
+                "data": {
+                  "accounts": {
+                    "__typename": "AccountsList",
+                    "accounts": [
+                      {
+                        "chainKey": "1111111111111111111111111111111111111111",
+                        "keyid": 1,
+                        "multiAddresses": [],
+                        "packetKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+                        "safeAddress": null
+                      }
+                    ]
+                  }
+                }
+              },
+              {
+                "data": {
+                  "accounts": {
+                    "__typename": "AccountsList",
+                    "accounts": [
+                      {
+                        "chainKey": "2222222222222222222222222222222222222222",
+                        "keyid": 2,
+                        "multiAddresses": [],
+                        "packetKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                        "safeAddress": null
+                      }
+                    ]
+                  }
+                }
+              }
+            ]"#,
+        )
+        .create_async()
+        .await;
+
+    let mut batch = cli.query_batch();
+    let first = batch.query_accounts(AccountSelector::Address([0x11; 20]))?;
+    let second = batch.query_accounts(AccountSelector::Address([0x22; 20]))?;
+
+    let mut results = batch.execute().await?;
+    let first_accounts = results.take(first)?;
+    let second_accounts = results.take(second)?;
+
+    assert_eq!(first_accounts[0].keyid, 1);
+    assert_eq!(second_accounts[0].keyid, 2);
+
+    mock.assert_async().await;
+    let requests = recorder.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].method, "POST");
+    assert_eq!(requests[0].path_and_query, "/graphql");
+    insta::assert_yaml_snapshot!(requests);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn query_batch_keeps_per_handle_errors_isolated() -> anyhow::Result<()> {
+    let mut server = mockito::Server::new_async().await;
+    let cfg = BlokliClientConfig {
+        auto_compatibility_check: false,
+        ..Default::default()
+    };
+    let cli = BlokliClient::new(server.url().parse()?, cfg);
+
+    let mock = server
+        .mock("POST", "/graphql")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(
+            r#"[
+              {
+                "errors": [
+                  {
+                    "message": "bad account query"
+                  }
+                ]
+              },
+              {
+                "data": {
+                  "accounts": {
+                    "__typename": "AccountsList",
+                    "accounts": [
+                      {
+                        "chainKey": "2222222222222222222222222222222222222222",
+                        "keyid": 2,
+                        "multiAddresses": [],
+                        "packetKey": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                        "safeAddress": null
+                      }
+                    ]
+                  }
+                }
+              }
+            ]"#,
+        )
+        .create_async()
+        .await;
+
+    let mut batch = cli.query_batch();
+    let first = batch.query_accounts(AccountSelector::Address([0x11; 20]))?;
+    let second = batch.query_accounts(AccountSelector::Address([0x22; 20]))?;
+
+    let mut results = batch.execute().await?;
+    assert!(results.take(first).is_err());
+    let second_accounts = results.take(second)?;
+    assert_eq!(second_accounts[0].keyid, 2);
+
+    mock.assert_async().await;
+
+    Ok(())
+}
 
 #[tokio::test]
 async fn query_native_balance() -> anyhow::Result<()> {

@@ -1,3 +1,4 @@
+mod batch;
 mod queries;
 mod subscriptions;
 #[cfg(feature = "testing")]
@@ -11,6 +12,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub use batch::{BlokliQueryBatch, BlokliQueryBatchResult, QueryHandle};
 use cynic::GraphQlResponse;
 use eventsource_client::{Client, ReconnectOptionsBuilder, SSE};
 use futures::{StreamExt, TryFutureExt, TryStreamExt, lock::Mutex};
@@ -220,6 +222,30 @@ impl BlokliClient {
     /// Returns the client's configuration.
     pub fn config(&self) -> &BlokliClientConfig {
         &self.cfg
+    }
+
+    /// Creates a query batch builder for executing multiple GraphQL queries in one HTTP request.
+    ///
+    /// Queue queries on the returned [`BlokliQueryBatch`], keep the typed [`QueryHandle`] returned by each queued
+    /// query, then call [`BlokliQueryBatch::execute`] and extract each value with [`BlokliQueryBatchResult::take`].
+    ///
+    /// ```
+    /// # async fn example(client: blokli_client::BlokliClient) -> Result<(), blokli_client::errors::BlokliClientError> {
+    /// use blokli_client::api::AccountSelector;
+    ///
+    /// let mut batch = client.query_batch();
+    /// let first = batch.query_accounts(AccountSelector::Address([0x11; 20]))?;
+    /// let second = batch.query_accounts(AccountSelector::Address([0x22; 20]))?;
+    ///
+    /// let mut results = batch.execute().await?;
+    /// let first_accounts = results.take(first)?;
+    /// let second_accounts = results.take(second)?;
+    /// # let _ = (first_accounts, second_accounts);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub fn query_batch(&self) -> BlokliQueryBatch {
+        BlokliQueryBatch::new(self.clone())
     }
 
     pub async fn check_compatibility(&self) -> Result<(), BlokliClientError> {
@@ -460,6 +486,39 @@ impl BlokliClient {
                 serde_json::from_slice(&body).map_err(BlokliClientError::from)
             })
             .inspect_ok(|resp| tracing::debug!(?resp, "decoded Blokli response")))
+    }
+
+    fn build_raw_batch(
+        &self,
+        operations: Vec<serde_json::Value>,
+    ) -> Result<impl Future<Output = Result<Vec<serde_json::Value>, BlokliClientError>>, BlokliClientError> {
+        let client = self.build_reqwest_client()?;
+        tracing::debug!(query = ?operations, "sending Blokli query batch");
+
+        Ok(client
+            .post(self.graphql_url()?)
+            .header("Accept", "application/json")
+            .json(&operations)
+            .send()
+            .map_err(BlokliClientError::from)
+            .and_then(|resp| async {
+                let body = resp.bytes().await.map_err(BlokliClientError::from)?;
+                tracing::trace!(body = %String::from_utf8_lossy(body.as_ref()), "received Blokli batch response");
+                serde_json::from_slice(&body).map_err(BlokliClientError::from)
+            })
+            .inspect_ok(|resp| tracing::debug!(?resp, "decoded Blokli batch response")))
+    }
+
+    fn build_batch(
+        &self,
+        operations: Vec<serde_json::Value>,
+    ) -> Result<impl Future<Output = Result<Vec<serde_json::Value>, BlokliClientError>>, BlokliClientError> {
+        let client = self.clone();
+
+        Ok(async move {
+            client.ensure_compatibility().await?;
+            client.build_raw_batch(operations)?.await
+        })
     }
 
     fn build_query<Q, V>(

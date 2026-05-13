@@ -3,7 +3,7 @@
 use std::{pin::Pin, sync::Arc, time::Instant};
 
 use async_graphql::{
-    Schema,
+    BatchRequest, BatchResponse, Request, Schema,
     http::{GraphQLPlaygroundConfig, playground_source},
 };
 use async_stream::stream;
@@ -163,6 +163,36 @@ fn extract_subscription_name(query: &str) -> String {
     "unknown".to_string()
 }
 
+fn request_kind(query: &str) -> &'static str {
+    let query = query.trim_start();
+    if query.starts_with("subscription") {
+        "subscription"
+    } else if query.starts_with("mutation") {
+        "mutation"
+    } else {
+        "query"
+    }
+}
+
+fn is_subscription_request(request: &Request) -> bool {
+    request_kind(&request.query) == "subscription"
+}
+
+fn validate_query_batch(request: &BatchRequest) -> Result<(), String> {
+    for request in request.iter() {
+        match request_kind(&request.query) {
+            "query" => {}
+            other => {
+                return Err(format!(
+                    "Batched GraphQL requests may only contain queries, found {other}"
+                ));
+            }
+        }
+    }
+
+    Ok(())
+}
+
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
@@ -278,7 +308,7 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
     }
 
     // Parse the GraphQL request
-    let request = match serde_json::from_value::<async_graphql::Request>(request) {
+    let request = match serde_json::from_value::<BatchRequest>(request) {
         Ok(req) => req,
         Err(e) => {
             metrics::increment_errors("invalid_request");
@@ -301,23 +331,32 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
         .map(|v| v.contains("text/event-stream"))
         .unwrap_or(false);
 
-    // Check if the request is a subscription
-    let is_subscription = request.query.trim_start().starts_with("subscription");
+    let is_single_subscription = match &request {
+        BatchRequest::Single(request) => is_subscription_request(request),
+        BatchRequest::Batch(_) => false,
+    };
 
     // Determine request type label for metrics
-    let request_type = if is_subscription {
-        "subscription"
-    } else if request.query.trim_start().starts_with("mutation") {
-        "mutation"
-    } else {
-        "query"
+    let request_type = match &request {
+        BatchRequest::Single(request) => request_kind(&request.query),
+        BatchRequest::Batch(_) => "query",
     };
 
     // Track request count
-    metrics::increment_request_count(request_type);
+    match &request {
+        BatchRequest::Single(_) => metrics::increment_request_count(request_type),
+        BatchRequest::Batch(requests) => {
+            for _ in requests {
+                metrics::increment_request_count("query");
+            }
+        }
+    }
 
     // Handle subscription requests via SSE
-    if accepts_sse && is_subscription {
+    if accepts_sse && is_single_subscription {
+        let BatchRequest::Single(request) = request else {
+            unreachable!("subscription request was already checked to be single");
+        };
         // Generate unique identifier for this SSE connection
         let subscription_name = extract_subscription_name(&request.query);
         let connection_id = Uuid::new_v4();
@@ -353,19 +392,45 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
         return Sse::new(sse_stream).into_response();
     }
 
+    if matches!(request, BatchRequest::Batch(_))
+        && let Err(e) = validate_query_batch(&request)
+    {
+        metrics::increment_errors("invalid_request");
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(serde_json::json!({
+                "errors": [{
+                    "message": e
+                }]
+            })),
+        )
+            .into_response();
+    }
+
     // Start timer for request duration. Intentionnaly after the subscription check, as timing a
     // subscription is not meaningful - it's a long-lived connection, not a single request.
     let start_time = Instant::now();
 
     // Execute regular query/mutation
-    let response = state.schema.execute(request).await;
+    let response = state.schema.execute_batch(request).await;
 
     // Record request duration
     metrics::observe_request_duration(request_type, start_time.elapsed().as_secs_f64());
 
     // Count any errors returned in the response
-    if !response.errors.is_empty() {
-        metrics::increment_errors(request_type);
+    match &response {
+        BatchResponse::Single(response) => {
+            if !response.errors.is_empty() {
+                metrics::increment_errors(request_type);
+            }
+        }
+        BatchResponse::Batch(responses) => {
+            for response in responses {
+                if !response.errors.is_empty() {
+                    metrics::increment_errors("query");
+                }
+            }
+        }
     }
 
     // Serialize and return the response

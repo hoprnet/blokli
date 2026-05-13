@@ -7,7 +7,9 @@ pub mod errors;
 
 pub const CLIENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
-pub use client::{BlokliClient, BlokliClientConfig, ReqwestTransport};
+pub use client::{
+    BlokliClient, BlokliClientConfig, BlokliQueryBatch, BlokliQueryBatchResult, QueryHandle, ReqwestTransport,
+};
 #[cfg(feature = "testing")]
 pub use client::{
     BlokliTestClient, BlokliTestState, BlokliTestStateMutator, BlokliTestStateSnapshot, GraphQlQueries, NopStateMutator,

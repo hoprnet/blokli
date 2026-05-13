@@ -62,6 +62,8 @@ pub enum ErrorKind {
     SafeEventIndexingDisabled { api_version: String },
     #[error("invalid query input: {0}")]
     InvalidInput(&'static str),
+    #[error("query batch error: {0}")]
+    Batch(&'static str),
     #[error("transaction tracking error: {0:?}")]
     TrackingError(TrackingErrorKind),
     #[error("data returned from blokli was unparseable")]

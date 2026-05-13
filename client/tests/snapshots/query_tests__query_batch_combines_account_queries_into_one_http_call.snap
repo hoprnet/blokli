@@ -1,0 +1,21 @@
+---
+source: client/tests/query_tests.rs
+assertion_line: 82
+expression: requests
+---
+- method: POST
+  path_and_query: /graphql
+  body:
+    Json:
+      - operationName: QueryAccounts
+        query: "query QueryAccounts($keyid: Int, $packetKey: String, $chainKey: String) {\n  accounts(keyid: $keyid, packetKey: $packetKey, chainKey: $chainKey) {\n    __typename\n    ... on AccountsList {\n      __typename\n      accounts {\n        chainKey\n        keyid\n        multiAddresses\n        packetKey\n        safeAddress\n      }\n    }\n    ... on MissingFilterError {\n      __typename\n      code\n      message\n    }\n    ... on QueryFailedError {\n      __typename\n      message\n      code\n    }\n  }\n}\n"
+        variables:
+          chainKey: "1111111111111111111111111111111111111111"
+          keyid: ~
+          packetKey: ~
+      - operationName: QueryAccounts
+        query: "query QueryAccounts($keyid: Int, $packetKey: String, $chainKey: String) {\n  accounts(keyid: $keyid, packetKey: $packetKey, chainKey: $chainKey) {\n    __typename\n    ... on AccountsList {\n      __typename\n      accounts {\n        chainKey\n        keyid\n        multiAddresses\n        packetKey\n        safeAddress\n      }\n    }\n    ... on MissingFilterError {\n      __typename\n      code\n      message\n    }\n    ... on QueryFailedError {\n      __typename\n      message\n      code\n    }\n  }\n}\n"
+        variables:
+          chainKey: "2222222222222222222222222222222222222222"
+          keyid: ~
+          packetKey: ~
