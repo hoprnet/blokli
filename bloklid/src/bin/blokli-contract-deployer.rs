@@ -171,27 +171,29 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
+    use anyhow::Result;
     use clap::Parser;
+    use hopr_types::{internal::prelude::WinningProbability, primitive::traits::IntoEndian};
 
     use super::Args;
 
     #[test]
-    fn ticket_price_arg_parses_wxhopr_string() {
-        let args = Args::try_parse_from(["blokli-contract-deployer", "--ticket-price", "1 wxHOPR"])
-            .expect("arg parse failed");
-        // 1 wxHOPR = 10^18 wei
-        assert_eq!(args.ticket_price.to_string(), "1 wxHOPR");
+    fn ticket_price_arg_default_parses() -> Result<()> {
+        let args = Args::try_parse_from(["blokli-contract-deployer"])?;
+        // 100 wei: amount() returns the raw U256 value
+        assert_eq!(args.ticket_price.amount().to_be_bytes(), {
+            let mut b = [0u8; 32];
+            b[31] = 100;
+            b
+        });
+        Ok(())
     }
 
     #[test]
-    fn winning_probability_arg_parses_float_string() {
-        let args =
-            Args::try_parse_from(["blokli-contract-deployer", "--winning-probability", "0.00000125"])
-                .expect("arg parse failed");
+    fn winning_probability_arg_default_parses() -> Result<()> {
+        let args = Args::try_parse_from(["blokli-contract-deployer"])?;
         let roundtrip = args.winning_probability.as_f64();
-        // Allow epsilon from the reduced-precision IEEE-754 encoding
-        assert!(
-            (roundtrip - 0.00000125_f64).abs() < hopr_types::internal::prelude::WinningProbability::EPSILON
-        );
+        assert!((roundtrip - 0.000125_f64).abs() < WinningProbability::EPSILON);
+        Ok(())
     }
 }
