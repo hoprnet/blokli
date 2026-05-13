@@ -171,22 +171,27 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
+    use clap::Parser;
 
-    use hopr_types::{internal::prelude::WinningProbability, primitive::prelude::HoprBalance};
+    use super::Args;
 
     #[test]
-    fn ticket_price_parses_from_wxhopr_string() {
-        let balance = HoprBalance::from_str("1 wxHOPR").expect("valid balance string");
+    fn ticket_price_arg_parses_wxhopr_string() {
+        let args = Args::try_parse_from(["blokli-contract-deployer", "--ticket-price", "1 wxHOPR"])
+            .expect("arg parse failed");
         // 1 wxHOPR = 10^18 wei
-        assert_eq!(balance.to_string(), "1 wxHOPR");
+        assert_eq!(args.ticket_price.to_string(), "1 wxHOPR");
     }
 
     #[test]
-    fn winning_probability_parses_from_float_string() {
-        let prob = WinningProbability::from_str("0.00000125").expect("valid probability string");
-        let roundtrip = prob.as_f64();
+    fn winning_probability_arg_parses_float_string() {
+        let args =
+            Args::try_parse_from(["blokli-contract-deployer", "--winning-probability", "0.00000125"])
+                .expect("arg parse failed");
+        let roundtrip = args.winning_probability.as_f64();
         // Allow epsilon from the reduced-precision IEEE-754 encoding
-        assert!((roundtrip - 0.00000125_f64).abs() < WinningProbability::EPSILON);
+        assert!(
+            (roundtrip - 0.00000125_f64).abs() < hopr_types::internal::prelude::WinningProbability::EPSILON
+        );
     }
 }
