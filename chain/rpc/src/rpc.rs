@@ -170,7 +170,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
             .disable_recommended_fillers()
             .filler(ChainIdFiller::default())
             .filler(NonceFiller::new(CachedNonceManager::default()))
-            .filler(GasFiller)
+            .filler(GasFiller::default())
             .filler(GasOracleFiller::new(
                 requestor.clone(),
                 cfg.gas_oracle_url.clone(),

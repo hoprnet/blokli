@@ -10,11 +10,9 @@ use blokli_client::{
     BlokliClient, BlokliClientConfig,
     api::{AccountSelector, BlokliQueryClient, BlokliTransactionClient, SafeSelector, types::Safe},
 };
-use hopli_lib::{
-    methods::transfer_or_mint_tokens,
-    utils::{ContractInstances, a2h},
-};
+use hopli_lib::{methods::transfer_or_mint_tokens, utils::a2h};
 use hopr_bindings::{
+    config::ContractInstances,
     exports::alloy::{
         primitives::{Address, U256, keccak256},
         providers::{
@@ -722,12 +720,12 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
         .disable_recommended_fillers()
         .filler(ChainIdFiller::default())
         .filler(NonceFiller::new(CachedNonceManager::default()))
-        .filler(GasFiller)
+        .filler(GasFiller::default())
         .filler(BlobGasFiller::default())
         .wallet(wallet)
         .connect_http(config.rpc_url().clone());
 
-    let contract_instances = ContractInstances::deploy_for_testing(provider, &deployer)
+    let contract_instances = ContractInstances::deploy_for_testing(provider, accounts[0].to_alloy_address())
         .await
         .expect("failed to deploy hopr contracts for testing");
 
