@@ -81,7 +81,11 @@ impl Args {
         let mut builder = config_rs::Config::builder();
 
         let effective_config = self.config.clone().or_else(|| {
-            std::env::var("BLOKLI_CONFIG_PATH").ok().map(PathBuf::from)
+            std::env::var("BLOKLI_CONFIG_PATH")
+                .ok()
+                .map(|value| value.trim().to_owned())
+                .filter(|p| !p.is_empty())
+                .map(PathBuf::from)
         });
 
         if let Some(config_path) = &effective_config {
@@ -1145,5 +1149,95 @@ mod tests {
                 assert_eq!(config.telemetry.metric_export_interval, Duration::from_secs(15));
             },
         );
+    }
+
+    #[test]
+    fn test_blokli_config_path_env_var_used_when_no_config_flag() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://from-env-path:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_var("BLOKLI_CONFIG_PATH", Some(path.to_str().unwrap()), || {
+            let args = Args {
+                verbose: 0,
+                config: None,
+                command: None,
+            };
+
+            // Without BLOKLI_CONFIG_PATH, use_default=false would return NoConfiguration.
+            // With it set, the file must be loaded.
+            let config = args.load_config(false).expect("BLOKLI_CONFIG_PATH should provide the config file");
+            assert_eq!(config.rpc_url, "http://from-env-path:8545");
+        });
+    }
+
+    #[test]
+    fn test_config_flag_takes_precedence_over_blokli_config_path() {
+        let mut flag_file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            flag_file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://from-flag:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://flag:5432/db"
+        "#
+        )
+        .unwrap();
+        let flag_path = flag_file.path().to_path_buf();
+
+        let mut env_file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            env_file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://from-env-path:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://env:5432/db"
+        "#
+        )
+        .unwrap();
+        let env_path = env_file.path().to_path_buf();
+
+        temp_env::with_var("BLOKLI_CONFIG_PATH", Some(env_path.to_str().unwrap()), || {
+            let args = Args {
+                verbose: 0,
+                config: Some(flag_path),
+                command: None,
+            };
+
+            let config = args.load_config(false).expect("Should load config from -c flag");
+            assert_eq!(config.rpc_url, "http://from-flag:8545", "-c flag must win over BLOKLI_CONFIG_PATH");
+        });
+    }
+
+    #[test]
+    fn test_blokli_config_path_empty_string_falls_back_to_defaults() {
+        temp_env::with_var("BLOKLI_CONFIG_PATH", Some(""), || {
+            let args = Args {
+                verbose: 0,
+                config: None,
+                command: None,
+            };
+
+            // An empty BLOKLI_CONFIG_PATH must be treated as unset, not as a real path.
+            let result = args.load_config(false);
+            assert!(
+                result.is_err(),
+                "Empty BLOKLI_CONFIG_PATH should not trigger config-file loading; expected NoConfiguration error"
+            );
+        });
     }
 }
