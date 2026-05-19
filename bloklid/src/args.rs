@@ -21,7 +21,13 @@ pub(crate) struct Args {
     #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count, global = true)]
     pub(crate) verbose: u8,
 
-    #[arg(short = 'c', long = "config", value_name = "FILE", global = true)]
+    #[arg(
+        short = 'c',
+        long = "config",
+        value_name = "FILE",
+        global = true,
+        help = "Path to the configuration file. If not set, falls back to BLOKLI_CONFIG_PATH env var."
+    )]
     pub(crate) config: Option<PathBuf>,
 
     #[command(subcommand)]
@@ -74,7 +80,11 @@ impl Args {
     pub(crate) fn load_config(&self, use_default: bool) -> errors::Result<Config> {
         let mut builder = config_rs::Config::builder();
 
-        if let Some(config_path) = &self.config {
+        let effective_config = self.config.clone().or_else(|| {
+            std::env::var("BLOKLI_CONFIG_PATH").ok().map(PathBuf::from)
+        });
+
+        if let Some(config_path) = &effective_config {
             builder = builder.add_source(config_rs::File::from(config_path.clone()));
         } else if use_default {
             tracing::warn!("no configuration file specified; using defaults and environment variables");

@@ -116,6 +116,22 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
         "bloklid starting"
     );
 
+    {
+        let env_config_path = std::env::var("BLOKLI_CONFIG_PATH").ok();
+        let effective_path = args.config.as_deref().map(|p| p.to_string_lossy().into_owned())
+            .or_else(|| env_config_path.clone());
+        match effective_path {
+            Some(path) => {
+                let source = if args.config.is_some() { "-c flag" } else { "BLOKLI_CONFIG_PATH" };
+                tracing::info!(path, source, exists = std::path::Path::new(&path).exists(), "config file");
+            }
+            None => tracing::info!(
+                BLOKLI_CONFIG_PATH = env_config_path.as_deref().unwrap_or("<not set>"),
+                "no config file specified; using defaults"
+            ),
+        }
+    }
+
     // Initial config load
     let config = Arc::new(RwLock::new(match initial_config {
         Some(config) => config,
