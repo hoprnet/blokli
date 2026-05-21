@@ -6,8 +6,8 @@ use async_broadcast::Receiver;
 use async_graphql::{Context, ID, Result, Subscription};
 use async_stream::stream;
 use blokli_api_types::{
-    Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, Safe, TicketParameters, TokenValueString,
-    Transaction, UInt64,
+    Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, RedeemTicketDetails, RedeemTicketDetailsInfo,
+    Safe, TicketParameters, TokenValueString, Transaction, UInt64,
 };
 use blokli_chain_api::transaction_store::{
     TransactionEvent, TransactionStatus as StoreTransactionStatus, TransactionStore,
@@ -25,6 +25,7 @@ use blokli_db_entity::{
 };
 use chrono::Utc;
 use futures::Stream;
+use hopr_bindings::exports::alloy::hex;
 use hopr_types::primitive::{
     prelude::HoprBalance as PrimitiveHoprBalance,
     primitives::Address,
@@ -528,6 +529,9 @@ impl SubscriptionRoot {
                             Ok(IndexerEvent::TicketParametersUpdated(_)) => {
                                 // Ticket parameter updates don't affect this subscription
                             }
+                            Ok(IndexerEvent::TicketRedeemed(_)) => {
+                                // Ticket redeemed don't affect this subscription
+                            }
                             Err(async_broadcast::RecvError::Closed) => {
                                 info!("Event bus closed, ending channelUpdated subscription");
                                 return;
@@ -651,6 +655,9 @@ impl SubscriptionRoot {
                             }
                             Ok(IndexerEvent::TicketParametersUpdated(_)) => {
                                 // Ticket parameter updates don't affect this subscription
+                            }
+                            Ok(IndexerEvent::TicketRedeemed(_)) => {
+                                // Ticket redeemed don't affect this subscription
                             }
                             Err(async_broadcast::RecvError::Closed) => {
                                 info!("Event bus closed, ending subscription");
@@ -840,6 +847,9 @@ impl SubscriptionRoot {
                             Ok(IndexerEvent::SafeDeployed(_)) => {
                                 // Irrelevant for this subscription
                             }
+                            Ok(IndexerEvent::TicketRedeemed(_)) => {
+                                // Ticket redeemed don't affect this subscription
+                            }
                             Err(async_broadcast::RecvError::Closed) => {
                                 info!("Event bus closed, ending ticketParametersUpdated subscription");
                                 return;
@@ -944,6 +954,9 @@ impl SubscriptionRoot {
                             }
                             Ok(IndexerEvent::TicketParametersUpdated(_)) => {
                                 // Irrelevant for this subscription
+                            }
+                            Ok(IndexerEvent::TicketRedeemed(_)) => {
+                                // Ticket redeemed don't affect this subscription
                             }
                             Err(async_broadcast::RecvError::Closed) => {
                                 info!("Event bus closed, ending keyBindingFeeUpdated subscription");
@@ -1201,6 +1214,85 @@ impl SubscriptionRoot {
             }
         })
     }
+
+    #[graphql(name = "ticketRedeemed")]
+    async fn ticket_redeemed(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Filter by channel ID (hexadecimal format)")] channel_id: Option<ID>,
+        #[graphql(desc = "Filter by ticket issuesr (hexadecimal format)")] issuer_address: Option<ID>,
+        #[graphql(desc = "Filter by ticket recepient (hexadecimal format)")] recepient_address: Option<ID>,
+    ) -> Result<impl Stream<Item = RedeemTicketDetails>> {
+        // Validate correctnes of input parameters
+        if let Some(channel_id) = &channel_id {
+            hex::check(channel_id.as_bytes()).map_err(|e| {
+                async_graphql::Error::new(format!("Invalid channel ID format: {}. Expected hex format.", e))
+            })?
+        }
+        if let Some(issuer_address) = &issuer_address {
+            hex::check(issuer_address.as_bytes()).map_err(|e| {
+                async_graphql::Error::new(format!("Invalid issuer address format: {}. expected hex format.", e))
+            })?
+        }
+        if let Some(recepient_address) = &recepient_address {
+            hex::check(recepient_address.as_bytes()).map_err(|e| {
+                async_graphql::Error::new(format!("Invalid recepient address format: {}. Expected hex format.", e))
+            })?
+        }
+
+        let indexer_state = ctx
+            .data::<IndexerState>()
+            .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
+            .clone();
+
+        Ok(stream! {
+            // Subscribe to events and shutdown first to avoid missing events
+            let mut event_receiver = indexer_state.subscribe_to_events();
+            let mut shutdown_receiver = indexer_state.subscribe_to_shutdown();
+
+            // Stream updates from event bus
+            loop {
+                tokio::select! {
+                    biased;
+
+                    shutdown_result = shutdown_receiver.recv() => {
+                        match shutdown_result {
+                            Ok(_) => {
+                                info!("ticketRedeemed subscription shutting down due to reorg");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                warn!("Shutdown channel closed for ticketRedeemed");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Shutdown signal overflowed ({}), continuing", n);
+                            }
+                        }
+                    }
+                    event_result = event_receiver.recv() => {
+                        match event_result {
+                            Ok(IndexerEvent::TicketRedeemed(ticket_redeemed)) => {
+                                if match_ticket_filters(&ticket_redeemed, &channel_id, &issuer_address, &recepient_address) {
+                                yield ticket_redeemed.into();
+                                }
+                            }
+                            Ok(_) => {
+                                // Other events (ChannelUpdated, etc.) - ignore
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                info!("Event bus closed, ending ticketRedeemed subscription");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Event bus overflowed ({}); ticketRedeemed may miss events", n);
+                            }
+                        }
+                    }
+                }
+            }
+        })
+    }
 }
 
 /// Convert ChannelUpdate (from events) to OpenedChannelsGraphEntry (for GraphQL)
@@ -1254,6 +1346,61 @@ impl SubscriptionRoot {
 
         Ok(result)
     }
+}
+
+fn match_ticket_filters(
+    info: &RedeemTicketDetailsInfo,
+    channel_id: &Option<ID>,
+    issuer_address: &Option<ID>,
+    recepient_address: &Option<ID>,
+) -> bool {
+    if let Some(channel_id) = channel_id {
+        let channel_id_normalized = channel_id.strip_prefix("0x").unwrap_or(&channel_id);
+        if info.channel_id != channel_id_normalized {
+            return false;
+        }
+    }
+
+    if let Some(iss_addr) = issuer_address {
+        let iss = match Address::from_hex(&iss_addr) {
+            Ok(iss) => iss,
+            Err(_) => {
+                // Invalid address - this should never happen due to early validation of inputs
+                return false;
+            }
+        };
+        let iss_info = match Address::from_hex(&info.issuer_address) {
+            Ok(iss) => iss,
+            Err(_) => {
+                // Invalid address
+                return false;
+            }
+        };
+        if iss != iss_info {
+            return false;
+        }
+    }
+
+    if let Some(rec_addr) = recepient_address {
+        let rec = match Address::from_hex(&rec_addr) {
+            Ok(rec) => rec,
+            Err(_) => {
+                // Invalid address - this should never happen due to early validation of inputs
+                return false;
+            }
+        };
+        let rec_info = match Address::from_hex(&info.recepient_address) {
+            Ok(rec) => rec,
+            Err(_) => {
+                // Invalid address
+                return false;
+            }
+        };
+        if rec != rec_info {
+            return false;
+        }
+    }
+    true
 }
 
 /// Helper to check if an account matches the subscription filters

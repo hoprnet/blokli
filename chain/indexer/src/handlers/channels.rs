@@ -1,7 +1,8 @@
+use blokli_api_types::RedeemTicketDetailsInfo;
 use blokli_chain_rpc::HoprIndexerRpcOperations;
 use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator, errors::DbSqlError};
-use hopr_bindings::hopr_channels::HoprChannels::HoprChannelsEvents;
+use hopr_bindings::{exports::alloy::hex, hopr_channels::HoprChannels::HoprChannelsEvents};
 use hopr_types::{
     crypto::types::Hash,
     internal::channels::{ChannelEntry, ChannelStatus, generate_channel_id},
@@ -376,6 +377,18 @@ where
 
                 // Decode the packed channel state from the event
                 let decoded = decode_channel(ticket_redeemed.channel);
+
+                // Earliest point in which we have all data for TicketRedeemed Indexer Event
+                let ticket_redeemed = RedeemTicketDetailsInfo {
+                    issuer_address: existing_channel.source.to_string(),
+                    recepient_address: existing_channel.destination.to_string(),
+                    epoch: decoded.epoch,
+                    index: decoded.ticket_index,
+                    channel_id: hex::encode(&channel_id),
+                    result: blokli_api_types::RedemptionResult::Redeemed,
+                }; //TODO: move this to some function or
+                //something
+                events.push(crate::state::IndexerEvent::TicketRedeemed(ticket_redeemed));
 
                 trace!(
                     %channel_id,

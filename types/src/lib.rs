@@ -684,6 +684,57 @@ pub struct RedeemedStatsFilter {
     pub node_address: Option<String>,
 }
 
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum RedemptionResult {
+    Redeemed,
+    Rejected,
+}
+
+#[derive(SimpleObject, Clone, Debug)]
+pub struct RedeemTicketDetails {
+    /// Issuer account on-chain address in hexadecimal format
+    #[graphql(name = "issuerAddress")]
+    pub issuer_address: String,
+    /// Recipient account on-chain address in hexadecimal format
+    #[graphql(name = "recepientAddress")]
+    pub recepient_address: String,
+    /// Epoch of the Channel where the ticket has been redeemed
+    pub epoch: u32,
+    /// Index of the ticket in the Channel
+    pub index: u64,
+    /// Result of the redemption attempt
+    pub result: RedemptionResult,
+}
+
+/// DTO for ReedemTicketDetail, carying extra information.
+#[derive(Debug, Clone)]
+pub struct RedeemTicketDetailsInfo {
+    /// Issuer account on-chain address in hexadecimal format
+    pub issuer_address: String,
+    /// Recipient account on-chain address in hexadecimal format
+    pub recepient_address: String,
+    /// Epoch of the Channel where the ticket has been redeemed
+    pub epoch: u32,
+    /// Channel ID
+    pub channel_id: String,
+    /// Index of the ticket in the Channel
+    pub index: u64,
+    /// Result of the redemption attempt
+    pub result: RedemptionResult,
+}
+
+impl From<RedeemTicketDetailsInfo> for RedeemTicketDetails {
+    fn from(value: RedeemTicketDetailsInfo) -> Self {
+        Self {
+            issuer_address: value.issuer_address,
+            recepient_address: value.recepient_address,
+            epoch: value.epoch,
+            index: value.index,
+            result: value.result,
+        }
+    }
+}
+
 /// Selector for safe lookup queries.
 ///
 /// This enum is used together with a single `address` argument when querying

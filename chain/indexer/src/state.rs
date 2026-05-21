@@ -13,7 +13,7 @@ use std::sync::{
 };
 
 use async_broadcast::{Receiver, Sender, broadcast};
-use blokli_api_types::{Account, ChannelUpdate, TicketParameters, TokenValueString};
+use blokli_api_types::{Account, ChannelUpdate, RedeemTicketDetailsInfo, TicketParameters, TokenValueString};
 use hopr_types::primitive::prelude::Address;
 use tokio::sync::RwLock;
 
@@ -45,6 +45,8 @@ pub enum IndexerEvent {
     /// Contains both ticket price and winning probability since both are needed
     /// for the GraphQL subscription.
     TicketParametersUpdated(TicketParameters),
+
+    TicketRedeemed(RedeemTicketDetailsInfo),
 }
 
 /// Shared state for coordinating indexer operations with subscriptions
