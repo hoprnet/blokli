@@ -1230,23 +1230,29 @@ impl SubscriptionRoot {
         ctx: &Context<'_>,
         #[graphql(desc = "Filter by channel ID (hexadecimal format)")] channel_id: Option<ID>,
         #[graphql(desc = "Filter by ticket issuer (hexadecimal format)")] issuer_address: Option<ID>,
-        #[graphql(desc = "Filter by ticket recipient (hexadecimal format)")] recepient_address: Option<ID>,
+        #[graphql(desc = "Filter by ticket recipient (hexadecimal format)")] recipient_address: Option<ID>,
     ) -> Result<impl Stream<Item = RedeemTicketDetails>> {
         // Validate correctness of input parameters
         if let Some(channel_id) = &channel_id {
-            hex::check(channel_id.as_bytes()).map_err(|e| {
+            let stripped = channel_id.strip_prefix("0x").unwrap_or(channel_id.as_str());
+            if stripped.len() != 64 {
+                return Err(async_graphql::Error::new(
+                    "Invalid channel ID format: must be a 32-byte hex value (64 hex chars, optional 0x prefix)",
+                ));
+            }
+            hex::decode(stripped).map_err(|e| {
                 async_graphql::Error::new(format!("Invalid channel ID format: {}. Expected hex format.", e))
-            })?
+            })?;
         }
         if let Some(issuer_address) = &issuer_address {
-            hex::check(issuer_address.as_bytes()).map_err(|e| {
-                async_graphql::Error::new(format!("Invalid issuer address format: {}. expected hex format.", e))
-            })?
+            Address::from_hex(issuer_address.as_str()).map_err(|e| {
+                async_graphql::Error::new(format!("Invalid issuer address format: {}. Expected hex format.", e))
+            })?;
         }
-        if let Some(recepient_address) = &recepient_address {
-            hex::check(recepient_address.as_bytes()).map_err(|e| {
-                async_graphql::Error::new(format!("Invalid recepient address format: {}. Expected hex format.", e))
-            })?
+        if let Some(recipient_address) = &recipient_address {
+            Address::from_hex(recipient_address.as_str()).map_err(|e| {
+                async_graphql::Error::new(format!("Invalid recipient address format: {}. Expected hex format.", e))
+            })?;
         }
 
         let indexer_state = ctx
@@ -1282,7 +1288,7 @@ impl SubscriptionRoot {
                     event_result = event_receiver.recv() => {
                         match event_result {
                             Ok(IndexerEvent::TicketRedeemed(ticket_redeemed)) => {
-                                if match_ticket_filters(&ticket_redeemed, &channel_id, &issuer_address, &recepient_address) {
+                                if match_ticket_filters(&ticket_redeemed, &channel_id, &issuer_address, &recipient_address) {
                                 yield ticket_redeemed.into();
                                 }
                             }
@@ -1373,10 +1379,13 @@ fn match_ticket_filters(
     info: &RedeemTicketDetailsInfo,
     channel_id: &Option<ID>,
     issuer_address: &Option<ID>,
-    recepient_address: &Option<ID>,
+    recipient_address: &Option<ID>,
 ) -> bool {
     if let Some(channel_id) = channel_id {
-        let channel_id_normalized = channel_id.strip_prefix("0x").unwrap_or(channel_id);
+        let channel_id_normalized = channel_id
+            .strip_prefix("0x")
+            .unwrap_or(channel_id.as_str())
+            .to_lowercase();
         if info.channel_id != channel_id_normalized {
             return false;
         }
@@ -1402,7 +1411,7 @@ fn match_ticket_filters(
         }
     }
 
-    if let Some(rec_addr) = recepient_address {
+    if let Some(rec_addr) = recipient_address {
         let rec = match Address::from_hex(rec_addr) {
             Ok(rec) => rec,
             Err(_) => {
@@ -1410,7 +1419,7 @@ fn match_ticket_filters(
                 return false;
             }
         };
-        let rec_info = match Address::from_hex(&info.recepient_address) {
+        let rec_info = match Address::from_hex(&info.recipient_address) {
             Ok(rec) => rec,
             Err(_) => {
                 // Invalid address
@@ -2750,7 +2759,7 @@ mod tests {
     fn make_test_ticket_info() -> RedeemTicketDetailsInfo {
         RedeemTicketDetailsInfo {
             issuer_address: TEST_ISSUER_ADDR.to_string(),
-            recepient_address: TEST_RECIPIENT_ADDR.to_string(),
+            recipient_address: TEST_RECIPIENT_ADDR.to_string(),
             epoch: 1,
             index: 42,
             channel_id: TEST_CHANNEL_ID.to_string(),
@@ -2808,7 +2817,7 @@ mod tests {
         let indexer_state = IndexerState::new(10, 100);
         let schema = make_subscription_schema(db.conn(blokli_db::TargetDb::Index), &indexer_state);
 
-        let query = r#"subscription { ticketRedeemed { issuerAddress recepientAddress epoch index result } }"#;
+        let query = r#"subscription { ticketRedeemed { issuerAddress recipientAddress epoch index result } }"#;
         let mut stream = schema.execute_stream(query).boxed();
 
         let ticket_info = make_test_ticket_info();
@@ -2830,7 +2839,7 @@ mod tests {
             async_graphql::Value::from_json(serde_json::json!({
                 "ticketRedeemed": {
                     "issuerAddress": TEST_ISSUER_ADDR,
-                    "recepientAddress": TEST_RECIPIENT_ADDR,
+                    "recipientAddress": TEST_RECIPIENT_ADDR,
                     "epoch": 1,
                     "index": 42,
                     "result": "REDEEMED"

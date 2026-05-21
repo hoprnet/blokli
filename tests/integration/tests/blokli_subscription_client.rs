@@ -744,7 +744,7 @@ async fn subscribe_ticket_redeemed(#[future(awt)] fixture: IntegrationFixture) -
         "issuer must be src"
     );
     assert_eq!(
-        event.recepient_address.to_lowercase(),
+        event.recipient_address.to_lowercase(),
         dst.address.to_string().to_lowercase(),
         "recipient must be dst"
     );

@@ -392,17 +392,17 @@ where
 
                 let above_minimum = min_ticket_price.is_none_or(|min| ticket_value >= min);
 
-                if above_minimum {
+                if above_minimum && is_synced {
                     let ticket_redeemed = RedeemTicketDetailsInfo {
                         issuer_address: existing_channel.source.to_string(),
-                        recepient_address: existing_channel.destination.to_string(),
+                        recipient_address: existing_channel.destination.to_string(),
                         epoch: decoded.epoch,
                         index: decoded.ticket_index,
                         channel_id: hex::encode(channel_id),
                         result: blokli_api_types::RedemptionResult::Redeemed,
                     };
                     events.push(crate::state::IndexerEvent::TicketRedeemed(ticket_redeemed));
-                } else {
+                } else if !above_minimum {
                     trace!(
                         %channel_id,
                         ticket_value = %ticket_value,

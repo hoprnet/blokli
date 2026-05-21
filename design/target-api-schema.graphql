@@ -726,7 +726,7 @@ type RedeemTicketDetails {
   "Issuer account on-chain address in hexadecimal format"
   issuerAddress: String!
   "Recipient account on-chain address in hexadecimal format"
-  recepientAddress: String!
+  recipientAddress: String!
   "Outcome of the redemption attempt"
   result: RedemptionResult!
 }
@@ -1013,7 +1013,7 @@ type SubscriptionRoot {
     "Filter by ticket issuer (hexadecimal format)"
     issuerAddress: ID
     "Filter by ticket recipient (hexadecimal format)"
-    recepientAddress: ID
+    recipientAddress: ID
   ): RedeemTicketDetails!
   """
   Subscribe to real-time updates of a specific transaction

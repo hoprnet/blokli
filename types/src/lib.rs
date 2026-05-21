@@ -699,7 +699,7 @@ pub enum RedemptionResult {
 
 /// GraphQL output type for a ticket redemption event.
 ///
-/// Uniquely identifies the ticket (`issuerAddress` + `recepientAddress` +
+/// Uniquely identifies the ticket (`issuerAddress` + `recipientAddress` +
 /// `epoch` + `index`) and reports whether it was accepted or rejected.
 ///
 /// Returned by the `ticketRedeemed` subscription.
@@ -709,12 +709,12 @@ pub struct RedeemTicketDetails {
     #[graphql(name = "issuerAddress")]
     pub issuer_address: String,
     /// Recipient account on-chain address in hexadecimal format
-    #[graphql(name = "recepientAddress")]
-    pub recepient_address: String,
+    #[graphql(name = "recipientAddress")]
+    pub recipient_address: String,
     /// Epoch of the channel where the ticket was redeemed
-    pub epoch: u32,
+    pub epoch: UInt64,
     /// Index of the ticket within the channel epoch
-    pub index: u64,
+    pub index: UInt64,
     /// Outcome of the redemption attempt
     pub result: RedemptionResult,
 }
@@ -730,7 +730,7 @@ pub struct RedeemTicketDetailsInfo {
     /// Issuer account on-chain address in hexadecimal format
     pub issuer_address: String,
     /// Recipient account on-chain address in hexadecimal format
-    pub recepient_address: String,
+    pub recipient_address: String,
     /// Epoch of the channel where the ticket was redeemed
     pub epoch: u32,
     /// Channel ID in lowercase hex (no `0x` prefix), used for subscription filtering
@@ -746,9 +746,9 @@ impl From<RedeemTicketDetailsInfo> for RedeemTicketDetails {
     fn from(value: RedeemTicketDetailsInfo) -> Self {
         Self {
             issuer_address: value.issuer_address,
-            recepient_address: value.recepient_address,
-            epoch: value.epoch,
-            index: value.index,
+            recipient_address: value.recipient_address,
+            epoch: UInt64(value.epoch as u64),
+            index: UInt64(value.index),
             result: value.result,
         }
     }

@@ -283,7 +283,7 @@ pub trait BlokliSubscriptionClient {
         &self,
         channel_id: Option<cynic::Id>,
         issuer_address: Option<cynic::Id>,
-        recepient_address: Option<cynic::Id>,
+        recipient_address: Option<cynic::Id>,
     ) -> Result<impl futures::Stream<Item = Result<types::RedeemTicketDetails>> + Send>;
 }
 
