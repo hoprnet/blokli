@@ -10,6 +10,7 @@ pub mod types {
         graph::OpenedChannelsGraphEntry,
         info::{ChainInfo, Compatibility, ContractAddressMap, TicketParameters},
         safe::{ModuleAddress, Safe},
+        tickets::{RedeemTicketDetails, RedemptionResult},
         txs::{SafeExecution, Transaction, TransactionStatus},
     };
 }
@@ -33,6 +34,7 @@ pub(crate) mod internal {
             ModuleAddressVariables, QueryModuleAddress, QuerySafeBy, SafeByVariables, SafeSelectorInput,
             SubscribeSafeDeployment,
         },
+        tickets::{SubscribeTicketRedeemed, TicketRedeemedVariables},
         txs::{
             ConfirmTransactionVariables, MutateConfirmTransaction, MutateSendTransaction, MutateTrackTransaction,
             QueryTransaction, SendTransactionVariables, SubscribeTransaction, TransactionsVariables,
@@ -276,6 +278,13 @@ pub trait BlokliSubscriptionClient {
         &self,
         tx_id: TxId,
     ) -> Result<impl futures::Stream<Item = Result<types::Transaction>> + Send>;
+    /// Subscribes to updates of ticket redemptions.
+    fn subscribe_ticket_redeemed(
+        &self,
+        channel_id: Option<cynic::Id>,
+        issuer_address: Option<cynic::Id>,
+        recepient_address: Option<cynic::Id>,
+    ) -> Result<impl futures::Stream<Item = Result<types::RedeemTicketDetails>> + Send>;
 }
 
 /// Trait defining Blokli API for signed transaction submission to the chain.

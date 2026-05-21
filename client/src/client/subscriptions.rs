@@ -6,9 +6,9 @@ use crate::api::{
     AccountSelector, BlokliSubscriptionClient, ChannelSelector, Result, TxId,
     internal::{
         AccountVariables, ChannelsVariables, SubscribeAccounts, SubscribeChannels, SubscribeGraph,
-        SubscribeSafeDeployment, SubscribeTicketParams,
+        SubscribeSafeDeployment, SubscribeTicketParams, SubscribeTicketRedeemed, TicketRedeemedVariables,
     },
-    types::{Account, Channel, OpenedChannelsGraphEntry, Safe, TicketParameters, Transaction},
+    types::{Account, Channel, OpenedChannelsGraphEntry, RedeemTicketDetails, Safe, TicketParameters, Transaction},
 };
 
 impl GraphQlQueries {
@@ -39,6 +39,19 @@ impl GraphQlQueries {
     /// `SubscribeSafeDeployment` subscription GraphQL query.
     pub fn subscribe_safe_deployments() -> cynic::StreamingOperation<SubscribeSafeDeployment, ()> {
         SubscribeSafeDeployment::build(())
+    }
+
+    /// `SubscribeTicketRedeemed` subscription GraphQL query.
+    pub fn subscribe_ticket_redeemed(
+        channel_id: Option<cynic::Id>,
+        issuer_address: Option<cynic::Id>,
+        recepient_address: Option<cynic::Id>,
+    ) -> cynic::StreamingOperation<SubscribeTicketRedeemed, TicketRedeemedVariables> {
+        SubscribeTicketRedeemed::build(TicketRedeemedVariables {
+            channel_id,
+            issuer_address,
+            recepient_address,
+        })
     }
 }
 
@@ -83,5 +96,21 @@ impl BlokliSubscriptionClient for BlokliClient {
         Ok(self
             .build_subscription_stream(GraphQlQueries::subscribe_track_transaction(tx_id))?
             .try_filter_map(|item| futures::future::ok(Some(item.transaction_updated))))
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    fn subscribe_ticket_redeemed(
+        &self,
+        channel_id: Option<cynic::Id>,
+        issuer_address: Option<cynic::Id>,
+        recepient_address: Option<cynic::Id>,
+    ) -> Result<impl futures::Stream<Item = Result<RedeemTicketDetails>> + Send> {
+        Ok(self
+            .build_subscription_stream(GraphQlQueries::subscribe_ticket_redeemed(
+                channel_id,
+                issuer_address,
+                recepient_address,
+            ))?
+            .try_filter_map(|item| futures::future::ok(Some(item.ticket_redeemed))))
     }
 }

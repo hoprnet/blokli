@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use anyhow::{Result, anyhow};
 use blokli_client::api::{
     AccountSelector, BlokliQueryClient, BlokliSubscriptionClient, ChannelFilter, ChannelSelector, SafeSelector,
-    types::{ChannelStatus, TransactionStatus},
+    types::{ChannelStatus, RedemptionResult, TransactionStatus},
 };
 use blokli_integration_tests::{
     constants::{EPSILON, parsed_safe_balance, subscription_timeout},
@@ -664,6 +664,92 @@ async fn subscribe_transaction_status_updates(#[future(awt)] fixture: Integratio
         statuses.contains(&TransactionStatus::Confirmed),
         "Should receive CONFIRMED status"
     );
+
+    Ok(())
+}
+
+#[rstest]
+#[test_log::test(tokio::test)]
+#[serial]
+/// Deploys two safes and announces both nodes. Opens a channel from src to dst, then subscribes
+/// to ticketRedeemed events filtered by that channel ID. Redeems a single ticket from dst's
+/// perspective. Asserts that the subscription delivers exactly one event with the correct issuer,
+/// recipient, ticket index, and redemption outcome (Redeemed).
+async fn subscribe_ticket_redeemed(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
+    let [src, dst] = fixture.sample_accounts::<2>();
+    let channel_id = generate_channel_id(&src.address, &dst.address);
+    let channel_id_hex = Hash::from(channel_id).encode_hex::<String>();
+
+    let ticket_amount = "1 wei wxHOPR".parse::<HoprBalance>().expect("failed to parse amount");
+    let safe_balance = parsed_safe_balance();
+
+    // Deploy safes for both accounts and announce their presence on-chain.
+    let (src_safe, dst_safe) = tokio::try_join!(
+        fixture.deploy_safe_and_announce(&src, safe_balance),
+        fixture.deploy_safe_and_announce(&dst, safe_balance),
+    )?;
+
+    // Approve the channel contract to pull wxHOPR from src's safe and open the channel.
+    fixture.approve(&src, ticket_amount, &src_safe.module_address).await?;
+    fixture
+        .open_channel(src, dst, ticket_amount, &src_safe.module_address, None)
+        .await?;
+
+    // Wait for the channel to be indexed before subscribing so we know epoch=1 is stable.
+    let poll_client = fixture.client().clone();
+    let poll_channel_id = channel_id;
+    poll_until(
+        "channel indexed before ticket redemption subscription",
+        Duration::from_secs(30),
+        Duration::from_millis(500),
+        || {
+            let client = poll_client.clone();
+            let selector = ChannelSelector {
+                filter: Some(ChannelFilter::ChannelId(poll_channel_id.into())),
+                status: Some(ChannelStatus::Open),
+                ..Default::default()
+            };
+            async move {
+                let count = client.count_channels(selector).await?;
+                Ok(if count >= 1 { Some(count) } else { None })
+            }
+        },
+    )
+    .await?;
+
+    // Subscribe to ticket redemptions filtered by the channel ID we just opened.
+    let client = fixture.client().clone();
+    let subscribe_channel_id = channel_id_hex.clone();
+    let handle = tokio::task::spawn(async move {
+        client
+            .subscribe_ticket_redeemed(Some(subscribe_channel_id.into()), None, None)
+            .expect("failed to create ticket redeemed subscription")
+            .next()
+            .timeout(subscription_timeout())
+            .await
+    });
+
+    // Redeem a single ticket: dst redeems ticket index 0 in epoch 1 issued by src.
+    fixture
+        .redeem_ticket(&src, &dst, ticket_amount, &dst_safe.module_address, 0, 1)
+        .await?;
+
+    let event = handle
+        .await??
+        .ok_or_else(|| anyhow!("no ticket redeemed event received from subscription"))??;
+
+    assert_eq!(
+        event.issuer_address.to_lowercase(),
+        src.address.to_string().to_lowercase(),
+        "issuer must be src"
+    );
+    assert_eq!(
+        event.recepient_address.to_lowercase(),
+        dst.address.to_string().to_lowercase(),
+        "recipient must be dst"
+    );
+    assert_eq!(event.index.0, "0", "ticket index must be 0");
+    assert_eq!(event.result, RedemptionResult::Redeemed, "ticket must be accepted");
 
     Ok(())
 }

@@ -805,6 +805,15 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliSubscriptionClient for Blokl
 
         Ok(futures::stream::once(futures::future::ok(tx)).delay(Duration2::from(self.tx_simulation_delay)))
     }
+
+    fn subscribe_ticket_redeemed(
+        &self,
+        _channel_id: Option<cynic::Id>,
+        _issuer_address: Option<cynic::Id>,
+        _recepient_address: Option<cynic::Id>,
+    ) -> Result<impl futures::Stream<Item = Result<RedeemTicketDetails>> + Send> {
+        Ok(futures::stream::empty())
+    }
 }
 
 fn simulate_tx_execution(
