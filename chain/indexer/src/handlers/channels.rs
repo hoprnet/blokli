@@ -378,17 +378,38 @@ where
                 // Decode the packed channel state from the event
                 let decoded = decode_channel(ticket_redeemed.channel);
 
-                // Earliest point in which we have all data for TicketRedeemed Indexer Event
-                let ticket_redeemed = RedeemTicketDetailsInfo {
-                    issuer_address: existing_channel.source.to_string(),
-                    recepient_address: existing_channel.destination.to_string(),
-                    epoch: decoded.epoch,
-                    index: decoded.ticket_index,
-                    channel_id: hex::encode(channel_id),
-                    result: blokli_api_types::RedemptionResult::Redeemed,
-                }; //TODO: move this to some function or
-                // something
-                events.push(crate::state::IndexerEvent::TicketRedeemed(ticket_redeemed));
+                let ticket_value = existing_channel.balance - decoded.balance;
+
+                // Fetch current minimum ticket price. If unavailable (oracle not yet indexed),
+                // allow the event through rather than silently dropping valid redemptions.
+                let min_ticket_price = match self.db.get_indexer_data(tx.into()).await {
+                    Ok(data) => data.ticket_price,
+                    Err(e) => {
+                        warn!(%e, "failed to fetch ticket price for low-value filter; allowing event through");
+                        None
+                    }
+                };
+
+                let above_minimum = min_ticket_price.is_none_or(|min| ticket_value >= min);
+
+                if above_minimum {
+                    let ticket_redeemed = RedeemTicketDetailsInfo {
+                        issuer_address: existing_channel.source.to_string(),
+                        recepient_address: existing_channel.destination.to_string(),
+                        epoch: decoded.epoch,
+                        index: decoded.ticket_index,
+                        channel_id: hex::encode(channel_id),
+                        result: blokli_api_types::RedemptionResult::Redeemed,
+                    };
+                    events.push(crate::state::IndexerEvent::TicketRedeemed(ticket_redeemed));
+                } else {
+                    trace!(
+                        %channel_id,
+                        ticket_value = %ticket_value,
+                        min = %min_ticket_price.unwrap(),
+                        "TicketRedeemed: skipping low-value ticket"
+                    );
+                }
 
                 trace!(
                     %channel_id,

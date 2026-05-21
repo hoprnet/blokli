@@ -1520,13 +1520,12 @@ mod tests {
     use std::time::Duration;
 
     use async_graphql::{EmptyMutation, Object, Schema};
+    use blokli_api_types::RedemptionResult;
     use blokli_chain_indexer::state::IndexerEvent;
     use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb};
     use blokli_db_entity::{hopr_safe_contract, hopr_safe_contract_state};
     use futures::StreamExt;
     use sea_orm::{ActiveModelTrait, Set};
-
-    use blokli_api_types::RedemptionResult;
 
     use super::*;
     use crate::schema::GasMultiplier;
