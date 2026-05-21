@@ -28,18 +28,10 @@ struct QueuedQuery {
 ///
 /// A handle is returned when a query is added to a batch. After executing the batch, pass the handle to
 /// [`BlokliQueryBatchResult::take`] to retrieve that query's typed result.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct QueryHandle<T> {
     index: usize,
     phantom: PhantomData<fn() -> T>,
-}
-
-impl<T> Copy for QueryHandle<T> {}
-
-impl<T> Clone for QueryHandle<T> {
-    fn clone(&self) -> Self {
-        *self
-    }
 }
 
 /// Builder for executing multiple read-only Blokli GraphQL queries in a single HTTP request.
