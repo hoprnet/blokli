@@ -384,10 +384,10 @@ where
                     recepient_address: existing_channel.destination.to_string(),
                     epoch: decoded.epoch,
                     index: decoded.ticket_index,
-                    channel_id: hex::encode(&channel_id),
+                    channel_id: hex::encode(channel_id),
                     result: blokli_api_types::RedemptionResult::Redeemed,
                 }; //TODO: move this to some function or
-                //something
+                // something
                 events.push(crate::state::IndexerEvent::TicketRedeemed(ticket_redeemed));
 
                 trace!(

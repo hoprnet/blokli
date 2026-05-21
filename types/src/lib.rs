@@ -684,12 +684,25 @@ pub struct RedeemedStatsFilter {
     pub node_address: Option<String>,
 }
 
+/// Outcome of a ticket redemption attempt.
+///
+/// Carried in [`RedeemTicketDetails`] to allow subscribers to distinguish
+/// successful on-chain redemptions from inner Safe transaction failures
+/// (rejected) without polling the chain.
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum RedemptionResult {
+    /// Ticket was successfully redeemed on-chain.
     Redeemed,
+    /// Ticket redemption was rejected (inner Safe transaction failed).
     Rejected,
 }
 
+/// GraphQL output type for a ticket redemption event.
+///
+/// Uniquely identifies the ticket (`issuerAddress` + `recepientAddress` +
+/// `epoch` + `index`) and reports whether it was accepted or rejected.
+///
+/// Returned by the `ticketRedeemed` subscription.
 #[derive(SimpleObject, Clone, Debug)]
 pub struct RedeemTicketDetails {
     /// Issuer account on-chain address in hexadecimal format
@@ -698,31 +711,37 @@ pub struct RedeemTicketDetails {
     /// Recipient account on-chain address in hexadecimal format
     #[graphql(name = "recepientAddress")]
     pub recepient_address: String,
-    /// Epoch of the Channel where the ticket has been redeemed
+    /// Epoch of the channel where the ticket was redeemed
     pub epoch: u32,
-    /// Index of the ticket in the Channel
+    /// Index of the ticket within the channel epoch
     pub index: u64,
-    /// Result of the redemption attempt
+    /// Outcome of the redemption attempt
     pub result: RedemptionResult,
 }
 
-/// DTO for ReedemTicketDetail, carying extra information.
+/// Internal event payload for ticket redemption, extending [`RedeemTicketDetails`]
+/// with the channel ID needed for subscription filtering.
+///
+/// Produced by the indexer handler and published on the event bus.
+/// Converted to [`RedeemTicketDetails`] (dropping `channel_id`) before
+/// yielding to GraphQL subscribers.
 #[derive(Debug, Clone)]
 pub struct RedeemTicketDetailsInfo {
     /// Issuer account on-chain address in hexadecimal format
     pub issuer_address: String,
     /// Recipient account on-chain address in hexadecimal format
     pub recepient_address: String,
-    /// Epoch of the Channel where the ticket has been redeemed
+    /// Epoch of the channel where the ticket was redeemed
     pub epoch: u32,
-    /// Channel ID
+    /// Channel ID in lowercase hex (no `0x` prefix), used for subscription filtering
     pub channel_id: String,
-    /// Index of the ticket in the Channel
+    /// Index of the ticket within the channel epoch
     pub index: u64,
-    /// Result of the redemption attempt
+    /// Outcome of the redemption attempt
     pub result: RedemptionResult,
 }
 
+/// Strip `channel_id` (used only for filtering) and expose the GraphQL fields.
 impl From<RedeemTicketDetailsInfo> for RedeemTicketDetails {
     fn from(value: RedeemTicketDetailsInfo) -> Self {
         Self {

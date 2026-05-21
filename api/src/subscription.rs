@@ -1215,15 +1215,24 @@ impl SubscriptionRoot {
         })
     }
 
+    /// Subscribe to real-time updates of ticket redemptions.
+    ///
+    /// Streams a [`RedeemTicketDetails`] item each time a ticket redemption event
+    /// is observed on-chain. Covers both successful redemptions and inner Safe
+    /// transaction rejections (see [`RedemptionResult`]).
+    ///
+    /// At most one of the three filter arguments is typically supplied. When none
+    /// are given, all ticket redemption events are emitted. Input addresses and
+    /// channel IDs are validated as hex before the stream is established.
     #[graphql(name = "ticketRedeemed")]
     async fn ticket_redeemed(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "Filter by channel ID (hexadecimal format)")] channel_id: Option<ID>,
-        #[graphql(desc = "Filter by ticket issuesr (hexadecimal format)")] issuer_address: Option<ID>,
-        #[graphql(desc = "Filter by ticket recepient (hexadecimal format)")] recepient_address: Option<ID>,
+        #[graphql(desc = "Filter by ticket issuer (hexadecimal format)")] issuer_address: Option<ID>,
+        #[graphql(desc = "Filter by ticket recipient (hexadecimal format)")] recepient_address: Option<ID>,
     ) -> Result<impl Stream<Item = RedeemTicketDetails>> {
-        // Validate correctnes of input parameters
+        // Validate correctness of input parameters
         if let Some(channel_id) = &channel_id {
             hex::check(channel_id.as_bytes()).map_err(|e| {
                 async_graphql::Error::new(format!("Invalid channel ID format: {}. Expected hex format.", e))
@@ -1348,6 +1357,18 @@ impl SubscriptionRoot {
     }
 }
 
+/// Check whether a ticket redemption event matches the subscription filters.
+///
+/// Filters are ANDed — all non-`None` arguments must match. An absent filter
+/// matches everything.
+///
+/// * Channel ID comparison strips the `0x` prefix from the filter value if present, then compares against the lowercase
+///   hex stored in [`RedeemTicketDetailsInfo::channel_id`].
+/// * Address comparisons normalise both the filter value and the stored address via [`Address::from_hex`], giving
+///   case-insensitive, prefix-agnostic matching.
+///
+/// Returns `false` and silently drops the event if either address is unparseable
+/// (this is a defensive fallback — inputs are validated before the stream starts).
 fn match_ticket_filters(
     info: &RedeemTicketDetailsInfo,
     channel_id: &Option<ID>,
@@ -1355,14 +1376,14 @@ fn match_ticket_filters(
     recepient_address: &Option<ID>,
 ) -> bool {
     if let Some(channel_id) = channel_id {
-        let channel_id_normalized = channel_id.strip_prefix("0x").unwrap_or(&channel_id);
+        let channel_id_normalized = channel_id.strip_prefix("0x").unwrap_or(channel_id);
         if info.channel_id != channel_id_normalized {
             return false;
         }
     }
 
     if let Some(iss_addr) = issuer_address {
-        let iss = match Address::from_hex(&iss_addr) {
+        let iss = match Address::from_hex(iss_addr) {
             Ok(iss) => iss,
             Err(_) => {
                 // Invalid address - this should never happen due to early validation of inputs
@@ -1382,7 +1403,7 @@ fn match_ticket_filters(
     }
 
     if let Some(rec_addr) = recepient_address {
-        let rec = match Address::from_hex(&rec_addr) {
+        let rec = match Address::from_hex(rec_addr) {
             Ok(rec) => rec,
             Err(_) => {
                 // Invalid address - this should never happen due to early validation of inputs
@@ -1504,6 +1525,8 @@ mod tests {
     use blokli_db_entity::{hopr_safe_contract, hopr_safe_contract_state};
     use futures::StreamExt;
     use sea_orm::{ActiveModelTrait, Set};
+
+    use blokli_api_types::RedemptionResult;
 
     use super::*;
     use crate::schema::GasMultiplier;
@@ -2712,6 +2735,171 @@ mod tests {
         assert!(
             seen_different,
             "5 subscription runs of 10 accounts should produce at least one different Phase 1 ordering"
+        );
+    }
+
+    // ── match_ticket_filters ──────────────────────────────────────────────────
+
+    const TEST_ISSUER_ADDR: &str = "0x1111111111111111111111111111111111111111";
+    const TEST_RECIPIENT_ADDR: &str = "0x2222222222222222222222222222222222222222";
+    const TEST_OTHER_ADDR: &str = "0x3333333333333333333333333333333333333333";
+    /// Lowercase hex without 0x prefix — matches how `hex::encode` stores channel IDs.
+    const TEST_CHANNEL_ID: &str = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
+    const TEST_CHANNEL_ID_0X: &str = "0xabcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
+    const TEST_CHANNEL_ID_OTHER: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
+    fn make_test_ticket_info() -> RedeemTicketDetailsInfo {
+        RedeemTicketDetailsInfo {
+            issuer_address: TEST_ISSUER_ADDR.to_string(),
+            recepient_address: TEST_RECIPIENT_ADDR.to_string(),
+            epoch: 1,
+            index: 42,
+            channel_id: TEST_CHANNEL_ID.to_string(),
+            result: RedemptionResult::Redeemed,
+        }
+    }
+
+    #[rstest::rstest]
+    #[case(None, None, None, true)]
+    #[case(Some(ID::from(TEST_CHANNEL_ID)), None, None, true)]
+    #[case(Some(ID::from(TEST_CHANNEL_ID_0X)), None, None, true)]
+    #[case(Some(ID::from(TEST_CHANNEL_ID_OTHER)), None, None, false)]
+    #[case(None, Some(ID::from(TEST_ISSUER_ADDR)), None, true)]
+    #[case(None, Some(ID::from(TEST_OTHER_ADDR)), None, false)]
+    #[case(None, None, Some(ID::from(TEST_RECIPIENT_ADDR)), true)]
+    #[case(None, None, Some(ID::from(TEST_OTHER_ADDR)), false)]
+    #[case(
+        Some(ID::from(TEST_CHANNEL_ID)),
+        Some(ID::from(TEST_ISSUER_ADDR)),
+        Some(ID::from(TEST_RECIPIENT_ADDR)),
+        true
+    )]
+    #[case(
+        Some(ID::from(TEST_CHANNEL_ID)),
+        Some(ID::from(TEST_OTHER_ADDR)),
+        Some(ID::from(TEST_RECIPIENT_ADDR)),
+        false
+    )]
+    fn test_match_ticket_filters(
+        #[case] channel_id: Option<ID>,
+        #[case] issuer: Option<ID>,
+        #[case] recipient: Option<ID>,
+        #[case] expected: bool,
+    ) {
+        let info = make_test_ticket_info();
+        assert_eq!(match_ticket_filters(&info, &channel_id, &issuer, &recipient), expected);
+    }
+
+    // ── ticketRedeemed subscription ───────────────────────────────────────────
+
+    fn make_subscription_schema(
+        conn: &DatabaseConnection,
+        indexer_state: &IndexerState,
+    ) -> Schema<DummyQuery, EmptyMutation, SubscriptionRoot> {
+        Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
+            .data(conn.clone())
+            .data(indexer_state.clone())
+            .data(GasMultiplier(1.0))
+            .finish()
+    }
+
+    #[tokio::test]
+    async fn test_ticket_redeemed_subscription_yields_on_event() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let indexer_state = IndexerState::new(10, 100);
+        let schema = make_subscription_schema(db.conn(blokli_db::TargetDb::Index), &indexer_state);
+
+        let query = r#"subscription { ticketRedeemed { issuerAddress recepientAddress epoch index result } }"#;
+        let mut stream = schema.execute_stream(query).boxed();
+
+        let ticket_info = make_test_ticket_info();
+        let indexer_clone = indexer_state.clone();
+        let info_clone = ticket_info.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            indexer_clone.publish_event(IndexerEvent::TicketRedeemed(info_clone));
+        });
+
+        let response = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout waiting for ticketRedeemed event")
+            .expect("stream ended early");
+        let data = response.into_result().expect("response error").data;
+
+        assert_eq!(
+            data,
+            async_graphql::Value::from_json(serde_json::json!({
+                "ticketRedeemed": {
+                    "issuerAddress": TEST_ISSUER_ADDR,
+                    "recepientAddress": TEST_RECIPIENT_ADDR,
+                    "epoch": 1,
+                    "index": 42,
+                    "result": "REDEEMED"
+                }
+            }))
+            .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ticket_redeemed_subscription_filters_by_channel_id() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let indexer_state = IndexerState::new(10, 100);
+        let schema = make_subscription_schema(db.conn(blokli_db::TargetDb::Index), &indexer_state);
+
+        let query = format!(
+            r#"subscription {{ ticketRedeemed(channelId: "{}") {{ issuerAddress }} }}"#,
+            TEST_CHANNEL_ID
+        );
+        let mut stream = schema.execute_stream(query.as_str()).boxed();
+
+        let matching = make_test_ticket_info();
+        let non_matching = RedeemTicketDetailsInfo {
+            channel_id: TEST_CHANNEL_ID_OTHER.to_string(),
+            ..make_test_ticket_info()
+        };
+
+        let indexer_clone = indexer_state.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            indexer_clone.publish_event(IndexerEvent::TicketRedeemed(non_matching));
+            indexer_clone.publish_event(IndexerEvent::TicketRedeemed(matching));
+        });
+
+        let response = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout waiting for matching ticketRedeemed event")
+            .expect("stream ended early");
+        let data = response.into_result().expect("response error").data;
+
+        assert_eq!(
+            data,
+            async_graphql::Value::from_json(serde_json::json!({
+                "ticketRedeemed": { "issuerAddress": TEST_ISSUER_ADDR }
+            }))
+            .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ticket_redeemed_subscription_ignores_other_indexer_events() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let indexer_state = IndexerState::new(10, 100);
+        let schema = make_subscription_schema(db.conn(blokli_db::TargetDb::Index), &indexer_state);
+
+        let query = r#"subscription { ticketRedeemed { issuerAddress } }"#;
+        let mut stream = schema.execute_stream(query).boxed();
+
+        let indexer_clone = indexer_state.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            indexer_clone.publish_event(IndexerEvent::KeyBindingFeeUpdated(TokenValueString("999".to_string())));
+        });
+
+        let timeout_result = tokio::time::timeout(Duration::from_millis(500), stream.next()).await;
+        assert!(
+            timeout_result.is_err(),
+            "non-TicketRedeemed events must not produce subscription items"
         );
     }
 }

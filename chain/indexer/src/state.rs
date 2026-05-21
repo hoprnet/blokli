@@ -46,6 +46,10 @@ pub enum IndexerEvent {
     /// for the GraphQL subscription.
     TicketParametersUpdated(TicketParameters),
 
+    /// A ticket redemption was observed on-chain (either accepted or rejected).
+    ///
+    /// Carries all fields needed to identify the ticket and report the outcome.
+    /// Subscribers filter by channel ID, issuer, or recipient address.
     TicketRedeemed(RedeemTicketDetailsInfo),
 }
 
