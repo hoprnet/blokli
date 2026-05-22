@@ -178,7 +178,26 @@ impl std::fmt::Debug for RedeemedStatsSelector {
     }
 }
 
-/// Allows filtering ticket redemption subscription events by channel id, issuer address, or recipient address.
+/// Filters which ticket redemption events are delivered by a [`BlokliSubscriptionClient::subscribe_ticket_redeemed`]
+/// subscription.
+///
+/// Pass one of the variants to receive only events matching that criterion, or [`TicketSelector::Any`] to receive all
+/// events.
+///
+/// # Examples
+///
+/// ```ignore
+/// use blokli_client::api::v1::{TicketSelector, ChannelId, ChainAddress};
+///
+/// // Subscribe to all redemptions in a specific channel
+/// let by_channel = TicketSelector::ChannelId(channel_id);
+///
+/// // Subscribe to all redemptions where a specific node is the issuer
+/// let by_issuer = TicketSelector::IssuerAddress(issuer_address);
+///
+/// // Subscribe to every redemption event regardless of channel or party
+/// let any = TicketSelector::Any;
+/// ```
 #[derive(Clone)]
 pub enum TicketSelector {
     /// Filter by channel id.
@@ -302,9 +321,32 @@ pub trait BlokliSubscriptionClient {
         &self,
         tx_id: TxId,
     ) -> Result<impl futures::Stream<Item = Result<types::Transaction>> + Send>;
-    /// Subscribes to updates of ticket redemptions matching the given [`selector`](TicketSelector).
+    /// Subscribes to on-chain ticket redemption events matching the given [`TicketSelector`].
     ///
-    /// If [`TicketSelector::Any`] is given, subscribes to all ticket redemption events.
+    /// Returns an infinite stream of `Result<`[`types::RedeemTicketDetails`]`>`. Each item represents
+    /// one redemption event that passed the selector filter. The stream terminates when the
+    /// underlying SSE connection closes; errors (network, parse) are yielded as `Err` items.
+    ///
+    /// Use [`TicketSelector::Any`] to receive every redemption, or narrow by channel, issuer, or
+    /// recipient address.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use futures::StreamExt;
+    /// use blokli_client::api::v1::{BlokliSubscriptionClient, TicketSelector};
+    ///
+    /// let mut stream = client
+    ///     .subscribe_ticket_redeemed(TicketSelector::Any)
+    ///     .expect("failed to subscribe");
+    ///
+    /// while let Some(result) = stream.next().await {
+    ///     match result {
+    ///         Ok(event) => println!("redeemed ticket {} in epoch {}", event.index, event.epoch),
+    ///         Err(e) => eprintln!("stream error: {e}"),
+    ///     }
+    /// }
+    /// ```
     fn subscribe_ticket_redeemed(
         &self,
         selector: TicketSelector,

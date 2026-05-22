@@ -13,7 +13,9 @@ use std::sync::{
 };
 
 use async_broadcast::{Receiver, Sender, broadcast};
-use blokli_api_types::{Account, ChannelUpdate, RedeemTicketDetails, TicketParameters, TokenValueString, UInt64};
+use blokli_api_types::{
+    Account, ChannelUpdate, RedeemTicketDetails, RedemptionResult, TicketParameters, TokenValueString, UInt64,
+};
 use hopr_types::primitive::prelude::Address;
 use tokio::sync::RwLock;
 
@@ -22,6 +24,23 @@ use tokio::sync::RwLock;
 /// Carries all fields needed to identify the ticket and report the outcome.
 /// The `channel_id` field is used for subscription filtering and stripped
 /// before the event is yielded to GraphQL clients (see `From` impl below).
+///
+/// # Examples
+///
+/// ```
+/// use blokli_api_types::{RedeemTicketDetails, RedemptionResult};
+/// use blokli_chain_indexer::state::RedeemTicketDetailsInfo;
+///
+/// let info = RedeemTicketDetailsInfo {
+///     issuer_address: "0xaabbccdd".to_string(),
+///     recipient_address: "0xddeeff00".to_string(),
+///     epoch: 1,
+///     index: 0,
+///     channel_id: "14a2c4f5".to_string(),
+///     result: RedemptionResult::Redeemed,
+/// };
+/// let gql: RedeemTicketDetails = info.into();
+/// ```
 #[derive(Debug, Clone)]
 pub struct RedeemTicketDetailsInfo {
     /// Issuer account on-chain address in hexadecimal format
@@ -35,7 +54,7 @@ pub struct RedeemTicketDetailsInfo {
     /// Index of the ticket within the channel epoch
     pub index: u64,
     /// Outcome of the redemption attempt
-    pub result: blokli_api_types::RedemptionResult,
+    pub result: RedemptionResult,
 }
 
 impl From<RedeemTicketDetailsInfo> for RedeemTicketDetails {

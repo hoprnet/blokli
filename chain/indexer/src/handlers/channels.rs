@@ -16,7 +16,7 @@ use super::{ContractEventHandlers, channel_utils::decode_channel, helpers::const
 use crate::{
     errors::{CoreEthereumIndexerError, Result},
     handlers::helpers::build_channel_entry,
-    state::RedeemTicketDetailsInfo,
+    state::{IndexerEvent, RedeemTicketDetailsInfo},
 };
 
 impl<T, Db> ContractEventHandlers<T, Db>
@@ -32,7 +32,7 @@ where
         tx_index: u32,
         log_index: u32,
         is_synced: bool,
-    ) -> Result<Vec<crate::state::IndexerEvent>> {
+    ) -> Result<Vec<IndexerEvent>> {
         #[cfg(all(feature = "telemetry", not(test)))]
         increment_indexer_contract_log_count("channels");
 
@@ -88,7 +88,7 @@ where
                     };
                     let above_minimum = min_ticket_price.is_none_or(|min| diff >= min);
                     if above_minimum {
-                        events.push(crate::state::IndexerEvent::TicketRedeemed(RedeemTicketDetailsInfo {
+                        events.push(IndexerEvent::TicketRedeemed(RedeemTicketDetailsInfo {
                             issuer_address: existing_channel.source.to_string(),
                             recipient_address: existing_channel.destination.to_string(),
                             epoch: decoded.epoch,
@@ -150,7 +150,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for ChannelBalanceDecreased");
@@ -218,7 +218,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for ChannelBalanceIncreased");
@@ -284,7 +284,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for ChannelClosed");
@@ -368,7 +368,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for ChannelOpened");
@@ -428,7 +428,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for TicketRedeemed");
@@ -488,7 +488,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for OutgoingChannelClosureInitiated");

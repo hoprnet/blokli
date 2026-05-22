@@ -766,7 +766,7 @@ async fn subscribe_ticket_redeemed(#[future(awt)] fixture: IntegrationFixture) -
         dst.address.to_string().to_lowercase(),
         "recipient must be dst"
     );
-    assert_eq!(event.index.0, "0", "ticket index must be 0");
+    assert_eq!(event.index.0, ticket_index.to_string(), "ticket index must match");
     assert_eq!(event.result, RedemptionResult::Redeemed, "ticket must be accepted");
 
     Ok(())

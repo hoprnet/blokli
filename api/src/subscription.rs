@@ -2843,8 +2843,8 @@ mod tests {
                 "ticketRedeemed": {
                     "issuerAddress": TEST_ISSUER_ADDR,
                     "recipientAddress": TEST_RECIPIENT_ADDR,
-                    "epoch": 1,
-                    "index": 42,
+                    "epoch": "1",
+                    "index": "42",
                     "result": "REDEEMED"
                 }
             }))
