@@ -178,6 +178,30 @@ impl std::fmt::Debug for RedeemedStatsSelector {
     }
 }
 
+/// Allows filtering ticket redemption subscription events by channel id, issuer address, or recipient address.
+#[derive(Clone)]
+pub enum TicketSelector {
+    /// Filter by channel id.
+    ChannelId(ChannelId),
+    /// Filter by issuer (source node) address.
+    IssuerAddress(ChainAddress),
+    /// Filter by recipient (destination node) address.
+    RecipientAddress(ChainAddress),
+    /// Matches any ticket redemption event.
+    Any,
+}
+
+impl std::fmt::Debug for TicketSelector {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ChannelId(channel_id) => write!(f, "ChannelId({})", hex::encode(channel_id)),
+            Self::IssuerAddress(address) => write!(f, "IssuerAddress({})", hex::encode(address)),
+            Self::RecipientAddress(address) => write!(f, "RecipientAddress({})", hex::encode(address)),
+            Self::Any => write!(f, "Any"),
+        }
+    }
+}
+
 /// Input for the [`query_module_address_prediction`] query.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ModulePredictionInput {
@@ -278,12 +302,12 @@ pub trait BlokliSubscriptionClient {
         &self,
         tx_id: TxId,
     ) -> Result<impl futures::Stream<Item = Result<types::Transaction>> + Send>;
-    /// Subscribes to updates of ticket redemptions.
+    /// Subscribes to updates of ticket redemptions matching the given [`selector`](TicketSelector).
+    ///
+    /// If [`TicketSelector::Any`] is given, subscribes to all ticket redemption events.
     fn subscribe_ticket_redeemed(
         &self,
-        channel_id: Option<cynic::Id>,
-        issuer_address: Option<cynic::Id>,
-        recipient_address: Option<cynic::Id>,
+        selector: TicketSelector,
     ) -> Result<impl futures::Stream<Item = Result<types::RedeemTicketDetails>> + Send>;
 }
 

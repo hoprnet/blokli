@@ -808,9 +808,7 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliSubscriptionClient for Blokl
 
     fn subscribe_ticket_redeemed(
         &self,
-        _channel_id: Option<cynic::Id>,
-        _issuer_address: Option<cynic::Id>,
-        _recipient_address: Option<cynic::Id>,
+        _selector: TicketSelector,
     ) -> Result<impl futures::Stream<Item = Result<RedeemTicketDetails>> + Send> {
         Ok(futures::stream::empty())
     }

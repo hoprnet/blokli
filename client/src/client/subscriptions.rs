@@ -3,7 +3,7 @@ use futures::{Stream, TryStreamExt};
 
 use super::{BlokliClient, GraphQlQueries};
 use crate::api::{
-    AccountSelector, BlokliSubscriptionClient, ChannelSelector, Result, TxId,
+    AccountSelector, BlokliSubscriptionClient, ChannelSelector, Result, TicketSelector, TxId,
     internal::{
         AccountVariables, ChannelsVariables, SubscribeAccounts, SubscribeChannels, SubscribeGraph,
         SubscribeSafeDeployment, SubscribeTicketParams, SubscribeTicketRedeemed, TicketRedeemedVariables,
@@ -43,15 +43,9 @@ impl GraphQlQueries {
 
     /// `SubscribeTicketRedeemed` subscription GraphQL query.
     pub fn subscribe_ticket_redeemed(
-        channel_id: Option<cynic::Id>,
-        issuer_address: Option<cynic::Id>,
-        recipient_address: Option<cynic::Id>,
+        selector: TicketSelector,
     ) -> cynic::StreamingOperation<SubscribeTicketRedeemed, TicketRedeemedVariables> {
-        SubscribeTicketRedeemed::build(TicketRedeemedVariables {
-            channel_id,
-            issuer_address,
-            recipient_address,
-        })
+        SubscribeTicketRedeemed::build(TicketRedeemedVariables::from(selector))
     }
 }
 
@@ -98,19 +92,13 @@ impl BlokliSubscriptionClient for BlokliClient {
             .try_filter_map(|item| futures::future::ok(Some(item.transaction_updated))))
     }
 
-    #[tracing::instrument(level = "debug", skip(self))]
+    #[tracing::instrument(level = "debug", skip(self), fields(?selector))]
     fn subscribe_ticket_redeemed(
         &self,
-        channel_id: Option<cynic::Id>,
-        issuer_address: Option<cynic::Id>,
-        recipient_address: Option<cynic::Id>,
+        selector: TicketSelector,
     ) -> Result<impl futures::Stream<Item = Result<RedeemTicketDetails>> + Send> {
         Ok(self
-            .build_subscription_stream(GraphQlQueries::subscribe_ticket_redeemed(
-                channel_id,
-                issuer_address,
-                recipient_address,
-            ))?
+            .build_subscription_stream(GraphQlQueries::subscribe_ticket_redeemed(selector))?
             .try_filter_map(|item| futures::future::ok(Some(item.ticket_redeemed))))
     }
 }

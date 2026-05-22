@@ -6,13 +6,16 @@ use async_broadcast::Receiver;
 use async_graphql::{Context, ID, Result, Subscription};
 use async_stream::stream;
 use blokli_api_types::{
-    Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, RedeemTicketDetails, RedeemTicketDetailsInfo,
-    Safe, TicketParameters, TokenValueString, Transaction, UInt64,
+    Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, RedeemTicketDetails, Safe, TicketParameters,
+    TokenValueString, Transaction, UInt64,
 };
 use blokli_chain_api::transaction_store::{
     TransactionEvent, TransactionStatus as StoreTransactionStatus, TransactionStore,
 };
-use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
+use blokli_chain_indexer::{
+    IndexerState,
+    state::{IndexerEvent, RedeemTicketDetailsInfo},
+};
 use blokli_db_entity::{
     chain_info,
     chain_info::Entity as ChainInfoEntity,
@@ -1530,7 +1533,7 @@ mod tests {
 
     use async_graphql::{EmptyMutation, Object, Schema};
     use blokli_api_types::RedemptionResult;
-    use blokli_chain_indexer::state::IndexerEvent;
+    use blokli_chain_indexer::state::{IndexerEvent, RedeemTicketDetailsInfo};
     use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb};
     use blokli_db_entity::{hopr_safe_contract, hopr_safe_contract_state};
     use futures::StreamExt;

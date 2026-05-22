@@ -1,4 +1,4 @@
-use blokli_api_types::RedeemTicketDetailsInfo;
+use blokli_api_types::RedemptionResult;
 use blokli_chain_rpc::HoprIndexerRpcOperations;
 use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator, errors::DbSqlError};
@@ -16,6 +16,7 @@ use super::{ContractEventHandlers, channel_utils::decode_channel, helpers::const
 use crate::{
     errors::{CoreEthereumIndexerError, Result},
     handlers::helpers::build_channel_entry,
+    state::RedeemTicketDetailsInfo,
 };
 
 impl<T, Db> ContractEventHandlers<T, Db>
@@ -76,6 +77,29 @@ where
                     diff = %diff,
                     "ChannelBalanceDecreased: decoded channel state"
                 );
+
+                if is_synced {
+                    let min_ticket_price = match self.db.get_indexer_data(tx.into()).await {
+                        Ok(data) => data.ticket_price,
+                        Err(e) => {
+                            warn!(%channel_id, %e, "ChannelBalanceDecreased: failed to get ticket price filter");
+                            None
+                        }
+                    };
+                    let above_minimum = min_ticket_price.is_none_or(|min| diff >= min);
+                    if above_minimum {
+                        events.push(crate::state::IndexerEvent::TicketRedeemed(RedeemTicketDetailsInfo {
+                            issuer_address: existing_channel.source.to_string(),
+                            recipient_address: existing_channel.destination.to_string(),
+                            epoch: decoded.epoch,
+                            index: decoded.ticket_index.saturating_sub(1),
+                            channel_id: hex::encode(channel_id),
+                            result: RedemptionResult::Redeemed,
+                        }));
+                    } else if let Some(min) = min_ticket_price {
+                        trace!(%channel_id, diff = %diff, min = %min, "ChannelBalanceDecreased: skipping low-value ticket redemption event");
+                    }
+                }
 
                 let destination_account = self.db.get_account(tx.into(), existing_channel.destination).await?;
 
@@ -377,39 +401,6 @@ where
 
                 // Decode the packed channel state from the event
                 let decoded = decode_channel(ticket_redeemed.channel);
-
-                let ticket_value = existing_channel.balance - decoded.balance;
-
-                // Fetch current minimum ticket price. If unavailable (oracle not yet indexed),
-                // allow the event through rather than silently dropping valid redemptions.
-                let min_ticket_price = match self.db.get_indexer_data(tx.into()).await {
-                    Ok(data) => data.ticket_price,
-                    Err(e) => {
-                        warn!(%e, "failed to fetch ticket price for low-value filter; allowing event through");
-                        None
-                    }
-                };
-
-                let above_minimum = min_ticket_price.is_none_or(|min| ticket_value >= min);
-
-                if above_minimum && is_synced {
-                    let ticket_redeemed = RedeemTicketDetailsInfo {
-                        issuer_address: existing_channel.source.to_string(),
-                        recipient_address: existing_channel.destination.to_string(),
-                        epoch: decoded.epoch,
-                        index: decoded.ticket_index,
-                        channel_id: hex::encode(channel_id),
-                        result: blokli_api_types::RedemptionResult::Redeemed,
-                    };
-                    events.push(crate::state::IndexerEvent::TicketRedeemed(ticket_redeemed));
-                } else if !above_minimum {
-                    trace!(
-                        %channel_id,
-                        ticket_value = %ticket_value,
-                        min = %min_ticket_price.unwrap(),
-                        "TicketRedeemed: skipping low-value ticket"
-                    );
-                }
 
                 trace!(
                     %channel_id,

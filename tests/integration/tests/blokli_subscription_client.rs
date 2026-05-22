@@ -1,8 +1,12 @@
-use std::time::{Duration, Instant};
+use std::{
+    str::FromStr,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Result, anyhow};
 use blokli_client::api::{
     AccountSelector, BlokliQueryClient, BlokliSubscriptionClient, ChannelFilter, ChannelSelector, SafeSelector,
+    TicketSelector,
     types::{ChannelStatus, RedemptionResult, TransactionStatus},
 };
 use blokli_integration_tests::{
@@ -13,6 +17,7 @@ use eventsource_client::{Client, ClientBuilder, SSE};
 use futures::stream::StreamExt;
 use futures_time::{future::FutureExt as FutureTimeoutExt, time::Duration as FuturesDuration};
 use hex::{FromHex, ToHex};
+use hopli_lib::exports::alloy::sol_types::sol_data::Address;
 use hopr_bindings::exports::alloy::primitives::U256;
 use hopr_types::{
     crypto::{keypairs::Keypair, types::Hash},
@@ -678,9 +683,8 @@ async fn subscribe_transaction_status_updates(#[future(awt)] fixture: Integratio
 async fn subscribe_ticket_redeemed(#[future(awt)] fixture: IntegrationFixture) -> Result<()> {
     let [src, dst] = fixture.sample_accounts::<2>();
     let channel_id = generate_channel_id(&src.address, &dst.address);
-    let channel_id_hex = Hash::from(channel_id).encode_hex::<String>();
 
-    let ticket_amount = "1 wei wxHOPR".parse::<HoprBalance>().expect("failed to parse amount");
+    let ticket_amount = "0.2 wxHOPR".parse::<HoprBalance>().expect("failed to parse amount");
     let safe_balance = parsed_safe_balance();
 
     // Deploy safes for both accounts and announce their presence on-chain.
@@ -695,34 +699,41 @@ async fn subscribe_ticket_redeemed(#[future(awt)] fixture: IntegrationFixture) -
         .open_channel(src, dst, ticket_amount, &src_safe.module_address, None)
         .await?;
 
+    let channel_selector = ChannelSelector {
+        filter: Some(ChannelFilter::ChannelId(channel_id.into())),
+        status: Some(ChannelStatus::Open),
+        ..Default::default()
+    };
     // Wait for the channel to be indexed before subscribing so we know epoch=1 is stable.
-    let poll_client = fixture.client().clone();
-    let poll_channel_id = channel_id;
-    poll_until(
-        "channel indexed before ticket redemption subscription",
+    let selector = channel_selector.clone();
+    let client = fixture.client().clone();
+    let channels = poll_until(
+        "channel open indexed",
         Duration::from_secs(30),
         Duration::from_millis(500),
         || {
-            let client = poll_client.clone();
-            let selector = ChannelSelector {
-                filter: Some(ChannelFilter::ChannelId(poll_channel_id.into())),
-                status: Some(ChannelStatus::Open),
-                ..Default::default()
-            };
+            let client = client.clone();
+            let selector = selector.clone();
             async move {
-                let count = client.count_channels(selector).await?;
-                Ok(if count >= 1 { Some(count) } else { None })
+                let channels = client.query_channels(selector).await?;
+                Ok(if channels.channels.is_empty() {
+                    None
+                } else {
+                    Some(channels)
+                })
             }
         },
     )
     .await?;
+    let channel = channels.channels.first().unwrap();
+
+    let ticket_index: u64 = channel.ticket_index.0.parse()?;
+    let channel_epoch = u32::try_from(channel.epoch).unwrap();
 
     // Subscribe to ticket redemptions filtered by the channel ID we just opened.
-    let client = fixture.client().clone();
-    let subscribe_channel_id = channel_id_hex.clone();
     let handle = tokio::task::spawn(async move {
         client
-            .subscribe_ticket_redeemed(Some(subscribe_channel_id.into()), None, None)
+            .subscribe_ticket_redeemed(TicketSelector::ChannelId(channel_id.into()))
             .expect("failed to create ticket redeemed subscription")
             .next()
             .timeout(subscription_timeout())
@@ -731,7 +742,14 @@ async fn subscribe_ticket_redeemed(#[future(awt)] fixture: IntegrationFixture) -
 
     // Redeem a single ticket: dst redeems ticket index 0 in epoch 1 issued by src.
     fixture
-        .redeem_ticket(&src, &dst, ticket_amount, &dst_safe.module_address, 0, 1)
+        .redeem_ticket(
+            &src,
+            &dst,
+            ticket_amount,
+            &dst_safe.module_address,
+            ticket_index,
+            channel_epoch,
+        )
         .await?;
 
     let event = handle
