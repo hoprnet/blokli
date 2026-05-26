@@ -2,10 +2,7 @@
 
 use std::{pin::Pin, sync::Arc, time::Instant};
 
-use async_graphql::{
-    Schema,
-    http::{GraphQLPlaygroundConfig, playground_source},
-};
+use async_graphql::{Schema, http::GraphiQLSource};
 use async_stream::stream;
 use axum::{
     Json, Router,
@@ -167,6 +164,8 @@ fn extract_subscription_name(query: &str) -> String {
 #[derive(Clone)]
 pub struct AppState {
     pub schema: Arc<Schema<QueryRoot, MutationRoot, SubscriptionRoot>>,
+    /// Schema without depth/complexity limits, used only for introspection queries.
+    pub introspection_schema: Arc<Schema<QueryRoot, MutationRoot, SubscriptionRoot>>,
     pub playground_enabled: bool,
     pub db: DatabaseConnection,
     pub rpc_operations: Arc<RpcOperations<ReqwestClient>>,
@@ -192,6 +191,22 @@ pub async fn build_app(
     let schema = build_schema(
         db.clone(),
         config.chain_id,
+        network.clone(),
+        config.contract_addresses,
+        expected_block_time,
+        finality,
+        config.gas_multiplier,
+        indexes_safe_events,
+        indexer_state.clone(),
+        transaction_executor.clone(),
+        transaction_store.clone(),
+        rpc_operations.clone(),
+        true,
+    );
+
+    let introspection_schema = build_schema(
+        db.clone(),
+        config.chain_id,
         network,
         config.contract_addresses,
         expected_block_time,
@@ -202,6 +217,7 @@ pub async fn build_app(
         transaction_executor,
         transaction_store,
         rpc_operations.clone(),
+        false,
     );
 
     let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), config.health.clone());
@@ -211,6 +227,7 @@ pub async fn build_app(
 
     let app_state = AppState {
         schema: Arc::new(schema),
+        introspection_schema: Arc::new(introspection_schema),
         playground_enabled: config.playground_enabled,
         db,
         rpc_operations,
@@ -264,8 +281,16 @@ pub async fn build_app(
 
 /// GraphQL query/mutation/subscription handler
 async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json(request): Json<Value>) -> Response {
+    // Introspection queries (__schema / __type) query the type system, not indexed data.
+    // Always allow them so the GraphQL Playground can load the schema regardless of readiness.
+    let is_introspection = request
+        .get("query")
+        .and_then(|q| q.as_str())
+        .map(|q| q.contains("__schema") || q.contains("__type"))
+        .unwrap_or(false);
+
     // Check if server is ready before processing GraphQL requests
-    if state.readiness_checker.get().await == ReadinessState::NotReady {
+    if !is_introspection && state.readiness_checker.get().await == ReadinessState::NotReady {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({
@@ -357,8 +382,15 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
     // subscription is not meaningful - it's a long-lived connection, not a single request.
     let start_time = Instant::now();
 
+    // Introspection queries use the limit-free schema; everything else uses the guarded one.
+    let schema = if is_introspection {
+        state.introspection_schema.clone()
+    } else {
+        state.schema.clone()
+    };
+
     // Execute regular query/mutation
-    let response = state.schema.execute(request).await;
+    let response = schema.execute(request).await;
 
     // Record request duration
     metrics::observe_request_duration(request_type, start_time.elapsed().as_secs_f64());
@@ -400,14 +432,14 @@ async fn metrics_handler() -> impl IntoResponse {
     }
 }
 
-/// GraphQL Playground UI (only enabled if playground_enabled config is true)
+/// GraphiQL UI (only enabled if playground_enabled config is true)
 async fn graphql_playground(State(state): State<AppState>) -> impl IntoResponse {
     if state.playground_enabled {
-        Html(playground_source(GraphQLPlaygroundConfig::new("/graphql"))).into_response()
+        Html(GraphiQLSource::build().endpoint("/graphql").finish()).into_response()
     } else {
         (
             StatusCode::NOT_FOUND,
-            "GraphQL Playground is disabled. Use POST /graphql for queries.",
+            "GraphiQL is disabled. Use POST /graphql for queries.",
         )
             .into_response()
     }

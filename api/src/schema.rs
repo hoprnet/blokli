@@ -57,7 +57,9 @@ pub struct SafeEventIndexingEnabled(pub bool);
 /// - Transaction executor and store injected as context data (for mutations and transaction queries)
 /// - RPC operations injected as context data (for passthrough balance queries)
 /// - Query depth limit (10 levels) to prevent excessive nesting
-/// - Query complexity limit (100 points) to prevent expensive operations
+///
+/// Set `enforce_limits` to `false` to build a schema without depth/complexity limits,
+/// used for introspection queries that exceed the standard limits by design.
 #[allow(clippy::too_many_arguments)]
 pub fn build_schema<R: HttpRequestor + 'static + Clone>(
     db: DatabaseConnection,
@@ -72,10 +74,9 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
     rpc_operations: Arc<RpcOperations<R>>,
+    enforce_limits: bool,
 ) -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
-    Schema::build(QueryRoot, MutationRoot, SubscriptionRoot)
-        .limit_depth(10)
-        .limit_complexity(100)
+    let mut builder = Schema::build(QueryRoot, MutationRoot, SubscriptionRoot)
         .data(db)
         .data(ChainId(chain_id))
         .data(NetworkName(network))
@@ -87,8 +88,13 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
         .data(indexer_state)
         .data(transaction_executor)
         .data(transaction_store)
-        .data(rpc_operations)
-        .finish()
+        .data(rpc_operations);
+
+    if enforce_limits {
+        builder = builder.limit_depth(10);
+    }
+
+    builder.finish()
 }
 
 /// Export the GraphQL schema to SDL (Schema Definition Language) format
@@ -119,6 +125,7 @@ pub fn export_schema_sdl<R: HttpRequestor + 'static + Clone>(
         transaction_executor,
         transaction_store,
         rpc_operations,
+        false,
     );
 
     schema.sdl()

@@ -20,50 +20,54 @@ members = [
 ]
 
 [workspace.dependencies]
-alloy-sol-types      = "1.5.7"
-anyhow               = "1.0.102"
-async-broadcast      = "0.7.2"
-async-compression    = "0.4.42"
-async-graphql        = { version = "7.2.1", features = ["chrono", "dataloader"] }
-async-lock           = "3.4.2"
-async-signal         = "0.2.14"
-async-stream         = "0.3.6"
-async-tar            = "0.6.0"
-async-trait          = "0.1.89"
-axum                 = { version = "0.8.9", features = ["http2", "ws"] }
-backon               = { version = "1.6.0", default-features = false }
-base64ct             = "1.8.3"
-blokli-api           = { path = "api" }
-blokli-api-types     = { path = "types" }
-blokli-chain-api     = { path = "chain/api" }
+alloy-sol-types = "1.5.7"
+anyhow = "1.0.102"
+async-broadcast = "0.7.2"
+async-compression = "0.4.42"
+async-graphql = { version = "7.2.1", features = [
+  "chrono",
+  "dataloader",
+  "graphiql",
+] }
+async-lock = "3.4.2"
+async-signal = "0.2.14"
+async-stream = "0.3.6"
+async-tar = "0.6.0"
+async-trait = "0.1.89"
+axum = { version = "0.8.9", features = ["http2", "ws"] }
+backon = { version = "1.6.0", default-features = false }
+base64ct = "1.8.3"
+blokli-api = { path = "api" }
+blokli-api-types = { path = "types" }
+blokli-chain-api = { path = "chain/api" }
 blokli-chain-indexer = { path = "chain/indexer" }
-blokli-chain-rpc     = { path = "chain/rpc" }
-blokli-chain-types   = { path = "chain/types" }
-blokli-client        = { path = "client" }
-blokli-db            = { path = "db/core" }
-blokli-db-entity     = { path = "db/entity" }
-blokli-db-migration  = { path = "db/migration" }
-bytes                = "1.11.1"
-chrono               = "0.4.44"
-clap                 = { version = "4.6.1", features = ["derive", "env", "string"] }
-config               = "0.15.22"
-cynic                = "3.13.2"
-cynic-codegen        = "3.13.2"
-dashmap              = "6.1.0"
-env_logger           = "0.11.10"
-eventsource-client   = { version = "0.17.2", default-features = false }
-flagset              = "0.4.7"
-futures              = "0.3.32"
-futures-time         = "3.1.0"
-futures-timer        = "3.0.3"
-futures-util         = "0.3.32"
-hex                  = "0.4.3"
-hex-literal          = "1.1.0"
-hopli                = { git = "https://github.com/hoprnet/hopli", branch = "q/remove-contract-instances" }
-hopr-async-runtime   = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
-hopr-bindings        = "4.8.0"
-hopr-metrics         = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
-hopr-types           = "1.8.0"
+blokli-chain-rpc = { path = "chain/rpc" }
+blokli-chain-types = { path = "chain/types" }
+blokli-client = { path = "client" }
+blokli-db = { path = "db/core" }
+blokli-db-entity = { path = "db/entity" }
+blokli-db-migration = { path = "db/migration" }
+bytes = "1.11.1"
+chrono = "0.4.44"
+clap = { version = "4.6.1", features = ["derive", "env", "string"] }
+config = "0.15.22"
+cynic = "3.13.2"
+cynic-codegen = "3.13.2"
+dashmap = "6.1.0"
+env_logger = "0.11.10"
+eventsource-client = { version = "0.17.2", default-features = false }
+flagset = "0.4.7"
+futures = "0.3.32"
+futures-time = "3.1.0"
+futures-timer = "3.0.3"
+futures-util = "0.3.32"
+hex = "0.4.3"
+hex-literal = "1.1.0"
+hopli = { git = "https://github.com/hoprnet/hopli", branch = "q/remove-contract-instances" }
+hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-bindings = "4.8.0"
+hopr-metrics = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-types = "1.8.0"
 
 http = "1.4.0"
 humantime-serde = "1.1.1"
