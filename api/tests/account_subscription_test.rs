@@ -92,6 +92,7 @@ fn create_test_schema(db: &BlokliDb) -> (Schema<QueryRoot, MutationRoot, Subscri
         transaction_executor,
         transaction_store,
         rpc_ops,
+        true,
     );
 
     (schema, indexer_state)

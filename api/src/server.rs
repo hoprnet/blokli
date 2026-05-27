@@ -2,7 +2,7 @@
 
 use std::{pin::Pin, sync::Arc, time::Instant};
 
-use async_graphql::{Schema, http::GraphiQLSource};
+use async_graphql::{Schema, http::GraphiQLSource, parser::types::Selection};
 use async_stream::stream;
 use axum::{
     Json, Router,
@@ -160,6 +160,37 @@ fn extract_subscription_name(query: &str) -> String {
     "unknown".to_string()
 }
 
+/// Returns true only when every top-level selection in every operation is a
+/// built-in introspection field (`__schema`, `__type`, `__typename`).
+///
+/// Fragment spreads or inline fragments at the top level are treated as
+/// non-introspection (conservative). Parse failures also return false so that
+/// the readiness gate is never bypassed for malformed requests.
+fn is_introspection_query(query: &str) -> bool {
+    let doc = match async_graphql::parser::parse_query(query) {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+
+    for (_name, op) in doc.operations.iter() {
+        for selection in &op.node.selection_set.node.items {
+            match &selection.node {
+                Selection::Field(f) => {
+                    let name = f.node.name.node.as_str();
+                    if name != "__schema" && name != "__type" {
+                        return false;
+                    }
+                }
+                // Fragment spreads/inline fragments at the top level are not
+                // guaranteed to be introspection-only without resolving them.
+                Selection::FragmentSpread(_) | Selection::InlineFragment(_) => return false,
+            }
+        }
+    }
+
+    true
+}
+
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
@@ -286,7 +317,7 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
     let is_introspection = request
         .get("query")
         .and_then(|q| q.as_str())
-        .map(|q| q.contains("__schema") || q.contains("__type"))
+        .map(is_introspection_query)
         .unwrap_or(false);
 
     // Check if server is ready before processing GraphQL requests
@@ -981,5 +1012,57 @@ mod tests {
 
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(body, "Metrics endpoint is disabled");
+    }
+
+    #[test]
+    fn test_is_introspection_query_schema() {
+        assert!(is_introspection_query("{ __schema { queryType { name } } }"));
+    }
+
+    #[test]
+    fn test_is_introspection_query_type() {
+        assert!(is_introspection_query("{ __type(name: \"Foo\") { kind name } }"));
+    }
+
+    #[test]
+    fn test_is_introspection_query_typename_rejects() {
+        // __typename is a meta-field, not an introspection entry point
+        assert!(!is_introspection_query("{ __typename }"));
+    }
+
+    #[test]
+    fn test_is_introspection_query_named_operation() {
+        assert!(is_introspection_query(
+            "query IntrospectionQuery { __schema { types { name } } }"
+        ));
+    }
+
+    #[test]
+    fn test_is_introspection_query_mixed_rejects() {
+        assert!(!is_introspection_query(
+            "{ __schema { queryType { name } } channels { id } }"
+        ));
+    }
+
+    #[test]
+    fn test_is_introspection_query_data_field_rejects() {
+        assert!(!is_introspection_query("{ accounts { chainKey } }"));
+    }
+
+    #[test]
+    fn test_is_introspection_query_fragment_spread_rejects() {
+        assert!(!is_introspection_query(
+            "query { ...SomeFragment } fragment SomeFragment on QueryRoot { __schema { types { name } } }"
+        ));
+    }
+
+    #[test]
+    fn test_is_introspection_query_parse_error_rejects() {
+        assert!(!is_introspection_query("this is not graphql !!!"));
+    }
+
+    #[test]
+    fn test_is_introspection_query_empty_rejects() {
+        assert!(!is_introspection_query(""));
     }
 }
