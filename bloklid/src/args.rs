@@ -80,23 +80,9 @@ impl Args {
     pub(crate) fn load_config(&self, use_default: bool) -> errors::Result<Config> {
         let mut builder = config_rs::Config::builder();
 
-        let effective_config = self.config.clone().or_else(|| {
-            std::env::var("BLOKLI_CONFIG_PATH")
-                .ok()
-                .map(|value| value.trim().to_owned())
-                .filter(|p| !p.is_empty())
-                .map(PathBuf::from)
-        });
-
-        if let Some(config_path) = &effective_config {
-            builder = builder.add_source(config_rs::File::from(config_path.clone()));
-        } else if use_default {
-            tracing::warn!("no configuration file specified; using defaults and environment variables");
-        } else {
-            return Err(ConfigError::NoConfiguration.into());
-        }
-
+        const BLOKLI_CONFIG_PATH_DEFAULT: &str = "/etc/bloklid/bloklid.toml";
         let env_mappings = [
+            ("BLOKLI_CONFIG_PATH", BLOKLI_CONFIG_PATH_DEFAULT),
             ("BLOKLI_DATA_DIRECTORY", "data_directory"),
             ("BLOKLI_NETWORK", "network"),
             ("BLOKLI_RPC_URL", "rpc_url"),
@@ -157,6 +143,33 @@ impl Args {
             ("BLOKLI_OTLP_SIGNALS", "telemetry.otlp_signals"),
         ];
 
+        // Precedence: -c flag > BLOKLI_CONFIG_PATH > /etc/bloklid/bloklid.toml (if present).
+        let (config_path, config_source) = match std::env::var("BLOKLI_CONFIG_PATH")
+            .ok()
+            .map(|v| v.trim().to_owned())
+            .filter(|p| !p.is_empty())
+        {
+            Some(p) => (PathBuf::from(p), "BLOKLI_CONFIG_PATH"),
+            None => (PathBuf::from(BLOKLI_CONFIG_PATH_DEFAULT), "default"),
+        };
+
+        let effective_config = self.config.clone().or_else(|| config_path.exists().then_some(config_path));
+
+        if let Some(config_path) = &effective_config {
+            let source = if self.config.is_some() { "-c flag" } else { config_source };
+            tracing::info!(
+                path = %config_path.display(),
+                source,
+                exists = config_path.exists(),
+                "config file"
+            );
+            builder = builder.add_source(config_rs::File::from(config_path.clone()));
+        } else if use_default {
+            tracing::warn!("no configuration file specified; using defaults and environment variables");
+        } else {
+            return Err(ConfigError::NoConfiguration.into());
+        }
+
         let boolean_keys = [
             "indexer.fast_sync",
             "indexer.enable_logs_snapshot",
@@ -167,6 +180,9 @@ impl Args {
         ];
 
         for (env_var, config_key) in env_mappings {
+            if env_var == "BLOKLI_CONFIG_PATH" {
+                continue;
+            }
             if let Ok(val) = std::env::var(env_var) {
                 let override_val: config_rs::Value = if boolean_keys.contains(&config_key) {
                     if let Ok(flag) = val.parse::<bool>() {
@@ -1176,7 +1192,9 @@ mod tests {
 
             // Without BLOKLI_CONFIG_PATH, use_default=false would return NoConfiguration.
             // With it set, the file must be loaded.
-            let config = args.load_config(false).expect("BLOKLI_CONFIG_PATH should provide the config file");
+            let config = args
+                .load_config(false)
+                .expect("BLOKLI_CONFIG_PATH should provide the config file");
             assert_eq!(config.rpc_url, "http://from-env-path:8545");
         });
     }
@@ -1219,7 +1237,10 @@ mod tests {
             };
 
             let config = args.load_config(false).expect("Should load config from -c flag");
-            assert_eq!(config.rpc_url, "http://from-flag:8545", "-c flag must win over BLOKLI_CONFIG_PATH");
+            assert_eq!(
+                config.rpc_url, "http://from-flag:8545",
+                "-c flag must win over BLOKLI_CONFIG_PATH"
+            );
         });
     }
 
