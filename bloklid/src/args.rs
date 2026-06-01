@@ -1257,11 +1257,19 @@ mod tests {
             };
 
             // An empty BLOKLI_CONFIG_PATH must be treated as unset, not as a real path.
+            // Outcome depends on whether /etc/bloklid/bloklid.toml exists on this machine.
             let result = args.load_config(false);
-            assert!(
-                result.is_err(),
-                "Empty BLOKLI_CONFIG_PATH should not trigger config-file loading; expected NoConfiguration error"
-            );
+            if std::path::Path::new("/etc/bloklid/bloklid.toml").exists() {
+                // Default file present: load may succeed or fail with a parse error, but not
+                // with NoConfiguration.
+                let err_msg = result.as_ref().err().map(|e| e.to_string()).unwrap_or_default();
+                assert!(
+                    !err_msg.contains("no configuration"),
+                    "Should not return NoConfiguration when default file exists: {err_msg}"
+                );
+            } else {
+                assert!(result.is_err(), "Expected error when no config source is available");
+            }
         });
     }
 }
