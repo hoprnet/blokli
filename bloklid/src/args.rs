@@ -80,9 +80,7 @@ impl Args {
     pub(crate) fn load_config(&self, use_default: bool) -> errors::Result<Config> {
         let mut builder = config_rs::Config::builder();
 
-        const BLOKLI_CONFIG_PATH_DEFAULT: &str = "/etc/bloklid/bloklid.toml";
         let env_mappings = [
-            ("BLOKLI_CONFIG_PATH", BLOKLI_CONFIG_PATH_DEFAULT),
             ("BLOKLI_DATA_DIRECTORY", "data_directory"),
             ("BLOKLI_NETWORK", "network"),
             ("BLOKLI_RPC_URL", "rpc_url"),
@@ -143,20 +141,28 @@ impl Args {
             ("BLOKLI_OTLP_SIGNALS", "telemetry.otlp_signals"),
         ];
 
-        // Precedence: -c flag > BLOKLI_CONFIG_PATH > /etc/bloklid/bloklid.toml (if present).
-        let (config_path, config_source) = match std::env::var("BLOKLI_CONFIG_PATH")
+        // Precedence: -c flag > BLOKLI_CONFIG_PATH (required) > /etc/bloklid/bloklid.toml (if present).
+        let env_config_path = std::env::var("BLOKLI_CONFIG_PATH")
             .ok()
             .map(|v| v.trim().to_owned())
             .filter(|p| !p.is_empty())
-        {
-            Some(p) => (PathBuf::from(p), "BLOKLI_CONFIG_PATH"),
-            None => (PathBuf::from(BLOKLI_CONFIG_PATH_DEFAULT), "default"),
-        };
+            .map(PathBuf::from);
 
-        let effective_config = self.config.clone().or_else(|| config_path.exists().then_some(config_path));
+        let effective_config = self.config.clone()
+            .or_else(|| env_config_path.clone())
+            .or_else(|| {
+                let path = PathBuf::from("/etc/bloklid/bloklid.toml");
+                path.exists().then_some(path)
+            });
 
         if let Some(config_path) = &effective_config {
-            let source = if self.config.is_some() { "-c flag" } else { config_source };
+            let source = if self.config.is_some() {
+                "-c flag"
+            } else if env_config_path.is_some() {
+                "BLOKLI_CONFIG_PATH"
+            } else {
+                "default"
+            };
             tracing::info!(
                 path = %config_path.display(),
                 source,
@@ -180,9 +186,6 @@ impl Args {
         ];
 
         for (env_var, config_key) in env_mappings {
-            if env_var == "BLOKLI_CONFIG_PATH" {
-                continue;
-            }
             if let Ok(val) = std::env::var(env_var) {
                 let override_val: config_rs::Value = if boolean_keys.contains(&config_key) {
                     if let Ok(flag) = val.parse::<bool>() {
