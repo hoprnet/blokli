@@ -1,0 +1,11 @@
+---
+source: inspector/src/table.rs
+expression: "render(&json!([{\"keyid\": 1, \"packet_key\": \"first\"},\n{\"keyid\": 2, \"packet_key\": \"second\"},]))"
+---
++-------+-------+------------+
+| INDEX | keyid | packet_key |
++============================+
+| 0     | 1     | first      |
+|-------+-------+------------|
+| 1     | 2     | second     |
++-------+-------+------------+

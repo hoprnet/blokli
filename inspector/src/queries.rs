@@ -1,11 +1,50 @@
+use std::collections::{HashMap, HashSet};
+
 use blokli_client::{
     BlokliClient,
-    api::{BlokliQueryClient, ChainAddress, ModulePredictionInput, SafeSelector},
+    api::{
+        AccountSelector, BlokliQueryClient, ChainAddress, ChannelFilter, ChannelSelector, ModulePredictionInput,
+        SafeSelector,
+        types::{Account, ChainInfo, Channel, ChannelStatus, ChannelsList, TokenValueString},
+    },
 };
 use clap::Subcommand;
-use hopr_types::primitive::prelude::Address;
+use futures::{StreamExt, TryStreamExt, stream};
+use hopr_types::primitive::prelude::{Address, HoprBalance};
 
-use crate::{AccountArgs, AltAccount, ChannelArgs, Formats, RedemptionsArgs};
+use crate::{AccountArgs, AltAccount, ChannelArgs, Formats, NodeOverviewArgs, RedemptionsArgs};
+
+const DESTINATION_QUERY_CONCURRENCY: usize = 8;
+
+#[derive(Debug, serde::Serialize)]
+struct NodeOverview {
+    source: AltAccount,
+    ticket_parameters: OverviewTicketParameters,
+    summary: NodeOverviewSummary,
+    channels: Vec<NodeOverviewChannel>,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct OverviewTicketParameters {
+    block_number: i32,
+    ticket_price: TokenValueString,
+    min_ticket_winning_probability: f64,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct NodeOverviewSummary {
+    channel_count: usize,
+    open_count: usize,
+    pending_to_close_count: usize,
+    closed_count: usize,
+    total_balance: String,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct NodeOverviewChannel {
+    channel: Channel,
+    destination: AltAccount,
+}
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum QueryTarget {
@@ -66,6 +105,8 @@ pub(crate) enum QueryTarget {
     CountAccounts(AccountArgs),
     /// Gets information about an account.
     Account(AccountArgs),
+    /// Gets a node and its outgoing channels, enriched with destination and ticket details.
+    NodeOverview(NodeOverviewArgs),
     /// Gets channel count and total wxHOPR balance matching optional filters.
     ChannelStats(ChannelArgs),
     /// Gets channels with their aggregated wxHOPR balance. Use --safe-address to scope to a safe.
@@ -129,6 +170,9 @@ impl QueryTarget {
                     format.serialize(client.query_accounts(sel.try_into()?).await?)
                 }
             }
+            QueryTarget::NodeOverview(sel) => query_node_overview(client, sel.try_into()?)
+                .await
+                .and_then(|overview| format.serialize(overview)),
             QueryTarget::Channel(sel) => format.serialize(client.query_channels(sel.try_into()?).await?),
             QueryTarget::SafesBalance { owner } => {
                 format.serialize(client.query_safes_balance(owner.map(ChainAddress::from)).await?)
@@ -156,5 +200,193 @@ impl QueryTarget {
             QueryTarget::ChannelStats(sel) => format.serialize(client.query_channel_stats(sel.try_into()?).await?),
             QueryTarget::Redemptions(sel) => format.serialize(client.query_redeemed_stats(sel.try_into()?).await?),
         }
+    }
+}
+
+async fn query_node_overview(client: &BlokliClient, selector: AccountSelector) -> anyhow::Result<NodeOverview> {
+    let source = exactly_one_account(client.query_accounts(selector).await?, "source")?;
+    let source_key_id = u32::try_from(source.keyid)?;
+    let channels = client
+        .query_channels(ChannelSelector {
+            filter: Some(ChannelFilter::SourceKeyId(source_key_id)),
+            ..Default::default()
+        })
+        .await?;
+    let chain_info = client.query_chain_info().await?;
+    let destination_ids: HashSet<i32> = channels.channels.iter().map(|channel| channel.destination).collect();
+    let destinations = stream::iter(destination_ids)
+        .map(|destination_id| async move {
+            let key_id = u32::try_from(destination_id)?;
+            let destination = exactly_one_account(
+                client.query_accounts(AccountSelector::KeyId(key_id)).await?,
+                "destination",
+            )?;
+            Ok::<_, anyhow::Error>((destination_id, AltAccount::try_from(destination)?))
+        })
+        .buffer_unordered(DESTINATION_QUERY_CONCURRENCY)
+        .try_collect::<HashMap<_, _>>()
+        .await?;
+
+    build_node_overview(source, channels, chain_info, destinations)
+}
+
+fn exactly_one_account(accounts: Vec<Account>, role: &str) -> anyhow::Result<Account> {
+    let [account]: [Account; 1] = accounts.try_into().map_err(|accounts: Vec<Account>| {
+        anyhow::anyhow!("Expected exactly one {role} account, got {}", accounts.len())
+    })?;
+    Ok(account)
+}
+
+fn build_node_overview(
+    source: Account,
+    channels: ChannelsList,
+    chain_info: ChainInfo,
+    destinations: HashMap<i32, AltAccount>,
+) -> anyhow::Result<NodeOverview> {
+    let mut total_balance = HoprBalance::zero();
+    let mut open_count = 0;
+    let mut pending_to_close_count = 0;
+    let mut closed_count = 0;
+    let overview_channels = channels
+        .channels
+        .into_iter()
+        .map(|channel| {
+            total_balance += channel.balance.0.parse::<HoprBalance>()?;
+            match channel.status {
+                ChannelStatus::Open => open_count += 1,
+                ChannelStatus::PendingToClose => pending_to_close_count += 1,
+                ChannelStatus::Closed => closed_count += 1,
+            }
+            let destination = destinations
+                .get(&channel.destination)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("Missing destination account for key ID {}", channel.destination))?;
+            Ok(NodeOverviewChannel { channel, destination })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+
+    Ok(NodeOverview {
+        source: AltAccount::try_from(source)?,
+        ticket_parameters: OverviewTicketParameters {
+            block_number: chain_info.block_number,
+            ticket_price: chain_info.ticket_price,
+            min_ticket_winning_probability: chain_info.min_ticket_winning_probability,
+        },
+        summary: NodeOverviewSummary {
+            channel_count: overview_channels.len(),
+            open_count,
+            pending_to_close_count,
+            closed_count,
+            total_balance: total_balance.to_string(),
+        },
+        channels: overview_channels,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use blokli_client::api::types::{
+        Account, ChainInfo, Channel, ChannelStatus, ChannelsList, ContractAddressMap, TokenValueString, Uint64,
+    };
+
+    use super::{AltAccount, build_node_overview};
+    use crate::Formats;
+
+    const PACKET_KEY: &str = "30dc46df1f429b9c0d1d6d81198420f3af92348e7fe97b003717108b22f8d985";
+
+    fn account(keyid: i32) -> Account {
+        Account {
+            chain_key: format!("0x{keyid:040x}"),
+            keyid,
+            multi_addresses: Vec::new(),
+            packet_key: PACKET_KEY.to_string(),
+            safe_address: None,
+        }
+    }
+
+    fn channel(destination: i32, status: ChannelStatus, balance: &str) -> Channel {
+        Channel {
+            balance: TokenValueString(balance.to_string()),
+            closure_time: None,
+            concrete_channel_id: format!("{destination:064x}"),
+            destination,
+            epoch: 1,
+            source: 7,
+            status,
+            ticket_index: Uint64("0".to_string()),
+        }
+    }
+
+    fn chain_info() -> ChainInfo {
+        ChainInfo {
+            block_number: 123,
+            chain_id: 100,
+            network: "rotsee".to_string(),
+            ticket_price: TokenValueString("0.0000000000000001 wxHOPR".to_string()),
+            key_binding_fee: TokenValueString("0.01 wxHOPR".to_string()),
+            gas_price: None,
+            max_fee_per_gas: None,
+            max_priority_fee_per_gas: None,
+            min_ticket_winning_probability: 0.000125,
+            channel_dst: None,
+            contract_addresses: ContractAddressMap("{}".to_string()),
+            ledger_dst: None,
+            safe_registry_dst: None,
+            channel_closure_grace_period: Uint64("300".to_string()),
+            expected_block_time: Uint64("5".to_string()),
+            finality: Uint64("3".to_string()),
+        }
+    }
+
+    #[test]
+    fn overview_enriches_channels_and_aggregates_summary() -> anyhow::Result<()> {
+        let channels = ChannelsList {
+            __typename: "ChannelsList".to_string(),
+            channels: vec![
+                channel(2, ChannelStatus::Open, "1 wxHOPR"),
+                channel(3, ChannelStatus::PendingToClose, "0.5 wxHOPR"),
+                channel(4, ChannelStatus::Closed, "0 wxHOPR"),
+            ],
+        };
+        let destinations = [2, 3, 4]
+            .into_iter()
+            .map(|keyid| Ok((keyid, AltAccount::try_from(account(keyid))?)))
+            .collect::<anyhow::Result<HashMap<_, _>>>()?;
+
+        let overview = build_node_overview(account(7), channels, chain_info(), destinations)?;
+
+        assert_eq!(overview.ticket_parameters.block_number, 123);
+        assert_eq!(overview.ticket_parameters.ticket_price.0, "0.0000000000000001 wxHOPR");
+        assert_eq!(overview.ticket_parameters.min_ticket_winning_probability, 0.000125);
+        assert_eq!(overview.summary.channel_count, 3);
+        assert_eq!(overview.summary.open_count, 1);
+        assert_eq!(overview.summary.pending_to_close_count, 1);
+        assert_eq!(overview.summary.closed_count, 1);
+        assert_eq!(overview.summary.total_balance, "1.5 wxHOPR");
+        assert_eq!(
+            overview
+                .channels
+                .iter()
+                .map(|entry| entry.destination.keyid)
+                .collect::<Vec<_>>(),
+            vec![2, 3, 4]
+        );
+        insta::assert_snapshot!(Formats::Table.serialize(&overview)?);
+        Ok(())
+    }
+
+    #[test]
+    fn overview_rejects_missing_destination() -> anyhow::Result<()> {
+        let channels = ChannelsList {
+            __typename: "ChannelsList".to_string(),
+            channels: vec![channel(2, ChannelStatus::Open, "1 wxHOPR")],
+        };
+
+        let result = build_node_overview(account(7), channels, chain_info(), HashMap::new());
+
+        assert!(result.is_err());
+        Ok(())
     }
 }
