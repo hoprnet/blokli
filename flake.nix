@@ -467,6 +467,7 @@
               ".npm/"
             ];
             extraFormatters = {
+              programs.nixfmt.package = pkgs.nixfmt;
               programs.prettier.package = pkgs.prettier;
               settings.formatter.shfmt.includes = [
                 "*.sh"
