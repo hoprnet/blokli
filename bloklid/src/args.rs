@@ -26,7 +26,7 @@ pub(crate) struct Args {
         long = "config",
         value_name = "FILE",
         global = true,
-        help = "Path to the configuration file. If not set, falls back to BLOKLI_CONFIG_PATH env var."
+        help = "Path to the configuration file. Overrides BLOKLI_CONFIG_PATH. If neither is set, uses /etc/bloklid/bloklid.toml (if present)."
     )]
     pub(crate) config: Option<PathBuf>,
 
