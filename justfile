@@ -80,9 +80,9 @@ system-test: smoke-test-full
 # Code Quality
 # ============================================================================
 
-# Format all code with nix formatter
+# Format all code with the treefmt wrapper provided by the dev shell
 fmt:
-    nix fmt
+    treefmt
 
 # Run clippy lints with warnings as errors
 clippy:
