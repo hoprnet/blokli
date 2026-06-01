@@ -562,6 +562,41 @@ impl IntegrationFixture {
             .await
     }
 
+    /// Finalizes closure of an outgoing channel from `from` to `to`.
+    /// Must be called after `initiate_outgoing_channel_closure` and after the notice period has elapsed.
+    pub async fn finalize_outgoing_channel_closure(
+        &self,
+        from: &AnvilAccount,
+        to: &AnvilAccount,
+        module: &str,
+    ) -> Result<[u8; 32]> {
+        let nonce = self.rpc().transaction_count(&from.address).await?;
+
+        let payload_generator = SafePayloadGenerator::new(
+            &from.keypair,
+            *self.contract_addresses(),
+            HoprAddress::from_str(module)?,
+        );
+
+        let payload = payload_generator.finalize_outgoing_channel_closure(to.address)?;
+
+        let payload_bytes = payload
+            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &from.keypair)
+            .await?;
+
+        self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
+            .await
+    }
+
+    /// Fully closes an outgoing channel from `from` to `to` (initiates then finalizes).
+    /// Notice period in test contracts is 1 second; the confirmation wait between the two
+    /// transactions is enough for it to elapse.
+    pub async fn close_outgoing_channel(&self, from: &AnvilAccount, to: &AnvilAccount, module: &str) -> Result<()> {
+        self.initiate_outgoing_channel_closure(from, to, module).await?;
+        self.finalize_outgoing_channel_closure(from, to, module).await?;
+        Ok(())
+    }
+
     fn teardown(&self) {
         self.inner.teardown();
     }
