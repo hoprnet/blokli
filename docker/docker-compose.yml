@@ -1,11 +1,11 @@
 ---
 services:
   postgres:
-    image: postgres:18-alpine@sha256:96d56f7f57c6aacd1fcb908bc83b345ec5f83231ee486dd66a1baadce274db88
+    image: postgres:18-alpine@sha256:96d56f7f57c6aacd1fcb908bc83b345ec5f83231ee486dd66a1baadce274db88 # pinned 2026-06-01, see https://hub.docker.com/_/postgres/tags?name=18-alpine
     container_name: bloklid-postgres
     environment:
       POSTGRES_USER: bloklid
-      POSTGRES_PASSWORD: bloklid_dev_password
+
       POSTGRES_DB: bloklid
     ports:
       - "5432:5432"
