@@ -151,6 +151,9 @@ impl Args {
         let effective_config = self.config.clone()
             .or_else(|| env_config_path.clone())
             .or_else(|| {
+                if !use_default {
+                    return None;
+                }
                 let path = PathBuf::from("/etc/bloklid/bloklid.toml");
                 path.exists().then_some(path)
             });
