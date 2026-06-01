@@ -334,6 +334,20 @@ async fn build_safe_by_result_from_current_rows(
     }
 }
 
+/// Maximum number of safes `safesBalance` will fan out RPC balance calls for in a single request.
+/// Bounds RPC load; over this, the caller must narrow the query with `owner_address`.
+const SAFES_BALANCE_MAX_SAFES: usize = 1000;
+
+/// Enforces the [`SAFES_BALANCE_MAX_SAFES`] cap on the number of safes a single `safesBalance`
+/// request may fan out RPC calls for. Returns an error to surface to the caller when exceeded.
+fn check_safes_balance_cap(count: usize) -> std::result::Result<(), QueryFailedError> {
+    if count > SAFES_BALANCE_MAX_SAFES {
+        Err(errors::limit_exceeded("safes balance", count, SAFES_BALANCE_MAX_SAFES))
+    } else {
+        Ok(())
+    }
+}
+
 /// Root query type providing read-only access to indexed blockchain data
 pub struct QueryRoot;
 
@@ -1601,6 +1615,12 @@ impl QueryRoot {
             });
         }
 
+        // Bound RPC fan-out: each safe triggers a get_hopr_balance call, so cap the count
+        // rather than firing an unbounded number of concurrent RPC requests.
+        if let Err(e) = check_safes_balance_cap(safe_addresses.len()) {
+            return SafesBalanceResult::QueryFailed(e);
+        }
+
         let rpc = match ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>() {
             Ok(rpc) => rpc,
             Err(e) => {
@@ -1694,8 +1714,14 @@ mod tests {
         primitive::{prelude::Address, traits::ToHex},
     };
 
-    use super::{QueryRoot, owners_for_safe, safe_from_current_row, scale_wei_by_multiplier};
-    use crate::schema::{ChainId, GasMultiplier, NetworkName};
+    use super::{
+        QueryRoot, SAFES_BALANCE_MAX_SAFES, check_safes_balance_cap, owners_for_safe, safe_from_current_row,
+        scale_wei_by_multiplier,
+    };
+    use crate::{
+        errors,
+        schema::{ChainId, GasMultiplier, NetworkName},
+    };
 
     fn random_address() -> Address {
         Address::from(rand::random::<[u8; 20]>())
@@ -1823,6 +1849,20 @@ mod tests {
             !requires_filter_with_safe,
             "Should not require filter when safe_address is provided"
         );
+    }
+
+    #[test]
+    fn test_safes_balance_cap_allows_count_at_limit() {
+        assert!(check_safes_balance_cap(0).is_ok());
+        assert!(check_safes_balance_cap(SAFES_BALANCE_MAX_SAFES - 1).is_ok());
+        assert!(check_safes_balance_cap(SAFES_BALANCE_MAX_SAFES).is_ok());
+    }
+
+    #[test]
+    fn test_safes_balance_cap_rejects_count_over_limit() {
+        let err =
+            check_safes_balance_cap(SAFES_BALANCE_MAX_SAFES + 1).expect_err("count over the cap must be rejected");
+        assert_eq!(err.code, errors::codes::LIMIT_EXCEEDED);
     }
 
     #[tokio::test]
