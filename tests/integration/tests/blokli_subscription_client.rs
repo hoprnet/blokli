@@ -78,6 +78,10 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
 
     assert_eq!(channel.balance.0, amount.to_string());
 
+    fixture
+        .close_outgoing_channel(src, dst, &src_safe.module_address)
+        .await?;
+
     Ok(())
 }
 
@@ -166,14 +170,10 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
             .subscribe_graph()
             .expect("failed to create safe deployments subscription")
             .skip_while(|entry| {
-                let retrieved_channel = entry
-                    .as_ref()
-                    .expect("failed to get subscription update")
-                    .channel
-                    .concrete_channel_id
-                    .to_lowercase();
-
-                let should_skip = expected_id.encode_hex::<String>() != retrieved_channel;
+                let entry = entry.as_ref().expect("failed to get subscription update");
+                let retrieved_channel = entry.channel.concrete_channel_id.to_lowercase();
+                let should_skip = expected_id.encode_hex::<String>() != retrieved_channel
+                    || entry.channel.status != ChannelStatus::Open;
                 futures::future::ready(should_skip)
             })
             .next()
@@ -193,6 +193,10 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
     assert_eq!(graph_entry.source.chain_key, src.address.to_string());
     assert_eq!(graph_entry.destination.chain_key, dst.address.to_string());
     assert_eq!(graph_entry.channel.status, ChannelStatus::Open);
+
+    fixture
+        .close_outgoing_channel(src, dst, &src_safe.module_address)
+        .await?;
 
     Ok(())
 }
@@ -553,6 +557,10 @@ async fn subscribe_channels_no_duplicate_initial_state(#[future(awt)] fixture: I
         received_channel?.concrete_channel_id.to_lowercase(),
         expected_channel_id.to_lowercase()
     );
+
+    fixture
+        .close_outgoing_channel(src, dst, &src_safe.module_address)
+        .await?;
 
     Ok(())
 }
