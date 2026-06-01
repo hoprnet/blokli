@@ -728,7 +728,7 @@ impl QueryRoot {
     ///
     /// This query makes a direct RPC call to the blockchain to get the current HOPR token balance.
     /// No database storage is used - balance is fetched directly from the chain.
-    #[graphql(name = "hoprBalance")]
+    #[graphql(name = "hoprBalance", complexity = 50)]
     async fn hopr_balance(
         &self,
         ctx: &Context<'_>,
@@ -765,7 +765,7 @@ impl QueryRoot {
     ///
     /// This query makes a direct RPC call to the blockchain to get the current native token (xDAI) balance.
     /// No database storage is used - balance is fetched directly from the chain.
-    #[graphql(name = "nativeBalance")]
+    #[graphql(name = "nativeBalance", complexity = 50)]
     async fn native_balance(
         &self,
         ctx: &Context<'_>,
@@ -805,7 +805,7 @@ impl QueryRoot {
     ///
     /// This query makes a direct RPC call to the blockchain to get the current allowance.
     /// No database storage is used - allowance is fetched directly from the chain.
-    #[graphql(name = "safeHoprAllowance")]
+    #[graphql(name = "safeHoprAllowance", complexity = 50)]
     async fn safe_hopr_allowance(
         &self,
         ctx: &Context<'_>,
@@ -845,7 +845,7 @@ impl QueryRoot {
     /// Retrieve aggregated TicketRedeemed statistics filtered by safe, node, or both.
     ///
     /// At least one filter field must be provided. If both are provided, both filters are applied.
-    #[graphql(name = "ticketRedemptionStats")]
+    #[graphql(name = "ticketRedemptionStats", complexity = 100)]
     async fn ticket_redemption_stats(
         &self,
         ctx: &Context<'_>,
@@ -954,6 +954,7 @@ impl QueryRoot {
     ///     TransactionCountResult::QueryFailed(err) => panic!("query failed: {}", err.message),
     /// }
     /// ```
+    #[graphql(complexity = 50)]
     async fn transaction_count(
         &self,
         ctx: &Context<'_>,
@@ -1270,6 +1271,7 @@ impl QueryRoot {
     /// // Inspect returned `ChainInfo` in the GraphQL response
     /// # }
     /// ```
+    #[graphql(complexity = 50)]
     async fn chain_info(&self, ctx: &Context<'_>) -> ChainInfoResult {
         let db = match ctx.data::<DatabaseConnection>() {
             Ok(db) => db,
@@ -1500,6 +1502,7 @@ impl QueryRoot {
     ///
     /// Calls the HoprNodeStakeFactory.predictModuleAddress_1 function to compute
     /// the deterministic CREATE2 address for a HOPR node management module.
+    #[graphql(complexity = 50)]
     async fn calculate_module_address(
         &self,
         ctx: &Context<'_>,
@@ -1548,7 +1551,7 @@ impl QueryRoot {
     ///
     /// When `owner_address` is provided, restricts to safes whose indexed owner
     /// set currently contains that address.
-    #[graphql(name = "safesBalance")]
+    #[graphql(name = "safesBalance", complexity = 100)]
     async fn safes_balance(
         &self,
         ctx: &Context<'_>,

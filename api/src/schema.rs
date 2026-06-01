@@ -56,7 +56,8 @@ pub struct SafeEventIndexingEnabled(pub bool);
 /// - IndexerState injected as context data (for subscription coordination)
 /// - Transaction executor and store injected as context data (for mutations and transaction queries)
 /// - RPC operations injected as context data (for passthrough balance queries)
-/// - Query depth limit (10 levels) to prevent excessive nesting
+/// - Query depth limit (8 levels) to prevent excessive nesting
+/// - Query complexity limit (500 points) to throttle expensive RPC fan-out
 ///
 /// Set `enforce_limits` to `false` to build a schema without depth/complexity limits,
 /// used for introspection queries that exceed the standard limits by design.
@@ -91,7 +92,15 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
         .data(rpc_operations);
 
     if enforce_limits {
-        builder = builder.limit_depth(10);
+        // Depth guards against pathological nesting (real queries reach depth ~4 at most).
+        // Complexity throttles request cost: cheap scalar/DB fields cost 1 each, while
+        // RPC-backed resolvers carry per-field weights (see `complexity` attributes in
+        // query.rs). A 500 budget comfortably fits any real query yet caps RPC fan-out
+        // (e.g. aliased `nativeBalance` calls) to ~10 per request.
+        //
+        // Introspection queries are routed to a separate, unlimited schema
+        // (see `enforce_limits = false`), so these limits never block schema loading.
+        builder = builder.limit_depth(8).limit_complexity(500);
     }
 
     builder.finish()

@@ -172,23 +172,14 @@ fn is_introspection_query(query: &str) -> bool {
         Err(_) => return false,
     };
 
-    for (_name, op) in doc.operations.iter() {
-        for selection in &op.node.selection_set.node.items {
-            match &selection.node {
-                Selection::Field(f) => {
-                    let name = f.node.name.node.as_str();
-                    if name != "__schema" && name != "__type" {
-                        return false;
-                    }
-                }
-                // Fragment spreads/inline fragments at the top level are not
-                // guaranteed to be introspection-only without resolving them.
-                Selection::FragmentSpread(_) | Selection::InlineFragment(_) => return false,
-            }
-        }
-    }
-
-    true
+    doc.operations.iter().all(|(_name, op)| {
+        op.node.selection_set.node.items.iter().all(|selection| {
+            matches!(
+                &selection.node,
+                Selection::Field(f) if matches!(f.node.name.node.as_str(), "__schema" | "__type")
+            )
+        })
+    })
 }
 
 /// Application state shared across handlers
