@@ -1,6 +1,6 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
-use comfy_table::Table;
+use comfy_table::{ContentArrangement, Table, modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -9,151 +9,164 @@ pub(crate) fn serialize<T: Serialize>(value: T) -> anyhow::Result<String> {
 }
 
 fn render(value: &Value) -> String {
-    let mut sections = Vec::new();
-    render_section(None, value, &mut sections);
+    match value {
+        Value::Array(values) => render_list(values),
+        Value::Object(values) => render_object(values),
+        _ => scalar_to_string(value),
+    }
+}
+
+fn render_object(values: &Map<String, Value>) -> String {
+    let mut fields = BTreeMap::new();
+    let mut lists = Vec::new();
+    flatten_object(None, values, &mut fields, &mut lists);
+
+    let mut sections = vec![render_detail_box(&fields)];
+    sections.extend(
+        lists
+            .into_iter()
+            .map(|(path, values)| format!("{path}\n{}", render_list(values))),
+    );
     sections.join("\n\n")
 }
 
-fn render_section(label: Option<&str>, value: &Value, sections: &mut Vec<String>) {
-    match value {
-        Value::Array(values) => {
-            let (rendered, nested_values) = render_list(label, values);
-            sections.push(with_label(label, rendered));
-            render_nested_values(nested_values, sections);
-        }
-        Value::Object(values) => {
-            let (rendered, nested_values) = render_object(label, values);
-            sections.push(with_label(label, rendered));
-            render_nested_values(nested_values, sections);
-        }
-        _ => sections.push(with_label(label, scalar_to_string(value))),
-    }
-}
-
-fn render_nested_values(nested_values: Vec<(String, &Value)>, sections: &mut Vec<String>) {
-    for (path, value) in nested_values {
-        render_section(Some(&path), value, sections);
-    }
-}
-
-fn render_object<'a>(label: Option<&str>, values: &'a Map<String, Value>) -> (String, Vec<(String, &'a Value)>) {
-    let mut table = new_table();
-    table.set_header(["FIELD", "VALUE"]);
-    let mut nested_values = Vec::new();
-
-    for (field, value) in values {
-        if is_nested(value) {
-            table.add_row([field, child_marker(value)]);
-            nested_values.push((child_path(label, field), value));
-        } else {
-            table.add_row([field.to_string(), scalar_to_string(value)]);
-        }
-    }
-
-    (table.to_string(), nested_values)
-}
-
-fn render_list<'a>(label: Option<&str>, values: &'a [Value]) -> (String, Vec<(String, &'a Value)>) {
+fn render_list(values: &[Value]) -> String {
     if values.is_empty() {
-        return ("(empty)".to_string(), Vec::new());
+        return "(empty)".to_string();
     }
 
     if values.iter().all(Value::is_object) {
-        render_object_list(label, values)
+        render_object_list(values)
     } else {
-        render_value_list(label, values)
+        render_value_list(values)
     }
 }
 
-fn render_object_list<'a>(label: Option<&str>, values: &'a [Value]) -> (String, Vec<(String, &'a Value)>) {
-    let scalar_fields = values
+fn render_object_list(values: &[Value]) -> String {
+    let rows = values
         .iter()
-        .filter_map(Value::as_object)
-        .flat_map(Map::iter)
-        .filter(|(_, value)| !is_nested(value))
-        .map(|(field, _)| field)
-        .collect::<BTreeSet<_>>();
+        .map(|value| {
+            let mut fields = BTreeMap::new();
+            flatten_list_row(
+                value.as_object().expect("object list only contains objects"),
+                &mut fields,
+            );
+            fields
+        })
+        .collect::<Vec<_>>();
+    let columns = rows.iter().flat_map(BTreeMap::keys).collect::<BTreeSet<_>>();
     let mut table = new_table();
     let mut header = vec!["INDEX"];
-    header.extend(scalar_fields.iter().map(|field| field.as_str()));
+    header.extend(columns.iter().map(|field| field.as_str()));
     table.set_header(header);
-    let mut nested_values = Vec::new();
 
-    for (index, value) in values.iter().enumerate() {
-        let object = value.as_object().expect("object list only contains objects");
+    for (index, fields) in rows.iter().enumerate() {
         let mut row = vec![index.to_string()];
         row.extend(
-            scalar_fields
+            columns
                 .iter()
-                .map(|field| object.get(*field).map_or_else(|| "-".to_string(), scalar_to_string)),
+                .map(|field| fields.get(*field).cloned().unwrap_or_else(|| "-".to_string())),
         );
         table.add_row(row);
-
-        for (field, value) in object.iter().filter(|(_, value)| is_nested(value)) {
-            nested_values.push((indexed_child_path(label, index, field), value));
-        }
     }
 
-    (table.to_string(), nested_values)
+    table.to_string()
 }
 
-fn render_value_list<'a>(label: Option<&str>, values: &'a [Value]) -> (String, Vec<(String, &'a Value)>) {
+fn render_value_list(values: &[Value]) -> String {
     let mut table = new_table();
-    table.set_header(["VALUE"]);
-    let mut nested_values = Vec::new();
+    table
+        .set_header(["VALUE"])
+        .add_rows(values.iter().map(|value| [inline_value(value)]))
+        .to_string()
+}
 
-    for (index, value) in values.iter().enumerate() {
-        if is_nested(value) {
-            table.add_row([child_marker(value)]);
-            nested_values.push((indexed_path(label, index), value));
-        } else {
-            table.add_row([scalar_to_string(value)]);
+fn render_detail_box(fields: &BTreeMap<String, String>) -> String {
+    let mut table = new_table();
+    table
+        .set_header(["FIELD", "VALUE"])
+        .add_rows(fields.iter().map(|(field, value)| [field, value]))
+        .to_string()
+}
+
+fn flatten_object<'a>(
+    prefix: Option<&str>,
+    values: &'a Map<String, Value>,
+    fields: &mut BTreeMap<String, String>,
+    lists: &mut Vec<(String, &'a [Value])>,
+) {
+    for (field, value) in values {
+        let path = dotted_path(prefix, field);
+        match value {
+            Value::Object(values) => flatten_object(Some(&path), values, fields, lists),
+            Value::Array(values) if values.iter().all(Value::is_object) && !values.is_empty() => {
+                fields.insert(path.clone(), format!("({} rows below)", values.len()));
+                lists.push((path, values));
+            }
+            _ => {
+                fields.insert(path, inline_value(value));
+            }
         }
     }
-
-    (table.to_string(), nested_values)
 }
 
-fn new_table() -> Table {
-    Table::new()
+fn flatten_list_row(values: &Map<String, Value>, fields: &mut BTreeMap<String, String>) {
+    for (field, value) in values {
+        flatten_list_row_value(field, value, fields);
+    }
 }
 
-fn scalar_to_string(value: &Value) -> String {
+fn flatten_list_row_value(prefix: &str, value: &Value, fields: &mut BTreeMap<String, String>) {
+    if omit_list_column(prefix) {
+        return;
+    }
+
+    match value {
+        Value::Object(values) => {
+            for (field, value) in values {
+                flatten_list_row_value(&dotted_path(Some(prefix), field), value, fields);
+            }
+        }
+        _ => {
+            fields.insert(prefix.to_string(), inline_value(value));
+        }
+    }
+}
+
+fn omit_list_column(field: &str) -> bool {
+    matches!(
+        field,
+        "destination.packet_key" | "destination.peer_id" | "destination.safe_address"
+    )
+}
+
+fn inline_value(value: &Value) -> String {
     match value {
         Value::Null => "-".to_string(),
         Value::Bool(value) => value.to_string(),
         Value::Number(value) => value.to_string(),
         Value::String(value) => value.clone(),
-        Value::Array(_) | Value::Object(_) => child_marker(value).to_string(),
+        Value::Array(values) if values.is_empty() => "(empty)".to_string(),
+        Value::Array(values) => values.iter().map(inline_value).collect::<Vec<_>>().join(", "),
+        Value::Object(values) => serde_json::to_string(values).expect("JSON object serialization cannot fail"),
     }
 }
 
-fn is_nested(value: &Value) -> bool {
-    matches!(value, Value::Array(_) | Value::Object(_))
+fn scalar_to_string(value: &Value) -> String {
+    inline_value(value)
 }
 
-fn child_marker(value: &Value) -> &'static str {
-    match value {
-        Value::Array(_) => "(see list below)",
-        Value::Object(_) => "(see details below)",
-        _ => unreachable!("child marker is only used for nested values"),
-    }
-}
-
-fn with_label(label: Option<&str>, rendered: String) -> String {
-    label.map_or(rendered.clone(), |label| format!("{label}\n{rendered}"))
-}
-
-fn child_path(parent: Option<&str>, child: &str) -> String {
+fn dotted_path(parent: Option<&str>, child: &str) -> String {
     parent.map_or_else(|| child.to_string(), |parent| format!("{parent}.{child}"))
 }
 
-fn indexed_path(parent: Option<&str>, index: usize) -> String {
-    parent.map_or_else(|| format!("[{index}]"), |parent| format!("{parent}[{index}]"))
-}
-
-fn indexed_child_path(parent: Option<&str>, index: usize, child: &str) -> String {
-    format!("{}.{}", indexed_path(parent, index), child)
+fn new_table() -> Table {
+    let mut table = Table::new();
+    table
+        .load_preset(UTF8_FULL)
+        .apply_modifier(UTF8_ROUND_CORNERS)
+        .set_content_arrangement(ContentArrangement::Dynamic);
+    table
 }
 
 #[cfg(test)]
@@ -180,12 +193,12 @@ mod tests {
     fn renders_flat_list() {
         insta::assert_snapshot!(render(&json!([
             {"keyid": 1, "packet_key": "first"},
-            {"keyid": 2, "packet_key": "second"},
+            {"keyid": 2, "packet_key": "second", "safe_address": "0x1234"},
         ])));
     }
 
     #[test]
-    fn renders_nested_sections_and_empty_lists() {
+    fn flattens_nested_objects_and_inline_lists() {
         insta::assert_snapshot!(render(&json!({
             "source": {
                 "chain_key": "0x1234",
@@ -194,7 +207,13 @@ mod tests {
             "channels": [
                 {
                     "channel": {"status": "OPEN", "ticket_index": "0"},
-                    "destination": {"peer_id": "12D3KooWFullPeerId"},
+                    "destination": {
+                        "chain_key": "0x1234",
+                        "packet_key": "packet-key",
+                        "peer_id": "12D3KooWFullPeerId",
+                        "safe_address": "0xabcd",
+                        "multi_addresses": ["/ip4/127.0.0.1/tcp/9091"],
+                    },
                 },
             ],
             "empty": [],
