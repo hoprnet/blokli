@@ -19,12 +19,12 @@ jobs:
         with:
           persist-credentials: false
       - name: Setup Nix
-        uses: hoprnet/hopr-workflows/actions/setup-nix@c8d45034bb33307dfda3b4dfcd1fc4000cadc05a # setup-nix-v1
+        uses: hoprnet/hopr-workflows/actions/setup-nix@setup-nix-v2
         with:
           cachix_cache_name: blokli
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Setup GCP
-        uses: hoprnet/hopr-workflows/actions/setup-gcp@12c56020e16036982e6cc529848edeedfc705865 # master
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@setup-nix-v2
         with:
           google-credentials: ${{ secrets.GCP_SA_GITHUB_RUNNER }}
           login-artifact-registry: 'true'
