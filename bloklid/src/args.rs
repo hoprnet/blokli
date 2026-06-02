@@ -26,7 +26,8 @@ pub(crate) struct Args {
         long = "config",
         value_name = "FILE",
         global = true,
-        help = "Path to the configuration file. Overrides BLOKLI_CONFIG_PATH. If neither is set, uses /etc/bloklid/bloklid.toml (if present)."
+        help = "Path to the configuration file. Overrides BLOKLI_CONFIG_PATH. If neither is set, uses \
+                /etc/bloklid/bloklid.toml (if present)."
     )]
     pub(crate) config: Option<PathBuf>,
 
@@ -141,22 +142,20 @@ impl Args {
             ("BLOKLI_OTLP_SIGNALS", "telemetry.otlp_signals"),
         ];
 
-        // Precedence: -c flag > BLOKLI_CONFIG_PATH (required) > /etc/bloklid/bloklid.toml (if present).
+        // Precedence: -c flag > BLOKLI_CONFIG_PATH (optional) > /etc/bloklid/bloklid.toml (if present).
         let env_config_path = std::env::var("BLOKLI_CONFIG_PATH")
             .ok()
             .map(|v| v.trim().to_owned())
             .filter(|p| !p.is_empty())
             .map(PathBuf::from);
 
-        let effective_config = self.config.clone()
-            .or_else(|| env_config_path.clone())
-            .or_else(|| {
-                if !use_default {
-                    return None;
-                }
-                let path = PathBuf::from("/etc/bloklid/bloklid.toml");
-                path.exists().then_some(path)
-            });
+        let effective_config = self.config.clone().or_else(|| env_config_path.clone()).or_else(|| {
+            if !use_default {
+                return None;
+            }
+            let path = PathBuf::from("/etc/bloklid/bloklid.toml");
+            path.exists().then_some(path)
+        });
 
         if let Some(config_path) = &effective_config {
             let source = if self.config.is_some() {
@@ -1259,20 +1258,14 @@ mod tests {
                 command: None,
             };
 
-            // An empty BLOKLI_CONFIG_PATH must be treated as unset, not as a real path.
-            // Outcome depends on whether /etc/bloklid/bloklid.toml exists on this machine.
+            // An empty BLOKLI_CONFIG_PATH must be treated as unset.
+            // use_default=false means the /etc/bloklid/bloklid.toml fallback is never consulted,
+            // so with no -c flag and no valid BLOKLI_CONFIG_PATH this must always be NoConfiguration.
             let result = args.load_config(false);
-            if std::path::Path::new("/etc/bloklid/bloklid.toml").exists() {
-                // Default file present: load may succeed or fail with a parse error, but not
-                // with NoConfiguration.
-                let err_msg = result.as_ref().err().map(|e| e.to_string()).unwrap_or_default();
-                assert!(
-                    !err_msg.contains("no configuration"),
-                    "Should not return NoConfiguration when default file exists: {err_msg}"
-                );
-            } else {
-                assert!(result.is_err(), "Expected error when no config source is available");
-            }
+            assert!(
+                matches!(result, Err(BloklidError::Config(ConfigError::NoConfiguration))),
+                "Expected NoConfiguration error, got: {result:?}"
+            );
         });
     }
 }
