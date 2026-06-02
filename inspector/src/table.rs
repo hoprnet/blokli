@@ -136,7 +136,12 @@ fn flatten_list_row_value(prefix: &str, value: &Value, fields: &mut BTreeMap<Str
 fn omit_list_column(field: &str) -> bool {
     matches!(
         field,
-        "destination.packet_key" | "destination.peer_id" | "destination.safe_address"
+        "destination.packet_key"
+            | "destination.peer_id"
+            | "destination.safe_address"
+            | "source.packet_key"
+            | "source.peer_id"
+            | "source.safe_address"
     )
 }
 
@@ -213,6 +218,18 @@ mod tests {
                         "peer_id": "12D3KooWFullPeerId",
                         "safe_address": "0xabcd",
                         "multi_addresses": ["/ip4/127.0.0.1/tcp/9091"],
+                    },
+                },
+            ],
+            "incoming_channels": [
+                {
+                    "channel": {"status": "OPEN", "ticket_index": "1"},
+                    "source": {
+                        "chain_key": "0xabcd",
+                        "packet_key": "packet-key",
+                        "peer_id": "12D3KooWFullPeerId",
+                        "safe_address": "0xabcd",
+                        "multi_addresses": ["/ip4/127.0.0.1/tcp/9092"],
                     },
                 },
             ],

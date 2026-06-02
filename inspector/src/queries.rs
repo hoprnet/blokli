@@ -14,7 +14,7 @@ use hopr_types::primitive::prelude::{Address, HoprBalance};
 
 use crate::{AccountArgs, AltAccount, ChannelArgs, Formats, NodeOverviewArgs, RedemptionsArgs};
 
-const DESTINATION_QUERY_CONCURRENCY: usize = 8;
+const ACCOUNT_QUERY_CONCURRENCY: usize = 8;
 
 #[derive(Debug, serde::Serialize)]
 struct NodeOverview {
@@ -22,6 +22,7 @@ struct NodeOverview {
     ticket_parameters: OverviewTicketParameters,
     summary: NodeOverviewSummary,
     channels: Vec<NodeOverviewChannel>,
+    incoming_channels: Vec<NodeOverviewIncomingChannel>,
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -44,6 +45,12 @@ struct NodeOverviewSummary {
 struct NodeOverviewChannel {
     channel: Channel,
     destination: AltAccount,
+}
+
+#[derive(Debug, serde::Serialize)]
+struct NodeOverviewIncomingChannel {
+    channel: Channel,
+    source: AltAccount,
 }
 
 #[derive(Subcommand, Debug)]
@@ -105,7 +112,7 @@ pub(crate) enum QueryTarget {
     CountAccounts(AccountArgs),
     /// Gets information about an account.
     Account(AccountArgs),
-    /// Gets a node and its outgoing channels, enriched with destination and ticket details.
+    /// Gets a node and its channels, enriched with counterparty and ticket details.
     NodeOverview(NodeOverviewArgs),
     /// Gets channel count and total wxHOPR balance matching optional filters.
     ChannelStats(ChannelArgs),
@@ -206,28 +213,37 @@ impl QueryTarget {
 async fn query_node_overview(client: &BlokliClient, selector: AccountSelector) -> anyhow::Result<NodeOverview> {
     let source = exactly_one_account(client.query_accounts(selector).await?, "source")?;
     let source_key_id = u32::try_from(source.keyid)?;
-    let channels = client
-        .query_channels(ChannelSelector {
+    let (channels, incoming_channels, chain_info) = tokio::try_join!(
+        client.query_channels(ChannelSelector {
             filter: Some(ChannelFilter::SourceKeyId(source_key_id)),
             ..Default::default()
-        })
-        .await?;
-    let chain_info = client.query_chain_info().await?;
-    let destination_ids: HashSet<i32> = channels.channels.iter().map(|channel| channel.destination).collect();
-    let destinations = stream::iter(destination_ids)
-        .map(|destination_id| async move {
-            let key_id = u32::try_from(destination_id)?;
-            let destination = exactly_one_account(
+        }),
+        client.query_channels(ChannelSelector {
+            filter: Some(ChannelFilter::DestinationKeyId(source_key_id)),
+            ..Default::default()
+        }),
+        client.query_chain_info(),
+    )?;
+    let account_ids = channels
+        .channels
+        .iter()
+        .map(|channel| channel.destination)
+        .chain(incoming_channels.channels.iter().map(|channel| channel.source))
+        .collect::<HashSet<_>>();
+    let accounts = stream::iter(account_ids)
+        .map(|account_id| async move {
+            let key_id = u32::try_from(account_id)?;
+            let account = exactly_one_account(
                 client.query_accounts(AccountSelector::KeyId(key_id)).await?,
-                "destination",
+                "counterparty",
             )?;
-            Ok::<_, anyhow::Error>((destination_id, AltAccount::try_from(destination)?))
+            Ok::<_, anyhow::Error>((account_id, AltAccount::try_from(account)?))
         })
-        .buffer_unordered(DESTINATION_QUERY_CONCURRENCY)
+        .buffer_unordered(ACCOUNT_QUERY_CONCURRENCY)
         .try_collect::<HashMap<_, _>>()
         .await?;
 
-    build_node_overview(source, channels, chain_info, destinations)
+    build_node_overview(source, channels, incoming_channels, chain_info, accounts)
 }
 
 fn exactly_one_account(accounts: Vec<Account>, role: &str) -> anyhow::Result<Account> {
@@ -240,8 +256,9 @@ fn exactly_one_account(accounts: Vec<Account>, role: &str) -> anyhow::Result<Acc
 fn build_node_overview(
     source: Account,
     channels: ChannelsList,
+    incoming_channels: ChannelsList,
     chain_info: ChainInfo,
-    destinations: HashMap<i32, AltAccount>,
+    accounts: HashMap<i32, AltAccount>,
 ) -> anyhow::Result<NodeOverview> {
     let mut total_balance = HoprBalance::zero();
     let mut open_count = 0;
@@ -257,11 +274,22 @@ fn build_node_overview(
                 ChannelStatus::PendingToClose => pending_to_close_count += 1,
                 ChannelStatus::Closed => closed_count += 1,
             }
-            let destination = destinations
+            let destination = accounts
                 .get(&channel.destination)
                 .cloned()
                 .ok_or_else(|| anyhow::anyhow!("Missing destination account for key ID {}", channel.destination))?;
             Ok(NodeOverviewChannel { channel, destination })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    let overview_incoming_channels = incoming_channels
+        .channels
+        .into_iter()
+        .map(|channel| {
+            let source = accounts
+                .get(&channel.source)
+                .cloned()
+                .ok_or_else(|| anyhow::anyhow!("Missing source account for key ID {}", channel.source))?;
+            Ok(NodeOverviewIncomingChannel { channel, source })
         })
         .collect::<anyhow::Result<Vec<_>>>()?;
 
@@ -280,6 +308,7 @@ fn build_node_overview(
             total_balance: total_balance.to_string(),
         },
         channels: overview_channels,
+        incoming_channels: overview_incoming_channels,
     })
 }
 
@@ -319,6 +348,19 @@ mod tests {
         }
     }
 
+    fn incoming_channel(source: i32, status: ChannelStatus, balance: &str) -> Channel {
+        Channel {
+            balance: TokenValueString(balance.to_string()),
+            closure_time: None,
+            concrete_channel_id: format!("{source:064x}"),
+            destination: 7,
+            epoch: 1,
+            source,
+            status,
+            ticket_index: Uint64("0".to_string()),
+        }
+    }
+
     fn chain_info() -> ChainInfo {
         ChainInfo {
             block_number: 123,
@@ -350,12 +392,16 @@ mod tests {
                 channel(4, ChannelStatus::Closed, "0 wxHOPR"),
             ],
         };
-        let destinations = [2, 3, 4]
+        let incoming_channels = ChannelsList {
+            __typename: "ChannelsList".to_string(),
+            channels: vec![incoming_channel(5, ChannelStatus::Open, "2 wxHOPR")],
+        };
+        let accounts = [2, 3, 4, 5]
             .into_iter()
             .map(|keyid| Ok((keyid, AltAccount::try_from(account(keyid))?)))
             .collect::<anyhow::Result<HashMap<_, _>>>()?;
 
-        let overview = build_node_overview(account(7), channels, chain_info(), destinations)?;
+        let overview = build_node_overview(account(7), channels, incoming_channels, chain_info(), accounts)?;
 
         assert_eq!(overview.ticket_parameters.block_number, 123);
         assert_eq!(overview.ticket_parameters.ticket_price.0, "0.0000000000000001 wxHOPR");
@@ -373,6 +419,14 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![2, 3, 4]
         );
+        assert_eq!(
+            overview
+                .incoming_channels
+                .iter()
+                .map(|entry| entry.source.keyid)
+                .collect::<Vec<_>>(),
+            vec![5]
+        );
         insta::assert_snapshot!(Formats::Table.serialize(&overview)?);
         Ok(())
     }
@@ -383,8 +437,29 @@ mod tests {
             __typename: "ChannelsList".to_string(),
             channels: vec![channel(2, ChannelStatus::Open, "1 wxHOPR")],
         };
+        let incoming_channels = ChannelsList {
+            __typename: "ChannelsList".to_string(),
+            channels: Vec::new(),
+        };
 
-        let result = build_node_overview(account(7), channels, chain_info(), HashMap::new());
+        let result = build_node_overview(account(7), channels, incoming_channels, chain_info(), HashMap::new());
+
+        assert!(result.is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn overview_rejects_missing_incoming_source() -> anyhow::Result<()> {
+        let channels = ChannelsList {
+            __typename: "ChannelsList".to_string(),
+            channels: Vec::new(),
+        };
+        let incoming_channels = ChannelsList {
+            __typename: "ChannelsList".to_string(),
+            channels: vec![incoming_channel(5, ChannelStatus::Open, "2 wxHOPR")],
+        };
+
+        let result = build_node_overview(account(7), channels, incoming_channels, chain_info(), HashMap::new());
 
         assert!(result.is_err());
         Ok(())

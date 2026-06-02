@@ -1,6 +1,6 @@
 ---
 source: inspector/src/table.rs
-expression: "render(&json!({\n    \"source\":\n    {\n        \"chain_key\": \"0x1234\", \"multi_addresses\": [\"/ip4/127.0.0.1/tcp/9091\"],\n    }, \"channels\":\n    [{\n        \"channel\": {\"status\": \"OPEN\", \"ticket_index\": \"0\"}, \"destination\":\n        {\n            \"chain_key\": \"0x1234\", \"packet_key\": \"packet-key\", \"peer_id\":\n            \"12D3KooWFullPeerId\", \"safe_address\": \"0xabcd\", \"multi_addresses\":\n            [\"/ip4/127.0.0.1/tcp/9091\"],\n        },\n    },], \"empty\": [],\n}))"
+expression: "render(&json!({\n    \"source\":\n    {\n        \"chain_key\": \"0x1234\", \"multi_addresses\": [\"/ip4/127.0.0.1/tcp/9091\"],\n    }, \"channels\":\n    [{\n        \"channel\": {\"status\": \"OPEN\", \"ticket_index\": \"0\"}, \"destination\":\n        {\n            \"chain_key\": \"0x1234\", \"packet_key\": \"packet-key\", \"peer_id\":\n            \"12D3KooWFullPeerId\", \"safe_address\": \"0xabcd\", \"multi_addresses\":\n            [\"/ip4/127.0.0.1/tcp/9091\"],\n        },\n    },], \"incoming_channels\":\n    [{\n        \"channel\": {\"status\": \"OPEN\", \"ticket_index\": \"1\"}, \"source\":\n        {\n            \"chain_key\": \"0xabcd\", \"packet_key\": \"packet-key\", \"peer_id\":\n            \"12D3KooWFullPeerId\", \"safe_address\": \"0xabcd\", \"multi_addresses\":\n            [\"/ip4/127.0.0.1/tcp/9092\"],\n        },\n    },], \"empty\": [],\n}))"
 ---
 ╭────────────────────────┬─────────────────────────╮
 │ FIELD                  ┆ VALUE                   │
@@ -8,6 +8,8 @@ expression: "render(&json!({\n    \"source\":\n    {\n        \"chain_key\": \"0
 │ channels               ┆ (1 rows below)          │
 ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
 │ empty                  ┆ (empty)                 │
+├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
+│ incoming_channels      ┆ (1 rows below)          │
 ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
 │ source.chain_key       ┆ 0x1234                  │
 ├╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌╌┤
@@ -20,3 +22,10 @@ channels
 ╞═══════╪════════════════╪══════════════════════╪═══════════════════════╪═════════════════════════════╡
 │ 0     ┆ OPEN           ┆ 0                    ┆ 0x1234                ┆ /ip4/127.0.0.1/tcp/9091     │
 ╰───────┴────────────────┴──────────────────────┴───────────────────────┴─────────────────────────────╯
+
+incoming_channels
+╭───────┬────────────────┬──────────────────────┬──────────────────┬─────────────────────────╮
+│ INDEX ┆ channel.status ┆ channel.ticket_index ┆ source.chain_key ┆ source.multi_addresses  │
+╞═══════╪════════════════╪══════════════════════╪══════════════════╪═════════════════════════╡
+│ 0     ┆ OPEN           ┆ 1                    ┆ 0xabcd           ┆ /ip4/127.0.0.1/tcp/9092 │
+╰───────┴────────────────┴──────────────────────┴──────────────────┴─────────────────────────╯
