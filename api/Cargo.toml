@@ -102,7 +102,3 @@ tower               = { workspace = true, features = ["util"] }
 
 [package.metadata.cargo-machete]
 ignored = ["humantime-serde"]
-
-
-[package.metadata.cargo-shear]
-ignored = ["humantime-serde"]

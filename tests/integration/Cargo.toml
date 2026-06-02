@@ -9,8 +9,6 @@ anyhow = { workspace = true }
 blokli-client = { workspace = true, features = ["serde"] }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
-eventsource-client = { workspace = true }
-futures = { workspace = true }
 futures-time = { workspace = true }
 hex = { workspace = true }
 hopli = { workspace = true }
@@ -21,20 +19,24 @@ hopr-types = { workspace = true, features = [
   "internal",
   "primitive",
 ] }
-insta = { workspace = true, features = ["redactions", "yaml"] }
 libc = { workspace = true }
 rand = { workspace = true }
 reqwest = { workspace = true }
 rstest = { workspace = true }
-semver = { workspace = true }
 serde = { workspace = true, features = ["derive"] }
 serde_json = { workspace = true }
-serial_test = { workspace = true }
-test-log = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
-uuid = { workspace = true }
+
+[dev-dependencies]
+eventsource-client = { workspace = true }
+futures            = { workspace = true }
+insta              = { workspace = true, features = ["redactions", "yaml"] }
+semver             = { workspace = true }
+serial_test        = { workspace = true }
+test-log           = { workspace = true }
+uuid               = { workspace = true }
 
 [package.metadata.cargo-machete]
 ignored = ["hopli"]
