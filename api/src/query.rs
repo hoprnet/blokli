@@ -1863,6 +1863,36 @@ mod tests {
         let err =
             check_safes_balance_cap(SAFES_BALANCE_MAX_SAFES + 1).expect_err("count over the cap must be rejected");
         assert_eq!(err.code, errors::codes::LIMIT_EXCEEDED);
+        assert!(err.message.contains("safes balance limit exceeded"));
+    }
+
+    #[tokio::test]
+    async fn test_complexity_limit_rejects_weighted_fields() {
+        let schema = Schema::build(
+            QueryRoot,
+            async_graphql::EmptyMutation,
+            async_graphql::EmptySubscription,
+        )
+        .limit_complexity(10)
+        .finish();
+
+        let zero = "0x0000000000000000000000000000000000000000";
+        let query = format!(
+            r#"{{
+                a: hoprBalance(address: "{zero}") {{ __typename }}
+                b: nativeBalance(address: "{zero}") {{ __typename }}
+                c: safeHoprAllowance(address: "{zero}") {{ __typename }}
+                d: transactionCount(address: "{zero}") {{ __typename }}
+                e: chainInfo {{ __typename }}
+                f: safesBalance {{ __typename }}
+                g: ticketRedemptionStats(filter: {{}}) {{ __typename }}
+                h: calculateModuleAddress(owner: "{zero}", nonce: 0, safeAddress: "{zero}") {{ __typename }}
+            }}"#
+        );
+
+        let res = schema.execute(query).await;
+
+        assert!(!res.errors.is_empty());
     }
 
     #[tokio::test]
