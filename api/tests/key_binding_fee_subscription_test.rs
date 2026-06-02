@@ -75,7 +75,7 @@ fn create_test_schema(db: &BlokliDb, indexer_state: IndexerState) -> Schema<Quer
         transaction_executor,
         transaction_store,
         rpc_ops,
-        true,
+        None,
     )
 }
 

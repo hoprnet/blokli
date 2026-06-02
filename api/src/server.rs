@@ -223,7 +223,7 @@ pub async fn build_app(
         transaction_executor.clone(),
         transaction_store.clone(),
         rpc_operations.clone(),
-        true,
+        Some((config.max_query_depth, config.max_query_complexity)),
     );
 
     let introspection_schema = build_schema(
@@ -239,7 +239,7 @@ pub async fn build_app(
         transaction_executor,
         transaction_store,
         rpc_operations.clone(),
-        false,
+        None,
     );
 
     let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), config.health.clone());

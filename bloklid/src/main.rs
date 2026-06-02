@@ -299,6 +299,8 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                     timeout: api_config.health.timeout,
                     readiness_check_interval: api_config.health.readiness_check_interval,
                 },
+                max_query_depth: api_config.max_query_depth,
+                max_query_complexity: api_config.max_query_complexity,
             };
 
             // Get RPC operations from blokli_chain for balance queries

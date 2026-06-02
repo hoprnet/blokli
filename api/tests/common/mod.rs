@@ -234,7 +234,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
         transaction_executor.clone(),
         transaction_store.clone(),
         rpc_operations.clone(),
-        true,
+        None,
     );
 
     Ok(TestContext {
