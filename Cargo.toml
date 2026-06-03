@@ -2,9 +2,6 @@
 
 resolver = "2"
 
-[workspace.metadata.cargo-shear]
-ignored = ["humantime-serde"]
-
 members = [
   "api",
   "bloklid",
@@ -21,6 +18,9 @@ members = [
   "tests/integration",
   "types",
 ]
+
+[workspace.metadata.cargo-shear]
+ignored = ["humantime-serde"]
 
 [workspace.dependencies]
 alloy-sol-types = "1.5.7"
