@@ -26,7 +26,7 @@ pub(crate) struct Args {
         long = "config",
         value_name = "FILE",
         global = true,
-        help = "Path to the configuration file. Overrides BLOKLI_CONFIG_PATH. If neither is set, uses \
+        help = "Path to the configuration file. Overridden by BLOKLI_CONFIG_PATH. If neither is set, uses \
                 /etc/bloklid/bloklid.toml (if present)."
     )]
     pub(crate) config: Option<PathBuf>,
@@ -142,14 +142,14 @@ impl Args {
             ("BLOKLI_OTLP_SIGNALS", "telemetry.otlp_signals"),
         ];
 
-        // Precedence: -c flag > BLOKLI_CONFIG_PATH (optional) > /etc/bloklid/bloklid.toml (if present).
+        // Precedence: BLOKLI_CONFIG_PATH (optional) > -c flag > /etc/bloklid/bloklid.toml (if present).
         let env_config_path = std::env::var("BLOKLI_CONFIG_PATH")
             .ok()
             .map(|v| v.trim().to_owned())
             .filter(|p| !p.is_empty())
             .map(PathBuf::from);
 
-        let effective_config = self.config.clone().or_else(|| env_config_path.clone()).or_else(|| {
+        let effective_config = env_config_path.clone().or_else(|| self.config.clone()).or_else(|| {
             if !use_default {
                 return None;
             }
@@ -158,10 +158,10 @@ impl Args {
         });
 
         if let Some(config_path) = &effective_config {
-            let source = if self.config.is_some() {
-                "-c flag"
-            } else if env_config_path.is_some() {
+            let source = if env_config_path.is_some() {
                 "BLOKLI_CONFIG_PATH"
+            } else if self.config.is_some() {
+                "-c flag"
             } else {
                 "default"
             };
@@ -1205,7 +1205,7 @@ mod tests {
     }
 
     #[test]
-    fn test_config_flag_takes_precedence_over_blokli_config_path() {
+    fn test_blokli_config_path_takes_precedence_over_config_flag() {
         let mut flag_file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
             flag_file,
@@ -1241,10 +1241,10 @@ mod tests {
                 command: None,
             };
 
-            let config = args.load_config(false).expect("Should load config from -c flag");
+            let config = args.load_config(false).expect("Should load config from BLOKLI_CONFIG_PATH");
             assert_eq!(
-                config.rpc_url, "http://from-flag:8545",
-                "-c flag must win over BLOKLI_CONFIG_PATH"
+                config.rpc_url, "http://from-env-path:8545",
+                "BLOKLI_CONFIG_PATH must win over -c flag"
             );
         });
     }
