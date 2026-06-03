@@ -55,6 +55,33 @@ Run the GraphQL API server on its own:
 just run-api
 ```
 
+### Client DNS Override
+
+`blokli-client` uses system DNS by default. For deployments where Blokli is reachable through a stable, VPN-exempt IP but DNS can be
+unreliable, callers can configure a DNS override in `BlokliClientConfig`.
+
+The Blokli URL should stay hostname-based. The override only changes the socket address used by reqwest, so HTTP `Host`, TLS SNI, and
+certificate validation still use the original hostname.
+
+```rust
+use std::net::IpAddr;
+
+use blokli_client::{BlokliClient, BlokliClientConfig, BlokliDnsOverride};
+
+fn build_client() -> Result<BlokliClient, Box<dyn std::error::Error>> {
+    Ok(BlokliClient::new(
+        "https://blokli.example.org".parse()?,
+        BlokliClientConfig {
+            dns_override: Some(BlokliDnsOverride {
+                ip: IpAddr::from([203, 0, 113, 10]),
+                port: None,
+            }),
+            ..Default::default()
+        },
+    ))
+}
+```
+
 ## Docker Images
 
 ### Blokli + Anvil (single container)
