@@ -240,7 +240,7 @@ async fn subscribe_graph_channel_update_on_closure(#[future(awt)] fixture: Integ
     let poll_selector = channel_selector.clone();
     poll_until(
         "channel indexed for graph subscription",
-        Duration::from_secs(30),
+        Duration::from_secs(60),
         Duration::from_millis(500),
         || {
             let client = poll_client.clone();

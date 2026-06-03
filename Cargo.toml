@@ -19,9 +19,6 @@ members = [
   "types",
 ]
 
-[workspace.metadata.cargo-shear]
-ignored = ["humantime-serde"]
-
 [workspace.dependencies]
 alloy-sol-types = "1.5.7"
 anyhow = "1.0.102"
