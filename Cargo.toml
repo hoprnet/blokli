@@ -2,6 +2,9 @@
 
 resolver = "2"
 
+[workspace.metadata.cargo-shear]
+ignored = ["humantime-serde"]
+
 members = [
   "api",
   "bloklid",
