@@ -65,7 +65,10 @@ impl CompatibilityFeatures {
 pub struct BlokliDnsOverride {
     /// IP address to connect to for the Blokli base URL host.
     pub ip: IpAddr,
-    /// Optional port override. When `None`, the request URL port or scheme default is used.
+    /// Optional port override.
+    ///
+    /// When `None`, the request URL port or scheme default is used. When a request URL already includes an explicit
+    /// port, that URL port takes precedence over this override.
     pub port: Option<u16>,
 }
 
@@ -326,7 +329,13 @@ impl BlokliClient {
             .base_url
             .host_str()
             .ok_or(ErrorKind::InvalidInput("DNS override requires a Blokli base URL host"))?;
-        let addr = SocketAddr::new(dns_override.ip, dns_override.port.unwrap_or_default());
+        let port = dns_override
+            .port
+            .or_else(|| self.base_url.port_or_known_default())
+            .ok_or(ErrorKind::InvalidInput(
+                "DNS override requires a Blokli base URL port or known default",
+            ))?;
+        let addr = SocketAddr::new(dns_override.ip, port);
 
         Ok(builder.resolve(host, addr))
     }

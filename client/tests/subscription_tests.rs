@@ -5,7 +5,10 @@ use blokli_client::{
     BlokliClient, BlokliClientConfig, BlokliDnsOverride, CLIENT_VERSION, api::BlokliSubscriptionClient,
 };
 use futures::StreamExt;
-use tokio::{io::AsyncWriteExt, net::TcpListener};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+};
 use url::Url;
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -167,6 +170,15 @@ async fn subscribe_ticket_params_uses_dns_override() -> Result<()> {
         min_ticket_winning_probability: 0.25,
     };
     let (base_url, server) = spawn_dns_override_streaming_server(vec![expected_ticket_params.clone()]).await?;
+    let expected_host = format!(
+        "{}:{}",
+        base_url
+            .host_str()
+            .ok_or_else(|| anyhow::anyhow!("missing base URL host"))?,
+        base_url
+            .port_or_known_default()
+            .ok_or_else(|| anyhow::anyhow!("missing base URL port"))?,
+    );
     let client = BlokliClient::new(
         base_url,
         BlokliClientConfig {
@@ -194,7 +206,9 @@ async fn subscribe_ticket_params_uses_dns_override() -> Result<()> {
         expected_ticket_params.min_ticket_winning_probability
     );
 
-    server.await??;
+    let request = server.await??;
+    assert!(request.contains(&format!("\r\nhost: {expected_host}\r\n")));
+
     Ok(())
 }
 
@@ -229,7 +243,7 @@ async fn spawn_reconnecting_server(
 
 async fn spawn_dns_override_streaming_server(
     events: Vec<TicketParams>,
-) -> Result<(Url, tokio::task::JoinHandle<Result<()>>)> {
+) -> Result<(Url, tokio::task::JoinHandle<Result<String>>)> {
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let base_url = Url::parse(&format!(
         "http://blokli-stream.invalid:{}",
@@ -245,12 +259,30 @@ async fn spawn_dns_override_streaming_server(
 
         let body = format_ticket_params_events(&events);
         let (mut conn, _) = listener.accept().await?;
+        let request = read_http_request_head(&mut conn).await?;
         conn.write_all(format_sse_response(&body).as_bytes()).await?;
         conn.shutdown().await?;
-        Ok(())
+        Ok(request)
     });
 
     Ok((base_url, server))
+}
+
+async fn read_http_request_head(conn: &mut tokio::net::TcpStream) -> Result<String> {
+    let mut buf = Vec::new();
+    loop {
+        let mut chunk = [0_u8; 1024];
+        let n = conn.read(&mut chunk).await?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
+
+    Ok(String::from_utf8_lossy(&buf).to_ascii_lowercase())
 }
 
 async fn spawn_delayed_streaming_server(

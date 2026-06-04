@@ -301,6 +301,42 @@ async fn query_uses_dns_override_without_rewriting_host() -> anyhow::Result<()> 
     Ok(())
 }
 
+#[tokio::test]
+async fn query_uses_dns_override_with_explicit_port() -> anyhow::Result<()> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let listener_port = listener.local_addr()?.port();
+    let base_url = "http://blokli.invalid".parse()?;
+    let client = BlokliClient::new(
+        base_url,
+        BlokliClientConfig {
+            auto_compatibility_check: false,
+            dns_override: Some(BlokliDnsOverride {
+                ip: IpAddr::from([127, 0, 0, 1]),
+                port: Some(listener_port),
+            }),
+            ..Default::default()
+        },
+    );
+
+    let server = tokio::spawn(async move {
+        let (mut conn, _) = listener.accept().await?;
+        let request = read_http_request_head(&mut conn).await?;
+        conn.write_all(format_json_response(r#"{"data":{"version":"0.19.1"}}"#).as_bytes())
+            .await?;
+        conn.shutdown().await?;
+        anyhow::Ok(request)
+    });
+
+    let version = client.query_version().await?;
+    let request = server.await??;
+
+    assert_eq!(version, "0.19.1");
+    assert!(request.starts_with("post /graphql http/1.1\r\n"));
+    assert!(request.contains("\r\nhost: blokli.invalid\r\n"));
+
+    Ok(())
+}
+
 async fn read_http_request_head(conn: &mut tokio::net::TcpStream) -> anyhow::Result<String> {
     let mut buf = Vec::new();
     loop {
