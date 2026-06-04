@@ -6,7 +6,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-api"
 repository  = "https://github.com/hoprnet/hoprnet"
-version     = "0.22.1"
+version     = "0.23.0"
 
 [lints]
 workspace = true
@@ -101,8 +101,4 @@ tower               = { workspace = true, features = ["util"] }
 
 
 [package.metadata.cargo-machete]
-ignored = ["humantime-serde"]
-
-
-[package.metadata.cargo-shear]
 ignored = ["humantime-serde"]

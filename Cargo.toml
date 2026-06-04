@@ -59,11 +59,11 @@ futures-timer        = "3.0.3"
 futures-util         = "0.3.32"
 hex                  = "0.4.3"
 hex-literal          = "1.1.0"
-hopli                = { git = "https://github.com/hoprnet/hopli", branch = "main" }
+hopli                = { git = "https://github.com/hoprnet/hopli", branch = "q/remove-contract-instances" }
 hopr-async-runtime   = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
-hopr-bindings        = "4.7.3"
+hopr-bindings        = "4.8.0"
 hopr-metrics         = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
-hopr-types           = "1.5.4"
+hopr-types           = "1.8.0"
 
 http = "1.4.0"
 humantime-serde = "1.1.1"
@@ -90,9 +90,7 @@ pem-rfc7468 = "1.0"
 primitive-types = { version = "0.14.0", features = ["serde"] }
 rand = "0.10.1"
 regex = "1.12.3"
-reqwest = { version = "0.12.28", features = [
-  "json",
-] } # Keep aligned with hopr-bindings/alloy transport types; reqwest 0.13 splits Http<Client> from Http<ReqwestClient> and breaks chain/api build.
+reqwest = { version = "0.13.3", features = ["json"] }
 rstest = "0.26.1"
 rust-stream-ext-concurrent = "2.0.0"
 rustls = { version = "0.23.39", default-features = false, features = ["std"] }
