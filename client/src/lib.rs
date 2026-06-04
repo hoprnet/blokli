@@ -3,12 +3,13 @@
 //! # DNS override
 //!
 //! By default, [`BlokliClient`] uses the system DNS resolver through `reqwest`. Callers that need to keep Blokli
-//! communication working while DNS is unreliable can configure [`BlokliClientConfig::dns_override`] to connect the
-//! Blokli URL hostname to a fixed IP address.
+//! communication working while DNS is unreliable can configure [`BlokliClientConfig::dns_override`] to pin the Blokli
+//! URL hostname to a fixed IP address.
 //!
-//! The request URL is not rewritten. For example, a client configured with `https://blokli.example.org` and a DNS
-//! override still sends requests to `https://blokli.example.org/graphql`, preserving HTTP `Host`, TLS SNI, and
-//! certificate validation while bypassing system DNS for that hostname.
+//! The request hostname is not rewritten. For example, a client configured with `https://blokli.example.org` and a DNS
+//! override still sends requests for `blokli.example.org`, preserving TLS SNI and certificate validation while
+//! bypassing system DNS for that hostname. When [`BlokliDnsOverride::port`] is set, it becomes the request port;
+//! otherwise the original URL port or scheme default is used.
 //!
 //! ```no_run
 //! use std::net::IpAddr;

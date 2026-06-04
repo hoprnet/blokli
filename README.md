@@ -60,8 +60,9 @@ just run-api
 `blokli-client` uses system DNS by default. For deployments where Blokli is reachable through a stable, VPN-exempt IP but DNS can be
 unreliable, callers can configure a DNS override in `BlokliClientConfig`.
 
-The Blokli URL should stay hostname-based. The override only changes the socket address used by reqwest, so HTTP `Host`, TLS SNI, and
-certificate validation still use the original hostname.
+The Blokli URL should stay hostname-based. The override pins DNS resolution for that hostname, so TLS SNI and certificate validation still
+use the original hostname. If `BlokliDnsOverride::port` is set, Blokli uses that port for requests; otherwise it uses the original URL port
+or the scheme default.
 
 ```rust
 use std::net::IpAddr;
