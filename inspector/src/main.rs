@@ -243,21 +243,12 @@ impl TryFrom<AccountArgs> for AccountSelector {
     }
 }
 
-#[derive(Debug, Clone, Args)]
-pub(crate) struct NodeOverviewArgs {
-    /// Node chain key, hex packet key, or Peer ID.
-    node: String,
-}
-
-impl TryFrom<NodeOverviewArgs> for AccountSelector {
-    type Error = anyhow::Error;
-
-    fn try_from(value: NodeOverviewArgs) -> Result<Self, Self::Error> {
-        if let Ok(address) = value.node.parse::<Address>() {
-            Ok(AccountSelector::Address(address.into()))
-        } else {
-            Ok(AccountSelector::PacketKey(parse_packet_key(&value.node)?.into()))
-        }
+/// Resolves a node argument (chain key, hex packet key, or Peer ID) into an [`AccountSelector`].
+pub(crate) fn node_account_selector(node: &str) -> anyhow::Result<AccountSelector> {
+    if let Ok(address) = node.parse::<Address>() {
+        Ok(AccountSelector::Address(address.into()))
+    } else {
+        Ok(AccountSelector::PacketKey(parse_packet_key(node)?.into()))
     }
 }
 
@@ -276,13 +267,11 @@ mod tests {
     use blokli_client::api::AccountSelector;
     use hopr_types::{crypto::types::OffchainPublicKey, primitive::prelude::ToHex};
 
-    use super::NodeOverviewArgs;
+    use super::node_account_selector;
 
     #[test]
     fn node_overview_selector_accepts_chain_key() -> anyhow::Result<()> {
-        let selector = AccountSelector::try_from(NodeOverviewArgs {
-            node: "0x1111111111111111111111111111111111111111".to_string(),
-        })?;
+        let selector = node_account_selector("0x1111111111111111111111111111111111111111")?;
 
         assert!(matches!(selector, AccountSelector::Address(address) if address == [0x11; 20]));
         Ok(())
@@ -296,7 +285,7 @@ mod tests {
         let peer_id = packet_key.to_peerid_str();
 
         for node in [expected, peer_id] {
-            let selector = AccountSelector::try_from(NodeOverviewArgs { node })?;
+            let selector = node_account_selector(&node)?;
             assert!(matches!(selector, AccountSelector::PacketKey(_)));
         }
         Ok(())
@@ -304,9 +293,7 @@ mod tests {
 
     #[test]
     fn node_overview_selector_rejects_invalid_value() {
-        let result = AccountSelector::try_from(NodeOverviewArgs {
-            node: "not-a-node".to_string(),
-        });
+        let result = node_account_selector("not-a-node");
 
         assert!(result.is_err());
     }

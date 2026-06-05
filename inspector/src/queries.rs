@@ -12,7 +12,7 @@ use clap::Subcommand;
 use futures::{StreamExt, TryStreamExt, stream};
 use hopr_types::primitive::prelude::{Address, HoprBalance};
 
-use crate::{AccountArgs, AltAccount, ChannelArgs, Formats, NodeOverviewArgs, RedemptionsArgs};
+use crate::{AccountArgs, AltAccount, ChannelArgs, Formats, RedemptionsArgs, node_account_selector};
 
 const ACCOUNT_QUERY_CONCURRENCY: usize = 8;
 
@@ -113,7 +113,10 @@ pub(crate) enum QueryTarget {
     /// Gets information about an account.
     Account(AccountArgs),
     /// Gets a node and its channels, enriched with counterparty and ticket details.
-    NodeOverview(NodeOverviewArgs),
+    NodeOverview {
+        /// Node chain key, hex packet key, or Peer ID.
+        node: String,
+    },
     /// Gets channel count and total wxHOPR balance matching optional filters.
     ChannelStats(ChannelArgs),
     /// Gets channels with their aggregated wxHOPR balance. Use --safe-address to scope to a safe.
@@ -177,7 +180,7 @@ impl QueryTarget {
                     format.serialize(client.query_accounts(sel.try_into()?).await?)
                 }
             }
-            QueryTarget::NodeOverview(sel) => query_node_overview(client, sel.try_into()?)
+            QueryTarget::NodeOverview { node } => query_node_overview(client, node_account_selector(&node)?)
                 .await
                 .and_then(|overview| format.serialize(overview)),
             QueryTarget::Channel(sel) => format.serialize(client.query_channels(sel.try_into()?).await?),

@@ -100,7 +100,9 @@ fn flatten_object<'a>(
         match value {
             Value::Object(values) => flatten_object(Some(&path), values, fields, lists),
             Value::Array(values) if values.iter().all(Value::is_object) && !values.is_empty() => {
-                fields.insert(path.clone(), format!("({} rows below)", values.len()));
+                let count = values.len();
+                let noun = if count == 1 { "row" } else { "rows" };
+                fields.insert(path.clone(), format!("({count} {noun} below)"));
                 lists.push((path, values));
             }
             _ => {
