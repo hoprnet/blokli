@@ -67,8 +67,7 @@ pub struct BlokliDnsOverride {
     pub ip: IpAddr,
     /// Optional port override.
     ///
-    /// When `None`, the request URL port or scheme default is used. When a request URL already includes an explicit
-    /// port, that URL port takes precedence over this override.
+    /// When `None`, the request URL port or scheme default is used. When `Some`, the override port is used for requests.
     pub port: Option<u16>,
 }
 
