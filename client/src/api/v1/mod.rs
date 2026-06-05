@@ -266,6 +266,11 @@ pub trait BlokliSubscriptionClient {
         selector: AccountSelector,
     ) -> Result<impl futures::Stream<Item = Result<types::Account>> + Send>;
     /// Subscribes to updates of the entire channel graph.
+    ///
+    /// The initial stream emits one entry per currently open channel. Later updates
+    /// include all channel state transitions, including `CLOSED` entries. Consumers
+    /// should merge entries by `channel.concrete_channel_id` and use closed entries
+    /// as removal signals for an open-channel graph.
     fn subscribe_graph(&self) -> Result<impl futures::Stream<Item = Result<types::OpenedChannelsGraphEntry>> + Send>;
     /// Subscribes to updates of the ticket parameters.
     fn subscribe_ticket_params(&self) -> Result<impl futures::Stream<Item = Result<types::TicketParameters>> + Send>;
