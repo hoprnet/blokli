@@ -5,7 +5,7 @@
 //! - Graph updates when channels are opened
 //! - Graph updates when channels are closed
 //! - Account information is included for all channel participants
-//! - Only OPEN channels are included in the graph
+//! - Initial snapshots include only OPEN channels; later updates may include CLOSED removal signals
 //! - Each emission contains one channel with its source and destination accounts
 
 use std::{
