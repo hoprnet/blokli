@@ -1237,12 +1237,15 @@ mod tests {
         let env_path_str = env_path.to_string_lossy().into_owned();
 
         temp_env::with_var("BLOKLI_CONFIG_PATH", Some(env_path_str.as_str()), || {
+            let args = Args {
                 verbose: 0,
                 config: Some(flag_path),
                 command: None,
             };
 
-            let config = args.load_config(false).expect("Should load config from BLOKLI_CONFIG_PATH");
+            let config = args
+                .load_config(false)
+                .expect("Should load config from BLOKLI_CONFIG_PATH");
             assert_eq!(
                 config.rpc_url, "http://from-env-path:8545",
                 "BLOKLI_CONFIG_PATH must win over -c flag"
