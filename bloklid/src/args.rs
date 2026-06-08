@@ -1187,9 +1187,9 @@ mod tests {
         )
         .unwrap();
         let path = file.path().to_path_buf();
+        let path_str = path.to_string_lossy().into_owned();
 
-        temp_env::with_var("BLOKLI_CONFIG_PATH", Some(path.to_str().unwrap()), || {
-            let args = Args {
+        temp_env::with_var("BLOKLI_CONFIG_PATH", Some(path_str.as_str()), || {
                 verbose: 0,
                 config: None,
                 command: None,
