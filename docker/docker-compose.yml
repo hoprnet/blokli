@@ -1,7 +1,7 @@
 ---
 services:
   postgres:
-    image: postgres:18-alpine
+    image: postgres:18-alpine@sha256:ccfb3a1332f1ade601b73005eda74192167c5ca09c3bd7589c46f61f0490f470 # pinned 2026-06-01, see https://hub.docker.com/layers/library/postgres/18-alpine/images/sha256-ccfb3a1332f1ade601b73005eda74192167c5ca09c3bd7589c46f61f0490f470
     container_name: bloklid-postgres
     environment:
       POSTGRES_USER: bloklid
@@ -9,7 +9,7 @@ services:
       POSTGRES_DB: bloklid
     ports:
       - "5432:5432"
-    volumes:
+
       - postgres_data:/var/lib/postgresql/data
       - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
     healthcheck:

@@ -31,7 +31,7 @@
   inputs = {
     # Core Nix ecosystem dependencies
     flake-parts.url = "github:hercules-ci/flake-parts";
-    nixpkgs.url = "github:NixOS/nixpkgs/release-25.11";
+    nixpkgs.url = "github:NixOS/nixpkgs/release-26.05";
     nixpkgs-unstable.url = "github:NixOS/nixpkgs/nixos-unstable";
 
     # HOPR Nix Library (provides flake-utils and reusable build functions)
@@ -467,6 +467,8 @@
               ".npm/"
             ];
             extraFormatters = {
+              programs.nixfmt.package = pkgs.nixfmt;
+              programs.prettier.package = pkgs.prettier;
               settings.formatter.shfmt.includes = [
                 "*.sh"
                 "deploy/compose/.env.sample"
@@ -481,7 +483,7 @@
                 command = pkgs.writeShellApplication {
                   name = "format-graphql";
                   runtimeInputs = with pkgs; [
-                    nodePackages.prettier
+                    prettier
                   ];
                   text = ''
                     prettier --parser graphql --write "$@"

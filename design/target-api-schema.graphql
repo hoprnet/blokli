@@ -349,15 +349,18 @@ directions (A→B and B→A), these are emitted as separate entries.
 **Structure:**
 - Each entry contains exactly one channel with its source and destination accounts
 - If multiple channels exist between the same account pair, each is emitted as a separate entry
-- The channel is always open (closed channels are not included)
+- Initial snapshot entries are always open; subsequent update entries may include
+  non-open states such as CLOSED
 
 **Usage in subscriptions:**
 The `openedChannelGraphUpdated` subscription streams these entries one at a time.
-Clients must accumulate entries to build the complete channel graph.
-An entry is emitted whenever that specific channel is updated.
+Clients must accumulate entries by `channel.concreteChannelId` to build the
+complete channel graph. An entry is emitted whenever that specific channel is
+updated. CLOSED entries are intentional removal signals for consumers that
+maintain an open-channel graph.
 """
 type OpenedChannelsGraphEntry {
-  "The open payment channel from source to destination"
+  "The payment channel update from source to destination"
   channel: Channel!
   "Destination account (recipient end of the directed edge)"
   destination: Account!
@@ -965,17 +968,19 @@ type SubscriptionRoot {
   - Emits one OpenedChannelsGraphEntry per open channel
   - Each entry contains a single channel with its source and destination accounts
   - On subscription start, emits all existing open channels as separate entries
-  - Subsequently, emits updates when any channel changes
+  - Subsequently, emits updates when any channel changes, including non-open states
 
   **Building the Graph:**
   Clients receive entries incrementally (one per channel) and should accumulate
-  them to build the complete network topology. The full graph is the union of all entries.
+  them by channel.concreteChannelId to build the complete network topology.
+  CLOSED entries are intentional removal signals for consumers that maintain an
+  open-channel graph.
 
   **Update Triggers:**
   An entry is re-emitted for a channel when:
   - The channel's status changes (e.g., OPEN → PENDINGTOCLOSE)
   - The channel's balance changes
-  - The channel closes (no longer emitted)
+  - The channel closes (emitted with CLOSED status so consumers can remove it)
   - A new channel opens (new entry emitted)
 
   **Example:**

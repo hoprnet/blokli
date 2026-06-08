@@ -556,7 +556,7 @@ impl SubscriptionRoot {
     /// - Emits one OpenedChannelsGraphEntry per open channel
     /// - Each entry contains a single channel with its source and destination accounts
     /// - On subscription start, emits all existing open channels as separate entries
-    /// - Subsequently, emits updates when any channel changes
+    /// - Subsequently, emits updates when any channel changes, including non-open states
     ///
     /// **Phase 1 Ordering:**
     /// The initial snapshot (Phase 1) emits channels in randomized order to prevent
@@ -565,13 +565,15 @@ impl SubscriptionRoot {
     ///
     /// **Building the Graph:**
     /// Clients receive entries incrementally (one per channel) and should accumulate
-    /// them to build the complete network topology. The full graph is the union of all entries.
+    /// them to build the complete network topology. Entries should be merged by
+    /// concrete channel ID. Closed-channel entries are intentional removal signals
+    /// for consumers that maintain an open-channel graph.
     ///
     /// **Update Triggers:**
     /// An entry is re-emitted for a channel when:
     /// - The channel's status changes (e.g., OPEN -> PENDINGTOCLOSE)
     /// - The channel's balance changes
-    /// - The channel closes (no longer emitted)
+    /// - The channel closes (emitted with CLOSED status so consumers can remove it)
     /// - A new channel opens (new entry emitted)
     ///
     /// **Example:**
