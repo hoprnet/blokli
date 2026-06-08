@@ -1,7 +1,8 @@
+use blokli_api_types::RedemptionResult;
 use blokli_chain_rpc::HoprIndexerRpcOperations;
 use blokli_chain_types::AlloyAddressExt;
 use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator, errors::DbSqlError};
-use hopr_bindings::hopr_channels::HoprChannels::HoprChannelsEvents;
+use hopr_bindings::{exports::alloy::hex, hopr_channels::HoprChannels::HoprChannelsEvents};
 use hopr_types::{
     crypto::types::Hash,
     internal::channels::{ChannelEntry, ChannelStatus, generate_channel_id},
@@ -15,6 +16,7 @@ use super::{ContractEventHandlers, channel_utils::decode_channel, helpers::const
 use crate::{
     errors::{CoreEthereumIndexerError, Result},
     handlers::helpers::build_channel_entry,
+    state::{IndexerEvent, RedeemTicketDetailsInfo},
 };
 
 impl<T, Db> ContractEventHandlers<T, Db>
@@ -30,7 +32,7 @@ where
         tx_index: u32,
         log_index: u32,
         is_synced: bool,
-    ) -> Result<Vec<crate::state::IndexerEvent>> {
+    ) -> Result<Vec<IndexerEvent>> {
         #[cfg(all(feature = "telemetry", not(test)))]
         increment_indexer_contract_log_count("channels");
 
@@ -75,6 +77,29 @@ where
                     diff = %diff,
                     "ChannelBalanceDecreased: decoded channel state"
                 );
+
+                if is_synced {
+                    let min_ticket_price = match self.db.get_indexer_data(tx.into()).await {
+                        Ok(data) => data.ticket_price,
+                        Err(e) => {
+                            warn!(%channel_id, %e, "ChannelBalanceDecreased: failed to get ticket price filter");
+                            None
+                        }
+                    };
+                    let above_minimum = min_ticket_price.is_none_or(|min| diff >= min);
+                    if above_minimum {
+                        events.push(IndexerEvent::TicketRedeemed(RedeemTicketDetailsInfo {
+                            issuer_address: existing_channel.source.to_string(),
+                            recipient_address: existing_channel.destination.to_string(),
+                            epoch: decoded.epoch,
+                            index: decoded.ticket_index.saturating_sub(1),
+                            channel_id: hex::encode(channel_id),
+                            result: RedemptionResult::Redeemed,
+                        }));
+                    } else if let Some(min) = min_ticket_price {
+                        trace!(%channel_id, diff = %diff, min = %min, "ChannelBalanceDecreased: skipping low-value ticket redemption event");
+                    }
+                }
 
                 let destination_account = self.db.get_account(tx.into(), existing_channel.destination).await?;
 
@@ -125,7 +150,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for ChannelBalanceDecreased");
@@ -193,7 +218,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for ChannelBalanceIncreased");
@@ -259,7 +284,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for ChannelClosed");
@@ -343,7 +368,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for ChannelOpened");
@@ -403,7 +428,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for TicketRedeemed");
@@ -463,7 +488,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for OutgoingChannelClosureInitiated");

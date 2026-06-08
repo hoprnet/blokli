@@ -13,9 +13,61 @@ use std::sync::{
 };
 
 use async_broadcast::{Receiver, Sender, broadcast};
-use blokli_api_types::{Account, ChannelUpdate, TicketParameters, TokenValueString};
+use blokli_api_types::{
+    Account, ChannelUpdate, RedeemTicketDetails, RedemptionResult, TicketParameters, TokenValueString, UInt64,
+};
 use hopr_types::primitive::prelude::Address;
 use tokio::sync::RwLock;
+
+/// Internal event payload for a ticket redemption observed on-chain.
+///
+/// Carries all fields needed to identify the ticket and report the outcome.
+/// The `channel_id` field is used for subscription filtering and stripped
+/// before the event is yielded to GraphQL clients (see `From` impl below).
+///
+/// # Examples
+///
+/// ```
+/// use blokli_api_types::{RedeemTicketDetails, RedemptionResult};
+/// use blokli_chain_indexer::state::RedeemTicketDetailsInfo;
+///
+/// let info = RedeemTicketDetailsInfo {
+///     issuer_address: "0xaabbccdd".to_string(),
+///     recipient_address: "0xddeeff00".to_string(),
+///     epoch: 1,
+///     index: 0,
+///     channel_id: "14a2c4f5".to_string(),
+///     result: RedemptionResult::Redeemed,
+/// };
+/// let gql: RedeemTicketDetails = info.into();
+/// ```
+#[derive(Debug, Clone)]
+pub struct RedeemTicketDetailsInfo {
+    /// Issuer account on-chain address in hexadecimal format
+    pub issuer_address: String,
+    /// Recipient account on-chain address in hexadecimal format
+    pub recipient_address: String,
+    /// Epoch of the channel where the ticket was redeemed
+    pub epoch: u32,
+    /// Channel ID in lowercase hex (no `0x` prefix), used for subscription filtering
+    pub channel_id: String,
+    /// Index of the ticket within the channel epoch
+    pub index: u64,
+    /// Outcome of the redemption attempt
+    pub result: RedemptionResult,
+}
+
+impl From<RedeemTicketDetailsInfo> for RedeemTicketDetails {
+    fn from(value: RedeemTicketDetailsInfo) -> Self {
+        Self {
+            issuer_address: value.issuer_address,
+            recipient_address: value.recipient_address,
+            epoch: UInt64(value.epoch as u64),
+            index: UInt64(value.index),
+            result: value.result,
+        }
+    }
+}
 
 /// Event type for the subscription event bus
 ///
@@ -45,6 +97,12 @@ pub enum IndexerEvent {
     /// Contains both ticket price and winning probability since both are needed
     /// for the GraphQL subscription.
     TicketParametersUpdated(TicketParameters),
+
+    /// A ticket redemption was observed on-chain (either accepted or rejected).
+    ///
+    /// Carries all fields needed to identify the ticket and report the outcome.
+    /// Subscribers filter by channel ID, issuer, or recipient address.
+    TicketRedeemed(RedeemTicketDetailsInfo),
 }
 
 /// Shared state for coordinating indexer operations with subscriptions

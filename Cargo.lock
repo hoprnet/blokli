@@ -1809,6 +1809,7 @@ dependencies = [
  "pem-rfc7468 1.0.0",
  "rand 0.10.1",
  "regex",
+ "rstest",
  "rustls",
  "sea-orm",
  "serde",

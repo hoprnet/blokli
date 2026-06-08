@@ -183,6 +183,11 @@ opt-level     = 3
 panic         = "abort"
 strip         = true
 
+# humantime-serde used only via #[serde(with = "humantime_serde")] string attrs,
+# which cargo-shear cannot detect through static analysis.
+[workspace.metadata.cargo-shear]
+ignored = ["humantime-serde"]
+
 # Workspace-level lints to prevent common issues
 [workspace.lints.clippy]
 # Prevent lossy numeric casts that can cause data corruption
