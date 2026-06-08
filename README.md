@@ -212,7 +212,7 @@ Blokli can be configured via a configuration file (TOML) or environment variable
 2. Configuration File
 3. Default Values
 
-The path to the configuration file can be specified via the `-c` flag or the `BLOKLI_CONFIG_PATH` environment variable (the flag takes
+The path to the configuration file can be specified via the `-c` flag or the `BLOKLI_CONFIG_PATH` environment variable (`BLOKLI_CONFIG_PATH` takes
 priority). If neither is set, the daemon will try `/etc/bloklid/bloklid.toml` if it exists; otherwise it starts using only environment
 variables and built-in defaults.
 
