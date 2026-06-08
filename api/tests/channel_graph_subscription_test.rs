@@ -5,10 +5,15 @@
 //! - Graph updates when channels are opened
 //! - Graph updates when channels are closed
 //! - Account information is included for all channel participants
-//! - Only OPEN channels are included in the graph
+//! - Initial snapshots include only OPEN channels; later updates may include CLOSED removal signals
 //! - Each emission contains one channel with its source and destination accounts
 
-use std::{collections::HashSet, str::FromStr, sync::Arc, time::Duration};
+use std::{
+    collections::HashSet,
+    str::FromStr,
+    sync::Arc,
+    time::{Duration, UNIX_EPOCH},
+};
 
 use async_graphql::Schema;
 use blokli_api::{mutation::MutationRoot, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot};
@@ -791,4 +796,99 @@ async fn test_opened_channel_graph_subscription_balance_update() {
         .as_str()
         .unwrap();
     assert_eq!(updated_balance_str, "2000 wxHOPR");
+}
+
+async fn assert_opened_channel_graph_subscription_emits_status_update(status: ChannelStatus, expected_status: &str) {
+    let db = BlokliDb::new_in_memory().await.unwrap();
+    let indexer_state = IndexerState::new(10, 100);
+
+    let keypair1 = random_keypair();
+    let keypair2 = random_keypair();
+    let offchain1 = random_offchain_keypair();
+    let offchain2 = random_offchain_keypair();
+    let addr1 = keypair1.public().to_address();
+    let addr2 = keypair2.public().to_address();
+
+    db.upsert_account(None, 1, addr1, *offchain1.public(), None, 100, 0, 0)
+        .await
+        .unwrap();
+    db.upsert_account(None, 2, addr2, *offchain2.public(), None, 101, 0, 0)
+        .await
+        .unwrap();
+
+    let balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
+    let open_channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel_id = open_channel.get_id().to_hex();
+    db.upsert_channel(None, open_channel, 100, 0, 0).await.unwrap();
+
+    update_watermark(&db, 1000, 0, 0).await;
+
+    let schema = create_test_schema_with_state(&db, indexer_state.clone());
+    let query = r#"
+        subscription {
+            openedChannelGraphUpdated {
+                channel {
+                    concreteChannelId
+                    status
+                }
+                source {
+                    keyid
+                }
+                destination {
+                    keyid
+                }
+            }
+        }
+    "#;
+
+    let mut stream = schema.execute_stream(query).boxed();
+
+    let initial = tokio::time::timeout(Duration::from_secs(2), stream.next())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(initial.errors.is_empty());
+    let initial_data = initial.data.into_json().unwrap();
+    assert_eq!(
+        initial_data["openedChannelGraphUpdated"]["channel"]["status"]
+            .as_str()
+            .unwrap(),
+        "OPEN"
+    );
+
+    let updated_channel = build_channel_entry(addr1, addr2, balance, 0, status, 1);
+    db.upsert_channel(None, updated_channel, 110, 0, 0).await.unwrap();
+
+    let channel_update = create_channel_update_event(&db, &channel_id).await.unwrap();
+    indexer_state.publish_event(IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+
+    let updated = tokio::time::timeout(Duration::from_secs(3), stream.next())
+        .await
+        .unwrap()
+        .unwrap();
+
+    assert!(updated.errors.is_empty());
+    let updated_data = updated.data.into_json().unwrap();
+    let entry = &updated_data["openedChannelGraphUpdated"];
+    assert_eq!(
+        entry["channel"]["concreteChannelId"].as_str().unwrap(),
+        channel_id.strip_prefix("0x").unwrap_or(&channel_id)
+    );
+    assert_eq!(entry["channel"]["status"].as_str().unwrap(), expected_status);
+    assert_eq!(entry["source"]["keyid"].as_i64().unwrap(), 1);
+    assert_eq!(entry["destination"]["keyid"].as_i64().unwrap(), 2);
+}
+
+#[tokio::test]
+async fn test_opened_channel_graph_subscription_emits_pending_to_close_update() {
+    assert_opened_channel_graph_subscription_emits_status_update(
+        ChannelStatus::PendingToClose(UNIX_EPOCH),
+        "PENDINGTOCLOSE",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn test_opened_channel_graph_subscription_emits_closed_update() {
+    assert_opened_channel_graph_subscription_emits_status_update(ChannelStatus::Closed, "CLOSED").await;
 }
