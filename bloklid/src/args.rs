@@ -1190,6 +1190,7 @@ mod tests {
         let path_str = path.to_string_lossy().into_owned();
 
         temp_env::with_var("BLOKLI_CONFIG_PATH", Some(path_str.as_str()), || {
+            let args = Args {
                 verbose: 0,
                 config: None,
                 command: None,
