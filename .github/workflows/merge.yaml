@@ -31,7 +31,7 @@ jobs:
           - architecture: aarch64-darwin
             runner: depot-macos-15
             build_command: nix build -L .#binary-bloklid-aarch64-darwin
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@7d8e6dfe4cfacb23a42857171d7426467686970e
     permissions:
       contents: read
     with:
@@ -76,7 +76,7 @@ jobs:
   build-docker:
     name: Docker
     if: github.event.pull_request.merged == true
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@7d8e6dfe4cfacb23a42857171d7426467686970e
     needs: build-binaries
     permissions:
       contents: read
@@ -111,7 +111,7 @@ jobs:
   build-docker-with-anvil:
     name: Docker anvil
     if: github.event.pull_request.merged == true
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@7d8e6dfe4cfacb23a42857171d7426467686970e
     needs: build-binaries
     permissions:
       contents: read
@@ -153,7 +153,7 @@ jobs:
         run: echo "suffix=v$(echo '${{ needs.build-docker.outputs.docker_build_version }}' | tr '.' '-')" | tee -a "$GITHUB_OUTPUT"
       - name: Setup GCP
         id: gcp
-        uses: hoprnet/hopr-workflows/actions/setup-gcp@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@7d8e6dfe4cfacb23a42857171d7426467686970e
         with:
           workload_identity_provider: ${{ vars.WIF_PROVIDER_DEVELOPMENT }}
           service_account: ${{ vars.WIF_SERVICE_ACCOUNT_DEVELOPMENT }}

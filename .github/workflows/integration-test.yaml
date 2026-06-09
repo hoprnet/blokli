@@ -19,16 +19,16 @@ jobs:
         with:
           persist-credentials: false
       - name: Setup Nix
-        uses: hoprnet/hopr-workflows/actions/setup-nix@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+        uses: hoprnet/hopr-workflows/actions/setup-nix@7d8e6dfe4cfacb23a42857171d7426467686970e
         with:
           cachix_cache_name: blokli
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Setup GCP
-        uses: hoprnet/hopr-workflows/actions/setup-gcp@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@7d8e6dfe4cfacb23a42857171d7426467686970e
         with:
           google_credentials: ${{ secrets.GCP_SA_GITHUB_RUNNER }}
-          login-artifact-registry: 'true'
-          install-sdk: 'false'
+          login_artifact_registry: 'true'
+          install_sdk: 'false'
       - name: Run Integration tests
         env:
           BLOKLI_TEST_REMOTE_IMAGE: ${{ inputs.image }}
