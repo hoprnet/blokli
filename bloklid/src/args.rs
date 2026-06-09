@@ -21,7 +21,14 @@ pub(crate) struct Args {
     #[arg(short = 'v', long = "verbose", action = clap::ArgAction::Count, global = true)]
     pub(crate) verbose: u8,
 
-    #[arg(short = 'c', long = "config", value_name = "FILE", global = true)]
+    #[arg(
+        short = 'c',
+        long = "config",
+        value_name = "FILE",
+        global = true,
+        help = "Path to the configuration file. Overridden by BLOKLI_CONFIG_PATH. If neither is set, uses \
+                /etc/bloklid/bloklid.toml (if present)."
+    )]
     pub(crate) config: Option<PathBuf>,
 
     #[command(subcommand)]
@@ -73,14 +80,6 @@ pub(crate) fn peek_verbosity_from_env_args() -> u8 {
 impl Args {
     pub(crate) fn load_config(&self, use_default: bool) -> errors::Result<Config> {
         let mut builder = config_rs::Config::builder();
-
-        if let Some(config_path) = &self.config {
-            builder = builder.add_source(config_rs::File::from(config_path.clone()));
-        } else if use_default {
-            tracing::warn!("no configuration file specified; using defaults and environment variables");
-        } else {
-            return Err(ConfigError::NoConfiguration.into());
-        }
 
         let env_mappings = [
             ("BLOKLI_DATA_DIRECTORY", "data_directory"),
@@ -142,6 +141,42 @@ impl Args {
             ("BLOKLI_OTLP_ENDPOINT", "telemetry.otlp_endpoint"),
             ("BLOKLI_OTLP_SIGNALS", "telemetry.otlp_signals"),
         ];
+
+        // Precedence: BLOKLI_CONFIG_PATH (optional) > -c flag > /etc/bloklid/bloklid.toml (if present).
+        let env_config_path = std::env::var("BLOKLI_CONFIG_PATH")
+            .ok()
+            .map(|v| v.trim().to_owned())
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from);
+
+        let effective_config = env_config_path.clone().or_else(|| self.config.clone()).or_else(|| {
+            if !use_default {
+                return None;
+            }
+            let path = PathBuf::from("/etc/bloklid/bloklid.toml");
+            path.exists().then_some(path)
+        });
+
+        if let Some(config_path) = &effective_config {
+            let source = if env_config_path.is_some() {
+                "BLOKLI_CONFIG_PATH"
+            } else if self.config.is_some() {
+                "-c flag"
+            } else {
+                "default"
+            };
+            tracing::info!(
+                path = %config_path.display(),
+                source,
+                exists = config_path.exists(),
+                "config file"
+            );
+            builder = builder.add_source(config_rs::File::from(config_path.clone()));
+        } else if use_default {
+            tracing::warn!("no configuration file specified; using defaults and environment variables");
+        } else {
+            return Err(ConfigError::NoConfiguration.into());
+        }
 
         let boolean_keys = [
             "indexer.fast_sync",
@@ -1135,5 +1170,106 @@ mod tests {
                 assert_eq!(config.telemetry.metric_export_interval, Duration::from_secs(15));
             },
         );
+    }
+
+    #[test]
+    fn test_blokli_config_path_env_var_used_when_no_config_flag() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://from-env-path:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+        let path_str = path.to_string_lossy().into_owned();
+
+        temp_env::with_var("BLOKLI_CONFIG_PATH", Some(path_str.as_str()), || {
+            let args = Args {
+                verbose: 0,
+                config: None,
+                command: None,
+            };
+
+            // Without BLOKLI_CONFIG_PATH, use_default=false would return NoConfiguration.
+            // With it set, the file must be loaded.
+            let config = args
+                .load_config(false)
+                .expect("BLOKLI_CONFIG_PATH should provide the config file");
+            assert_eq!(config.rpc_url, "http://from-env-path:8545");
+        });
+    }
+
+    #[test]
+    fn test_blokli_config_path_takes_precedence_over_config_flag() {
+        let mut flag_file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            flag_file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://from-flag:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://flag:5432/db"
+        "#
+        )
+        .unwrap();
+        let flag_path = flag_file.path().to_path_buf();
+
+        let mut env_file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            env_file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://from-env-path:8545"
+            [database]
+            type = "postgresql"
+            url = "postgres://env:5432/db"
+        "#
+        )
+        .unwrap();
+        let env_path = env_file.path().to_path_buf();
+        let env_path_str = env_path.to_string_lossy().into_owned();
+
+        temp_env::with_var("BLOKLI_CONFIG_PATH", Some(env_path_str.as_str()), || {
+            let args = Args {
+                verbose: 0,
+                config: Some(flag_path),
+                command: None,
+            };
+
+            let config = args
+                .load_config(false)
+                .expect("Should load config from BLOKLI_CONFIG_PATH");
+            assert_eq!(
+                config.rpc_url, "http://from-env-path:8545",
+                "BLOKLI_CONFIG_PATH must win over -c flag"
+            );
+        });
+    }
+
+    #[test]
+    fn test_blokli_config_path_empty_string_is_treated_as_unset() {
+        temp_env::with_var("BLOKLI_CONFIG_PATH", Some(""), || {
+            let args = Args {
+                verbose: 0,
+                config: None,
+                command: None,
+            };
+
+            // An empty BLOKLI_CONFIG_PATH must be treated as unset.
+            // use_default=false means the /etc/bloklid/bloklid.toml fallback is never consulted,
+            // so with no -c flag and no valid BLOKLI_CONFIG_PATH this must always be NoConfiguration.
+            let result = args.load_config(false);
+            assert!(
+                matches!(result, Err(BloklidError::Config(ConfigError::NoConfiguration))),
+                "Expected NoConfiguration error, got: {result:?}"
+            );
+        });
     }
 }
