@@ -342,6 +342,8 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                     timeout: api_config.health.timeout,
                     readiness_check_interval: api_config.health.readiness_check_interval,
                 },
+                max_query_depth: api_config.max_query_depth,
+                max_query_complexity: api_config.max_query_complexity,
             };
 
             // Get RPC operations from blokli_chain for balance queries
@@ -354,6 +356,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 blokli_api_config,
                 expected_block_time,
                 finality,
+                enable_safe_indexing,
                 indexer_state,
                 blokli_chain.transaction_executor(),
                 blokli_chain.transaction_store(),
@@ -404,7 +407,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
         match signal {
             Signal::Hup => {
                 tracing::info!("received SIGHUP; reloading configuration");
-                match args.load_config(false) {
+                match args.load_config(true) {
                     Ok(new_cfg) => {
                         let mut cfg_guard = config
                             .write()

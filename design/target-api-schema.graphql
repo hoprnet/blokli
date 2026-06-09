@@ -160,6 +160,8 @@ Compatibility contract for blokli-client consumers
 type Compatibility {
   "The blokli-api package version serving this schema"
   apiVersion: String!
+  "Feature flags exposed by this server, e.g. indexes_safe_events"
+  features: [String!]!
   "Semver requirement describing which blokli-client versions are supported"
   supportedClientVersions: String!
 }
@@ -347,15 +349,18 @@ directions (A→B and B→A), these are emitted as separate entries.
 **Structure:**
 - Each entry contains exactly one channel with its source and destination accounts
 - If multiple channels exist between the same account pair, each is emitted as a separate entry
-- The channel is always open (closed channels are not included)
+- Initial snapshot entries are always open; subsequent update entries may include
+  non-open states such as CLOSED
 
 **Usage in subscriptions:**
 The `openedChannelGraphUpdated` subscription streams these entries one at a time.
-Clients must accumulate entries to build the complete channel graph.
-An entry is emitted whenever that specific channel is updated.
+Clients must accumulate entries by `channel.concreteChannelId` to build the
+complete channel graph. An entry is emitted whenever that specific channel is
+updated. CLOSED entries are intentional removal signals for consumers that
+maintain an open-channel graph.
 """
 type OpenedChannelsGraphEntry {
-  "The open payment channel from source to destination"
+  "The payment channel update from source to destination"
   channel: Channel!
   "Destination account (recipient end of the directed edge)"
   destination: Account!
@@ -594,7 +599,7 @@ type QueryRoot {
     address: String!
     "Selector type for safe lookup"
     selector: SafeSelectorInput!
-  ): SafeResult
+  ): SafeByResult
   """
   Retrieve safe by chain key (owner address)
 
@@ -702,6 +707,34 @@ type QueryRoot {
 }
 
 """
+Outcome of a ticket redemption attempt.
+"""
+enum RedemptionResult {
+  "Ticket was successfully redeemed on-chain."
+  REDEEMED
+  "Ticket redemption was rejected (inner Safe transaction failed)."
+  REJECTED
+}
+
+"""
+Details of a ticket redemption event.
+
+Uniquely identifies the ticket and reports whether it was accepted or rejected.
+"""
+type RedeemTicketDetails {
+  "Epoch of the channel where the ticket was redeemed"
+  epoch: UInt64!
+  "Index of the ticket within the channel epoch"
+  index: UInt64!
+  "Issuer account on-chain address in hexadecimal format"
+  issuerAddress: String!
+  "Recipient account on-chain address in hexadecimal format"
+  recipientAddress: String!
+  "Outcome of the redemption attempt"
+  result: RedemptionResult!
+}
+
+"""
 Aggregated redeemed ticket statistics
 """
 type RedeemedStats {
@@ -799,6 +832,10 @@ union SafeHoprAllowanceResult =
 Result type for single safe queries
 """
 union SafeResult = Safe | InvalidAddressError | QueryFailedError
+"""
+Result union for selector-based safe lookups that always return safe vectors on success.
+"""
+union SafeByResult = SafesList | InvalidAddressError | QueryFailedError
 
 """
 Aggregated wxHOPR holdings across all indexed safe contracts
@@ -931,17 +968,19 @@ type SubscriptionRoot {
   - Emits one OpenedChannelsGraphEntry per open channel
   - Each entry contains a single channel with its source and destination accounts
   - On subscription start, emits all existing open channels as separate entries
-  - Subsequently, emits updates when any channel changes
+  - Subsequently, emits updates when any channel changes, including non-open states
 
   **Building the Graph:**
   Clients receive entries incrementally (one per channel) and should accumulate
-  them to build the complete network topology. The full graph is the union of all entries.
+  them by channel.concreteChannelId to build the complete network topology.
+  CLOSED entries are intentional removal signals for consumers that maintain an
+  open-channel graph.
 
   **Update Triggers:**
   An entry is re-emitted for a channel when:
   - The channel's status changes (e.g., OPEN → PENDINGTOCLOSE)
   - The channel's balance changes
-  - The channel closes (no longer emitted)
+  - The channel closes (emitted with CLOSED status so consumers can remove it)
   - A new channel opens (new entry emitted)
 
   **Example:**
@@ -967,6 +1006,20 @@ type SubscriptionRoot {
   and payment channel operation.
   """
   ticketParametersUpdated: TicketParameters!
+  """
+  Subscribe to real-time updates of ticket redemptions.
+
+  Streams a RedeemTicketDetails item each time a ticket redemption is observed
+  on-chain. Filters are optional and ANDed; omit all to receive every event.
+  """
+  ticketRedeemed(
+    "Filter by channel ID (hexadecimal format)"
+    channelId: ID
+    "Filter by ticket issuer (hexadecimal format)"
+    issuerAddress: ID
+    "Filter by ticket recipient (hexadecimal format)"
+    recipientAddress: ID
+  ): RedeemTicketDetails!
   """
   Subscribe to real-time updates of a specific transaction
 

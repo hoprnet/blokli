@@ -6,6 +6,7 @@ use blokli_client::api::{
     types::{ChannelStatus, TransactionStatus},
 };
 use blokli_integration_tests::{
+    anvil::AnvilAccount,
     constants::parsed_safe_balance,
     fixtures::{IntegrationFixture, integration_fixture as fixture, poll_until},
 };
@@ -127,7 +128,9 @@ async fn query_token_balance_and_allowance_of_safe(#[future(awt)] fixture: Integ
     let maybe_safe = fixture
         .client()
         .query_safe(SafeSelector::ChainKey(account.to_alloy_address().into()))
-        .await?;
+        .await?
+        .into_iter()
+        .next();
 
     let safe = match maybe_safe {
         Some(safe) => safe,
@@ -142,7 +145,7 @@ async fn query_token_balance_and_allowance_of_safe(#[future(awt)] fixture: Integ
                 || {
                     let client = client.clone();
                     let selector = selector.clone();
-                    async move { Ok(client.query_safe(selector).await?) }
+                    async move { Ok(client.query_safe(selector).await?.into_iter().next()) }
                 },
             )
             .await?
@@ -185,6 +188,8 @@ async fn query_safe_returns_indexed_owners(#[future(awt)] fixture: IntegrationFi
         .client()
         .query_safe(SafeSelector::Owner(account.to_alloy_address().into()))
         .await?
+        .into_iter()
+        .next()
         .context("deployed safe not found")?;
 
     assert_eq!(safe.address.to_lowercase(), deployed_safe.address.to_lowercase());

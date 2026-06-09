@@ -142,6 +142,16 @@ playground_enabled = true
 # Must be greater than or equal to 1.
 gas_multiplier = 1.0
 
+# Maximum GraphQL query nesting depth. Queries exceeding this are rejected.
+# Real queries reach depth ~4; the default of 8 gives ample headroom.
+max_query_depth = 8
+
+# Maximum GraphQL query complexity budget. Each field costs 1 point by default;
+# RPC-backed resolvers carry higher weights (see query.rs `complexity` attributes).
+# The default of 500 comfortably fits any real query while capping RPC fan-out
+# (e.g. aliased nativeBalance calls) to ~10 per request.
+max_query_complexity = 500
+
 # SSE keepalive configuration
 [api.sse_keepalive]
 # Enable keepalive comments to prevent idle timeouts (default: true)

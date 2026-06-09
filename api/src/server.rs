@@ -2,10 +2,7 @@
 
 use std::{pin::Pin, sync::Arc, time::Instant};
 
-use async_graphql::{
-    Schema,
-    http::{GraphQLPlaygroundConfig, playground_source},
-};
+use async_graphql::{Schema, http::GraphiQLSource, parser::types::Selection};
 use async_stream::stream;
 use axum::{
     Json, Router,
@@ -163,10 +160,34 @@ fn extract_subscription_name(query: &str) -> String {
     "unknown".to_string()
 }
 
+/// Returns true only when every top-level selection in every operation is a
+/// built-in introspection field (`__schema`, `__type`, `__typename`).
+///
+/// Fragment spreads or inline fragments at the top level are treated as
+/// non-introspection (conservative). Parse failures also return false so that
+/// the readiness gate is never bypassed for malformed requests.
+fn is_introspection_query(query: &str) -> bool {
+    let doc = match async_graphql::parser::parse_query(query) {
+        Ok(d) => d,
+        Err(_) => return false,
+    };
+
+    doc.operations.iter().all(|(_name, op)| {
+        op.node.selection_set.node.items.iter().all(|selection| {
+            matches!(
+                &selection.node,
+                Selection::Field(f) if matches!(f.node.name.node.as_str(), "__schema" | "__type")
+            )
+        })
+    })
+}
+
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
     pub schema: Arc<Schema<QueryRoot, MutationRoot, SubscriptionRoot>>,
+    /// Schema without depth/complexity limits, used only for introspection queries.
+    pub introspection_schema: Arc<Schema<QueryRoot, MutationRoot, SubscriptionRoot>>,
     pub playground_enabled: bool,
     pub db: DatabaseConnection,
     pub rpc_operations: Arc<RpcOperations<ReqwestClient>>,
@@ -183,6 +204,7 @@ pub async fn build_app(
     config: ApiConfig,
     expected_block_time: u64,
     finality: u16,
+    indexes_safe_events: bool,
     indexer_state: IndexerState,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
@@ -191,15 +213,33 @@ pub async fn build_app(
     let schema = build_schema(
         db.clone(),
         config.chain_id,
+        network.clone(),
+        config.contract_addresses,
+        expected_block_time,
+        finality,
+        config.gas_multiplier,
+        indexes_safe_events,
+        indexer_state.clone(),
+        transaction_executor.clone(),
+        transaction_store.clone(),
+        rpc_operations.clone(),
+        Some((config.max_query_depth, config.max_query_complexity)),
+    );
+
+    let introspection_schema = build_schema(
+        db.clone(),
+        config.chain_id,
         network,
         config.contract_addresses,
         expected_block_time,
         finality,
         config.gas_multiplier,
+        indexes_safe_events,
         indexer_state,
         transaction_executor,
         transaction_store,
         rpc_operations.clone(),
+        None,
     );
 
     let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), config.health.clone());
@@ -209,6 +249,7 @@ pub async fn build_app(
 
     let app_state = AppState {
         schema: Arc::new(schema),
+        introspection_schema: Arc::new(introspection_schema),
         playground_enabled: config.playground_enabled,
         db,
         rpc_operations,
@@ -262,8 +303,16 @@ pub async fn build_app(
 
 /// GraphQL query/mutation/subscription handler
 async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json(request): Json<Value>) -> Response {
+    // Introspection queries (__schema / __type) query the type system, not indexed data.
+    // Always allow them so the GraphQL Playground can load the schema regardless of readiness.
+    let is_introspection = request
+        .get("query")
+        .and_then(|q| q.as_str())
+        .map(is_introspection_query)
+        .unwrap_or(false);
+
     // Check if server is ready before processing GraphQL requests
-    if state.readiness_checker.get().await == ReadinessState::NotReady {
+    if !is_introspection && state.readiness_checker.get().await == ReadinessState::NotReady {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({
@@ -355,8 +404,15 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
     // subscription is not meaningful - it's a long-lived connection, not a single request.
     let start_time = Instant::now();
 
+    // Introspection queries use the limit-free schema; everything else uses the guarded one.
+    let schema = if is_introspection {
+        state.introspection_schema.clone()
+    } else {
+        state.schema.clone()
+    };
+
     // Execute regular query/mutation
-    let response = state.schema.execute(request).await;
+    let response = schema.execute(request).await;
 
     // Record request duration
     metrics::observe_request_duration(request_type, start_time.elapsed().as_secs_f64());
@@ -398,14 +454,14 @@ async fn metrics_handler() -> impl IntoResponse {
     }
 }
 
-/// GraphQL Playground UI (only enabled if playground_enabled config is true)
+/// GraphiQL UI (only enabled if playground_enabled config is true)
 async fn graphql_playground(State(state): State<AppState>) -> impl IntoResponse {
     if state.playground_enabled {
-        Html(playground_source(GraphQLPlaygroundConfig::new("/graphql"))).into_response()
+        Html(GraphiQLSource::build().endpoint("/graphql").finish()).into_response()
     } else {
         (
             StatusCode::NOT_FOUND,
-            "GraphQL Playground is disabled. Use POST /graphql for queries.",
+            "GraphiQL is disabled. Use POST /graphql for queries.",
         )
             .into_response()
     }
@@ -947,5 +1003,57 @@ mod tests {
 
         assert_eq!(status, StatusCode::NOT_FOUND);
         assert_eq!(body, "Metrics endpoint is disabled");
+    }
+
+    #[test]
+    fn test_is_introspection_query_schema() {
+        assert!(is_introspection_query("{ __schema { queryType { name } } }"));
+    }
+
+    #[test]
+    fn test_is_introspection_query_type() {
+        assert!(is_introspection_query("{ __type(name: \"Foo\") { kind name } }"));
+    }
+
+    #[test]
+    fn test_is_introspection_query_typename_rejects() {
+        // __typename is a meta-field, not an introspection entry point
+        assert!(!is_introspection_query("{ __typename }"));
+    }
+
+    #[test]
+    fn test_is_introspection_query_named_operation() {
+        assert!(is_introspection_query(
+            "query IntrospectionQuery { __schema { types { name } } }"
+        ));
+    }
+
+    #[test]
+    fn test_is_introspection_query_mixed_rejects() {
+        assert!(!is_introspection_query(
+            "{ __schema { queryType { name } } channels { id } }"
+        ));
+    }
+
+    #[test]
+    fn test_is_introspection_query_data_field_rejects() {
+        assert!(!is_introspection_query("{ accounts { chainKey } }"));
+    }
+
+    #[test]
+    fn test_is_introspection_query_fragment_spread_rejects() {
+        assert!(!is_introspection_query(
+            "query { ...SomeFragment } fragment SomeFragment on QueryRoot { __schema { types { name } } }"
+        ));
+    }
+
+    #[test]
+    fn test_is_introspection_query_parse_error_rejects() {
+        assert!(!is_introspection_query("this is not graphql !!!"));
+    }
+
+    #[test]
+    fn test_is_introspection_query_empty_rejects() {
+        assert!(!is_introspection_query(""));
     }
 }

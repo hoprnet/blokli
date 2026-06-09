@@ -80,9 +80,9 @@ system-test: smoke-test-full
 # Code Quality
 # ============================================================================
 
-# Format all code with nix formatter
+# Format all code with the treefmt wrapper provided by the dev shell
 fmt:
-    nix fmt
+    treefmt
 
 # Run clippy lints with warnings as errors
 clippy:
@@ -226,12 +226,12 @@ docker-logs service="":
 
 # Build bloklid Docker image from Nix
 docker-build:
-    nix build .#docker-blokli-x86_64-linux
+    nix build .#docker-bloklid-x86_64-linux
     docker load < result
 
 # Build bloklid + anvil Docker image from Nix
 docker-build-anvil:
-    nix build .#docker-blokli-anvil-x86_64-linux
+    nix build .#docker-bloklid-anvil-x86_64-linux
     docker load < result
 
 # Run bloklid + anvil container (GraphQL API on port 8080)

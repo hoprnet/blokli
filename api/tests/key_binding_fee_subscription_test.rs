@@ -70,10 +70,12 @@ fn create_test_schema(db: &BlokliDb, indexer_state: IndexerState) -> Schema<Quer
         1,
         3, // Test finality value
         1.0,
+        true,
         indexer_state,
         transaction_executor,
         transaction_store,
         rpc_ops,
+        None,
     )
 }
 

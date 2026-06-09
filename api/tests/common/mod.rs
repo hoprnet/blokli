@@ -229,10 +229,12 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
         config.expected_block_time.as_secs(),
         3, // Test finality value
         1.0,
+        true,
         indexer_state,
         transaction_executor.clone(),
         transaction_store.clone(),
         rpc_operations.clone(),
+        None,
     );
 
     Ok(TestContext {
@@ -330,6 +332,7 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
         api_config,
         expected_block_time,
         3, // Test finality value
+        false,
         indexer_state,
         ctx.transaction_executor.clone(),
         ctx.transaction_store.clone(),

@@ -5,7 +5,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-db-entity"
 repository  = "https://github.com/hoprnet/blokli"
-version     = "0.5.1"
+version     = "0.6.1"
 
 [lints]
 workspace = true
@@ -43,3 +43,15 @@ hopr-types = { workspace = true, features = [
   "internal",
   "primitive",
 ] }
+
+# These are all build-dependencies used only in `build.rs` (SeaORM codegen).
+# cargo-machete does not scan build scripts, so it reports them as unused.
+[package.metadata.cargo-machete]
+ignored = [
+  "anyhow",
+  "blokli-db-migration",
+  "clap",
+  "sea-orm-cli",
+  "sea-orm-migration",
+  "tokio",
+]

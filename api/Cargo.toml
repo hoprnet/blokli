@@ -6,7 +6,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-api"
 repository  = "https://github.com/hoprnet/hoprnet"
-version     = "0.21.1"
+version     = "0.23.1"
 
 [lints]
 workspace = true
@@ -42,6 +42,7 @@ async-graphql = { workspace = true }
 # Serialization
 serde      = { workspace = true }
 serde_json = { workspace = true }
+strum      = { workspace = true }
 
 # Error handling
 anyhow    = { workspace = true }
@@ -93,6 +94,7 @@ insta               = { workspace = true, features = ["redactions", "yaml"] }
 multiaddr           = { workspace = true }
 rand                = { workspace = true }
 regex               = { workspace = true }
+rstest              = { workspace = true }
 temp-env            = { workspace = true }
 tempfile            = { workspace = true }
 test-log            = { workspace = true }
@@ -100,8 +102,4 @@ tower               = { workspace = true, features = ["util"] }
 
 
 [package.metadata.cargo-machete]
-ignored = ["humantime-serde"]
-
-
-[package.metadata.cargo-shear]
 ignored = ["humantime-serde"]

@@ -19,12 +19,12 @@ permissions:
   security-events: write
 jobs:
   zizmor:
-    uses: hoprnet/hopr-workflows/.github/workflows/checks-zizmor.yaml@bbd22e57cf954c15f0a6051d59329857809141dd # workflow-checks-zizmor-v1
+    uses: hoprnet/hopr-workflows/.github/workflows/checks-zizmor.yaml@7d8e6dfe4cfacb23a42857171d7426467686970e
     permissions:
       contents: read
       security-events: write
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
-      runner: depot-ubuntu-22.04-4
+      runner: depot-ubuntu-24.04-4
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}

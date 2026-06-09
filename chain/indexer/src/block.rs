@@ -760,7 +760,6 @@ where
             };
             #[cfg(all(feature = "telemetry", not(test)))]
             {
-                METRIC_INDEXER_CURRENT_BLOCK.set(block.block_id as f64);
                 METRIC_INDEXER_SYNC_PROGRESS.set(&[&filter_phase.to_string()], progress / 100_f64);
             }
             info!(
@@ -866,6 +865,9 @@ where
 
         // if we made it this far, no errors occurred and we can update checksums and indexer state
         if !finalize_block {
+            #[cfg(all(feature = "telemetry", not(test)))]
+            METRIC_INDEXER_CURRENT_BLOCK.set(block_id as f64);
+
             debug!(
                 block_id,
                 "processed block logs without finalizing checksum or indexer state"
@@ -903,6 +905,8 @@ where
                 // finally update the block number in the database to the last processed block
                 match db.set_indexer_state_info(None, block_id as u32).await {
                     Ok(_) => {
+                        #[cfg(all(feature = "telemetry", not(test)))]
+                        METRIC_INDEXER_CURRENT_BLOCK.set(block_id as f64);
                         trace!(block_id, "updated indexer state info");
                     }
                     Err(error) => error!(block_id, %error, "failed to update indexer state info"),
