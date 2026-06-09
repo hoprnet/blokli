@@ -65,3 +65,8 @@ parking_lot = { workspace = true }
 serde       = { workspace = true }
 serde_json  = { workspace = true }
 tokio       = { workspace = true }
+
+# `cynic-codegen` is a build-dependency used only in `build.rs` (GraphQL schema
+# registration). cargo-machete does not scan build scripts, so it reports it as unused.
+[package.metadata.cargo-machete]
+ignored = ["cynic-codegen"]
