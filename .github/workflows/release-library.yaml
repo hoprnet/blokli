@@ -19,7 +19,7 @@ concurrency:
 jobs:
   build-library:
     name: Build Library
-    uses: hoprnet/hopr-workflows/.github/workflows/build-library.yaml@build-library-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-library.yaml@7d8e6dfe4cfacb23a42857171d7426467686970e
     permissions:
       contents: read
     with:
@@ -28,7 +28,6 @@ jobs:
       architecture: x86_64-linux
       cachix_cache_name: blokli
       build_file: client/Cargo.toml
-      build_command: nix build -L .#lib-blokli-client-x86_64-linux
       package_name: blokli-client
       runner: depot-ubuntu-24.04-4
     secrets:
@@ -43,7 +42,7 @@ jobs:
       contents: write
     steps:
       - name: Release version
-        uses: hoprnet/hopr-workflows/actions/release-version@release-version-v4
+        uses: hoprnet/hopr-workflows/actions/release-version@7d8e6dfe4cfacb23a42857171d7426467686970e
         with:
           source_branch: ${{ github.ref_name }}
           file: client/Cargo.toml

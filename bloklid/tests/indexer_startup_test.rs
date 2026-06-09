@@ -143,6 +143,7 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         ticket_price_oracle: Address::from([5; 20]),
         winning_probability_oracle: Address::from([6; 20]),
         node_stake_factory: Address::from([7; 20]),
+        xhopr_token: Address::from([10; 20]),
     };
 
     // Create indexer state for subscriptions (must be created before handlers)
@@ -225,6 +226,7 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         ticket_price_oracle: Address::from([5; 20]),
         winning_probability_oracle: Address::from([6; 20]),
         node_stake_factory: Address::from([7; 20]),
+        xhopr_token: Address::from([10; 20]),
     };
 
     // Create indexer state for subscriptions (must be created before handlers)
@@ -407,6 +409,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         ticket_price_oracle: Address::from([5; 20]),
         winning_probability_oracle: Address::from([6; 20]),
         node_stake_factory: Address::from([7; 20]),
+        xhopr_token: Address::from([10; 20]),
     };
 
     // Create indexer state for subscriptions (must be created before handlers)
@@ -511,6 +514,7 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         ticket_price_oracle: Address::from([5; 20]),
         winning_probability_oracle: Address::from([6; 20]),
         node_stake_factory: Address::from([7; 20]),
+        xhopr_token: Address::from([10; 20]),
     };
 
     // Create indexer state for subscriptions

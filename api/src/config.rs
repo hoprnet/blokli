@@ -56,6 +56,14 @@ pub struct ApiConfig {
     /// Health check configuration
     #[serde(default)]
     pub health: HealthConfig,
+
+    /// Maximum GraphQL query nesting depth
+    #[serde(default = "default_max_query_depth")]
+    pub max_query_depth: usize,
+
+    /// Maximum GraphQL query complexity budget
+    #[serde(default = "default_max_query_complexity")]
+    pub max_query_complexity: usize,
 }
 
 /// TLS configuration
@@ -131,6 +139,14 @@ fn default_sse_keepalive_text() -> String {
     "keep-alive".to_string()
 }
 
+fn default_max_query_depth() -> usize {
+    8
+}
+
+fn default_max_query_complexity() -> usize {
+    500
+}
+
 fn default_max_indexer_lag() -> u64 {
     10
 }
@@ -158,6 +174,8 @@ impl Default for ApiConfig {
             gas_multiplier: default_gas_multiplier(),
             sse_keepalive: SseKeepAliveConfig::default(),
             health: HealthConfig::default(),
+            max_query_depth: default_max_query_depth(),
+            max_query_complexity: default_max_query_complexity(),
         }
     }
 }
@@ -221,6 +239,13 @@ mod tests {
         assert_eq!(config.sse_keepalive.interval, Duration::from_secs(15));
         assert_eq!(config.sse_keepalive.text, "keep-alive");
         assert_eq!(config.gas_multiplier, 1.0);
+    }
+
+    #[test]
+    fn test_graphql_limits_defaults() {
+        let config = ApiConfig::default();
+        assert_eq!(config.max_query_depth, 8);
+        assert_eq!(config.max_query_complexity, 500);
     }
 
     #[test]

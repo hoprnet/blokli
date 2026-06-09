@@ -2,14 +2,22 @@ use std::{error::Error, fs, path::PathBuf, str::FromStr};
 
 use blokli_chain_types::ContractAddresses as BlokliContractAddresses;
 use clap::Parser;
-use hopli_lib::utils::{ContractInstances, h2a};
+use hopli_lib::utils::{a2h, h2a};
 use hopr_bindings::{
-    exports::alloy::{providers::ProviderBuilder, rpc::client::ClientBuilder, signers::local::PrivateKeySigner},
+    config::ContractInstances,
+    exports::alloy::{
+        primitives::{U256, aliases::U56},
+        providers::ProviderBuilder,
+        rpc::client::ClientBuilder,
+        signers::local::PrivateKeySigner,
+    },
     hopr_node_stake_factory::HoprNodeStakeFactory::HoprNetwork,
 };
 use hopr_types::{
     chain::ContractAddresses,
     crypto::keypairs::{ChainKeypair, Keypair},
+    internal::prelude::WinningProbability,
+    primitive::{prelude::HoprBalance, primitives::Address, traits::IntoEndian},
 };
 use serde::Serialize;
 use url::Url;
@@ -29,6 +37,21 @@ struct Args {
     /// Private key used to deploy contracts
     #[arg(long, env = "ANVIL_DEPLOYER_PRIVATE_KEY", default_value = DEFAULT_ANVIL_PRIVATE_KEY)]
     private_key: String,
+
+    /// Minimum ticket price to set on the deployed HoprTicketPriceOracle.
+    /// Defaults to the live rotsee value so the local cluster behaves like rotsee.
+    /// Read once via: cast call 0xca2c60433eC6a10dDEabBbE3Ce7f9737b1a0628C
+    ///   "currentTicketPrice()(uint256)" --rpc-url https://rpc.gnosischain.com
+    #[arg(long, env = "BLOKLI_DEPLOYER_TICKET_PRICE", default_value = "100 wei wxHOPR")]
+    ticket_price: HoprBalance,
+
+    /// Minimum winning probability to set on the deployed HoprWinningProbabilityOracle.
+    /// Defaults to the live rotsee value so the local cluster behaves like rotsee.
+    /// Read once via: cast call 0x5136Bac09C78af89bDA56F5086A3F3E2Ee4EAfCa
+    ///   "currentWinProb()(uint56)" --rpc-url https://rpc.gnosischain.com
+    /// Use 1.0 to restore the legacy "always wins" behaviour.
+    #[arg(long, env = "BLOKLI_DEPLOYER_WINNING_PROBABILITY", default_value = "0.000125")]
+    winning_probability: WinningProbability,
 
     /// Optional output path for TOML configuration
     #[arg(long)]
@@ -58,7 +81,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let rpc_client = ClientBuilder::default().http(rpc_url);
     let provider = ProviderBuilder::new().wallet(signer).connect_client(rpc_client);
 
-    let instances = ContractInstances::deploy_for_testing(provider, &signer_chain_key).await?;
+    let instances =
+        ContractInstances::deploy_for_testing(provider, a2h(signer_chain_key.public().to_address())).await?;
     let contracts = ContractAddresses::from(&instances);
     let output = ContractsOutput {
         contracts: BlokliContractAddresses {
@@ -71,6 +95,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
             ticket_price_oracle: h2a(contracts.ticket_price_oracle),
             winning_probability_oracle: h2a(contracts.winning_probability_oracle),
             node_stake_factory: h2a(contracts.node_stake_factory),
+            xhopr_token: Address::default(), // xHOPR is not deployed by this script, so we set it to zero address
         },
     };
     let toml_output = toml::to_string(&output)?;
@@ -116,6 +141,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?;
     tracing::info!("updated stake factory contract");
 
+    instances
+        .price_oracle
+        .setTicketPrice(U256::from_be_bytes(args.ticket_price.amount().to_be_bytes()))
+        .send()
+        .await?
+        .watch()
+        .await?;
+    tracing::info!("ticket price oracle set to {}", args.ticket_price);
+
+    let win_prob_u56 = U56::from_be_slice(&args.winning_probability.as_encoded());
+    instances
+        .win_prob_oracle
+        .setWinProb(win_prob_u56)
+        .send()
+        .await?
+        .watch()
+        .await?;
+    tracing::info!(
+        "winning probability oracle set to {} (U56 {win_prob_u56})",
+        args.winning_probability.as_f64()
+    );
+
     if let Some(path) = args.output {
         fs::write(path, toml_output)?;
     } else {
@@ -123,4 +170,33 @@ async fn main() -> Result<(), Box<dyn Error>> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::Result;
+    use clap::Parser;
+    use hopr_types::{internal::prelude::WinningProbability, primitive::traits::IntoEndian};
+
+    use super::Args;
+
+    #[test]
+    fn ticket_price_arg_default_parses() -> Result<()> {
+        let args = Args::try_parse_from(["blokli-contract-deployer"])?;
+        // 100 wei: amount() returns the raw U256 value
+        assert_eq!(args.ticket_price.amount().to_be_bytes(), {
+            let mut b = [0u8; 32];
+            b[31] = 100;
+            b
+        });
+        Ok(())
+    }
+
+    #[test]
+    fn winning_probability_arg_default_parses() -> Result<()> {
+        let args = Args::try_parse_from(["blokli-contract-deployer"])?;
+        let roundtrip = args.winning_probability.as_f64();
+        assert!((roundtrip - 0.000125_f64).abs() < WinningProbability::EPSILON);
+        Ok(())
+    }
 }

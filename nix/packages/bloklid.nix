@@ -63,6 +63,15 @@ in
     depsSrc = sources.deps;
   });
 
+  blokli-inspector = builders.local.callPackage nixLib.mkRustPackage {
+    src = sources.main;
+    depsSrc = sources.deps;
+    inherit rev;
+    prependPackageName = false;
+    cargoExtraArgs = "-p blokli-inspector --bins";
+    cargoToml = ./../../inspector/Cargo.toml;
+  };
+
   bloklid-dev = builders.local.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {
       src = sources.main;

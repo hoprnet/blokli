@@ -684,6 +684,41 @@ pub struct RedeemedStatsFilter {
     pub node_address: Option<String>,
 }
 
+/// Outcome of a ticket redemption attempt.
+///
+/// Carried in [`RedeemTicketDetails`] to allow subscribers to distinguish
+/// successful on-chain redemptions from inner Safe transaction failures
+/// (rejected) without polling the chain.
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum RedemptionResult {
+    /// Ticket was successfully redeemed on-chain.
+    Redeemed,
+    /// Ticket redemption was rejected (inner Safe transaction failed).
+    Rejected,
+}
+
+/// GraphQL output type for a ticket redemption event.
+///
+/// Uniquely identifies the ticket (`issuerAddress` + `recipientAddress` +
+/// `epoch` + `index`) and reports whether it was accepted or rejected.
+///
+/// Returned by the `ticketRedeemed` subscription.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct RedeemTicketDetails {
+    /// Issuer account on-chain address in hexadecimal format
+    #[graphql(name = "issuerAddress")]
+    pub issuer_address: String,
+    /// Recipient account on-chain address in hexadecimal format
+    #[graphql(name = "recipientAddress")]
+    pub recipient_address: String,
+    /// Epoch of the channel where the ticket was redeemed
+    pub epoch: UInt64,
+    /// Index of the ticket within the channel epoch
+    pub index: UInt64,
+    /// Outcome of the redemption attempt
+    pub result: RedemptionResult,
+}
+
 /// Selector for safe lookup queries.
 ///
 /// This enum is used together with a single `address` argument when querying
@@ -796,6 +831,7 @@ impl From<&blokli_chain_types::ContractAddresses> for ContractAddressMap {
             ("ticket_price_oracle", &addresses.ticket_price_oracle),
             ("winning_probability_oracle", &addresses.winning_probability_oracle),
             ("node_stake_factory", &addresses.node_stake_factory),
+            ("xhopr_token", &addresses.xhopr_token),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))

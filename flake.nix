@@ -467,6 +467,8 @@
               ".npm/"
             ];
             extraFormatters = {
+              programs.nixfmt.package = pkgs.nixfmt;
+              programs.prettier.package = pkgs.prettier;
               settings.formatter.shfmt.includes = [
                 "*.sh"
                 "deploy/compose/.env.sample"
@@ -481,7 +483,7 @@
                 command = pkgs.writeShellApplication {
                   name = "format-graphql";
                   runtimeInputs = with pkgs; [
-                    nodePackages.prettier
+                    prettier
                   ];
                   text = ''
                     prettier --parser graphql --write "$@"

@@ -107,6 +107,9 @@ pub mod codes {
 
     /// Invalid pagination parameters
     pub const INVALID_PAGINATION: &str = "INVALID_PAGINATION";
+
+    /// Request exceeds an allowed resource limit
+    pub const LIMIT_EXCEEDED: &str = "LIMIT_EXCEEDED";
 }
 
 // ============================================================================
@@ -215,6 +218,14 @@ pub mod messages {
         format!("Invalid pagination parameters: {}", reason)
     }
 
+    /// Resource limit exceeded message
+    pub fn limit_exceeded(resource: &str, actual: impl std::fmt::Display, max: impl std::fmt::Display) -> String {
+        format!(
+            "{} limit exceeded: {} exceeds the maximum of {}; narrow the query with a filter",
+            resource, actual, max
+        )
+    }
+
     /// Ticket parameters missing or incomplete message
     pub fn ticket_params_incomplete() -> String {
         "Ticket parameters are not yet available".to_string()
@@ -315,6 +326,14 @@ pub fn overflow_error(operation: &str, value: impl std::fmt::Display) -> QueryFa
     QueryFailedError {
         code: codes::OVERFLOW.to_string(),
         message: messages::overflow_error(operation, value),
+    }
+}
+
+/// Creates a QueryFailedError for an exceeded resource limit
+pub fn limit_exceeded(resource: &str, actual: impl std::fmt::Display, max: impl std::fmt::Display) -> QueryFailedError {
+    QueryFailedError {
+        code: codes::LIMIT_EXCEEDED.to_string(),
+        message: messages::limit_exceeded(resource, actual, max),
     }
 }
 

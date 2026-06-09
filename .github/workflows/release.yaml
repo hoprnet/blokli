@@ -32,7 +32,7 @@ jobs:
           - architecture: aarch64-darwin
             runner: depot-macos-15
             build_command: nix build -L .#binary-bloklid-aarch64-darwin
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@7d8e6dfe4cfacb23a42857171d7426467686970e
     permissions:
       contents: read
     with:
@@ -50,7 +50,7 @@ jobs:
       gpg_private_key: ${{ secrets.GPG_HOPRNET_PRIVATE_KEY }}
   build-docker:
     name: Docker
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@43b03a7b5df777770d95c6524f48be34184b26fa # build-docker-v1
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@7d8e6dfe4cfacb23a42857171d7426467686970e
     needs: build-binaries
     permissions:
       contents: read
@@ -93,7 +93,7 @@ jobs:
       contents: write
     steps:
       - name: Release version
-        uses: hoprnet/hopr-workflows/actions/release-version@release-version-v4
+        uses: hoprnet/hopr-workflows/actions/release-version@7d8e6dfe4cfacb23a42857171d7426467686970e
         with:
           source_branch: ${{ github.ref_name }}
           file: bloklid/Cargo.toml
@@ -126,7 +126,7 @@ jobs:
         run: echo "suffix=v$(echo '${{ needs.build-docker.outputs.docker_build_version }}' | tr '.' '-')" | tee -a "$GITHUB_OUTPUT"
       - name: Setup GCP
         id: gcp
-        uses: hoprnet/hopr-workflows/actions/setup-gcp@7295b2131e2ed8f8e62a8fc2d8e550d62528adc6 # setup-gcp-v2
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@7d8e6dfe4cfacb23a42857171d7426467686970e
         with:
           workload_identity_provider: ${{ vars.WIF_PROVIDER_STAGING }}
           service_account: ${{ vars.WIF_SERVICE_ACCOUNT_STAGING }}

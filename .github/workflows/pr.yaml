@@ -83,7 +83,7 @@ jobs:
   # ── Shared checks (lint, pre-commit, audit) ─────────────────────────────────
   checks:
     name: Check
-    uses: hoprnet/hopr-workflows/.github/workflows/checks.yaml@bbd22e57cf954c15f0a6051d59329857809141dd # workflow-checks-v1
+    uses: hoprnet/hopr-workflows/.github/workflows/checks.yaml@d0cffaf9e9209c8eca00e8c74e82ac3f5f3cf7bb # workflow-checks-v2
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       lint_command: "nix develop --command just quick"
@@ -96,14 +96,14 @@ jobs:
   # ── Shared tests (unit) ─────────────────────────────────────────────────────
   tests:
     name: Test
-    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@268553d7984344080e3dc65eb92778c9103af7ec # workflow-tests-v3
+    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@69d61153fe24338ea983dd657496f0bc8b4cd819 # 0.6.0
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
-      unit_tests: true
+      enable_unit_tests: true
       unit_test_command: "nix run -L .#test"
-      unit_coverage: true
+      enable_unit_coverage: true
       unit_coverage_command: "nix run .#coverage-unit"
-      runner: depot-ubuntu-24.04-4
+      runner_unit: depot-ubuntu-24.04-4
       test_timeout: 30
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
@@ -121,7 +121,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Setup Nix
-        uses: hoprnet/hopr-workflows/actions/setup-nix@c8d45034bb33307dfda3b4dfcd1fc4000cadc05a # setup-nix-v1
+        uses: hoprnet/hopr-workflows/actions/setup-nix@7d8e6dfe4cfacb23a42857171d7426467686970e
         with:
           cachix_cache_name: blokli
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
@@ -148,7 +148,7 @@ jobs:
             runner: depot-macos-15
             build_command: nix build -L .#binary-bloklid-aarch64-darwin
             required_label: "binary:aarch64-darwin"
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@7d8e6dfe4cfacb23a42857171d7426467686970e
     permissions:
       contents: read
     with:
@@ -174,17 +174,14 @@ jobs:
         include:
           - architecture: x86_64-linux
             runner: depot-ubuntu-24.04-4
-            build_command: nix build -L .#lib-blokli-client-x86_64-linux
             required_label: ""
           - architecture: aarch64-linux
             runner: depot-ubuntu-24.04-arm-4
-            build_command: nix build -L .#lib-blokli-client-aarch64-linux
             required_label: "binary:aarch64-linux"
           - architecture: aarch64-darwin
             runner: depot-macos-15
-            build_command: nix build -L .#lib-blokli-client-aarch64-darwin
             required_label: "binary:aarch64-darwin"
-    uses: hoprnet/hopr-workflows/.github/workflows/build-library.yaml@build-library-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-library.yaml@7d8e6dfe4cfacb23a42857171d7426467686970e
     permissions:
       contents: read
     with:
@@ -193,7 +190,6 @@ jobs:
       architecture: ${{ matrix.architecture }}
       cachix_cache_name: blokli
       build_file: client/Cargo.toml
-      build_command: ${{ matrix.build_command }}
       package_name: blokli-client
       runner: ${{ matrix.runner }}
       enabled: ${{ matrix.required_label == '' || contains(github.event.pull_request.labels.*.name, matrix.required_label) }}
@@ -203,7 +199,7 @@ jobs:
   # ── Build: Docker ───────────────────────────────────────────────────────────
   build-docker:
     name: Docker
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@43b03a7b5df777770d95c6524f48be34184b26fa # build-docker-v1
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@7d8e6dfe4cfacb23a42857171d7426467686970e
     needs: build-binaries
     permissions:
       contents: read

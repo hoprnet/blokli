@@ -21,7 +21,8 @@ use hopr_types::{
         traits::IntoEndian,
     },
 };
-use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{ActiveModelTrait, ActiveValue::Set, ColumnTrait, DbErr, EntityTrait, QueryFilter, QueryOrder};
+use sea_query::OnConflict;
 use tracing::instrument;
 
 use crate::{
@@ -224,6 +225,25 @@ async fn insert_channel_state_and_emit(
         DateTime::from(*time)
     }
 
+    async fn find_channel_state_by_composite_key(
+        tx: &sea_orm::DatabaseTransaction,
+        channel_id: i64,
+        block: i64,
+        tx_index: i64,
+        log_index: i64,
+    ) -> Result<blokli_db_entity::channel_state::Model> {
+        channel_state::Entity::find()
+            .filter(channel_state::Column::ChannelId.eq(channel_id))
+            .filter(channel_state::Column::PublishedBlock.eq(block))
+            .filter(channel_state::Column::PublishedTxIndex.eq(tx_index))
+            .filter(channel_state::Column::PublishedLogIndex.eq(log_index))
+            .one(tx)
+            .await?
+            .ok_or_else(|| {
+                DbSqlError::LogicalError("channel_state not found for composite key after insert/no-op".to_string())
+            })
+    }
+
     // Create channel_state record with state fields from ChannelEntry
     // HoprBalance.to_be_bytes() returns 32 bytes (U256), but we only need the last 12 bytes
     // for database storage (balances fit in 96 bits)
@@ -250,25 +270,69 @@ async fn insert_channel_state_and_emit(
     };
 
     tracing::debug!(?state_model, "About to insert channel_state");
-    let inserted = state_model.insert(tx).await?;
-    tracing::debug!("Successfully inserted channel_state with id: {}", inserted.id);
-
-    // Emit state change event (fire and forget - don't block on event delivery)
-    let event = StateChange::ChannelState(ChannelStateChange {
-        channel_id,
-        state_id: inserted.id,
-        published_block: block,
-        published_tx_index: tx_index,
-        published_log_index: log_index,
-    });
-
-    // Spawn event emission as a background task to avoid blocking
-    let event_bus = db.event_bus.clone();
-    tokio::spawn(async move {
-        if let Err(e) = event_bus.publish(event).await {
-            tracing::warn!("Failed to publish channel state change event: {}", e);
+    let (inserted, is_new) = match ChannelState::insert(state_model)
+        .on_conflict(
+            OnConflict::columns([
+                channel_state::Column::ChannelId,
+                channel_state::Column::PublishedBlock,
+                channel_state::Column::PublishedTxIndex,
+                channel_state::Column::PublishedLogIndex,
+            ])
+            .do_nothing()
+            .to_owned(),
+        )
+        .exec(tx)
+        .await
+    {
+        Ok(_insert_result) => {
+            tracing::debug!(
+                channel_id,
+                block,
+                tx_index,
+                log_index,
+                "Successfully inserted channel_state"
+            );
+            (
+                find_channel_state_by_composite_key(tx, channel_id, block, tx_index, log_index).await?,
+                true,
+            )
         }
-    });
+        Err(DbErr::RecordNotInserted) => {
+            // Idempotent: record already exists from a previous incomplete sync
+            tracing::debug!(
+                channel_id,
+                block,
+                tx_index,
+                log_index,
+                "Channel state already exists, skipping insert"
+            );
+            (
+                find_channel_state_by_composite_key(tx, channel_id, block, tx_index, log_index).await?,
+                false,
+            )
+        }
+        Err(e) => return Err(e.into()),
+    };
+
+    // Only emit events for genuine new inserts to avoid duplicate downstream processing on restart
+    if is_new {
+        // Emit state change event (fire and forget - don't block on event delivery)
+        let event = StateChange::ChannelState(ChannelStateChange {
+            channel_id,
+            state_id: inserted.id,
+            published_block: block,
+            published_tx_index: tx_index,
+            published_log_index: log_index,
+        });
+
+        // Spawn event emission as a background task to avoid blocking
+        let event_bus = db.event_bus.clone();
+        tokio::spawn(async move {
+            if let Err(e) = event_bus.publish(event).await {
+                tracing::warn!("Failed to publish channel state change event: {}", e);
+            }
+        });
+    }
 
     Ok(inserted)
 }
@@ -830,7 +894,7 @@ mod tests {
 
     use crate::{
         BlokliDbGeneralModelOperations, accounts::BlokliDbAccountOperations, channels::BlokliDbChannelOperations,
-        db::BlokliDb,
+        db::BlokliDb, events::StateChange,
     };
 
     fn build_channel_entry(
@@ -1492,6 +1556,98 @@ mod tests {
             11,
             history.len(),
             "should have 11 state records (1 initial + 10 updates)"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upsert_channel_idempotent_on_same_position() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let addr_1 = Address::from(random_bytes());
+        let addr_2 = Address::from(random_bytes());
+
+        // Create accounts first
+        let packet_key_1 = *OffchainKeypair::random().public();
+        let packet_key_2 = *OffchainKeypair::random().public();
+        db.upsert_account(None, 1, addr_1, packet_key_1, None, 1, 0, 0).await?;
+        db.upsert_account(None, 2, addr_2, packet_key_2, None, 1, 0, 0).await?;
+
+        let ce = ChannelEntry::new(
+            addr_1,
+            addr_2,
+            HoprBalance::from(1000u32),
+            0_u32.into(),
+            ChannelStatus::Open,
+            1_u32.into(),
+        );
+
+        // Insert channel state at (block=100, tx_index=5, log_index=3)
+        db.upsert_channel(None, ce, 100, 5, 3).await?;
+
+        // Insert again with the same position - should succeed (idempotent)
+        db.upsert_channel(None, ce, 100, 5, 3).await?;
+
+        // Verify only one state record exists
+        let history = db.get_channel_history(None, &ce.get_id()).await?;
+        assert_eq!(
+            1,
+            history.len(),
+            "should have exactly 1 state record despite double insert"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upsert_channel_idempotent_on_same_position_emits_single_event() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let addr_1 = Address::from(random_bytes());
+        let addr_2 = Address::from(random_bytes());
+
+        // Create accounts first
+        let packet_key_1 = *OffchainKeypair::random().public();
+        let packet_key_2 = *OffchainKeypair::random().public();
+        db.upsert_account(None, 1, addr_1, packet_key_1, None, 1, 0, 0).await?;
+        db.upsert_account(None, 2, addr_2, packet_key_2, None, 1, 0, 0).await?;
+
+        let ce = build_channel_entry(
+            addr_1,
+            addr_2,
+            HoprBalance::from(1000u32),
+            0_u64,
+            ChannelStatus::Open,
+            1_u32,
+        );
+
+        let mut subscriber = db.event_bus().subscribe();
+
+        // Insert channel state at (block=100, tx_index=5, log_index=3)
+        db.upsert_channel(None, ce, 100, 5, 3).await?;
+
+        let first_event = tokio::time::timeout(Duration::from_millis(200), subscriber.recv())
+            .await
+            .context("timed out waiting for first channel state event")?
+            .context("failed to receive first channel state event")?;
+
+        let change = match first_event {
+            StateChange::ChannelState(change) => change,
+            StateChange::AccountState(_) => anyhow::bail!("received unexpected account state event"),
+        };
+
+        assert_eq!(100, change.published_block);
+        assert_eq!(5, change.published_tx_index);
+        assert_eq!(3, change.published_log_index);
+
+        // Insert again with the same position - should succeed (idempotent) and emit no new event
+        db.upsert_channel(None, ce, 100, 5, 3).await?;
+
+        let second_recv = tokio::time::timeout(Duration::from_millis(100), subscriber.recv()).await;
+        assert!(
+            second_recv.is_err(),
+            "duplicate upsert at same position should not emit a second channel state event"
         );
 
         Ok(())

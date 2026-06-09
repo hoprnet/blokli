@@ -154,7 +154,7 @@ where
             )));
         }
 
-        for (log, slog) in safe_logs.into_iter().zip(serialized_logs.into_iter()) {
+        for (log, slog) in safe_logs.into_iter().zip(serialized_logs) {
             let primitive_log = AlloyLog::new(
                 AlloyAddress::from_hopr_address(log.address),
                 log.topics.iter().map(|hash| B256::from_slice(hash.as_ref())).collect(),

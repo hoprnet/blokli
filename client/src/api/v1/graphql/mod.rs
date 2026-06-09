@@ -6,6 +6,7 @@ pub mod channels;
 pub mod graph;
 pub mod info;
 pub mod safe;
+pub mod tickets;
 pub mod txs;
 
 #[cynic::schema("blokli")]
