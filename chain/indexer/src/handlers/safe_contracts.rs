@@ -455,6 +455,7 @@ mod tests {
             ticket_price_oracle: AlloyAddress::from_hopr_address(*TICKET_PRICE_ORACLE_ADDR),
             winning_probability_oracle: AlloyAddress::from_hopr_address(*WIN_PROB_ORACLE_ADDR),
             node_stake_factory: alloy_address_with_byte(0),
+            xhopr_token: alloy_address_with_byte(0),
         }
     }
 
