@@ -83,10 +83,9 @@ jobs:
   # ── Shared checks (lint, pre-commit, audit) ─────────────────────────────────
   checks:
     name: Check
-    uses: hoprnet/hopr-workflows/.github/workflows/checks.yaml@18b6c2fec0b8f0240a83d2099cb40301c06585a0 # workflow-checks-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/checks.yaml@d0cffaf9e9209c8eca00e8c74e82ac3f5f3cf7bb # workflow-checks-v2
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
-      format: true
       lint_command: "nix develop --command just quick"
       audit_command: "nix run -L .#audit"
       deps: true
