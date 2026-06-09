@@ -202,21 +202,48 @@ async fn record_safe_ticket_stats(
                                 .checked_add(1)
                                 .ok_or_else(|| DbSqlError::LogicalError("safe rejection count overflow".to_string()))?,
                         };
+                        let (next_last_redeemed_block, next_last_redeemed_tx_index, next_last_redeemed_log_index) =
+                            match stat_kind {
+                                TicketStatKind::Redeemed => {
+                                    (i64::from(block), i64::from(tx_index), i64::from(log_index))
+                                }
+                                TicketStatKind::Rejected => (
+                                    model.last_redeemed_block,
+                                    model.last_redeemed_tx_index,
+                                    model.last_redeemed_log_index,
+                                ),
+                            };
 
                         let mut active: hopr_safe_redeemed_stats::ActiveModel = model.into();
                         active.redeemed_amount = Set(next_redeemed_amount.to_be_bytes().to_vec());
                         active.redemption_count = Set(next_redemption_count);
                         active.rejected_amount = Set(next_rejected_amount.to_be_bytes().to_vec());
                         active.rejection_count = Set(next_rejection_count);
-                        active.last_redeemed_block = Set(i64::from(block));
-                        active.last_redeemed_tx_index = Set(i64::from(tx_index));
-                        active.last_redeemed_log_index = Set(i64::from(log_index));
+                        active.last_redeemed_block = Set(next_last_redeemed_block);
+                        active.last_redeemed_tx_index = Set(next_last_redeemed_tx_index);
+                        active.last_redeemed_log_index = Set(next_last_redeemed_log_index);
                         active.update(tx.as_ref()).await?
                     }
                     None => {
-                        let (redeemed_amount, redemption_count, rejected_amount, rejection_count) = match stat_kind {
-                            TicketStatKind::Redeemed => (amount, 1, HoprBalance::zero(), 0),
-                            TicketStatKind::Rejected => (HoprBalance::zero(), 0, amount, 1),
+                        let (
+                            redeemed_amount,
+                            redemption_count,
+                            rejected_amount,
+                            rejection_count,
+                            last_redeemed_block,
+                            last_redeemed_tx_index,
+                            last_redeemed_log_index,
+                        ) = match stat_kind {
+                            TicketStatKind::Redeemed => (
+                                amount,
+                                1,
+                                HoprBalance::zero(),
+                                0,
+                                i64::from(block),
+                                i64::from(tx_index),
+                                i64::from(log_index),
+                            ),
+                            TicketStatKind::Rejected => (HoprBalance::zero(), 0, amount, 1, 0, 0, 0),
                         };
 
                         let active = hopr_safe_redeemed_stats::ActiveModel {
@@ -226,9 +253,9 @@ async fn record_safe_ticket_stats(
                             redemption_count: Set(redemption_count),
                             rejected_amount: Set(rejected_amount.to_be_bytes().to_vec()),
                             rejection_count: Set(rejection_count),
-                            last_redeemed_block: Set(i64::from(block)),
-                            last_redeemed_tx_index: Set(i64::from(tx_index)),
-                            last_redeemed_log_index: Set(i64::from(log_index)),
+                            last_redeemed_block: Set(last_redeemed_block),
+                            last_redeemed_tx_index: Set(last_redeemed_tx_index),
+                            last_redeemed_log_index: Set(last_redeemed_log_index),
                             ..Default::default()
                         };
                         active.insert(tx.as_ref()).await?
@@ -387,6 +414,9 @@ mod tests {
         assert_eq!(first.redemption_count, 0);
         assert_eq!(first.rejected_amount, HoprBalance::from(7_u64));
         assert_eq!(first.rejection_count, 1);
+        assert_eq!(first.last_redeemed_block, 0);
+        assert_eq!(first.last_redeemed_tx_index, 0);
+        assert_eq!(first.last_redeemed_log_index, 0);
 
         let second = db
             .record_safe_ticket_redeemed(None, safe_address, node_address, HoprBalance::from(3_u64), 201, 1, 2)
@@ -403,6 +433,9 @@ mod tests {
         assert_eq!(third.redemption_count, 1);
         assert_eq!(third.rejected_amount, HoprBalance::from(12_u64));
         assert_eq!(third.rejection_count, 2);
+        assert_eq!(third.last_redeemed_block, 201);
+        assert_eq!(third.last_redeemed_tx_index, 1);
+        assert_eq!(third.last_redeemed_log_index, 2);
 
         let aggregated = db
             .get_aggregated_redeemed_stats(Some(safe_address), Some(node_address))

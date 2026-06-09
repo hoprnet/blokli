@@ -707,7 +707,7 @@ type QueryRoot {
 }
 
 """
-Aggregated ticket redemption attempt statistics
+Outcome of a single ticket redemption attempt.
 """
 enum RedemptionResult {
   "Ticket was successfully redeemed on-chain."

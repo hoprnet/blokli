@@ -199,9 +199,9 @@ erDiagram
         bigint redemption_count "Number of successful ticket redemption events (NOT NULL)"
         binary(32) rejected_amount "Total rejected amount from failed ticket redemption attempts (original u256 stored in bytes, NOT NULL)"
         bigint rejection_count "Number of failed ticket redemption attempts (NOT NULL)"
-        bigint last_redeemed_block "Last redeemed block (NOT NULL)"
-        bigint last_redeemed_tx_index "Last redeemed tx index (NOT NULL)"
-        bigint last_redeemed_log_index "Last redeemed log index (NOT NULL)"
+        bigint last_redeemed_block "Last successful redemption block, or 0 when none has succeeded yet (NOT NULL)"
+        bigint last_redeemed_tx_index "Last successful redemption tx index, or 0 when none has succeeded yet (NOT NULL)"
+        bigint last_redeemed_log_index "Last successful redemption log index, or 0 when none has succeeded yet (NOT NULL)"
     }
 
     %% ========================================

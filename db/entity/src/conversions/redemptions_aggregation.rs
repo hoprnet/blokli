@@ -17,7 +17,7 @@ pub struct AggregatedRedeemedStats {
     pub redemption_count: u64,
     /// Sum of all rejected HOPR token amounts across matching rows.
     pub rejected_amount: HoprBalance,
-    /// Total number of rejected ticket redemptions across matching rows.
+    /// Total number of failed ticket redemption attempts across matching rows.
     pub rejection_count: u64,
 }
 
