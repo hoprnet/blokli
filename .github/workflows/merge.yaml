@@ -60,7 +60,7 @@ jobs:
             runner: depot-ubuntu-24.04-arm-4
           - architecture: aarch64-darwin
             runner: depot-macos-15
-    uses: hoprnet/hopr-workflows/.github/workflows/build-library.yaml@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-library.yaml@91ab5099f01685dd0d14f960a5cb1408f076c763 # setup-nix-v2
     permissions:
       contents: read
     with:
