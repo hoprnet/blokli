@@ -83,7 +83,7 @@ jobs:
   # ── Shared checks (lint, pre-commit, audit) ─────────────────────────────────
   checks:
     name: Check
-    uses: hoprnet/hopr-workflows/.github/workflows/checks.yaml@2002c3d074e48378468372a6de710f88377c94e2 # workflow-checks-v1
+    uses: hoprnet/hopr-workflows/.github/workflows/checks.yaml@18b6c2fec0b8f0240a83d2099cb40301c06585a0 # workflow-checks-v2
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       format: true
