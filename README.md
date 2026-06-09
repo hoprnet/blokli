@@ -191,7 +191,7 @@ Blokli implements a temporal database system for tracking blockchain state chang
 ## Repository Layout
 
 - `bloklid/`: Indexer daemon and chain operations
-- `blokli-api/`: GraphQL API server
+- `api/`: GraphQL API server
 - `db/`: Database abstractions, entities, and migrations
 - `design/`: Architecture and target schema references
 - `tests/`: Integration and smoke tests
@@ -212,6 +212,10 @@ Blokli can be configured via a configuration file (TOML) or environment variable
 2. Configuration File
 3. Default Values
 
+The path to the configuration file can be specified via the `-c` flag or the `BLOKLI_CONFIG_PATH` environment variable (`BLOKLI_CONFIG_PATH`
+takes priority). If neither is set, the daemon will try `/etc/bloklid/bloklid.toml` if it exists; otherwise it starts using only environment
+variables and built-in defaults.
+
 To generate a template configuration file:
 
 ```bash
@@ -223,6 +227,12 @@ For a complete example with defaults and comments, see `bloklid/example-config.t
 ### Environment Variables
 
 You can override any configuration setting using environment variables.
+
+#### Daemon Configuration
+
+| Description             | Environment Variable |
+| :---------------------- | :------------------- |
+| Path to the config file | `BLOKLI_CONFIG_PATH` |
 
 #### Root Configuration
 

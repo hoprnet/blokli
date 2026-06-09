@@ -19,7 +19,7 @@ permissions:
   security-events: write
 jobs:
   zizmor:
-    uses: hoprnet/hopr-workflows/.github/workflows/checks-zizmor.yaml@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/checks-zizmor.yaml@7d8e6dfe4cfacb23a42857171d7426467686970e
     permissions:
       contents: read
       security-events: write

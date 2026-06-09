@@ -97,14 +97,14 @@ jobs:
   # ── Shared tests (unit) ─────────────────────────────────────────────────────
   tests:
     name: Test
-    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@69d61153fe24338ea983dd657496f0bc8b4cd819 # 0.6.0
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
-      unit_tests: true
+      enable_unit_tests: true
       unit_test_command: "nix run -L .#test"
-      unit_coverage: true
+      enable_unit_coverage: true
       unit_coverage_command: "nix run .#coverage-unit"
-      runner: depot-ubuntu-24.04-4
+      runner_unit: depot-ubuntu-24.04-4
       test_timeout: 30
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
@@ -122,7 +122,7 @@ jobs:
         with:
           persist-credentials: false
       - name: Setup Nix
-        uses: hoprnet/hopr-workflows/actions/setup-nix@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+        uses: hoprnet/hopr-workflows/actions/setup-nix@7d8e6dfe4cfacb23a42857171d7426467686970e
         with:
           cachix_cache_name: blokli
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
@@ -149,7 +149,7 @@ jobs:
             runner: depot-macos-15
             build_command: nix build -L .#binary-bloklid-aarch64-darwin
             required_label: "binary:aarch64-darwin"
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@7d8e6dfe4cfacb23a42857171d7426467686970e
     permissions:
       contents: read
     with:
@@ -182,7 +182,7 @@ jobs:
           - architecture: aarch64-darwin
             runner: depot-macos-15
             required_label: "binary:aarch64-darwin"
-    uses: hoprnet/hopr-workflows/.github/workflows/build-library.yaml@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-library.yaml@7d8e6dfe4cfacb23a42857171d7426467686970e
     permissions:
       contents: read
     with:
@@ -200,7 +200,7 @@ jobs:
   # ── Build: Docker ───────────────────────────────────────────────────────────
   build-docker:
     name: Docker
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@7d8e6dfe4cfacb23a42857171d7426467686970e
     needs: build-binaries
     permissions:
       contents: read
