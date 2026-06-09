@@ -8,8 +8,11 @@ use blokli_db_entity::{
     log, log_status, log_topic_info,
     prelude::{Log, LogStatus, LogTopicInfo},
 };
-use chrono::NaiveDateTime;
-use sea_orm::{ConnectionTrait, DatabaseBackend, EntityTrait, PaginatorTrait, QueryOrder, Set, Statement};
+use chrono::{DateTime, FixedOffset, NaiveDateTime};
+use sea_orm::{
+    ColumnTrait, ConnectionTrait, DatabaseBackend, EntityTrait, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+    Set, Statement,
+};
 
 use crate::{
     BlokliDbGeneralModelOperations, OpenTransaction, TargetDb,
@@ -79,7 +82,7 @@ impl ParsedSnapshot {
             log_count: self.logs.len() as u64,
             log_status_count: self.statuses.len() as u64,
             log_topic_info_count: self.topics.len() as u64,
-            latest_block: self.logs.last().map(|row| row.block_number.cast_unsigned()),
+            latest_block: self.logs.last().and_then(|row| u64::try_from(row.block_number).ok()),
         }
     }
 
@@ -109,6 +112,19 @@ fn encode_copy_bytes(value: &[u8]) -> String {
     format!("\\x{}", hex::encode(value))
 }
 
+fn validate_copy_bytes(value: &str) -> Result<()> {
+    let hex = value
+        .strip_prefix("\\x")
+        .ok_or_else(|| DbSqlError::Construction(format!("expected PostgreSQL bytea hex value, got '{value}'")))?;
+    if hex.len() % 2 != 0 || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(DbSqlError::Construction(format!(
+            "invalid bytea hex value '{value}' in snapshot"
+        )));
+    }
+
+    Ok(())
+}
+
 fn parse_bool(value: &str) -> Result<bool> {
     match value {
         "t" => Ok(true),
@@ -122,6 +138,10 @@ fn parse_bool(value: &str) -> Result<bool> {
 fn parse_nullable_timestamp(value: &str) -> Result<Option<NaiveDateTime>> {
     if value == "\\N" {
         return Ok(None);
+    }
+
+    if let Ok(parsed) = DateTime::<FixedOffset>::parse_from_str(value, "%Y-%m-%d %H:%M:%S%.f%:z") {
+        return Ok(Some(parsed.naive_utc()));
     }
 
     NaiveDateTime::parse_from_str(value, TIMESTAMP_FORMAT)
@@ -225,6 +245,137 @@ pub fn inspect_logs_snapshot_sql(sql_path: &Path) -> Result<LogsSnapshotInfo> {
     parse_logs_snapshot_sql(sql_path).map(|snapshot| snapshot.info())
 }
 
+pub fn validate_logs_snapshot_sql(sql_path: &Path) -> Result<LogsSnapshotInfo> {
+    let file = File::open(sql_path).map_err(|error| {
+        DbSqlError::Construction(format!(
+            "failed to open snapshot SQL file {}: {error}",
+            sql_path.display()
+        ))
+    })?;
+    let reader = BufReader::new(file);
+
+    #[derive(Copy, Clone)]
+    enum Section {
+        None,
+        Log,
+        LogStatus,
+        LogTopicInfo,
+    }
+
+    let mut section = Section::None;
+    let mut saw_log_copy = false;
+    let mut saw_log_status_copy = false;
+    let mut saw_log_topic_info_copy = false;
+    let mut log_count = 0_u64;
+    let mut log_status_count = 0_u64;
+    let mut log_topic_info_count = 0_u64;
+    let mut latest_block: Option<u64> = None;
+
+    for line in reader.lines() {
+        let line = line.map_err(|error| {
+            DbSqlError::Construction(format!(
+                "failed to read snapshot SQL file {}: {error}",
+                sql_path.display()
+            ))
+        })?;
+        let trimmed = line.trim();
+
+        if trimmed.is_empty() || trimmed.starts_with("--") || trimmed.starts_with("SET ") {
+            continue;
+        }
+
+        if trimmed.starts_with("COPY ") {
+            section = if trimmed.starts_with("COPY log ") || trimmed.starts_with("COPY public.log ") {
+                saw_log_copy = true;
+                Section::Log
+            } else if trimmed.starts_with("COPY log_status ") || trimmed.starts_with("COPY public.log_status ") {
+                saw_log_status_copy = true;
+                Section::LogStatus
+            } else if trimmed.starts_with("COPY log_topic_info ") || trimmed.starts_with("COPY public.log_topic_info ")
+            {
+                saw_log_topic_info_copy = true;
+                Section::LogTopicInfo
+            } else {
+                Section::None
+            };
+            continue;
+        }
+
+        if trimmed == "\\." {
+            section = Section::None;
+            continue;
+        }
+
+        match section {
+            Section::None => {}
+            Section::Log => {
+                let fields = split_copy_row(&line);
+                if fields.len() != 10 {
+                    return Err(DbSqlError::Construction(format!(
+                        "log COPY row must contain 10 fields, got {}",
+                        fields.len()
+                    )));
+                }
+                let block_number = fields[3].parse::<u64>().map_err(|error| {
+                    DbSqlError::Construction(format!("invalid log.block_number '{}': {error}", fields[3]))
+                })?;
+                for value in [&fields[4], &fields[5], &fields[6], &fields[7], &fields[8]] {
+                    validate_copy_bytes(value)?;
+                }
+                parse_bool(fields[9])?;
+                latest_block = Some(latest_block.map_or(block_number, |current| current.max(block_number)));
+                log_count += 1;
+            }
+            Section::LogStatus => {
+                let fields = split_copy_row(&line);
+                if fields.len() != 8 {
+                    return Err(DbSqlError::Construction(format!(
+                        "log_status COPY row must contain 8 fields, got {}",
+                        fields.len()
+                    )));
+                }
+                for value in fields.iter().take(5) {
+                    value.parse::<i64>().map_err(|error| {
+                        DbSqlError::Construction(format!("invalid log_status field '{}': {error}", value))
+                    })?;
+                }
+                parse_bool(fields[5])?;
+                parse_nullable_timestamp(fields[6])?;
+                parse_nullable_bytes(fields[7])?;
+                log_status_count += 1;
+            }
+            Section::LogTopicInfo => {
+                let fields = split_copy_row(&line);
+                if fields.len() != 3 {
+                    return Err(DbSqlError::Construction(format!(
+                        "log_topic_info COPY row must contain 3 fields, got {}",
+                        fields.len()
+                    )));
+                }
+                fields[0].parse::<i64>().map_err(|error| {
+                    DbSqlError::Construction(format!("invalid log_topic_info.id '{}': {error}", fields[0]))
+                })?;
+                validate_copy_bytes(fields[1])?;
+                validate_copy_bytes(fields[2])?;
+                log_topic_info_count += 1;
+            }
+        }
+    }
+
+    if !saw_log_copy || !saw_log_status_copy || !saw_log_topic_info_copy {
+        return Err(DbSqlError::Construction(
+            "hopr_logs.sql must contain COPY sections for log, log_status, and log_topic_info".to_string(),
+        ));
+    }
+
+    Ok(LogsSnapshotInfo {
+        log_count,
+        log_status_count,
+        log_topic_info_count,
+        latest_block,
+    })
+}
+
 fn parse_logs_snapshot_sql(sql_path: &Path) -> Result<ParsedSnapshot> {
     let file = File::open(sql_path).map_err(|error| {
         DbSqlError::Construction(format!(
@@ -304,7 +455,16 @@ pub async fn export_logs_snapshot_to_dir(db: &BlokliDb, target_dir: &Path) -> Re
         ))
     })?;
 
-    let conn = db.conn(TargetDb::Logs);
+    let tx = db.begin_transaction_in_db(TargetDb::Logs).await?;
+    let conn = tx.as_ref();
+    if conn.get_database_backend() == DatabaseBackend::Postgres {
+        conn.execute_raw(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY".to_string(),
+        ))
+        .await?;
+    }
+
     let sql_path = target_dir.join(SNAPSHOT_SQL_FILE);
     let file = File::create(&sql_path)
         .map_err(|error| DbSqlError::Construction(format!("failed to create {}: {error}", sql_path.display())))?;
@@ -333,27 +493,41 @@ pub async fn export_logs_snapshot_to_dir(db: &BlokliDb, target_dir: &Path) -> Re
         .one(conn)
         .await?;
 
-    Ok(LogsSnapshotInfo {
+    let info = LogsSnapshotInfo {
         log_count,
         log_status_count,
         log_topic_info_count,
-        latest_block: latest_log.map(|row| row.block_number.cast_unsigned()),
-    })
+        latest_block: latest_log.and_then(|row| u64::try_from(row.block_number).ok()),
+    };
+
+    tx.commit().await?;
+
+    Ok(info)
 }
 
-async fn write_log_copy_section(writer: &mut BufWriter<File>, conn: &sea_orm::DatabaseConnection) -> Result<()> {
+async fn write_log_copy_section<C>(writer: &mut BufWriter<File>, conn: &C) -> Result<()>
+where
+    C: ConnectionTrait,
+{
     writer
         .write_all(
             b"COPY log (id, tx_index, log_index, block_number, block_hash, transaction_hash, address, topics, data, removed) FROM stdin;\n",
         )
         .map_err(|error| io_error("failed to write log COPY header", error))?;
 
-    let paginator = Log::find()
-        .order_by_asc(log::Column::Id)
-        .paginate(conn, SNAPSHOT_PAGE_SIZE);
-    let pages = paginator.num_pages().await?;
-    for page in 0..pages {
-        for row in paginator.fetch_page(page).await? {
+    let mut last_id = None;
+    loop {
+        let mut query = Log::find().order_by_asc(log::Column::Id).limit(SNAPSHOT_PAGE_SIZE);
+        if let Some(id) = last_id {
+            query = query.filter(log::Column::Id.gt(id));
+        }
+        let rows = query.all(conn).await?;
+        if rows.is_empty() {
+            break;
+        }
+
+        last_id = rows.last().map(|row| row.id);
+        for row in rows {
             writeln!(
                 writer,
                 "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
@@ -378,19 +552,31 @@ async fn write_log_copy_section(writer: &mut BufWriter<File>, conn: &sea_orm::Da
     Ok(())
 }
 
-async fn write_log_status_copy_section(writer: &mut BufWriter<File>, conn: &sea_orm::DatabaseConnection) -> Result<()> {
+async fn write_log_status_copy_section<C>(writer: &mut BufWriter<File>, conn: &C) -> Result<()>
+where
+    C: ConnectionTrait,
+{
     writer
         .write_all(
             b"COPY log_status (id, log_id, tx_index, log_index, block_number, processed, processed_at, checksum) FROM stdin;\n",
         )
         .map_err(|error| io_error("failed to write log_status COPY header", error))?;
 
-    let paginator = LogStatus::find()
-        .order_by_asc(log_status::Column::Id)
-        .paginate(conn, SNAPSHOT_PAGE_SIZE);
-    let pages = paginator.num_pages().await?;
-    for page in 0..pages {
-        for row in paginator.fetch_page(page).await? {
+    let mut last_id = None;
+    loop {
+        let mut query = LogStatus::find()
+            .order_by_asc(log_status::Column::Id)
+            .limit(SNAPSHOT_PAGE_SIZE);
+        if let Some(id) = last_id {
+            query = query.filter(log_status::Column::Id.gt(id));
+        }
+        let rows = query.all(conn).await?;
+        if rows.is_empty() {
+            break;
+        }
+
+        last_id = rows.last().map(|row| row.id);
+        for row in rows {
             let processed_at = row
                 .processed_at
                 .map(|value| value.format(TIMESTAMP_FORMAT).to_string())
@@ -422,20 +608,29 @@ async fn write_log_status_copy_section(writer: &mut BufWriter<File>, conn: &sea_
     Ok(())
 }
 
-async fn write_log_topic_info_copy_section(
-    writer: &mut BufWriter<File>,
-    conn: &sea_orm::DatabaseConnection,
-) -> Result<()> {
+async fn write_log_topic_info_copy_section<C>(writer: &mut BufWriter<File>, conn: &C) -> Result<()>
+where
+    C: ConnectionTrait,
+{
     writer
         .write_all(b"COPY log_topic_info (id, address, topic) FROM stdin;\n")
         .map_err(|error| io_error("failed to write log_topic_info COPY header", error))?;
 
-    let paginator = LogTopicInfo::find()
-        .order_by_asc(log_topic_info::Column::Id)
-        .paginate(conn, SNAPSHOT_PAGE_SIZE);
-    let pages = paginator.num_pages().await?;
-    for page in 0..pages {
-        for row in paginator.fetch_page(page).await? {
+    let mut last_id = None;
+    loop {
+        let mut query = LogTopicInfo::find()
+            .order_by_asc(log_topic_info::Column::Id)
+            .limit(SNAPSHOT_PAGE_SIZE);
+        if let Some(id) = last_id {
+            query = query.filter(log_topic_info::Column::Id.gt(id));
+        }
+        let rows = query.all(conn).await?;
+        if rows.is_empty() {
+            break;
+        }
+
+        last_id = rows.last().map(|row| row.id);
+        for row in rows {
             writeln!(
                 writer,
                 "{}\t{}\t{}",

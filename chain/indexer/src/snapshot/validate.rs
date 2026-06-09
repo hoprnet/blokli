@@ -4,7 +4,7 @@
 
 use std::path::Path;
 
-use blokli_db::snapshot::{SNAPSHOT_SQL_FILE, inspect_logs_snapshot_sql};
+use blokli_db::snapshot::{SNAPSHOT_SQL_FILE, validate_logs_snapshot_sql};
 use tracing::{info, warn};
 
 use crate::snapshot::error::{SnapshotError, SnapshotResult};
@@ -47,7 +47,7 @@ impl SnapshotValidator {
         }
 
         let info =
-            inspect_logs_snapshot_sql(&sql_path).map_err(|error| SnapshotError::Validation(error.to_string()))?;
+            validate_logs_snapshot_sql(&sql_path).map_err(|error| SnapshotError::Validation(error.to_string()))?;
         if info.log_count == 0 {
             warn!("SQL dump contains no log data");
         }

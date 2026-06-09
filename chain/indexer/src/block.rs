@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::error::Error as StdError;
 use std::{
     collections::HashSet,
     path::Path,
@@ -482,7 +484,7 @@ where
             info!("Logs database is empty, attempting to download logs snapshot...");
 
             let snapshot_info = self.download_snapshot().await?;
-            info!("Logs snapshot downloaded successfully: {:?}", snapshot_info);
+            info!(?snapshot_info, "Logs snapshot downloaded successfully");
         }
 
         // Initialize channel closure grace period from contract
@@ -1896,11 +1898,23 @@ mod tests {
             IndexerState::default(),
         );
 
-        let result = indexer.pre_start().await;
-        assert!(
-            result.is_err(),
-            "configured snapshot bootstrap failures must abort startup"
-        );
+        let error = indexer
+            .pre_start()
+            .await
+            .expect_err("configured snapshot bootstrap failures must abort startup");
+        let mut contains_missing_file = error.to_string().contains("Local file not found")
+            || error.to_string().contains("No such file or directory");
+        let mut source = StdError::source(&error);
+        while let Some(cause) = source {
+            if cause.to_string().contains("Local file not found")
+                || cause.to_string().contains("No such file or directory")
+            {
+                contains_missing_file = true;
+                break;
+            }
+            source = cause.source();
+        }
+        assert!(contains_missing_file, "unexpected snapshot bootstrap error: {error:#}");
 
         Ok(())
     }

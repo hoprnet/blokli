@@ -23,7 +23,7 @@ use sea_orm::Database;
 use tokio::net::TcpListener;
 
 use crate::{
-    config::{Config, redact_database_url},
+    config::{Config, DatabaseConfig, redact_database_url},
     errors::BloklidError,
 };
 
@@ -51,7 +51,10 @@ async fn main() -> ExitCode {
         }
     };
 
-    if !matches!(args.command, Some(Command::GenerateConfig { .. })) {
+    if !matches!(
+        args.command,
+        Some(Command::GenerateConfig { .. } | Command::ExportLogsSnapshot { .. })
+    ) {
         let config = match args.load_config(true) {
             Ok(config) => config,
             Err(error) => {
@@ -93,12 +96,14 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
             // Create parent directories if they don't exist
             if let Some(parent) = output.parent() {
-                std::fs::create_dir_all(parent)
+                tokio::fs::create_dir_all(parent)
+                    .await
                     .map_err(|e| BloklidError::NonSpecific(format!("Failed to create parent directories: {}", e)))?;
             }
 
             // Write the template to the specified file
-            std::fs::write(output, template)
+            tokio::fs::write(output, template)
+                .await
                 .map_err(|e| BloklidError::NonSpecific(format!("Failed to write configuration template: {}", e)))?;
 
             tracing::info!("Configuration template successfully written to: {}", output.display());
@@ -110,13 +115,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 None => args.load_config(true)?,
             };
 
-            let database = config.database.as_ref().ok_or_else(|| {
-                BloklidError::DatabaseNotConfigured(
-                    "Database configuration is missing. Ensure either [database] section is present in config file or \
-                     BLOKLI_DATABASE_TYPE and BLOKLI_DATABASE_URL are set"
-                        .to_string(),
-                )
-            })?;
+            let database = require_database(&config)?;
 
             let db_config = BlokliDbConfig {
                 max_connections: database.max_connections(),
@@ -130,13 +129,8 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 BlokliDb::new(&database.to_url(), database.to_logs_url().as_deref(), db_config).await?
             };
 
-            let snapshot_manager = SnapshotManager::with_db(db)
-                .map_err(|error| BloklidError::NonSpecific(format!("Failed to create snapshot manager: {error}")))?;
-
-            let info = snapshot_manager
-                .export_snapshot(output)
-                .await
-                .map_err(|error| BloklidError::NonSpecific(format!("Failed to export logs snapshot: {error}")))?;
+            let snapshot_manager = SnapshotManager::with_db(db)?;
+            let info = snapshot_manager.export_snapshot(output).await?;
 
             tracing::info!(
                 path = %output.display(),
@@ -186,13 +180,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 .ok_or_else(|| BloklidError::NonSpecific("Chain network not configured".into()))?
                 .clone();
 
-            let database = cfg.database.as_ref().ok_or_else(|| {
-                BloklidError::DatabaseNotConfigured(
-                    "Database configuration is missing. Ensure either [database] section is present in config file or \
-                     BLOKLI_DATABASE_TYPE and BLOKLI_DATABASE_URL are set"
-                        .to_string(),
-                )
-            })?;
+            let database = require_database(&cfg)?;
 
             let indexer_config = blokli_chain_indexer::IndexerConfig {
                 start_block_number: chain_network.channel_contract_deploy_block as u64,
@@ -447,4 +435,14 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
     tracing::info!("bloklid stopped gracefully");
     Ok(())
+}
+
+fn require_database(config: &Config) -> errors::Result<&DatabaseConfig> {
+    config.database.as_ref().ok_or_else(|| {
+        BloklidError::DatabaseNotConfigured(
+            "Database configuration is missing. Ensure either [database] section is present in config file or \
+             BLOKLI_DATABASE_TYPE and BLOKLI_DATABASE_URL are set"
+                .to_string(),
+        )
+    })
 }

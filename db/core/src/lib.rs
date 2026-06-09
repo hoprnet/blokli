@@ -146,7 +146,7 @@ pub trait BlokliDbGeneralModelOperations {
     /// 2. Clears existing data from all logs-related tables
     /// 3. Parses the `COPY ... FROM stdin` sections for `log`, `log_status`, and `log_topic_info`
     /// 4. Inserts the parsed rows into the logs tables
-    /// 4. Commits the transaction
+    /// 5. Commits the transaction
     ///
     /// All operations are performed within a single transaction for atomicity.
     ///
@@ -180,6 +180,33 @@ pub trait BlokliDbGeneralModelOperations {
     /// Export logs snapshot SQL data into a target directory.
     ///
     /// Writes `hopr_logs.sql` into `target_dir`.
+    ///
+    /// # Arguments
+    ///
+    /// * `target_dir` - Directory where `hopr_logs.sql` should be written
+    ///
+    /// # Returns
+    ///
+    /// [`LogsSnapshotInfo`] describing the exported snapshot, including row counts
+    /// and the latest block number captured in the exported logs.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the target directory cannot be created, the snapshot
+    /// file cannot be written, or exporting rows from the logs database fails.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use std::path::PathBuf;
+    /// # use blokli_db::BlokliDbGeneralModelOperations;
+    /// # async fn example(db: impl BlokliDbGeneralModelOperations) -> Result<(), Box<dyn std::error::Error>> {
+    /// let target_dir = PathBuf::from("/tmp/snapshot");
+    /// let info = db.export_logs_snapshot(target_dir).await?;
+    /// println!("exported {} logs", info.log_count);
+    /// # Ok(())
+    /// # }
+    /// ```
     async fn export_logs_snapshot(&self, target_dir: PathBuf) -> Result<LogsSnapshotInfo>;
 
     /// Same as [`BlokliDbGeneralModelOperations::begin_transaction_in_db`] with default [TargetDb].
