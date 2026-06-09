@@ -362,7 +362,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
         match signal {
             Signal::Hup => {
                 tracing::info!("received SIGHUP; reloading configuration");
-                match args.load_config(false) {
+                match args.load_config(true) {
                     Ok(new_cfg) => {
                         let mut cfg_guard = config
                             .write()

@@ -1254,7 +1254,7 @@ mod tests {
     }
 
     #[test]
-    fn test_blokli_config_path_empty_string_falls_back_to_defaults() {
+    fn test_blokli_config_path_empty_string_is_treated_as_unset() {
         temp_env::with_var("BLOKLI_CONFIG_PATH", Some(""), || {
             let args = Args {
                 verbose: 0,
