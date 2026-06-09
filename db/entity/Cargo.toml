@@ -43,3 +43,15 @@ hopr-types = { workspace = true, features = [
   "internal",
   "primitive",
 ] }
+
+# These are all build-dependencies used only in `build.rs` (SeaORM codegen).
+# cargo-machete does not scan build scripts, so it reports them as unused.
+[package.metadata.cargo-machete]
+ignored = [
+  "anyhow",
+  "blokli-db-migration",
+  "clap",
+  "sea-orm-cli",
+  "sea-orm-migration",
+  "tokio",
+]
