@@ -389,6 +389,7 @@
               kubernetes-helm
               cargo-insta
               cargo-machete
+              cargo-release
               cargo-shear
               yq
               uv
