@@ -707,6 +707,34 @@ type QueryRoot {
 }
 
 """
+Outcome of a ticket redemption attempt.
+"""
+enum RedemptionResult {
+  "Ticket was successfully redeemed on-chain."
+  REDEEMED
+  "Ticket redemption was rejected (inner Safe transaction failed)."
+  REJECTED
+}
+
+"""
+Details of a ticket redemption event.
+
+Uniquely identifies the ticket and reports whether it was accepted or rejected.
+"""
+type RedeemTicketDetails {
+  "Epoch of the channel where the ticket was redeemed"
+  epoch: UInt64!
+  "Index of the ticket within the channel epoch"
+  index: UInt64!
+  "Issuer account on-chain address in hexadecimal format"
+  issuerAddress: String!
+  "Recipient account on-chain address in hexadecimal format"
+  recipientAddress: String!
+  "Outcome of the redemption attempt"
+  result: RedemptionResult!
+}
+
+"""
 Aggregated redeemed ticket statistics
 """
 type RedeemedStats {
@@ -978,6 +1006,20 @@ type SubscriptionRoot {
   and payment channel operation.
   """
   ticketParametersUpdated: TicketParameters!
+  """
+  Subscribe to real-time updates of ticket redemptions.
+
+  Streams a RedeemTicketDetails item each time a ticket redemption is observed
+  on-chain. Filters are optional and ANDed; omit all to receive every event.
+  """
+  ticketRedeemed(
+    "Filter by channel ID (hexadecimal format)"
+    channelId: ID
+    "Filter by ticket issuer (hexadecimal format)"
+    issuerAddress: ID
+    "Filter by ticket recipient (hexadecimal format)"
+    recipientAddress: ID
+  ): RedeemTicketDetails!
   """
   Subscribe to real-time updates of a specific transaction
 

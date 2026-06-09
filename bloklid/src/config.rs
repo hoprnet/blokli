@@ -341,6 +341,11 @@ impl Config {
         output.push_str(&format!("  api.bind_address: {}\n", self.api.bind_address));
         output.push_str(&format!("  api.playground_enabled: {}\n", self.api.playground_enabled));
         output.push_str(&format!("  api.gas_multiplier: {}\n", self.api.gas_multiplier));
+        output.push_str(&format!("  api.max_query_depth: {}\n", self.api.max_query_depth));
+        output.push_str(&format!(
+            "  api.max_query_complexity: {}\n",
+            self.api.max_query_complexity
+        ));
         output.push_str(&format!(
             "  api.sse_keepalive.enabled: {}\n",
             self.api.sse_keepalive.enabled
@@ -458,6 +463,14 @@ pub struct ApiConfig {
 
     #[serde(default)]
     pub health: HealthConfig,
+
+    #[default(8)]
+    #[serde(default = "default_max_query_depth")]
+    pub max_query_depth: usize,
+
+    #[default(500)]
+    #[serde(default = "default_max_query_complexity")]
+    pub max_query_complexity: usize,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
@@ -534,6 +547,14 @@ fn default_sse_keepalive_interval() -> Duration {
 
 fn default_sse_keepalive_text() -> String {
     "keep-alive".to_string()
+}
+
+fn default_max_query_depth() -> usize {
+    8
+}
+
+fn default_max_query_complexity() -> usize {
+    500
 }
 
 fn default_max_indexer_lag() -> u64 {
@@ -773,6 +794,8 @@ mod tests {
         assert!(config.api.enabled);
         assert_eq!(config.api.bind_address.to_string(), "0.0.0.0:8080");
         assert_eq!(config.api.gas_multiplier, 1.0);
+        assert_eq!(config.api.max_query_depth, 8);
+        assert_eq!(config.api.max_query_complexity, 500);
 
         assert!(config.telemetry.otlp_endpoint.is_some());
         assert_eq!(config.telemetry.metric_export_interval, Duration::from_secs(60));
@@ -837,6 +860,35 @@ mod tests {
      "#;
         let cfg: Config = toml::from_str(config).expect("Failed to parse config");
         assert_eq!(cfg.api.gas_multiplier, 1.5);
+    }
+
+    #[test]
+    fn test_api_graphql_limits_defaults() {
+        let config = r#"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let cfg: Config = toml::from_str(config).expect("Failed to parse config");
+        assert_eq!(cfg.api.max_query_depth, 8);
+        assert_eq!(cfg.api.max_query_complexity, 500);
+    }
+
+    #[test]
+    fn test_api_graphql_limits_override() {
+        let config = r#"
+         [api]
+         max_query_depth = 4
+         max_query_complexity = 200
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let cfg: Config = toml::from_str(config).expect("Failed to parse config");
+        assert_eq!(cfg.api.max_query_depth, 4);
+        assert_eq!(cfg.api.max_query_complexity, 200);
     }
 
     #[test]

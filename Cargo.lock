@@ -1778,7 +1778,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api"
-version = "0.23.0"
+version = "0.23.1"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1809,6 +1809,7 @@ dependencies = [
  "pem-rfc7468 1.0.0",
  "rand 0.10.1",
  "regex",
+ "rstest",
  "rustls",
  "sea-orm",
  "serde",
@@ -2120,7 +2121,7 @@ dependencies = [
 
 [[package]]
 name = "bloklid"
-version = "0.10.7"
+version = "0.11.1"
 dependencies = [
  "anyhow",
  "async-signal",

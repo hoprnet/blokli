@@ -191,7 +191,7 @@ Blokli implements a temporal database system for tracking blockchain state chang
 ## Repository Layout
 
 - `bloklid/`: Indexer daemon and chain operations
-- `blokli-api/`: GraphQL API server
+- `api/`: GraphQL API server
 - `db/`: Database abstractions, entities, and migrations
 - `design/`: Architecture and target schema references
 - `tests/`: Integration and smoke tests

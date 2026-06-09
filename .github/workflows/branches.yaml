@@ -16,7 +16,7 @@ concurrency:
 jobs:
   coverage:
     name: Coverage
-    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@7d8e6dfe4cfacb23a42857171d7426467686970e
+    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@69d61153fe24338ea983dd657496f0bc8b4cd819 # 0.6.0
     with:
       source_branch: ${{ github.ref_name }}
       enable_unit_tests: false
