@@ -100,7 +100,7 @@ fn flatten_object<'a>(
         match value {
             Value::Object(values) => flatten_object(Some(&path), values, fields, lists),
             Value::Array(values) if values.iter().all(Value::is_object) && !values.is_empty() => {
-                fields.insert(path.clone(), format!("({} rows below)", values.len()));
+                fields.insert(path.clone(), nested_rows_below_placeholder(values.len()));
                 lists.push((path, values));
             }
             _ => {
@@ -163,6 +163,11 @@ fn scalar_to_string(value: &Value) -> String {
 
 fn dotted_path(parent: Option<&str>, child: &str) -> String {
     parent.map_or_else(|| child.to_string(), |parent| format!("{parent}.{child}"))
+}
+
+fn nested_rows_below_placeholder(len: usize) -> String {
+    let noun = if len == 1 { "row" } else { "rows" };
+    format!("({len} {noun} below)")
 }
 
 fn new_table() -> Table {
