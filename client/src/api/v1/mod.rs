@@ -10,6 +10,7 @@ pub mod types {
         graph::OpenedChannelsGraphEntry,
         info::{ChainInfo, Compatibility, ContractAddressMap, TicketParameters},
         safe::{ModuleAddress, Safe},
+        tickets::{RedeemTicketDetails, RedemptionResult},
         txs::{SafeExecution, Transaction, TransactionStatus},
     };
 }
@@ -33,6 +34,7 @@ pub(crate) mod internal {
             ModuleAddressVariables, QueryModuleAddress, QuerySafeBy, SafeByVariables, SafeSelectorInput,
             SubscribeSafeDeployment,
         },
+        tickets::{SubscribeTicketRedeemed, TicketRedeemedVariables},
         txs::{
             ConfirmTransactionVariables, MutateConfirmTransaction, MutateSendTransaction, MutateTrackTransaction,
             QueryTransaction, SendTransactionVariables, SubscribeTransaction, TransactionsVariables,
@@ -176,6 +178,49 @@ impl std::fmt::Debug for RedeemedStatsSelector {
     }
 }
 
+/// Filters which ticket redemption events are delivered by a [`BlokliSubscriptionClient::subscribe_ticket_redeemed`]
+/// subscription.
+///
+/// Pass one of the variants to receive only events matching that criterion, or [`TicketSelector::Any`] to receive all
+/// events.
+///
+/// # Examples
+///
+/// ```ignore
+/// use blokli_client::api::v1::{TicketSelector, ChannelId, ChainAddress};
+///
+/// // Subscribe to all redemptions in a specific channel
+/// let by_channel = TicketSelector::ChannelId(channel_id);
+///
+/// // Subscribe to all redemptions where a specific node is the issuer
+/// let by_issuer = TicketSelector::IssuerAddress(issuer_address);
+///
+/// // Subscribe to every redemption event regardless of channel or party
+/// let any = TicketSelector::Any;
+/// ```
+#[derive(Clone)]
+pub enum TicketSelector {
+    /// Filter by channel id.
+    ChannelId(ChannelId),
+    /// Filter by issuer (source node) address.
+    IssuerAddress(ChainAddress),
+    /// Filter by recipient (destination node) address.
+    RecipientAddress(ChainAddress),
+    /// Matches any ticket redemption event.
+    Any,
+}
+
+impl std::fmt::Debug for TicketSelector {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ChannelId(channel_id) => write!(f, "ChannelId({})", hex::encode(channel_id)),
+            Self::IssuerAddress(address) => write!(f, "IssuerAddress({})", hex::encode(address)),
+            Self::RecipientAddress(address) => write!(f, "RecipientAddress({})", hex::encode(address)),
+            Self::Any => write!(f, "Any"),
+        }
+    }
+}
+
 /// Input for the [`query_module_address_prediction`] query.
 #[derive(Clone, PartialEq, Eq)]
 pub struct ModulePredictionInput {
@@ -266,6 +311,11 @@ pub trait BlokliSubscriptionClient {
         selector: AccountSelector,
     ) -> Result<impl futures::Stream<Item = Result<types::Account>> + Send>;
     /// Subscribes to updates of the entire channel graph.
+    ///
+    /// The initial stream emits one entry per currently open channel. Later updates
+    /// include all channel state transitions, including `CLOSED` entries. Consumers
+    /// should merge entries by `channel.concrete_channel_id` and use closed entries
+    /// as removal signals for an open-channel graph.
     fn subscribe_graph(&self) -> Result<impl futures::Stream<Item = Result<types::OpenedChannelsGraphEntry>> + Send>;
     /// Subscribes to updates of the ticket parameters.
     fn subscribe_ticket_params(&self) -> Result<impl futures::Stream<Item = Result<types::TicketParameters>> + Send>;
@@ -276,6 +326,36 @@ pub trait BlokliSubscriptionClient {
         &self,
         tx_id: TxId,
     ) -> Result<impl futures::Stream<Item = Result<types::Transaction>> + Send>;
+    /// Subscribes to on-chain ticket redemption events matching the given [`TicketSelector`].
+    ///
+    /// Returns an infinite stream of `Result<`[`types::RedeemTicketDetails`]`>`. Each item represents
+    /// one redemption event that passed the selector filter. The stream terminates when the
+    /// underlying SSE connection closes; errors (network, parse) are yielded as `Err` items.
+    ///
+    /// Use [`TicketSelector::Any`] to receive every redemption, or narrow by channel, issuer, or
+    /// recipient address.
+    ///
+    /// # Examples
+    ///
+    /// ```ignore
+    /// use futures::StreamExt;
+    /// use blokli_client::api::v1::{BlokliSubscriptionClient, TicketSelector};
+    ///
+    /// let mut stream = client
+    ///     .subscribe_ticket_redeemed(TicketSelector::Any)
+    ///     .expect("failed to subscribe");
+    ///
+    /// while let Some(result) = stream.next().await {
+    ///     match result {
+    ///         Ok(event) => println!("redeemed ticket {} in epoch {}", event.index, event.epoch),
+    ///         Err(e) => eprintln!("stream error: {e}"),
+    ///     }
+    /// }
+    /// ```
+    fn subscribe_ticket_redeemed(
+        &self,
+        selector: TicketSelector,
+    ) -> Result<impl futures::Stream<Item = Result<types::RedeemTicketDetails>> + Send>;
 }
 
 /// Trait defining Blokli API for signed transaction submission to the chain.

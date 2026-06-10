@@ -322,7 +322,7 @@ impl SnapshotDownloader {
         }
 
         // Copy the file using futures-io
-        let copied_bytes = fs::copy(canonical_path.clone(), target_path)? as u64;
+        let copied_bytes = fs::copy(canonical_path.clone(), target_path)?;
         info!(
             %copied_bytes, from = %canonical_path.display(), to = %target_path.display(),
             "Copied local snapshot file",

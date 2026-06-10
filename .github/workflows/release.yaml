@@ -32,7 +32,7 @@ jobs:
           - architecture: aarch64-darwin
             runner: depot-macos-15
             build_command: nix build -L .#binary-bloklid-aarch64-darwin
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@6895dbbc515e39e0e283a68a80b8628ca6ead37a
     permissions:
       contents: read
     with:
@@ -50,7 +50,7 @@ jobs:
       gpg_private_key: ${{ secrets.GPG_HOPRNET_PRIVATE_KEY }}
   build-docker:
     name: Docker
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@6895dbbc515e39e0e283a68a80b8628ca6ead37a
     needs: build-binaries
     permissions:
       contents: read
@@ -93,7 +93,7 @@ jobs:
       contents: write
     steps:
       - name: Release version
-        uses: hoprnet/hopr-workflows/actions/release-version@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+        uses: hoprnet/hopr-workflows/actions/release-version@6895dbbc515e39e0e283a68a80b8628ca6ead37a
         with:
           source_branch: ${{ github.ref_name }}
           file: bloklid/Cargo.toml
@@ -120,13 +120,13 @@ jobs:
       id-token: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
       - name: Compute revision suffix
         id: revision
         run: echo "suffix=v$(echo '${{ needs.build-docker.outputs.docker_build_version }}' | tr '.' '-')" | tee -a "$GITHUB_OUTPUT"
       - name: Setup GCP
         id: gcp
-        uses: hoprnet/hopr-workflows/actions/setup-gcp@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@6895dbbc515e39e0e283a68a80b8628ca6ead37a
         with:
           workload_identity_provider: ${{ vars.WIF_PROVIDER_STAGING }}
           service_account: ${{ vars.WIF_SERVICE_ACCOUNT_STAGING }}

@@ -20,60 +20,64 @@ members = [
 ]
 
 [workspace.dependencies]
-alloy-sol-types      = "1.5.7"
-anyhow               = "1.0.102"
-async-broadcast      = "0.7.2"
-async-compression    = "0.4.42"
-async-graphql        = { version = "7.2.1", features = ["chrono", "dataloader"] }
-async-lock           = "3.4.2"
-async-signal         = "0.2.14"
-async-stream         = "0.3.6"
-async-tar            = "0.6.0"
-async-trait          = "0.1.89"
-axum                 = { version = "0.8.9", features = ["http2", "ws"] }
-backon               = { version = "1.6.0", default-features = false }
-base64ct             = "1.8.3"
-blokli-api           = { path = "api" }
-blokli-api-types     = { path = "types" }
-blokli-chain-api     = { path = "chain/api" }
+alloy-sol-types = "1.5.7"
+anyhow = "1.0.102"
+async-broadcast = "0.7.2"
+async-compression = "0.4.42"
+async-graphql = { version = "7.2.1", features = [
+  "chrono",
+  "dataloader",
+  "graphiql",
+] }
+async-lock = "3.4.2"
+async-signal = "0.2.14"
+async-stream = "0.3.6"
+async-tar = "0.6.1"
+async-trait = "0.1.89"
+axum = { version = "0.8.9", features = ["http2", "ws"] }
+backon = { version = "1.6.0", default-features = false }
+base64ct = "1.8.3"
+blokli-api = { path = "api" }
+blokli-api-types = { path = "types" }
+blokli-chain-api = { path = "chain/api" }
 blokli-chain-indexer = { path = "chain/indexer" }
-blokli-chain-rpc     = { path = "chain/rpc" }
-blokli-chain-types   = { path = "chain/types" }
-blokli-client        = { path = "client" }
-blokli-db            = { path = "db/core" }
-blokli-db-entity     = { path = "db/entity" }
-blokli-db-migration  = { path = "db/migration" }
-bytes                = "1.11.1"
-chrono               = "0.4.44"
-clap                 = { version = "4.6.1", features = ["derive", "env", "string"] }
-comfy-table          = { version = "7.2.2", default-features = false }
-config               = "0.15.22"
-cynic                = "3.13.2"
-cynic-codegen        = "3.13.2"
-dashmap              = "6.1.0"
-env_logger           = "0.11.10"
-eventsource-client   = { version = "0.17.2", default-features = false }
-flagset              = "0.4.7"
-futures              = "0.3.32"
-futures-time         = "3.1.0"
-futures-timer        = "3.0.3"
-futures-util         = "0.3.32"
-hex                  = "0.4.3"
-hex-literal          = "1.1.0"
-hopli                = { git = "https://github.com/hoprnet/hopli", branch = "q/remove-contract-instances" }
-hopr-async-runtime   = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
-hopr-bindings        = "4.8.0"
-hopr-metrics         = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
-hopr-types           = "1.8.0"
+blokli-chain-rpc = { path = "chain/rpc" }
+blokli-chain-types = { path = "chain/types" }
+blokli-client = { path = "client" }
+blokli-db = { path = "db/core" }
+blokli-db-entity = { path = "db/entity" }
+blokli-db-migration = { path = "db/migration" }
+bytes = "1.11.1"
+chrono = "0.4.45"
+clap = { version = "4.6.1", features = ["derive", "env", "string"] }
+comfy-table = { version = "7.2.2", default-features = false }
+config = "0.15.23"
+cynic = "3.13.2"
+cynic-codegen = "3.13.2"
+dashmap = "6.2.1"
+env_logger = "0.11.10"
+eventsource-client = { version = "0.17.5", default-features = false }
+flagset = "0.4.7"
+futures = "0.3.32"
+futures-time = "3.1.0"
+futures-timer = "3.0.4"
+futures-util = "0.3.32"
+hex = "0.4.3"
+hex-literal = "1.1.0"
+hopli = { git = "https://github.com/hoprnet/hopli", branch = "q/remove-contract-instances" }
+hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-bindings = "4.8.0"
+hopr-metrics = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopr-types = "1.8.2"
 
-http = "1.4.0"
+http = "1.4.2"
 humantime-serde = "1.1.1"
 indexmap = "2.14.0"
 insta = { version = "1.47.2", features = ["yaml"] }
-launchdarkly-sdk-transport = "0.1.1"
+launchdarkly-sdk-transport = "0.1.3"
 lazy_static = "1.5.0"
 libc = "0.2.186"
-libp2p-identity = { version = "0.2.13", features = [
+libp2p-identity = { version = "0.2.14", features = [
   "ed25519",
   "peerid",
   "rand",
@@ -83,7 +87,7 @@ mockito = "1.7.2"
 moka = { version = "0.12.15", features = ["future"] }
 multiaddr = "0.18.2"
 opentelemetry = "0.31.0"
-opentelemetry-otlp = { version = "0.31.1", default-features = false }
+opentelemetry-otlp = { version = "0.31.0", default-features = false }
 opentelemetry-prometheus-text-exporter = "0.2.1"
 opentelemetry_sdk = "0.31.0"
 parking_lot = "0.12.5"
@@ -91,46 +95,46 @@ pem-rfc7468 = "1.0"
 primitive-types = { version = "0.14.0", features = ["serde"] }
 rand = "0.10.1"
 regex = "1.12.3"
-reqwest = { version = "0.13.3", features = ["json"] }
+reqwest = { version = "0.13.4", features = ["json"] }
 rstest = "0.26.1"
 rust-stream-ext-concurrent = "2.0.0"
-rustls = { version = "0.23.39", default-features = false, features = ["std"] }
-sea-orm = { version = "2.0.0-rc.38", default-features = false, features = [
+rustls = { version = "0.23.40", default-features = false, features = ["std"] }
+sea-orm = { version = "2.0.0-rc.40", default-features = false, features = [
   "debug-print",
   "macros",
   "runtime-tokio-rustls",
   "sqlx-postgres",
   "with-chrono",
 ] }
-sea-orm-cli = { version = "2.0.0-rc.38", default-features = false, features = [
+sea-orm-cli = { version = "2.0.0-rc.40", default-features = false, features = [
   "codegen",
   "runtime-tokio-rustls",
 ] }
-sea-orm-migration = { version = "2.0.0-rc.38", default-features = false, features = [
+sea-orm-migration = { version = "2.0.0-rc.40", default-features = false, features = [
   "cli",
   "sqlx-postgres",
   "with-chrono",
 ] }
-sea-query = { version = "1.0.0-rc.33", default-features = false }
+sea-query = { version = "1.0.1", default-features = false }
 # Keep sea-query aligned with SeaORM RC line to avoid resolver drift.
 semver = "1.0.28"
 serde = { version = "1.0.228", features = ["derive"] }
-serde_json = "1.0.149"
-serde_with = { version = "3.18.0" }
+serde_json = "1.0.150"
+serde_with = { version = "3.21.0" }
 serde_yaml = "0.9.34"
-serial_test = "3.4.0"
+serial_test = "3.5.0"
 smart-default = "0.7.1"
-sqlx = { version = "0.8.6", default-features = false, features = [
+sqlx = { version = "0.9.0", default-features = false, features = [
   "postgres",
   "sqlite",
 ] }
 strum = { version = "0.28.0", features = ["derive"] }
-sysinfo = "0.38.4"
+sysinfo = "0.39.3"
 temp-env = "0.3.6"
 tempfile = "3.27.0"
-test-log = { version = "0.2.20", features = ["trace"] }
+test-log = { version = "0.2.21", features = ["trace"] }
 thiserror = "2.0.18"
-tokio = { version = "1.52.1", features = [
+tokio = { version = "1.52.3", features = [
   "fs",
   "macros",
   "rt-multi-thread",
@@ -143,7 +147,7 @@ tokio-rustls = { version = "0.26.4", default-features = false, features = [
 ] }
 toml = "1.1.2"
 tower = { version = "0.5.3", default-features = false, features = ["util"] }
-tower-http = { version = "0.6.8", features = [
+tower-http = { version = "0.6.11", features = [
   "compression-zstd",
   "cors",
   "trace",
@@ -157,7 +161,7 @@ tracing-subscriber = { version = "0.3.23", features = [
   "std",
 ] }
 url = { version = "2.5.8", features = ["serde"] }
-uuid = { version = "1.23.1", features = ["serde", "v4"] }
+uuid = { version = "1.23.3", features = ["serde", "v4"] }
 validator = { version = "0.20.0", features = ["derive"] }
 
 [profile.dev]
@@ -183,6 +187,11 @@ lto           = "fat"
 opt-level     = 3
 panic         = "abort"
 strip         = true
+
+# humantime-serde used only via #[serde(with = "humantime_serde")] string attrs,
+# which cargo-shear cannot detect through static analysis.
+[workspace.metadata.cargo-shear]
+ignored = ["humantime-serde"]
 
 # Workspace-level lints to prevent common issues
 [workspace.lints.clippy]
