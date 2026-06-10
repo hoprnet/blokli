@@ -383,6 +383,13 @@ pub fn validate_logs_snapshot_sql(sql_path: &Path) -> Result<LogsSnapshotInfo> {
         }
     }
 
+    if !matches!(section, Section::None) {
+        return Err(DbSqlError::Construction(format!(
+            "snapshot SQL file {} ended before terminating a COPY section",
+            sql_path.display()
+        )));
+    }
+
     if !saw_log_copy || !saw_log_status_copy || !saw_log_topic_info_copy {
         return Err(DbSqlError::Construction(
             "hopr_logs.sql must contain COPY sections for log, log_status, and log_topic_info".to_string(),
@@ -517,6 +524,13 @@ async fn import_logs_snapshot_sql(tx: &sea_orm::DatabaseTransaction, sql_path: &
                 }
             }
         }
+    }
+
+    if !matches!(section, Section::None) {
+        return Err(DbSqlError::Construction(format!(
+            "snapshot SQL file {} ended before terminating a COPY section",
+            sql_path.display()
+        )));
     }
 
     if !logs.is_empty() {
@@ -856,6 +870,8 @@ async fn reset_sequences_if_needed(tx: &sea_orm::DatabaseTransaction) -> Result<
 
 #[cfg(test)]
 mod tests {
+    use std::fs;
+
     use hopr_types::{
         crypto::types::Hash,
         primitive::prelude::{DateTime, SerializableLog},
@@ -927,6 +943,53 @@ mod tests {
 
         assert_eq!(exported, imported);
         assert_eq!(imported_db.get_logs_count(None, None).await?, 150);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_validate_logs_snapshot_sql_rejects_truncated_copy_section() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let sql_path = temp_dir.path().join(SNAPSHOT_SQL_FILE);
+        fs::write(
+            &sql_path,
+            "COPY log (id, tx_index, log_index, block_number, block_hash, transaction_hash, address, topics, data, \
+             removed) FROM \
+             stdin;\n1\t1\t1\t1\t\\x0000000000000000000000000000000000000000000000000000000000000000\t\\\
+             x0000000000000000000000000000000000000000000000000000000000000001\t\\\
+             x0000000000000000000000000000000000000001\t\\x010203\t\\x0405\tf\n",
+        )
+        .expect("write truncated snapshot");
+
+        let error = validate_logs_snapshot_sql(&sql_path).expect_err("truncated snapshot should fail validation");
+        assert!(error.to_string().contains("ended before terminating a COPY section"));
+    }
+
+    #[tokio::test]
+    async fn test_import_logs_snapshot_from_dir_rejects_truncated_copy_section() -> Result<()> {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let sql_path = temp_dir.path().join(SNAPSHOT_SQL_FILE);
+        fs::write(
+            &sql_path,
+            "COPY log (id, tx_index, log_index, block_number, block_hash, transaction_hash, address, topics, data, \
+             removed) FROM \
+             stdin;\n1\t1\t1\t1\t\\x0000000000000000000000000000000000000000000000000000000000000000\t\\\
+             x0000000000000000000000000000000000000000000000000000000000000001\t\\\
+             x0000000000000000000000000000000000000001\t\\x010203\t\\x0405\tf\nCOPY log_status (id, log_id, tx_index, \
+             log_index, block_number, processed, processed_at, checksum) FROM stdin;\n1\t1\t1\t1\t1\tt\t2026-01-01 \
+             00:00:00.000000\t\\x1111111111111111111111111111111111111111111111111111111111111111\n\\.\nCOPY \
+             log_topic_info (id, address, topic) FROM \
+             stdin;\n1\t\\x0000000000000000000000000000000000000001\t\\\
+             xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\\.\n",
+        )
+        .expect("write truncated snapshot");
+
+        let db = BlokliDb::new_in_memory().await?;
+        let error = import_logs_snapshot_from_dir(&db, temp_dir.path())
+            .await
+            .expect_err("truncated snapshot should fail import");
+        assert!(error.to_string().contains("ended before terminating a COPY section"));
+        assert_eq!(db.get_logs_count(None, None).await?, 0);
 
         Ok(())
     }

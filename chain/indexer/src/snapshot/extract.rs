@@ -6,7 +6,7 @@
 use std::{
     fs,
     fs::File,
-    path::{Component::ParentDir, Path},
+    path::{Component, Component::ParentDir, Path},
 };
 
 use async_compression::futures::bufread::XzDecoder;
@@ -101,6 +101,13 @@ impl SnapshotExtractor {
                 ));
             }
 
+            if !path_is_root_file(Path::new(path_buf.as_os_str())) {
+                return Err(SnapshotError::InvalidFormat(format!(
+                    "Archive entry must be a root-level file: {}",
+                    path_buf.display()
+                )));
+            }
+
             // Get the filename
             let filename = path_buf
                 .file_name()
@@ -164,6 +171,11 @@ impl SnapshotExtractor {
 /// Checks if the path is safe for extraction
 fn path_is_safe(path: &Path) -> bool {
     !path.components().any(|c| c == ParentDir)
+}
+
+fn path_is_root_file(path: &Path) -> bool {
+    let mut components = path.components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
 }
 
 impl Default for SnapshotExtractor {
@@ -237,9 +249,29 @@ mod tests {
         assert!(result.is_err(), "Extraction should fail for invalid archive");
     }
 
+    #[tokio::test]
+    async fn test_rejects_nested_snapshot_sql_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let extractor = SnapshotExtractor::new();
+        let archive_path = create_test_archive(&temp_dir, Some(format!("nested/{SNAPSHOT_SQL_FILE}")))
+            .await
+            .unwrap();
+
+        let extract_dir = temp_dir.path().join("extracted");
+        let result = extractor.extract_snapshot(&archive_path, &extract_dir).await;
+
+        assert!(result.is_err(), "Extraction should fail for nested snapshot paths");
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("root-level file"));
+        assert!(!extract_dir.join(SNAPSHOT_SQL_FILE).exists());
+    }
+
     #[test_log::test(tokio::test)]
     async fn test_path_traversal_protection() {
         assert!(path_is_safe(Path::new("good.db")));
+        assert!(path_is_root_file(Path::new("good.db")));
+        assert!(!path_is_root_file(Path::new("nested/good.db")));
+        assert!(!path_is_root_file(Path::new("./good.db")));
 
         assert!(!path_is_safe(Path::new("../malicious.db")));
         assert!(!path_is_safe(Path::new("../../malicious.db")));
