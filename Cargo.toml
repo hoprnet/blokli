@@ -50,6 +50,7 @@ blokli-db-migration = { path = "db/migration" }
 bytes = "1.11.1"
 chrono = "0.4.45"
 clap = { version = "4.6.1", features = ["derive", "env", "string"] }
+comfy-table = { version = "7.2.2", default-features = false }
 config = "0.15.23"
 cynic = "3.13.2"
 cynic-codegen = "3.13.2"

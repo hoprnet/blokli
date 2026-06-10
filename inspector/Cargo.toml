@@ -12,6 +12,7 @@ version     = "0.11.2"
 anyhow             = { workspace = true }
 blokli-client      = { workspace = true, features = ["serde"] }
 clap               = { workspace = true }
+comfy-table        = { workspace = true }
 futures            = { workspace = true }
 hex                = { workspace = true }
 serde              = { workspace = true }
@@ -22,6 +23,9 @@ tracing-subscriber = { workspace = true }
 url                = { workspace = true }
 
 hopr-types = { workspace = true, features = ["crypto", "primitive"] }
+
+[dev-dependencies]
+insta = { workspace = true }
 
 [lints]
 workspace = true
