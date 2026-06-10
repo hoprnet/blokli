@@ -15,16 +15,16 @@ jobs:
     if: github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
       - name: Setup Nix
-        uses: hoprnet/hopr-workflows/actions/setup-nix@7d8e6dfe4cfacb23a42857171d7426467686970e
+        uses: hoprnet/hopr-workflows/actions/setup-nix@6895dbbc515e39e0e283a68a80b8628ca6ead37a
         with:
           cachix_cache_name: blokli
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Setup GCP
-        uses: hoprnet/hopr-workflows/actions/setup-gcp@7d8e6dfe4cfacb23a42857171d7426467686970e
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@6895dbbc515e39e0e283a68a80b8628ca6ead37a
         with:
           google_credentials: ${{ secrets.GCP_SA_GITHUB_RUNNER }}
           login_artifact_registry: 'true'
