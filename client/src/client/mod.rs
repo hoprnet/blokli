@@ -7,6 +7,7 @@ mod transactions;
 use std::{
     fmt::Debug,
     future::Future,
+    net::{IpAddr, SocketAddr},
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -55,6 +56,22 @@ impl CompatibilityFeatures {
     }
 }
 
+/// DNS resolution override for the Blokli base URL host.
+///
+/// This pins the configured Blokli URL hostname to a fixed socket address in reqwest without rewriting the request
+/// URL. That keeps HTTP `Host`, TLS SNI, and certificate validation based on the original hostname while avoiding
+/// system DNS lookups for that host.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlokliDnsOverride {
+    /// IP address to connect to for the Blokli base URL host.
+    pub ip: IpAddr,
+    /// Optional port override.
+    ///
+    /// When `None`, the request URL port or scheme default is used. When `Some`, the override port is used for
+    /// requests.
+    pub port: Option<u16>,
+}
+
 /// Configuration for the [`BlokliClient`].
 #[derive(Clone, Debug, PartialEq, Eq, smart_default::SmartDefault)]
 pub struct BlokliClientConfig {
@@ -79,6 +96,11 @@ pub struct BlokliClientConfig {
     /// Delay before recreating a completed SSE stream. If `None`, completed streams will not be recreated.
     #[default(Some(Duration::from_secs(1)))]
     pub subscription_stream_restart_delay: Option<Duration>,
+    /// Optional DNS override for the Blokli base URL host.
+    ///
+    /// When `None`, the client uses system DNS. When set, both GraphQL requests and SSE subscription connections use
+    /// the override.
+    pub dns_override: Option<BlokliDnsOverride>,
 }
 
 /// Internal state for managing GraphQL subscription streams.
@@ -299,15 +321,37 @@ impl BlokliClient {
         Ok(base.join("graphql").map_err(ErrorKind::from)?)
     }
 
+    fn apply_dns_override(&self, builder: reqwest::ClientBuilder) -> Result<reqwest::ClientBuilder, BlokliClientError> {
+        let Some(dns_override) = &self.cfg.dns_override else {
+            return Ok(builder);
+        };
+        let host = self
+            .base_url
+            .host_str()
+            .ok_or(ErrorKind::InvalidInput("DNS override requires a Blokli base URL host"))?;
+        let port = dns_override
+            .port
+            .or_else(|| self.base_url.port_or_known_default())
+            .ok_or(ErrorKind::InvalidInput(
+                "DNS override requires a Blokli base URL port or known default",
+            ))?;
+        let addr = SocketAddr::new(dns_override.ip, port);
+
+        Ok(builder.resolve(host, addr))
+    }
+
     fn build_reqwest_client(&self) -> Result<reqwest::Client, BlokliClientError> {
-        Ok(reqwest::Client::builder()
+        let client_builder = reqwest::Client::builder()
             .timeout(self.cfg.timeout)
             .brotli(true)
             .gzip(true)
             .zstd(true)
             .deflate(true)
             .user_agent(format!("blokli-client/{}-{}", env!("CARGO_PKG_VERSION"), VERSION))
-            .redirect(RedirectPolicy::limited(REDIRECT_LIMIT))
+            .redirect(RedirectPolicy::limited(REDIRECT_LIMIT));
+
+        Ok(self
+            .apply_dns_override(client_builder)?
             .build()
             .map_err(ErrorKind::from)?)
     }
@@ -327,7 +371,10 @@ impl BlokliClient {
             client_builder = client_builder.read_timeout(read_timeout);
         }
 
-        Ok(client_builder.build().map_err(ErrorKind::from)?)
+        Ok(self
+            .apply_dns_override(client_builder)?
+            .build()
+            .map_err(ErrorKind::from)?)
     }
 
     fn build_subscription_stream<Q, V>(
