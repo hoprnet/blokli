@@ -182,6 +182,13 @@ fn split_copy_row(line: &str) -> Vec<&str> {
     line.split('\t').collect()
 }
 
+fn validate_nonnegative_snapshot_integer(value: &str, field_name: &str) -> Result<()> {
+    value
+        .parse::<u64>()
+        .map_err(|error| DbSqlError::Construction(format!("invalid {field_name} '{value}': {error}")))?;
+    Ok(())
+}
+
 fn parse_log_row(line: &str) -> Result<SnapshotLogRow> {
     let fields = split_copy_row(line);
     if fields.len() != 10 {
@@ -337,6 +344,9 @@ pub fn validate_logs_snapshot_sql(sql_path: &Path) -> Result<LogsSnapshotInfo> {
                         fields.len()
                     )));
                 }
+                validate_nonnegative_snapshot_integer(fields[0], "log.id")?;
+                validate_nonnegative_snapshot_integer(fields[1], "log.tx_index")?;
+                validate_nonnegative_snapshot_integer(fields[2], "log.log_index")?;
                 let block_number = fields[3].parse::<u64>().map_err(|error| {
                     DbSqlError::Construction(format!("invalid log.block_number '{}': {error}", fields[3]))
                 })?;
@@ -963,6 +973,30 @@ mod tests {
 
         let error = validate_logs_snapshot_sql(&sql_path).expect_err("truncated snapshot should fail validation");
         assert!(error.to_string().contains("ended before terminating a COPY section"));
+    }
+
+    #[test]
+    fn test_validate_logs_snapshot_sql_rejects_negative_log_identifiers() {
+        let temp_dir = TempDir::new().expect("tempdir");
+        let sql_path = temp_dir.path().join(SNAPSHOT_SQL_FILE);
+        fs::write(
+            &sql_path,
+            "COPY log (id, tx_index, log_index, block_number, block_hash, transaction_hash, address, topics, data, \
+             removed) FROM \
+             stdin;\n-1\t1\t1\t1\t\\x0000000000000000000000000000000000000000000000000000000000000000\t\\\
+             x0000000000000000000000000000000000000000000000000000000000000001\t\\\
+             x0000000000000000000000000000000000000001\t\\x010203\t\\x0405\tf\n\\.\nCOPY log_status (id, log_id, \
+             tx_index, log_index, block_number, processed, processed_at, checksum) FROM \
+             stdin;\n1\t1\t1\t1\t1\tt\t2026-01-01 \
+             00:00:00.000000\t\\x1111111111111111111111111111111111111111111111111111111111111111\n\\.\nCOPY \
+             log_topic_info (id, address, topic) FROM \
+             stdin;\n1\t\\x0000000000000000000000000000000000000001\t\\\
+             xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n\\.\n",
+        )
+        .expect("write invalid snapshot");
+
+        let error = validate_logs_snapshot_sql(&sql_path).expect_err("negative log.id should fail validation");
+        assert!(error.to_string().contains("invalid log.id '-1'"));
     }
 
     #[tokio::test]
