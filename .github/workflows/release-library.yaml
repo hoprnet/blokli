@@ -19,7 +19,7 @@ concurrency:
 jobs:
   build-library:
     name: Build Library
-    uses: hoprnet/hopr-workflows/.github/workflows/build-library.yaml@5477bd53d62ac15c4804b31fbd55966b29a43997 # setup-nix-v2
+    uses: hoprnet/hopr-workflows/.github/workflows/build-library.yaml@6895dbbc515e39e0e283a68a80b8628ca6ead37a
     permissions:
       contents: read
     with:
@@ -42,7 +42,7 @@ jobs:
       contents: write
     steps:
       - name: Release version
-        uses: hoprnet/hopr-workflows/actions/release-version@7d8e6dfe4cfacb23a42857171d7426467686970e
+        uses: hoprnet/hopr-workflows/actions/release-version@6895dbbc515e39e0e283a68a80b8628ca6ead37a
         with:
           source_branch: ${{ github.ref_name }}
           file: client/Cargo.toml
