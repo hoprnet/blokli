@@ -1,12 +1,15 @@
-use std::time::Duration;
+use std::{net::IpAddr, time::Duration};
 
 use anyhow::Result;
 use blokli_client::{
-    BlokliClient, BlokliClientConfig, CLIENT_VERSION,
+    BlokliClient, BlokliClientConfig, BlokliDnsOverride, CLIENT_VERSION,
     api::{BlokliSubscriptionClient, types::ChannelStatus},
 };
 use futures::StreamExt;
-use tokio::{io::AsyncWriteExt, net::TcpListener};
+use tokio::{
+    io::{AsyncReadExt, AsyncWriteExt},
+    net::TcpListener,
+};
 use url::Url;
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
@@ -162,6 +165,56 @@ async fn subscribe_ticket_params_reconnects_after_read_timeout() -> Result<()> {
 }
 
 #[tokio::test]
+async fn subscribe_ticket_params_uses_dns_override() -> Result<()> {
+    let expected_ticket_params = TicketParams {
+        ticket_price: "0.0010 wxHOPR".to_string(),
+        min_ticket_winning_probability: 0.25,
+    };
+    let (base_url, server) = spawn_dns_override_streaming_server(vec![expected_ticket_params.clone()]).await?;
+    let expected_host = format!(
+        "{}:{}",
+        base_url
+            .host_str()
+            .ok_or_else(|| anyhow::anyhow!("missing base URL host"))?,
+        base_url
+            .port_or_known_default()
+            .ok_or_else(|| anyhow::anyhow!("missing base URL port"))?,
+    );
+    let client = BlokliClient::new(
+        base_url,
+        BlokliClientConfig {
+            dns_override: Some(BlokliDnsOverride {
+                ip: IpAddr::from([127, 0, 0, 1]),
+                port: None,
+            }),
+            auto_compatibility_check: true,
+            timeout: Duration::from_secs(2),
+            stream_reconnect_timeout: Duration::from_secs(2),
+            subscription_read_timeout: Some(Duration::from_secs(2)),
+            subscription_tcp_keepalive: Duration::from_secs(15),
+            subscription_stream_restart_delay: Some(Duration::from_millis(100)),
+            ..Default::default()
+        },
+    );
+
+    let mut stream = client.subscribe_ticket_params()?;
+    let update = tokio::time::timeout(Duration::from_secs(2), stream.next())
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("subscription ended before delivering an event"))??;
+
+    assert_eq!(update.ticket_price.0, expected_ticket_params.ticket_price);
+    assert_eq!(
+        update.min_ticket_winning_probability,
+        expected_ticket_params.min_ticket_winning_probability
+    );
+
+    let request = server.await??;
+    assert!(request.contains(&format!("\r\nhost: {expected_host}\r\n")));
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn subscribe_graph_forwards_closed_channel_entries() -> Result<()> {
     let channel_id = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     let (base_url, server) = spawn_single_streaming_server(format_graph_event(channel_id, "CLOSED")).await?;
@@ -219,6 +272,50 @@ async fn spawn_reconnecting_server(
     });
 
     Ok((base_url, server))
+}
+
+async fn spawn_dns_override_streaming_server(
+    events: Vec<TicketParams>,
+) -> Result<(Url, tokio::task::JoinHandle<Result<String>>)> {
+    let listener = TcpListener::bind("127.0.0.1:0").await?;
+    let base_url = Url::parse(&format!(
+        "http://blokli-stream.invalid:{}",
+        listener.local_addr()?.port()
+    ))?;
+
+    let server = tokio::spawn(async move {
+        let (mut compatibility_conn, _) = listener.accept().await?;
+        compatibility_conn
+            .write_all(format_json_response(&compatibility_response_body()).as_bytes())
+            .await?;
+        compatibility_conn.shutdown().await?;
+
+        let body = format_ticket_params_events(&events);
+        let (mut conn, _) = listener.accept().await?;
+        let request = read_http_request_head(&mut conn).await?;
+        conn.write_all(format_sse_response(&body).as_bytes()).await?;
+        conn.shutdown().await?;
+        Ok(request)
+    });
+
+    Ok((base_url, server))
+}
+
+async fn read_http_request_head(conn: &mut tokio::net::TcpStream) -> Result<String> {
+    let mut buf = Vec::new();
+    loop {
+        let mut chunk = [0_u8; 1024];
+        let n = conn.read(&mut chunk).await?;
+        if n == 0 {
+            break;
+        }
+        buf.extend_from_slice(&chunk[..n]);
+        if buf.windows(4).any(|window| window == b"\r\n\r\n") {
+            break;
+        }
+    }
+
+    Ok(String::from_utf8_lossy(&buf).to_ascii_lowercase())
 }
 
 async fn spawn_delayed_streaming_server(
