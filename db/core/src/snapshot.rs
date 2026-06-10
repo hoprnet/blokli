@@ -22,7 +22,11 @@ use crate::{
 
 pub const SNAPSHOT_SQL_FILE: &str = "hopr_logs.sql";
 const SNAPSHOT_PAGE_SIZE: u64 = 10_000;
-const IMPORT_BATCH_SIZE: usize = 1_000;
+const DEFAULT_IMPORT_BATCH_SIZE: usize = 1_000;
+const SQLITE_MAX_VARIABLE_NUMBER: usize = 999;
+const LOG_INSERT_COLUMNS: usize = 10;
+const LOG_STATUS_INSERT_COLUMNS: usize = 8;
+const LOG_TOPIC_INFO_INSERT_COLUMNS: usize = 3;
 const TIMESTAMP_FORMAT: &str = "%Y-%m-%d %H:%M:%S%.f";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -67,22 +71,23 @@ struct SnapshotLogTopicInfoRow {
 }
 
 #[derive(Debug, Default)]
-struct ParsedSnapshot {
-    logs: Vec<SnapshotLogRow>,
-    statuses: Vec<SnapshotLogStatusRow>,
-    topics: Vec<SnapshotLogTopicInfoRow>,
+struct SnapshotProgress {
+    log_count: u64,
+    log_status_count: u64,
+    log_topic_info_count: u64,
+    latest_block: Option<u64>,
     saw_log_copy: bool,
     saw_log_status_copy: bool,
     saw_log_topic_info_copy: bool,
 }
 
-impl ParsedSnapshot {
+impl SnapshotProgress {
     fn info(&self) -> LogsSnapshotInfo {
         LogsSnapshotInfo {
-            log_count: self.logs.len() as u64,
-            log_status_count: self.statuses.len() as u64,
-            log_topic_info_count: self.topics.len() as u64,
-            latest_block: self.logs.last().and_then(|row| u64::try_from(row.block_number).ok()),
+            log_count: self.log_count,
+            log_status_count: self.log_status_count,
+            log_topic_info_count: self.log_topic_info_count,
+            latest_block: self.latest_block,
         }
     }
 
@@ -94,6 +99,22 @@ impl ParsedSnapshot {
         }
 
         Ok(())
+    }
+
+    fn record_log(&mut self, row: &SnapshotLogRow) {
+        self.log_count += 1;
+        self.latest_block = u64::try_from(row.block_number).ok().map(|block_number| {
+            self.latest_block
+                .map_or(block_number, |current| current.max(block_number))
+        });
+    }
+
+    fn record_log_status(&mut self) {
+        self.log_status_count += 1;
+    }
+
+    fn record_log_topic_info(&mut self) {
+        self.log_topic_info_count += 1;
     }
 }
 
@@ -242,7 +263,7 @@ fn parse_log_topic_info_row(line: &str) -> Result<SnapshotLogTopicInfoRow> {
 }
 
 pub fn inspect_logs_snapshot_sql(sql_path: &Path) -> Result<LogsSnapshotInfo> {
-    parse_logs_snapshot_sql(sql_path).map(|snapshot| snapshot.info())
+    validate_logs_snapshot_sql(sql_path)
 }
 
 pub fn validate_logs_snapshot_sql(sql_path: &Path) -> Result<LogsSnapshotInfo> {
@@ -376,7 +397,15 @@ pub fn validate_logs_snapshot_sql(sql_path: &Path) -> Result<LogsSnapshotInfo> {
     })
 }
 
-fn parse_logs_snapshot_sql(sql_path: &Path) -> Result<ParsedSnapshot> {
+fn import_batch_size(backend: DatabaseBackend, nr_of_columns: usize) -> usize {
+    if backend == DatabaseBackend::Sqlite {
+        (SQLITE_MAX_VARIABLE_NUMBER / nr_of_columns).max(1)
+    } else {
+        DEFAULT_IMPORT_BATCH_SIZE
+    }
+}
+
+async fn import_logs_snapshot_sql(tx: &sea_orm::DatabaseTransaction, sql_path: &Path) -> Result<LogsSnapshotInfo> {
     let file = File::open(sql_path).map_err(|error| {
         DbSqlError::Construction(format!(
             "failed to open snapshot SQL file {}: {error}",
@@ -393,8 +422,14 @@ fn parse_logs_snapshot_sql(sql_path: &Path) -> Result<ParsedSnapshot> {
         LogTopicInfo,
     }
 
-    let mut parsed = ParsedSnapshot::default();
+    let mut progress = SnapshotProgress::default();
     let mut section = Section::None;
+    let mut logs = Vec::new();
+    let mut statuses = Vec::new();
+    let mut topics = Vec::new();
+    let log_batch_size = import_batch_size(tx.get_database_backend(), LOG_INSERT_COLUMNS);
+    let log_status_batch_size = import_batch_size(tx.get_database_backend(), LOG_STATUS_INSERT_COLUMNS);
+    let log_topic_info_batch_size = import_batch_size(tx.get_database_backend(), LOG_TOPIC_INFO_INSERT_COLUMNS);
 
     for line in reader.lines() {
         let line = line.map_err(|error| {
@@ -411,14 +446,14 @@ fn parse_logs_snapshot_sql(sql_path: &Path) -> Result<ParsedSnapshot> {
 
         if trimmed.starts_with("COPY ") {
             section = if trimmed.starts_with("COPY log ") || trimmed.starts_with("COPY public.log ") {
-                parsed.saw_log_copy = true;
+                progress.saw_log_copy = true;
                 Section::Log
             } else if trimmed.starts_with("COPY log_status ") || trimmed.starts_with("COPY public.log_status ") {
-                parsed.saw_log_status_copy = true;
+                progress.saw_log_status_copy = true;
                 Section::LogStatus
             } else if trimmed.starts_with("COPY log_topic_info ") || trimmed.starts_with("COPY public.log_topic_info ")
             {
-                parsed.saw_log_topic_info_copy = true;
+                progress.saw_log_topic_info_copy = true;
                 Section::LogTopicInfo
             } else {
                 Section::None
@@ -427,24 +462,75 @@ fn parse_logs_snapshot_sql(sql_path: &Path) -> Result<ParsedSnapshot> {
         }
 
         if trimmed == "\\." {
+            match section {
+                Section::None => {}
+                Section::Log => {
+                    if !logs.is_empty() {
+                        insert_logs(tx, &logs).await?;
+                        logs.clear();
+                    }
+                }
+                Section::LogStatus => {
+                    if !statuses.is_empty() {
+                        insert_log_statuses(tx, &statuses).await?;
+                        statuses.clear();
+                    }
+                }
+                Section::LogTopicInfo => {
+                    if !topics.is_empty() {
+                        insert_log_topic_infos(tx, &topics).await?;
+                        topics.clear();
+                    }
+                }
+            }
             section = Section::None;
             continue;
         }
 
         match section {
             Section::None => {}
-            Section::Log => parsed.logs.push(parse_log_row(&line)?),
-            Section::LogStatus => parsed.statuses.push(parse_log_status_row(&line)?),
-            Section::LogTopicInfo => parsed.topics.push(parse_log_topic_info_row(&line)?),
+            Section::Log => {
+                let row = parse_log_row(&line)?;
+                progress.record_log(&row);
+                logs.push(row);
+                if logs.len() >= log_batch_size {
+                    insert_logs(tx, &logs).await?;
+                    logs.clear();
+                }
+            }
+            Section::LogStatus => {
+                let row = parse_log_status_row(&line)?;
+                progress.record_log_status();
+                statuses.push(row);
+                if statuses.len() >= log_status_batch_size {
+                    insert_log_statuses(tx, &statuses).await?;
+                    statuses.clear();
+                }
+            }
+            Section::LogTopicInfo => {
+                let row = parse_log_topic_info_row(&line)?;
+                progress.record_log_topic_info();
+                topics.push(row);
+                if topics.len() >= log_topic_info_batch_size {
+                    insert_log_topic_infos(tx, &topics).await?;
+                    topics.clear();
+                }
+            }
         }
     }
 
-    parsed.ensure_complete()?;
-    parsed
-        .logs
-        .sort_by_key(|row| (row.block_number, row.tx_index, row.log_index));
+    if !logs.is_empty() {
+        insert_logs(tx, &logs).await?;
+    }
+    if !statuses.is_empty() {
+        insert_log_statuses(tx, &statuses).await?;
+    }
+    if !topics.is_empty() {
+        insert_log_topic_infos(tx, &topics).await?;
+    }
 
-    Ok(parsed)
+    progress.ensure_complete()?;
+    Ok(progress.info())
 }
 
 pub async fn export_logs_snapshot_to_dir(db: &BlokliDb, target_dir: &Path) -> Result<LogsSnapshotInfo> {
@@ -657,32 +743,22 @@ pub async fn import_logs_snapshot_from_dir(db: &BlokliDb, snapshot_dir: &Path) -
         )));
     }
 
-    let parsed = parse_logs_snapshot_sql(&sql_path)?;
-    let info = parsed.info();
-
     db.nest_transaction_in_db(None, TargetDb::Logs)
         .await?
         .perform(|tx: &OpenTransaction| {
             Box::pin(async move {
-                LogStatus::delete_many().exec(tx.as_ref()).await?;
-                Log::delete_many().exec(tx.as_ref()).await?;
-                LogTopicInfo::delete_many().exec(tx.as_ref()).await?;
-
-                insert_logs(tx.as_ref(), &parsed.logs).await?;
-                insert_log_statuses(tx.as_ref(), &parsed.statuses).await?;
-                insert_log_topic_infos(tx.as_ref(), &parsed.topics).await?;
+                clear_logs_tables(tx.as_ref()).await?;
+                let info = import_logs_snapshot_sql(tx.as_ref(), &sql_path).await?;
                 reset_sequences_if_needed(tx.as_ref()).await?;
-
-                Ok::<(), DbSqlError>(())
+                Ok::<LogsSnapshotInfo, DbSqlError>(info)
             })
         })
-        .await?;
-
-    Ok(info)
+        .await
 }
 
 async fn insert_logs(tx: &sea_orm::DatabaseTransaction, rows: &[SnapshotLogRow]) -> Result<()> {
-    for chunk in rows.chunks(IMPORT_BATCH_SIZE) {
+    let batch_size = import_batch_size(tx.get_database_backend(), LOG_INSERT_COLUMNS);
+    for chunk in rows.chunks(batch_size) {
         let models = chunk
             .iter()
             .map(|row| log::ActiveModel {
@@ -705,7 +781,8 @@ async fn insert_logs(tx: &sea_orm::DatabaseTransaction, rows: &[SnapshotLogRow])
 }
 
 async fn insert_log_statuses(tx: &sea_orm::DatabaseTransaction, rows: &[SnapshotLogStatusRow]) -> Result<()> {
-    for chunk in rows.chunks(IMPORT_BATCH_SIZE) {
+    let batch_size = import_batch_size(tx.get_database_backend(), LOG_STATUS_INSERT_COLUMNS);
+    for chunk in rows.chunks(batch_size) {
         let models = chunk
             .iter()
             .map(|row| log_status::ActiveModel {
@@ -726,7 +803,8 @@ async fn insert_log_statuses(tx: &sea_orm::DatabaseTransaction, rows: &[Snapshot
 }
 
 async fn insert_log_topic_infos(tx: &sea_orm::DatabaseTransaction, rows: &[SnapshotLogTopicInfoRow]) -> Result<()> {
-    for chunk in rows.chunks(IMPORT_BATCH_SIZE) {
+    let batch_size = import_batch_size(tx.get_database_backend(), LOG_TOPIC_INFO_INSERT_COLUMNS);
+    for chunk in rows.chunks(batch_size) {
         let models = chunk
             .iter()
             .map(|row| log_topic_info::ActiveModel {
@@ -738,6 +816,22 @@ async fn insert_log_topic_infos(tx: &sea_orm::DatabaseTransaction, rows: &[Snaps
         LogTopicInfo::insert_many(models).exec(tx).await?;
     }
 
+    Ok(())
+}
+
+async fn clear_logs_tables(tx: &sea_orm::DatabaseTransaction) -> Result<()> {
+    if tx.get_database_backend() == DatabaseBackend::Postgres {
+        tx.execute_raw(Statement::from_string(
+            DatabaseBackend::Postgres,
+            "TRUNCATE TABLE log_status, log, log_topic_info RESTART IDENTITY CASCADE".to_string(),
+        ))
+        .await?;
+        return Ok(());
+    }
+
+    LogStatus::delete_many().exec(tx).await?;
+    Log::delete_many().exec(tx).await?;
+    LogTopicInfo::delete_many().exec(tx).await?;
     Ok(())
 }
 
@@ -809,6 +903,30 @@ mod tests {
             imported_db.get_logs_block_numbers(None, None, Some(true)).await?,
             vec![10, 11]
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_round_trip_large_sqlite_import() -> Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let sample_origin = (sample_log(10, 1, 0).address, Hash::create(&[b"topic"]));
+        db.ensure_logs_origin(vec![sample_origin]).await?;
+        for index in 0..150_u64 {
+            let mut log = sample_log(10 + index, 1, index);
+            log.address = sample_origin.0;
+            db.store_log(log).await?;
+        }
+        db.update_logs_checksums().await?;
+
+        let export_dir = TempDir::new().expect("tempdir");
+        let exported = export_logs_snapshot_to_dir(&db, export_dir.path()).await?;
+
+        let imported_db = BlokliDb::new_in_memory().await?;
+        let imported = import_logs_snapshot_from_dir(&imported_db, export_dir.path()).await?;
+
+        assert_eq!(exported, imported);
+        assert_eq!(imported_db.get_logs_count(None, None).await?, 150);
 
         Ok(())
     }

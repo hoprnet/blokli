@@ -46,13 +46,13 @@ pub mod validate;
 pub(crate) mod test_utils;
 
 // Re-export commonly used types
-use std::{fs, io::Cursor, path::Path};
+use std::{fs, path::Path};
 
-use async_compression::futures::bufread::XzEncoder;
+use async_compression::futures::write::XzEncoder;
 use async_tar::Builder;
 use blokli_db::{BlokliDbGeneralModelOperations, snapshot::SNAPSHOT_SQL_FILE};
 pub use error::{SnapshotError, SnapshotResult};
-use futures_util::io::{AllowStdIo, AsyncReadExt, BufReader as FuturesBufReader};
+use futures_util::io::{AllowStdIo, AsyncWriteExt as _};
 use tracing::{debug, error, info};
 pub use validate::SnapshotInfo;
 
@@ -338,20 +338,13 @@ async fn archive_snapshot_dir(source_dir: &Path, output_path: &Path) -> Snapshot
         )));
     }
 
-    let mut tar_data = Vec::new();
-    {
-        let mut builder = Builder::new(&mut tar_data);
-        builder.append_path_with_name(&sql_path, SNAPSHOT_SQL_FILE).await?;
-
-        builder.into_inner().await?;
-    }
-
-    let cursor = Cursor::new(tar_data);
-    let reader = FuturesBufReader::new(AllowStdIo::new(cursor));
-    let mut encoder = XzEncoder::new(reader);
-    let mut compressed = Vec::new();
-    encoder.read_to_end(&mut compressed).await?;
-    fs::write(output_path, compressed)?;
+    let output_file = fs::File::create(output_path)?;
+    let writer = AllowStdIo::new(output_file);
+    let encoder = XzEncoder::new(writer);
+    let mut builder = Builder::new(encoder);
+    builder.append_path_with_name(&sql_path, SNAPSHOT_SQL_FILE).await?;
+    let mut encoder = builder.into_inner().await?;
+    encoder.close().await?;
     Ok(())
 }
 

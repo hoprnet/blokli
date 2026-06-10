@@ -121,9 +121,9 @@ impl SnapshotExtractor {
 
         // Verify we got the SQL dump file
         if !extracted_files.contains(&SNAPSHOT_SQL_FILE.to_string()) {
-            return Err(SnapshotError::InvalidFormat(
-                "Archive does not contain hopr_logs.sql".to_string(),
-            ));
+            return Err(SnapshotError::InvalidFormat(format!(
+                "Archive does not contain {SNAPSHOT_SQL_FILE}"
+            )));
         }
 
         Ok(extracted_files)
