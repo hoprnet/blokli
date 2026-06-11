@@ -6,11 +6,12 @@
 //! 2. RPC is reachable
 //! 3. Indexer lag is within acceptable limits
 //!
-//! The readiness state is cached and updated by explicit checks.
+//! The readiness state is cached and updated periodically, with out-of-band refreshes for fast transitions.
 //! Updates are triggered by:
 //! - /readyz endpoint calls (immediate check)
 //! - Indexer completion signals (immediate check)
 //! - Readiness subscription connection checks
+//! - Periodic background refreshes (`readiness_check_interval`)
 
 use std::sync::Arc;
 

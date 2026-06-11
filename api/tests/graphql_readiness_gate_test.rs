@@ -261,6 +261,21 @@ async fn test_non_readiness_subscription_blocked_when_not_ready() -> anyhow::Res
     Ok(())
 }
 
+#[test_log::test(tokio::test)]
+async fn test_mixed_subscription_blocked_when_not_ready() -> anyhow::Result<()> {
+    let ctx = common::setup_http_test_environment().await?;
+
+    delete_chain_info(&ctx.db).await?;
+
+    let (status, payload) =
+        make_graphql_sse_request(ctx.app, r#"subscription { health safeDeployed { address } }"#).await;
+
+    assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
+    assert!(payload.contains("not ready yet"));
+
+    Ok(())
+}
+
 /// Test that readiness state transitions from not ready to ready
 #[test_log::test(tokio::test)]
 async fn test_graphql_readiness_transition() -> anyhow::Result<()> {
