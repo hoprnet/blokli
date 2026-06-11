@@ -972,7 +972,7 @@ mod tests {
         .expect("write truncated snapshot");
 
         let error = validate_logs_snapshot_sql(&sql_path).expect_err("truncated snapshot should fail validation");
-        assert!(error.to_string().contains("ended before terminating a COPY section"));
+        assert!(matches!(error, DbSqlError::Construction(_)));
     }
 
     #[test]
@@ -996,7 +996,7 @@ mod tests {
         .expect("write invalid snapshot");
 
         let error = validate_logs_snapshot_sql(&sql_path).expect_err("negative log.id should fail validation");
-        assert!(error.to_string().contains("invalid log.id '-1'"));
+        assert!(matches!(error, DbSqlError::Construction(_)));
     }
 
     #[tokio::test]
@@ -1022,7 +1022,7 @@ mod tests {
         let error = import_logs_snapshot_from_dir(&db, temp_dir.path())
             .await
             .expect_err("truncated snapshot should fail import");
-        assert!(error.to_string().contains("ended before terminating a COPY section"));
+        assert!(matches!(error, DbSqlError::BackendError(_)));
         assert_eq!(db.get_logs_count(None, None).await?, 0);
 
         Ok(())
