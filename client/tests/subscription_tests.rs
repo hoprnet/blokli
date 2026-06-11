@@ -202,7 +202,13 @@ async fn subscribe_health_streams_state_updates() -> Result<()> {
         Ok::<_, anyhow::Error>(())
     });
 
-    let client = BlokliClient::new(base_url, BlokliClientConfig::default());
+    let client = BlokliClient::new(
+        base_url,
+        BlokliClientConfig {
+            auto_compatibility_check: false,
+            ..Default::default()
+        },
+    );
     let updates = client
         .subscribe_health()?
         .take(2)
@@ -217,6 +223,7 @@ async fn subscribe_health_streams_state_updates() -> Result<()> {
     Ok(())
 }
 
+#[tokio::test]
 async fn subscribe_ticket_params_uses_dns_override() -> Result<()> {
     let expected_ticket_params = TicketParams {
         ticket_price: "0.0010 wxHOPR".to_string(),
