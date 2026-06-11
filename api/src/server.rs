@@ -393,7 +393,7 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
     let accepts_sse = headers
         .get("accept")
         .and_then(|v| v.to_str().ok())
-        .map(|v| v.contains("text/event-stream"))
+        .map(|v| v.to_lowercase().contains("text/event-stream"))
         .unwrap_or(false);
 
     // Introspection queries query the type system, not indexed data.
@@ -407,7 +407,7 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
     let allows_pre_ready =
         accepts_sse && selected_operation_is_health_subscription(&request.query, request.operation_name.as_deref());
 
-    if state.readiness_checker.get().await == ReadinessState::NotReady && !allows_pre_ready {
+    if state.readiness_checker.get().await == ReadinessState::NotReady && !allows_pre_ready && !is_introspection {
         return (
             StatusCode::SERVICE_UNAVAILABLE,
             Json(serde_json::json!({

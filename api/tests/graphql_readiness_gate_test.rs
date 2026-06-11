@@ -49,7 +49,7 @@ async fn make_graphql_request(app: Router, query: &str) -> (StatusCode, serde_js
     (status, json)
 }
 
-async fn make_graphql_sse_request(app: Router, query: &str) -> (StatusCode, String) {
+async fn make_graphql_sse_request_with_accept(app: Router, query: &str, accept: &str) -> (StatusCode, String) {
     let request_body = json!({
         "query": query
     });
@@ -58,7 +58,7 @@ async fn make_graphql_sse_request(app: Router, query: &str) -> (StatusCode, Stri
         .method("POST")
         .uri("/graphql")
         .header("content-type", "application/json")
-        .header("accept", "text/event-stream")
+        .header("accept", accept)
         .body(Body::from(
             serde_json::to_string(&request_body).expect("Failed to serialize JSON"),
         ))
@@ -82,6 +82,10 @@ async fn make_graphql_sse_request(app: Router, query: &str) -> (StatusCode, Stri
         .expect("SSE stream returned error");
 
     (status, String::from_utf8_lossy(&frame).into_owned())
+}
+
+async fn make_graphql_sse_request(app: Router, query: &str) -> (StatusCode, String) {
+    make_graphql_sse_request_with_accept(app, query, "text/event-stream").await
 }
 
 /// Update chain_info record with current RPC block number
@@ -135,7 +139,7 @@ async fn test_graphql_returns_503_when_not_ready() -> anyhow::Result<()> {
     delete_chain_info(&ctx.db).await?;
 
     // Try to make a simple GraphQL query
-    let query = r#"query { __typename }"#;
+    let query = r#"query { version }"#;
     let (status, json) = make_graphql_request(ctx.app, query).await;
 
     // Should return 503 Service Unavailable
@@ -164,7 +168,7 @@ async fn test_graphql_returns_200_when_ready() -> anyhow::Result<()> {
     tokio::time::sleep(Duration::from_millis(150)).await;
 
     // Try to make a simple GraphQL query
-    let query = r#"query { __typename }"#;
+    let query = r#"query { version }"#;
     let (status, json) = make_graphql_request(ctx.app, query).await;
 
     // Should return 200 OK (or at least not 503)
@@ -190,7 +194,7 @@ async fn test_graphql_error_message_mentions_indexer() -> anyhow::Result<()> {
     // Delete chain_info to simulate server not ready
     delete_chain_info(&ctx.db).await?;
 
-    let query = r#"query { __typename }"#;
+    let query = r#"query { version }"#;
     let (status, json) = make_graphql_request(ctx.app, query).await;
 
     assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
@@ -213,9 +217,9 @@ async fn test_graphql_all_request_types_blocked_when_not_ready() -> anyhow::Resu
 
     // Test various query types
     let queries = vec![
-        r#"query { __typename }"#,
-        r#"{ __typename }"#, // Shorthand query
-        r#"query TestQuery { __typename }"#,
+        r#"query { version }"#,
+        r#"{ version }"#,
+        r#"query TestQuery { version }"#,
     ];
 
     for query in queries {
@@ -232,12 +236,42 @@ async fn test_graphql_all_request_types_blocked_when_not_ready() -> anyhow::Resu
 }
 
 #[test_log::test(tokio::test)]
+async fn test_introspection_query_allowed_when_not_ready() -> anyhow::Result<()> {
+    let ctx = common::setup_http_test_environment().await?;
+
+    delete_chain_info(&ctx.db).await?;
+
+    let (status, json) = make_graphql_request(ctx.app, r#"query { __typename }"#).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(json["data"]["__typename"], "QueryRoot");
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
 async fn test_readiness_subscription_allowed_when_not_ready() -> anyhow::Result<()> {
     let ctx = common::setup_http_test_environment().await?;
 
     delete_chain_info(&ctx.db).await?;
 
     let (status, payload) = make_graphql_sse_request(ctx.app, r#"subscription health { health }"#).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(payload.contains("health"));
+    assert!(payload.contains("NOT_READY"));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_readiness_subscription_allowed_when_accept_header_uses_different_casing() -> anyhow::Result<()> {
+    let ctx = common::setup_http_test_environment().await?;
+
+    delete_chain_info(&ctx.db).await?;
+
+    let (status, payload) =
+        make_graphql_sse_request_with_accept(ctx.app, r#"subscription health { health }"#, "Text/Event-Stream").await;
 
     assert_eq!(status, StatusCode::OK);
     assert!(payload.contains("health"));
@@ -281,7 +315,7 @@ async fn test_mixed_subscription_blocked_when_not_ready() -> anyhow::Result<()> 
 async fn test_graphql_readiness_transition() -> anyhow::Result<()> {
     let ctx = common::setup_http_test_environment().await?;
 
-    let query = r#"query { __typename }"#;
+    let query = r#"query { version }"#;
 
     // First request: not ready (no chain_info)
     delete_chain_info(&ctx.db).await?;
@@ -324,7 +358,7 @@ async fn test_graphql_readiness_synced_with_readyz() -> anyhow::Result<()> {
     // Scenario 1: Both should be unavailable when not ready
     delete_chain_info(&ctx.db).await?;
     let readyz_status = check_readyz(&ctx.app).await;
-    let (graphql_status, _) = make_graphql_request(ctx.app.clone(), r#"query { __typename }"#).await;
+    let (graphql_status, _) = make_graphql_request(ctx.app.clone(), r#"query { version }"#).await;
 
     // Both should indicate not ready (503 for readyz, 503 for GraphQL)
     assert_eq!(
@@ -355,7 +389,7 @@ async fn test_graphql_readiness_synced_with_readyz() -> anyhow::Result<()> {
     }
 
     let readyz_status = check_readyz(&ctx.app).await;
-    let (graphql_status, _) = make_graphql_request(ctx.app, r#"query { __typename }"#).await;
+    let (graphql_status, _) = make_graphql_request(ctx.app, r#"query { version }"#).await;
 
     assert_eq!(readyz_status, StatusCode::OK, "/readyz should return 200 when ready");
     assert_ne!(
