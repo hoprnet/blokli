@@ -10,8 +10,13 @@
 
 mod common;
 
-use std::{collections::HashSet, str::FromStr, time::Duration};
+use std::{
+    collections::HashSet,
+    str::FromStr,
+    time::{Duration, UNIX_EPOCH},
+};
 
+use async_graphql::Schema;
 use blokli_api_types::{Account, Channel, ChannelStatus as ApiChannelStatus, TokenValueString, UInt64};
 use blokli_chain_indexer::state::IndexerEvent;
 use blokli_db::{
@@ -746,7 +751,7 @@ async fn assert_opened_channel_graph_subscription_emits_status_update(status: Ch
 
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = common::create_test_schema(&db);
+    let (schema, indexer_state) = common::create_test_schema(&db);
     let query = r#"
         subscription {
             openedChannelGraphUpdated {

@@ -13,6 +13,7 @@ use blokli_client::{
         types::{ReadinessState, Safe},
     },
 };
+use futures::StreamExt;
 use hopli_lib::{methods::transfer_or_mint_tokens, utils::a2h};
 use hopr_bindings::{
     config::ContractInstances,

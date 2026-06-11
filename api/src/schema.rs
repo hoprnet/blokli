@@ -90,7 +90,7 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
         .data(indexer_state)
         .data(transaction_executor)
         .data(transaction_store)
-        .data(rpc_operations)        
+        .data(rpc_operations)
         .data(readiness_checker);
 
     if let Some((max_depth, max_complexity)) = limits {

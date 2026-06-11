@@ -3,7 +3,10 @@ use std::{net::IpAddr, time::Duration};
 use anyhow::Result;
 use blokli_client::{
     BlokliClient, BlokliClientConfig, BlokliDnsOverride, CLIENT_VERSION,
-    api::{BlokliSubscriptionClient, types::ChannelStatus},
+    api::{
+        BlokliSubscriptionClient,
+        types::{ChannelStatus, ReadinessState},
+    },
 };
 use futures::StreamExt;
 use tokio::{

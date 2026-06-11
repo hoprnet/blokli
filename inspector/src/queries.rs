@@ -61,18 +61,33 @@ pub(crate) enum QueryTarget {
     AccountCounts(AccountArgs),
     /// Gets information about the HOPR on-chain deployment.
     ChainInfo,
+    /// Gets channels with their aggregated wxHOPR balance. Use --safe-address to scope to a safe.
+    Channel(ChannelArgs),
+    /// Gets channel count and total wxHOPR balance matching optional filters.
+    ChannelStats(ChannelArgs),
     /// Gets the health status of Blokli.
     Health,
-    /// Gets the number of transactions sent by an address.
-    TxCount {
+    /// Gets the module address prediction.
+    ModuleAddress {
+        /// Nonce of the Safe deployment.
+        #[arg(short, long)]
+        nonce: u64,
+        /// Safe owner address.
+        #[arg(short, long, value_parser = clap::value_parser!(Address), group = "selector")]
+        owner: Address,
+        /// Predicted Safe address.
+        #[arg(short, long, value_parser = clap::value_parser!(Address), group = "selector")]
+        safe_address: Address,
+    },
+    /// Gets the native balance of an address.
+    NativeBalance {
         #[arg(value_parser = clap::value_parser!(Address))]
         address: Address,
     },
-    /// Gets the wxHOPR allowance granted by a Safe to the HOPR channels contract.
-    SafeAllowance {
-        #[arg(value_parser = clap::value_parser!(Address))]
-        address: Address,
-    },
+    /// Gets a node and its channels, enriched with counterparty and ticket details.
+    NodeOverview(NodeOverviewArgs),
+    /// Gets information about redemptions
+    Redemptions(RedemptionsArgs),
     /// Gets information about a Safe.
     Safe {
         /// Safe address.
@@ -88,28 +103,11 @@ pub(crate) enum QueryTarget {
         #[arg(short, long, value_parser = clap::value_parser!(Address), group = "selector")]
         registered_node: Option<Address>,
     },
-    /// Gets the module address prediction.
-    ModuleAddress {
-        /// Nonce of the Safe deployment.
-        #[arg(short, long)]
-        nonce: u64,
-        /// Safe owner address.
-        #[arg(short, long, value_parser = clap::value_parser!(Address), group = "selector")]
-        owner: Address,
-        /// Predicted Safe address.
-        #[arg(short, long, value_parser = clap::value_parser!(Address), group = "selector")]
-        safe_address: Address,
+    /// Gets the wxHOPR allowance granted by a Safe to the HOPR channels contract.
+    SafeAllowance {
+        #[arg(value_parser = clap::value_parser!(Address))]
+        address: Address,
     },
-    /// Gets the number of accounts.
-    CountAccounts(AccountArgs),
-    /// Gets information about an account.
-    Account(AccountArgs),
-    /// Gets a node and its channels, enriched with counterparty and ticket details.
-    NodeOverview(NodeOverviewArgs),
-    /// Gets channel count and total wxHOPR balance matching optional filters.
-    ChannelStats(ChannelArgs),
-    /// Gets channels with their aggregated wxHOPR balance. Use --safe-address to scope to a safe.
-    Channel(ChannelArgs),
     /// Gets total wxHOPR balance held across indexed safe contracts.
     SafesBalance {
         /// Restrict to safes whose current owner set contains the given address.
@@ -168,6 +166,10 @@ impl QueryTarget {
             QueryTarget::NativeBalance { address } => {
                 format.serialize(client.query_native_balance(&address.into()).await?)
             }
+
+            QueryTarget::NodeOverview(sel) => query_node_overview(client, sel.try_into()?)
+                .await
+                .and_then(|overview| format.serialize(overview)),
             QueryTarget::Redemptions(sel) => format.serialize(client.query_redeemed_stats(sel.try_into()?).await?),
             QueryTarget::Safe {
                 address,
@@ -192,9 +194,6 @@ impl QueryTarget {
                     })
                     .await?,
             ),
-            QueryTarget::NodeOverview(sel) => query_node_overview(client, sel.try_into()?)
-                .await
-                .and_then(|overview| format.serialize(overview)),
             QueryTarget::SafeAllowance { address } => {
                 format.serialize(client.query_safe_allowance(&address.into()).await?)
             }

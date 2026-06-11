@@ -8,7 +8,10 @@ use crate::api::{
         AccountVariables, ChannelsVariables, SubscribeAccounts, SubscribeChannels, SubscribeGraph, SubscribeHealth,
         SubscribeSafeDeployment, SubscribeTicketParams, SubscribeTicketRedeemed, TicketRedeemedVariables,
     },
-    types::{Account, Channel, OpenedChannelsGraphEntry, ReadinessState, RedeemTicketDetails, Safe, TicketParameters, Transaction},
+    types::{
+        Account, Channel, OpenedChannelsGraphEntry, ReadinessState, RedeemTicketDetails, Safe, TicketParameters,
+        Transaction,
+    },
 };
 
 impl GraphQlQueries {
