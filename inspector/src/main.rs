@@ -1,5 +1,6 @@
 mod queries;
 mod subscriptions;
+mod table;
 
 use std::{str::FromStr, time::Duration};
 
@@ -32,7 +33,7 @@ struct Cli {
     #[arg(short, long, env, value_enum, default_value = "json")]
     format: Formats,
     /// Skip the startup client/server compatibility check.
-    #[arg(long)]
+    #[arg(long, default_value_t = false)]
     skip_check: bool,
 
     #[clap(subcommand)]
@@ -45,6 +46,8 @@ enum Formats {
     Json,
     /// Output in YAML format.
     Yaml,
+    /// Output in human-readable tables.
+    Table,
 }
 
 impl Formats {
@@ -52,6 +55,7 @@ impl Formats {
         match self {
             Formats::Json => Ok(serde_json::to_string_pretty(&value)?),
             Formats::Yaml => Ok(serde_yaml::to_string(&value)?),
+            Formats::Table => table::serialize(value),
         }
     }
 }
@@ -199,6 +203,16 @@ pub(crate) struct AccountArgs {
     show_peer_ids: bool,
 }
 
+fn parse_packet_key(value: &str) -> anyhow::Result<OffchainPublicKey> {
+    if let Ok(key) = OffchainPublicKey::from_hex(value) {
+        Ok(key)
+    } else if let Ok(peer_id) = value.parse() {
+        Ok(OffchainPublicKey::from_peerid(&peer_id)?)
+    } else {
+        Err(anyhow::anyhow!("Cannot parse packet key or Peer ID: {value}"))
+    }
+}
+
 impl TryFrom<AccountArgs> for AccountSelector {
     type Error = anyhow::Error;
 
@@ -229,6 +243,24 @@ impl TryFrom<AccountArgs> for AccountSelector {
     }
 }
 
+#[derive(Debug, Clone, Args)]
+pub(crate) struct NodeOverviewArgs {
+    /// Node chain key, hex packet key, or Peer ID.
+    node: String,
+}
+
+impl TryFrom<NodeOverviewArgs> for AccountSelector {
+    type Error = anyhow::Error;
+
+    fn try_from(value: NodeOverviewArgs) -> Result<Self, Self::Error> {
+        if let Ok(address) = value.node.parse::<Address>() {
+            Ok(AccountSelector::Address(address.into()))
+        } else {
+            Ok(AccountSelector::PacketKey(parse_packet_key(&value.node)?.into()))
+        }
+    }
+}
+
 #[derive(Debug, Clone, serde::Serialize)]
 pub struct AltAccount {
     pub chain_key: String,
@@ -237,6 +269,47 @@ pub struct AltAccount {
     pub packet_key: String,
     pub peer_id: String,
     pub safe_address: Option<String>,
+}
+
+#[cfg(test)]
+mod tests {
+    use blokli_client::api::AccountSelector;
+    use hopr_types::{crypto::types::OffchainPublicKey, primitive::prelude::ToHex};
+
+    use super::NodeOverviewArgs;
+
+    #[test]
+    fn node_overview_selector_accepts_chain_key() -> anyhow::Result<()> {
+        let selector = AccountSelector::try_from(NodeOverviewArgs {
+            node: "0x1111111111111111111111111111111111111111".to_string(),
+        })?;
+
+        assert!(matches!(selector, AccountSelector::Address(address) if address == [0x11; 20]));
+        Ok(())
+    }
+
+    #[test]
+    fn node_overview_selector_accepts_packet_key_and_peer_id() -> anyhow::Result<()> {
+        let packet_key =
+            OffchainPublicKey::from_hex("30dc46df1f429b9c0d1d6d81198420f3af92348e7fe97b003717108b22f8d985")?;
+        let expected = packet_key.to_hex();
+        let peer_id = packet_key.to_peerid_str();
+
+        for node in [expected, peer_id] {
+            let selector = AccountSelector::try_from(NodeOverviewArgs { node })?;
+            assert!(matches!(selector, AccountSelector::PacketKey(_)));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn node_overview_selector_rejects_invalid_value() {
+        let result = AccountSelector::try_from(NodeOverviewArgs {
+            node: "not-a-node".to_string(),
+        });
+
+        assert!(result.is_err());
+    }
 }
 
 impl TryFrom<Account> for AltAccount {
@@ -276,11 +349,11 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let blokli_client = BlokliClient::new(cli.url, BlokliClientConfig::default());
-
-    if !cli.skip_check {
-        blokli_client.check_compatibility().await?;
-    }
+    let client_config = BlokliClientConfig {
+        auto_compatibility_check: !cli.skip_check,
+        ..Default::default()
+    };
+    let blokli_client = BlokliClient::new(cli.url, client_config);
 
     let exit_fut = tokio::signal::ctrl_c().inspect_ok(|_| {
         eprintln!("\nInterrupted.");

@@ -13,12 +13,9 @@ use blokli_client::{
         types::{ReadinessState, Safe},
     },
 };
-use futures::StreamExt;
-use hopli_lib::{
-    methods::transfer_or_mint_tokens,
-    utils::{ContractInstances, a2h},
-};
+use hopli_lib::{methods::transfer_or_mint_tokens, utils::a2h};
 use hopr_bindings::{
+    config::ContractInstances,
     exports::alloy::{
         primitives::{Address, U256, keccak256},
         providers::{
@@ -260,7 +257,9 @@ impl IntegrationFixture {
         let maybe_safe = self
             .client()
             .query_safe(SafeSelector::ChainKey(owner.to_alloy_address().into()))
-            .await?;
+            .await?
+            .into_iter()
+            .next();
 
         match maybe_safe {
             Some(s) => Ok(s),
@@ -276,7 +275,7 @@ impl IntegrationFixture {
                     || {
                         let client = client.clone();
                         let selector = selector.clone();
-                        async move { Ok(client.query_safe(selector).await?) }
+                        async move { Ok(client.query_safe(selector).await?.into_iter().next()) }
                     },
                 )
                 .await?;
@@ -565,6 +564,41 @@ impl IntegrationFixture {
             .await
     }
 
+    /// Finalizes closure of an outgoing channel from `from` to `to`.
+    /// Must be called after `initiate_outgoing_channel_closure` and after the notice period has elapsed.
+    pub async fn finalize_outgoing_channel_closure(
+        &self,
+        from: &AnvilAccount,
+        to: &AnvilAccount,
+        module: &str,
+    ) -> Result<[u8; 32]> {
+        let nonce = self.rpc().transaction_count(&from.address).await?;
+
+        let payload_generator = SafePayloadGenerator::new(
+            &from.keypair,
+            *self.contract_addresses(),
+            HoprAddress::from_str(module)?,
+        );
+
+        let payload = payload_generator.finalize_outgoing_channel_closure(to.address)?;
+
+        let payload_bytes = payload
+            .sign_and_encode_to_eip2718(nonce, self.rpc().chain_id().await?, None, &from.keypair)
+            .await?;
+
+        self.submit_and_confirm_tx(&payload_bytes, self.config().tx_confirmations)
+            .await
+    }
+
+    /// Fully closes an outgoing channel from `from` to `to` (initiates then finalizes).
+    /// Notice period in test contracts is 1 second; the confirmation wait between the two
+    /// transactions is enough for it to elapse.
+    pub async fn close_outgoing_channel(&self, from: &AnvilAccount, to: &AnvilAccount, module: &str) -> Result<()> {
+        self.initiate_outgoing_channel_closure(from, to, module).await?;
+        self.finalize_outgoing_channel_closure(from, to, module).await?;
+        Ok(())
+    }
+
     fn teardown(&self) {
         self.inner.teardown();
     }
@@ -724,12 +758,12 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
         .disable_recommended_fillers()
         .filler(ChainIdFiller::default())
         .filler(NonceFiller::new(CachedNonceManager::default()))
-        .filler(GasFiller)
+        .filler(GasFiller::default())
         .filler(BlobGasFiller::default())
         .wallet(wallet)
         .connect_http(config.rpc_url().clone());
 
-    let contract_instances = ContractInstances::deploy_for_testing(provider, &deployer)
+    let contract_instances = ContractInstances::deploy_for_testing(provider, accounts[0].to_alloy_address())
         .await
         .expect("failed to deploy hopr contracts for testing");
 

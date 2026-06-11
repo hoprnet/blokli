@@ -279,6 +279,7 @@ impl BlokliDbNodeSafeRegistrationOperations for BlokliDb {
 
 #[cfg(test)]
 mod tests {
+    use blokli_db_entity::conversions::node_safe_registration::fetch_registered_nodes_for_safes;
     use hopr_types::crypto_random::random_bytes;
     use sea_orm::PaginatorTrait;
 
@@ -442,6 +443,51 @@ mod tests {
         // Try to register same node to safe2 (should fail due to unique constraint on node_address)
         let result = db.register_node_to_safe(None, safe2, node, 100, 1, 0).await;
         assert!(result.is_err());
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_fetch_registered_nodes_for_safes_batches_and_filters_invalid_nodes() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let conn = db.conn(crate::TargetDb::Index);
+
+        let empty = fetch_registered_nodes_for_safes(conn, &[]).await?;
+        assert!(empty.is_empty());
+
+        let safe1 = random_address();
+        let safe2 = random_address();
+        let safe3 = random_address();
+        let node1 = random_address();
+        let node2 = random_address();
+
+        db.register_node_to_safe(None, safe1, node1, 100, 0, 0).await?;
+        db.register_node_to_safe(None, safe2, node2, 101, 0, 0).await?;
+
+        HoprNodeSafeRegistration::insert(hopr_node_safe_registration::ActiveModel {
+            safe_address: Set(safe1.as_ref().to_vec()),
+            node_address: Set(vec![0xAB; 19]),
+            registered_block: Set(102),
+            registered_tx_index: Set(0),
+            registered_log_index: Set(0),
+            ..Default::default()
+        })
+        .exec(conn)
+        .await?;
+
+        let result = fetch_registered_nodes_for_safes(
+            conn,
+            &[
+                safe1.as_ref().to_vec(),
+                safe2.as_ref().to_vec(),
+                safe3.as_ref().to_vec(),
+            ],
+        )
+        .await?;
+
+        assert_eq!(result.get(safe1.as_ref()), Some(&vec![node1]));
+        assert_eq!(result.get(safe2.as_ref()), Some(&vec![node2]));
+        assert!(!result.contains_key(safe3.as_ref()));
 
         Ok(())
     }

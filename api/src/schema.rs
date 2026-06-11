@@ -34,6 +34,10 @@ pub struct ChainId(pub u64);
 #[derive(Debug, Clone)]
 pub struct NetworkName(pub String);
 
+/// Wrapper type describing whether the server indexes Safe events
+#[derive(Debug, Clone, Copy)]
+pub struct SafeEventIndexingEnabled(pub bool);
+
 /// Build the async-graphql schema with database connection, chain ID, network, indexer state, and transaction
 /// components
 ///
@@ -52,8 +56,11 @@ pub struct NetworkName(pub String);
 /// - IndexerState injected as context data (for subscription coordination)
 /// - Transaction executor and store injected as context data (for mutations and transaction queries)
 /// - RPC operations injected as context data (for passthrough balance queries)
-/// - Query depth limit (10 levels) to prevent excessive nesting
-/// - Query complexity limit (100 points) to prevent expensive operations
+/// - Query depth limit to prevent excessive nesting
+/// - Query complexity limit to throttle expensive RPC fan-out
+///
+/// Pass `limits` as `Some((max_depth, max_complexity))` to enforce limits, or `None` to
+/// build an unlimited schema (used for introspection queries).
 #[allow(clippy::too_many_arguments)]
 pub fn build_schema<R: HttpRequestor + 'static + Clone>(
     db: DatabaseConnection,
@@ -63,15 +70,15 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
     expected_block_time: u64,
     finality: u16,
     gas_multiplier: f64,
+    indexes_safe_events: bool,
     indexer_state: IndexerState,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
     rpc_operations: Arc<RpcOperations<R>>,
     readiness_checker: ReadinessChecker,
+    limits: Option<(usize, usize)>,
 ) -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
-    Schema::build(QueryRoot, MutationRoot, SubscriptionRoot)
-        .limit_depth(10)
-        .limit_complexity(100)
+    let mut builder = Schema::build(QueryRoot, MutationRoot, SubscriptionRoot)
         .data(db)
         .data(ChainId(chain_id))
         .data(NetworkName(network))
@@ -79,12 +86,18 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
         .data(ExpectedBlockTime(expected_block_time))
         .data(Finality(finality))
         .data(GasMultiplier(gas_multiplier))
+        .data(SafeEventIndexingEnabled(indexes_safe_events))
         .data(indexer_state)
         .data(transaction_executor)
         .data(transaction_store)
-        .data(rpc_operations)
-        .data(readiness_checker)
-        .finish()
+        .data(rpc_operations)        
+        .data(readiness_checker);
+
+    if let Some((max_depth, max_complexity)) = limits {
+        builder = builder.limit_depth(max_depth).limit_complexity(max_complexity);
+    }
+
+    builder.finish()
 }
 
 /// Export the GraphQL schema to SDL (Schema Definition Language) format
@@ -96,6 +109,7 @@ pub fn export_schema_sdl<R: HttpRequestor + 'static + Clone>(
     db: DatabaseConnection,
     chain_id: u64,
     contract_addresses: ContractAddresses,
+    indexes_safe_events: bool,
     indexer_state: IndexerState,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
@@ -110,11 +124,13 @@ pub fn export_schema_sdl<R: HttpRequestor + 'static + Clone>(
         5,   // Placeholder expected block time
         8,   // Placeholder finality
         1.0, // Placeholder gas multiplier
+        indexes_safe_events,
         indexer_state,
         transaction_executor,
         transaction_store,
         rpc_operations,
         readiness_checker,
+        None,
     );
 
     schema.sdl()

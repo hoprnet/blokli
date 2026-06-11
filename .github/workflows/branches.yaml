@@ -16,15 +16,14 @@ concurrency:
 jobs:
   coverage:
     name: Coverage
-    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@268553d7984344080e3dc65eb92778c9103af7ec # workflow-tests-v3
+    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@6895dbbc515e39e0e283a68a80b8628ca6ead37a # 0.7.2
     with:
       source_branch: ${{ github.ref_name }}
-      unit_tests: false
-      integration_tests: false
-      unit_coverage: true
-      unconditional: true
+      enable_unit_tests: false
+      enable_integration_tests: false
+      enable_unit_coverage: true
       unit_coverage_command: "nix run .#coverage-unit"
-      runner: depot-ubuntu-22.04-4
+      runner_unit: depot-ubuntu-24.04-4
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       codecov_token: ${{ secrets.CODECOV_TOKEN }}

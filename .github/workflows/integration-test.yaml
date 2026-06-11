@@ -10,25 +10,25 @@ on:
 jobs:
   integration-test:
     name: Integration Tests
-    runs-on: depot-ubuntu-22.04-4
+    runs-on: depot-ubuntu-24.04-4
     timeout-minutes: 20
     if: github.event.pull_request.head.repo.full_name == github.repository
     steps:
       - name: Checkout repository
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        uses: actions/checkout@df4cb1c069e1874edd31b4311f1884172cec0e10 # v6.0.3
         with:
           persist-credentials: false
       - name: Setup Nix
-        uses: hoprnet/hopr-workflows/actions/setup-nix@c8d45034bb33307dfda3b4dfcd1fc4000cadc05a # setup-nix-v1
+        uses: hoprnet/hopr-workflows/actions/setup-nix@6895dbbc515e39e0e283a68a80b8628ca6ead37a
         with:
           cachix_cache_name: blokli
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Setup GCP
-        uses: hoprnet/hopr-workflows/actions/setup-gcp@12c56020e16036982e6cc529848edeedfc705865 # master
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@6895dbbc515e39e0e283a68a80b8628ca6ead37a
         with:
-          google-credentials: ${{ secrets.GCP_SA_GITHUB_RUNNER }}
-          login-artifact-registry: 'true'
-          install-sdk: 'false'
+          google_credentials: ${{ secrets.GCP_SA_GITHUB_RUNNER }}
+          login_artifact_registry: 'true'
+          install_sdk: 'false'
       - name: Run Integration tests
         env:
           BLOKLI_TEST_REMOTE_IMAGE: ${{ inputs.image }}

@@ -11,6 +11,7 @@ use hopr_types::{crypto::types::Hash, primitive::prelude::HoprBalance as Primiti
 use indexmap::IndexMap;
 
 use crate::{
+    CLIENT_VERSION,
     api::{types::*, *},
     errors::{BlokliClientError, ErrorKind, InternalTxError, TrackingErrorKind},
 };
@@ -124,7 +125,8 @@ impl Default for BlokliTestState {
             version: "1".to_string(),
             client_compatibility: Compatibility {
                 api_version: "1".to_string(),
-                supported_client_versions: "^0.26".to_string(),
+                supported_client_versions: format!("^{CLIENT_VERSION}"),
+                features: vec!["indexes_safe_events".to_string()],
             },
             health: "OK".to_string(),
             active_txs: Default::default(),
@@ -199,20 +201,22 @@ impl BlokliTestState {
         self.safe_redeem_stats.get_mut(&hex::encode(chain_address))
     }
 
-    /// Convenience method to return a reference to an [`Safe`] with the given owner's [`ChainAddress`].
-    pub fn get_safe_by_owner(&self, owner: &ChainAddress) -> Option<&Safe> {
+    /// Convenience method to return references to [`Safe`]s with the given owner's [`ChainAddress`].
+    pub fn get_safe_by_owner(&self, owner: &ChainAddress) -> Vec<&Safe> {
         let owner_hex = hex::encode(owner);
         self.deployed_safes
             .values()
-            .find(|safe| Self::safe_matches_owner(safe, &owner_hex))
+            .filter(|safe| Self::safe_matches_owner(safe, &owner_hex))
+            .collect()
     }
 
-    /// Convenience method to return a mutable reference to an [`Safe`] with the given owner's [`ChainAddress`].
-    pub fn get_safe_by_owner_mut(&mut self, owner: &ChainAddress) -> Option<&mut Safe> {
+    /// Convenience method to return mutable references to [`Safe`]s with the given owner's [`ChainAddress`].
+    pub fn get_safe_by_owner_mut(&mut self, owner: &ChainAddress) -> Vec<&mut Safe> {
         let owner_hex = hex::encode(owner);
         self.deployed_safes
             .values_mut()
-            .find(|safe| Self::safe_matches_owner(safe, &owner_hex))
+            .filter(|safe| Self::safe_matches_owner(safe, &owner_hex))
+            .collect()
     }
 }
 
@@ -567,20 +571,27 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
         }
     }
 
-    async fn query_safe(&self, selector: SafeSelector) -> Result<Option<Safe>> {
+    async fn query_safe(&self, selector: SafeSelector) -> Result<Vec<Safe>> {
         let state = self.state.read();
         match selector {
-            SafeSelector::SafeAddress(addr) => Ok(state.deployed_safes.get(&hex::encode(addr)).cloned()),
+            SafeSelector::SafeAddress(addr) => Ok(state
+                .deployed_safes
+                .get(&hex::encode(addr))
+                .cloned()
+                .into_iter()
+                .collect()),
             SafeSelector::Owner(owner_address) | SafeSelector::ChainKey(owner_address) => Ok(state
                 .deployed_safes
                 .values()
-                .find(|s| BlokliTestState::safe_matches_owner(s, &hex::encode(owner_address)))
-                .cloned()),
+                .filter(|s| BlokliTestState::safe_matches_owner(s, &hex::encode(owner_address)))
+                .cloned()
+                .collect()),
             SafeSelector::RegisteredNode(node_address) => Ok(state
                 .deployed_safes
                 .values()
-                .find(|s| s.registered_nodes.contains(&hex::encode(node_address)))
-                .cloned()),
+                .filter(|s| s.registered_nodes.contains(&hex::encode(node_address)))
+                .cloned()
+                .collect()),
         }
     }
 
@@ -797,6 +808,13 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliSubscriptionClient for Blokl
             .ok_or_else(|| BlokliClientError::from(ErrorKind::NoData))?;
 
         Ok(futures::stream::once(futures::future::ok(tx)).delay(Duration2::from(self.tx_simulation_delay)))
+    }
+
+    fn subscribe_ticket_redeemed(
+        &self,
+        _selector: TicketSelector,
+    ) -> Result<impl futures::Stream<Item = Result<RedeemTicketDetails>> + Send> {
+        Ok(futures::stream::empty())
     }
 }
 

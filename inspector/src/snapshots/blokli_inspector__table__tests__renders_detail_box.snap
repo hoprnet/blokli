@@ -1,0 +1,13 @@
+---
+source: inspector/src/table.rs
+expression: "render(&json!({ \"address\": \"0x1234\", \"enabled\": true, \"optional\": null, }))"
+---
+╭──────────┬────────╮
+│ FIELD    ┆ VALUE  │
+╞══════════╪════════╡
+│ address  ┆ 0x1234 │
+├╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌┤
+│ enabled  ┆ true   │
+├╌╌╌╌╌╌╌╌╌╌┼╌╌╌╌╌╌╌╌┤
+│ optional ┆ -      │
+╰──────────┴────────╯

@@ -102,6 +102,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ticket_price_oracle: Address::default(),
                             winning_probability_oracle: Address::default(),
                             node_stake_factory: Address::default(),
+                            xhopr_token: Address::default(),
                         },
                         ..Default::default()
                     },
@@ -123,6 +124,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     db.clone(),
                     chain_id,
                     ContractAddresses::default(),
+                    false,
                     indexer_state,
                     transaction_executor,
                     transaction_store,
