@@ -14,7 +14,7 @@ use std::{
 use axum::{
     Router,
     body::Body,
-    http::{Request, StatusCode},
+    http::{HeaderValue, Request, StatusCode},
 };
 use blokli_db_entity::chain_info;
 use futures::StreamExt;
@@ -86,6 +86,54 @@ async fn make_graphql_sse_request_with_accept(app: Router, query: &str, accept: 
 
 async fn make_graphql_sse_request(app: Router, query: &str) -> (StatusCode, String) {
     make_graphql_sse_request_with_accept(app, query, "text/event-stream").await
+}
+
+async fn make_graphql_sse_request_with_accept_values(
+    app: Router,
+    query: &str,
+    accept_values: &[&str],
+) -> (StatusCode, String) {
+    let request_body = json!({
+        "query": query
+    });
+
+    let mut request = Request::builder()
+        .method("POST")
+        .uri("/graphql")
+        .header("content-type", "application/json")
+        .body(Body::from(
+            serde_json::to_string(&request_body).expect("Failed to serialize JSON"),
+        ))
+        .expect("Failed to build request");
+
+    {
+        let headers = request.headers_mut();
+        for accept_value in accept_values {
+            headers.append(
+                "accept",
+                HeaderValue::from_str(accept_value).expect("Failed to serialize accept header"),
+            );
+        }
+    }
+
+    let response = app.oneshot(request).await.expect("Failed to execute request");
+    let status = response.status();
+
+    if status != StatusCode::OK {
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("Failed to read body");
+        return (status, String::from_utf8_lossy(&body).into_owned());
+    }
+
+    let mut stream = response.into_body().into_data_stream();
+    let frame = stream
+        .next()
+        .await
+        .expect("SSE stream closed before the first frame")
+        .expect("SSE stream returned error");
+
+    (status, String::from_utf8_lossy(&frame).into_owned())
 }
 
 /// Update chain_info record with current RPC block number
@@ -250,6 +298,26 @@ async fn test_introspection_query_allowed_when_not_ready() -> anyhow::Result<()>
 }
 
 #[test_log::test(tokio::test)]
+async fn test_compatibility_query_allowed_when_not_ready() -> anyhow::Result<()> {
+    let ctx = common::setup_http_test_environment().await?;
+
+    delete_chain_info(&ctx.db).await?;
+
+    let (status, json) = make_graphql_request(
+        ctx.app,
+        r#"query QueryCompatibility { compatibility { apiVersion supportedClientVersions features } }"#,
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(json["data"]["compatibility"]["apiVersion"].is_string());
+    assert!(json["data"]["compatibility"]["supportedClientVersions"].is_string());
+    assert!(json["data"]["compatibility"]["features"].is_array());
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
 async fn test_readiness_subscription_allowed_when_not_ready() -> anyhow::Result<()> {
     let ctx = common::setup_http_test_environment().await?;
 
@@ -272,6 +340,26 @@ async fn test_readiness_subscription_allowed_when_accept_header_uses_different_c
 
     let (status, payload) =
         make_graphql_sse_request_with_accept(ctx.app, r#"subscription health { health }"#, "Text/Event-Stream").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(payload.contains("health"));
+    assert!(payload.contains("NOT_READY"));
+
+    Ok(())
+}
+
+#[test_log::test(tokio::test)]
+async fn test_readiness_subscription_allowed_when_accept_header_is_split_across_values() -> anyhow::Result<()> {
+    let ctx = common::setup_http_test_environment().await?;
+
+    delete_chain_info(&ctx.db).await?;
+
+    let (status, payload) = make_graphql_sse_request_with_accept_values(
+        ctx.app,
+        r#"subscription health { health }"#,
+        &["application/json", "text/event-stream"],
+    )
+    .await;
 
     assert_eq!(status, StatusCode::OK);
     assert!(payload.contains("health"));

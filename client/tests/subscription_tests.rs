@@ -194,6 +194,12 @@ async fn subscribe_health_streams_state_updates() -> Result<()> {
     let base_url = Url::parse(&format!("http://{}", listener.local_addr()?))?;
 
     let server = tokio::spawn(async move {
+        let (mut compatibility_conn, _) = listener.accept().await?;
+        compatibility_conn
+            .write_all(format_json_response(&compatibility_response_body()).as_bytes())
+            .await?;
+        compatibility_conn.shutdown().await?;
+
         let body = events.iter().map(ReadinessEvent::format_event).collect::<String>();
         let response = format_sse_response(&body);
         let (mut conn, _) = listener.accept().await?;
@@ -202,13 +208,7 @@ async fn subscribe_health_streams_state_updates() -> Result<()> {
         Ok::<_, anyhow::Error>(())
     });
 
-    let client = BlokliClient::new(
-        base_url,
-        BlokliClientConfig {
-            auto_compatibility_check: false,
-            ..Default::default()
-        },
-    );
+    let client = BlokliClient::new(base_url, BlokliClientConfig::default());
     let updates = client
         .subscribe_health()?
         .take(2)
