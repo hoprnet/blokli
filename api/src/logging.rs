@@ -1,37 +1,14 @@
-use std::{
-    any::Any,
-    backtrace::Backtrace,
-    io::stdout,
-    panic,
-    sync::{Once, OnceLock},
-};
+use std::{any::Any, backtrace::Backtrace, io::stdout, panic, sync::Once};
 
-use tracing_subscriber::{Registry, prelude::*, reload};
+use tracing_subscriber::{Layer as _, Registry, layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
-use crate::errors::{BloklidError, Result};
-
-pub(crate) type OtelBoxedLayer = Box<dyn tracing_subscriber::Layer<Registry> + Send + Sync + 'static>;
-
-static OTEL_HANDLE: OnceLock<reload::Handle<Vec<OtelBoxedLayer>, Registry>> = OnceLock::new();
 static PANIC_HOOK_INSTALLED: Once = Once::new();
 
-fn passthrough_layers(layers: Vec<OtelBoxedLayer>) -> Vec<OtelBoxedLayer> {
-    if layers.is_empty() {
-        vec![Box::new(tracing_subscriber::layer::Identity::new())]
-    } else {
-        layers
-    }
-}
-
-pub(crate) fn install_base_subscriber(verbosity: u8) -> Result<()> {
+pub fn install_tracing(default_env_filter: &str) -> Result<(), String> {
     let env_filter = if std::env::var(tracing_subscriber::EnvFilter::DEFAULT_ENV).is_ok() {
         tracing_subscriber::EnvFilter::from_default_env()
     } else {
-        match verbosity {
-            0 => tracing_subscriber::EnvFilter::new("info"),
-            1 => tracing_subscriber::EnvFilter::new("debug"),
-            _ => tracing_subscriber::EnvFilter::new("trace"),
-        }
+        tracing_subscriber::EnvFilter::new(default_env_filter)
     };
 
     let format = tracing_subscriber::fmt::layer()
@@ -40,32 +17,19 @@ pub(crate) fn install_base_subscriber(verbosity: u8) -> Result<()> {
         .with_thread_ids(true)
         .with_thread_names(false)
         .with_writer(stdout);
-    let format = if std::env::var("BLOKLI_LOG_FORMAT")
-        .map(|value| value.eq_ignore_ascii_case("json"))
-        .unwrap_or(false)
-    {
-        format.json().boxed()
-    } else {
-        format.boxed()
-    };
+    let subscriber = Registry::default().with(env_filter).with(
+        if std::env::var("BLOKLI_LOG_FORMAT")
+            .map(|value| value.eq_ignore_ascii_case("json"))
+            .unwrap_or(false)
+        {
+            format.json().boxed()
+        } else {
+            format.boxed()
+        },
+    );
 
-    let (reload_layer, handle) = reload::Layer::<Vec<OtelBoxedLayer>, Registry>::new(passthrough_layers(Vec::new()));
-    let _ = OTEL_HANDLE.set(handle);
-
-    let subscriber = Registry::default().with(reload_layer).with(env_filter).with(format);
-
-    tracing::subscriber::set_global_default(subscriber)
-        .map_err(|error| BloklidError::NonSpecific(error.to_string()))?;
+    let _ = subscriber.try_init();
     install_panic_hook();
-    Ok(())
-}
-
-pub(crate) fn install_otel_layers(layers: Vec<OtelBoxedLayer>) -> Result<()> {
-    OTEL_HANDLE
-        .get()
-        .ok_or_else(|| BloklidError::NonSpecific("base subscriber not initialized".into()))?
-        .reload(passthrough_layers(layers))
-        .map_err(|error| BloklidError::NonSpecific(error.to_string()))?;
     Ok(())
 }
 
@@ -108,13 +72,6 @@ fn panic_payload_to_string(payload: &(dyn Any + Send)) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_install_otel_layers_fails_before_base_subscriber_is_initialized() {
-        let error = install_otel_layers(Vec::new()).expect_err("otel layers should require a base subscriber");
-
-        assert!(error.to_string().contains("base subscriber not initialized"));
-    }
 
     #[test]
     fn test_panic_payload_to_string_from_str() {

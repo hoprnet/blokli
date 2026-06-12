@@ -649,6 +649,10 @@ impl SnapshotRequestor {
         self.next_id.store(1, Ordering::Relaxed);
     }
 
+    fn snapshot_error(action: &str, file: &str, error: impl std::error::Error) -> Error {
+        Error::other(format!("{action} '{file}': {error}"))
+    }
+
     /// Clears all entries and loads them from the snapshot file.
     /// If `fail_on_miss` is set and the data is successfully loaded, all later
     /// requests that miss the loaded snapshot will result in HTTP error 404.
@@ -657,8 +661,10 @@ impl SnapshotRequestor {
             return Ok(());
         }
 
-        let loaded = serde_yaml::from_reader::<_, Vec<RequestorResponseSnapshot>>(File::open(&self.file)?)
-            .map_err(Error::other)?;
+        let file = File::open(&self.file)
+            .map_err(|error| Self::snapshot_error("failed to open snapshot file", &self.file, error))?;
+        let loaded = serde_yaml::from_reader::<_, Vec<RequestorResponseSnapshot>>(file)
+            .map_err(|error| Self::snapshot_error("failed to parse snapshot file", &self.file, error))?;
 
         self.clear();
 
@@ -675,7 +681,7 @@ impl SnapshotRequestor {
             self.fail_on_miss = fail_on_miss;
         }
 
-        tracing::debug!("snapshot with {loaded_len} entries has been loaded from {}", &self.file);
+        tracing::debug!(loaded_len, file = %self.file, "snapshot loaded from file");
         Ok(())
     }
 
@@ -717,13 +723,18 @@ impl SnapshotRequestor {
         let mut values: Vec<RequestorResponseSnapshot> = self.entries.iter().map(|(_, r)| r).collect();
         values.sort_unstable_by_key(|a| a.id);
 
-        let mut writer = BufWriter::new(File::create(&self.file)?);
+        let file = File::create(&self.file)
+            .map_err(|error| Self::snapshot_error("failed to create snapshot file", &self.file, error))?;
+        let mut writer = BufWriter::new(file);
 
-        serde_yaml::to_writer(&mut writer, &values).map_err(Error::other)?;
+        serde_yaml::to_writer(&mut writer, &values)
+            .map_err(|error| Self::snapshot_error("failed to write snapshot file", &self.file, error))?;
 
-        writer.flush()?;
+        writer
+            .flush()
+            .map_err(|error| Self::snapshot_error("failed to flush snapshot file", &self.file, error))?;
 
-        tracing::debug!("snapshot with {} entries saved to file {}", values.len(), self.file);
+        tracing::debug!(entries = values.len(), file = %self.file, "snapshot saved to file");
         Ok(())
     }
 }
@@ -731,7 +742,7 @@ impl SnapshotRequestor {
 impl Drop for SnapshotRequestor {
     fn drop(&mut self) {
         if let Err(e) = self.save() {
-            tracing::error!("failed to save snapshot: {e}");
+            tracing::error!(error = %e, "failed to save snapshot");
         }
     }
 }
@@ -803,7 +814,7 @@ where
                 .entry(request_string.clone())
                 .or_try_insert_with(async {
                     if snapshot_requestor.fail_on_miss {
-                        tracing::error!("Snapshot entry missing in {}", &snapshot_requestor.file);
+                        tracing::error!(file = %snapshot_requestor.file, "snapshot entry missing");
                         return Err(TransportErrorKind::http_error(
                             http::StatusCode::NOT_FOUND.into(),
                             "".into(),
@@ -847,7 +858,7 @@ where
 
                     let id = snapshot_requestor.next_id.fetch_add(1, Ordering::SeqCst);
                     inserted.store(true, Ordering::Relaxed);
-                    tracing::debug!("saved new snapshot entry #{id}");
+                    tracing::debug!(id, "saved new snapshot entry");
 
                     Ok(RequestorResponseSnapshot {
                         id,
@@ -899,7 +910,7 @@ pub fn create_rpc_client_to_anvil(
 
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
+    use std::{fs, time::Duration};
 
     use hopr_bindings::exports::alloy::{
         primitives::U64,
@@ -908,8 +919,9 @@ mod tests {
         transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
     };
     use serde_json::json;
+    use tempfile::{NamedTempFile, tempdir};
 
-    use crate::client::{DefaultRetryPolicy, ZeroRetryPolicy};
+    use crate::client::{DefaultRetryPolicy, SnapshotRequestor, ZeroRetryPolicy};
 
     #[tokio::test]
     async fn test_client_should_fail_on_malformed_response() {
@@ -1265,5 +1277,36 @@ mod tests {
         //     client.requests_enqueued.load(Ordering::SeqCst),
         //     "retry queue should be zero when policy says no more retries"
         // );
+    }
+
+    #[tokio::test]
+    async fn snapshot_try_load_error_includes_snapshot_path() {
+        let snapshot_file = NamedTempFile::new().expect("temp file should be created");
+        fs::write(snapshot_file.path(), "not: [valid: yaml").expect("invalid snapshot yaml should be written");
+
+        let path = snapshot_file.path().display().to_string();
+        let mut requestor = SnapshotRequestor::new(&path);
+
+        let error = requestor
+            .try_load(false)
+            .await
+            .expect_err("malformed yaml should fail to load");
+
+        let error_text = error.to_string();
+        assert!(error_text.contains("failed to parse snapshot file"));
+        assert!(error_text.contains(&path));
+    }
+
+    #[test]
+    fn snapshot_save_error_includes_snapshot_path() {
+        let snapshot_dir = tempdir().expect("temp dir should be created");
+        let path = snapshot_dir.path().display().to_string();
+        let requestor = SnapshotRequestor::new(&path);
+
+        let error = requestor.save().expect_err("saving to a directory path should fail");
+
+        let error_text = error.to_string();
+        assert!(error_text.contains("failed to create snapshot file"));
+        assert!(error_text.contains(&path));
     }
 }

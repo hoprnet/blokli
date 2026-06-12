@@ -284,7 +284,7 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
                                         current_block_log.block_id = log.block_number;
                                     }
 
-                                    debug!("retrieved {log}");
+                                    debug!(%log, "retrieved log");
                                     current_block_log.logs.insert(log.into());
                                 },
                                 None => {

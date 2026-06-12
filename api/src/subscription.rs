@@ -472,7 +472,7 @@ impl SubscriptionRoot {
                     }
                 }
                 Err(e) => {
-                    error!("Failed to query historical channels: {:?}", e);
+                    error!(error = ?e, "failed to query historical channels");
                     return; // Terminate subscription on error
                 }
             }
@@ -612,7 +612,7 @@ impl SubscriptionRoot {
                     }
                 }
                 Err(e) => {
-                    error!("Failed to query historical channels: {:?}", e);
+                    error!(error = ?e, "failed to query historical channels");
                     return; // Terminate subscription on error
                 }
             }
@@ -722,7 +722,7 @@ impl SubscriptionRoot {
                     }
                 }
                 Err(e) => {
-                    error!("Failed to fetch initial accounts: {:?}", e);
+                    error!(error = ?e, "failed to fetch initial accounts");
                 }
             }
 
@@ -807,7 +807,7 @@ impl SubscriptionRoot {
                     warn!("Ticket parameters not initialized when subscribing to ticketParametersUpdated");
                 }
                 Err(e) => {
-                    error!("Failed to fetch ticket parameters: {:?}", e);
+                    error!(error = ?e, "failed to fetch ticket parameters");
                 }
             }
 
@@ -917,7 +917,7 @@ impl SubscriptionRoot {
                     warn!("chain_info not initialized when subscribing to keyBindingFeeUpdated");
                 }
                 Err(e) => {
-                    error!("Failed to fetch chain_info for keyBindingFeeUpdated: {:?}", e);
+                    error!(error = ?e, "failed to fetch chain_info for keyBindingFeeUpdated");
                 }
             }
 
