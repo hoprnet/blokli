@@ -1851,7 +1851,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-api"
-version = "0.7.0"
+version = "0.7.1"
 dependencies = [
  "alloy-sol-types",
  "anyhow",
@@ -2059,7 +2059,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db-migration"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "hopr-types",
  "sea-orm",

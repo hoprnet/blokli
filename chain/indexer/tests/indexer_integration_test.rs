@@ -153,6 +153,10 @@ mod integration_tests {
             Ok(HoprBalance::zero())
         }
 
+        async fn get_transaction_bytes(&self, _tx_hash: Hash) -> blokli_chain_rpc::errors::Result<Vec<u8>> {
+            unreachable!("get_transaction_bytes not used in integration tests")
+        }
+
         async fn get_xdai_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {
             Ok(XDaiBalance::zero())
         }
