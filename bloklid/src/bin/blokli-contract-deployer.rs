@@ -173,11 +173,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
 }
 
 fn install_tracing() -> Result<(), Box<dyn Error>> {
-    let env_filter = if std::env::var(tracing_subscriber::EnvFilter::DEFAULT_ENV).is_ok() {
-        tracing_subscriber::EnvFilter::from_default_env()
-    } else {
-        tracing_subscriber::EnvFilter::new("info")
-    };
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
 
     let format = tracing_subscriber::fmt::layer()
         .with_writer(stdout)
@@ -196,7 +193,7 @@ fn install_tracing() -> Result<(), Box<dyn Error>> {
         },
     );
 
-    let _ = tracing::subscriber::set_global_default(subscriber);
+    tracing::subscriber::set_global_default(subscriber)?;
     install_panic_hook();
     Ok(())
 }

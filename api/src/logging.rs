@@ -1,15 +1,27 @@
-use std::{any::Any, backtrace::Backtrace, io::stdout, panic, sync::Once};
+use std::{
+    any::Any,
+    backtrace::Backtrace,
+    io::stdout,
+    panic,
+    sync::{Once, OnceLock},
+};
 
 use tracing_subscriber::{Layer as _, Registry, layer::SubscriberExt as _, util::SubscriberInitExt as _};
 
 static PANIC_HOOK_INSTALLED: Once = Once::new();
+static TRACING_INIT: OnceLock<Result<(), String>> = OnceLock::new();
 
 pub fn install_tracing(default_env_filter: &str) -> Result<(), String> {
-    let env_filter = if std::env::var(tracing_subscriber::EnvFilter::DEFAULT_ENV).is_ok() {
-        tracing_subscriber::EnvFilter::from_default_env()
-    } else {
-        tracing_subscriber::EnvFilter::new(default_env_filter)
-    };
+    TRACING_INIT
+        .get_or_init(|| try_install_tracing(default_env_filter))
+        .clone()?;
+    install_panic_hook();
+    Ok(())
+}
+
+fn try_install_tracing(default_env_filter: &str) -> Result<(), String> {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(default_env_filter));
 
     let format = tracing_subscriber::fmt::layer()
         .with_level(true)
@@ -28,9 +40,7 @@ pub fn install_tracing(default_env_filter: &str) -> Result<(), String> {
         },
     );
 
-    let _ = subscriber.try_init();
-    install_panic_hook();
-    Ok(())
+    subscriber.try_init().map_err(|error| error.to_string())
 }
 
 fn install_panic_hook() {
