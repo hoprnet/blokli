@@ -768,7 +768,7 @@ pub async fn build_integration_fixture() -> Result<IntegrationFixture> {
 
     let contract_addresses = contract_instances.get_contract_addresses();
 
-    info!("deployed contract addresses: {:?}", contract_addresses);
+    info!(contract_addresses = ?contract_addresses, "deployed contract addresses");
 
     // Mint HOPR tokens
     let encoded_minter_role = keccak256(b"MINTER_ROLE");

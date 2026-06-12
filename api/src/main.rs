@@ -2,7 +2,7 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use blokli_api::schema::export_schema_sdl;
+use blokli_api::{logging, schema::export_schema_sdl};
 use blokli_chain_api::{
     rpc_adapter::RpcAdapter,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
@@ -53,6 +53,7 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    logging::install_tracing("blokli_api=info,tower_http=debug")?;
     let args = Args::parse();
 
     // Handle subcommands

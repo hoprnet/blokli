@@ -74,14 +74,14 @@ async fn test_try_stream_logs_should_contain_all_logs_when_opening_channel() -> 
         no_token: vec![filter_channels_opened, filter_channels_balance_increased],
     };
 
-    debug!("{:#?}", contract_addrs);
-    debug!("{:#?}", log_filter);
+    debug!(contract_addresses = ?contract_addrs, "configured contract addresses");
+    debug!(log_filter = ?log_filter, "configured log filter");
 
     let tokens_minted_at =
         blokli_chain_types::utils::mint_tokens(contract_instances.token.clone(), U256::from(1000_u128))
             .await?
             .unwrap();
-    debug!("tokens were minted at block {tokens_minted_at}");
+    debug!(tokens_minted_at, "tokens were minted");
 
     let transport_client = ReqwestTransport::new(anvil.endpoint_url());
 
@@ -138,16 +138,16 @@ async fn test_try_stream_logs_should_contain_all_logs_when_opening_channel() -> 
     let channel_balance_filter = ChannelBalanceIncreased::SIGNATURE_HASH;
 
     debug!(
-        "channel_open_filter: {:?} - {:?}",
-        channel_open_filter,
-        channel_open_filter.0.to_vec()
+        channel_open_filter = ?channel_open_filter,
+        channel_open_filter_bytes = ?channel_open_filter.0.to_vec(),
+        "channel open filter"
     );
     debug!(
-        "channel_balance_filter: {:?} - {:?}",
-        channel_balance_filter,
-        channel_balance_filter.0.to_vec()
+        channel_balance_filter = ?channel_balance_filter,
+        channel_balance_filter_bytes = ?channel_balance_filter.0.to_vec(),
+        "channel balance filter"
     );
-    debug!("logs: {:#?}", last_block_logs);
+    debug!(last_block_logs = ?last_block_logs, "retrieved logs");
 
     assert!(
         last_block_logs
@@ -186,7 +186,7 @@ async fn test_try_stream_logs_should_contain_only_channel_logs_when_filtered_on_
         blokli_chain_types::utils::mint_tokens(contract_instances.token.clone(), U256::from(1000_u128))
             .await?
             .unwrap();
-    debug!("tokens were minted at block {tokens_minted_at}");
+    debug!(tokens_minted_at, "tokens were minted");
 
     let contract_addrs = ContractAddresses::from(&contract_instances);
 
@@ -227,8 +227,8 @@ async fn test_try_stream_logs_should_contain_only_channel_logs_when_filtered_on_
         no_token: vec![filter_channels_opened, filter_channels_balance_increased],
     };
 
-    debug!("{:#?}", contract_addrs);
-    debug!("{:#?}", log_filter);
+    debug!(contract_addresses = ?contract_addrs, "configured contract addresses");
+    debug!(log_filter = ?log_filter, "configured log filter");
 
     // Spawn stream
     let count_filtered_topics = 2;

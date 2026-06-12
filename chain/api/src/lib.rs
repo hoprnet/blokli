@@ -229,7 +229,8 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
                 ))
             })?;
 
-        info!("RPC debug tracing support verified (traced tx {tx_hash:#x})");
+        let traced_tx_hash = format!("{tx_hash:#x}");
+        info!(tx_hash = %traced_tx_hash, "RPC debug tracing support verified");
         Ok(())
     }
 

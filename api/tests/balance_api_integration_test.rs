@@ -284,7 +284,7 @@ async fn test_balance_api_integration() -> anyhow::Result<()> {
         // Verify balance by parsing into HoprBalance type
         assert!(balance.is_some(), "Balance should be returned");
         let balance_str = balance.unwrap();
-        tracing::info!("HOPR balance: {balance_str}");
+        tracing::info!(balance = %balance_str, "retrieved HOPR balance");
 
         let parsed_balance =
             HoprBalance::from_str(&balance_str).expect("Balance string should be valid HoprBalance format");
@@ -311,7 +311,7 @@ async fn test_balance_api_integration() -> anyhow::Result<()> {
         // Verify balance exists and is non-zero
         assert!(balance.is_some(), "Balance should be returned");
         let balance_str = balance.unwrap();
-        tracing::info!("Native balance: {balance_str}");
+        tracing::info!(balance = %balance_str, "retrieved native balance");
         let parsed_balance =
             XDaiBalance::from_str(&balance_str).expect("Balance string should be valid XDaiBalance format");
 

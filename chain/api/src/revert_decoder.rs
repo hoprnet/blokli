@@ -56,7 +56,7 @@ fn find_deepest_revert(frame: &serde_json::Value, depth: usize, best: &mut Optio
     let output_bytes = match hex_decode(output_hex) {
         Some(bytes) => bytes,
         None => {
-            debug!("Failed to decode hex output from trace frame at depth {depth}: {output_hex}");
+            debug!(depth, output_hex, "failed to decode hex output from trace frame");
             return;
         }
     };
