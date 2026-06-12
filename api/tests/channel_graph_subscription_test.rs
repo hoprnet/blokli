@@ -8,28 +8,17 @@
 //! - Initial snapshots include only OPEN channels; later updates may include CLOSED removal signals
 //! - Each emission contains one channel with its source and destination accounts
 
+mod common;
+
 use std::{
     collections::HashSet,
     str::FromStr,
-    sync::Arc,
     time::{Duration, UNIX_EPOCH},
 };
 
 use async_graphql::Schema;
-use blokli_api::{mutation::MutationRoot, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot};
 use blokli_api_types::{Account, Channel, ChannelStatus as ApiChannelStatus, TokenValueString, UInt64};
-use blokli_chain_api::{
-    rpc_adapter::RpcAdapter,
-    transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
-    transaction_store::TransactionStore,
-    transaction_validator::TransactionValidator,
-};
-use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
-use blokli_chain_rpc::{
-    rpc::{RpcOperations, RpcOperationsConfig},
-    transport::ReqwestClient,
-};
-use blokli_chain_types::ContractAddresses;
+use blokli_chain_indexer::state::IndexerEvent;
 use blokli_db::{
     BlokliDbGeneralModelOperations, TargetDb, accounts::BlokliDbAccountOperations, channels::BlokliDbChannelOperations,
     db::BlokliDb,
@@ -39,7 +28,6 @@ use blokli_db_entity::{
 };
 use chrono::Utc;
 use futures::StreamExt;
-use hopr_bindings::exports::alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
 use hopr_types::{
     crypto::prelude::{ChainKeypair, Keypair, OffchainKeypair},
     internal::channels::{ChannelEntry, ChannelStatus},
@@ -182,64 +170,6 @@ async fn update_watermark(db: &BlokliDb, block: i64, tx_index: i64, log_index: i
         .unwrap();
 }
 
-/// Create a minimal GraphQL schema for testing subscriptions
-fn create_test_schema(db: &BlokliDb) -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
-    create_test_schema_with_state(db, IndexerState::new(10, 100))
-}
-
-/// Create a minimal GraphQL schema for testing subscriptions with a specific IndexerState
-fn create_test_schema_with_state(
-    db: &BlokliDb,
-    indexer_state: IndexerState,
-) -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
-    let transaction_store = Arc::new(TransactionStore::new());
-    let transaction_validator = Arc::new(TransactionValidator::new());
-
-    // Create mock RPC client for testing (won't actually connect)
-    let transport = ReqwestTransport::new("http://localhost:8545".parse().unwrap());
-    let rpc_client = ClientBuilder::default().transport(transport.clone(), transport.guess_local());
-    let transport_client = ReqwestClient::new();
-
-    // Create stub RPC operations (not used for subscription tests)
-    let rpc_ops = Arc::new(
-        RpcOperations::new(
-            rpc_client.clone(),
-            transport_client.clone(),
-            RpcOperationsConfig::default(),
-            None,
-        )
-        .expect("Failed to create RPC operations"),
-    );
-
-    let rpc_adapter = Arc::new(RpcAdapter::new(
-        RpcOperations::new(rpc_client, transport_client, RpcOperationsConfig::default(), None)
-            .expect("Failed to create RPC adapter operations"),
-    ));
-
-    let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
-        rpc_adapter,
-        transaction_store.clone(),
-        transaction_validator,
-        RawTransactionExecutorConfig::default(),
-    ));
-
-    build_schema(
-        db.conn(TargetDb::Index).clone(),
-        1,
-        "test-network".to_string(),
-        ContractAddresses::default(),
-        1,
-        3, // Test finality value
-        1.0,
-        true,
-        indexer_state,
-        transaction_executor,
-        transaction_store,
-        rpc_ops,
-        None,
-    )
-}
-
 #[tokio::test]
 async fn test_opened_channel_graph_subscription_emits_initial_entry() {
     let db = BlokliDb::new_in_memory().await.unwrap();
@@ -268,7 +198,7 @@ async fn test_opened_channel_graph_subscription_emits_initial_entry() {
     update_watermark(&db, 1000, 0, 0).await;
 
     // Create GraphQL schema
-    let schema = create_test_schema(&db);
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     // Execute subscription query with new schema structure
     let query = r#"
@@ -364,7 +294,7 @@ async fn test_opened_channel_graph_subscription_emits_multiple_entries() {
     // Update watermark to include all test data
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = create_test_schema(&db);
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -450,7 +380,7 @@ async fn test_opened_channel_graph_subscription_excludes_closed_channels() {
     // Update watermark to include all test data
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -486,7 +416,6 @@ async fn test_opened_channel_graph_subscription_excludes_closed_channels() {
 #[tokio::test]
 async fn test_opened_channel_graph_subscription_receives_new_channel_entry() {
     let db = BlokliDb::new_in_memory().await.unwrap();
-    let indexer_state = IndexerState::new(10, 100);
 
     // Create accounts
     let keypair1 = random_keypair();
@@ -517,7 +446,7 @@ async fn test_opened_channel_graph_subscription_receives_new_channel_entry() {
     // Update watermark to include all test data
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = create_test_schema_with_state(&db, indexer_state.clone());
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -596,7 +525,7 @@ async fn test_opened_channel_graph_subscription_receives_channel_closure_update(
     // Update watermark to include all test data
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -646,7 +575,7 @@ async fn test_opened_channel_graph_subscription_handles_empty_database() {
     // Update watermark to include all test data
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -694,7 +623,7 @@ async fn test_opened_channel_graph_subscription_includes_channel_balance() {
     // Update watermark to include all test data
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -723,7 +652,6 @@ async fn test_opened_channel_graph_subscription_includes_channel_balance() {
 #[tokio::test]
 async fn test_opened_channel_graph_subscription_balance_update() {
     let db = BlokliDb::new_in_memory().await.unwrap();
-    let indexer_state = IndexerState::new(10, 100);
 
     // Create accounts
     let keypair1 = random_keypair();
@@ -749,7 +677,7 @@ async fn test_opened_channel_graph_subscription_balance_update() {
     // Update watermark to include all test data
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = create_test_schema_with_state(&db, indexer_state.clone());
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -801,7 +729,6 @@ async fn test_opened_channel_graph_subscription_balance_update() {
 
 async fn assert_opened_channel_graph_subscription_emits_status_update(status: ChannelStatus, expected_status: &str) {
     let db = BlokliDb::new_in_memory().await.unwrap();
-    let indexer_state = IndexerState::new(10, 100);
 
     let keypair1 = random_keypair();
     let keypair2 = random_keypair();
@@ -824,7 +751,7 @@ async fn assert_opened_channel_graph_subscription_emits_status_update(status: Ch
 
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = create_test_schema_with_state(&db, indexer_state.clone());
+    let (schema, indexer_state) = common::create_test_schema(&db);
     let query = r#"
         subscription {
             openedChannelGraphUpdated {
