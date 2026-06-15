@@ -106,6 +106,17 @@ pre-commit.lib.${system}.run {
       files = "";
       language = "system";
     };
+
+    renovate-config-validator = {
+      enable = true;
+      name = "Renovate config validator";
+      entry = toString (pkgs.writeShellScript "validate-renovate" ''
+        ${pkgs.nodejs}/bin/npx --yes --package renovate -- renovate-config-validator "$@"
+      '');
+      files = "renovate\\.json$";
+      language = "system";
+      pass_filenames = true;
+    };
   };
 
   # Exclude certain paths from pre-commit checks
