@@ -24,9 +24,8 @@ jobs:
           cachix_cache_name: blokli
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       - name: Setup GCP
-        uses: hoprnet/hopr-workflows/actions/setup-gcp@6895dbbc515e39e0e283a68a80b8628ca6ead37a
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@setup-gcp-v4
         with:
-          google_credentials: ${{ secrets.GCP_SA_GITHUB_RUNNER }}
           login_artifact_registry: 'true'
           install_sdk: 'false'
       - name: Run Integration tests

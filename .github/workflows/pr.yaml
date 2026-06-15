@@ -148,7 +148,7 @@ jobs:
             runner: depot-macos-15
             build_command: nix build -L .#binary-bloklid-aarch64-darwin
             required_label: "binary:aarch64-darwin"
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@6895dbbc515e39e0e283a68a80b8628ca6ead37a
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v3
     permissions:
       contents: read
     with:
@@ -162,7 +162,6 @@ jobs:
       runner: ${{ matrix.runner }}
       enabled: ${{ matrix.required_label == '' || contains(github.event.pull_request.labels.*.name, matrix.required_label) }}
     secrets:
-      gcp_service_account: ${{ secrets.GCP_SA_GITHUB_RUNNER }}
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       gpg_private_key: ${{ secrets.GPG_HOPRNET_PRIVATE_KEY }}
   # ── Build: library ─────────────────────────────────────────────────────────
@@ -199,7 +198,7 @@ jobs:
   # ── Build: Docker ───────────────────────────────────────────────────────────
   build-docker:
     name: Docker
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@6895dbbc515e39e0e283a68a80b8628ca6ead37a
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@build-docker-v3
     needs: build-binaries
     permissions:
       contents: read
@@ -224,7 +223,6 @@ jobs:
       deployment_namespace: blokli
       deployment_label_selector: app.kubernetes.io/name=blokli
     secrets:
-      gcp_service_account: ${{ secrets.GCP_SA_GITHUB_RUNNER }}
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
   # ── Integration tests ──────────────────────────────────────────────────────
   integration-test:
