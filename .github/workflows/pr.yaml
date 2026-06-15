@@ -229,6 +229,8 @@ jobs:
   integration-test:
     name: Integration Tests
     needs: [build-docker]
+    permissions:
+      id-token: write
     uses: ./.github/workflows/integration-test.yaml
     with:
       image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid:${{ needs.build-docker.outputs.docker_build_version }}
