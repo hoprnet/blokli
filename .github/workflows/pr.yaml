@@ -151,6 +151,7 @@ jobs:
     uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@fa71078959cf9f892185e8df16551720693a2cd1
     permissions:
       contents: read
+      id-token: write
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       version_type: commit
