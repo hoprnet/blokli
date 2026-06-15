@@ -32,7 +32,7 @@ jobs:
           - architecture: aarch64-darwin
             runner: depot-macos-15
             build_command: nix build -L .#binary-bloklid-aarch64-darwin
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@build-binaries-v3
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@fa71078959cf9f892185e8df16551720693a2cd1
     permissions:
       contents: read
     with:
@@ -123,7 +123,7 @@ jobs:
         run: echo "suffix=v$(echo '${{ needs.build-docker.outputs.docker_build_version }}' | tr '.' '-')" | tee -a "$GITHUB_OUTPUT"
       - name: Setup GCP
         id: gcp
-        uses: hoprnet/hopr-workflows/actions/setup-gcp@setup-gcp-v4
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@fa71078959cf9f892185e8df16551720693a2cd1
         with:
           workload_identity_provider: ${{ vars.WIF_PROVIDER_STAGING }}
           service_account: ${{ vars.WIF_SERVICE_ACCOUNT_STAGING }}
