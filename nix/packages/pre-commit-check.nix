@@ -111,6 +111,7 @@ pre-commit.lib.${system}.run {
       enable = true;
       name = "Renovate config validator";
       entry = toString (pkgs.writeShellScript "validate-renovate" ''
+        if [ -n "''${NIX_BUILD_TOP:-}" ]; then exit 0; fi
         ${pkgs.nodejs}/bin/npx --yes --package renovate -- renovate-config-validator "$@"
       '');
       files = "renovate\\.json$";
