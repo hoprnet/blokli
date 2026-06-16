@@ -236,6 +236,24 @@ async fn load_safe_redeemed_stat_event_anchors<C: ConnectionTrait>(
     Ok(stored)
 }
 
+async fn load_safe_redeemed_stats_models<C: ConnectionTrait>(
+    conn: &C,
+    pairs: &[SafeRedeemedStatPair],
+    batch_size: usize,
+) -> Result<Vec<hopr_safe_redeemed_stats::Model>> {
+    let mut stored = Vec::new();
+
+    for chunk in pairs.chunks(batch_size) {
+        let stored_chunk = HoprSafeRedeemedStats::find()
+            .filter(safe_redeemed_stat_pair_filter(chunk.iter().cloned()))
+            .all(conn)
+            .await?;
+        stored.extend(stored_chunk);
+    }
+
+    Ok(stored)
+}
+
 fn group_inserted_safe_redeemed_stat_events(
     inserted_events: Vec<hopr_safe_redeemed_stat_event::Model>,
 ) -> Result<HashMap<SafeRedeemedStatPair, GroupedRedeemedDelta>> {
@@ -295,10 +313,8 @@ async fn persist_grouped_safe_redeemed_stats<C: ConnectionTrait>(
     }
 
     let pairs = grouped_deltas.keys().cloned().collect::<Vec<_>>();
-    let existing_models = HoprSafeRedeemedStats::find()
-        .filter(safe_redeemed_stat_pair_filter(pairs))
-        .all(conn)
-        .await?;
+    let batch_size = safe_redeemed_stats_batch_size(conn.get_database_backend());
+    let existing_models = load_safe_redeemed_stats_models(conn, &pairs, batch_size).await?;
 
     let existing_by_pair = existing_models
         .into_iter()
@@ -368,10 +384,8 @@ async fn load_safe_redeemed_stats_entries<C: ConnectionTrait>(
         return Ok(Vec::new());
     }
 
-    let models = HoprSafeRedeemedStats::find()
-        .filter(safe_redeemed_stat_pair_filter(pairs.clone()))
-        .all(conn)
-        .await?;
+    let batch_size = safe_redeemed_stats_batch_size(conn.get_database_backend());
+    let models = load_safe_redeemed_stats_models(conn, &pairs, batch_size).await?;
 
     let models_by_pair = models
         .into_iter()
@@ -770,6 +784,58 @@ mod tests {
 
         assert_eq!(persisted.len(), 250);
         assert_eq!(redeemed_anchor_count(&db).await?, 250);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_persist_staged_safe_ticket_redemptions_updates_large_existing_sqlite_batches() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = random_address();
+
+        let first_batch = (0_u64..600)
+            .map(|index| {
+                let mut node_address = [0u8; 20];
+                node_address[12..20].copy_from_slice(&index.to_be_bytes());
+
+                StagedSafeRedeemedStatMutation {
+                    safe_address,
+                    node_address: Address::from(node_address),
+                    redeemed_amount: HoprBalance::from(1_u64),
+                    block: 100 + index,
+                    tx_index: 1,
+                    log_index: 0,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let second_batch = (0_u64..600)
+            .map(|index| {
+                let mut node_address = [0u8; 20];
+                node_address[12..20].copy_from_slice(&index.to_be_bytes());
+
+                StagedSafeRedeemedStatMutation {
+                    safe_address,
+                    node_address: Address::from(node_address),
+                    redeemed_amount: HoprBalance::from(2_u64),
+                    block: 1_100 + index,
+                    tx_index: 2,
+                    log_index: 0,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let first = db.persist_staged_safe_ticket_redemptions(None, first_batch).await?;
+        let second = db.persist_staged_safe_ticket_redemptions(None, second_batch).await?;
+
+        assert_eq!(first.len(), 600);
+        assert_eq!(second.len(), 600);
+        assert!(
+            second
+                .iter()
+                .all(|entry| entry.redeemed_amount == HoprBalance::from(3_u64) && entry.redemption_count == 2)
+        );
+        assert_eq!(redeemed_anchor_count(&db).await?, 1_200);
 
         Ok(())
     }

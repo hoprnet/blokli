@@ -66,6 +66,19 @@ fn log_identity_filter(identities: impl IntoIterator<Item = LogIdentity>) -> Con
         })
 }
 
+fn log_status_identity_filter(identities: impl IntoIterator<Item = LogIdentity>) -> Condition {
+    identities
+        .into_iter()
+        .fold(Condition::any(), |condition, (block_number, tx_index, log_index)| {
+            condition.add(
+                Condition::all()
+                    .add(log_status::Column::BlockNumber.eq(block_number))
+                    .add(log_status::Column::TxIndex.eq(tx_index))
+                    .add(log_status::Column::LogIndex.eq(log_index)),
+            )
+        })
+}
+
 async fn store_log_in_tx(tx: &OpenTransaction, log: SerializableLog) -> Result<()> {
     let log_id = log.to_string();
     let log_model = log::ActiveModel::from(log.clone());
@@ -456,34 +469,25 @@ impl BlokliDbLogOperations for BlokliDb {
         }
 
         let now = Utc::now();
+        let batch_size = store_logs_batch_size(self.conn(TargetDb::Logs).get_database_backend());
+        let identities = identities.into_iter().collect::<Vec<_>>();
 
-        let identity_filter =
-            identities
-                .into_iter()
-                .fold(Condition::any(), |condition, (block_number, tx_index, log_index)| {
-                    condition.add(
-                        Condition::all()
-                            .add(log_status::Column::BlockNumber.eq(block_number))
-                            .add(log_status::Column::TxIndex.eq(tx_index))
-                            .add(log_status::Column::LogIndex.eq(log_index)),
-                    )
-                });
+        for chunk in identities.chunks(batch_size) {
+            let query = LogStatus::update_many()
+                .col_expr(log_status::Column::Processed, Expr::value(Value::Bool(Some(true))))
+                .col_expr(
+                    log_status::Column::ProcessedAt,
+                    Expr::value(Value::ChronoDateTimeUtc(Some(now))),
+                )
+                .filter(log_status_identity_filter(chunk.iter().copied()));
 
-        let query = LogStatus::update_many()
-            .col_expr(log_status::Column::Processed, Expr::value(Value::Bool(Some(true))))
-            .col_expr(
-                log_status::Column::ProcessedAt,
-                Expr::value(Value::ChronoDateTimeUtc(Some(now))),
-            )
-            .filter(identity_filter);
-
-        match query.exec(self.conn(TargetDb::Logs)).await {
-            Ok(_) => Ok(()),
-            Err(e) => {
+            if let Err(e) = query.exec(self.conn(TargetDb::Logs)).await {
                 error!("Failed to update log status in db");
-                Err(DbError::from(DbSqlError::from(e)))
+                return Err(DbError::from(DbSqlError::from(e)));
             }
         }
+
+        Ok(())
     }
 
     async fn set_logs_unprocessed(&self, block_number: Option<u64>, block_offset: Option<u64>) -> Result<()> {
@@ -1006,6 +1010,46 @@ mod tests {
         assert_eq!(second_log_db.processed_at, None);
         assert_eq!(third_log_db.processed, Some(true));
         assert!(third_log_db.processed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_set_logs_processed_explicit_large_sqlite_batch() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        let base_log = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: [Hash::create(&[b"my topic"]).into()].into(),
+            data: [1, 2, 3, 4].into(),
+            tx_index: 0,
+            block_number: 42,
+            block_hash: Hash::create(&[b"my block hash"]).into(),
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            log_index: 0,
+            removed: false,
+            ..Default::default()
+        };
+
+        let logs = (0..350_u64)
+            .map(|index| SerializableLog {
+                tx_index: index,
+                log_index: index,
+                ..base_log.clone()
+            })
+            .collect::<Vec<_>>();
+
+        db.store_logs(logs.clone())
+            .await
+            .unwrap()
+            .into_iter()
+            .for_each(|result| assert!(result.is_ok()));
+
+        db.set_logs_processed_explicit(logs.clone()).await.unwrap();
+
+        for log in logs {
+            let log_db = db.get_log(log.block_number, log.tx_index, log.log_index).await.unwrap();
+            assert_eq!(log_db.processed, Some(true));
+            assert!(log_db.processed_at.is_some());
+        }
     }
 
     #[tokio::test]
