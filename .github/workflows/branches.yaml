@@ -8,6 +8,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 concurrency:
   group: branches-${{ github.ref_name }}
@@ -16,7 +17,7 @@ concurrency:
 jobs:
   coverage:
     name: Coverage
-    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@6895dbbc515e39e0e283a68a80b8628ca6ead37a # 0.7.2
+    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@b17431137fb50edf6a7b5fcfd4e3d17e9e9ea33a # workflow-tests-v6
     with:
       source_branch: ${{ github.ref_name }}
       enable_unit_tests: false
@@ -26,4 +27,3 @@ jobs:
       runner_unit: depot-ubuntu-24.04-4
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      codecov_token: ${{ secrets.CODECOV_TOKEN }}
