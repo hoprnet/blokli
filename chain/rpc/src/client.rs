@@ -9,6 +9,8 @@
 //! - Use tokio runtime for most of the tests
 //!
 //! This module contains defalut gas estimation constants for EIP-1559 for Gnosis chain,
+#[cfg(all(feature = "telemetry", not(test)))]
+use std::time::Instant;
 use std::{
     fmt::Debug,
     fs::File,
@@ -19,7 +21,7 @@ use std::{
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     task::{Context, Poll},
-    time::{Duration, Instant},
+    time::Duration,
 };
 
 use futures::{FutureExt, StreamExt};
@@ -51,7 +53,7 @@ use moka::future::Cache;
 use serde::{Deserialize, Serialize};
 use serde_with::{DisplayFromStr, serde_as};
 use tower::{Layer, Service};
-use tracing::{error, trace};
+use tracing::error;
 use url::Url;
 use validator::Validate;
 
@@ -534,6 +536,7 @@ where
 
     fn call(&mut self, request: RequestPacket) -> Self::Future {
         // metrics before calling
+        #[cfg(all(feature = "telemetry", not(test)))]
         let start = Instant::now();
 
         let method_names = match request.clone() {
@@ -547,12 +550,10 @@ where
         Box::pin(async move {
             let res = future.await;
 
-            let req_duration = start.elapsed();
-            method_names.iter().for_each(|method| {
-                trace!(method, duration_in_ms = req_duration.as_millis(), "rpc request took");
-                #[cfg(all(feature = "telemetry", not(test)))]
-                METRIC_RPC_CALLS_TIMING.observe(&[method], req_duration.as_secs_f64());
-            });
+            #[cfg(all(feature = "telemetry", not(test)))]
+            for method in &method_names {
+                METRIC_RPC_CALLS_TIMING.observe(&[method], start.elapsed().as_secs_f64());
+            }
 
             // First deserialize the Response object
             match &res {

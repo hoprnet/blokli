@@ -135,6 +135,16 @@ CREATE TABLE "hopr_safe_owner_state" (
     FOREIGN KEY ("hopr_safe_contract_id") REFERENCES "hopr_safe_contract" ("id") ON DELETE CASCADE ON UPDATE CASCADE
 );
 
+CREATE TABLE "hopr_safe_redeemed_stat_event" (
+    "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
+    "safe_address" blob (20) NOT NULL,
+    "node_address" blob (20) NOT NULL,
+    "redeemed_amount" blob (32) NOT NULL,
+    "published_block" integer NOT NULL,
+    "published_tx_index" integer NOT NULL,
+    "published_log_index" integer NOT NULL
+);
+
 CREATE TABLE "hopr_safe_redeemed_stats" (
     "id" integer NOT NULL PRIMARY KEY AUTOINCREMENT,
     "safe_address" blob (20) NOT NULL,
@@ -370,10 +380,6 @@ CREATE INDEX "idx_channel_source_destination" ON "channel" ("source", "destinati
 
 CREATE INDEX "idx_channel_state_position" ON "channel_state" ("channel_id", "published_block" DESC, "published_tx_index" DESC, "published_log_index" DESC);
 
-CREATE INDEX "idx_channel_state_status_channel_position" ON "channel_state" ("status", "channel_id", "published_block" DESC, "published_tx_index" DESC, "published_log_index" DESC);
-
-CREATE INDEX "idx_channel_state_status_position" ON "channel_state" ("status", "published_block" DESC, "published_tx_index" DESC, "published_log_index" DESC);
-
 CREATE UNIQUE INDEX "idx_channel_state_unique_position" ON "channel_state" ("channel_id", "published_block", "published_tx_index", "published_log_index");
 
 CREATE UNIQUE INDEX "idx_contract_log_topic" ON "log_topic_info" ("address", "topic");
@@ -417,6 +423,10 @@ CREATE INDEX "idx_safe_owner_state_current_lookup" ON "hopr_safe_owner_state" ("
 CREATE INDEX "idx_safe_owner_state_owner_lookup" ON "hopr_safe_owner_state" ("owner_address", "published_block" DESC, "published_tx_index" DESC, "published_log_index" DESC);
 
 CREATE UNIQUE INDEX "idx_safe_owner_state_unique_position" ON "hopr_safe_owner_state" ("hopr_safe_contract_id", "owner_address", "published_block", "published_tx_index", "published_log_index");
+
+CREATE INDEX "idx_safe_redeemed_stat_event_safe_node" ON "hopr_safe_redeemed_stat_event" ("safe_address", "node_address");
+
+CREATE UNIQUE INDEX "idx_safe_redeemed_stat_event_unique_position" ON "hopr_safe_redeemed_stat_event" ("safe_address", "node_address", "published_block", "published_tx_index", "published_log_index");
 
 CREATE INDEX "idx_safe_setup_owner_event_lookup" ON "hopr_safe_setup_owner" ("hopr_safe_event_id", "owner_position");
 

@@ -1,28 +1,29 @@
 // Allow casts for blockchain indices - u64 block/tx/log indices fit safely in i64
 #![allow(clippy::cast_possible_wrap, clippy::cast_sign_loss)]
 
+use std::collections::{BTreeSet, HashMap};
+
 use async_trait::async_trait;
 use blokli_db_entity::{
     errors::DbEntityError,
     log, log_status, log_topic_info,
     prelude::{Log, LogStatus, LogTopicInfo},
 };
-use futures::{StreamExt, stream};
 use hopr_types::{
     crypto::prelude::Hash,
     primitive::prelude::{Address, DateTime, SerializableLog, ToHex, Utc},
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, FromQueryResult, IntoActiveModel, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect,
+    ActiveModelTrait, ColumnTrait, DbBackend, DbErr, EntityTrait, FromQueryResult, IntoActiveModel, PaginatorTrait,
+    QueryFilter, QueryOrder, QuerySelect,
     entity::Set,
     query::QueryTrait,
-    sea_query::{Expr, OnConflict, Value},
+    sea_query::{Condition, Expr, OnConflict, Value},
 };
 use tracing::{error, trace};
 
 use crate::{
-    BlokliDbGeneralModelOperations, TargetDb,
+    BlokliDbGeneralModelOperations, OpenTransaction, TargetDb,
     api::{
         errors::{DbError, Result},
         logs::BlokliDbLogOperations,
@@ -34,6 +35,253 @@ use crate::{
 #[derive(FromQueryResult)]
 struct BlockNumber {
     block_number: i64,
+}
+
+type LogIdentity = (i64, i64, i64);
+
+const SQLITE_STORE_LOGS_BATCH_SIZE: usize = 100;
+const DEFAULT_STORE_LOGS_BATCH_SIZE: usize = 1_000;
+
+fn store_logs_batch_size(backend: DbBackend) -> usize {
+    match backend {
+        DbBackend::Sqlite => SQLITE_STORE_LOGS_BATCH_SIZE,
+        _ => DEFAULT_STORE_LOGS_BATCH_SIZE,
+    }
+}
+
+fn log_identity(log: &SerializableLog) -> LogIdentity {
+    (log.block_number as i64, log.tx_index as i64, log.log_index as i64)
+}
+
+fn log_identity_filter(identities: impl IntoIterator<Item = LogIdentity>) -> Condition {
+    identities
+        .into_iter()
+        .fold(Condition::any(), |condition, (block_number, tx_index, log_index)| {
+            condition.add(
+                Condition::all()
+                    .add(log::Column::BlockNumber.eq(block_number))
+                    .add(log::Column::TxIndex.eq(tx_index))
+                    .add(log::Column::LogIndex.eq(log_index)),
+            )
+        })
+}
+
+async fn store_log_in_tx(tx: &OpenTransaction, log: SerializableLog) -> Result<()> {
+    let log_id = log.to_string();
+    let log_model = log::ActiveModel::from(log.clone());
+    let log_result = Log::insert(log_model)
+        .on_conflict(
+            OnConflict::columns([log::Column::LogIndex, log::Column::TxIndex, log::Column::BlockNumber])
+                .do_nothing()
+                .to_owned(),
+        )
+        .exec(tx.as_ref())
+        .await;
+
+    match log_result {
+        Ok(insert_result) => {
+            let mut status_model = log_status::ActiveModel::from(log);
+            status_model.log_id = Set(insert_result.last_insert_id);
+
+            match LogStatus::insert(status_model)
+                .on_conflict(
+                    OnConflict::columns([
+                        log_status::Column::LogIndex,
+                        log_status::Column::TxIndex,
+                        log_status::Column::BlockNumber,
+                    ])
+                    .do_nothing()
+                    .to_owned(),
+                )
+                .exec(tx.as_ref())
+                .await
+            {
+                Ok(_) => Ok(()),
+                Err(DbErr::RecordNotInserted) => {
+                    trace!(log_id, "log status already in the DB");
+                    Ok(())
+                }
+                Err(error) => {
+                    error!(%log_id, "Failed to insert log status into db: {:?}", error);
+                    Err(DbError::General(error.to_string()))
+                }
+            }
+        }
+        Err(DbErr::RecordNotInserted) => {
+            match Log::find()
+                .filter(log::Column::BlockNumber.eq(log.block_number as i64))
+                .filter(log::Column::TxIndex.eq(log.tx_index as i64))
+                .filter(log::Column::LogIndex.eq(log.log_index as i64))
+                .one(tx.as_ref())
+                .await
+            {
+                Ok(Some(existing_log)) => {
+                    let mut status_model = log_status::ActiveModel::from(log);
+                    status_model.log_id = Set(existing_log.id);
+
+                    match LogStatus::insert(status_model)
+                        .on_conflict(
+                            OnConflict::columns([
+                                log_status::Column::LogIndex,
+                                log_status::Column::TxIndex,
+                                log_status::Column::BlockNumber,
+                            ])
+                            .do_nothing()
+                            .to_owned(),
+                        )
+                        .exec(tx.as_ref())
+                        .await
+                    {
+                        Ok(_) | Err(DbErr::RecordNotInserted) => {
+                            trace!(log_id, "log already in the DB");
+                            Ok(())
+                        }
+                        Err(error) => {
+                            error!(%log_id, "Failed to insert log status into db: {:?}", error);
+                            Err(DbError::General(error.to_string()))
+                        }
+                    }
+                }
+                Ok(None) => {
+                    error!(%log_id, "Log not found after RecordNotInserted error");
+                    Err(DbError::General(format!("Log not found: {log_id}")))
+                }
+                Err(error) => {
+                    error!(%log_id, "Failed to find existing log: {:?}", error);
+                    Err(DbError::General(error.to_string()))
+                }
+            }
+        }
+        Err(error) => {
+            error!("Failed to insert log into db: {:?}", error);
+            Err(DbError::General(error.to_string()))
+        }
+    }
+}
+
+async fn store_logs_chunk_in_tx(tx: &OpenTransaction, logs: &[SerializableLog]) -> Result<()> {
+    if logs.is_empty() {
+        return Ok(());
+    }
+
+    Log::insert_many(logs.iter().cloned().map(log::ActiveModel::from))
+        .on_conflict(
+            OnConflict::columns([log::Column::LogIndex, log::Column::TxIndex, log::Column::BlockNumber])
+                .do_nothing()
+                .to_owned(),
+        )
+        .exec_without_returning(tx.as_ref())
+        .await
+        .map_err(|error| {
+            error!("Failed to bulk insert logs into db: {:?}", error);
+            DbError::from(DbSqlError::from(error))
+        })?;
+
+    let identities = logs.iter().map(log_identity).collect::<Vec<_>>();
+    let stored_logs = Log::find()
+        .filter(log_identity_filter(identities.iter().copied()))
+        .all(tx.as_ref())
+        .await
+        .map_err(|error| {
+            error!("Failed to load inserted logs from db: {:?}", error);
+            DbError::from(DbSqlError::from(error))
+        })?;
+
+    let log_ids_by_identity = stored_logs
+        .into_iter()
+        .map(|stored_log| {
+            (
+                (stored_log.block_number, stored_log.tx_index, stored_log.log_index),
+                stored_log.id,
+            )
+        })
+        .collect::<HashMap<_, _>>();
+
+    if identities
+        .iter()
+        .any(|identity| !log_ids_by_identity.contains_key(identity))
+    {
+        return Err(DbError::General(
+            "failed to reconcile stored log ids after bulk insert".into(),
+        ));
+    }
+
+    let mut status_models = Vec::with_capacity(logs.len());
+    for log in logs.iter().cloned() {
+        let identity = log_identity(&log);
+        let Some(log_id) = log_ids_by_identity.get(&identity).copied() else {
+            return Err(DbError::General(
+                "failed to reconcile stored log ids after bulk insert".into(),
+            ));
+        };
+
+        let mut status_model = log_status::ActiveModel::from(log);
+        status_model.log_id = Set(log_id);
+        status_models.push(status_model);
+    }
+
+    LogStatus::insert_many(status_models)
+        .on_conflict(
+            OnConflict::columns([
+                log_status::Column::LogIndex,
+                log_status::Column::TxIndex,
+                log_status::Column::BlockNumber,
+            ])
+            .do_nothing()
+            .to_owned(),
+        )
+        .exec_without_returning(tx.as_ref())
+        .await
+        .map_err(|error| {
+            error!("Failed to bulk insert log statuses into db: {:?}", error);
+            DbError::from(DbSqlError::from(error))
+        })?;
+
+    Ok(())
+}
+
+async fn store_logs_in_tx(
+    db: BlokliDb,
+    tx: &OpenTransaction,
+    logs: Vec<SerializableLog>,
+    batch_size: usize,
+) -> Result<Vec<Result<()>>> {
+    let mut results = Vec::with_capacity(logs.len());
+
+    for chunk in logs.chunks(batch_size) {
+        let chunk_logs = chunk.to_vec();
+        let chunk_result = db
+            .nest_transaction_in_db(Some(tx), TargetDb::Logs)
+            .await?
+            .perform(|chunk_tx| {
+                let chunk_logs = chunk_logs.clone();
+                Box::pin(async move { store_logs_chunk_in_tx(chunk_tx, &chunk_logs).await })
+            })
+            .await;
+
+        match chunk_result {
+            Ok(()) => results.extend(chunk_logs.into_iter().map(|_| Ok(()))),
+            Err(error) => {
+                error!(
+                    %error,
+                    chunk_len = chunk_logs.len(),
+                    "bulk log insert failed, falling back to per-log insertion"
+                );
+
+                for log in chunk_logs {
+                    let fallback_result = db
+                        .nest_transaction_in_db(Some(tx), TargetDb::Logs)
+                        .await?
+                        .perform(|fallback_tx| Box::pin(async move { store_log_in_tx(fallback_tx, log).await }))
+                        .await;
+
+                    results.push(fallback_result);
+                }
+            }
+        }
+    }
+
+    Ok(results)
 }
 
 #[async_trait]
@@ -52,115 +300,18 @@ impl BlokliDbLogOperations for BlokliDb {
     }
 
     async fn store_logs(&self, logs: Vec<SerializableLog>) -> Result<Vec<Result<()>>> {
+        if logs.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let batch_size = store_logs_batch_size(self.conn(TargetDb::Logs).get_database_backend());
+        let db = self.clone();
+
         self.nest_transaction_in_db(None, TargetDb::Logs)
             .await?
             .perform(|tx| {
-                Box::pin(async move {
-                    let results = stream::iter(logs).then(|log| async {
-                        let log_id = log.to_string();
-
-                        // First, try to insert the Log and get its ID
-                        let log_model = log::ActiveModel::from(log.clone());
-                        let log_result = Log::insert(log_model)
-                            .on_conflict(
-                                OnConflict::columns([
-                                    log::Column::LogIndex,
-                                    log::Column::TxIndex,
-                                    log::Column::BlockNumber,
-                                ])
-                                .do_nothing()
-                                .to_owned(),
-                            )
-                            .exec(tx.as_ref())
-                            .await;
-
-                        match log_result {
-                            Ok(insert_result) => {
-                                // Log was inserted successfully, now insert LogStatus with the log_id
-                                let mut status_model = log_status::ActiveModel::from(log);
-                                status_model.log_id = Set(insert_result.last_insert_id);
-
-                                match LogStatus::insert(status_model)
-                                    .on_conflict(
-                                        OnConflict::columns([
-                                            log_status::Column::LogIndex,
-                                            log_status::Column::TxIndex,
-                                            log_status::Column::BlockNumber,
-                                        ])
-                                        .do_nothing()
-                                        .to_owned(),
-                                    )
-                                    .exec(tx.as_ref())
-                                    .await
-                                {
-                                    Ok(_) => Ok(()),
-                                    Err(DbErr::RecordNotInserted) => {
-                                        // LogStatus already exists - idempotent success
-                                        trace!(log_id, "log status already in the DB");
-                                        Ok(())
-                                    }
-                                    Err(e) => {
-                                        error!(%log_id, "Failed to insert log status into db: {:?}", e);
-                                        Err(DbError::General(e.to_string()))
-                                    }
-                                }
-                            }
-                            Err(DbErr::RecordNotInserted) => {
-                                // Log already exists, need to find it to get its ID for LogStatus
-                                match Log::find()
-                                    .filter(log::Column::BlockNumber.eq(log.block_number as i64))
-                                    .filter(log::Column::TxIndex.eq(log.tx_index as i64))
-                                    .filter(log::Column::LogIndex.eq(log.log_index as i64))
-                                    .one(tx.as_ref())
-                                    .await
-                                {
-                                    Ok(Some(existing_log)) => {
-                                        // Found existing log, try to insert LogStatus with its ID
-                                        let mut status_model = log_status::ActiveModel::from(log);
-                                        status_model.log_id = Set(existing_log.id);
-
-                                        match LogStatus::insert(status_model)
-                                            .on_conflict(
-                                                OnConflict::columns([
-                                                    log_status::Column::LogIndex,
-                                                    log_status::Column::TxIndex,
-                                                    log_status::Column::BlockNumber,
-                                                ])
-                                                .do_nothing()
-                                                .to_owned(),
-                                            )
-                                            .exec(tx.as_ref())
-                                            .await
-                                        {
-                                            Ok(_) | Err(DbErr::RecordNotInserted) => {
-                                                // Both Log and LogStatus exist - idempotent success
-                                                trace!(log_id, "log already in the DB");
-                                                Ok(())
-                                            }
-                                            Err(e) => {
-                                                error!(%log_id, "Failed to insert log status into db: {:?}", e);
-                                                Err(DbError::General(e.to_string()))
-                                            }
-                                        }
-                                    }
-                                    Ok(None) => {
-                                        error!(%log_id, "Log not found after RecordNotInserted error");
-                                        Err(DbError::General(format!("Log not found: {log_id}")))
-                                    }
-                                    Err(e) => {
-                                        error!(%log_id, "Failed to find existing log: {:?}", e);
-                                        Err(DbError::General(e.to_string()))
-                                    }
-                                }
-                            }
-                            Err(e) => {
-                                error!("Failed to insert log into db: {:?}", e);
-                                Err(DbError::General(e.to_string()))
-                            }
-                        }
-                    });
-                    Ok(results.collect::<Vec<_>>().await)
-                })
+                let db = db.clone();
+                Box::pin(async move { store_logs_in_tx(db, tx, logs, batch_size).await })
             })
             .await
     }
@@ -291,7 +442,32 @@ impl BlokliDbLogOperations for BlokliDb {
     }
 
     async fn set_log_processed<'a>(&'a self, log: SerializableLog) -> Result<()> {
+        self.set_logs_processed_explicit(vec![log]).await
+    }
+
+    async fn set_logs_processed_explicit(&self, logs: Vec<SerializableLog>) -> Result<()> {
+        let identities = logs
+            .into_iter()
+            .map(|log| (log.block_number as i64, log.tx_index as i64, log.log_index as i64))
+            .collect::<BTreeSet<_>>();
+
+        if identities.is_empty() {
+            return Ok(());
+        }
+
         let now = Utc::now();
+
+        let identity_filter =
+            identities
+                .into_iter()
+                .fold(Condition::any(), |condition, (block_number, tx_index, log_index)| {
+                    condition.add(
+                        Condition::all()
+                            .add(log_status::Column::BlockNumber.eq(block_number))
+                            .add(log_status::Column::TxIndex.eq(tx_index))
+                            .add(log_status::Column::LogIndex.eq(log_index)),
+                    )
+                });
 
         let query = LogStatus::update_many()
             .col_expr(log_status::Column::Processed, Expr::value(Value::Bool(Some(true))))
@@ -299,9 +475,7 @@ impl BlokliDbLogOperations for BlokliDb {
                 log_status::Column::ProcessedAt,
                 Expr::value(Value::ChronoDateTimeUtc(Some(now))),
             )
-            .filter(log_status::Column::BlockNumber.eq(log.block_number as i64))
-            .filter(log_status::Column::TxIndex.eq(log.tx_index as i64))
-            .filter(log_status::Column::LogIndex.eq(log.log_index as i64));
+            .filter(identity_filter);
 
         match query.exec(self.conn(TargetDb::Logs)).await {
             Ok(_) => Ok(()),
@@ -588,8 +762,11 @@ mod tests {
             ..Default::default()
         };
 
-        db.store_log(log_1.clone()).await.unwrap();
-        db.store_log(log_2.clone()).await.unwrap();
+        db.store_logs(vec![log_1.clone(), log_2.clone()])
+            .await
+            .unwrap()
+            .into_iter()
+            .for_each(|result| assert!(result.is_ok()));
 
         let logs = db.get_logs(None, None).await.unwrap();
 
@@ -603,6 +780,53 @@ mod tests {
             .unwrap();
 
         assert_eq!(log_2, log_2_retrieved);
+    }
+
+    #[tokio::test]
+    async fn test_store_logs_batch_is_idempotent_across_large_chunks() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        let total_logs = SQLITE_STORE_LOGS_BATCH_SIZE + 25;
+        let logs = (0..total_logs)
+            .map(|offset| SerializableLog {
+                address: Address::new(b"my address 123456789"),
+                topics: [Hash::create(&[b"my topic"]).into()].into(),
+                data: vec![offset as u8, (offset % 251) as u8].into(),
+                tx_index: offset as u64,
+                block_number: 42,
+                block_hash: Hash::create(&[b"my block hash"]).into(),
+                tx_hash: Hash::create(&[&(offset as u64).to_be_bytes()]).into(),
+                log_index: offset as u64,
+                removed: false,
+                processed: Some(false),
+                ..Default::default()
+            })
+            .collect::<Vec<_>>();
+
+        db.store_logs(logs.clone())
+            .await
+            .unwrap()
+            .into_iter()
+            .for_each(|result| assert!(result.is_ok()));
+
+        let replay_logs = logs
+            .iter()
+            .skip(SQLITE_STORE_LOGS_BATCH_SIZE / 2)
+            .take(SQLITE_STORE_LOGS_BATCH_SIZE)
+            .cloned()
+            .chain(logs.iter().take(SQLITE_STORE_LOGS_BATCH_SIZE / 2).cloned())
+            .collect::<Vec<_>>();
+
+        db.store_logs(replay_logs)
+            .await
+            .unwrap()
+            .into_iter()
+            .for_each(|result| assert!(result.is_ok()));
+
+        let stored_logs = db.get_logs(Some(42), Some(0)).await.unwrap();
+
+        assert_eq!(stored_logs.len(), logs.len());
+        assert_eq!(stored_logs, logs);
     }
 
     #[tokio::test]
@@ -630,6 +854,63 @@ mod tests {
         let logs = db.get_logs(None, None).await.unwrap();
 
         assert_eq!(logs.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_store_logs_duplicate_entries_in_same_batch() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        let log = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: [Hash::create(&[b"my topic"]).into()].into(),
+            data: [1, 2, 3, 4].into(),
+            tx_index: 1u64,
+            block_number: 1u64,
+            block_hash: Hash::create(&[b"my block hash"]).into(),
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            log_index: 1u64,
+            removed: false,
+            ..Default::default()
+        };
+
+        let results = db.store_logs(vec![log.clone(), log.clone()]).await.unwrap();
+
+        assert_eq!(results.len(), 2);
+        assert!(results.into_iter().all(|result| result.is_ok()));
+        assert_eq!(db.get_logs(None, None).await.unwrap().len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_store_logs_across_chunk_boundaries() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        let base_log = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: [Hash::create(&[b"my topic"]).into()].into(),
+            data: [1, 2, 3, 4].into(),
+            tx_index: 0u64,
+            block_number: 1u64,
+            block_hash: Hash::create(&[b"my block hash"]).into(),
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            log_index: 0u64,
+            removed: false,
+            processed: Some(false),
+            ..Default::default()
+        };
+
+        let logs = (0..(SQLITE_STORE_LOGS_BATCH_SIZE + 1))
+            .map(|index| SerializableLog {
+                tx_index: index as u64,
+                log_index: index as u64,
+                ..base_log.clone()
+            })
+            .collect::<Vec<_>>();
+
+        let results = db.store_logs(logs.clone()).await.unwrap();
+
+        assert_eq!(results.len(), logs.len());
+        assert!(results.into_iter().all(|result| result.is_ok()));
+        assert_eq!(db.get_logs(None, None).await.unwrap(), logs);
     }
 
     #[tokio::test]
@@ -662,6 +943,69 @@ mod tests {
 
         assert_eq!(log_db_updated.processed, Some(true));
         assert!(log_db_updated.processed_at.is_some());
+    }
+
+    #[tokio::test]
+    async fn test_set_logs_processed_explicit() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        let base_log = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: [Hash::create(&[b"my topic"]).into()].into(),
+            data: [1, 2, 3, 4].into(),
+            tx_index: 0,
+            block_number: 1,
+            block_hash: Hash::create(&[b"my block hash"]).into(),
+            tx_hash: Hash::create(&[b"my tx hash"]).into(),
+            log_index: 0,
+            removed: false,
+            ..Default::default()
+        };
+        let first_log = SerializableLog {
+            tx_index: 1,
+            log_index: 1,
+            ..base_log.clone()
+        };
+        let second_log = SerializableLog {
+            tx_index: 2,
+            log_index: 2,
+            ..base_log.clone()
+        };
+        let third_log = SerializableLog {
+            tx_index: 3,
+            log_index: 3,
+            ..base_log
+        };
+
+        db.store_logs(vec![first_log.clone(), second_log.clone(), third_log.clone()])
+            .await
+            .unwrap()
+            .into_iter()
+            .for_each(|result| assert!(result.is_ok()));
+
+        db.set_logs_processed_explicit(vec![first_log.clone(), third_log.clone(), first_log.clone()])
+            .await
+            .unwrap();
+
+        let first_log_db = db
+            .get_log(first_log.block_number, first_log.tx_index, first_log.log_index)
+            .await
+            .unwrap();
+        let second_log_db = db
+            .get_log(second_log.block_number, second_log.tx_index, second_log.log_index)
+            .await
+            .unwrap();
+        let third_log_db = db
+            .get_log(third_log.block_number, third_log.tx_index, third_log.log_index)
+            .await
+            .unwrap();
+
+        assert_eq!(first_log_db.processed, Some(true));
+        assert!(first_log_db.processed_at.is_some());
+        assert_eq!(second_log_db.processed, Some(false));
+        assert_eq!(second_log_db.processed_at, None);
+        assert_eq!(third_log_db.processed, Some(true));
+        assert!(third_log_db.processed_at.is_some());
     }
 
     #[tokio::test]

@@ -178,6 +178,7 @@ where
                     .db
                     .upsert_safe_contract(Some(tx), safe_addr, module_addr, node_addr, block, tx_index, log_index)
                     .await?;
+                self.remember_safe_address(safe_addr).await;
 
                 // Register node to safe in the registration table
                 let _registration_id = self

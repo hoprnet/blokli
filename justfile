@@ -32,6 +32,10 @@ build:
 build-release:
     cargo build --workspace --release
 
+# Build a profiling-capable bloklid binary through the Nix package
+build-profile:
+    nix build .#bloklid-profile
+
 # Check all workspace code without building binaries
 check:
     cargo check --workspace
@@ -227,6 +231,11 @@ docker-logs service="":
 # Build bloklid Docker image from Nix
 docker-build:
     nix build .#docker-bloklid-x86_64-linux
+    docker load < result
+
+# Build profiling bloklid Docker image from Nix
+docker-build-profile:
+    nix build .#docker-bloklid-x86_64-linux-profile
     docker load < result
 
 # Build bloklid + anvil Docker image from Nix

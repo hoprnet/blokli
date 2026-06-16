@@ -1,6 +1,9 @@
 use blokli_chain_rpc::Log;
 use blokli_chain_types::AlloyAddressExt;
-use blokli_db::{BlokliDbAllOperations, OpenTransaction, safe_history::SafeActivityKind};
+use blokli_db::{
+    BlokliDbAllOperations, OpenTransaction,
+    safe_history::{StagedSafeMutation, StagedSafeMutationKind},
+};
 use hopr_bindings::exports::alloy::{
     primitives::{Address as AlloyAddress, B256, Log as AlloyLog},
     sol_types::SolEventInterface,
@@ -11,7 +14,7 @@ use hopr_types::{
 };
 use tracing::{debug, info, warn};
 
-use super::ContractEventHandlers;
+use super::{ContractEventHandlers, PendingSafeMutation};
 use crate::{custom_abis::safe_contract_events::SafeContract::SafeContractEvents, errors::Result, state::IndexerEvent};
 
 impl<T, Db> ContractEventHandlers<T, Db>
@@ -19,6 +22,63 @@ where
     T: blokli_chain_rpc::HoprIndexerRpcOperations + Clone + Send + 'static,
     Db: BlokliDbAllOperations + Clone,
 {
+    fn pending_safe_mutation_key(tx: &OpenTransaction) -> usize {
+        tx.as_ref() as *const _ as usize
+    }
+
+    async fn append_pending_safe_mutations_for_tx(
+        &self,
+        tx: &OpenTransaction,
+        staged_mutations: Vec<PendingSafeMutation>,
+    ) {
+        if staged_mutations.is_empty() {
+            return;
+        }
+
+        let mut pending_safe_mutations = self.pending_safe_mutations.lock().await;
+        pending_safe_mutations
+            .entry(Self::pending_safe_mutation_key(tx))
+            .or_default()
+            .extend(staged_mutations);
+    }
+
+    pub(super) async fn merge_pending_safe_mutations_for_tx_key(&self, from_key: usize, tx: &OpenTransaction) {
+        let mut pending_safe_mutations = self.pending_safe_mutations.lock().await;
+        let from_mutations = pending_safe_mutations.remove(&from_key).unwrap_or_default();
+        if from_mutations.is_empty() {
+            return;
+        }
+
+        pending_safe_mutations
+            .entry(Self::pending_safe_mutation_key(tx))
+            .or_default()
+            .extend(from_mutations);
+    }
+
+    pub(super) async fn clear_pending_safe_mutations_for_tx(&self, tx: &OpenTransaction) {
+        self.pending_safe_mutations
+            .lock()
+            .await
+            .remove(&Self::pending_safe_mutation_key(tx));
+    }
+
+    pub(super) async fn discard_pending_safe_mutations_for_tx(&self, tx: &OpenTransaction) {
+        self.clear_pending_safe_mutations_for_tx(tx).await;
+    }
+
+    pub(super) async fn flush_pending_safe_mutations_for_tx(&self, tx: &OpenTransaction) -> Result<()> {
+        let pending_mutations = self
+            .pending_safe_mutations
+            .lock()
+            .await
+            .remove(&Self::pending_safe_mutation_key(tx))
+            .unwrap_or_default();
+        self.db
+            .persist_staged_safe_mutations(Some(tx), pending_mutations)
+            .await?;
+        Ok(())
+    }
+
     pub(super) async fn backfill_safe_logs_in_discovery_block(
         &self,
         tx: &OpenTransaction,
@@ -43,7 +103,7 @@ where
             )));
         }
 
-        for (log, slog) in safe_logs.into_iter().zip(serialized_logs) {
+        for (log, slog) in safe_logs.iter().zip(serialized_logs.iter()) {
             let primitive_log = AlloyLog::new(
                 AlloyAddress::from_hopr_address(log.address),
                 log.topics.iter().map(|hash| B256::from_slice(hash.as_ref())).collect(),
@@ -63,14 +123,20 @@ where
                 log_index = %log.log_index,
                 "Backfilling Safe discovery-block log"
             );
-            self.on_safe_contract_event(tx, safe_address, &log, event.data, false)
+            self.on_safe_contract_event(tx, safe_address, log, event.data, false)
                 .await?;
-            self.db.set_log_processed(slog).await.map_err(|e| {
+        }
+
+        self.flush_pending_safe_mutations_for_tx(tx).await?;
+
+        self.db
+            .set_logs_processed_explicit(serialized_logs)
+            .await
+            .map_err(|e| {
                 crate::errors::CoreEthereumIndexerError::ProcessError(format!(
-                    "failed to mark Safe discovery block log as processed: {e}"
+                    "failed to mark Safe discovery block logs as processed: {e}"
                 ))
             })?;
-        }
 
         Ok(())
     }
@@ -84,6 +150,7 @@ where
         _is_synced: bool,
     ) -> Result<Vec<IndexerEvent>> {
         let chain_tx_hash = Hash::from(log.tx_hash);
+        let mut staged_mutations = Vec::new();
 
         match event {
             SafeContractEvents::SafeSetup(safe_setup) => {
@@ -93,33 +160,18 @@ where
                     .iter()
                     .map(|owner| owner.to_hopr_address())
                     .collect::<Vec<_>>();
-                self.db
-                    .record_safe_setup(
-                        Some(tx),
-                        safe_address,
-                        chain_tx_hash,
-                        owners.clone(),
-                        safe_setup.threshold.to_string(),
-                        Some(safe_setup.initiator.to_hopr_address()),
-                        log.block_number,
-                        log.tx_index,
-                        log.log_index.as_u64(),
-                    )
-                    .await?;
-
-                for owner in owners {
-                    self.db
-                        .upsert_safe_owner_state(
-                            Some(tx),
-                            safe_address,
-                            owner,
-                            true,
-                            log.block_number,
-                            log.tx_index,
-                            log.log_index.as_u64(),
-                        )
-                        .await?;
-                }
+                staged_mutations.push(StagedSafeMutation {
+                    safe_address,
+                    chain_tx_hash,
+                    block: log.block_number,
+                    tx_index: log.tx_index,
+                    log_index: log.log_index.as_u64(),
+                    event: StagedSafeMutationKind::SafeSetup {
+                        owners,
+                        threshold: safe_setup.threshold.to_string(),
+                        initiator_address: Some(safe_setup.initiator.to_hopr_address()),
+                    },
+                });
 
                 info!(
                     safe_address = %safe_address,
@@ -128,128 +180,79 @@ where
                     block = log.block_number,
                     tx_index = log.tx_index,
                     log_index = %log.log_index,
-                    "Persisted Safe SafeSetup event"
+                    "Staged Safe SafeSetup event"
                 );
             }
             SafeContractEvents::AddedOwner(added_owner) => {
                 let owner = added_owner.owner.to_hopr_address();
-                self.db
-                    .record_safe_activity(
-                        Some(tx),
-                        safe_address,
-                        SafeActivityKind::AddedOwner,
-                        chain_tx_hash,
-                        None,
-                        Some(owner),
-                        None,
-                        None,
-                        None,
-                        log.block_number,
-                        log.tx_index,
-                        log.log_index.as_u64(),
-                    )
-                    .await?;
-                self.db
-                    .upsert_safe_owner_state(
-                        Some(tx),
-                        safe_address,
-                        owner,
-                        true,
-                        log.block_number,
-                        log.tx_index,
-                        log.log_index.as_u64(),
-                    )
-                    .await?;
+                staged_mutations.push(StagedSafeMutation {
+                    safe_address,
+                    chain_tx_hash,
+                    block: log.block_number,
+                    tx_index: log.tx_index,
+                    log_index: log.log_index.as_u64(),
+                    event: StagedSafeMutationKind::AddedOwner { owner_address: owner },
+                });
                 info!(
                     safe_address = %safe_address,
                     owner = %owner,
                     block = log.block_number,
                     tx_index = log.tx_index,
                     log_index = %log.log_index,
-                    "Persisted Safe AddedOwner event"
+                    "Staged Safe AddedOwner event"
                 );
             }
             SafeContractEvents::RemovedOwner(removed_owner) => {
                 let owner = removed_owner.owner.to_hopr_address();
-                self.db
-                    .record_safe_activity(
-                        Some(tx),
-                        safe_address,
-                        SafeActivityKind::RemovedOwner,
-                        chain_tx_hash,
-                        None,
-                        Some(owner),
-                        None,
-                        None,
-                        None,
-                        log.block_number,
-                        log.tx_index,
-                        log.log_index.as_u64(),
-                    )
-                    .await?;
-                self.db
-                    .upsert_safe_owner_state(
-                        Some(tx),
-                        safe_address,
-                        owner,
-                        false,
-                        log.block_number,
-                        log.tx_index,
-                        log.log_index.as_u64(),
-                    )
-                    .await?;
+                staged_mutations.push(StagedSafeMutation {
+                    safe_address,
+                    chain_tx_hash,
+                    block: log.block_number,
+                    tx_index: log.tx_index,
+                    log_index: log.log_index.as_u64(),
+                    event: StagedSafeMutationKind::RemovedOwner { owner_address: owner },
+                });
                 info!(
                     safe_address = %safe_address,
                     owner = %owner,
                     block = log.block_number,
                     tx_index = log.tx_index,
                     log_index = %log.log_index,
-                    "Persisted Safe RemovedOwner event"
+                    "Staged Safe RemovedOwner event"
                 );
             }
             SafeContractEvents::ChangedThreshold(changed_threshold) => {
-                self.db
-                    .record_safe_activity(
-                        Some(tx),
-                        safe_address,
-                        SafeActivityKind::ChangedThreshold,
-                        chain_tx_hash,
-                        None,
-                        None,
-                        Some(changed_threshold.threshold.to_string()),
-                        None,
-                        None,
-                        log.block_number,
-                        log.tx_index,
-                        log.log_index.as_u64(),
-                    )
-                    .await?;
+                staged_mutations.push(StagedSafeMutation {
+                    safe_address,
+                    chain_tx_hash,
+                    block: log.block_number,
+                    tx_index: log.tx_index,
+                    log_index: log.log_index.as_u64(),
+                    event: StagedSafeMutationKind::ChangedThreshold {
+                        threshold: changed_threshold.threshold.to_string(),
+                    },
+                });
                 info!(
                     safe_address = %safe_address,
                     threshold = %changed_threshold.threshold.to_string(),
                     block = log.block_number,
                     tx_index = log.tx_index,
                     log_index = %log.log_index,
-                    "Persisted Safe ChangedThreshold event"
+                    "Staged Safe ChangedThreshold event"
                 );
             }
             SafeContractEvents::ExecutionSuccess(execution) => {
-                self.db
-                    .record_safe_activity(
-                        Some(tx),
-                        safe_address,
-                        SafeActivityKind::ExecutionSuccess,
-                        chain_tx_hash,
-                        Some(Hash::from(execution.txHash.0)),
-                        None,
-                        None,
-                        Some(execution.payment.to_string()),
-                        None,
-                        log.block_number,
-                        log.tx_index,
-                        log.log_index.as_u64(),
-                    )
-                    .await?;
+                staged_mutations.push(StagedSafeMutation {
+                    safe_address,
+                    chain_tx_hash,
+                    block: log.block_number,
+                    tx_index: log.tx_index,
+                    log_index: log.log_index.as_u64(),
+                    event: StagedSafeMutationKind::ExecutionSuccess {
+                        safe_tx_hash: Hash::from(execution.txHash.0),
+                        payment: execution.payment.to_string(),
+                    },
+                });
                 info!(
                     safe_address = %safe_address,
                     safe_tx_hash = %Hash::from(execution.txHash.0),
@@ -257,26 +260,21 @@ where
                     block = log.block_number,
                     tx_index = log.tx_index,
                     log_index = %log.log_index,
-                    "Persisted Safe ExecutionSuccess event"
+                    "Staged Safe ExecutionSuccess event"
                 );
             }
             SafeContractEvents::ExecutionFailure(execution) => {
-                self.db
-                    .record_safe_activity(
-                        Some(tx),
-                        safe_address,
-                        SafeActivityKind::ExecutionFailure,
-                        chain_tx_hash,
-                        Some(Hash::from(execution.txHash.0)),
-                        None,
-                        None,
-                        Some(execution.payment.to_string()),
-                        None,
-                        log.block_number,
-                        log.tx_index,
-                        log.log_index.as_u64(),
-                    )
-                    .await?;
+                staged_mutations.push(StagedSafeMutation {
+                    safe_address,
+                    chain_tx_hash,
+                    block: log.block_number,
+                    tx_index: log.tx_index,
+                    log_index: log.log_index.as_u64(),
+                    event: StagedSafeMutationKind::ExecutionFailure {
+                        safe_tx_hash: Hash::from(execution.txHash.0),
+                        payment: execution.payment.to_string(),
+                    },
+                });
                 warn!(
                     safe_address = %safe_address,
                     safe_tx_hash = %Hash::from(execution.txHash.0),
@@ -284,10 +282,12 @@ where
                     block = log.block_number,
                     tx_index = log.tx_index,
                     log_index = %log.log_index,
-                    "Persisted Safe ExecutionFailure event"
+                    "Staged Safe ExecutionFailure event"
                 );
             }
         }
+
+        self.append_pending_safe_mutations_for_tx(tx, staged_mutations).await;
 
         Ok(Vec::new())
     }
@@ -366,6 +366,7 @@ mod tests {
             fallbackHandler: AlloyAddress::ZERO,
         });
         let log = test_rpc_log(safe_address, 101, 4, 7);
+        let db_check = db.clone();
 
         db.begin_transaction()
             .await?
@@ -373,7 +374,10 @@ mod tests {
                 Box::pin(async move {
                     handlers
                         .on_safe_contract_event(tx, safe_address, &log, event, true)
-                        .await
+                        .await?;
+                    assert!(db_check.get_safe_activity(Some(tx), safe_address).await?.is_empty());
+                    handlers.flush_pending_safe_mutations_for_tx(tx).await?;
+                    Ok::<Vec<IndexerEvent>, crate::errors::CoreEthereumIndexerError>(Vec::new())
                 })
             })
             .await?;
@@ -460,7 +464,9 @@ mod tests {
                             }),
                             true,
                         )
-                        .await
+                        .await?;
+                    handlers.flush_pending_safe_mutations_for_tx(tx).await?;
+                    Ok::<Vec<IndexerEvent>, crate::errors::CoreEthereumIndexerError>(Vec::new())
                 })
             })
             .await?;
@@ -484,6 +490,52 @@ mod tests {
             .count(db.conn(TargetDb::Index))
             .await?;
         assert_eq!(safe_count, 1, "event handling should not duplicate the safe identity");
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_discard_pending_safe_mutations_drops_staged_safe_writes() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let handlers = init_handlers(
+            ClonableMockOperations {
+                inner: Arc::new(MockIndexerRpcOperations::new()),
+            },
+            db.clone(),
+        );
+
+        let safe_address = address_with_byte(21);
+        let module_address = address_with_byte(22);
+        let chain_key = address_with_byte(23);
+        let owner = address_with_byte(24);
+
+        db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+            .await?;
+
+        db.begin_transaction()
+            .await?
+            .perform(|tx| {
+                Box::pin(async move {
+                    handlers
+                        .on_safe_contract_event(
+                            tx,
+                            safe_address,
+                            &test_rpc_log(safe_address, 101, 0, 0),
+                            SafeContractEvents::AddedOwner(SafeContract::AddedOwner {
+                                owner: AlloyAddress::from_hopr_address(owner),
+                            }),
+                            true,
+                        )
+                        .await?;
+                    handlers.discard_pending_safe_mutations_for_tx(tx).await;
+                    handlers.flush_pending_safe_mutations_for_tx(tx).await?;
+                    Ok::<Vec<IndexerEvent>, crate::errors::CoreEthereumIndexerError>(Vec::new())
+                })
+            })
+            .await?;
+
+        assert!(db.get_safe_owners(None, safe_address).await?.is_empty());
+        assert!(db.get_safe_activity(None, safe_address).await?.is_empty());
 
         Ok(())
     }

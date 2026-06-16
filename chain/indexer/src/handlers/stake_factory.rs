@@ -87,6 +87,7 @@ where
                 .db
                 .create_safe_contract(Some(tx), safe_addr, module_addr, chain_key, block, tx_index, log_index)
                 .await?;
+            self.remember_safe_address(safe_addr).await;
 
             if !safe_previously_known && is_synced {
                 self.backfill_safe_logs_in_discovery_block(tx, safe_addr, block).await?;

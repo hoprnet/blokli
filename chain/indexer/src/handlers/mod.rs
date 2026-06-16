@@ -1,4 +1,5 @@
 use std::{
+    collections::{HashMap, HashSet},
     fmt::{Debug, Formatter},
     sync::Arc,
 };
@@ -6,7 +7,10 @@ use std::{
 use async_trait::async_trait;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, Log};
 use blokli_chain_types::{AlloyAddressExt, ContractAddresses};
-use blokli_db::{BlokliDbAllOperations, OpenTransaction};
+use blokli_db::{
+    BlokliDbAllOperations, OpenTransaction, safe_history::StagedSafeMutation,
+    safe_redeemed_stats::StagedSafeRedeemedStatMutation,
+};
 use hopr_bindings::{
     exports::alloy::{
         primitives::{Address as AlloyAddress, B256, Log as AlloyLog},
@@ -25,6 +29,7 @@ use hopr_types::{
     crypto::prelude::Hash,
     primitive::prelude::{Address, SerializableLog},
 };
+use tokio::sync::{Mutex, RwLock};
 use tracing::{debug, error, trace};
 
 use crate::{
@@ -64,6 +69,9 @@ fn increment_indexer_contract_log_count(contract: &str) {
     METRIC_INDEXER_LOG_COUNTERS.increment(&[contract]);
 }
 
+type PendingSafeMutation = StagedSafeMutation;
+type PendingSafeRedeemedStatMutation = StagedSafeRedeemedStatMutation;
+
 /// Event handling an object for on-chain operations
 ///
 /// Once an on-chain operation is recorded by the [crate::block::Indexer], it is pre-processed
@@ -80,6 +88,9 @@ pub struct ContractEventHandlers<T, Db> {
     /// indexer state for publishing events to subscribers
     pub(super) indexer_state: IndexerState,
     pub(super) enable_safe_indexing: bool,
+    known_safe_addresses: Arc<RwLock<Option<HashSet<Address>>>>,
+    pending_safe_mutations: Arc<Mutex<HashMap<usize, Vec<PendingSafeMutation>>>>,
+    pending_safe_redeemed_stat_mutations: Arc<Mutex<HashMap<usize, Vec<PendingSafeRedeemedStatMutation>>>>,
 }
 
 impl<T, Db> Debug for ContractEventHandlers<T, Db> {
@@ -124,7 +135,38 @@ where
             _rpc_operations: rpc_operations,
             indexer_state,
             enable_safe_indexing,
+            known_safe_addresses: Arc::new(RwLock::new(None)),
+            pending_safe_mutations: Arc::new(Mutex::new(HashMap::new())),
+            pending_safe_redeemed_stat_mutations: Arc::new(Mutex::new(HashMap::new())),
         }
+    }
+
+    async fn ensure_known_safe_addresses_loaded(&self, tx: &OpenTransaction) -> Result<()> {
+        if self.known_safe_addresses.read().await.is_some() {
+            return Ok(());
+        }
+
+        let safe_addresses = self.db.get_safe_contract_addresses(Some(tx)).await?;
+        let mut known_safe_addresses = self.known_safe_addresses.write().await;
+        known_safe_addresses.get_or_insert_with(|| safe_addresses.into_iter().collect());
+        Ok(())
+    }
+
+    pub(super) async fn remember_safe_address(&self, safe_address: Address) {
+        let mut known_safe_addresses = self.known_safe_addresses.write().await;
+        known_safe_addresses
+            .get_or_insert_with(HashSet::new)
+            .insert(safe_address);
+    }
+
+    async fn is_known_safe_address(&self, tx: &OpenTransaction, address: Address) -> Result<bool> {
+        self.ensure_known_safe_addresses_loaded(tx).await?;
+        Ok(self
+            .known_safe_addresses
+            .read()
+            .await
+            .as_ref()
+            .is_some_and(|known_safe_addresses| known_safe_addresses.contains(&address)))
     }
 
     fn is_safe_contract_topic(topic: &[u8; 32]) -> bool {
@@ -237,12 +279,7 @@ where
         } else if log.address.eq(&self.addresses.node_safe_registry) {
             let event = HoprNodeSafeRegistryEvents::decode_log(&primitive_log)?;
             self.on_node_safe_registry_event(tx, &log, event.data, is_synced).await
-        } else if self
-            .db
-            .get_safe_contract_by_address(Some(tx), log.address)
-            .await?
-            .is_some()
-        {
+        } else if self.is_known_safe_address(tx, log.address).await? {
             if !self.enable_safe_indexing {
                 debug!(address = %log.address, "Ignoring Safe contract event because Safe indexing is disabled");
                 return Ok(vec![]);
@@ -357,19 +394,30 @@ where
             .begin_transaction()
             .await?
             .perform(move |tx| {
-                let log = slog.clone();
-                let tx_hash = Hash::from(log.tx_hash);
-                let log_id = log.log_index;
-                let block_id = log.block_number;
+                let myself = myself.clone();
+                let slog = slog.clone();
 
                 Box::pin(async move {
-                    match myself.process_log_event(tx, log, is_synced).await {
-                        Ok(events) => {
-                            debug!(block_id, %tx_hash, log_id, "processed log successfully");
-                            Ok(events)
-                        }
+                    myself.clear_pending_safe_mutations_for_tx(tx).await;
+                    myself.clear_pending_safe_redeemed_stat_mutations_for_tx(tx).await;
+
+                    match myself.collect_log_event_in_tx(tx, slog, is_synced).await {
+                        Ok(events) => match myself.flush_pending_safe_mutations_for_tx(tx).await {
+                            Ok(()) => match myself.flush_pending_safe_redeemed_stat_mutations_for_tx(tx).await {
+                                Ok(()) => Ok(events),
+                                Err(error) => {
+                                    myself.discard_pending_safe_redeemed_stat_mutations_for_tx(tx).await;
+                                    Err(error)
+                                }
+                            },
+                            Err(error) => {
+                                myself.discard_pending_safe_mutations_for_tx(tx).await;
+                                Err(error)
+                            }
+                        },
                         Err(error) => {
-                            error!(block_id, %tx_hash, log_id, %error, "error processing log in tx");
+                            myself.discard_pending_safe_mutations_for_tx(tx).await;
+                            myself.discard_pending_safe_redeemed_stat_mutations_for_tx(tx).await;
                             Err(error)
                         }
                     }
@@ -377,7 +425,6 @@ where
             })
             .await?;
 
-        // Publish events after transaction commit
         if is_synced {
             for event in events {
                 self.indexer_state.publish_event(event);
@@ -385,6 +432,61 @@ where
         }
 
         Ok(())
+    }
+
+    async fn collect_log_event_in_tx(
+        &self,
+        tx: &OpenTransaction,
+        slog: SerializableLog,
+        is_synced: bool,
+    ) -> Result<Vec<IndexerEvent>> {
+        let tx_hash = Hash::from(slog.tx_hash);
+        let log_id = slog.log_index;
+        let block_id = slog.block_number;
+
+        match self.process_log_event(tx, slog, is_synced).await {
+            Ok(events) => {
+                debug!(block_id, %tx_hash, log_id, "processed log successfully");
+                Ok(events)
+            }
+            Err(error) => {
+                error!(block_id, %tx_hash, log_id, %error, "error processing log in tx");
+                Err(error)
+            }
+        }
+    }
+
+    async fn clear_pending_safe_mutations(&self, tx: &OpenTransaction) {
+        self.clear_pending_safe_mutations_for_tx(tx).await;
+    }
+
+    async fn clear_pending_safe_redeemed_stats(&self, tx: &OpenTransaction) {
+        self.clear_pending_safe_redeemed_stat_mutations_for_tx(tx).await;
+    }
+
+    async fn merge_pending_safe_mutations(&self, from_key: usize, tx: &OpenTransaction) {
+        self.merge_pending_safe_mutations_for_tx_key(from_key, tx).await;
+    }
+
+    async fn merge_pending_safe_redeemed_stats(&self, from_key: usize, tx: &OpenTransaction) {
+        self.merge_pending_safe_redeemed_stat_mutations_for_tx_key(from_key, tx)
+            .await;
+    }
+
+    async fn flush_pending_safe_mutations(&self, tx: &OpenTransaction) -> Result<()> {
+        self.flush_pending_safe_mutations_for_tx(tx).await
+    }
+
+    async fn flush_pending_safe_redeemed_stats(&self, tx: &OpenTransaction) -> Result<()> {
+        self.flush_pending_safe_redeemed_stat_mutations_for_tx(tx).await
+    }
+
+    async fn discard_pending_safe_mutations(&self, tx: &OpenTransaction) {
+        self.discard_pending_safe_mutations_for_tx(tx).await;
+    }
+
+    async fn discard_pending_safe_redeemed_stats(&self, tx: &OpenTransaction) {
+        self.discard_pending_safe_redeemed_stat_mutations_for_tx(tx).await;
     }
 }
 

@@ -2,10 +2,11 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use blokli_chain_types::ContractAddresses;
+use blokli_db::OpenTransaction;
 use hopr_bindings::exports::alloy::primitives::B256;
 use hopr_types::primitive::prelude::*;
 
-use crate::errors::Result;
+use crate::{errors::Result, state::IndexerEvent};
 
 #[async_trait]
 pub trait ChainLogHandler {
@@ -47,6 +48,25 @@ pub trait ChainLogHandler {
     /// # Returns
     /// * `Result<()>` - Success or error
     async fn collect_log_event(&self, log: SerializableLog, is_synced: bool) -> Result<()>;
+
+    async fn collect_log_event_in_tx(
+        &self,
+        tx: &OpenTransaction,
+        log: SerializableLog,
+        is_synced: bool,
+    ) -> Result<Vec<IndexerEvent>>;
+
+    async fn clear_pending_safe_mutations(&self, tx: &OpenTransaction);
+    async fn clear_pending_safe_redeemed_stats(&self, tx: &OpenTransaction);
+
+    async fn merge_pending_safe_mutations(&self, from_key: usize, tx: &OpenTransaction);
+    async fn merge_pending_safe_redeemed_stats(&self, from_key: usize, tx: &OpenTransaction);
+
+    async fn flush_pending_safe_mutations(&self, tx: &OpenTransaction) -> Result<()>;
+    async fn flush_pending_safe_redeemed_stats(&self, tx: &OpenTransaction) -> Result<()>;
+
+    async fn discard_pending_safe_mutations(&self, tx: &OpenTransaction);
+    async fn discard_pending_safe_redeemed_stats(&self, tx: &OpenTransaction);
 }
 
 #[cfg(test)]
@@ -75,5 +95,19 @@ mock! {
         fn contract_addresses_map(&self) -> Arc<ContractAddresses>;
         fn contract_address_topics(&self, contract: Address) -> Vec<B256>;
         async fn collect_log_event(&self, log: SerializableLog, is_synced: bool) -> Result<()>;
+        async fn collect_log_event_in_tx(
+            &self,
+            tx: &OpenTransaction,
+            log: SerializableLog,
+            is_synced: bool,
+        ) -> Result<Vec<IndexerEvent>>;
+        async fn clear_pending_safe_mutations(&self, tx: &OpenTransaction);
+        async fn clear_pending_safe_redeemed_stats(&self, tx: &OpenTransaction);
+        async fn merge_pending_safe_mutations(&self, from_key: usize, tx: &OpenTransaction);
+        async fn merge_pending_safe_redeemed_stats(&self, from_key: usize, tx: &OpenTransaction);
+        async fn flush_pending_safe_mutations(&self, tx: &OpenTransaction) -> Result<()>;
+        async fn flush_pending_safe_redeemed_stats(&self, tx: &OpenTransaction) -> Result<()>;
+        async fn discard_pending_safe_mutations(&self, tx: &OpenTransaction);
+        async fn discard_pending_safe_redeemed_stats(&self, tx: &OpenTransaction);
     }
 }

@@ -436,7 +436,7 @@ where
                         .await
                         .expect("live block logs should be stored");
 
-                    Self::process_block(&db, &logs_handler, block.clone(), false, true, &indexer_state, true).await;
+                    Self::process_block(&db, &logs_handler, &block, false, true, &indexer_state, true).await;
 
                     stream_start_block = block.block_id.saturating_add(1);
 
@@ -657,14 +657,14 @@ where
     /// A `Result` containing an Option with unit type if the operation succeeds or an error if it fails.
     async fn process_block_by_id(
         db: &Db,
-        logs_handler: &U,
+        logs_handler: &Arc<U>,
         block_id: u64,
         is_synced: bool,
         indexer_state: &IndexerState,
     ) -> crate::errors::Result<Option<()>>
     where
         U: ChainLogHandler + 'static,
-        Db: BlokliDbLogOperations + 'static,
+        Db: BlokliDbGeneralModelOperations + BlokliDbLogOperations + 'static,
     {
         let logs = db.get_logs(Some(block_id), Some(0)).await?;
         let mut block = BlockWithLogs {
@@ -685,10 +685,10 @@ where
             }
         }
 
-        Ok(Self::process_block(db, logs_handler, block, true, is_synced, indexer_state, true).await)
+        Ok(Self::process_block(db, logs_handler, &block, true, is_synced, indexer_state, true).await)
     }
 
-    async fn store_block_logs(db: &Db, logs_handler: &U, block: &BlockWithLogs) -> Result<()>
+    async fn store_block_logs(db: &Db, logs_handler: &Arc<U>, block: &BlockWithLogs) -> Result<()>
     where
         U: ChainLogHandler + 'static,
         Db: BlokliDbLogOperations + 'static,
@@ -722,18 +722,18 @@ where
     async fn run_historical_phase(
         rpc: &T,
         db: &Db,
-        logs_handler: &U,
+        logs_handler: &Arc<U>,
         indexer_state: &IndexerState,
         start_block: u64,
         end_block: u64,
         filter_phase: LogFilterPhase,
-        phase_name: &str,
+        phase_name: &'static str,
         enable_safe_indexing: bool,
     ) -> Result<()>
     where
         T: HoprIndexerRpcOperations + 'static,
         U: ChainLogHandler + 'static,
-        Db: BlokliDbLogOperations + 'static,
+        Db: BlokliDbGeneralModelOperations + BlokliDbLogOperations + 'static,
     {
         if start_block > end_block {
             return Ok(());
@@ -749,14 +749,46 @@ where
         }
 
         let mut event_stream = rpc.try_stream_logs(start_block, log_filters, false)?;
+        let mut next_block = event_stream.next().await;
 
-        while let Some(block) = event_stream.next().await {
+        while let Some(block) = next_block {
             if block.block_id > end_block {
                 break;
             }
 
-            Self::store_block_logs(db, logs_handler, &block).await?;
-            Self::process_block(db, logs_handler, block.clone(), false, false, indexer_state, false).await;
+            if block.block_id >= end_block {
+                Self::store_block_logs(db, logs_handler, &block).await?;
+                Self::process_block(db, logs_handler, &block, false, false, indexer_state, false).await;
+
+                let progress = if end_block == start_block {
+                    100_f64
+                } else {
+                    ((block.block_id.saturating_sub(start_block)) as f64
+                        / (end_block.saturating_sub(start_block)) as f64)
+                        * 100_f64
+                };
+                #[cfg(all(feature = "telemetry", not(test)))]
+                {
+                    METRIC_INDEXER_SYNC_PROGRESS.set(&[&filter_phase.to_string()], progress / 100_f64);
+                }
+                info!(
+                    phase = phase_name,
+                    progress,
+                    block = block.block_id,
+                    end_block,
+                    "Historical sync phase progress"
+                );
+
+                break;
+            }
+
+            let process_current_block = async {
+                Self::store_block_logs(db, logs_handler, &block).await?;
+                Self::process_block(db, logs_handler, &block, false, false, indexer_state, false).await;
+                Ok::<(), crate::errors::CoreEthereumIndexerError>(())
+            };
+            let (process_result, prefetched_block) = tokio::join!(process_current_block, event_stream.next());
+            process_result?;
 
             let progress = if end_block == start_block {
                 100_f64
@@ -776,9 +808,7 @@ where
                 "Historical sync phase progress"
             );
 
-            if block.block_id >= end_block {
-                break;
-            }
+            next_block = prefetched_block;
         }
 
         Ok(())
@@ -799,10 +829,11 @@ where
     /// # Returns
     ///
     /// An Option with unit type if the operation succeeds.
+    #[allow(clippy::too_many_arguments)]
     async fn process_block(
         db: &Db,
-        logs_handler: &U,
-        block: BlockWithLogs,
+        logs_handler: &Arc<U>,
+        block: &BlockWithLogs,
         fetch_checksum_from_db: bool,
         is_synced: bool,
         indexer_state: &IndexerState,
@@ -810,15 +841,16 @@ where
     ) -> Option<()>
     where
         U: ChainLogHandler + 'static,
-        Db: BlokliDbLogOperations + 'static,
+        Db: BlokliDbGeneralModelOperations + BlokliDbLogOperations + Clone + 'static,
     {
         let _lock = indexer_state.acquire_processing_lock().await;
         let block_id = block.block_id;
         let log_count = block.logs.len();
+        let block_logs = block.logs.clone();
         debug!(block_id, "processing events");
 
         // Check for blockchain reorganization before processing logs
-        if let Some(reorg_info) = Self::detect_reorg(&block) {
+        if let Some(reorg_info) = Self::detect_reorg(block) {
             error!(
                 block_id = reorg_info.detected_at_block,
                 affected_blocks = ?reorg_info.affected_block_range,
@@ -847,25 +879,98 @@ where
             }
         }
 
-        // FIXME: The block indexing and marking as processed should be done in a single
-        // transaction. This is difficult since currently this would be across databases.
-        // Process all logs - events are published internally via IndexerState
-        for log in block.logs.clone() {
-            match logs_handler.collect_log_event(log.clone(), is_synced).await {
-                Ok(()) => match db.set_log_processed(log).await {
-                    Ok(_) => {}
-                    Err(error) => {
-                        error!(block_id, %error, "failed to mark log as processed, panicking to prevent data loss");
-                        panic!("failed to mark log as processed, panicking to prevent data loss")
-                    }
-                },
-                Err(CoreEthereumIndexerError::ProcessError(error)) => {
-                    error!(block_id, %error, "failed to process log, continuing indexing");
-                }
+        let db_for_block = db.clone();
+        let logs_handler_for_block = Arc::clone(logs_handler);
+        let (successful_logs, committed_events) = match db.begin_transaction().await {
+            Ok(block_tx) => match block_tx
+                .perform(|block_tx| {
+                    let db = db_for_block.clone();
+                    let logs_handler = Arc::clone(&logs_handler_for_block);
+                    let block_logs = block_logs.clone();
+                    Box::pin(async move {
+                        let mut successful_logs = Vec::with_capacity(log_count);
+                        let mut committed_events = Vec::new();
+
+                        logs_handler.clear_pending_safe_mutations(block_tx).await;
+                        logs_handler.clear_pending_safe_redeemed_stats(block_tx).await;
+
+                        for log in block_logs {
+                            let nested_tx = db.nest_transaction(Some(block_tx)).await?;
+                            let log_result = nested_tx
+                                .perform(|log_tx| {
+                                    let logs_handler = Arc::clone(&logs_handler);
+                                    let log = log.clone();
+
+                                    Box::pin(async move {
+                                        logs_handler.clear_pending_safe_mutations(log_tx).await;
+                                        logs_handler.clear_pending_safe_redeemed_stats(log_tx).await;
+
+                                        match logs_handler.collect_log_event_in_tx(log_tx, log, is_synced).await {
+                                            Ok(events) => Ok((events, log_tx.as_ref() as *const _ as usize)),
+                                            Err(error) => {
+                                                logs_handler.discard_pending_safe_mutations(log_tx).await;
+                                                logs_handler.discard_pending_safe_redeemed_stats(log_tx).await;
+                                                Err(error)
+                                            }
+                                        }
+                                    })
+                                })
+                                .await;
+
+                            match log_result {
+                                Ok((events, mutation_key)) => {
+                                    logs_handler.merge_pending_safe_mutations(mutation_key, block_tx).await;
+                                    logs_handler
+                                        .merge_pending_safe_redeemed_stats(mutation_key, block_tx)
+                                        .await;
+                                    successful_logs.push(log);
+                                    committed_events.extend(events);
+                                }
+                                Err(CoreEthereumIndexerError::ProcessError(error)) => {
+                                    error!(block_id, %error, "failed to process log, continuing indexing");
+                                }
+                                Err(error) => {
+                                    error!(block_id, %error, "failed to process log, panicking to prevent data loss");
+                                    return Err(error);
+                                }
+                            }
+                        }
+
+                        if let Err(error) = logs_handler.flush_pending_safe_mutations(block_tx).await {
+                            logs_handler.discard_pending_safe_mutations(block_tx).await;
+                            return Err(error);
+                        }
+                        if let Err(error) = logs_handler.flush_pending_safe_redeemed_stats(block_tx).await {
+                            logs_handler.discard_pending_safe_redeemed_stats(block_tx).await;
+                            return Err(error);
+                        }
+
+                        Ok((successful_logs, committed_events))
+                    })
+                })
+                .await
+            {
+                Ok(outcome) => outcome,
                 Err(error) => {
-                    error!(block_id, %error, "failed to process log, panicking to prevent data loss");
-                    panic!("failed to process log, panicking to prevent data loss")
+                    error!(block_id, %error, "failed to process block, panicking to prevent data loss");
+                    panic!("failed to process block, panicking to prevent data loss")
                 }
+            },
+            Err(error) => {
+                error!(block_id, %error, "failed to start block transaction, panicking to prevent data loss");
+                panic!("failed to start block transaction, panicking to prevent data loss")
+            }
+        };
+        match db.set_logs_processed_explicit(successful_logs).await {
+            Ok(_) => {}
+            Err(error) => {
+                error!(block_id, %error, "failed to mark logs as processed, panicking to prevent data loss");
+                panic!("failed to mark logs as processed, panicking to prevent data loss")
+            }
+        }
+        if is_synced {
+            for event in committed_events {
+                indexer_state.publish_event(event);
             }
         }
 
@@ -884,7 +989,7 @@ where
         match db.update_logs_checksums().await {
             Ok(last_log_checksum) => {
                 let checksum = if fetch_checksum_from_db {
-                    let last_log = block.logs.into_iter().next_back()?;
+                    let last_log = block.logs.iter().next_back()?;
                     let log = db.get_log(block_id, last_log.tx_index, last_log.log_index).await.ok()?;
 
                     log.checksum?
@@ -1261,9 +1366,9 @@ mod tests {
         pin::Pin,
         sync::{
             Arc,
-            atomic::{AtomicBool as StdAtomicBool, Ordering as StdOrdering},
+            atomic::{AtomicBool as StdAtomicBool, AtomicUsize, Ordering as StdOrdering},
         },
-        time::Duration,
+        time::{Duration, Instant},
     };
 
     use async_trait::async_trait;
@@ -1354,6 +1459,103 @@ mod tests {
         Ok(logs)
     }
 
+    fn expect_noop_safe_mutation_lifecycle(
+        handler: &mut MockChainLogHandler,
+        processed_blocks: usize,
+        successful_logs: usize,
+    ) {
+        handler
+            .expect_clear_pending_safe_mutations()
+            .times(processed_blocks + successful_logs)
+            .returning(|_| ());
+        handler
+            .expect_clear_pending_safe_redeemed_stats()
+            .times(processed_blocks + successful_logs)
+            .returning(|_| ());
+        handler
+            .expect_merge_pending_safe_mutations()
+            .times(successful_logs)
+            .returning(|_, _| ());
+        handler
+            .expect_merge_pending_safe_redeemed_stats()
+            .times(successful_logs)
+            .returning(|_, _| ());
+        handler
+            .expect_flush_pending_safe_mutations()
+            .times(processed_blocks)
+            .returning(|_| Ok(()));
+        handler
+            .expect_flush_pending_safe_redeemed_stats()
+            .times(processed_blocks)
+            .returning(|_| Ok(()));
+    }
+
+    #[derive(Clone)]
+    struct SleepyHistoricalHandler {
+        addresses: Arc<ContractAddresses>,
+        topic: B256,
+        first_log_seen: Arc<AtomicUsize>,
+    }
+
+    #[async_trait]
+    impl ChainLogHandler for SleepyHistoricalHandler {
+        fn contract_addresses(&self) -> Vec<Address> {
+            vec![self.addresses.announcements]
+        }
+
+        fn contract_addresses_map(&self) -> Arc<ContractAddresses> {
+            Arc::clone(&self.addresses)
+        }
+
+        fn contract_address_topics(&self, contract: Address) -> Vec<B256> {
+            if contract == self.addresses.announcements {
+                vec![self.topic]
+            } else {
+                vec![]
+            }
+        }
+
+        async fn collect_log_event(&self, _log: SerializableLog, _is_synced: bool) -> crate::errors::Result<()> {
+            Ok(())
+        }
+
+        async fn collect_log_event_in_tx(
+            &self,
+            _tx: &blokli_db::OpenTransaction,
+            _log: SerializableLog,
+            _is_synced: bool,
+        ) -> crate::errors::Result<Vec<crate::state::IndexerEvent>> {
+            if self.first_log_seen.fetch_add(1, StdOrdering::SeqCst) == 0 {
+                tokio::time::sleep(Duration::from_millis(150)).await;
+            }
+
+            Ok(Vec::new())
+        }
+
+        async fn clear_pending_safe_mutations(&self, _tx: &blokli_db::OpenTransaction) {}
+
+        async fn clear_pending_safe_redeemed_stats(&self, _tx: &blokli_db::OpenTransaction) {}
+
+        async fn merge_pending_safe_mutations(&self, _from_key: usize, _tx: &blokli_db::OpenTransaction) {}
+
+        async fn merge_pending_safe_redeemed_stats(&self, _from_key: usize, _tx: &blokli_db::OpenTransaction) {}
+
+        async fn flush_pending_safe_mutations(&self, _tx: &blokli_db::OpenTransaction) -> crate::errors::Result<()> {
+            Ok(())
+        }
+
+        async fn flush_pending_safe_redeemed_stats(
+            &self,
+            _tx: &blokli_db::OpenTransaction,
+        ) -> crate::errors::Result<()> {
+            Ok(())
+        }
+
+        async fn discard_pending_safe_mutations(&self, _tx: &blokli_db::OpenTransaction) {}
+
+        async fn discard_pending_safe_redeemed_stats(&self, _tx: &blokli_db::OpenTransaction) {}
+    }
+
     mock! {
         HoprIndexerOps {}     // Name of the mock struct, less the "Mock" prefix
 
@@ -1415,16 +1617,78 @@ mod tests {
         }
 
         async fn collect_log_event(&self, _log: SerializableLog, _is_synced: bool) -> crate::errors::Result<()> {
+            let myself = self.clone();
+            let tx = self.db.begin_transaction().await?;
+            tx.perform(move |tx| {
+                let myself = myself.clone();
+                let log = _log.clone();
+
+                Box::pin(async move {
+                    myself.clear_pending_safe_mutations(tx).await;
+                    myself.clear_pending_safe_redeemed_stats(tx).await;
+                    match myself.collect_log_event_in_tx(tx, log, _is_synced).await {
+                        Ok(_) => {
+                            myself.flush_pending_safe_mutations(tx).await?;
+                            myself.flush_pending_safe_redeemed_stats(tx).await
+                        }
+                        Err(error) => {
+                            myself.discard_pending_safe_mutations(tx).await;
+                            myself.discard_pending_safe_redeemed_stats(tx).await;
+                            Err(error)
+                        }
+                    }
+                })
+            })
+            .await
+        }
+
+        async fn collect_log_event_in_tx(
+            &self,
+            _tx: &blokli_db::OpenTransaction,
+            _log: SerializableLog,
+            _is_synced: bool,
+        ) -> crate::errors::Result<Vec<crate::state::IndexerEvent>> {
             if !self.safe_created.swap(true, StdOrdering::SeqCst) {
                 self.db
-                    .create_safe_contract(None, self.safe_address, Address::default(), self.safe_address, 1, 0, 0)
+                    .create_safe_contract(
+                        Some(_tx),
+                        self.safe_address,
+                        Address::default(),
+                        self.safe_address,
+                        1,
+                        0,
+                        0,
+                    )
                     .await
                     .map_err(CoreEthereumIndexerError::from)?;
                 self.indexer_state.mark_safe_filters_dirty();
             }
 
+            Ok(Vec::new())
+        }
+
+        async fn clear_pending_safe_mutations(&self, _tx: &blokli_db::OpenTransaction) {}
+
+        async fn clear_pending_safe_redeemed_stats(&self, _tx: &blokli_db::OpenTransaction) {}
+
+        async fn merge_pending_safe_mutations(&self, _from_key: usize, _tx: &blokli_db::OpenTransaction) {}
+
+        async fn merge_pending_safe_redeemed_stats(&self, _from_key: usize, _tx: &blokli_db::OpenTransaction) {}
+
+        async fn flush_pending_safe_mutations(&self, _tx: &blokli_db::OpenTransaction) -> crate::errors::Result<()> {
             Ok(())
         }
+
+        async fn flush_pending_safe_redeemed_stats(
+            &self,
+            _tx: &blokli_db::OpenTransaction,
+        ) -> crate::errors::Result<()> {
+            Ok(())
+        }
+
+        async fn discard_pending_safe_mutations(&self, _tx: &blokli_db::OpenTransaction) {}
+
+        async fn discard_pending_safe_redeemed_stats(&self, _tx: &blokli_db::OpenTransaction) {}
     }
 
     #[tokio::test]
@@ -1694,10 +1958,11 @@ mod tests {
 
         // called once per block which is finalizable
         handlers
-            .expect_collect_log_event()
+            .expect_collect_log_event_in_tx()
             // .times(2)
             .times(finalized_block.logs.len())
-            .returning(|_, _| Ok(()));
+            .returning(|_, _, _| Ok(Vec::new()));
+        expect_noop_safe_mutation_lifecycle(&mut handlers, 1, finalized_block.logs.len());
 
         assert!(tx.start_send(finalized_block.clone()).is_ok());
         assert!(tx.start_send(head_allowing_finalization.clone()).is_ok());
@@ -1759,10 +2024,11 @@ mod tests {
                 .withf(move |x| x == &addr)
                 .return_const(vec![B256::from_slice(topic.as_ref())]);
             handlers
-                .expect_collect_log_event()
+                .expect_collect_log_event_in_tx()
                 .times(2)
-                .withf(move |l, _| [1, 2].contains(&l.block_number))
-                .returning(|_, _| Ok(()));
+                .withf(move |_, l, _| [1, 2].contains(&l.block_number))
+                .returning(|_, _, _| Ok(Vec::new()));
+            expect_noop_safe_mutation_lifecycle(&mut handlers, 2, 2);
             handlers
                 .expect_contract_address_topics()
                 .withf(move |x| x == &addr)
@@ -1850,10 +2116,11 @@ mod tests {
                 .return_const(vec![B256::from_slice(topic.as_ref())]);
 
             handlers
-                .expect_collect_log_event()
+                .expect_collect_log_event_in_tx()
                 .times(2)
-                .withf(move |l, _| [3, 4].contains(&l.block_number))
-                .returning(|_, _| Ok(()));
+                .withf(move |_, l, _| [3, 4].contains(&l.block_number))
+                .returning(|_, _, _| Ok(Vec::new()));
+            expect_noop_safe_mutation_lifecycle(&mut handlers, 2, 2);
             handlers
                 .expect_contract_address_topics()
                 .withf(move |x| x == &addr)
@@ -1874,6 +2141,165 @@ mod tests {
             assert_eq!(db.get_logs_block_numbers(None, None, Some(true)).await?.len(), 4);
             assert_eq!(db.get_logs_block_numbers(None, None, Some(false)).await?.len(), 0);
         }
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_process_block_commits_successful_logs_around_process_error() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let indexer_state = IndexerState::default();
+        let mut handlers = MockChainLogHandler::new();
+
+        let logs = build_announcement_logs(*ALICE, 3, 42, 10)?;
+        db.store_logs(logs.clone())
+            .await?
+            .into_iter()
+            .for_each(|result| assert!(result.is_ok()));
+
+        let block = BlockWithLogs {
+            block_id: 42,
+            logs: BTreeSet::from_iter(logs.clone()),
+        };
+
+        handlers
+            .expect_collect_log_event_in_tx()
+            .times(3)
+            .returning(|_, log, _| {
+                if log.log_index == 11 {
+                    Err(CoreEthereumIndexerError::ProcessError("synthetic soft failure".into()))
+                } else {
+                    Ok(Vec::new())
+                }
+            });
+        handlers
+            .expect_clear_pending_safe_mutations()
+            .times(4)
+            .returning(|_| ());
+        handlers
+            .expect_clear_pending_safe_redeemed_stats()
+            .times(4)
+            .returning(|_| ());
+        handlers
+            .expect_merge_pending_safe_mutations()
+            .times(2)
+            .returning(|_, _| ());
+        handlers
+            .expect_merge_pending_safe_redeemed_stats()
+            .times(2)
+            .returning(|_, _| ());
+        handlers
+            .expect_flush_pending_safe_mutations()
+            .times(1)
+            .returning(|_| Ok(()));
+        handlers
+            .expect_flush_pending_safe_redeemed_stats()
+            .times(1)
+            .returning(|_| Ok(()));
+        handlers
+            .expect_discard_pending_safe_mutations()
+            .times(1)
+            .returning(|_| ());
+        handlers
+            .expect_discard_pending_safe_redeemed_stats()
+            .times(1)
+            .returning(|_| ());
+        let handlers = Arc::new(handlers);
+
+        let result = Indexer::<MockHoprIndexerOps, MockChainLogHandler, BlokliDb>::process_block(
+            &db,
+            &handlers,
+            &block,
+            false,
+            false,
+            &indexer_state,
+            false,
+        )
+        .await;
+
+        assert_eq!(result, Some(()));
+
+        let first_log = db
+            .get_log(logs[0].block_number, logs[0].tx_index, logs[0].log_index)
+            .await?;
+        let second_log = db
+            .get_log(logs[1].block_number, logs[1].tx_index, logs[1].log_index)
+            .await?;
+        let third_log = db
+            .get_log(logs[2].block_number, logs[2].tx_index, logs[2].log_index)
+            .await?;
+
+        assert_eq!(first_log.processed, Some(true));
+        assert_eq!(second_log.processed, Some(false));
+        assert_eq!(third_log.processed, Some(true));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_indexer_historical_sync_overlaps_fetch_with_processing() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let indexer_state = IndexerState::default();
+        let mut rpc = MockHoprIndexerOps::new();
+
+        let addr = Address::new(b"my address 123456789");
+        let topic = B256::from_slice(Hash::create(&[b"my topic"]).as_ref());
+        db.ensure_logs_origin(vec![(addr, Hash::from(topic.0))]).await?;
+
+        let handlers = Arc::new(SleepyHistoricalHandler {
+            addresses: Arc::new(ContractAddresses {
+                announcements: addr,
+                ..ContractAddresses::default()
+            }),
+            topic,
+            first_log_seen: Arc::new(AtomicUsize::new(0)),
+        });
+
+        let first_block = BlockWithLogs {
+            block_id: 1,
+            logs: BTreeSet::from_iter(build_announcement_logs(addr, 1, 1, 0)?),
+        };
+        let second_block = BlockWithLogs {
+            block_id: 2,
+            logs: BTreeSet::from_iter(build_announcement_logs(addr, 1, 2, 1)?),
+        };
+
+        rpc.expect_try_stream_logs().once().return_once(move |_, _, _| {
+            Ok(Box::pin(futures::stream::unfold(
+                (Some(first_block), Some(second_block)),
+                |(first_block, second_block)| async move {
+                    match (first_block, second_block) {
+                        (Some(first_block), second_block) => Some((first_block, (None, second_block))),
+                        (None, Some(second_block)) => {
+                            tokio::time::sleep(Duration::from_millis(150)).await;
+                            Some((second_block, (None, None)))
+                        }
+                        (None, None) => None,
+                    }
+                },
+            )))
+        });
+
+        let started_at = Instant::now();
+        Indexer::<MockHoprIndexerOps, SleepyHistoricalHandler, BlokliDb>::run_historical_phase(
+            &rpc,
+            &db,
+            &handlers,
+            &indexer_state,
+            1,
+            2,
+            LogFilterPhase::HistoricalDiscovery,
+            "discover-safes",
+            false,
+        )
+        .await?;
+        let elapsed = started_at.elapsed();
+
+        assert!(
+            elapsed < Duration::from_millis(260),
+            "historical sync should overlap the 150ms next-block fetch with the 150ms first-block processing step, \
+             elapsed={elapsed:?}"
+        );
 
         Ok(())
     }
@@ -1910,14 +2336,12 @@ mod tests {
             .return_once(move |_, _, _| Ok(Box::pin(rx)));
         rpc.expect_try_stream_logs()
             .times(1)
-            .withf(move |x: &u64, _y: &FilterSet, is_synced: &bool| *x == head_block + 2 && *is_synced)
+            .withf(move |x: &u64, _y: &FilterSet, is_synced: &bool| *x == head_block + 1 && *is_synced)
             .return_once(move |_, _, _| Ok(Box::pin(futures::stream::empty())));
         rpc.expect_get_hopr_balance()
-            .once()
-            .return_once(move |_| Ok(HoprBalance::zero()));
+            .returning(move |_| Ok(HoprBalance::zero()));
         rpc.expect_get_hopr_allowance()
-            .once()
-            .return_once(move |_, _| Ok(HoprBalance::zero()));
+            .returning(move |_, _| Ok(HoprBalance::zero()));
 
         let block_numbers = [head_block - 1, head_block, head_block + 1];
 
@@ -1939,10 +2363,11 @@ mod tests {
 
         // Generate the expected events to be able to process the blocks
         handlers
-            .expect_collect_log_event()
-            .times(blocks.len())
-            .withf(move |l, _| block_numbers.contains(&l.block_number))
-            .returning(|_, _| Ok(()));
+            .expect_collect_log_event_in_tx()
+            .times(2)
+            .withf(move |_, l, _| block_numbers.contains(&l.block_number))
+            .returning(|_, _, _| Ok(Vec::new()));
+        expect_noop_safe_mutation_lifecycle(&mut handlers, 2, 2);
 
         let indexer =
             Indexer::new(rpc, handlers, db.clone(), cfg, IndexerState::default()).without_panic_on_completion();
@@ -2027,10 +2452,11 @@ mod tests {
             .expect_contract_addresses_map()
             .return_const(ContractAddresses::default());
         handlers
-            .expect_collect_log_event()
+            .expect_collect_log_event_in_tx()
             .once()
-            .withf(move |l, _| l.block_number == last_processed_block + 1)
-            .returning(|_, _| Ok(()));
+            .withf(move |_, l, _| l.block_number == last_processed_block + 1)
+            .returning(|_, _, _| Ok(Vec::new()));
+        expect_noop_safe_mutation_lifecycle(&mut handlers, 1, 1);
 
         let indexer_cfg = IndexerConfig::new(0, false, false, false, None, "/tmp/test_data".to_string(), 1000, 10);
 

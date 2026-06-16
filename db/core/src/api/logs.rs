@@ -113,6 +113,17 @@ pub trait BlokliDbLogOperations {
     /// A `Result` which is `Ok(())` if the operation succeeds or an error if it fails.
     async fn set_log_processed(&self, log: SerializableLog) -> Result<()>;
 
+    /// Marks an explicit set of log entries as processed.
+    ///
+    /// # Arguments
+    ///
+    /// * `logs` - The log entries to mark as processed.
+    ///
+    /// # Returns
+    ///
+    /// A `Result` which is `Ok(())` if the operation succeeds or an error if it fails.
+    async fn set_logs_processed_explicit(&self, logs: Vec<SerializableLog>) -> Result<()>;
+
     /// Marks multiple log entries as processed.
     ///
     /// # Arguments
