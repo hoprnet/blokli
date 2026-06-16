@@ -551,8 +551,11 @@ where
             let res = future.await;
 
             #[cfg(all(feature = "telemetry", not(test)))]
-            for method in &method_names {
-                METRIC_RPC_CALLS_TIMING.observe(&[method], start.elapsed().as_secs_f64());
+            {
+                let elapsed = start.elapsed().as_secs_f64();
+                for method in &method_names {
+                    METRIC_RPC_CALLS_TIMING.observe(&[method], elapsed);
+                }
             }
 
             // First deserialize the Response object

@@ -218,6 +218,24 @@ async fn insert_safe_redeemed_stat_event_anchors<C: ConnectionTrait>(
     Ok(inserted)
 }
 
+async fn load_safe_redeemed_stat_event_anchors<C: ConnectionTrait>(
+    conn: &C,
+    identities: &[SafeRedeemedStatEventIdentity],
+    batch_size: usize,
+) -> Result<Vec<hopr_safe_redeemed_stat_event::Model>> {
+    let mut stored = Vec::new();
+
+    for chunk in identities.chunks(batch_size) {
+        let stored_chunk = HoprSafeRedeemedStatEvent::find()
+            .filter(safe_redeemed_stat_event_identity_filter(chunk.iter().cloned()))
+            .all(conn)
+            .await?;
+        stored.extend(stored_chunk);
+    }
+
+    Ok(stored)
+}
+
 fn group_inserted_safe_redeemed_stat_events(
     inserted_events: Vec<hopr_safe_redeemed_stat_event::Model>,
 ) -> Result<HashMap<SafeRedeemedStatPair, GroupedRedeemedDelta>> {
@@ -407,10 +425,7 @@ async fn persist_staged_safe_ticket_redemptions_in<C: ConnectionTrait>(
         .iter()
         .map(safe_redeemed_stat_event_identity)
         .collect::<Vec<_>>();
-    let stored_events = HoprSafeRedeemedStatEvent::find()
-        .filter(safe_redeemed_stat_event_identity_filter(event_identities))
-        .all(conn)
-        .await?;
+    let stored_events = load_safe_redeemed_stat_event_anchors(conn, &event_identities, batch_size).await?;
     if stored_events.len() != prepared_mutations.len() {
         return Err(DbSqlError::EntityNotFound(
             "failed to reconcile safe redeemed stat event anchors after bulk insert".to_string(),
@@ -726,6 +741,35 @@ mod tests {
         assert_eq!(second_node_entry.redemption_count, 1);
 
         assert_eq!(redeemed_anchor_count(&db).await?, 3);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_persist_staged_safe_ticket_redemptions_reconciles_large_sqlite_batches() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = random_address();
+
+        let staged = (0_u64..250)
+            .map(|index| {
+                let mut node_address = [0u8; 20];
+                node_address[12..20].copy_from_slice(&index.to_be_bytes());
+
+                StagedSafeRedeemedStatMutation {
+                    safe_address,
+                    node_address: Address::from(node_address),
+                    redeemed_amount: HoprBalance::from(index + 1),
+                    block: 100 + index,
+                    tx_index: 1,
+                    log_index: 0,
+                }
+            })
+            .collect::<Vec<_>>();
+
+        let persisted = db.persist_staged_safe_ticket_redemptions(None, staged).await?;
+
+        assert_eq!(persisted.len(), 250);
+        assert_eq!(redeemed_anchor_count(&db).await?, 250);
 
         Ok(())
     }
