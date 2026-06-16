@@ -17,7 +17,6 @@ on:
       - ready_for_review
 permissions:
   contents: read
-  id-token: write
 concurrency:
   group: ${{ github.event.pull_request.head.ref || github.ref_name }}-pr
   cancel-in-progress: true
@@ -97,6 +96,8 @@ jobs:
   # ── Shared tests (unit) ─────────────────────────────────────────────────────
   tests:
     name: Test
+    permissions:
+      id-token: write
     uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@798d791de5c5485c3043049781dfd0938539a36a # workflow-tests-v6
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
