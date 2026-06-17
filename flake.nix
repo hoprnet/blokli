@@ -426,6 +426,7 @@
               treefmtPrograms = pkgs.lib.attrValues config.treefmt.build.programs;
               extraPackages = with pkgs; [
                 cargo-machete
+                cargo-release
                 cargo-shear
                 zizmor
               ];
