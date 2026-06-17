@@ -379,7 +379,7 @@
             shellHook = ''
               echo "Running pre-commit checks..."
               ${packages.pre-commit-check.shellHook}
-              export GITHUB_TOKEN="$(gh auth token 2>/dev/null || true)"
+              export GITHUB_TOKEN="''${GITHUB_TOKEN:-$(gh auth token 2>/dev/null || true)}"
             '';
             extraPackages = with pkgs; [
               nodejs
