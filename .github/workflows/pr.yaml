@@ -17,6 +17,7 @@ on:
       - ready_for_review
 permissions:
   contents: read
+  id-token: write # zizmor: ignore[excessive-permissions]
 concurrency:
   group: ${{ github.event.pull_request.head.ref || github.ref_name }}-pr
   cancel-in-progress: true
@@ -96,7 +97,7 @@ jobs:
   # ── Shared tests (unit) ─────────────────────────────────────────────────────
   tests:
     name: Test
-    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@6895dbbc515e39e0e283a68a80b8628ca6ead37a # 0.7.2
+    uses: hoprnet/hopr-workflows/.github/workflows/tests.yaml@798d791de5c5485c3043049781dfd0938539a36a # workflow-tests-v6
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       enable_unit_tests: true
@@ -107,7 +108,6 @@ jobs:
       test_timeout: 30
     secrets:
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      codecov_token: ${{ secrets.CODECOV_TOKEN }}
   # ── Repo-specific: schema validation ────────────────────────────────────────
   schema-validation:
     name: Schema Validation
@@ -148,9 +148,10 @@ jobs:
             runner: depot-macos-15
             build_command: nix build -L .#binary-bloklid-aarch64-darwin
             required_label: "binary:aarch64-darwin"
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@6895dbbc515e39e0e283a68a80b8628ca6ead37a
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@b4ee9597f2c47f62fbc2c989a4af36fc4abf2f6f
     permissions:
       contents: read
+      id-token: write
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       version_type: commit
@@ -162,7 +163,6 @@ jobs:
       runner: ${{ matrix.runner }}
       enabled: ${{ matrix.required_label == '' || contains(github.event.pull_request.labels.*.name, matrix.required_label) }}
     secrets:
-      gcp_service_account: ${{ secrets.GCP_SA_GITHUB_RUNNER }}
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       gpg_private_key: ${{ secrets.GPG_HOPRNET_PRIVATE_KEY }}
   # ── Build: library ─────────────────────────────────────────────────────────
@@ -199,7 +199,7 @@ jobs:
   # ── Build: Docker ───────────────────────────────────────────────────────────
   build-docker:
     name: Docker
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@6895dbbc515e39e0e283a68a80b8628ca6ead37a
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@fa71078959cf9f892185e8df16551720693a2cd1
     needs: build-binaries
     permissions:
       contents: read
@@ -224,12 +224,14 @@ jobs:
       deployment_namespace: blokli
       deployment_label_selector: app.kubernetes.io/name=blokli
     secrets:
-      gcp_service_account: ${{ secrets.GCP_SA_GITHUB_RUNNER }}
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
   # ── Integration tests ──────────────────────────────────────────────────────
   integration-test:
     name: Integration Tests
     needs: [build-docker]
+    permissions:
+      contents: read
+      id-token: write
     uses: ./.github/workflows/integration-test.yaml
     with:
       image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid:${{ needs.build-docker.outputs.docker_build_version }}

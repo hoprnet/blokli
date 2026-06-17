@@ -31,9 +31,10 @@ jobs:
           - architecture: aarch64-darwin
             runner: depot-macos-15
             build_command: nix build -L .#binary-bloklid-aarch64-darwin
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@6895dbbc515e39e0e283a68a80b8628ca6ead37a
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@b4ee9597f2c47f62fbc2c989a4af36fc4abf2f6f
     permissions:
       contents: read
+      id-token: write
     with:
       source_branch: ${{ github.event.pull_request.base.ref }}
       version_type: pr
@@ -44,7 +45,6 @@ jobs:
       binary: bloklid
       runner: ${{ matrix.runner }}
     secrets:
-      gcp_service_account: ${{ secrets.GCP_SA_GITHUB_RUNNER }}
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
       gpg_private_key: ${{ secrets.GPG_HOPRNET_PRIVATE_KEY }}
   build-library:
@@ -76,7 +76,7 @@ jobs:
   build-docker:
     name: Docker
     if: github.event.pull_request.merged == true
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@6895dbbc515e39e0e283a68a80b8628ca6ead37a
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@fa71078959cf9f892185e8df16551720693a2cd1
     needs: build-binaries
     permissions:
       contents: read
@@ -106,12 +106,11 @@ jobs:
       deployment_label_selector: app.kubernetes.io/name=blokli
       concurrency_group_suffix: main
     secrets:
-      gcp_service_account: ${{ secrets.GCP_SA_GITHUB_RUNNER }}
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
   build-docker-with-anvil:
     name: Docker anvil
     if: github.event.pull_request.merged == true
-    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@6895dbbc515e39e0e283a68a80b8628ca6ead37a
+    uses: hoprnet/hopr-workflows/.github/workflows/build-docker.yaml@fa71078959cf9f892185e8df16551720693a2cd1
     needs: build-binaries
     permissions:
       contents: read
@@ -134,10 +133,7 @@ jobs:
       docker_image_format: skopeo
       concurrency_group_suffix: anvil
     secrets:
-      gcp_service_account: ${{ secrets.GCP_SA_GITHUB_RUNNER }}
       cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
-      docker_hub_username: ${{ secrets.DOCKER_HUB_USERNAME }}
-      docker_hub_token: ${{ secrets.DOCKER_HUB_TOKEN }}
   deploy-dev:
     name: Deploy Gnosis Dev
     runs-on: depot-ubuntu-24.04-2
@@ -153,7 +149,7 @@ jobs:
         run: echo "suffix=v$(echo '${{ needs.build-docker.outputs.docker_build_version }}' | tr '.' '-')" | tee -a "$GITHUB_OUTPUT"
       - name: Setup GCP
         id: gcp
-        uses: hoprnet/hopr-workflows/actions/setup-gcp@6895dbbc515e39e0e283a68a80b8628ca6ead37a
+        uses: hoprnet/hopr-workflows/actions/setup-gcp@ac3e0b6137b0ba470a30c373aab2ceba9e0879e4
         with:
           workload_identity_provider: ${{ vars.WIF_PROVIDER_DEVELOPMENT }}
           service_account: ${{ vars.WIF_SERVICE_ACCOUNT_DEVELOPMENT }}

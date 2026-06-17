@@ -1,4 +1,4 @@
-use super::{QueryFailedError, TokenValueString, Uint64, schema};
+use super::{QueryFailedError, ReadinessState, TokenValueString, Uint64, schema};
 
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "QueryRoot")]
@@ -52,6 +52,12 @@ impl From<ChainInfoResult> for Result<ChainInfo, crate::errors::BlokliClientErro
 #[cynic(graphql_type = "SubscriptionRoot")]
 pub struct SubscribeTicketParams {
     pub ticket_parameters_updated: TicketParameters,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "SubscriptionRoot")]
+pub struct SubscribeHealth {
+    pub health: ReadinessState,
 }
 
 #[derive(cynic::QueryFragment, Debug, Clone, PartialEq)]
