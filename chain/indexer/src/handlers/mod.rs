@@ -154,9 +154,9 @@ where
 
     pub(super) async fn remember_safe_address(&self, safe_address: Address) {
         let mut known_safe_addresses = self.known_safe_addresses.write().await;
-        known_safe_addresses
-            .get_or_insert_with(HashSet::new)
-            .insert(safe_address);
+        if let Some(known_safe_addresses) = known_safe_addresses.as_mut() {
+            known_safe_addresses.insert(safe_address);
+        }
     }
 
     async fn is_known_safe_address(&self, tx: &OpenTransaction, address: Address) -> Result<bool> {
@@ -494,7 +494,10 @@ where
 mod tests {
     use std::{sync::Arc, time::Duration};
 
-    use blokli_db::{BlokliDbGeneralModelOperations, accounts::BlokliDbAccountOperations, db::BlokliDb};
+    use blokli_db::{
+        BlokliDbGeneralModelOperations, accounts::BlokliDbAccountOperations, db::BlokliDb,
+        safe_contracts::BlokliDbSafeContractOperations,
+    };
     use blokli_db_entity::{hopr_safe_contract, prelude::HoprSafeContract};
     use hopr_bindings::{
         exports::alloy::sol_types::{SolEvent, SolValue},
@@ -513,7 +516,7 @@ mod tests {
     use crate::{
         handlers::test_utils::test_helpers::{
             ClonableMockOperations, MockIndexerRpcOperations, SAFE_INSTANCE_ADDR, SELF_CHAIN_ADDRESS, SELF_PRIV_KEY,
-            init_handlers_with_events, test_log,
+            init_handlers, init_handlers_with_events, test_log,
         },
         state::IndexerEvent,
         traits::ChainLogHandler,
@@ -595,6 +598,32 @@ mod tests {
 
         // Await listener verification
         listener.await?;
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_remember_safe_address_does_not_skip_initial_hydration() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let rpc_operations = MockIndexerRpcOperations::new();
+        let clonable_rpc = ClonableMockOperations {
+            inner: Arc::new(rpc_operations),
+        };
+        let handlers = init_handlers(clonable_rpc, db.clone());
+
+        let known_safe = *SAFE_INSTANCE_ADDR;
+        let discovered_before_hydration: Address = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".parse()?;
+
+        db.create_safe_contract(None, known_safe, Address::default(), *SELF_CHAIN_ADDRESS, 10, 0, 0)
+            .await?;
+
+        handlers.remember_safe_address(discovered_before_hydration).await;
+        assert!(handlers.known_safe_addresses.read().await.is_none());
+
+        let tx = db.begin_transaction().await?;
+        assert!(handlers.is_known_safe_address(&tx, known_safe).await?);
+        assert!(!handlers.is_known_safe_address(&tx, discovered_before_hydration).await?);
+        tx.rollback().await?;
 
         Ok(())
     }

@@ -87,7 +87,6 @@ where
                 .db
                 .create_safe_contract(Some(tx), safe_addr, module_addr, chain_key, block, tx_index, log_index)
                 .await?;
-            self.remember_safe_address(safe_addr).await;
 
             if !safe_previously_known && is_synced {
                 self.backfill_safe_logs_in_discovery_block(tx, safe_addr, block).await?;
@@ -98,6 +97,8 @@ where
                     "Backfilled discovery-block Safe logs and marked Safe filters for refresh after deployment"
                 );
             }
+
+            self.remember_safe_address(safe_addr).await;
 
             info!(
                 safe_id,
@@ -520,6 +521,68 @@ mod tests {
         let stored_safe_log = db.get_log(100, 19, 10).await?;
         assert_eq!(stored_safe_log.address, safe_address);
         assert_eq!(stored_safe_log.processed, Some(true));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_on_stake_factory_event_does_not_cache_safe_when_backfill_rolls_back() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let mut rpc_operations = MockIndexerRpcOperations::new();
+
+        let existing_safe = random_address();
+        let new_safe = random_address();
+        let module_address = random_address();
+        let sender = random_address();
+        let tx_hash = random_hash();
+
+        db.create_safe_contract(None, existing_safe, random_address(), sender, 10, 0, 0)
+            .await?;
+
+        rpc_operations
+            .expect_get_transaction_sender()
+            .with(eq(tx_hash))
+            .returning(move |_| Ok(sender));
+        rpc_operations
+            .expect_get_logs_for_address()
+            .withf(move |address, _, from_block, to_block| {
+                *address == new_safe && *from_block == 100 && *to_block == 100
+            })
+            .returning(|_, _, _, _| Err(RpcError::Other("backfill failed".into())));
+
+        let clonable_rpc_operations = ClonableMockOperations {
+            inner: Arc::new(rpc_operations),
+        };
+        let handlers = init_handlers(clonable_rpc_operations, db.clone());
+
+        let preload_tx = db.begin_transaction().await?;
+        assert!(handlers.is_known_safe_address(&preload_tx, existing_safe).await?);
+        preload_tx.rollback().await?;
+
+        let event = HoprNodeStakeFactory::NewHoprNodeStakeModuleForSafe {
+            safe: AlloyAddress::from_hopr_address(new_safe),
+            module: AlloyAddress::from_hopr_address(module_address),
+        };
+        let encoded_data = event.encode_log_data();
+        let log = SerializableLog {
+            address: handlers.addresses.node_stake_factory,
+            topics: encoded_data.topics().iter().map(|t| t.0).collect(),
+            data: encoded_data.data.to_vec(),
+            tx_hash: tx_hash.into(),
+            block_number: 100,
+            tx_index: 1,
+            log_index: 2,
+            ..test_log()
+        };
+
+        let result = handlers.collect_log_event(log, true).await;
+        assert!(result.is_err());
+        assert!(db.get_safe_contract_by_address(None, new_safe).await?.is_none());
+
+        let known_safe_addresses = handlers.known_safe_addresses.read().await;
+        let known_safe_addresses = known_safe_addresses.as_ref().expect("cache should stay hydrated");
+        assert!(known_safe_addresses.contains(&existing_safe));
+        assert!(!known_safe_addresses.contains(&new_safe));
 
         Ok(())
     }
