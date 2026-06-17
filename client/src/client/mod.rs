@@ -416,13 +416,30 @@ impl BlokliClient {
 
                 loop {
                     if let SubscriptionState::Pending(pending_state) = state {
-                        pending_state.client.ensure_compatibility().await?;
-                        state = SubscriptionState::Active(Box::new(SubscriptionStreamState::new(
-                            pending_state.graphql_url,
-                            pending_state.query,
-                            pending_state.cfg,
-                            pending_state.reqwest_client,
-                        )?));
+                        match pending_state.client.ensure_compatibility().await {
+                            Ok(()) => {
+                                state = SubscriptionState::Active(Box::new(SubscriptionStreamState::new(
+                                    pending_state.graphql_url,
+                                    pending_state.query,
+                                    pending_state.cfg,
+                                    pending_state.reqwest_client,
+                                )?));
+                            }
+                            Err(error) => {
+                                if let Some(delay) = pending_state.cfg.subscription_stream_restart_delay {
+                                    let actual_delay = delay.max(MIN_RECONNECTION_DELAY);
+                                    tracing::warn!(
+                                        %error,
+                                        ?actual_delay,
+                                        "compatibility check failed, sleeping before retrying subscription"
+                                    );
+                                    futures_time::task::sleep(actual_delay.into()).await;
+                                    state = SubscriptionState::Pending(pending_state);
+                                } else {
+                                    return Err(error);
+                                }
+                            }
+                        }
                         continue;
                     }
 
