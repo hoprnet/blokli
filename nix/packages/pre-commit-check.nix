@@ -125,9 +125,9 @@ pre-commit.lib.${system}.run {
       name = "pinact";
       description = "Check GitHub Action refs are SHA-pinned and resolvable";
       entry = "${pkgs.writeShellScript "pinact-check" ''
-        token="''${GITHUB_TOKEN:-$(${pkgs.gh}/bin/gh auth token 2>/dev/null || true)}"
+        token="''${GITHUB_TOKEN:-''${GH_TOKEN:-$(${pkgs.gh}/bin/gh auth token 2>/dev/null || true)}}"
         if [ -z "$token" ]; then
-          echo "pinact: skipping — no GITHUB_TOKEN and gh not authenticated" >&2
+          echo "pinact: skipping — no GITHUB_TOKEN/GH_TOKEN and gh not authenticated" >&2
           exit 0
         fi
         export GITHUB_TOKEN="$token"
