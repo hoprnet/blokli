@@ -22,6 +22,7 @@ use blokli_api::{
     config::{ApiConfig, HealthConfig, SseKeepAliveConfig},
     mutation::MutationRoot,
     query::QueryRoot,
+    readiness::ReadinessChecker,
     schema::build_schema,
     server::build_app,
     subscription::SubscriptionRoot,
@@ -40,6 +41,7 @@ use blokli_chain_rpc::{
     transport::ReqwestClient,
 };
 use blokli_chain_types::{ContractAddresses, ContractInstances, utils::create_anvil};
+use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 use hopr_bindings::exports::alloy::{
     node_bindings::AnvilInstance,
     rpc::client::ClientBuilder,
@@ -94,6 +96,67 @@ pub struct TestContext {
     pub transaction_store: Arc<TransactionStore>,
     /// Transaction executor
     pub transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<ReqwestClient>>>,
+}
+
+/// Create a minimal GraphQL schema for testing subscriptions
+/// Returns both the schema and the IndexerState for publishing test events
+pub fn create_test_schema(db: &BlokliDb) -> (Schema<QueryRoot, MutationRoot, SubscriptionRoot>, IndexerState) {
+    let indexer_state = IndexerState::new(10, 100);
+    let schema = build_subscription_test_schema(db, indexer_state.clone());
+
+    (schema, indexer_state)
+}
+
+fn build_subscription_test_schema(
+    db: &BlokliDb,
+    indexer_state: IndexerState,
+) -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
+    let transaction_store = Arc::new(TransactionStore::new());
+    let transaction_validator = Arc::new(TransactionValidator::new());
+    let transport = ReqwestTransport::new("http://localhost:8545".parse().unwrap());
+    let rpc_client = ClientBuilder::default().transport(transport.clone(), transport.guess_local());
+    let transport_client = ReqwestClient::new();
+    let rpc_operations = Arc::new(
+        RpcOperations::new(
+            rpc_client.clone(),
+            transport_client.clone(),
+            RpcOperationsConfig::default(),
+            None,
+        )
+        .expect("Failed to create RPC operations"),
+    );
+    let rpc_adapter = Arc::new(RpcAdapter::new(
+        RpcOperations::new(rpc_client, transport_client, RpcOperationsConfig::default(), None)
+            .expect("Failed to create RPC adapter operations"),
+    ));
+    let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
+        rpc_adapter,
+        transaction_store.clone(),
+        transaction_validator,
+        RawTransactionExecutorConfig::default(),
+    ));
+    let readiness_checker = ReadinessChecker::new(
+        db.conn(TargetDb::Index).clone(),
+        rpc_operations.clone(),
+        HealthConfig::default(),
+    );
+
+    build_schema(
+        db.conn(TargetDb::Index).clone(),
+        1,
+        "test-network".to_string(),
+        ContractAddresses::default(),
+        1,
+        3,
+        1.0,
+        true,
+        indexer_state,
+        transaction_executor,
+        transaction_store,
+        rpc_operations,
+        readiness_checker,
+        None,
+    )
 }
 
 /// Setup test environment with Anvil, contracts, RPC operations, and GraphQL schema.
@@ -216,6 +279,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
         transaction_validator,
         RawTransactionExecutorConfig::default(),
     ));
+    let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), HealthConfig::default());
 
     // Create IndexerState for subscriptions
     let indexer_state = IndexerState::new(1, 1);
@@ -234,6 +298,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
         transaction_executor.clone(),
         transaction_store.clone(),
         rpc_operations.clone(),
+        readiness_checker,
         None,
     );
 
