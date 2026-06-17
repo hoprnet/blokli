@@ -32,7 +32,7 @@ jobs:
           - architecture: aarch64-darwin
             runner: depot-macos-15
             build_command: nix build -L .#binary-bloklid-aarch64-darwin
-    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@fa71078959cf9f892185e8df16551720693a2cd1
+    uses: hoprnet/hopr-workflows/.github/workflows/build-binaries.yaml@b4ee9597f2c47f62fbc2c989a4af36fc4abf2f6f
     permissions:
       contents: read
       id-token: write
