@@ -110,12 +110,7 @@ pre-commit.lib.${system}.run {
     renovate-config-validator = {
       enable = true;
       name = "Renovate config validator";
-      entry = toString (
-        pkgs.writeShellScript "validate-renovate" ''
-          if [ -n "''${NIX_BUILD_TOP:-}" ]; then exit 0; fi
-          ${pkgs.nodejs}/bin/npx --yes --package renovate -- renovate-config-validator "$@"
-        ''
-      );
+      entry = "${pkgs.renovate}/bin/renovate-config-validator";
       files = "renovate\\.json$";
       language = "system";
       pass_filenames = true;
@@ -129,7 +124,15 @@ pre-commit.lib.${system}.run {
       enable = true;
       name = "pinact";
       description = "Check GitHub Action refs are SHA-pinned and resolvable";
-      entry = "${pkgs.pinact}/bin/pinact run --check";
+      entry = "${pkgs.writeShellScript "pinact-check" ''
+        token="''${GITHUB_TOKEN:-$(${pkgs.gh}/bin/gh auth token 2>/dev/null || true)}"
+        if [ -z "$token" ]; then
+          echo "pinact: skipping — no GITHUB_TOKEN and gh not authenticated" >&2
+          exit 0
+        fi
+        export GITHUB_TOKEN="$token"
+        exec ${pkgs.pinact}/bin/pinact run --check
+      ''}";
       files = "(^\\.github/workflows/.*\\.ya?ml$|^\\.github/actions/.*/action\\.ya?ml$)";
       language = "system";
       pass_filenames = false;
