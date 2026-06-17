@@ -16,16 +16,18 @@ pub(crate) enum ChannelAllowedStates {
 
 #[derive(Subcommand, Debug)]
 pub(crate) enum SubscriptionTarget {
-    /// Subscribe to Safe deployments.
-    SafeDeployments,
-    /// Subscribe to the graph updates.
-    Graph,
-    /// Subscribe to ticket parameter updates.
-    TicketParams,
     /// Subscribe to account updates.
     Accounts(AccountArgs),
     /// Subscribe to channel updates.
     Channels(ChannelArgs),
+    /// Subscribe to the graph updates.
+    Graph,
+    /// Subscribe to health updates
+    Health,
+    /// Subscribe to Safe deployments.
+    SafeDeployments,
+    /// Subscribe to ticket parameter updates.
+    TicketParams,
 }
 
 impl SubscriptionTarget {
@@ -35,40 +37,6 @@ impl SubscriptionTarget {
         format: Formats,
     ) -> anyhow::Result<impl futures::Stream<Item = String> + Send> {
         match self {
-            SubscriptionTarget::SafeDeployments => Ok(client
-                .subscribe_safe_deployments()?
-                .map_err(anyhow::Error::from)
-                .filter_map(move |f| {
-                    futures::future::ready(
-                        f.and_then(|v| format.serialize(v))
-                            .inspect_err(|e| eprintln!("failed to decode safe deployment event: {e}"))
-                            .ok(),
-                    )
-                })
-                .boxed()),
-            SubscriptionTarget::Graph => Ok(client
-                .subscribe_graph()?
-                .map_err(anyhow::Error::from)
-                .filter_map(move |f| {
-                    futures::future::ready(
-                        f.and_then(|v| format.serialize(v))
-                            .inspect_err(|e| eprintln!("failed to decode graph event: {e}"))
-                            .ok(),
-                    )
-                })
-                .boxed()),
-            SubscriptionTarget::TicketParams => Ok(client
-                .subscribe_ticket_params()?
-                .map_err(anyhow::Error::from)
-                .filter_map(move |f| {
-                    futures::future::ready(
-                        f.and_then(|v| format.serialize(v))
-                            .inspect_err(|e| eprintln!("failed to decode ticket params event: {e}"))
-                            .ok(),
-                    )
-                })
-                .boxed()),
-
             SubscriptionTarget::Accounts(sel) => {
                 let serialize_alt_account = sel.show_peer_ids;
                 Ok(client
@@ -96,6 +64,51 @@ impl SubscriptionTarget {
                     futures::future::ready(
                         f.and_then(|v| format.serialize(v))
                             .inspect_err(|e| eprintln!("failed to decode channel event: {e}"))
+                            .ok(),
+                    )
+                })
+                .boxed()),
+            SubscriptionTarget::Graph => Ok(client
+                .subscribe_graph()?
+                .map_err(anyhow::Error::from)
+                .filter_map(move |f| {
+                    futures::future::ready(
+                        f.and_then(|v| format.serialize(v))
+                            .inspect_err(|e| eprintln!("failed to decode graph event: {e}"))
+                            .ok(),
+                    )
+                })
+                .boxed()),
+            SubscriptionTarget::Health => Ok(client
+                .subscribe_health()?
+                .map_err(anyhow::Error::from)
+                .filter_map(move |f| {
+                    futures::future::ready(
+                        f.and_then(|v| format.serialize(v))
+                            .inspect_err(|e| eprintln!("failed to decode health event: {e}"))
+                            .ok(),
+                    )
+                })
+                .boxed()),
+            SubscriptionTarget::SafeDeployments => Ok(client
+                .subscribe_safe_deployments()?
+                .map_err(anyhow::Error::from)
+                .filter_map(move |f| {
+                    futures::future::ready(
+                        f.and_then(|v| format.serialize(v))
+                            .inspect_err(|e| eprintln!("failed to decode safe deployment event: {e}"))
+                            .ok(),
+                    )
+                })
+                .boxed()),
+
+            SubscriptionTarget::TicketParams => Ok(client
+                .subscribe_ticket_params()?
+                .map_err(anyhow::Error::from)
+                .filter_map(move |f| {
+                    futures::future::ready(
+                        f.and_then(|v| format.serialize(v))
+                            .inspect_err(|e| eprintln!("failed to decode ticket params event: {e}"))
                             .ok(),
                     )
                 })

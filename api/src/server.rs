@@ -2,7 +2,11 @@
 
 use std::{pin::Pin, sync::Arc, time::Instant};
 
-use async_graphql::{Schema, http::GraphiQLSource, parser::types::Selection};
+use async_graphql::{
+    Request, Schema,
+    http::GraphiQLSource,
+    parser::types::{DocumentOperations, ExecutableDocument, OperationDefinition, OperationType, Selection},
+};
 use async_stream::stream;
 use axum::{
     Json, Router,
@@ -160,23 +164,97 @@ fn extract_subscription_name(query: &str) -> String {
     "unknown".to_string()
 }
 
+/// Resolve the operation that the request is actually targeting.
+///
+/// GraphQL allows either a single operation document or multiple named
+/// operations. For the readiness gate we need to inspect the exact operation
+/// the client intends to execute so that unnamed companion operations cannot
+/// influence the pre-ready allowlist decision.
+///
+/// When the document contains exactly one named operation and the client omits
+/// `operationName`, `async-graphql` still represents it as `Multiple`, so we
+/// accept that sole entry as the selected operation.
+fn selected_operation<'a>(
+    doc: &'a ExecutableDocument,
+    operation_name: Option<&str>,
+) -> Option<&'a OperationDefinition> {
+    match &doc.operations {
+        DocumentOperations::Single(operation) => Some(&operation.node),
+        DocumentOperations::Multiple(operations) => match operation_name {
+            Some(operation_name) => operations.get(operation_name).map(|operation| &operation.node),
+            None if operations.len() == 1 => operations.values().next().map(|operation| &operation.node),
+            None => None,
+        },
+    }
+}
+
+fn selected_operation_matches(
+    query: &str,
+    operation_name: Option<&str>,
+    predicate: impl FnOnce(&OperationDefinition) -> bool,
+) -> bool {
+    let doc = match async_graphql::parser::parse_query(query) {
+        Ok(doc) => doc,
+        Err(_) => return false,
+    };
+
+    let Some(operation) = selected_operation(&doc, operation_name) else {
+        return false;
+    };
+
+    predicate(operation)
+}
+
+/// Return `true` only for the narrow pre-ready bypass case.
+///
+/// The `/graphql` readiness gate has only three pre-ready exceptions while the
+/// indexer is still catching up:
+/// - introspection queries, handled separately by `is_introspection_query(...)` so tools such as GraphQL Playground can
+///   still inspect the schema,
+/// - the `compatibility` query, validated separately so clients can negotiate the API contract before readiness,
+/// - the `health` subscription, validated here so clients can wait for the API to become ready without polling
+///   `/readyz` out-of-band.
+///
+/// This helper keeps that bypass tight by requiring all of the following:
+/// - the request parses successfully,
+/// - the selected operation is a subscription,
+/// - the operation has exactly one top-level field,
+/// - that field is `health`.
+///
+/// Anything broader, such as extra fields, fragments, malformed GraphQL, or a
+/// different subscription name, falls back to the normal `503` readiness gate.
+fn selected_operation_is_health_subscription(query: &str, operation_name: Option<&str>) -> bool {
+    selected_operation_matches(query, operation_name, |operation| {
+        operation.ty == OperationType::Subscription
+            && matches!(
+                operation.selection_set.node.items.as_slice(),
+                [selection] if matches!(&selection.node, Selection::Field(field) if field.node.name.node == "health")
+            )
+    })
+}
+
+fn selected_operation_is_compatibility_query(query: &str, operation_name: Option<&str>) -> bool {
+    selected_operation_matches(query, operation_name, |operation| {
+        operation.ty == OperationType::Query
+            && matches!(
+                operation.selection_set.node.items.as_slice(),
+                [selection] if matches!(&selection.node, Selection::Field(field) if field.node.name.node == "compatibility")
+            )
+    })
+}
+
 /// Returns true only when every top-level selection in every operation is a
 /// built-in introspection field (`__schema`, `__type`, `__typename`).
 ///
 /// Fragment spreads or inline fragments at the top level are treated as
 /// non-introspection (conservative). Parse failures also return false so that
 /// the readiness gate is never bypassed for malformed requests.
-fn is_introspection_query(query: &str) -> bool {
-    let doc = match async_graphql::parser::parse_query(query) {
-        Ok(d) => d,
-        Err(_) => return false,
-    };
-
-    doc.operations.iter().all(|(_name, op)| {
-        op.node.selection_set.node.items.iter().all(|selection| {
+fn is_introspection_query(query: &str, operation_name: Option<&str>) -> bool {
+    selected_operation_matches(query, operation_name, |operation| {
+        operation.selection_set.node.items.iter().all(|selection| {
             matches!(
                 &selection.node,
-                Selection::Field(f) if matches!(f.node.name.node.as_str(), "__schema" | "__type")
+                Selection::Field(field) if matches!(field.node.name.node.as_str(), "__schema" | "__type" | "__typename")
             )
         })
     })
@@ -210,6 +288,8 @@ pub async fn build_app(
     transaction_store: Arc<TransactionStore>,
     rpc_operations: Arc<RpcOperations<ReqwestClient>>,
 ) -> ApiResult<Router> {
+    let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), config.health.clone());
+
     let schema = build_schema(
         db.clone(),
         config.chain_id,
@@ -223,6 +303,7 @@ pub async fn build_app(
         transaction_executor.clone(),
         transaction_store.clone(),
         rpc_operations.clone(),
+        readiness_checker.clone(),
         Some((config.max_query_depth, config.max_query_complexity)),
     );
 
@@ -239,10 +320,9 @@ pub async fn build_app(
         transaction_executor,
         transaction_store,
         rpc_operations.clone(),
+        readiness_checker.clone(),
         None,
     );
-
-    let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), config.health.clone());
 
     // Start periodic readiness updates in background
     readiness_checker.clone().start_periodic_updates();
@@ -303,29 +383,8 @@ pub async fn build_app(
 
 /// GraphQL query/mutation/subscription handler
 async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json(request): Json<Value>) -> Response {
-    // Introspection queries (__schema / __type) query the type system, not indexed data.
-    // Always allow them so the GraphQL Playground can load the schema regardless of readiness.
-    let is_introspection = request
-        .get("query")
-        .and_then(|q| q.as_str())
-        .map(is_introspection_query)
-        .unwrap_or(false);
-
-    // Check if server is ready before processing GraphQL requests
-    if !is_introspection && state.readiness_checker.get().await == ReadinessState::NotReady {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "errors": [{
-                    "message": "GraphQL API is not ready yet. Indexer is still catching up. Please try again later."
-                }]
-            })),
-        )
-            .into_response();
-    }
-
     // Parse the GraphQL request
-    let request = match serde_json::from_value::<async_graphql::Request>(request) {
+    let request = match serde_json::from_value::<Request>(request) {
         Ok(req) => req,
         Err(e) => {
             metrics::increment_errors("invalid_request");
@@ -343,13 +402,33 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
 
     // Check if client accepts SSE (for subscriptions)
     let accepts_sse = headers
-        .get("accept")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.contains("text/event-stream"))
-        .unwrap_or(false);
+        .get_all("accept")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .any(|value| value.to_lowercase().contains("text/event-stream"));
+
+    // Introspection queries query the type system, not indexed data.
+    // Always allow them so the GraphQL Playground can load the schema regardless of readiness.
+    let is_introspection = is_introspection_query(&request.query, request.operation_name.as_deref());
 
     // Check if the request is a subscription
     let is_subscription = request.query.trim_start().starts_with("subscription");
+
+    // Check if the query should be allowed before readiness. Only allowed if it's a health subscription
+    let allows_pre_ready = selected_operation_is_health_subscription(&request.query, request.operation_name.as_deref())
+        || selected_operation_is_compatibility_query(&request.query, request.operation_name.as_deref());
+
+    if state.readiness_checker.get().await == ReadinessState::NotReady && !allows_pre_ready && !is_introspection {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "errors": [{
+                    "message": "GraphQL API is not ready yet. Indexer is still catching up. Please try again later."
+                }]
+            })),
+        )
+            .into_response();
+    }
 
     // Determine request type label for metrics
     let request_type = if is_subscription {
@@ -1007,53 +1086,88 @@ mod tests {
 
     #[test]
     fn test_is_introspection_query_schema() {
-        assert!(is_introspection_query("{ __schema { queryType { name } } }"));
+        assert!(is_introspection_query("{ __schema { queryType { name } } }", None));
     }
 
     #[test]
     fn test_is_introspection_query_type() {
-        assert!(is_introspection_query("{ __type(name: \"Foo\") { kind name } }"));
+        assert!(is_introspection_query("{ __type(name: \"Foo\") { kind name } }", None));
     }
 
     #[test]
-    fn test_is_introspection_query_typename_rejects() {
-        // __typename is a meta-field, not an introspection entry point
-        assert!(!is_introspection_query("{ __typename }"));
+    fn test_is_introspection_query_typename() {
+        assert!(is_introspection_query("{ __typename }", None));
     }
 
     #[test]
     fn test_is_introspection_query_named_operation() {
         assert!(is_introspection_query(
-            "query IntrospectionQuery { __schema { types { name } } }"
+            "query IntrospectionQuery { __schema { types { name } } }",
+            None,
         ));
     }
 
     #[test]
     fn test_is_introspection_query_mixed_rejects() {
         assert!(!is_introspection_query(
-            "{ __schema { queryType { name } } channels { id } }"
+            "{ __schema { queryType { name } } channels { id } }",
+            None,
         ));
     }
 
     #[test]
     fn test_is_introspection_query_data_field_rejects() {
-        assert!(!is_introspection_query("{ accounts { chainKey } }"));
+        assert!(!is_introspection_query("{ accounts { chainKey } }", None));
     }
 
     #[test]
     fn test_is_introspection_query_fragment_spread_rejects() {
         assert!(!is_introspection_query(
-            "query { ...SomeFragment } fragment SomeFragment on QueryRoot { __schema { types { name } } }"
+            "query { ...SomeFragment } fragment SomeFragment on QueryRoot { __schema { types { name } } }",
+            None,
         ));
     }
 
     #[test]
     fn test_is_introspection_query_parse_error_rejects() {
-        assert!(!is_introspection_query("this is not graphql !!!"));
+        assert!(!is_introspection_query("this is not graphql !!!", None));
     }
 
     #[test]
     fn test_is_introspection_query_empty_rejects() {
-        assert!(!is_introspection_query(""));
+        assert!(!is_introspection_query("", None));
+    }
+
+    #[test]
+    fn test_selected_operation_is_health_subscription_accepts_named_client_query() {
+        assert!(selected_operation_is_health_subscription(
+            "subscription SubscribeHealth {\n  health\n}\n",
+            Some("SubscribeHealth"),
+        ));
+    }
+
+    #[test]
+    fn test_selected_operation_is_health_subscription_accepts_sole_named_operation_without_operation_name() {
+        assert!(selected_operation_is_health_subscription(
+            "subscription SubscribeHealth {\n  health\n}\n",
+            None,
+        ));
+    }
+
+    #[test]
+    fn test_selected_operation_is_compatibility_query_accepts_named_client_query() {
+        assert!(selected_operation_is_compatibility_query(
+            "query QueryCompatibility {\n  compatibility {\n    apiVersion\n    supportedClientVersions\n    \
+             features\n  }\n}\n",
+            Some("QueryCompatibility"),
+        ));
+    }
+
+    #[test]
+    fn test_selected_operation_is_compatibility_query_rejects_mixed_query() {
+        assert!(!selected_operation_is_compatibility_query(
+            "query QueryCompatibility {\n  compatibility {\n    apiVersion\n  }\n  version\n}\n",
+            Some("QueryCompatibility"),
+        ));
     }
 }

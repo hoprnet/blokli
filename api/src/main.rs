@@ -2,7 +2,7 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use blokli_api::{logging, schema::export_schema_sdl};
+use blokli_api::{config::HealthConfig, logging, readiness::ReadinessChecker, schema::export_schema_sdl};
 use blokli_chain_api::{
     rpc_adapter::RpcAdapter,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
@@ -122,14 +122,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Generate schema SDL
                 let schema_sdl = export_schema_sdl(
-                    db,
+                    db.clone(),
                     chain_id,
                     ContractAddresses::default(),
                     false,
                     indexer_state,
                     transaction_executor,
                     transaction_store,
-                    Arc::new(rpc_operations),
+                    Arc::new(rpc_operations.clone()),
+                    ReadinessChecker::new(db.clone(), Arc::new(rpc_operations.clone()), HealthConfig::default()),
                 );
 
                 // Write to file or stdout
