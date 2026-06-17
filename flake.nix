@@ -378,7 +378,7 @@
             treefmtPrograms = pkgs.lib.attrValues config.treefmt.build.programs;
             shellHook = ''
               echo "Running pre-commit checks..."
-              _github_token="''${GITHUB_TOKEN:-$(gh auth token 2>/dev/null || true)}"
+              _github_token="''${GITHUB_TOKEN:-''${GH_TOKEN:-$(gh auth token 2>/dev/null || true)}}"
               if [ -n "$_github_token" ]; then
                 export GITHUB_TOKEN="$_github_token"
               fi
