@@ -14,6 +14,8 @@ use hopr_types::{
 };
 use tracing::{debug, info, warn};
 
+#[cfg(all(feature = "telemetry", not(test)))]
+use super::increment_indexer_contract_log_count;
 use super::{ContractEventHandlers, PendingSafeMutation};
 use crate::{custom_abis::safe_contract_events::SafeContract::SafeContractEvents, errors::Result, state::IndexerEvent};
 
@@ -149,6 +151,9 @@ where
         event: SafeContractEvents,
         _is_synced: bool,
     ) -> Result<Vec<IndexerEvent>> {
+        #[cfg(all(feature = "telemetry", not(test)))]
+        increment_indexer_contract_log_count("safe_events");
+
         let chain_tx_hash = Hash::from(log.tx_hash);
         let mut staged_mutations = Vec::new();
 
