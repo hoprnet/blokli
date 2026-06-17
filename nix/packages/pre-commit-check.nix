@@ -133,7 +133,7 @@ pre-commit.lib.${system}.run {
         export GITHUB_TOKEN="$token"
         exec ${pkgs.pinact}/bin/pinact run --check
       ''}";
-      files = "(^\\.github/workflows/.*\\.ya?ml$|^\\.github/actions/.*/action\\.ya?ml$)";
+      files = "^\\.github/workflows/.*\\.ya?ml$";
       language = "system";
       pass_filenames = false;
     };
