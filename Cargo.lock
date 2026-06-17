@@ -1787,7 +1787,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-api"
-version = "0.23.1"
+version = "0.23.2"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -2081,7 +2081,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-inspector"
-version = "0.11.2"
+version = "0.12.0"
 dependencies = [
  "anyhow",
  "blokli-client",
@@ -2101,7 +2101,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-integration-tests"
-version = "0.4.2"
+version = "0.4.3"
 dependencies = [
  "anyhow",
  "blokli-client",

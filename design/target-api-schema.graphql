@@ -5,6 +5,16 @@ schema {
 }
 
 """
+Readiness state of the API server
+"""
+enum ReadinessState {
+  "The server is not ready to serve general GraphQL traffic yet"
+  NOT_READY
+  "The server is ready to serve GraphQL traffic"
+  READY
+}
+
+"""
 Account information
 
 The Account type contains identity information for HOPR nodes including keys,
@@ -959,6 +969,13 @@ type SubscriptionRoot {
     status: ChannelStatus
   ): Channel!
   """
+  Subscribe to readiness-state updates for the API instance
+
+  Emits the current readiness state immediately after subscription, then streams
+  later state transitions.
+  """
+  health: ReadinessState!
+  """
   Subscribe to real-time updates of key binding fee
 
   Emits the current fee once on subscription, then streams updates whenever
@@ -991,7 +1008,6 @@ type SubscriptionRoot {
   If the network has three open channels: channelA (A→B), channelB (B→A), channelC (A→C),
   the subscription emits three separate OpenedChannelsGraphEntry objects, each containing
   one channel with its source and destination accounts.
-
   **Note:** This is a directed graph. Bidirectional communication requires
   channels in both directions, each emitted as a separate entry.
   """

@@ -2,13 +2,14 @@
 edition = "2021"
 name    = "blokli-integration-tests"
 publish = false
-version = "0.4.2"
+version = "0.4.3"
 
 [dependencies]
 anyhow = { workspace = true }
 blokli-client = { workspace = true, features = ["serde"] }
 chrono = { workspace = true }
 clap = { workspace = true, features = ["derive"] }
+futures = { workspace = true }
 futures-time = { workspace = true }
 hex = { workspace = true }
 hopli = { workspace = true }
