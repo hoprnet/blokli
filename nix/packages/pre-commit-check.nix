@@ -118,6 +118,7 @@ pre-commit.lib.${system}.run {
 
     actionlint = {
       enable = true;
+      files = "^\\.github/workflows/.*\\.yaml$";
     };
 
     pinact = {
