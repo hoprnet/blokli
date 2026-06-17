@@ -5,10 +5,13 @@ use super::{BlokliClient, GraphQlQueries};
 use crate::api::{
     AccountSelector, BlokliSubscriptionClient, ChannelSelector, Result, TicketSelector, TxId,
     internal::{
-        AccountVariables, ChannelsVariables, SubscribeAccounts, SubscribeChannels, SubscribeGraph,
+        AccountVariables, ChannelsVariables, SubscribeAccounts, SubscribeChannels, SubscribeGraph, SubscribeHealth,
         SubscribeSafeDeployment, SubscribeTicketParams, SubscribeTicketRedeemed, TicketRedeemedVariables,
     },
-    types::{Account, Channel, OpenedChannelsGraphEntry, RedeemTicketDetails, Safe, TicketParameters, Transaction},
+    types::{
+        Account, Channel, OpenedChannelsGraphEntry, ReadinessState, RedeemTicketDetails, Safe, TicketParameters,
+        Transaction,
+    },
 };
 
 impl GraphQlQueries {
@@ -34,6 +37,11 @@ impl GraphQlQueries {
     /// `SubscribeTicketParams` subscription GraphQL query.
     pub fn subscribe_ticket_params() -> cynic::StreamingOperation<SubscribeTicketParams, ()> {
         SubscribeTicketParams::build(())
+    }
+
+    /// `SubscribeHealth` subscription GraphQL query.
+    pub fn subscribe_health() -> cynic::StreamingOperation<SubscribeHealth, ()> {
+        SubscribeHealth::build(())
     }
 
     /// `SubscribeSafeDeployment` subscription GraphQL query.
@@ -76,6 +84,13 @@ impl BlokliSubscriptionClient for BlokliClient {
         Ok(self
             .build_subscription_stream(GraphQlQueries::subscribe_ticket_params())?
             .try_filter_map(|item| futures::future::ok(Some(item.ticket_parameters_updated))))
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    fn subscribe_health(&self) -> Result<impl Stream<Item = Result<ReadinessState>> + Send> {
+        Ok(self
+            .build_subscription_stream(GraphQlQueries::subscribe_health())?
+            .try_filter_map(|item| futures::future::ok(Some(item.health))))
     }
 
     #[tracing::instrument(level = "debug", skip(self))]

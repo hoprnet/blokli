@@ -6,14 +6,17 @@
 //! 2. RPC is reachable
 //! 3. Indexer lag is within acceptable limits
 //!
-//! The readiness state is cached and updated periodically via a background task.
-//! Out-of-band updates are triggered by:
+//! The readiness state is cached and updated periodically, with out-of-band refreshes for fast transitions.
+//! Updates are triggered by:
 //! - /readyz endpoint calls (immediate check)
 //! - Indexer completion signals (immediate check)
-//! - Periodic background task (every `readiness_check_interval`)
+//! - Readiness subscription connection checks
+//! - Periodic background refreshes (`readiness_check_interval`)
 
 use std::sync::Arc;
 
+use async_broadcast::{Receiver, Sender, broadcast};
+use async_graphql::Enum;
 use blokli_chain_rpc::rpc::RpcOperations;
 use blokli_db_entity::prelude::ChainInfo;
 use sea_orm::{DatabaseConnection, EntityTrait};
@@ -23,7 +26,7 @@ use tracing::{error, info, warn};
 use crate::{config::HealthConfig, metrics};
 
 /// Readiness state of the API server
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
 pub enum ReadinessState {
     /// Server is ready to accept GraphQL requests
     Ready,
@@ -35,6 +38,8 @@ pub enum ReadinessState {
 #[derive(Clone)]
 pub struct ReadinessChecker {
     cached_state: Arc<RwLock<ReadinessState>>,
+    updates: Sender<ReadinessState>,
+    _updates_rx: Arc<Receiver<ReadinessState>>,
     db: DatabaseConnection,
     rpc_operations: Arc<RpcOperations<blokli_chain_rpc::transport::ReqwestClient>>,
     health_config: HealthConfig,
@@ -47,8 +52,13 @@ impl ReadinessChecker {
         rpc_operations: Arc<RpcOperations<blokli_chain_rpc::transport::ReqwestClient>>,
         health_config: HealthConfig,
     ) -> Self {
+        let (mut updates, updates_rx) = broadcast(16);
+        updates.set_overflow(true);
+
         Self {
             cached_state: Arc::new(RwLock::new(ReadinessState::NotReady)),
+            updates,
+            _updates_rx: Arc::new(updates_rx),
             db,
             rpc_operations,
             health_config,
@@ -58,6 +68,10 @@ impl ReadinessChecker {
     /// Get the current cached readiness state (fast, non-blocking)
     pub async fn get(&self) -> ReadinessState {
         *self.cached_state.read().await
+    }
+
+    pub fn subscribe(&self) -> Receiver<ReadinessState> {
+        self.updates.new_receiver()
     }
 
     /// Perform a full readiness check and update the cached state
@@ -73,6 +87,7 @@ impl ReadinessChecker {
 
         // Log state transitions
         if old_state != new_state {
+            let _ = self.updates.try_broadcast(new_state);
             match new_state {
                 ReadinessState::Ready => {
                     info!(status = health_status, "Readiness state transitioned to READY");

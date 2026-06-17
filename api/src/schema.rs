@@ -12,7 +12,7 @@ use blokli_chain_rpc::{rpc::RpcOperations, transport::HttpRequestor};
 use blokli_chain_types::ContractAddresses;
 use sea_orm::DatabaseConnection;
 
-use crate::{mutation::MutationRoot, query::QueryRoot, subscription::SubscriptionRoot};
+use crate::{mutation::MutationRoot, query::QueryRoot, readiness::ReadinessChecker, subscription::SubscriptionRoot};
 
 /// Wrapper type for expected block time to avoid type confusion in context
 #[derive(Debug, Clone, Copy)]
@@ -75,6 +75,7 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
     rpc_operations: Arc<RpcOperations<R>>,
+    readiness_checker: ReadinessChecker,
     limits: Option<(usize, usize)>,
 ) -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
     let mut builder = Schema::build(QueryRoot, MutationRoot, SubscriptionRoot)
@@ -89,7 +90,8 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
         .data(indexer_state)
         .data(transaction_executor)
         .data(transaction_store)
-        .data(rpc_operations);
+        .data(rpc_operations)
+        .data(readiness_checker);
 
     if let Some((max_depth, max_complexity)) = limits {
         builder = builder.limit_depth(max_depth).limit_complexity(max_complexity);
@@ -112,6 +114,7 @@ pub fn export_schema_sdl<R: HttpRequestor + 'static + Clone>(
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
     rpc_operations: Arc<RpcOperations<R>>,
+    readiness_checker: ReadinessChecker,
 ) -> String {
     let schema = build_schema(
         db,
@@ -126,6 +129,7 @@ pub fn export_schema_sdl<R: HttpRequestor + 'static + Clone>(
         transaction_executor,
         transaction_store,
         rpc_operations,
+        readiness_checker,
         None,
     );
 
