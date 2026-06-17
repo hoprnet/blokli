@@ -378,10 +378,11 @@
             treefmtPrograms = pkgs.lib.attrValues config.treefmt.build.programs;
             shellHook = ''
               echo "Running pre-commit checks..."
-              ${packages.pre-commit-check.shellHook}
               export GITHUB_TOKEN="''${GITHUB_TOKEN:-$(gh auth token 2>/dev/null || true)}"
+              ${packages.pre-commit-check.shellHook}
             '';
             extraPackages = with pkgs; [
+              gh
               nodejs
               ast-grep
               foundry-bin
