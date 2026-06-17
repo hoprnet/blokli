@@ -130,7 +130,7 @@ pre-commit.lib.${system}.run {
       name = "pinact";
       description = "Check GitHub Action refs are SHA-pinned and resolvable";
       entry = "${pkgs.pinact}/bin/pinact run --check";
-      files = "\\.ya?ml$";
+      files = "(^\\.github/workflows/.*\\.ya?ml$|^\\.github/actions/.*/action\\.ya?ml$)";
       language = "system";
       pass_filenames = false;
     };
