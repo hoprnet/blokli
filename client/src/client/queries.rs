@@ -202,6 +202,11 @@ impl GraphQlQueries {
     pub fn query_health() -> cynic::Operation<QueryHealth, ()> {
         QueryHealth::build(())
     }
+
+    /// `Compatibility` GraphQL query.
+    pub fn query_compatibility() -> cynic::Operation<QueryCompatibility, ()> {
+        QueryCompatibility::build(())
+    }
 }
 
 #[async_trait::async_trait]
@@ -360,6 +365,13 @@ impl BlokliQueryClient for BlokliClient {
         let resp = self.build_query(GraphQlQueries::query_health())?.await?;
 
         response_to_data(resp).map(|data| data.health)
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn query_compatibility(&self) -> Result<Compatibility> {
+        let resp = self.build_query(GraphQlQueries::query_compatibility())?.await?;
+
+        response_to_data(resp).map(|data| data.compatibility)
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(?owner_address))]

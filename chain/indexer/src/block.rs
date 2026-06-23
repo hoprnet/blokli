@@ -1432,8 +1432,10 @@ mod tests {
         let mut rpc = MockHoprIndexerOps::new();
         let db = BlokliDb::new_in_memory().await?;
         let indexer_state = IndexerState::default();
-        let mut cfg = IndexerConfig::default();
-        cfg.enable_safe_indexing = true;
+        let cfg = IndexerConfig {
+            enable_safe_indexing: true,
+            ..Default::default()
+        };
 
         let primary_address = Address::new(b"my address 123456789");
         let primary_topic = B256::from_slice(Hash::create(&[b"my topic"]).as_ref());

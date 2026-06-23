@@ -11,7 +11,7 @@ mod common;
 use std::{str::FromStr, time::Duration};
 
 use blokli_api_types::{Account, TokenValueString};
-use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
+use blokli_chain_indexer::state::IndexerEvent;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 use futures::StreamExt;
 use hopr_types::primitive::{prelude::HoprBalance, primitives::Address, traits::IntoEndian};
@@ -240,7 +240,7 @@ async fn test_key_binding_fee_subscription_zero_fee() {
     };
     chain_info.update(db.conn(TargetDb::Index)).await.unwrap();
 
-    let (schema, indexer_state) = common::create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -273,7 +273,7 @@ async fn test_key_binding_fee_subscription_large_fee() {
     };
     chain_info.update(db.conn(TargetDb::Index)).await.unwrap();
 
-    let (schema, indexer_state) = common::create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {

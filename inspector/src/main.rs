@@ -267,47 +267,6 @@ pub struct AltAccount {
     pub safe_address: Option<String>,
 }
 
-#[cfg(test)]
-mod tests {
-    use blokli_client::api::AccountSelector;
-    use hopr_types::{crypto::types::OffchainPublicKey, primitive::prelude::ToHex};
-
-    use super::NodeOverviewArgs;
-
-    #[test]
-    fn node_overview_selector_accepts_chain_key() -> anyhow::Result<()> {
-        let selector = AccountSelector::try_from(NodeOverviewArgs {
-            node: "0x1111111111111111111111111111111111111111".to_string(),
-        })?;
-
-        assert!(matches!(selector, AccountSelector::Address(address) if address == [0x11; 20]));
-        Ok(())
-    }
-
-    #[test]
-    fn node_overview_selector_accepts_packet_key_and_peer_id() -> anyhow::Result<()> {
-        let packet_key =
-            OffchainPublicKey::from_hex("30dc46df1f429b9c0d1d6d81198420f3af92348e7fe97b003717108b22f8d985")?;
-        let expected = packet_key.to_hex();
-        let peer_id = packet_key.to_peerid_str();
-
-        for node in [expected, peer_id] {
-            let selector = AccountSelector::try_from(NodeOverviewArgs { node })?;
-            assert!(matches!(selector, AccountSelector::PacketKey(_)));
-        }
-        Ok(())
-    }
-
-    #[test]
-    fn node_overview_selector_rejects_invalid_value() {
-        let result = AccountSelector::try_from(NodeOverviewArgs {
-            node: "not-a-node".to_string(),
-        });
-
-        assert!(result.is_err());
-    }
-}
-
 impl TryFrom<Account> for AltAccount {
     type Error = anyhow::Error;
 
@@ -434,4 +393,45 @@ async fn main() -> anyhow::Result<()> {
     };
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use blokli_client::api::AccountSelector;
+    use hopr_types::{crypto::types::OffchainPublicKey, primitive::prelude::ToHex};
+
+    use super::NodeOverviewArgs;
+
+    #[test]
+    fn node_overview_selector_accepts_chain_key() -> anyhow::Result<()> {
+        let selector = AccountSelector::try_from(NodeOverviewArgs {
+            node: "0x1111111111111111111111111111111111111111".to_string(),
+        })?;
+
+        assert!(matches!(selector, AccountSelector::Address(address) if address == [0x11; 20]));
+        Ok(())
+    }
+
+    #[test]
+    fn node_overview_selector_accepts_packet_key_and_peer_id() -> anyhow::Result<()> {
+        let packet_key =
+            OffchainPublicKey::from_hex("30dc46df1f429b9c0d1d6d81198420f3af92348e7fe97b003717108b22f8d985")?;
+        let expected = packet_key.to_hex();
+        let peer_id = packet_key.to_peerid_str();
+
+        for node in [expected, peer_id] {
+            let selector = AccountSelector::try_from(NodeOverviewArgs { node })?;
+            assert!(matches!(selector, AccountSelector::PacketKey(_)));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn node_overview_selector_rejects_invalid_value() {
+        let result = AccountSelector::try_from(NodeOverviewArgs {
+            node: "not-a-node".to_string(),
+        });
+
+        assert!(result.is_err());
+    }
 }

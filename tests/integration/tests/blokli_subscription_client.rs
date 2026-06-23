@@ -1,7 +1,4 @@
-use std::{
-    str::FromStr,
-    time::{Duration, Instant},
-};
+use std::time::{Duration, Instant};
 
 use anyhow::{Result, anyhow};
 use blokli_client::api::{
@@ -17,7 +14,6 @@ use eventsource_client::{Client, ClientBuilder, SSE};
 use futures::stream::StreamExt;
 use futures_time::{future::FutureExt as FutureTimeoutExt, time::Duration as FuturesDuration};
 use hex::{FromHex, ToHex};
-use hopli_lib::exports::alloy::sol_types::sol_data::Address;
 use hopr_bindings::exports::alloy::primitives::U256;
 use hopr_types::{
     crypto::{keypairs::Keypair, types::Hash},
@@ -48,8 +44,8 @@ async fn subscribe_channels(#[future(awt)] fixture: IntegrationFixture) -> Resul
     let client = fixture.client().clone();
 
     let (src_safe, _dst_safe) = tokio::try_join!(
-        fixture.deploy_safe_and_announce(&src, parsed_safe_balance()),
-        fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()),
+        fixture.deploy_safe_and_announce(src, parsed_safe_balance()),
+        fixture.deploy_safe_and_announce(dst, parsed_safe_balance()),
     )?;
 
     fixture.approve(src, amount, &src_safe.module_address).await?;
@@ -164,8 +160,8 @@ async fn subscribe_graph(#[future(awt)] fixture: IntegrationFixture) -> Result<(
     let client = fixture.client().clone();
 
     let (src_safe, _dst_safe) = tokio::try_join!(
-        fixture.deploy_safe_and_announce(&src, parsed_safe_balance()),
-        fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()),
+        fixture.deploy_safe_and_announce(src, parsed_safe_balance()),
+        fixture.deploy_safe_and_announce(dst, parsed_safe_balance()),
     )?;
 
     fixture.approve(src, amount, &src_safe.module_address).await?;
@@ -222,10 +218,10 @@ async fn subscribe_graph_channel_update_on_closure(#[future(awt)] fixture: Integ
 
     // Setup: deploy safes, announce, approve, and open channel with initial balance
     let (src_safe, _dst_safe) = tokio::try_join!(
-        fixture.deploy_safe_and_announce(&src, parsed_safe_balance()),
-        fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()),
+        fixture.deploy_safe_and_announce(src, parsed_safe_balance()),
+        fixture.deploy_safe_and_announce(dst, parsed_safe_balance()),
     )?;
-    fixture.approve(&src, initial_amount, &src_safe.module_address).await?;
+    fixture.approve(src, initial_amount, &src_safe.module_address).await?;
     fixture
         .open_channel(src, dst, initial_amount, &src_safe.module_address, None)
         .await?;
@@ -504,8 +500,8 @@ async fn subscribe_channels_no_duplicate_initial_state(#[future(awt)] fixture: I
     let [src, dst] = fixture.sample_accounts::<2>();
     let expected_id = generate_channel_id(&src.address, &dst.address);
     let (src_safe, _dst_safe) = tokio::try_join!(
-        fixture.deploy_safe_and_announce(&src, parsed_safe_balance()),
-        fixture.deploy_safe_and_announce(&dst, parsed_safe_balance()),
+        fixture.deploy_safe_and_announce(src, parsed_safe_balance()),
+        fixture.deploy_safe_and_announce(dst, parsed_safe_balance()),
     )?;
 
     // 2. Open channel BEFORE subscribing
@@ -697,12 +693,12 @@ async fn subscribe_ticket_redeemed(#[future(awt)] fixture: IntegrationFixture) -
 
     // Deploy safes for both accounts and announce their presence on-chain.
     let (src_safe, dst_safe) = tokio::try_join!(
-        fixture.deploy_safe_and_announce(&src, safe_balance),
-        fixture.deploy_safe_and_announce(&dst, safe_balance),
+        fixture.deploy_safe_and_announce(src, safe_balance),
+        fixture.deploy_safe_and_announce(dst, safe_balance),
     )?;
 
     // Approve the channel contract to pull wxHOPR from src's safe and open the channel.
-    fixture.approve(&src, ticket_amount, &src_safe.module_address).await?;
+    fixture.approve(src, ticket_amount, &src_safe.module_address).await?;
     fixture
         .open_channel(src, dst, ticket_amount, &src_safe.module_address, None)
         .await?;
@@ -751,8 +747,8 @@ async fn subscribe_ticket_redeemed(#[future(awt)] fixture: IntegrationFixture) -
     // Redeem a single ticket: dst redeems ticket index 0 in epoch 1 issued by src.
     fixture
         .redeem_ticket(
-            &src,
-            &dst,
+            src,
+            dst,
             ticket_amount,
             &dst_safe.module_address,
             ticket_index,

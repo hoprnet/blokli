@@ -101,6 +101,17 @@ pub enum SafeByResult {
     QueryFailed(QueryFailedError),
 }
 
+/// Response for the legacy `compatibility` query.
+#[derive(SimpleObject)]
+pub struct Compatibility {
+    /// Server version (semver).
+    pub api_version: String,
+    /// Semver range of compatible client versions. Always `"*"` — any client is accepted.
+    pub supported_client_versions: String,
+    /// Feature flags advertised by this server. Always empty since versioning is now header-based.
+    pub features: Vec<String>,
+}
+
 /// Success response for safes list query
 #[derive(SimpleObject)]
 pub struct SafesList {
@@ -1463,6 +1474,19 @@ impl QueryRoot {
     /// Returns "ok" to indicate the service is running
     async fn health(&self) -> &str {
         "ok"
+    }
+
+    /// Client compatibility information
+    ///
+    /// Legacy endpoint retained for backward compatibility with older clients.
+    /// Always reports `supported_client_versions = "*"` so any client version
+    /// that calls this query is considered compatible.
+    async fn compatibility(&self) -> Compatibility {
+        Compatibility {
+            api_version: env!("CARGO_PKG_VERSION").to_string(),
+            supported_client_versions: "*".to_string(),
+            features: vec![],
+        }
     }
 
     /// Calculate the predicted module address for a Safe deployment

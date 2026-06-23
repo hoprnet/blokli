@@ -674,6 +674,14 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
     async fn query_health(&self) -> Result<String> {
         Ok(self.state.read().health.clone())
     }
+
+    async fn query_compatibility(&self) -> Result<Compatibility> {
+        Ok(Compatibility {
+            api_version: env!("CARGO_PKG_VERSION").to_string(),
+            supported_client_versions: "*".to_string(),
+            features: vec![],
+        })
+    }
 }
 
 impl<M: BlokliTestStateMutator + Send + Sync> BlokliSubscriptionClient for BlokliTestClient<M> {

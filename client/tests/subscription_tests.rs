@@ -243,7 +243,6 @@ async fn subscribe_ticket_params_uses_dns_override() -> Result<()> {
             subscription_read_timeout: Some(Duration::from_secs(2)),
             subscription_tcp_keepalive: Duration::from_secs(15),
             subscription_stream_restart_delay: Some(Duration::from_millis(100)),
-            ..Default::default()
         },
     );
 
@@ -363,13 +362,14 @@ async fn spawn_delayed_streaming_server(
     let base_url = Url::parse(&format!("http://{}", listener.local_addr()?))?;
 
     let server = tokio::spawn(async move {
-        let response_headers = format!(concat!(
+        let response_headers = concat!(
             "HTTP/1.1 200 OK\r\n",
             "content-type: text/event-stream\r\n",
             "cache-control: no-cache\r\n",
             "connection: close\r\n",
             "\r\n",
-        ),);
+        )
+        .to_string();
         let body = format_ticket_params_events(&events);
         let (mut conn, _) = listener.accept().await?;
         conn.write_all(response_headers.as_bytes()).await?;
@@ -389,13 +389,14 @@ async fn spawn_timed_out_then_reconnecting_server(
     let base_url = Url::parse(&format!("http://{}", listener.local_addr()?))?;
 
     let server = tokio::spawn(async move {
-        let response_headers = format!(concat!(
+        let response_headers = concat!(
             "HTTP/1.1 200 OK\r\n",
             "content-type: text/event-stream\r\n",
             "cache-control: no-cache\r\n",
             "connection: close\r\n",
             "\r\n",
-        ),);
+        )
+        .to_string();
 
         let (mut first_conn, _) = listener.accept().await?;
         first_conn.write_all(response_headers.as_bytes()).await?;

@@ -385,7 +385,7 @@ mod tests {
 
             match config.database {
                 Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
-                    assert_eq!(c.url.as_ref().map(|s| s.as_str()), Some("postgres://env:5432/db"));
+                    assert_eq!(c.url.as_deref(), Some("postgres://env:5432/db"));
                 }
                 _ => panic!("Expected PostgreSQL database config"),
             }
@@ -419,7 +419,7 @@ mod tests {
 
             match config.database {
                 Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
-                    assert_eq!(c.url.as_ref().map(|s| s.as_str()), Some("postgres://canonical:5432/db"));
+                    assert_eq!(c.url.as_deref(), Some("postgres://canonical:5432/db"));
                 }
                 _ => panic!("Expected PostgreSQL database config"),
             }
@@ -457,10 +457,7 @@ mod tests {
 
                 match config.database {
                     Some(crate::config::DatabaseConfig::PostgreSql(c)) => {
-                        assert_eq!(
-                            c.url.as_ref().map(|s| s.as_str()),
-                            Some("postgresql://user:pass@localhost/db")
-                        );
+                        assert_eq!(c.url.as_deref(), Some("postgresql://user:pass@localhost/db"));
                         assert_eq!(c.max_connections, 10);
                     }
                     _ => panic!("Expected PostgreSQL database config"),
@@ -736,8 +733,8 @@ mod tests {
             };
 
             let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(
-                config.indexer.fast_sync, true,
+            assert!(
+                config.indexer.fast_sync,
                 "BLOKLI_INDEXER_FAST_SYNC should be parsed as bool"
             );
         });
@@ -769,8 +766,8 @@ mod tests {
             };
 
             let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(
-                config.indexer.fast_sync, true,
+            assert!(
+                config.indexer.fast_sync,
                 "BLOKLI_INDEXER_FAST_SYNC='1' should be parsed as boolean true"
             );
         });
@@ -802,8 +799,8 @@ mod tests {
             };
 
             let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(
-                config.indexer.fast_sync, false,
+            assert!(
+                !config.indexer.fast_sync,
                 "BLOKLI_INDEXER_FAST_SYNC='0' should be parsed as boolean false"
             );
         });
@@ -835,8 +832,8 @@ mod tests {
             };
 
             let config = args.load_config(false).expect("Failed to load config");
-            assert_eq!(
-                config.indexer.fast_sync, false,
+            assert!(
+                !config.indexer.fast_sync,
                 "BLOKLI_INDEXER_FAST_SYNC should be parsed as bool"
             );
         });
