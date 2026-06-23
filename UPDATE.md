@@ -1,12 +1,11 @@
 # Query Update Guide
 
-Blokli uses **header-based schema versioning** (`X-Blokli-Schema-Version: N`) to maintain backward
-compatibility across server and client deployments.  Each schema version is a complete GraphQL
-schema; unchanged resolvers live in `SharedQuery` / `SharedSubscription` and are composed into every
-version via `#[MergedObject]` / `#[MergedSubscription]`.
+Blokli uses **header-based schema versioning** (`X-Blokli-Schema-Version: N`) to maintain backward compatibility across server and client
+deployments. Each schema version is a complete GraphQL schema; unchanged resolvers live in `SharedQuery` / `SharedSubscription` and are
+composed into every version via `#[MergedObject]` / `#[MergedSubscription]`.
 
-Clients that omit the header are served **v1** (the original contract).  Updated clients send the
-version they were built for.  Old and new clients can safely coexist against the same server.
+Clients that omit the header are served **v1** (the original contract). Updated clients send the version they were built for. Old and new
+clients can safely coexist against the same server.
 
 ---
 
@@ -41,8 +40,7 @@ No version bump is needed.
 
 ## 2. Breaking change to an existing query or mutation
 
-A change is breaking when **existing clients would receive a validation error or a semantically
-different result** if served the new schema:
+A change is breaking when **existing clients would receive a validation error or a semantically different result** if served the new schema:
 
 - Removing a field or argument
 - Renaming a field or argument
@@ -53,8 +51,8 @@ different result** if served the new schema:
 
 #### Server side
 
-1. **Determine the next version number** — currently `LATEST_SCHEMA_VERSION` in
-   `api/src/schema.rs`.  If the current latest is `N`, the new version is `N+1`.
+1. **Determine the next version number** — currently `LATEST_SCHEMA_VERSION` in `api/src/schema.rs`. If the current latest is `N`, the new
+   version is `N+1`.
 
 2. **Create the new resolver** in a versioned module, e.g. `api/src/query_v2.rs`:
 
@@ -108,11 +106,9 @@ different result** if served the new schema:
    const SCHEMA_VERSION: u32 = 2;
    ```
 
-   The client sends this in every request header.  Old clients keep sending `1` and continue to
-   be served by the v1 schema.
+   The client sends this in every request header. Old clients keep sending `1` and continue to be served by the v1 schema.
 
-2. **Update the cynic types** in `client/src/api/v1/graphql/` (or add a `v2/` module) to match
-   the new query shape.
+2. **Update the cynic types** in `client/src/api/v1/graphql/` (or add a `v2/` module) to match the new query shape.
 
 3. Run `just quick && just test`.
 
@@ -131,8 +127,7 @@ Same principle as section 2 but for subscription roots.
 
 ## 4. Removing a query entirely
 
-Removing a query is a breaking change — existing clients that call it will receive a GraphQL
-validation error.
+Removing a query is a breaking change — existing clients that call it will receive a GraphQL validation error.
 
 1. Follow the breaking change steps (section 2): create v(N+1) where the query is absent.
 2. Keep v(N) in the registry until all deployed clients have migrated to v(N+1).
@@ -143,20 +138,18 @@ validation error.
 ## 5. Version lifecycle and retirement
 
 - Keep the previous version(s) in the registry while old clients are still in deployment.
-- Retire a version by removing its entry from `build_version_registry` and deleting its resolver
-  module.  Old clients will receive a `400 UNSUPPORTED_SCHEMA_VERSION` error — a clear signal to
-  upgrade.
-- A reasonable retirement window is one full deployment cycle (typically one release after the
-  breaking change ships).
+- Retire a version by removing its entry from `build_version_registry` and deleting its resolver module. Old clients will receive a
+  `400 UNSUPPORTED_SCHEMA_VERSION` error — a clear signal to upgrade.
+- A reasonable retirement window is one full deployment cycle (typically one release after the breaking change ships).
 
 ---
 
 ## Quick reference
 
-| Scenario | New version? | `LATEST_SCHEMA_VERSION` bump? | Client `SCHEMA_VERSION` bump? |
-|---|---|---|---|
-| Add optional field | No | No | No (optional) |
-| Add new query / subscription | No | No | No (optional) |
-| Remove / rename field or argument | Yes | Yes | Yes |
-| Change return type incompatibly | Yes | Yes | Yes |
-| Remove query entirely | Yes | Yes | Yes |
+| Scenario                          | New version? | `LATEST_SCHEMA_VERSION` bump? | Client `SCHEMA_VERSION` bump? |
+| --------------------------------- | ------------ | ----------------------------- | ----------------------------- |
+| Add optional field                | No           | No                            | No (optional)                 |
+| Add new query / subscription      | No           | No                            | No (optional)                 |
+| Remove / rename field or argument | Yes          | Yes                           | Yes                           |
+| Change return type incompatibly   | Yes          | Yes                           | Yes                           |
+| Remove query entirely             | Yes          | Yes                           | Yes                           |

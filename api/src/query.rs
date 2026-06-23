@@ -319,6 +319,7 @@ fn check_safes_balance_cap(count: usize) -> std::result::Result<(), QueryFailedE
 }
 
 /// Root query type providing read-only access to indexed blockchain data
+#[derive(Default)]
 pub struct QueryRoot;
 
 #[Object]

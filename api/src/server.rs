@@ -16,7 +16,7 @@ use axum::{
         Html, IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
     },
-    routing::get,
+    routing::{get, post},
 };
 use blokli_chain_api::{
     DefaultHttpRequestor, rpc_adapter::RpcAdapter, transaction_executor::RawTransactionExecutor,
@@ -372,7 +372,6 @@ pub async fn build_app(
 /// Intended for integration tests: lets tests inject custom schemas directly without
 /// going through the full `build_app` parameter list (Anvil, contracts, etc.).
 pub fn build_test_router(app_state: AppState) -> Router {
-    use axum::routing::post;
     Router::new()
         .route("/graphql", post(graphql_handler))
         .with_state(app_state)

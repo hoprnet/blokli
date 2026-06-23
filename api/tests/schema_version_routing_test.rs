@@ -2,8 +2,8 @@
 //!
 //! Tests cover two scenarios:
 //! - Basic routing: the correct schema is selected from the header value.
-//! - Composition routing: v2 only overrides `query1`; `query2` lives in
-//!   `SharedQuery` and is resolved identically regardless of the version header.
+//! - Composition routing: v2 only overrides `query1`; `query2` lives in `SharedQuery` and is resolved identically
+//!   regardless of the version header.
 
 use std::{collections::HashMap, sync::Arc};
 
@@ -173,7 +173,10 @@ async fn v2_only_field_fails_validation_against_v1() {
 #[tokio::test]
 async fn unknown_version_returns_400() {
     let app = build_test_router(build_test_app_state().await);
-    let resp = app.oneshot(post_graphql("{ schemaVersion }", Some("99"))).await.unwrap();
+    let resp = app
+        .oneshot(post_graphql("{ schemaVersion }", Some("99")))
+        .await
+        .unwrap();
     assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body = json_body(resp).await;
     assert!(body["errors"][0]["message"].as_str().unwrap().contains("99"));
@@ -260,7 +263,8 @@ async fn build_composed_app_state() -> AppState {
     let rpc_client = ClientBuilder::default().transport(transport.clone(), transport.guess_local());
     let transport_client = ReqwestClient::new();
     let rpc_operations = Arc::new(
-        RpcOperations::new(rpc_client, transport_client, RpcOperationsConfig::default(), None).expect("dummy RpcOperations"),
+        RpcOperations::new(rpc_client, transport_client, RpcOperationsConfig::default(), None)
+            .expect("dummy RpcOperations"),
     );
     let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), HealthConfig::default());
     readiness_checker.force_ready().await;

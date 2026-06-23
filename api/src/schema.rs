@@ -71,10 +71,33 @@ pub fn build_version_registry<R: HttpRequestor + 'static + Clone>(
         readiness_checker,
         limits,
     ));
+
+    // -- v2 (uncomment when the first breaking change ships) ------------------
+    //
+    // let v2: Arc<dyn ErasedSchema> = Arc::new(build_schema_v2(
+    //     db,
+    //     chain_id,
+    //     network,
+    //     contract_addresses,
+    //     expected_block_time,
+    //     finality,
+    //     gas_multiplier,
+    //     indexer_state,
+    //     transaction_executor,
+    //     transaction_store,
+    //     rpc_operations,
+    //     readiness_checker,
+    //     limits,
+    // ));
+    //
+    // Also bump LATEST_SCHEMA_VERSION to 2.
+    // -------------------------------------------------------------------------
+
     HashMap::from([(1, v1)])
 }
 
-/// The latest supported schema version. Clients that omit `X-Blokli-Schema-Version` are routed here.
+/// The latest supported schema version. Used for introspection and exposed in health responses.
+/// Clients that omit `X-Blokli-Schema-Version` are always routed to v1, not this value.
 pub const LATEST_SCHEMA_VERSION: u32 = 1;
 
 /// Type-erased GraphQL schema handle.
@@ -177,6 +200,55 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
 
     builder.finish()
 }
+
+// ---------------------------------------------------------------------------
+// V2 schema builder (commented out — uncomment when the first breaking change ships)
+//
+// Steps to activate:
+//   1. Add/move breaking resolvers to `query_v2::QueryRootV2`.
+//   2. Uncomment this function.
+//   3. Uncomment the v2 registration block in `build_version_registry` below.
+//   4. Bump `LATEST_SCHEMA_VERSION` to 2.
+//   5. Update `client/src/client/mod.rs` (`SCHEMA_VERSION`) and regenerate client types.
+//   6. Update `UPDATE.md` if the process differed.
+// ---------------------------------------------------------------------------
+//
+// #[allow(clippy::too_many_arguments)]
+// pub fn build_schema_v2<R: HttpRequestor + 'static + Clone>(
+//     db: DatabaseConnection,
+//     chain_id: u64,
+//     network: String,
+//     contract_addresses: ContractAddresses,
+//     expected_block_time: u64,
+//     finality: u16,
+//     gas_multiplier: f64,
+//     indexer_state: IndexerState,
+//     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
+//     transaction_store: Arc<TransactionStore>,
+//     rpc_operations: Arc<RpcOperations<R>>,
+//     readiness_checker: ReadinessChecker,
+//     limits: Option<(usize, usize)>,
+// ) -> Schema<query_v2::MergedQueryV2, MutationRoot, SubscriptionRoot> {
+//     let mut builder = Schema::build(query_v2::MergedQueryV2::default(), MutationRoot, SubscriptionRoot)
+//         .data(db)
+//         .data(ChainId(chain_id))
+//         .data(NetworkName(network))
+//         .data(contract_addresses)
+//         .data(ExpectedBlockTime(expected_block_time))
+//         .data(Finality(finality))
+//         .data(GasMultiplier(gas_multiplier))
+//         .data(indexer_state)
+//         .data(transaction_executor)
+//         .data(transaction_store)
+//         .data(rpc_operations)
+//         .data(readiness_checker);
+//
+//     if let Some((max_depth, max_complexity)) = limits {
+//         builder = builder.limit_depth(max_depth).limit_complexity(max_complexity);
+//     }
+//
+//     builder.finish()
+// }
 
 /// Export the GraphQL schema to SDL (Schema Definition Language) format
 ///
