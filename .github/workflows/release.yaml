@@ -93,7 +93,7 @@ jobs:
       id-token: write
     steps:
       - name: Release version
-        uses: hoprnet/hopr-workflows/actions/release-version@fa71078959cf9f892185e8df16551720693a2cd1
+        uses: hoprnet/hopr-workflows/actions/release-version@fd29bf3c58b72faacc300e068a05b59eb3b180bc # 0.9.4
         with:
           source_branch: ${{ github.ref_name }}
           file: bloklid/Cargo.toml
@@ -131,7 +131,7 @@ jobs:
           service_account: ${{ vars.WIF_SERVICE_ACCOUNT_STAGING }}
           install_sdk: "true"
       - name: Deploy to Cloud Run
-        uses: google-github-actions/deploy-cloudrun@2028e2d7d30a78c6910e0632e48dd561b064884d # v3
+        uses: google-github-actions/deploy-cloudrun@2028e2d7d30a78c6910e0632e48dd561b064884d # v3.0.1
         with:
           service: blokli
           region: europe-west1
