@@ -11,7 +11,6 @@ use hopr_types::{crypto::types::Hash, primitive::prelude::HoprBalance as Primiti
 use indexmap::IndexMap;
 
 use crate::{
-    CLIENT_VERSION,
     api::{types::*, *},
     errors::{BlokliClientError, ErrorKind, InternalTxError, TrackingErrorKind},
 };
@@ -48,8 +47,6 @@ pub struct BlokliTestState {
     pub chain_info: ChainInfo,
     /// Version of the Blokli server.
     pub version: String,
-    /// Client compatibility contract exposed by the Blokli server.
-    pub client_compatibility: Compatibility,
     /// Health of the Blokli server.
     pub health: String,
     /// Active transactions.
@@ -73,7 +70,6 @@ impl PartialEq for BlokliTestState {
             && self.channels == other.channels
             && self.chain_info == other.chain_info
             && self.version == other.version
-            && self.client_compatibility == other.client_compatibility
             && self.health == other.health
     }
 }
@@ -123,11 +119,6 @@ impl Default for BlokliTestState {
             },
 
             version: "1".to_string(),
-            client_compatibility: Compatibility {
-                api_version: "1".to_string(),
-                supported_client_versions: format!("^{CLIENT_VERSION}"),
-                features: vec!["indexes_safe_events".to_string()],
-            },
             health: "OK".to_string(),
             active_txs: Default::default(),
         }
@@ -678,10 +669,6 @@ impl<M: BlokliTestStateMutator + Send + Sync> BlokliQueryClient for BlokliTestCl
 
     async fn query_version(&self) -> Result<String> {
         Ok(self.state.read().version.clone())
-    }
-
-    async fn query_compatibility(&self) -> Result<Compatibility> {
-        Ok(self.state.read().client_compatibility.clone())
     }
 
     async fn query_health(&self) -> Result<String> {

@@ -5,6 +5,7 @@
 //! - GraphQL error codes and message templates for API responses
 //! - Builder functions for creating GraphQL error types with consistent formatting
 
+use async_graphql::ErrorExtensions;
 use blokli_api_types::{
     ContractNotAllowedError, FunctionNotAllowedError, InvalidAddressError, InvalidTransactionIdError,
     MissingFilterError, QueryFailedError, RpcError, TimeoutError,
@@ -110,6 +111,9 @@ pub mod codes {
 
     /// Request exceeds an allowed resource limit
     pub const LIMIT_EXCEEDED: &str = "LIMIT_EXCEEDED";
+
+    /// Requested schema version is not supported by this server
+    pub const UNSUPPORTED_SCHEMA_VERSION: &str = "UNSUPPORTED_SCHEMA_VERSION";
 }
 
 // ============================================================================
@@ -510,4 +514,10 @@ pub fn rpc_internal_error(error: impl std::fmt::Display) -> RpcError {
         code: codes::INTERNAL_ERROR.to_string(),
         message: error.to_string(),
     }
+}
+
+/// Creates an async_graphql::Error for unsupported schema version requests
+pub fn unsupported_schema_version(version: u32) -> async_graphql::Error {
+    async_graphql::Error::new(format!("Unsupported schema version: {}", version))
+        .extend_with(|_, e| e.set("code", codes::UNSUPPORTED_SCHEMA_VERSION))
 }

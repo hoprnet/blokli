@@ -5,7 +5,7 @@ mod table;
 use std::{str::FromStr, time::Duration};
 
 use blokli_client::{
-    BlokliClient, BlokliClientConfig,
+    BlokliClient,
     api::{
         AccountSelector, BlokliTransactionClient, ChainAddress, ChannelFilter, ChannelSelector, RedeemedStatsSelector,
         types::{Account, ChannelStatus},
@@ -32,10 +32,6 @@ struct Cli {
     /// Output format.
     #[arg(short, long, env, value_enum, default_value = "json")]
     format: Formats,
-    /// Skip the startup client/server compatibility check.
-    #[arg(long, default_value_t = false)]
-    skip_check: bool,
-
     #[clap(subcommand)]
     command: Commands,
 }
@@ -349,11 +345,7 @@ async fn main() -> anyhow::Result<()> {
         .init();
 
     let cli = Cli::parse();
-    let client_config = BlokliClientConfig {
-        auto_compatibility_check: !cli.skip_check,
-        ..Default::default()
-    };
-    let blokli_client = BlokliClient::new(cli.url, client_config);
+    let blokli_client = BlokliClient::new(cli.url, Default::default());
 
     let exit_fut = tokio::signal::ctrl_c().inspect_ok(|_| {
         eprintln!("\nInterrupted.");

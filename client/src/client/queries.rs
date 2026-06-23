@@ -198,11 +198,6 @@ impl GraphQlQueries {
         QueryVersion::build(())
     }
 
-    /// `Compatibility` GraphQL query.
-    pub fn query_compatibility() -> cynic::Operation<QueryCompatibility, ()> {
-        QueryCompatibility::build(())
-    }
-
     /// `Health` GraphQL query.
     pub fn query_health() -> cynic::Operation<QueryHealth, ()> {
         QueryHealth::build(())
@@ -358,11 +353,6 @@ impl BlokliQueryClient for BlokliClient {
         let resp = self.build_query(GraphQlQueries::query_version())?.await?;
 
         response_to_data(resp).map(|data| data.version)
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
-    async fn query_compatibility(&self) -> Result<Compatibility> {
-        self.query_compatibility_uncached().await
     }
 
     #[tracing::instrument(level = "debug", skip(self))]

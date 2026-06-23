@@ -75,20 +75,6 @@ pub struct QueryVersion {
 
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "QueryRoot")]
-pub struct QueryCompatibility {
-    pub compatibility: Compatibility,
-}
-
-#[derive(cynic::QueryFragment, Debug, Clone, PartialEq)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize))]
-pub struct Compatibility {
-    pub api_version: String,
-    pub supported_client_versions: String,
-    pub features: Vec<String>,
-}
-
-#[derive(cynic::QueryFragment, Debug)]
-#[cynic(graphql_type = "QueryRoot")]
 pub struct QueryHealth {
     pub health: String,
 }
