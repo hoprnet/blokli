@@ -46,7 +46,8 @@ async fn main() -> ExitCode {
                 tracing::info!(%error, "displaying command output");
                 return ExitCode::SUCCESS;
             }
-            tracing::error!(bin_name = BIN_NAME, %error, "error parsing arguments");
+            let raw_args: Vec<String> = std::env::args().skip(1).collect();
+            tracing::error!(bin_name = BIN_NAME, args = ?raw_args, %error, "error parsing arguments");
             return ExitCode::FAILURE;
         }
     };

@@ -78,7 +78,7 @@ pub async fn start_server(
     config: ApiConfig,
 ) -> ApiResult<()> {
     // Initialize tracing
-    logging::install_tracing("blokli_api=info,tower_http=debug")
+    logging::setup_tracing_env_like("blokli_api=info,tower_http=debug")
         .map_err(|error| ApiError::ConfigError(format!("Failed to initialize tracing: {error}")))?;
 
     info!("Starting blokli API server on {}", config.bind_address);

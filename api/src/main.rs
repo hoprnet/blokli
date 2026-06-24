@@ -53,7 +53,7 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    logging::install_tracing("blokli_api=info,tower_http=debug")?;
+    logging::setup_tracing_env_like("blokli_api=info,tower_http=debug")?;
     let args = Args::parse();
 
     // Handle subcommands

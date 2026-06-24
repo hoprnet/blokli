@@ -1,6 +1,7 @@
 use std::{
     any::Any,
     backtrace::Backtrace,
+    borrow::Cow,
     io::stdout,
     panic,
     sync::{Once, OnceLock},
@@ -56,7 +57,7 @@ pub(crate) fn install_base_subscriber(verbosity: u8) -> Result<()> {
 
     tracing::subscriber::set_global_default(subscriber)
         .map_err(|error| BloklidError::NonSpecific(error.to_string()))?;
-    install_panic_hook();
+    set_panic_hook();
     Ok(())
 }
 
@@ -69,17 +70,17 @@ pub(crate) fn install_otel_layers(layers: Vec<OtelBoxedLayer>) -> Result<()> {
     Ok(())
 }
 
-fn install_panic_hook() {
+fn set_panic_hook() {
     PANIC_HOOK_INSTALLED.call_once(|| {
         panic::set_hook(Box::new(|info| {
-            let payload = panic_payload_to_string(info.payload());
+            let payload = panic_payload_to_str(info.payload());
             let location = info.location();
             let panic_file = location.map(|value| value.file()).unwrap_or("unknown");
             let panic_line = location.map(|value| value.line()).unwrap_or(0);
             let panic_column = location.map(|value| value.column()).unwrap_or(0);
             let thread = std::thread::current();
             let thread_name = thread.name().unwrap_or("unnamed");
-            let backtrace = Backtrace::force_capture().to_string();
+            let backtrace = Backtrace::capture().to_string();
 
             tracing::error!(
                 panic_payload = %payload,
@@ -95,13 +96,13 @@ fn install_panic_hook() {
     });
 }
 
-fn panic_payload_to_string(payload: &(dyn Any + Send)) -> String {
-    if let Some(payload) = payload.downcast_ref::<&str>() {
-        (*payload).to_string()
+fn panic_payload_to_str(payload: &(dyn Any + Send)) -> Cow<'static, str> {
+    if let Some(payload) = payload.downcast_ref::<&'static str>() {
+        Cow::Borrowed(payload)
     } else if let Some(payload) = payload.downcast_ref::<String>() {
-        payload.clone()
+        Cow::Owned(payload.clone())
     } else {
-        "non-string panic payload".to_string()
+        Cow::Borrowed("non-string panic payload")
     }
 }
 
@@ -117,14 +118,14 @@ mod tests {
     }
 
     #[test]
-    fn test_panic_payload_to_string_from_str() {
+    fn test_panic_payload_to_str_from_str() {
         let payload: &(dyn Any + Send) = &"boom";
-        assert_eq!(panic_payload_to_string(payload), "boom");
+        assert_eq!(panic_payload_to_str(payload), "boom");
     }
 
     #[test]
-    fn test_panic_payload_to_string_from_string() {
+    fn test_panic_payload_to_str_from_string() {
         let payload: &(dyn Any + Send) = &"boom".to_string();
-        assert_eq!(panic_payload_to_string(payload), "boom");
+        assert_eq!(panic_payload_to_str(payload), "boom");
     }
 }

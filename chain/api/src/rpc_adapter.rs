@@ -43,7 +43,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
     /// Converts the raw transaction bytes to alloy Bytes format and submits to the RPC provider.
     /// Returns the transaction hash immediately without waiting for confirmation.
     async fn send_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<Hash, String> {
-        debug!(raw_tx_len = raw_tx.len(), "sending raw transaction");
+        debug!(length = raw_tx.len(), "sending raw transaction");
 
         // Convert Vec<u8> to alloy Bytes
         let bytes = Bytes::from(raw_tx);

@@ -284,7 +284,7 @@ async fn test_balance_api_integration() -> anyhow::Result<()> {
         // Verify balance by parsing into HoprBalance type
         assert!(balance.is_some(), "Balance should be returned");
         let balance_str = balance.unwrap();
-        tracing::info!(balance = %balance_str, "retrieved HOPR balance");
+        tracing::info!(balance = %balance_str, unit = "HOPR", "retrieved balance");
 
         let parsed_balance =
             HoprBalance::from_str(&balance_str).expect("Balance string should be valid HoprBalance format");
