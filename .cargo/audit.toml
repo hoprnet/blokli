@@ -34,7 +34,8 @@ ignore = [
 
   # RUSTSEC-2026-0173: proc-macro-error2 unmaintained
   # Crate: proc-macro-error2 2.0.1
-  # Transitive: alloy -> alloy/hopr-bindings
+  # Transitive: hopr-bindings -> alloy -> alloy-sol-macro (proc-macro-error2)
+  # Status: Build-time proc-macro only; no runtime impact. Track upstream for a maintained replacement.
   # Review by: 2026-06-30
   "RUSTSEC-2026-0173",
 
