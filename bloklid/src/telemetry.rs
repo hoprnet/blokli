@@ -358,9 +358,6 @@ pub fn init(verbosity: u8, config: &TelemetryConfig) -> Result<TelemetryHandles>
 
     opentelemetry::global::set_meter_provider(meter_provider.clone());
 
-    if !hopr_metrics::init_with_provider(prometheus_exporter, meter_provider.clone()) {
-        tracing::warn!("hopr-metrics global state was already initialized; custom provider not applied");
-    }
     handles.meter_provider = Some(meter_provider);
 
     if let Some(trace_layer) = trace_layer {

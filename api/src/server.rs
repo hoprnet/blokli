@@ -26,6 +26,8 @@ use blokli_chain_indexer::IndexerState;
 use blokli_chain_rpc::{rpc::RpcOperations, transport::ReqwestClient};
 use blokli_db_entity::prelude::ChainInfo;
 use futures::stream::{Stream, StreamExt};
+#[cfg(feature = "telemetry")]
+use hopr_types::telemetry as hopr_metrics;
 use sea_orm::{DatabaseConnection, EntityTrait};
 use serde::Serialize;
 use serde_json::Value;

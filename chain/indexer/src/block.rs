@@ -24,9 +24,9 @@ use hopr_bindings::{
     hopr_token::HoprToken::{Approval, Transfer},
 };
 #[cfg(all(feature = "telemetry", not(test)))]
-use hopr_metrics::{MultiGauge, SimpleGauge};
-#[cfg(all(feature = "telemetry", not(test)))]
 use hopr_types::primitive::prelude::ToHex;
+#[cfg(all(feature = "telemetry", not(test)))]
+use hopr_types::telemetry::{MultiGauge, SimpleGauge};
 use hopr_types::{
     crypto::types::Hash,
     primitive::prelude::{Address, SerializableLog},

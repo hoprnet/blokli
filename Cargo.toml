@@ -32,7 +32,9 @@ async-graphql = { version = "7.2.1", features = [
 async-lock = "3.4.2"
 async-signal = "0.2.14"
 async-stream = "0.3.6"
-async-tar = "0.6.1"
+async-tar = { version = "0.6.1", default-features = false, features = [
+  "runtime-tokio",
+] }
 async-trait = "0.1.89"
 axum = { version = "0.8.9", features = ["http2", "ws"] }
 backon = { version = "1.6.0", default-features = false }
