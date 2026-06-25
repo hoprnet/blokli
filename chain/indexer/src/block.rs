@@ -14,7 +14,11 @@ use blokli_db::{
     safe_contracts::BlokliDbSafeContractOperations,
 };
 use blokli_db_entity::{channel_state, prelude::ChannelState};
-use futures::{StreamExt, channel::mpsc::channel, future::AbortHandle};
+use futures::{
+    StreamExt,
+    channel::mpsc::channel,
+    future::{AbortHandle, abortable},
+};
 use hopr_bindings::{
     exports::alloy::{primitives::Address as AlloyAddress, rpc::types::Filter, sol_types::SolEvent},
     hopr_token::HoprToken::{Approval, Transfer},
@@ -338,7 +342,7 @@ where
         info!(next_block_to_process, "Indexer start point");
 
         let indexer_state = self.indexer_state.clone();
-        let indexing_abort_handle = hopr_async_runtime::spawn_as_abortable!(async move {
+        let (indexing_process, indexing_abort_handle) = abortable(async move {
             // Update the chain head once again
             debug!("Updating chain head at indexer startup");
             let historical_sync_head = Self::update_chain_head(&rpc, chain_head.clone()).await;
@@ -461,6 +465,7 @@ where
                 break;
             }
         });
+        let _indexing_task = tokio::spawn(indexing_process);
 
         if rx.next().await.is_some() {
             Ok(indexing_abort_handle)

@@ -17,7 +17,6 @@ use blokli_chain_rpc::{
 use blokli_chain_types::{AlloyAddressExt, ContractAddresses, ContractInstances, utils::create_anvil};
 use common::{TEST_BLOCK_TIME, TEST_TX_POLLING_INTERVAL, wait_for_finality};
 use futures::StreamExt;
-use hopr_async_runtime::prelude::spawn;
 use hopr_bindings::{
     exports::alloy::{
         primitives::{Address as AlloyAddress, U256},
@@ -29,7 +28,7 @@ use hopr_bindings::{
     hopr_token::HoprToken::{Approval, Transfer},
 };
 use hopr_types::crypto::keypairs::{ChainKeypair, Keypair};
-use tokio::time::timeout;
+use tokio::{spawn, time::timeout};
 use tracing::debug;
 
 #[tokio::test]

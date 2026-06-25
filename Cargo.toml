@@ -64,10 +64,8 @@ futures-timer = "3.0.4"
 futures-util = "0.3.32"
 hex = "0.4.3"
 hex-literal = "1.1.0"
-hopli = { git = "https://github.com/hoprnet/hopli", branch = "q/remove-contract-instances" }
-hopr-async-runtime = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
-hopr-bindings = "4.8.0"
-hopr-metrics = { git = "https://github.com/hoprnet/hoprnet", branch = "master" }
+hopli = { git = "https://github.com/hoprnet/hopli", branch = "main" }
+hopr-bindings = "4.9.1"
 hopr-types = "1.8.2"
 
 http = "1.4.2"

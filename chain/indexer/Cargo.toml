@@ -12,17 +12,9 @@ version     = "0.16.4"
 crate-type = ["rlib"]
 
 [features]
-default = []
-runtime-tokio = [
-  "blokli-chain-rpc/runtime-tokio",
-  "blokli-db/runtime-tokio",
-  "hopr-async-runtime/runtime-tokio",
-]
-telemetry = [
-  "blokli-chain-rpc/telemetry",
-  "blokli-db/telemetry",
-  "dep:hopr-metrics",
-]
+default       = []
+runtime-tokio = ["blokli-chain-rpc/runtime-tokio", "blokli-db/runtime-tokio"]
+telemetry     = ["blokli-chain-rpc/telemetry", "blokli-db/telemetry"]
 
 [dependencies]
 async-broadcast = { workspace = true }
@@ -54,13 +46,12 @@ blokli-chain-rpc = { workspace = true }
 blokli-chain-types = { workspace = true }
 blokli-db = { workspace = true }
 blokli-db-entity = { workspace = true }
-hopr-async-runtime = { workspace = true }
 hopr-bindings = { workspace = true }
-hopr-metrics = { workspace = true, optional = true }
 hopr-types = { workspace = true, features = [
   "crypto",
   "internal",
   "primitive",
+  "telemetry",
 ] }
 
 [dev-dependencies]

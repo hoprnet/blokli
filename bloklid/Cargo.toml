@@ -71,12 +71,12 @@ blokli-db            = { workspace = true }
 # HOPR dependencies
 config = { workspace = true }
 hopr-bindings = { workspace = true }
-hopr-metrics = { workspace = true }
 hopr-types = { workspace = true, features = [
   "chain",
   "crypto",
   "internal",
   "primitive",
+  "telemetry",
 ] }
 
 # Needed for test deployment, because deploy_for_testing from blokli_chain_types is outdated
