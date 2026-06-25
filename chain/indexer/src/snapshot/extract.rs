@@ -74,7 +74,7 @@ impl SnapshotExtractor {
 
     /// Extracts a tar.xz archive using async operations
     async fn extract_tar_xz(&self, archive_path: &Path, target_dir: &Path) -> SnapshotResult<Vec<String>> {
-        // Open file using AllowStdIo to make File work with futures-io
+        // Open file using Tokio I/O
         let file = File::open(archive_path).await.map_err(SnapshotError::Io)?;
 
         // Create XZ decoder with parallel decompression using Tokio I/O
