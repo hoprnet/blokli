@@ -17,7 +17,7 @@ runtime-tokio = [
   "blokli-chain-indexer/runtime-tokio",
   "blokli-db/runtime-tokio",
 ]
-telemetry = ["dep:lazy_static"]
+telemetry = ["dep:lazy_static", "hopr-types/telemetry"]
 
 [dependencies]
 # Async runtime
@@ -61,19 +61,15 @@ uuid            = { workspace = true }
 url = { workspace = true }
 
 # Internal dependencies
-blokli-api-types = { workspace = true }
-blokli-chain-api = { workspace = true }
+blokli-api-types     = { workspace = true }
+blokli-chain-api     = { workspace = true }
 blokli-chain-indexer = { workspace = true }
-blokli-chain-rpc = { workspace = true }
-blokli-chain-types = { workspace = true }
-blokli-db = { workspace = true }
-blokli-db-entity = { workspace = true }
-hopr-bindings = { workspace = true }
-hopr-types = { workspace = true, features = [
-  "crypto",
-  "primitive",
-  "telemetry",
-] }
+blokli-chain-rpc     = { workspace = true }
+blokli-chain-types   = { workspace = true }
+blokli-db            = { workspace = true }
+blokli-db-entity     = { workspace = true }
+hopr-bindings        = { workspace = true }
+hopr-types           = { workspace = true, features = ["crypto", "primitive"] }
 
 # Randomization
 rand = { workspace = true }

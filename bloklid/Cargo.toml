@@ -28,6 +28,7 @@ humantime-serde = { workspace = true }
 opentelemetry = { workspace = true, features = ["logs", "metrics", "trace"] }
 opentelemetry-otlp = { workspace = true, features = [
   "grpc-tonic",
+  "http-json",
   "http-proto",
   "logs",
   "metrics",

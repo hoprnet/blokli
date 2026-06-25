@@ -5,6 +5,7 @@ use std::{
 };
 
 use flagset::FlagSet;
+use hopr_types::telemetry as hopr_telemetry;
 use opentelemetry::{
     Key, KeyValue,
     logs::{AnyValue, LogRecord as _, Logger as _, LoggerProvider as _, Severity},
@@ -357,6 +358,10 @@ pub fn init(verbosity: u8, config: &TelemetryConfig) -> Result<TelemetryHandles>
     };
 
     opentelemetry::global::set_meter_provider(meter_provider.clone());
+
+    if !hopr_telemetry::init_with_provider(prometheus_exporter, meter_provider.clone()) {
+        tracing::warn!("hopr-types telemetry global state was already initialized; custom provider not applied");
+    }
 
     handles.meter_provider = Some(meter_provider);
 

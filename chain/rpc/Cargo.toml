@@ -42,7 +42,6 @@ hopr-types = { workspace = true, features = [
   "crypto",
   "internal",
   "primitive",
-  "telemetry",
 ] }
 tower = { workspace = true }
 tracing = { workspace = true }

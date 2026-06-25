@@ -86,10 +86,10 @@ mockall = "0.14.0"
 mockito = "1.7.2"
 moka = { version = "0.12.15", features = ["future"] }
 multiaddr = "0.18.2"
-opentelemetry = "0.31.0"
-opentelemetry-otlp = { version = "0.31.0", default-features = false }
-opentelemetry-prometheus-text-exporter = "0.2.1"
-opentelemetry_sdk = "0.31.0"
+opentelemetry = "0.32.0"
+opentelemetry-otlp = { version = "0.32.0", default-features = false }
+opentelemetry-prometheus-text-exporter = "0.3.0"
+opentelemetry_sdk = "0.32.0"
 parking_lot = "0.12.5"
 pem-rfc7468 = "1.0"
 primitive-types = { version = "0.14.0", features = ["serde"] }
@@ -153,7 +153,7 @@ tower-http = { version = "0.6.11", features = [
   "trace",
 ] }
 tracing = { version = "0.1.44" }
-tracing-opentelemetry = "0.32.1"
+tracing-opentelemetry = "0.33.0"
 tracing-subscriber = { version = "0.3.23", features = [
   "env-filter",
   "fmt",
