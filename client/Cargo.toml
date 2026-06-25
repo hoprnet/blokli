@@ -63,7 +63,7 @@ insta       = { workspace = true, features = ["json", "yaml"] }
 mockito     = { workspace = true }
 parking_lot = { workspace = true }
 serde       = { workspace = true }
-serde_json  = { workspace = true }
+serde_json  = { workspace = true, features = ["preserve_order"] }
 tokio       = { workspace = true }
 
 # `cynic-codegen` is a build-dependency used only in `build.rs` (GraphQL schema
