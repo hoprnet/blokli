@@ -4,12 +4,12 @@
 # Review cycle: Quarterly (next review by dates listed)
 
 ignore = [
-  # # RUSTSEC-2024-0388: derivative unmaintained
-  # # Crate: derivative 2.2.0
-  # # Transitive: ark-ff -> alloy/hopr-bindings
-  # # Status: Macro library for cryptographic operations. No suitable alternative.
-  # # Review by: 2026-06-30
-  # "RUSTSEC-2024-0388",
+  # RUSTSEC-2024-0388: derivative unmaintained
+  # Crate: derivative 2.2.0
+  # Transitive: ark-ff -> alloy/hopr-bindings
+  # Status: Macro library for cryptographic operations. No suitable alternative.
+  # Review by: 2026-06-30
+  "RUSTSEC-2024-0388",
 
   # RUSTSEC-2024-0436: paste unmaintained
   # Crate: paste 1.0.15
