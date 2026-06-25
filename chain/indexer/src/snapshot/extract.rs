@@ -132,7 +132,7 @@ impl SnapshotExtractor {
 
     /// Lists the contents of a tar.xz archive
     async fn list_archive_contents(&self, archive_path: &Path) -> SnapshotResult<Vec<String>> {
-        // Open file using AllowStdIo to make File work with futures-io
+        // Open file using Tokio I/O
         let file = File::open(archive_path).await.map_err(SnapshotError::Io)?;
 
         // Create XZ decoder using Tokio I/O
