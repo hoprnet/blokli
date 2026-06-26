@@ -10,7 +10,8 @@ use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder
 use sea_query::OnConflict;
 
 use crate::{
-    BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result, safe_history::BlokliDbSafeHistoryOperations,
+    BlokliDb, BlokliDbGeneralModelOperations, DbSqlError, OptTx, Result, TargetDb,
+    safe_history::BlokliDbSafeHistoryOperations, with_opt_transaction,
 };
 
 /// Combined safe contract entry with identity and current state.
@@ -218,6 +219,82 @@ where
 
     tx.commit().await?;
     Ok(loaded)
+}
+
+async fn upsert_safe_contract_in<C: ConnectionTrait>(
+    conn: &C,
+    safe_address: Address,
+    module_address: Address,
+    chain_key: Address,
+    block: u64,
+    tx_index: u64,
+    log_index: u64,
+) -> Result<i64> {
+    let existing_safe = HoprSafeContract::find()
+        .filter(hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
+        .one(conn)
+        .await?;
+
+    let safe_id = match existing_safe {
+        Some(safe) => safe.id,
+        None => {
+            let identity_model = hopr_safe_contract::ActiveModel {
+                address: Set(safe_address.as_ref().to_vec()),
+                ..Default::default()
+            };
+            let result = HoprSafeContract::insert(identity_model).exec(conn).await?;
+            result.last_insert_id
+        }
+    };
+
+    let state_model = hopr_safe_contract_state::ActiveModel {
+        hopr_safe_contract_id: Set(safe_id),
+        module_address: Set(module_address.as_ref().to_vec()),
+        chain_key: Set(chain_key.as_ref().to_vec()),
+        published_block: Set(block.cast_signed()),
+        published_tx_index: Set(tx_index.cast_signed()),
+        published_log_index: Set(log_index.cast_signed()),
+        ..Default::default()
+    };
+
+    match HoprSafeContractState::insert(state_model)
+        .on_conflict(
+            OnConflict::columns([
+                hopr_safe_contract_state::Column::HoprSafeContractId,
+                hopr_safe_contract_state::Column::PublishedBlock,
+                hopr_safe_contract_state::Column::PublishedTxIndex,
+                hopr_safe_contract_state::Column::PublishedLogIndex,
+            ])
+            .do_nothing()
+            .to_owned(),
+        )
+        .exec(conn)
+        .await
+    {
+        Ok(_) | Err(sea_orm::DbErr::RecordNotInserted) => {}
+        Err(e) => return Err(e.into()),
+    }
+
+    Ok(safe_id)
+}
+
+async fn get_safe_contract_by_address_in<C: ConnectionTrait>(
+    conn: &C,
+    safe_address: Address,
+) -> Result<Option<SafeContractEntry>> {
+    let Some(identity) = HoprSafeContract::find()
+        .filter(hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
+        .one(conn)
+        .await?
+    else {
+        return Ok(None);
+    };
+
+    let Some(state) = get_latest_safe_state(conn, identity.id).await? else {
+        return Ok(None);
+    };
+
+    Ok(Some(combine_entry(&identity, &state)))
 }
 
 #[async_trait]
@@ -441,62 +518,21 @@ impl BlokliDbSafeContractOperations for BlokliDb {
         tx_index: u64,
         log_index: u64,
     ) -> Result<i64> {
-        let tx = self.nest_transaction(tx).await?;
-
-        // Step 1: Find or create safe identity
-        let existing_safe = HoprSafeContract::find()
-            .filter(hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
-            .one(tx.as_ref())
-            .await?;
-
-        let safe_id = match existing_safe {
-            Some(safe) => safe.id,
-            None => {
-                // Create new identity
-                let identity_model = hopr_safe_contract::ActiveModel {
-                    address: Set(safe_address.as_ref().to_vec()),
-                    ..Default::default()
-                };
-                let result = HoprSafeContract::insert(identity_model).exec(tx.as_ref()).await?;
-                result.last_insert_id
-            }
-        };
-
-        // Step 2: Insert new state record (append-only)
-        let state_model = hopr_safe_contract_state::ActiveModel {
-            hopr_safe_contract_id: Set(safe_id),
-            module_address: Set(module_address.as_ref().to_vec()),
-            chain_key: Set(chain_key.as_ref().to_vec()),
-            published_block: Set(block as i64),
-            published_tx_index: Set(tx_index as i64),
-            published_log_index: Set(log_index as i64),
-            ..Default::default()
-        };
-
-        // Use ON CONFLICT DO NOTHING for idempotency on state position
-        match HoprSafeContractState::insert(state_model)
-            .on_conflict(
-                OnConflict::columns([
-                    hopr_safe_contract_state::Column::HoprSafeContractId,
-                    hopr_safe_contract_state::Column::PublishedBlock,
-                    hopr_safe_contract_state::Column::PublishedTxIndex,
-                    hopr_safe_contract_state::Column::PublishedLogIndex,
-                ])
-                .do_nothing()
-                .to_owned(),
-            )
-            .exec(tx.as_ref())
-            .await
-        {
-            Ok(_) => {}
-            Err(sea_orm::DbErr::RecordNotInserted) => {
-                // Expected: ON CONFLICT DO NOTHING prevented duplicate insert (idempotent)
-            }
-            Err(e) => return Err(e.into()),
-        }
-
-        tx.commit().await?;
-        Ok(safe_id)
+        with_opt_transaction(self, tx, TargetDb::Index, |tx| {
+            Box::pin(async move {
+                upsert_safe_contract_in(
+                    tx.as_ref(),
+                    safe_address,
+                    module_address,
+                    chain_key,
+                    block,
+                    tx_index,
+                    log_index,
+                )
+                .await
+            })
+        })
+        .await
     }
 
     async fn verify_safe_contract<'a>(
@@ -542,20 +578,10 @@ impl BlokliDbSafeContractOperations for BlokliDb {
         tx: OptTx<'a>,
         safe_address: Address,
     ) -> Result<Option<SafeContractEntry>> {
-        let tx = self.nest_transaction(tx).await?;
-        let Some(identity) = HoprSafeContract::find()
-            .filter(hopr_safe_contract::Column::Address.eq(safe_address.as_ref().to_vec()))
-            .one(tx.as_ref())
-            .await?
-        else {
-            return Ok(None);
-        };
-
-        let Some(state) = get_latest_safe_state(tx.as_ref(), identity.id).await? else {
-            return Ok(None);
-        };
-
-        Ok(Some(combine_entry(&identity, &state)))
+        with_opt_transaction(self, tx, TargetDb::Index, |tx| {
+            Box::pin(async move { get_safe_contract_by_address_in(tx.as_ref(), safe_address).await })
+        })
+        .await
     }
 
     #[allow(clippy::cast_possible_wrap)]

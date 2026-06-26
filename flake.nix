@@ -286,9 +286,11 @@
           bloklidDocker = {
             docker-bloklid-x86_64-linux = mkBloklidDocker "x86_64-linux" null;
             docker-bloklid-x86_64-linux-dev = mkBloklidDocker "x86_64-linux" "dev";
+            docker-bloklid-x86_64-linux-profile = mkBloklidDocker "x86_64-linux" "profile";
             docker-bloklid-anvil-x86_64-linux = mkBloklidAnvilDocker "x86_64-linux";
             docker-bloklid-aarch64-linux = mkBloklidDocker "aarch64-linux" null;
             docker-bloklid-aarch64-linux-dev = mkBloklidDocker "aarch64-linux" "dev";
+            docker-bloklid-aarch64-linux-profile = mkBloklidDocker "aarch64-linux" "profile";
             docker-bloklid-anvil-aarch64-linux = mkBloklidAnvilDocker "aarch64-linux";
           };
 

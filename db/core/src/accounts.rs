@@ -22,9 +22,10 @@ use sea_query::{Condition, OnConflict};
 use tracing::instrument;
 
 use crate::{
-    BlokliDbGeneralModelOperations, OptTx,
+    BlokliDbGeneralModelOperations, OptTx, TargetDb,
     db::BlokliDb,
     errors::{DbSqlError, DbSqlError::MissingAccount, Result},
+    with_opt_transaction,
 };
 
 /// A type that can represent both [chain public key](Address) and [packet public key](OffchainPublicKey).
@@ -125,6 +126,12 @@ pub trait BlokliDbAccountOperations {
     async fn get_account<'a, T>(&'a self, tx: OptTx<'a>, key: T) -> Result<Option<AccountEntry>>
     where
         T: Into<ChainOrPacketKey> + Send + Sync;
+
+    /// Retrieves only the latest safe address for an account identified by chain key.
+    ///
+    /// This is a lightweight alternative to `get_account(...)` for hot paths that only need
+    /// the current safe association and do not need announcements or packet-key data.
+    async fn get_account_safe_address<'a>(&'a self, tx: OptTx<'a>, chain_key: Address) -> Result<Option<Address>>;
 
     /// Retrieves entries of accounts with routable address announcements (if `public_only` is `true`)
     /// or about all accounts without routeable address announcements (if `public_only` is `false`).
@@ -257,83 +264,81 @@ impl BlokliDbAccountOperations for BlokliDb {
         let tx_index_i64 = tx_index as i64;
         let log_index_i64 = log_index as i64;
 
-        self.nest_transaction(tx)
-            .await?
-            .perform(|tx| {
-                Box::pin(async move {
-                    // Step 1: Insert account identity or reuse existing one
-                    let account_model = account::ActiveModel {
-                        id: Set(key_id as i64),
-                        chain_key: Set(chain_key.as_ref().to_vec()),
-                        packet_key: Set(hex::encode(packet_key.as_ref())),
-                        published_block: Set(block_i64),
-                        published_tx_index: Set(tx_index_i64),
-                        published_log_index: Set(log_index_i64),
-                    };
-                    let account_id = match Account::insert(account_model)
-                        .on_conflict(
-                            OnConflict::columns([account::Column::ChainKey, account::Column::PacketKey])
-                                .do_nothing()
-                                .to_owned(),
-                        )
-                        .exec(tx.as_ref())
-                        .await
-                    {
-                        Ok(insert_result) => insert_result.last_insert_id,
-                        Err(DbErr::RecordNotInserted) => {
-                            account::Entity::find()
-                                .filter(account::Column::ChainKey.eq(chain_key.as_ref().to_vec()))
-                                .filter(account::Column::PacketKey.eq(hex::encode(packet_key.as_ref())))
-                                .one(tx.as_ref())
-                                .await?
-                                .ok_or_else(|| {
-                                    DbSqlError::LogicalError(
-                                        "Account insert was skipped but account record was not found for chain_key \
-                                         and packet_key"
-                                            .to_string(),
-                                    )
-                                })?
-                                .id
-                        }
-                        Err(e) => return Err(e.into()),
-                    };
-
-                    // Step 2: Insert account_state record with state information
-                    // This creates a new immutable state record (never updates existing records)
-                    let state_model = account_state::ActiveModel {
-                        account_id: Set(account_id),
-                        safe_address: Set(safe_address.map(|a| a.as_ref().to_vec())),
-                        published_block: Set(block_i64),
-                        published_tx_index: Set(tx_index_i64),
-                        published_log_index: Set(log_index_i64),
-                        ..Default::default()
-                    };
-
-                    match AccountState::insert(state_model)
-                        .on_conflict(
-                            OnConflict::columns([
-                                account_state::Column::AccountId,
-                                account_state::Column::PublishedBlock,
-                                account_state::Column::PublishedTxIndex,
-                                account_state::Column::PublishedLogIndex,
-                            ])
+        with_opt_transaction(self, tx, TargetDb::Index, |tx| {
+            Box::pin(async move {
+                // Step 1: Insert account identity or reuse existing one
+                let account_model = account::ActiveModel {
+                    id: Set(key_id as i64),
+                    chain_key: Set(chain_key.as_ref().to_vec()),
+                    packet_key: Set(hex::encode(packet_key.as_ref())),
+                    published_block: Set(block_i64),
+                    published_tx_index: Set(tx_index_i64),
+                    published_log_index: Set(log_index_i64),
+                };
+                let account_id = match Account::insert(account_model)
+                    .on_conflict(
+                        OnConflict::columns([account::Column::ChainKey, account::Column::PacketKey])
                             .do_nothing()
                             .to_owned(),
-                        )
-                        .exec(tx.as_ref())
-                        .await
-                    {
-                        Ok(_) => {}
-                        Err(DbErr::RecordNotInserted) => {
-                            // Idempotent: record already exists from a previous incomplete sync
-                        }
-                        Err(e) => return Err(e.into()),
+                    )
+                    .exec(tx.as_ref())
+                    .await
+                {
+                    Ok(insert_result) => insert_result.last_insert_id,
+                    Err(DbErr::RecordNotInserted) => {
+                        account::Entity::find()
+                            .filter(account::Column::ChainKey.eq(chain_key.as_ref().to_vec()))
+                            .filter(account::Column::PacketKey.eq(hex::encode(packet_key.as_ref())))
+                            .one(tx.as_ref())
+                            .await?
+                            .ok_or_else(|| {
+                                DbSqlError::LogicalError(
+                                    "Account insert was skipped but account record was not found for chain_key and \
+                                     packet_key"
+                                        .to_string(),
+                                )
+                            })?
+                            .id
                     }
+                    Err(e) => return Err(e.into()),
+                };
 
-                    Ok::<_, DbSqlError>(())
-                })
+                // Step 2: Insert account_state record with state information
+                // This creates a new immutable state record (never updates existing records)
+                let state_model = account_state::ActiveModel {
+                    account_id: Set(account_id),
+                    safe_address: Set(safe_address.map(|a| a.as_ref().to_vec())),
+                    published_block: Set(block_i64),
+                    published_tx_index: Set(tx_index_i64),
+                    published_log_index: Set(log_index_i64),
+                    ..Default::default()
+                };
+
+                match AccountState::insert(state_model)
+                    .on_conflict(
+                        OnConflict::columns([
+                            account_state::Column::AccountId,
+                            account_state::Column::PublishedBlock,
+                            account_state::Column::PublishedTxIndex,
+                            account_state::Column::PublishedLogIndex,
+                        ])
+                        .do_nothing()
+                        .to_owned(),
+                    )
+                    .exec(tx.as_ref())
+                    .await
+                {
+                    Ok(_) => {}
+                    Err(DbErr::RecordNotInserted) => {
+                        // Idempotent: record already exists from a previous incomplete sync
+                    }
+                    Err(e) => return Err(e.into()),
+                }
+
+                Ok::<_, DbSqlError>(())
             })
-            .await?;
+        })
+        .await?;
 
         Ok(())
     }
@@ -344,35 +349,51 @@ impl BlokliDbAccountOperations for BlokliDb {
         key: T,
     ) -> Result<Option<AccountEntry>> {
         let cpk = key.into();
-        self.nest_transaction(tx)
-            .await?
-            .perform(|tx| {
-                Box::pin(async move {
-                    // Step 1: Find account by key
-                    let account_model = match Account::find().filter(cpk).one(tx.as_ref()).await? {
-                        Some(a) => a,
-                        None => return Ok(None),
-                    };
+        with_opt_transaction(self, tx, TargetDb::Index, |tx| {
+            Box::pin(async move {
+                // Step 1: Find account by key
+                let account_model = match Account::find().filter(cpk).one(tx.as_ref()).await? {
+                    Some(a) => a,
+                    None => return Ok(None),
+                };
 
-                    // Step 2: Get the latest account state from the account_current view
-                    let state_model = account_current::Entity::find()
-                        .filter(account_current::Column::AccountId.eq(account_model.id))
-                        .one(tx.as_ref())
-                        .await?
-                        .map(account_state::Model::from);
+                // Step 2: Get the latest account state from the account_current view
+                let state_model = account_current::Entity::find()
+                    .filter(account_current::Column::AccountId.eq(account_model.id))
+                    .one(tx.as_ref())
+                    .await?
+                    .map(account_state::Model::from);
 
-                    // Step 3: Get announcements for account entry
-                    let announcements = Announcement::find()
-                        .filter(announcement::Column::AccountId.eq(account_model.id))
-                        .order_by_desc(announcement::Column::PublishedBlock)
-                        .all(tx.as_ref())
-                        .await?;
+                // Step 3: Get announcements for account entry
+                let announcements = Announcement::find()
+                    .filter(announcement::Column::AccountId.eq(account_model.id))
+                    .order_by_desc(announcement::Column::PublishedBlock)
+                    .all(tx.as_ref())
+                    .await?;
 
-                    // Step 4: Convert to AccountEntry
-                    Ok::<_, DbSqlError>(Some(model_to_account_entry(account_model, state_model, announcements)?))
-                })
+                // Step 4: Convert to AccountEntry
+                Ok::<_, DbSqlError>(Some(model_to_account_entry(account_model, state_model, announcements)?))
             })
-            .await
+        })
+        .await
+    }
+
+    async fn get_account_safe_address<'a>(&'a self, tx: OptTx<'a>, chain_key: Address) -> Result<Option<Address>> {
+        with_opt_transaction(self, tx, TargetDb::Index, |tx| {
+            Box::pin(async move {
+                account_current::Entity::find()
+                    .filter(account_current::Column::ChainKey.eq(chain_key.as_ref().to_vec()))
+                    .one(tx.as_ref())
+                    .await?
+                    .and_then(|account| account.safe_address)
+                    .map(|safe_address| Address::try_from(safe_address.as_slice()))
+                    .transpose()
+                    .map_err(|error| {
+                        DbSqlError::LogicalError(format!("invalid safe address in account_current: {error}"))
+                    })
+            })
+        })
+        .await
     }
 
     async fn get_accounts<'a>(&'a self, tx: OptTx<'a>, public_only: bool) -> Result<Vec<AccountEntry>> {
@@ -480,54 +501,52 @@ impl BlokliDbAccountOperations for BlokliDb {
         T: Into<ChainOrPacketKey> + Send + Sync,
     {
         let cpk = key.into();
-        self.nest_transaction(tx)
-            .await?
-            .perform(|tx| {
-                Box::pin(async move {
-                    let (existing_account, mut existing_announcements) = account::Entity::find()
-                        .find_with_related(announcement::Entity)
-                        .filter(cpk)
-                        .order_by_desc(announcement::Column::PublishedBlock)
-                        .all(tx.as_ref())
-                        .await?
-                        .pop()
-                        .ok_or(MissingAccount)?;
+        with_opt_transaction(self, tx, TargetDb::Index, |tx| {
+            Box::pin(async move {
+                let (existing_account, mut existing_announcements) = account::Entity::find()
+                    .find_with_related(announcement::Entity)
+                    .filter(cpk)
+                    .order_by_desc(announcement::Column::PublishedBlock)
+                    .all(tx.as_ref())
+                    .await?
+                    .pop()
+                    .ok_or(MissingAccount)?;
 
-                    if let Some((index, _)) = existing_announcements
-                        .iter()
-                        .enumerate()
-                        .find(|(_, announcement)| announcement.multiaddress == multiaddr.to_string())
-                    {
-                        let mut existing_announcement = existing_announcements.remove(index).into_active_model();
-                        existing_announcement.published_block = Set(published_at as i64);
-                        let updated_announcement = existing_announcement.update(tx.as_ref()).await?;
+                if let Some((index, _)) = existing_announcements
+                    .iter()
+                    .enumerate()
+                    .find(|(_, announcement)| announcement.multiaddress == multiaddr.to_string())
+                {
+                    let mut existing_announcement = existing_announcements.remove(index).into_active_model();
+                    existing_announcement.published_block = Set(published_at as i64);
+                    let updated_announcement = existing_announcement.update(tx.as_ref()).await?;
 
-                        // To maintain the sort order, insert at the original location
-                        existing_announcements.insert(index, updated_announcement);
-                    } else {
-                        let new_announcement = announcement::ActiveModel {
-                            account_id: Set(existing_account.id),
-                            multiaddress: Set(multiaddr.to_string()),
-                            published_block: Set(published_at as i64),
-                            ..Default::default()
-                        }
-                        .insert(tx.as_ref())
-                        .await?;
-
-                        // Assuming this is the latest announcement, so prepend it
-                        existing_announcements.insert(0, new_announcement);
+                    // To maintain the sort order, insert at the original location
+                    existing_announcements.insert(index, updated_announcement);
+                } else {
+                    let new_announcement = announcement::ActiveModel {
+                        account_id: Set(existing_account.id),
+                        multiaddress: Set(multiaddr.to_string()),
+                        published_block: Set(published_at as i64),
+                        ..Default::default()
                     }
+                    .insert(tx.as_ref())
+                    .await?;
 
-                    let state_model = account_current::Entity::find()
-                        .filter(account_current::Column::AccountId.eq(existing_account.id))
-                        .one(tx.as_ref())
-                        .await?
-                        .map(account_state::Model::from);
+                    // Assuming this is the latest announcement, so prepend it
+                    existing_announcements.insert(0, new_announcement);
+                }
 
-                    model_to_account_entry(existing_account, state_model, existing_announcements)
-                })
+                let state_model = account_current::Entity::find()
+                    .filter(account_current::Column::AccountId.eq(existing_account.id))
+                    .one(tx.as_ref())
+                    .await?
+                    .map(account_state::Model::from);
+
+                model_to_account_entry(existing_account, state_model, existing_announcements)
             })
-            .await
+        })
+        .await
     }
 
     async fn delete_all_announcements<'a, T>(&'a self, tx: OptTx<'a>, key: T) -> Result<()>
@@ -535,37 +554,35 @@ impl BlokliDbAccountOperations for BlokliDb {
         T: Into<ChainOrPacketKey> + Send + Sync,
     {
         let cpk = key.into();
-        self.nest_transaction(tx)
-            .await?
-            .perform(|tx| {
-                Box::pin(async move {
-                    // First find the account
-                    let account_opt = Account::find().filter(cpk).one(tx.as_ref()).await?;
+        with_opt_transaction(self, tx, TargetDb::Index, |tx| {
+            Box::pin(async move {
+                // First find the account
+                let account_opt = Account::find().filter(cpk).one(tx.as_ref()).await?;
 
-                    if let Some(account_model) = account_opt {
-                        // Find and delete all related announcements
-                        let to_delete: Vec<i64> = Announcement::find()
-                            .filter(announcement::Column::AccountId.eq(account_model.id))
-                            .all(tx.as_ref())
-                            .await?
-                            .into_iter()
-                            .map(|x: announcement::Model| x.id)
-                            .collect();
+                if let Some(account_model) = account_opt {
+                    // Find and delete all related announcements
+                    let to_delete: Vec<i64> = Announcement::find()
+                        .filter(announcement::Column::AccountId.eq(account_model.id))
+                        .all(tx.as_ref())
+                        .await?
+                        .into_iter()
+                        .map(|x: announcement::Model| x.id)
+                        .collect();
 
-                        if !to_delete.is_empty() {
-                            announcement::Entity::delete_many()
-                                .filter(announcement::Column::Id.is_in(to_delete))
-                                .exec(tx.as_ref())
-                                .await?;
-                        }
-
-                        Ok::<_, DbSqlError>(())
-                    } else {
-                        Err(MissingAccount)
+                    if !to_delete.is_empty() {
+                        announcement::Entity::delete_many()
+                            .filter(announcement::Column::Id.is_in(to_delete))
+                            .exec(tx.as_ref())
+                            .await?;
                     }
-                })
+
+                    Ok::<_, DbSqlError>(())
+                } else {
+                    Err(MissingAccount)
+                }
             })
-            .await
+        })
+        .await
     }
 
     async fn delete_account<'a, T>(&'a self, tx: OptTx<'a>, key: T) -> Result<()>

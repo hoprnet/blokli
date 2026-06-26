@@ -188,6 +188,11 @@ opt-level     = 3
 panic         = "abort"
 strip         = true
 
+[profile.profile]
+debug    = 2
+inherits = "release"
+strip    = false
+
 # humantime-serde used only via #[serde(with = "humantime_serde")] string attrs,
 # which cargo-shear cannot detect through static analysis.
 [workspace.metadata.cargo-shear]

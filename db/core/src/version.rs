@@ -27,7 +27,9 @@ use crate::errors::{DbSqlError, Result};
 ///
 /// Version history:
 /// - `"1.1.0"`: Initial schema (consolidated from prior migration stack)
-pub const SCHEMA_VERSION: &str = "1.2.0";
+/// - `"1.2.0"`:
+/// - `"1.3.0"`: Added `hopr_safe_redeemed_stat_event` event table; re-sync required to populate it.
+pub const SCHEMA_VERSION: &str = "1.3.0";
 
 /// The singleton ID used for the schema_version table.
 const SCHEMA_VERSION_TABLE_ID: i64 = 1;

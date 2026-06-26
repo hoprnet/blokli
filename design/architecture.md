@@ -877,8 +877,11 @@ Clients can query Safe contracts through three methods:
 4. **Redeemed Ticket Aggregates**: `ticketRedemptionStats(filter: {safeAddress, nodeAddress})` - Retrieve total redeemed amount and
    redemption count derived from `TicketRedeemed` events
 
-`TicketRedeemed` processing updates a dedicated aggregate table keyed by `(safe_address, node_address)`. Attribution uses the destination
-account of the redeemed channel and resolves the account's current `safe_address` when the event is processed. Query behavior is:
+`TicketRedeemed` processing now writes two layers of storage. First, it records an immutable redeemed-stat event anchor keyed by
+`(safe_address, node_address, published_block, published_tx_index, published_log_index)` so replaying the same chain log cannot
+double-count. Second, it folds newly anchored events into a dedicated aggregate table keyed by `(safe_address, node_address)`. Attribution
+uses the destination account of the redeemed channel and resolves the account's current `safe_address` when the event is processed. Query
+behavior is:
 
 - safe-only filter aggregates all rows for that safe
 - node-only filter aggregates all rows for that node

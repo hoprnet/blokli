@@ -198,6 +198,8 @@ where
                 self.update_account_safe_address(tx, node_addr, Some(safe_addr), block, tx_index, log_index)
                     .await?;
 
+                self.remember_safe_address(safe_addr).await;
+
                 debug!(
                     node_address = %node_addr.to_hex(),
                     safe_address = %safe_addr.to_hex(),
@@ -289,6 +291,7 @@ where
 mod tests {
     use std::sync::Arc;
 
+    use blokli_chain_rpc::errors::RpcError;
     use blokli_db::{
         BlokliDbGeneralModelOperations,
         accounts::{BlokliDbAccountOperations, ChainOrPacketKey},
@@ -308,6 +311,7 @@ mod tests {
         crypto::keypairs::Keypair,
         primitive::prelude::{Address, SerializableLog},
     };
+    use mockall::predicate::*;
     use primitive_types::H256;
     use sea_orm::{ColumnTrait, EntityTrait, PaginatorTrait, QueryFilter};
 
@@ -315,6 +319,10 @@ mod tests {
         handlers::{node_safe_registry::tests::SAFE_INSTANCE_ADDR, test_utils::test_helpers::*},
         state::IndexerEvent,
     };
+
+    fn random_address() -> Address {
+        Address::from(hopr_types::crypto_random::random_bytes())
+    }
 
     #[tokio::test]
     async fn test_on_node_safe_registry_registered_creates_safe_with_module_from_rpc() -> anyhow::Result<()> {
@@ -847,6 +855,78 @@ mod tests {
             .await?
             .expect("account should exist");
         assert_eq!(account.safe_address, Some(new_safe_address));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_registered_node_safe_does_not_cache_safe_when_backfill_rolls_back() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let mut rpc_operations = MockIndexerRpcOperations::new();
+
+        let existing_safe = random_address();
+        let safe_address = random_address();
+        let node_address = *SELF_CHAIN_ADDRESS;
+        let existing_chain_key = random_address();
+        let module_address: Address = "aabbccddee00112233445566778899aabbccddee".parse()?;
+
+        db.create_safe_contract(None, existing_safe, random_address(), existing_chain_key, 10, 0, 0)
+            .await?;
+
+        rpc_operations
+            .expect_get_hopr_module_from_safe()
+            .with(eq(safe_address))
+            .returning(move |_| Ok(Some(module_address)));
+        rpc_operations
+            .expect_get_logs_for_address()
+            .withf(move |address, _, from_block, to_block| {
+                *address == safe_address && *from_block == 100 && *to_block == 100
+            })
+            .returning(|_, _, _, _| Err(RpcError::Other("backfill failed".into())));
+
+        let clonable_rpc_operations = ClonableMockOperations {
+            inner: Arc::new(rpc_operations),
+        };
+        let handlers = init_handlers(clonable_rpc_operations, db.clone());
+
+        let preload_tx = db.begin_transaction().await?;
+        assert!(handlers.is_known_safe_address(&preload_tx, existing_safe).await?);
+        preload_tx.rollback().await?;
+
+        let encoded_data = ().abi_encode();
+        let safe_registered_log = SerializableLog {
+            address: handlers.addresses.node_safe_registry,
+            topics: vec![
+                HoprNodeSafeRegistry::RegisteredNodeSafe::SIGNATURE_HASH.into(),
+                H256::from_slice(&safe_address.to_bytes32()).into(),
+                H256::from_slice(&node_address.to_bytes32()).into(),
+            ],
+            data: encoded_data,
+            block_number: 100,
+            tx_index: 5,
+            log_index: 10,
+            ..test_log()
+        };
+
+        let handlers_clone = handlers.clone();
+        let result = db
+            .begin_transaction()
+            .await?
+            .perform(|tx| {
+                Box::pin(async move {
+                    handlers_clone
+                        .process_log_event(tx, safe_registered_log.clone(), true)
+                        .await
+                })
+            })
+            .await;
+        assert!(result.is_err());
+        assert!(db.get_safe_contract_by_address(None, safe_address).await?.is_none());
+
+        let known_safe_addresses = handlers.known_safe_addresses.read().await;
+        let known_safe_addresses = known_safe_addresses.as_ref().expect("cache should stay hydrated");
+        assert!(known_safe_addresses.contains(&existing_safe));
+        assert!(!known_safe_addresses.contains(&safe_address));
 
         Ok(())
     }

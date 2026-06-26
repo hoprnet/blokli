@@ -1,7 +1,10 @@
 use blokli_api_types::RedemptionResult;
 use blokli_chain_rpc::HoprIndexerRpcOperations;
 use blokli_chain_types::AlloyAddressExt;
-use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator, errors::DbSqlError};
+use blokli_db::{
+    BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator, errors::DbSqlError,
+    safe_redeemed_stats::StagedSafeRedeemedStatMutation,
+};
 use hopr_bindings::{exports::alloy::hex, hopr_channels::HoprChannels::HoprChannelsEvents};
 use hopr_types::{
     crypto::types::Hash,
@@ -12,7 +15,10 @@ use tracing::{error, trace, warn};
 
 #[cfg(all(feature = "telemetry", not(test)))]
 use super::increment_indexer_contract_log_count;
-use super::{ContractEventHandlers, channel_utils::decode_channel, helpers::construct_channel_update};
+use super::{
+    ContractEventHandlers, PendingSafeRedeemedStatMutation, channel_utils::decode_channel,
+    helpers::construct_channel_update,
+};
 use crate::{
     errors::{CoreEthereumIndexerError, Result},
     handlers::helpers::build_channel_entry,
@@ -24,6 +30,69 @@ where
     T: HoprIndexerRpcOperations + Clone + Send + 'static,
     Db: BlokliDbAllOperations + Clone,
 {
+    fn pending_safe_redeemed_stat_mutation_key(tx: &OpenTransaction) -> usize {
+        tx.as_ref() as *const _ as usize
+    }
+
+    async fn append_pending_safe_redeemed_stat_mutations_for_tx(
+        &self,
+        tx: &OpenTransaction,
+        staged_mutations: Vec<PendingSafeRedeemedStatMutation>,
+    ) {
+        if staged_mutations.is_empty() {
+            return;
+        }
+
+        let mut pending_safe_redeemed_stat_mutations = self.pending_safe_redeemed_stat_mutations.lock().await;
+        pending_safe_redeemed_stat_mutations
+            .entry(Self::pending_safe_redeemed_stat_mutation_key(tx))
+            .or_default()
+            .extend(staged_mutations);
+    }
+
+    pub(super) async fn merge_pending_safe_redeemed_stat_mutations_for_tx_key(
+        &self,
+        from_key: usize,
+        tx: &OpenTransaction,
+    ) {
+        let mut pending_safe_redeemed_stat_mutations = self.pending_safe_redeemed_stat_mutations.lock().await;
+        let from_mutations = pending_safe_redeemed_stat_mutations
+            .remove(&from_key)
+            .unwrap_or_default();
+        if from_mutations.is_empty() {
+            return;
+        }
+
+        pending_safe_redeemed_stat_mutations
+            .entry(Self::pending_safe_redeemed_stat_mutation_key(tx))
+            .or_default()
+            .extend(from_mutations);
+    }
+
+    pub(super) async fn clear_pending_safe_redeemed_stat_mutations_for_tx(&self, tx: &OpenTransaction) {
+        self.pending_safe_redeemed_stat_mutations
+            .lock()
+            .await
+            .remove(&Self::pending_safe_redeemed_stat_mutation_key(tx));
+    }
+
+    pub(super) async fn discard_pending_safe_redeemed_stat_mutations_for_tx(&self, tx: &OpenTransaction) {
+        self.clear_pending_safe_redeemed_stat_mutations_for_tx(tx).await;
+    }
+
+    pub(super) async fn flush_pending_safe_redeemed_stat_mutations_for_tx(&self, tx: &OpenTransaction) -> Result<()> {
+        let pending_mutations = self
+            .pending_safe_redeemed_stat_mutations
+            .lock()
+            .await
+            .remove(&Self::pending_safe_redeemed_stat_mutation_key(tx))
+            .unwrap_or_default();
+        self.db
+            .persist_staged_safe_ticket_redemptions(Some(tx), pending_mutations)
+            .await?;
+        Ok(())
+    }
+
     pub(super) async fn on_channel_event(
         &self,
         tx: &OpenTransaction,
@@ -43,7 +112,7 @@ where
                 let channel_id = balance_decreased.channelId.0.into();
 
                 // Get existing channel to calculate the diff
-                let existing_channel = match self.db.get_channel_by_id(tx.into(), &channel_id).await {
+                let existing_channel = match self.db.get_existing_channel_by_id(tx.into(), &channel_id).await {
                     Ok(Some(channel)) => channel,
                     Ok(None) => {
                         error!(%channel_id, "observed balance decreased event for a channel that does not exist");
@@ -68,11 +137,11 @@ where
                 // Decode the packed channel state from the event
                 let decoded = decode_channel(balance_decreased.channel);
                 let new_balance = decoded.balance;
-                let diff = existing_channel.balance - new_balance;
+                let diff = existing_channel.entry.balance - new_balance;
 
                 trace!(
                     %channel_id,
-                    old_balance = %existing_channel.balance,
+                    old_balance = %existing_channel.entry.balance,
                     new_balance = %new_balance,
                     diff = %diff,
                     "ChannelBalanceDecreased: decoded channel state"
@@ -89,8 +158,8 @@ where
                     let above_minimum = min_ticket_price.is_none_or(|min| diff >= min);
                     if above_minimum {
                         events.push(IndexerEvent::TicketRedeemed(RedeemTicketDetailsInfo {
-                            issuer_address: existing_channel.source.to_string(),
-                            recipient_address: existing_channel.destination.to_string(),
+                            issuer_address: existing_channel.entry.source.to_string(),
+                            recipient_address: existing_channel.entry.destination.to_string(),
                             epoch: decoded.epoch,
                             index: decoded.ticket_index.saturating_sub(1),
                             channel_id: hex::encode(channel_id),
@@ -101,49 +170,52 @@ where
                     }
                 }
 
-                let destination_account = self.db.get_account(tx.into(), existing_channel.destination).await?;
+                let destination_safe_address = self
+                    .db
+                    .get_account_safe_address(tx.into(), existing_channel.entry.destination)
+                    .await?;
 
-                if let Some(destination_account) = destination_account {
-                    if let Some(safe_address) = destination_account.safe_address {
-                        self.db
-                            .record_safe_ticket_redeemed(
-                                tx.into(),
-                                safe_address,
-                                destination_account.chain_addr,
-                                diff,
-                                block,
-                                tx_index,
-                                log_index,
-                            )
-                            .await?;
-                    } else {
-                        warn!(
-                            %channel_id,
-                            node = %destination_account.chain_addr,
-                            "ChannelBalanceDecreased: destination account has no safe address, skipping redeemed stats recording"
-                        );
-                    }
+                if let Some(safe_address) = destination_safe_address {
+                    self.append_pending_safe_redeemed_stat_mutations_for_tx(
+                        tx,
+                        vec![StagedSafeRedeemedStatMutation {
+                            safe_address,
+                            node_address: existing_channel.entry.destination,
+                            redeemed_amount: diff,
+                            block: u64::from(block),
+                            tx_index: u64::from(tx_index),
+                            log_index: u64::from(log_index),
+                        }],
+                    )
+                    .await;
                 } else {
                     warn!(
                         %channel_id,
-                        destination = %existing_channel.destination,
-                        "ChannelBalanceDecreased: destination account not found, skipping redeemed stats recording"
+                        destination = %existing_channel.entry.destination,
+                        "ChannelBalanceDecreased: destination safe address not found, skipping redeemed stats recording"
                     );
                 }
 
                 // Create updated channel entry with new state
                 let updated_channel = build_channel_entry(
-                    existing_channel.source,
-                    existing_channel.destination,
+                    existing_channel.entry.source,
+                    existing_channel.entry.destination,
                     new_balance,
                     decoded.ticket_index,
                     decoded.status,
                     decoded.epoch,
                 )?;
 
-                // Atomically upsert the new state
+                // Append the new state without re-reading the stable channel identity.
                 self.db
-                    .upsert_channel(tx.into(), updated_channel, block, tx_index, log_index)
+                    .append_channel_state(
+                        tx.into(),
+                        existing_channel.channel_id,
+                        updated_channel,
+                        block,
+                        tx_index,
+                        log_index,
+                    )
                     .await?;
 
                 // Publish event if synced
@@ -164,7 +236,7 @@ where
                 let channel_id = balance_increased.channelId.0.into();
 
                 // Get existing channel to calculate the diff
-                let existing_channel = match self.db.get_channel_by_id(tx.into(), &channel_id).await {
+                let existing_channel = match self.db.get_existing_channel_by_id(tx.into(), &channel_id).await {
                     Ok(Some(channel)) => channel,
                     Ok(None) => {
                         error!(%channel_id, "observed balance increased event for a channel that does not exist");
@@ -189,11 +261,11 @@ where
                 // Decode the packed channel state from the event
                 let decoded = decode_channel(balance_increased.channel);
                 let new_balance = decoded.balance;
-                let diff = new_balance - existing_channel.balance;
+                let diff = new_balance - existing_channel.entry.balance;
 
                 trace!(
                     %channel_id,
-                    old_balance = %existing_channel.balance,
+                    old_balance = %existing_channel.entry.balance,
                     new_balance = %new_balance,
                     diff = %diff,
                     "ChannelBalanceIncreased: decoded channel state"
@@ -201,17 +273,24 @@ where
 
                 // Create updated channel entry with new state
                 let updated_channel = build_channel_entry(
-                    existing_channel.source,
-                    existing_channel.destination,
+                    existing_channel.entry.source,
+                    existing_channel.entry.destination,
                     new_balance,
                     decoded.ticket_index,
                     decoded.status,
                     decoded.epoch,
                 )?;
 
-                // Atomically upsert the new state
+                // Append the new state without re-reading the stable channel identity.
                 self.db
-                    .upsert_channel(tx.into(), updated_channel, block, tx_index, log_index)
+                    .append_channel_state(
+                        tx.into(),
+                        existing_channel.channel_id,
+                        updated_channel,
+                        block,
+                        tx_index,
+                        log_index,
+                    )
                     .await?;
 
                 // Publish event if synced
@@ -232,7 +311,7 @@ where
                 let channel_id = channel_closed.channelId.0.into();
 
                 // Get existing channel
-                let existing_channel = match self.db.get_channel_by_id(tx.into(), &channel_id).await {
+                let existing_channel = match self.db.get_existing_channel_by_id(tx.into(), &channel_id).await {
                     Ok(Some(channel)) => channel,
                     Ok(None) => {
                         error!(%channel_id, "observed closure finalization event for a channel that does not exist");
@@ -267,17 +346,24 @@ where
 
                 // Create updated channel entry with all new state from decoded values
                 let updated_channel = build_channel_entry(
-                    existing_channel.source,
-                    existing_channel.destination,
+                    existing_channel.entry.source,
+                    existing_channel.entry.destination,
                     decoded.balance,
                     decoded.ticket_index,
                     decoded.status,
                     decoded.epoch,
                 )?;
 
-                // Atomically upsert the new state
+                // Append the new state without re-reading the stable channel identity.
                 self.db
-                    .upsert_channel(tx.into(), updated_channel, block, tx_index, log_index)
+                    .append_channel_state(
+                        tx.into(),
+                        existing_channel.channel_id,
+                        updated_channel,
+                        block,
+                        tx_index,
+                        log_index,
+                    )
                     .await?;
 
                 // Publish event if synced
@@ -311,7 +397,7 @@ where
                     "ChannelOpened: decoded channel state"
                 );
 
-                let maybe_existing = match self.db.get_channel_by_id(tx.into(), &channel_id).await {
+                let maybe_existing = match self.db.get_existing_channel_by_id(tx.into(), &channel_id).await {
                     Ok(existing) => existing,
                     Err(e) => {
                         error!(%source, %destination, %channel_id, %e, "failed to get channel on on_channel_opened_event");
@@ -321,7 +407,7 @@ where
 
                 if let Some(existing) = maybe_existing {
                     // Channel exists - check if it's in Closed state
-                    if existing.status != ChannelStatus::Closed {
+                    if existing.entry.status != ChannelStatus::Closed {
                         warn!(%source, %destination, %channel_id, "received Open event for a channel that is not Closed, marking state as corrupted");
 
                         // Mark this state as corrupted
@@ -345,7 +431,15 @@ where
                         decoded.epoch,
                     )?;
 
-                    self.try_upsert_channel_opened(tx, reopened_channel, block, tx_index, log_index)
+                    self.db
+                        .append_channel_state(
+                            tx.into(),
+                            existing.channel_id,
+                            reopened_channel,
+                            block,
+                            tx_index,
+                            log_index,
+                        )
                         .await?;
                 } else {
                     // Channel doesn't exist - create new one with state from decoded event payload
@@ -382,7 +476,7 @@ where
                 let channel_id = ticket_redeemed.channelId.0.into();
 
                 // Get existing channel
-                let existing_channel = match self.db.get_channel_by_id(tx.into(), &channel_id).await {
+                let existing_channel = match self.db.get_existing_channel_by_id(tx.into(), &channel_id).await {
                     Ok(Some(channel)) => channel,
                     Ok(None) => {
                         error!(%channel_id, "observed ticket redeem on a channel that we don't have in the DB");
@@ -411,17 +505,24 @@ where
 
                 // Create updated channel entry with new balance and ticket index
                 let updated_channel = build_channel_entry(
-                    existing_channel.source,
-                    existing_channel.destination,
+                    existing_channel.entry.source,
+                    existing_channel.entry.destination,
                     decoded.balance,
                     decoded.ticket_index,
                     decoded.status,
                     decoded.epoch,
                 )?;
 
-                // Atomically upsert the new state
+                // Append the new state without re-reading the stable channel identity.
                 self.db
-                    .upsert_channel(tx.into(), updated_channel, block, tx_index, log_index)
+                    .append_channel_state(
+                        tx.into(),
+                        existing_channel.channel_id,
+                        updated_channel,
+                        block,
+                        tx_index,
+                        log_index,
+                    )
                     .await?;
 
                 // Publish event if synced
@@ -442,7 +543,7 @@ where
                 let channel_id = closure_initiated.channelId.0.into();
 
                 // Get existing channel
-                let existing_channel = match self.db.get_channel_by_id(tx.into(), &channel_id).await {
+                let existing_channel = match self.db.get_existing_channel_by_id(tx.into(), &channel_id).await {
                     Ok(Some(channel)) => channel,
                     Ok(None) => {
                         error!(%channel_id, "observed channel closure initiation on a channel that we don't have in the DB");
@@ -471,17 +572,24 @@ where
 
                 // Create updated channel entry with new status (PendingToClose)
                 let updated_channel = build_channel_entry(
-                    existing_channel.source,
-                    existing_channel.destination,
+                    existing_channel.entry.source,
+                    existing_channel.entry.destination,
                     decoded.balance,
                     decoded.ticket_index,
                     decoded.status, // Should be PendingToClose with proper timestamp
                     decoded.epoch,
                 )?;
 
-                // Atomically upsert the new state
+                // Append the new state without re-reading the stable channel identity.
                 self.db
-                    .upsert_channel(tx.into(), updated_channel, block, tx_index, log_index)
+                    .append_channel_state(
+                        tx.into(),
+                        existing_channel.channel_id,
+                        updated_channel,
+                        block,
+                        tx_index,
+                        log_index,
+                    )
                     .await?;
 
                 // Publish event if synced

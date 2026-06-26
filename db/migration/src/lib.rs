@@ -4,6 +4,7 @@ pub use sea_orm_migration::{MigrationTrait, MigratorTrait};
 mod m001_initial_schema;
 mod m002_initial_log_schema;
 mod m003_safe_history_schema;
+mod m004_safe_redeemed_stat_events;
 
 /// This is a special block ID that even pre-dates the v3 contract deployment on Gnosis chain,
 /// and therefore could be safely used to mark data added via the migration.
@@ -37,6 +38,7 @@ impl<const NETWORK: u8> Migrator<NETWORK> {
             Box::new(m001_initial_schema::Migration),
             Box::new(m002_initial_log_schema::Migration),
             Box::new(m003_safe_history_schema::Migration),
+            Box::new(m004_safe_redeemed_stat_events::Migration),
         ]
     }
 }
@@ -67,6 +69,7 @@ impl<const NETWORK: u8> MigratorIndex<NETWORK> {
         vec![
             Box::new(m001_initial_schema::Migration),
             Box::new(m003_safe_history_schema::Migration),
+            Box::new(m004_safe_redeemed_stat_events::Migration),
         ]
     }
 }
@@ -358,6 +361,31 @@ mod tests {
         assert!(
             duplicate_result.is_err(),
             "Duplicate position should be rejected by unique constraint"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_channel_state_status_indexes_removed_by_latest_schema() {
+        let db = setup_test_db().await;
+        Migrator::<{ SafeDataOrigin::NoData as u8 }>::up(&db, None)
+            .await
+            .unwrap();
+
+        assert!(
+            !index_exists(&db, "idx_channel_state_status_position").await,
+            "idx_channel_state_status_position should not exist after the latest migrations"
+        );
+        assert!(
+            !index_exists(&db, "idx_channel_state_status_channel_position").await,
+            "idx_channel_state_status_channel_position should not exist after the latest migrations"
+        );
+        assert!(
+            index_exists(&db, "idx_safe_redeemed_stat_event_unique_position").await,
+            "idx_safe_redeemed_stat_event_unique_position should exist"
+        );
+        assert!(
+            index_exists(&db, "idx_safe_redeemed_stat_event_safe_node").await,
+            "idx_safe_redeemed_stat_event_safe_node should exist"
         );
     }
 

@@ -40,6 +40,12 @@ let
     in
     {
       "${name}" = builders.${platform}.callPackage nixLib.mkRustPackage args;
+      "${name}-profile" = builders.${platform}.callPackage nixLib.mkRustPackage (
+        args
+        // {
+          CARGO_PROFILE = "profile";
+        }
+      );
     }
     // lib.optionalAttrs (lib.hasSuffix "-linux" platform) {
       "${name}-dev" = builders.${platform}.callPackage nixLib.mkRustPackage (
@@ -79,6 +85,16 @@ in
     })
     // {
       CARGO_PROFILE = "dev";
+    }
+  );
+
+  bloklid-profile = builders.local.callPackage nixLib.mkRustPackage (
+    (mkbloklidBuildArgs {
+      src = sources.main;
+      depsSrc = sources.deps;
+    })
+    // {
+      CARGO_PROFILE = "profile";
     }
   );
 }

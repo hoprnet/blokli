@@ -51,7 +51,6 @@ erDiagram
     }
     %% Composite unique constraint: UNIQUE(channel_id, published_block, published_tx_index, published_log_index)
     %% Index: idx_channel_state_position (channel_id, published_block DESC, published_tx_index DESC, published_log_index DESC)
-    %% Index: idx_channel_state_status (status)
 
     hopr_balance {
         int id PK "Primary key"
@@ -191,15 +190,27 @@ erDiagram
     %% Composite unique constraint: UNIQUE(hopr_safe_contract_id, published_block, published_tx_index, published_log_index)
     %% Index: idx_safe_threshold_state_current_lookup (hopr_safe_contract_id, published_block DESC, published_tx_index DESC, published_log_index DESC)
 
+    hopr_safe_redeemed_stat_event {
+        int id PK "Primary key"
+        binary(20) safe_address "Safe contract address (40-character hex string in bytes, NOT NULL; part of unique replay position key)"
+        binary(20) node_address "Destination node address (40-character hex string in bytes, NOT NULL; part of unique replay position key)"
+        binary(32) redeemed_amount "Redeemed amount for one TicketRedeemed-derived observation (original u256 stored in bytes, NOT NULL)"
+        bigint published_block "Published block (NOT NULL; part of unique replay position key)"
+        bigint published_tx_index "Published tx index (NOT NULL; part of unique replay position key)"
+        bigint published_log_index "Published log index (NOT NULL; part of unique replay position key)"
+    }
+    %% Composite unique constraint: UNIQUE(safe_address, node_address, published_block, published_tx_index, published_log_index)
+    %% Index: idx_safe_redeemed_stat_event_safe_node (safe_address, node_address)
+
     hopr_safe_redeemed_stats {
         int id PK "Primary key"
         binary(20) safe_address "Safe contract address (40-character hex string in bytes, NOT NULL; part of unique (safe_address,node_address) pair)"
         binary(20) node_address "Destination node address (40-character hex string in bytes, NOT NULL; part of unique (safe_address,node_address) pair)"
-        binary(32) redeemed_amount "Total redeemed amount (original u256 stored in bytes, NOT NULL)"
-        bigint redemption_count "Number of TicketRedeemed events (NOT NULL)"
-        bigint last_redeemed_block "Last redeemed block (NOT NULL)"
-        bigint last_redeemed_tx_index "Last redeemed tx index (NOT NULL)"
-        bigint last_redeemed_log_index "Last redeemed log index (NOT NULL)"
+        binary(32) redeemed_amount "Total redeemed amount across anchored redeemed-stat events (original u256 stored in bytes, NOT NULL)"
+        bigint redemption_count "Number of anchored redeemed-stat events (NOT NULL)"
+        bigint last_redeemed_block "Latest anchored redeemed-stat block (NOT NULL)"
+        bigint last_redeemed_tx_index "Latest anchored redeemed-stat tx index (NOT NULL)"
+        bigint last_redeemed_log_index "Latest anchored redeemed-stat log index (NOT NULL)"
     }
 
     %% ========================================
@@ -221,6 +232,7 @@ erDiagram
     hopr_safe_event ||--o| hopr_safe_owner_change_event : "has 0 or 1 owner-change payload"
     hopr_safe_event ||--o| hopr_safe_threshold_change_event : "has 0 or 1 threshold-change payload"
     hopr_safe_event ||--o| hopr_safe_execution_event : "has 0 or 1 execution payload"
+    hopr_safe_contract ||--o{ hopr_safe_redeemed_stat_event : "has redeemed-stat event anchors"
     hopr_safe_contract ||--o{ hopr_safe_redeemed_stats : "has 0 or more (one per safe/node pair)"
     channel ||--o{ channel_state : "has version history"
     log ||--o| log_status : "has 0 or 1"

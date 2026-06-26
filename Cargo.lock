@@ -1822,7 +1822,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-indexer"
-version = "0.16.4"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1860,7 +1860,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-chain-rpc"
-version = "0.10.1"
+version = "0.10.2"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1946,7 +1946,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db"
-version = "0.16.2"
+version = "0.17.0"
 dependencies = [
  "anyhow",
  "async-broadcast",
@@ -1993,7 +1993,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db-migration"
-version = "0.12.0"
+version = "0.13.0"
 dependencies = [
  "hopr-types",
  "sea-orm",

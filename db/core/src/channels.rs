@@ -26,10 +26,11 @@ use sea_query::OnConflict;
 use tracing::instrument;
 
 use crate::{
-    BlokliDbGeneralModelOperations, OptTx,
+    BlokliDbGeneralModelOperations, OptTx, TargetDb,
     db::BlokliDb,
     errors::{DbSqlError, Result},
     events::{ChannelStateChange, StateChange},
+    with_opt_transaction,
 };
 
 /// Database status code for an open channel
@@ -75,20 +76,49 @@ async fn lookup_account_addresses(
     source_id: i64,
     dest_id: i64,
 ) -> Result<(Address, Address)> {
-    let source_account = Account::find_by_id(source_id)
-        .one(tx)
-        .await?
-        .ok_or_else(|| DbSqlError::LogicalError(format!("Source account with ID {} not found", source_id)))?;
+    let accounts = Account::find()
+        .filter(account::Column::Id.is_in([source_id, dest_id]))
+        .all(tx)
+        .await?;
+    let account_map = accounts
+        .into_iter()
+        .map(|account| (account.id, account))
+        .collect::<HashMap<_, _>>();
 
-    let dest_account = Account::find_by_id(dest_id)
-        .one(tx)
-        .await?
-        .ok_or_else(|| DbSqlError::LogicalError(format!("Destination account with ID {} not found", dest_id)))?;
-
-    let source_addr = Address::try_from(source_account.chain_key.as_slice())?;
-    let dest_addr = Address::try_from(dest_account.chain_key.as_slice())?;
+    let source_addr = account_map
+        .get(&source_id)
+        .ok_or_else(|| DbSqlError::LogicalError(format!("Source account with ID {} not found", source_id)))
+        .and_then(|account| Address::try_from(account.chain_key.as_slice()).map_err(Into::into))?;
+    let dest_addr = account_map
+        .get(&dest_id)
+        .ok_or_else(|| DbSqlError::LogicalError(format!("Destination account with ID {} not found", dest_id)))
+        .and_then(|account| Address::try_from(account.chain_key.as_slice()).map_err(Into::into))?;
 
     Ok((source_addr, dest_addr))
+}
+
+async fn lookup_account_address_map(
+    tx: &sea_orm::DatabaseTransaction,
+    account_ids: impl IntoIterator<Item = i64>,
+) -> Result<HashMap<i64, Address>> {
+    let account_ids = account_ids.into_iter().collect::<std::collections::HashSet<_>>();
+    if account_ids.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    Account::find()
+        .filter(account::Column::Id.is_in(account_ids))
+        .all(tx)
+        .await?
+        .into_iter()
+        .map(|account| Ok((account.id, Address::try_from(account.chain_key.as_slice())?)))
+        .collect()
+}
+
+#[derive(Clone, Debug)]
+pub struct ExistingChannelEntry {
+    pub channel_id: i64,
+    pub entry: ChannelEntry,
 }
 
 /// Helper function to reconstruct a ChannelEntry from channel and channel_state records
@@ -345,6 +375,13 @@ pub trait BlokliDbChannelOperations {
     /// See [generate_channel_id] on how to generate a channel ID hash from source and destination [Addresses](Address).
     async fn get_channel_by_id<'a>(&'a self, tx: OptTx<'a>, id: &Hash) -> Result<Option<ChannelEntry>>;
 
+    /// Retrieves the latest channel state together with the stable numeric channel identifier.
+    ///
+    /// This is intended for hot update paths that need to append a new state for an already-known
+    /// channel without performing a second channel identity lookup during the write step.
+    async fn get_existing_channel_by_id<'a>(&'a self, tx: OptTx<'a>, id: &Hash)
+    -> Result<Option<ExistingChannelEntry>>;
+
     /// Retrieves the channel by source and destination (returns latest state).
     async fn get_channel_by_parties<'a>(
         &'a self,
@@ -393,6 +430,17 @@ pub trait BlokliDbChannelOperations {
     async fn upsert_channel<'a>(
         &'a self,
         tx: OptTx<'a>,
+        channel_entry: ChannelEntry,
+        block: u32,
+        tx_index: u32,
+        log_index: u32,
+    ) -> Result<()>;
+
+    /// Appends a new immutable state record for an already-existing channel.
+    async fn append_channel_state<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        channel_id: i64,
         channel_entry: ChannelEntry,
         block: u32,
         tx_index: u32,
@@ -453,31 +501,59 @@ pub trait BlokliDbChannelOperations {
 impl BlokliDbChannelOperations for BlokliDb {
     async fn get_channel_by_id<'a>(&'a self, tx: OptTx<'a>, id: &Hash) -> Result<Option<ChannelEntry>> {
         let id_hex = hex::encode(id.as_ref());
-        self.nest_transaction(tx)
-            .await?
-            .perform(|tx| {
-                Box::pin(async move {
-                    // Step 1: Query channel_current view by concrete_channel_id
-                    let view_row = match channel_current::Entity::find()
-                        .filter(channel_current::Column::ConcreteChannelId.eq(id_hex))
-                        .one(tx.as_ref())
-                        .await?
-                    {
-                        Some(r) => r,
-                        None => return Ok(None),
-                    };
+        with_opt_transaction(self, tx, TargetDb::Index, |tx| {
+            Box::pin(async move {
+                // Step 1: Query channel_current view by concrete_channel_id
+                let view_row = match channel_current::Entity::find()
+                    .filter(channel_current::Column::ConcreteChannelId.eq(id_hex))
+                    .one(tx.as_ref())
+                    .await?
+                {
+                    Some(r) => r,
+                    None => return Ok(None),
+                };
 
-                    // Step 2: Lookup account addresses
-                    let (source_addr, dest_addr) =
-                        lookup_account_addresses(tx.as_ref(), view_row.source, view_row.destination).await?;
+                // Step 2: Lookup account addresses
+                let (source_addr, dest_addr) =
+                    lookup_account_addresses(tx.as_ref(), view_row.source, view_row.destination).await?;
 
-                    // Step 3: Reconstruct ChannelEntry
-                    let entry = reconstruct_channel_entry_from_view(&view_row, source_addr, dest_addr)?;
+                // Step 3: Reconstruct ChannelEntry
+                let entry = reconstruct_channel_entry_from_view(&view_row, source_addr, dest_addr)?;
 
-                    Ok::<_, DbSqlError>(Some(entry))
-                })
+                Ok::<_, DbSqlError>(Some(entry))
             })
-            .await
+        })
+        .await
+    }
+
+    async fn get_existing_channel_by_id<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        id: &Hash,
+    ) -> Result<Option<ExistingChannelEntry>> {
+        let id_hex = hex::encode(id.as_ref());
+        with_opt_transaction(self, tx, TargetDb::Index, |tx| {
+            Box::pin(async move {
+                let view_row = match channel_current::Entity::find()
+                    .filter(channel_current::Column::ConcreteChannelId.eq(id_hex))
+                    .one(tx.as_ref())
+                    .await?
+                {
+                    Some(r) => r,
+                    None => return Ok(None),
+                };
+
+                let (source_addr, dest_addr) =
+                    lookup_account_addresses(tx.as_ref(), view_row.source, view_row.destination).await?;
+                let entry = reconstruct_channel_entry_from_view(&view_row, source_addr, dest_addr)?;
+
+                Ok::<_, DbSqlError>(Some(ExistingChannelEntry {
+                    channel_id: view_row.channel_id,
+                    entry,
+                }))
+            })
+        })
+        .await
     }
 
     #[instrument(level = "trace", skip(self, tx), err)]
@@ -571,12 +647,26 @@ impl BlokliDbChannelOperations for BlokliDb {
                     };
 
                     // Step 3: Reconstruct ChannelEntry for each row
+                    let account_map = lookup_account_address_map(
+                        tx.as_ref(),
+                        view_rows
+                            .iter()
+                            .flat_map(|view_row| [view_row.source, view_row.destination]),
+                    )
+                    .await?;
                     let mut results = Vec::new();
                     for view_row in &view_rows {
-                        let (source_addr, dest_addr) =
-                            lookup_account_addresses(tx.as_ref(), view_row.source, view_row.destination).await?;
+                        let source_addr = account_map.get(&view_row.source).ok_or_else(|| {
+                            DbSqlError::LogicalError(format!("Source account with ID {} not found", view_row.source))
+                        })?;
+                        let dest_addr = account_map.get(&view_row.destination).ok_or_else(|| {
+                            DbSqlError::LogicalError(format!(
+                                "Destination account with ID {} not found",
+                                view_row.destination
+                            ))
+                        })?;
 
-                        let entry = reconstruct_channel_entry_from_view(view_row, source_addr, dest_addr)?;
+                        let entry = reconstruct_channel_entry_from_view(view_row, *source_addr, *dest_addr)?;
                         results.push(entry);
                     }
 
@@ -595,12 +685,26 @@ impl BlokliDbChannelOperations for BlokliDb {
                     let view_rows = channel_current::Entity::find().all(tx.as_ref()).await?;
 
                     // Step 2: Reconstruct ChannelEntry for each row
+                    let account_map = lookup_account_address_map(
+                        tx.as_ref(),
+                        view_rows
+                            .iter()
+                            .flat_map(|view_row| [view_row.source, view_row.destination]),
+                    )
+                    .await?;
                     let mut results = Vec::new();
                     for view_row in &view_rows {
-                        let (source_addr, dest_addr) =
-                            lookup_account_addresses(tx.as_ref(), view_row.source, view_row.destination).await?;
+                        let source_addr = account_map.get(&view_row.source).ok_or_else(|| {
+                            DbSqlError::LogicalError(format!("Source account with ID {} not found", view_row.source))
+                        })?;
+                        let dest_addr = account_map.get(&view_row.destination).ok_or_else(|| {
+                            DbSqlError::LogicalError(format!(
+                                "Destination account with ID {} not found",
+                                view_row.destination
+                            ))
+                        })?;
 
-                        let entry = reconstruct_channel_entry_from_view(view_row, source_addr, dest_addr)?;
+                        let entry = reconstruct_channel_entry_from_view(view_row, *source_addr, *dest_addr)?;
                         results.push(entry);
                     }
 
@@ -677,51 +781,84 @@ impl BlokliDbChannelOperations for BlokliDb {
         let tx_index_i64 = tx_index as i64;
         let log_index_i64 = log_index as i64;
 
-        self.nest_transaction(tx)
-            .await?
-            .perform(|tx| {
-                Box::pin(async move {
-                    // Step 1: Lookup account IDs for source and destination
-                    let source_id = get_or_create_account_id(tx.as_ref(), &source_addr).await?;
-                    let dest_id = get_or_create_account_id(tx.as_ref(), &dest_addr).await?;
+        with_opt_transaction(self, tx, TargetDb::Index, |tx| {
+            Box::pin(async move {
+                // Step 1: Lookup account IDs for source and destination
+                let source_id = get_or_create_account_id(tx.as_ref(), &source_addr).await?;
+                let dest_id = get_or_create_account_id(tx.as_ref(), &dest_addr).await?;
 
-                    // Step 2: Insert or find channel identity record
-                    let channel_id = if let Some(existing_channel) = channel::Entity::find()
-                        .filter(channel::Column::ConcreteChannelId.eq(&channel_id_hex))
-                        .one(tx.as_ref())
-                        .await?
-                    {
-                        // Channel exists - we're adding a new state
-                        existing_channel.id
-                    } else {
-                        // Channel doesn't exist - create identity + initial state
-                        let channel_model = channel::ActiveModel {
-                            concrete_channel_id: Set(channel_id_hex),
-                            source: Set(source_id),
-                            destination: Set(dest_id),
-                            ..Default::default()
-                        };
-                        let inserted = channel_model.insert(tx.as_ref()).await?;
-                        inserted.id
+                // Step 2: Insert or find channel identity record
+                let channel_id = if let Some(existing_channel) = channel::Entity::find()
+                    .filter(channel::Column::ConcreteChannelId.eq(&channel_id_hex))
+                    .one(tx.as_ref())
+                    .await?
+                {
+                    // Channel exists - we're adding a new state
+                    existing_channel.id
+                } else {
+                    // Channel doesn't exist - create identity + initial state
+                    let channel_model = channel::ActiveModel {
+                        concrete_channel_id: Set(channel_id_hex),
+                        source: Set(source_id),
+                        destination: Set(dest_id),
+                        ..Default::default()
                     };
+                    let inserted = channel_model.insert(tx.as_ref()).await?;
+                    inserted.id
+                };
 
-                    // Step 3: Insert channel_state record with state information
-                    // This creates a new immutable state record (never updates existing records)
-                    insert_channel_state_and_emit(
-                        &db_clone,
-                        tx.as_ref(),
-                        channel_id,
-                        &channel_entry,
-                        block_i64,
-                        tx_index_i64,
-                        log_index_i64,
-                    )
-                    .await?;
+                // Step 3: Insert channel_state record with state information
+                // This creates a new immutable state record (never updates existing records)
+                insert_channel_state_and_emit(
+                    &db_clone,
+                    tx.as_ref(),
+                    channel_id,
+                    &channel_entry,
+                    block_i64,
+                    tx_index_i64,
+                    log_index_i64,
+                )
+                .await?;
 
-                    Ok::<_, DbSqlError>(())
-                })
+                Ok::<_, DbSqlError>(())
             })
-            .await?;
+        })
+        .await?;
+
+        Ok(())
+    }
+
+    async fn append_channel_state<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        channel_id: i64,
+        channel_entry: ChannelEntry,
+        block: u32,
+        tx_index: u32,
+        log_index: u32,
+    ) -> Result<()> {
+        let db_clone = self.clone();
+        let block_i64 = block as i64;
+        let tx_index_i64 = tx_index as i64;
+        let log_index_i64 = log_index as i64;
+
+        with_opt_transaction(self, tx, TargetDb::Index, |tx| {
+            Box::pin(async move {
+                insert_channel_state_and_emit(
+                    &db_clone,
+                    tx.as_ref(),
+                    channel_id,
+                    &channel_entry,
+                    block_i64,
+                    tx_index_i64,
+                    log_index_i64,
+                )
+                .await?;
+
+                Ok::<_, DbSqlError>(())
+            })
+        })
+        .await?;
 
         Ok(())
     }
@@ -836,41 +973,39 @@ impl BlokliDbChannelOperations for BlokliDb {
         let tx_index_i64 = tx_index as i64;
         let log_index_i64 = log_index as i64;
 
-        self.nest_transaction(tx)
-            .await?
-            .perform(|tx| {
-                Box::pin(async move {
-                    // Step 1: Find channel by concrete_channel_id
-                    let channel_model = Channel::find()
-                        .filter(channel::Column::ConcreteChannelId.eq(&id_hex))
-                        .one(tx.as_ref())
-                        .await?
-                        .ok_or_else(|| DbSqlError::LogicalError(format!("Channel {} not found", id_hex_clone)))?;
+        with_opt_transaction(self, tx, TargetDb::Index, |tx| {
+            Box::pin(async move {
+                // Step 1: Find channel by concrete_channel_id
+                let channel_model = Channel::find()
+                    .filter(channel::Column::ConcreteChannelId.eq(&id_hex))
+                    .one(tx.as_ref())
+                    .await?
+                    .ok_or_else(|| DbSqlError::LogicalError(format!("Channel {} not found", id_hex_clone)))?;
 
-                    // Step 2: Find the specific channel_state by temporal coordinates
-                    let state_model = ChannelState::find()
-                        .filter(channel_state::Column::ChannelId.eq(channel_model.id))
-                        .filter(channel_state::Column::PublishedBlock.eq(block_i64))
-                        .filter(channel_state::Column::PublishedTxIndex.eq(tx_index_i64))
-                        .filter(channel_state::Column::PublishedLogIndex.eq(log_index_i64))
-                        .one(tx.as_ref())
-                        .await?
-                        .ok_or_else(|| {
-                            DbSqlError::LogicalError(format!(
-                                "Channel state not found for channel {} at block {}, tx_index {}, log_index {}",
-                                id_hex_clone2, block, tx_index, log_index
-                            ))
-                        })?;
+                // Step 2: Find the specific channel_state by temporal coordinates
+                let state_model = ChannelState::find()
+                    .filter(channel_state::Column::ChannelId.eq(channel_model.id))
+                    .filter(channel_state::Column::PublishedBlock.eq(block_i64))
+                    .filter(channel_state::Column::PublishedTxIndex.eq(tx_index_i64))
+                    .filter(channel_state::Column::PublishedLogIndex.eq(log_index_i64))
+                    .one(tx.as_ref())
+                    .await?
+                    .ok_or_else(|| {
+                        DbSqlError::LogicalError(format!(
+                            "Channel state not found for channel {} at block {}, tx_index {}, log_index {}",
+                            id_hex_clone2, block, tx_index, log_index
+                        ))
+                    })?;
 
-                    // Step 3: Update the corrupted_state flag
-                    let mut active_model: channel_state::ActiveModel = state_model.into();
-                    active_model.corrupted_state = Set(true);
-                    active_model.update(tx.as_ref()).await?;
+                // Step 3: Update the corrupted_state flag
+                let mut active_model: channel_state::ActiveModel = state_model.into();
+                active_model.corrupted_state = Set(true);
+                active_model.update(tx.as_ref()).await?;
 
-                    Ok::<_, DbSqlError>(())
-                })
+                Ok::<_, DbSqlError>(())
             })
-            .await
+        })
+        .await
     }
 }
 

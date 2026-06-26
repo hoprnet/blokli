@@ -110,6 +110,23 @@ impl From<OpenTransaction> for DatabaseTransaction {
 /// Useful for transaction nesting (see [`BlokliDbGeneralModelOperations::nest_transaction`]).
 pub type OptTx<'a> = Option<&'a OpenTransaction>;
 
+pub(crate) async fn with_opt_transaction<'a, T, F>(
+    db: &BlokliDb,
+    tx: OptTx<'a>,
+    target_db: TargetDb,
+    callback: F,
+) -> Result<T>
+where
+    F: for<'c> FnOnce(&'c OpenTransaction) -> BoxFuture<'c, Result<T>> + Send,
+    T: Send,
+{
+    if let Some(tx) = tx {
+        callback(tx).await
+    } else {
+        db.begin_transaction_in_db(target_db).await?.perform(callback).await
+    }
+}
+
 /// When Sqlite is used as a backend, model needs to be split
 /// into 2 different databases to avoid locking the database.
 /// On Postgres backend, these should actually point to the same database.
