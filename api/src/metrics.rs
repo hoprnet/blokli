@@ -19,6 +19,8 @@ pub const HEALTH_STATUS_CORRUPTED: &str = "corrupted";
 
 /// All possible health status values, used to reset metrics on state transition.
 #[cfg(all(feature = "telemetry", not(test)))]
+use hopr_types::telemetry as hopr_metrics;
+#[cfg(all(feature = "telemetry", not(test)))]
 const ALL_HEALTH_STATUSES: &[&str] = &[
     HEALTH_STATUS_OK,
     HEALTH_STATUS_TIMEOUT,
