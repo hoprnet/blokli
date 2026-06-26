@@ -48,18 +48,19 @@ where
         };
 
         let tx_hash = Hash::from(log.tx_hash);
-        let tx_bytes = match self._rpc_operations.get_transaction_bytes(tx_hash).await {
-            Ok(bytes) => bytes,
-            Err(error) => {
+        let tx_bytes = self
+            ._rpc_operations
+            .get_transaction_bytes(tx_hash)
+            .await
+            .map_err(|error| {
                 warn!(
                     safe_address = %safe_address,
                     tx_hash = %tx_hash,
                     error = %error,
-                    "Failed to fetch Safe transaction bytes for rejection detection — skipping"
+                    "Failed to fetch Safe transaction bytes for rejection detection"
                 );
-                return Ok(());
-            }
-        };
+                error
+            })?;
 
         let contract_addresses = to_hopr_contract_addresses(self.addresses.as_ref());
 
