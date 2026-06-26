@@ -6,6 +6,7 @@ use std::{
 
 use async_compression::tokio::bufread::XzEncoder;
 use async_tar::Builder;
+use blokli_db::snapshot::SNAPSHOT_SQL_FILE;
 use tempfile::TempDir;
 use tokio::{
     fs as tokio_fs,
@@ -109,8 +110,8 @@ pub(crate) async fn create_test_archive(
     sql_target_path: Option<String>,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     // Create the SQL dump
-    let sql_target_path = sql_target_path.unwrap_or_else(|| "hopr_logs.sql".to_string());
-    let sql_path = temp_dir.path().join("hopr_logs.sql");
+    let sql_target_path = sql_target_path.unwrap_or_else(|| SNAPSHOT_SQL_FILE.to_string());
+    let sql_path = temp_dir.path().join(SNAPSHOT_SQL_FILE);
     create_test_sql_dump(&sql_path)?;
 
     // First create an uncompressed tar file using Tokio I/O.

@@ -123,7 +123,7 @@ impl SnapshotExtractor {
         }
 
         // Verify we got the SQL dump file
-        if !extracted_files.contains(&SNAPSHOT_SQL_FILE.to_string()) {
+        if !extracted_files.iter().any(|f| f == SNAPSHOT_SQL_FILE) {
             return Err(SnapshotError::InvalidFormat(format!(
                 "Archive does not contain {SNAPSHOT_SQL_FILE}"
             )));

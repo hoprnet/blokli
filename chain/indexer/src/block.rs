@@ -488,14 +488,9 @@ where
         if fast_sync_configured && index_empty && !logs_db_has_data && self.cfg.enable_logs_snapshot {
             info!("Logs database is empty, attempting to download logs snapshot...");
 
-            match self.download_snapshot().await {
-                Ok(snapshot_info) => {
-                    info!(snapshot_info = ?snapshot_info, "logs snapshot downloaded successfully");
-                }
-                Err(e) => {
-                    error!(error = %e, "failed to download logs snapshot, continuing with regular sync");
-                }
-            }
+            self.download_snapshot().await.map(|snapshot_info| {
+                info!(snapshot_info = ?snapshot_info, "logs snapshot downloaded successfully");
+            })?;
         }
 
         // Initialize channel closure grace period from contract

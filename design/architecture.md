@@ -1165,8 +1165,8 @@ Lightweight deployment using SQLite with separated databases:
 **Advantages**:
 
 - No external database server required
-- Logs DB can be atomically replaced from snapshot
-- Fast sync by downloading pre-built logs database
+- Logs tables can be repopulated from an imported logs snapshot
+- Fast sync imports raw logs and rebuilds derived state locally
 - Reduced write lock contention through separation
 - Simple backup and restore (file copy)
 
@@ -1321,7 +1321,7 @@ The transaction submission system implements defense-in-depth with multiple vali
 - **Reorg Handling**: Detects blockchain reorganizations and marks affected logs
 - **Transaction Safety**: All state changes wrapped in database transactions
 - **Position Constraints**: Unique constraints prevent duplicate event processing
-- **Atomic Snapshot Import**: Logs database replacement is atomic operation
+- **Atomic Snapshot Import**: Logs table import and derived-state rebuild run within a single transaction
 
 **Precision Preservation**: Large integers stored as binary to preserve full precision across language boundaries. GraphQL uses String type
 for UInt64 values to avoid JavaScript Number precision loss.
