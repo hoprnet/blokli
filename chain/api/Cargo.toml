@@ -14,7 +14,6 @@ default = []
 runtime-tokio = [
   "blokli-chain-indexer/runtime-tokio",
   "blokli-db/runtime-tokio",
-  "hopr-async-runtime/runtime-tokio",
 ]
 telemetry = [
   "blokli-chain-indexer/telemetry",
@@ -42,7 +41,6 @@ blokli-chain-indexer = { workspace = true }
 blokli-chain-rpc = { workspace = true }
 blokli-chain-types = { workspace = true }
 blokli-db = { workspace = true }
-hopr-async-runtime = { workspace = true }
 hopr-bindings = { workspace = true }
 hopr-types = { workspace = true, features = [
   "crypto",

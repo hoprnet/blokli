@@ -52,7 +52,7 @@ mod test_utils;
 mod tokens;
 
 #[cfg(all(feature = "telemetry", not(test)))]
-use hopr_metrics::MultiCounter;
+use hopr_types::telemetry::MultiCounter;
 
 #[cfg(all(feature = "telemetry", not(test)))]
 lazy_static::lazy_static! {

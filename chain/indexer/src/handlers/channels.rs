@@ -745,7 +745,7 @@ mod tests {
             0u32,
         );
 
-        db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
+        db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let solidity_balance: HoprBalance = primitive_types::U256::from((1u128 << 96) - 1).into();
         let channel_state = encode_channel_state(
@@ -770,7 +770,7 @@ mod tests {
             .await?;
 
         let channel = db
-            .get_channel_by_id(None, &channel.get_id())
+            .get_channel_by_id(None, channel.get_id())
             .await?
             .context("a value should be present")?;
 
@@ -846,7 +846,7 @@ mod tests {
             0u32,
         );
 
-        db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
+        db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let solidity_balance: HoprBalance = primitive_types::U256::from((1u128 << 96) - 2).into();
         let channel_state = encode_channel_state(
@@ -871,7 +871,7 @@ mod tests {
             .await?;
 
         let channel = db
-            .get_channel_by_id(None, &channel.get_id())
+            .get_channel_by_id(None, channel.get_id())
             .await?
             .context("a value should be present")?;
 
@@ -905,7 +905,7 @@ mod tests {
             0u32,
         );
 
-        db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
+        db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         // When channel is closed, balance is 0, ticket_index is reset to 0, and status is Closed
         let channel_state =
@@ -925,7 +925,7 @@ mod tests {
             .await?;
 
         let closed_channel = db
-            .get_channel_by_id(None, &channel.get_id())
+            .get_channel_by_id(None, channel.get_id())
             .await?
             .context("a value should be present")?;
 
@@ -979,7 +979,7 @@ mod tests {
             0u32,
         );
 
-        db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
+        db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         // When channel is closed, balance is 0, ticket_index is reset to 0, and status is Closed
         let channel_state =
@@ -999,7 +999,7 @@ mod tests {
             .await?;
 
         let closed_channel = db
-            .get_channel_by_id(None, &channel.get_id())
+            .get_channel_by_id(None, channel.get_id())
             .await?
             .context("channel should still exist after closing")?;
 
@@ -1209,7 +1209,7 @@ mod tests {
             .await?;
 
         let channel = db
-            .get_channel_by_id(None, &channel.get_id())
+            .get_channel_by_id(None, channel.get_id())
             .await?
             .context("a value should be present")?;
 
@@ -1627,7 +1627,7 @@ mod tests {
             .await?;
 
         let channel = db
-            .get_channel_by_id(None, &channel.get_id())
+            .get_channel_by_id(None, channel.get_id())
             .await?
             .context("a value should be present")?;
 
@@ -1703,7 +1703,7 @@ mod tests {
             .await?;
 
         let channel = db
-            .get_channel_by_id(None, &channel.get_id())
+            .get_channel_by_id(None, channel.get_id())
             .await?
             .context("a value should be present")?;
 
@@ -1750,7 +1750,7 @@ mod tests {
             0u32,
         );
 
-        db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
+        db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let next_ticket_index = primitive_types::U256::from((1u128 << 48) - 1);
         let channel_state = encode_channel_state(
@@ -1775,7 +1775,7 @@ mod tests {
             .await?;
 
         let channel = db
-            .get_channel_by_id(None, &channel.get_id())
+            .get_channel_by_id(None, channel.get_id())
             .await?
             .context("a value should be present")?;
 
@@ -1839,7 +1839,7 @@ mod tests {
             .await?;
 
         let channel = db
-            .get_channel_by_id(None, &channel.get_id())
+            .get_channel_by_id(None, channel.get_id())
             .await?
             .context("a value should be present")?;
 

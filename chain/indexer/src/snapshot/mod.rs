@@ -131,7 +131,7 @@ impl SnapshotWorkflow {
 
         // Extract snapshot
         let extracted_files = self.extractor.extract_snapshot(&archive_path, &temp_dir).await?;
-        debug!("Extracted snapshot files: {:?}", extracted_files);
+        debug!(extracted_files = ?extracted_files, "extracted snapshot files");
 
         // Validate extracted SQL dump
         let sql_path = temp_dir.join("hopr_logs.sql");
@@ -145,7 +145,7 @@ impl SnapshotWorkflow {
         // Cleanup temporary directory if we created it manually
         if use_temp_subdir {
             if let Err(e) = fs::remove_dir_all(&temp_dir) {
-                error!("Failed to cleanup temp directory: {}", e);
+                error!(error = %e, "failed to clean up temp directory");
             }
         }
         // tempfile cleanup is automatic via Drop

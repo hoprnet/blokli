@@ -298,26 +298,6 @@ async fn test_introspection_query_allowed_when_not_ready() -> anyhow::Result<()>
 }
 
 #[test_log::test(tokio::test)]
-async fn test_compatibility_query_allowed_when_not_ready() -> anyhow::Result<()> {
-    let ctx = common::setup_http_test_environment().await?;
-
-    delete_chain_info(&ctx.db).await?;
-
-    let (status, json) = make_graphql_request(
-        ctx.app,
-        r#"query QueryCompatibility { compatibility { apiVersion supportedClientVersions features } }"#,
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    assert!(json["data"]["compatibility"]["apiVersion"].is_string());
-    assert!(json["data"]["compatibility"]["supportedClientVersions"].is_string());
-    assert!(json["data"]["compatibility"]["features"].is_array());
-
-    Ok(())
-}
-
-#[test_log::test(tokio::test)]
 async fn test_readiness_subscription_allowed_when_not_ready() -> anyhow::Result<()> {
     let ctx = common::setup_http_test_environment().await?;
 

@@ -4,10 +4,13 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use async_compression::futures::bufread::XzEncoder;
+use async_compression::tokio::bufread::XzEncoder;
 use async_tar::Builder;
-use futures_util::io::{AllowStdIo, AsyncReadExt, BufReader as FuturesBufReader};
 use tempfile::TempDir;
+use tokio::{
+    fs as tokio_fs,
+    io::{AsyncReadExt, BufReader},
+};
 use tracing::debug;
 
 use crate::snapshot::{SnapshotInfo, SnapshotInstaller, SnapshotWorkflow, error::SnapshotResult};
@@ -150,17 +153,18 @@ pub(crate) async fn create_test_archive(
     let sql_path = temp_dir.path().join("hopr_logs.sql");
     create_test_sql_dump(&sql_path)?;
 
-    // First create uncompressed tar in memory
-    let mut tar_data = Vec::new();
-    {
-        let mut tar = Builder::new(&mut tar_data);
-        tar.append_path_with_name(&sql_path, sql_target_path_final).await?;
-        tar.into_inner().await?;
-    }
+    // First create an uncompressed tar file using Tokio I/O.
+    let tar_path = temp_dir.path().join("test_snapshot.tar");
+    let tar_file = tokio_fs::File::create(&tar_path).await?;
+    let mut tar = Builder::new(tar_file);
+    tar.append_path_with_name(&sql_path, sql_target_path_final).await?;
+    let tar_file = tar.into_inner().await?;
+    tar_file.sync_all().await?;
 
-    // Now compress with xz using async_compression
+    // Now compress with xz using Tokio I/O.
+    let tar_data = tokio_fs::read(&tar_path).await?;
     let cursor = Cursor::new(tar_data);
-    let buf_reader = FuturesBufReader::new(AllowStdIo::new(cursor));
+    let buf_reader = BufReader::new(cursor);
     let mut encoder = XzEncoder::new(buf_reader);
 
     // Read compressed data
@@ -169,10 +173,11 @@ pub(crate) async fn create_test_archive(
 
     // Write to final archive file
     let archive_path = temp_dir.path().join("test_snapshot.tar.xz");
-    fs::write(&archive_path, compressed_data)?;
+    tokio_fs::write(&archive_path, compressed_data).await?;
 
-    // Clean up the temporary SQL file to avoid test interference
-    fs::remove_file(&sql_path)?;
+    // Clean up temporary files to avoid test interference.
+    tokio_fs::remove_file(&sql_path).await?;
+    tokio_fs::remove_file(&tar_path).await?;
 
     Ok(archive_path)
 }

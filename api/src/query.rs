@@ -44,8 +44,6 @@ use crate::{
     conversions::transaction_from_record, errors, mutation::TransactionResult, validation::validate_eth_address,
 };
 
-const SUPPORTED_CLIENT_VERSIONS: &str = "^0.29";
-
 /// Result type for HOPR balance queries
 #[derive(Union)]
 pub enum HoprBalanceResult {
@@ -103,6 +101,17 @@ pub enum SafeByResult {
     QueryFailed(QueryFailedError),
 }
 
+/// Response for the legacy `compatibility` query.
+#[derive(SimpleObject)]
+pub struct Compatibility {
+    /// Server version (semver).
+    pub api_version: String,
+    /// Semver range of compatible client versions. Always `"*"` — any client is accepted.
+    pub supported_client_versions: String,
+    /// Feature flags advertised by this server. Always empty since versioning is now header-based.
+    pub features: Vec<String>,
+}
+
 /// Success response for safes list query
 #[derive(SimpleObject)]
 pub struct SafesList {
@@ -123,34 +132,6 @@ pub enum CalculateModuleAddressResult {
     ModuleAddress(ModuleAddress),
     InvalidAddress(InvalidAddressError),
     QueryFailed(QueryFailedError),
-}
-
-#[derive(SimpleObject)]
-pub struct Compatibility {
-    pub api_version: String,
-    pub supported_client_versions: String,
-    pub features: Vec<String>,
-}
-
-#[derive(strum::AsRefStr, Debug, Clone, Copy, PartialEq, Eq)]
-#[strum(serialize_all = "snake_case")]
-enum Feature {
-    IndexesSafeEvents,
-}
-
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-struct CompatibilityFeatures {
-    indexes_safe_events: bool,
-}
-
-impl CompatibilityFeatures {
-    fn to_wire(self) -> Vec<String> {
-        let mut features = Vec::new();
-        if self.indexes_safe_events {
-            features.push(Feature::IndexesSafeEvents);
-        }
-        features.iter().map(|f| f.as_ref().to_string()).collect()
-    }
 }
 
 /// Validate and parse an Ethereum hex address.
@@ -349,6 +330,7 @@ fn check_safes_balance_cap(count: usize) -> std::result::Result<(), QueryFailedE
 }
 
 /// Root query type providing read-only access to indexed blockchain data
+#[derive(Default)]
 pub struct QueryRoot;
 
 #[Object]
@@ -1487,29 +1469,24 @@ impl QueryRoot {
         }))
     }
 
-    /// Client compatibility information
-    ///
-    /// Returns the API version, a semver requirement for compatible blokli-client releases,
-    /// and feature flags supported by this server.
-    async fn compatibility(&self, ctx: &Context<'_>) -> Compatibility {
-        let indexes_safe_events = ctx
-            .data::<crate::schema::SafeEventIndexingEnabled>()
-            .map(|value| value.0)
-            .unwrap_or(false);
-        let features = CompatibilityFeatures { indexes_safe_events }.to_wire();
-
-        Compatibility {
-            api_version: env!("CARGO_PKG_VERSION").to_string(),
-            supported_client_versions: SUPPORTED_CLIENT_VERSIONS.to_string(),
-            features,
-        }
-    }
-
     /// Health check endpoint
     ///
     /// Returns "ok" to indicate the service is running
     async fn health(&self) -> &str {
         "ok"
+    }
+
+    /// Client compatibility information
+    ///
+    /// Legacy endpoint retained for backward compatibility with older clients.
+    /// Always reports `supported_client_versions = "*"` so any client version
+    /// that calls this query is considered compatible.
+    async fn compatibility(&self) -> Compatibility {
+        Compatibility {
+            api_version: env!("CARGO_PKG_VERSION").to_string(),
+            supported_client_versions: "*".to_string(),
+            features: vec![],
+        }
     }
 
     /// Calculate the predicted module address for a Safe deployment

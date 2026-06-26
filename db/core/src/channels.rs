@@ -1064,19 +1064,12 @@ mod tests {
         db.upsert_account(None, 2, destination, destination_packet_key, None, 1, 0, 1)
             .await?;
 
-        let ce = build_channel_entry(
-            source,
-            destination,
-            0.into(),
-            0_u32.into(),
-            ChannelStatus::Open,
-            0_u32.into(),
-        );
+        let ce = build_channel_entry(source, destination, 0.into(), 0_u32.into(), ChannelStatus::Open, 0_u32);
 
         db.upsert_channel(None, ce, 1, 0, 0).await?;
 
         let from_db = db
-            .get_channel_by_id(None, &ce.get_id())
+            .get_channel_by_id(None, ce.get_id())
             .await?
             .expect("channel must be present");
 
@@ -1098,7 +1091,7 @@ mod tests {
         db.upsert_account(None, 1, a, packet_key_a, None, 1, 0, 0).await?;
         db.upsert_account(None, 2, b, packet_key_b, None, 2, 0, 0).await?;
 
-        let ce = build_channel_entry(a, b, 0.into(), 0_u32.into(), ChannelStatus::Open, 0_u32.into());
+        let ce = build_channel_entry(a, b, 0.into(), 0_u32.into(), ChannelStatus::Open, 0_u32);
 
         db.upsert_channel(None, ce, 1, 0, 0).await?;
         let from_db = db
@@ -1140,7 +1133,7 @@ mod tests {
         db.upsert_account(None, 1, src, packet_key_src, None, 1, 0, 0).await?;
         db.upsert_account(None, 2, dst, packet_key_dst, None, 2, 0, 0).await?;
 
-        let ce = build_channel_entry(src, dst, 0.into(), 0_u32.into(), ChannelStatus::Open, 0_u32.into());
+        let ce = build_channel_entry(src, dst, 0.into(), 0_u32.into(), ChannelStatus::Open, 0_u32);
 
         db.upsert_channel(None, ce, 1, 0, 0).await?;
         let from_db = db
@@ -1169,23 +1162,9 @@ mod tests {
         db.upsert_account(None, 2, addr_2, packet_key_addr_2, None, 2, 0, 0)
             .await?;
 
-        let ce_1 = build_channel_entry(
-            addr_1,
-            addr_2,
-            0.into(),
-            1_u32.into(),
-            ChannelStatus::Open,
-            0_u32.into(),
-        );
+        let ce_1 = build_channel_entry(addr_1, addr_2, 0.into(), 1_u32.into(), ChannelStatus::Open, 0_u32);
 
-        let ce_2 = build_channel_entry(
-            addr_2,
-            addr_1,
-            0.into(),
-            2_u32.into(),
-            ChannelStatus::Open,
-            0_u32.into(),
-        );
+        let ce_2 = build_channel_entry(addr_2, addr_1, 0.into(), 2_u32.into(), ChannelStatus::Open, 0_u32);
 
         let db_clone = db.clone();
         db.begin_transaction()
@@ -1240,14 +1219,14 @@ mod tests {
             initial_balance,
             0_u32.into(),
             ChannelStatus::Open,
-            1_u32.into(),
+            1_u32,
         );
 
         db.upsert_channel(None, ce, 100, 0, 0).await?;
 
         // Verify channel can be retrieved
         let retrieved = db
-            .get_channel_by_id(None, &ce.get_id())
+            .get_channel_by_id(None, ce.get_id())
             .await?
             .expect("channel should exist");
 
@@ -1279,27 +1258,20 @@ mod tests {
             initial_balance,
             0_u32.into(),
             ChannelStatus::Open,
-            1_u32.into(),
+            1_u32,
         );
 
         db.upsert_channel(None, ce_initial, 100, 0, 0).await?;
 
         // Update channel with new balance at block 200
         let new_balance = HoprBalance::from(2000u32);
-        let ce_updated = build_channel_entry(
-            addr_1,
-            addr_2,
-            new_balance,
-            0_u32.into(),
-            ChannelStatus::Open,
-            1_u32.into(),
-        );
+        let ce_updated = build_channel_entry(addr_1, addr_2, new_balance, 0_u32.into(), ChannelStatus::Open, 1_u32);
 
         db.upsert_channel(None, ce_updated, 200, 0, 0).await?;
 
         // Verify latest state reflects new balance
         let latest = db
-            .get_channel_by_id(None, &ce_updated.get_id())
+            .get_channel_by_id(None, ce_updated.get_id())
             .await?
             .expect("channel should exist");
 
@@ -1307,7 +1279,7 @@ mod tests {
 
         // Verify old state still exists at block 100
         let historical = db
-            .get_channel_state_at_block(None, &ce_initial.get_id(), 150)
+            .get_channel_state_at_block(None, ce_initial.get_id(), 150)
             .await?
             .expect("historical state should exist");
 
@@ -1317,7 +1289,7 @@ mod tests {
         );
 
         // Verify full history contains both states
-        let history = db.get_channel_history(None, &ce_initial.get_id()).await?;
+        let history = db.get_channel_history(None, ce_initial.get_id()).await?;
 
         assert_eq!(2, history.len(), "should have 2 state records");
         assert_eq!(
@@ -1347,7 +1319,7 @@ mod tests {
         let balance = HoprBalance::from(1000u32);
 
         // State 1: Open at block 100
-        let ce_open = build_channel_entry(addr_1, addr_2, balance, 0_u32.into(), ChannelStatus::Open, 1_u32.into());
+        let ce_open = build_channel_entry(addr_1, addr_2, balance, 0_u32.into(), ChannelStatus::Open, 1_u32);
         db.upsert_channel(None, ce_open, 100, 0, 0).await?;
 
         // State 2: PendingToClose at block 200
@@ -1358,23 +1330,16 @@ mod tests {
             balance,
             0_u32.into(),
             ChannelStatus::PendingToClose(closure_time),
-            1_u32.into(),
+            1_u32,
         );
         db.upsert_channel(None, ce_pending, 200, 0, 0).await?;
 
         // State 3: Closed at block 300
-        let ce_closed = build_channel_entry(
-            addr_1,
-            addr_2,
-            balance,
-            0_u32.into(),
-            ChannelStatus::Closed,
-            1_u32.into(),
-        );
+        let ce_closed = build_channel_entry(addr_1, addr_2, balance, 0_u32.into(), ChannelStatus::Closed, 1_u32);
         db.upsert_channel(None, ce_closed, 300, 0, 0).await?;
 
         // Verify full history has all 3 states
-        let history = db.get_channel_history(None, &ce_open.get_id()).await?;
+        let history = db.get_channel_history(None, ce_open.get_id()).await?;
 
         assert_eq!(3, history.len(), "should have 3 state records");
         assert_eq!(ChannelStatus::Open, history[0].status, "first state should be Open");
@@ -1386,19 +1351,19 @@ mod tests {
 
         // Verify temporal queries return correct states
         let at_block_150 = db
-            .get_channel_state_at_block(None, &ce_open.get_id(), 150)
+            .get_channel_state_at_block(None, ce_open.get_id(), 150)
             .await?
             .expect("should exist");
         assert_eq!(ChannelStatus::Open, at_block_150.status);
 
         let at_block_250 = db
-            .get_channel_state_at_block(None, &ce_open.get_id(), 250)
+            .get_channel_state_at_block(None, ce_open.get_id(), 250)
             .await?
             .expect("should exist");
         assert!(matches!(at_block_250.status, ChannelStatus::PendingToClose(_)));
 
         let at_block_350 = db
-            .get_channel_state_at_block(None, &ce_open.get_id(), 350)
+            .get_channel_state_at_block(None, ce_open.get_id(), 350)
             .await?
             .expect("should exist");
         assert_eq!(ChannelStatus::Closed, at_block_350.status);
@@ -1424,15 +1389,15 @@ mod tests {
         let balance = HoprBalance::from(1000u32);
 
         // Initial state: ticket_index = 0
-        let ce_initial = build_channel_entry(addr_1, addr_2, balance, 0_u32.into(), ChannelStatus::Open, 1_u32.into());
+        let ce_initial = build_channel_entry(addr_1, addr_2, balance, 0_u32.into(), ChannelStatus::Open, 1_u32);
         db.upsert_channel(None, ce_initial, 100, 0, 0).await?;
 
         // Update: ticket_index = 5
-        let ce_updated = build_channel_entry(addr_1, addr_2, balance, 5_u32.into(), ChannelStatus::Open, 1_u32.into());
+        let ce_updated = build_channel_entry(addr_1, addr_2, balance, 5_u32.into(), ChannelStatus::Open, 1_u32);
         db.upsert_channel(None, ce_updated, 200, 0, 0).await?;
 
         // Verify history preserved
-        let history = db.get_channel_history(None, &ce_initial.get_id()).await?;
+        let history = db.get_channel_history(None, ce_initial.get_id()).await?;
 
         assert_eq!(2, history.len(), "should have 2 state records");
         assert_eq!(0u64, history[0].ticket_index, "first state should have ticket_index 0");
@@ -1463,7 +1428,7 @@ mod tests {
             HoprBalance::from(1000u32),
             0_u32.into(),
             ChannelStatus::Open,
-            1_u32.into(),
+            1_u32,
         );
         db.upsert_channel(None, ce_block_100, 100, 0, 0).await?;
 
@@ -1473,7 +1438,7 @@ mod tests {
             HoprBalance::from(2000u32),
             1_u32.into(),
             ChannelStatus::Open,
-            1_u32.into(),
+            1_u32,
         );
         db.upsert_channel(None, ce_block_200, 200, 0, 0).await?;
 
@@ -1483,22 +1448,22 @@ mod tests {
             HoprBalance::from(3000u32),
             2_u32.into(),
             ChannelStatus::Open,
-            1_u32.into(),
+            1_u32,
         );
         db.upsert_channel(None, ce_block_300, 300, 0, 0).await?;
 
         // Query state at various blocks
-        let at_50 = db.get_channel_state_at_block(None, &ce_block_100.get_id(), 50).await?;
+        let at_50 = db.get_channel_state_at_block(None, ce_block_100.get_id(), 50).await?;
         assert!(at_50.is_none(), "no state should exist before block 100");
 
         let at_100 = db
-            .get_channel_state_at_block(None, &ce_block_100.get_id(), 100)
+            .get_channel_state_at_block(None, ce_block_100.get_id(), 100)
             .await?
             .expect("state should exist at block 100");
         assert_eq!(HoprBalance::from(1000u32), at_100.balance);
 
         let at_150 = db
-            .get_channel_state_at_block(None, &ce_block_100.get_id(), 150)
+            .get_channel_state_at_block(None, ce_block_100.get_id(), 150)
             .await?
             .expect("state should exist at block 150");
         assert_eq!(
@@ -1508,13 +1473,13 @@ mod tests {
         );
 
         let at_200 = db
-            .get_channel_state_at_block(None, &ce_block_100.get_id(), 200)
+            .get_channel_state_at_block(None, ce_block_100.get_id(), 200)
             .await?
             .expect("state should exist at block 200");
         assert_eq!(HoprBalance::from(2000u32), at_200.balance);
 
         let at_250 = db
-            .get_channel_state_at_block(None, &ce_block_100.get_id(), 250)
+            .get_channel_state_at_block(None, ce_block_100.get_id(), 250)
             .await?
             .expect("state should exist at block 250");
         assert_eq!(
@@ -1524,13 +1489,13 @@ mod tests {
         );
 
         let at_300 = db
-            .get_channel_state_at_block(None, &ce_block_100.get_id(), 300)
+            .get_channel_state_at_block(None, ce_block_100.get_id(), 300)
             .await?
             .expect("state should exist at block 300");
         assert_eq!(HoprBalance::from(3000u32), at_300.balance);
 
         let at_400 = db
-            .get_channel_state_at_block(None, &ce_block_100.get_id(), 400)
+            .get_channel_state_at_block(None, ce_block_100.get_id(), 400)
             .await?
             .expect("state should exist at block 400");
         assert_eq!(
@@ -1575,13 +1540,13 @@ mod tests {
         }
 
         // Get full history
-        let history = db.get_channel_history(None, &channel_id).await?;
+        let history = db.get_channel_history(None, channel_id).await?;
 
         assert_eq!(5, history.len(), "should have 5 state records");
 
         // Verify chronological ordering
         for (i, state) in history.iter().enumerate() {
-            let expected_balance = HoprBalance::from(((i + 1) * 1000) as u32);
+            let expected_balance = HoprBalance::from(u32::try_from((i + 1) * 1000)?);
             assert_eq!(
                 expected_balance, state.balance,
                 "state {} should have correct balance",
@@ -1619,12 +1584,12 @@ mod tests {
             HoprBalance::from(1000u32),
             0_u32.into(),
             ChannelStatus::Open,
-            1_u32.into(),
+            1_u32,
         );
         db.upsert_channel(None, ce, 100, 0, 0).await?;
 
         // Mark the state as corrupted
-        db.mark_channel_state_corrupted(None, &ce.get_id(), 100, 0, 0).await?;
+        db.mark_channel_state_corrupted(None, ce.get_id(), 100, 0, 0).await?;
 
         // TODO: Add query to verify corrupted flag is set
         // This requires adding a way to query the corrupted_state field
@@ -1655,7 +1620,7 @@ mod tests {
             HoprBalance::from(1000u32),
             0_u32.into(),
             ChannelStatus::Open,
-            1_u32.into(),
+            1_u32,
         );
         db.upsert_channel(None, ce_initial, 100, 0, 0).await?;
 
@@ -1666,14 +1631,7 @@ mod tests {
             let _channel_id = ce_initial.get_id();
             let handle = tokio::spawn(async move {
                 let balance = HoprBalance::from((i + 2) * 1000);
-                let ce = build_channel_entry(
-                    addr_1,
-                    addr_2,
-                    balance,
-                    (i + 1).into(),
-                    ChannelStatus::Open,
-                    1_u32.into(),
-                );
+                let ce = build_channel_entry(addr_1, addr_2, balance, (i + 1).into(), ChannelStatus::Open, 1_u32);
                 db_clone.upsert_channel(None, ce, 200 + i, 0, 0).await
             });
             handles.push(handle);
@@ -1685,7 +1643,7 @@ mod tests {
         }
 
         // Verify all states were persisted (no lost updates)
-        let history = db.get_channel_history(None, &ce_initial.get_id()).await?;
+        let history = db.get_channel_history(None, ce_initial.get_id()).await?;
 
         assert_eq!(
             11,
@@ -1709,14 +1667,14 @@ mod tests {
         db.upsert_account(None, 1, addr_1, packet_key_1, None, 1, 0, 0).await?;
         db.upsert_account(None, 2, addr_2, packet_key_2, None, 1, 0, 0).await?;
 
-        let ce = ChannelEntry::new(
-            addr_1,
-            addr_2,
-            HoprBalance::from(1000u32),
-            0_u32.into(),
-            ChannelStatus::Open,
-            1_u32.into(),
-        );
+        let ce = ChannelEntry::builder()
+            .between(addr_1, addr_2)
+            .balance(HoprBalance::from(1000u32))
+            .ticket_index(0_u32.into())
+            .status(ChannelStatus::Open)
+            .epoch(1_u32)
+            .build()
+            .expect("valid channel entry");
 
         // Insert channel state at (block=100, tx_index=5, log_index=3)
         db.upsert_channel(None, ce, 100, 5, 3).await?;
@@ -1725,7 +1683,7 @@ mod tests {
         db.upsert_channel(None, ce, 100, 5, 3).await?;
 
         // Verify only one state record exists
-        let history = db.get_channel_history(None, &ce.get_id()).await?;
+        let history = db.get_channel_history(None, ce.get_id()).await?;
         assert_eq!(
             1,
             history.len(),

@@ -917,7 +917,7 @@ mod tests {
             owner_two.to_hex()
         );
 
-        let csv_data = vec![headers, &values].join("\n");
+        let csv_data = [headers, &values].join("\n");
 
         let loaded = load_preseeded_safes_from_csv(&db, None, &csv_data).await?;
         assert_eq!(loaded, 1);
