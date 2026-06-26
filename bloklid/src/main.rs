@@ -43,10 +43,11 @@ async fn main() -> ExitCode {
                 error.kind(),
                 clap::error::ErrorKind::DisplayHelp | clap::error::ErrorKind::DisplayVersion
             ) {
-                tracing::info!("{error}");
+                tracing::info!(%error, "displaying command output");
                 return ExitCode::SUCCESS;
             }
-            tracing::error!(%error, "error parsing '{BIN_NAME}' arguments");
+            let raw_args: Vec<String> = std::env::args().skip(1).collect();
+            tracing::error!(bin_name = BIN_NAME, args = ?raw_args, %error, "error parsing arguments");
             return ExitCode::FAILURE;
         }
     };
@@ -55,7 +56,7 @@ async fn main() -> ExitCode {
         let config = match args.load_config(true) {
             Ok(config) => config,
             Err(error) => {
-                tracing::error!(%error, "error loading '{BIN_NAME}' config");
+                tracing::error!(bin_name = BIN_NAME, %error, "error loading config");
                 return ExitCode::FAILURE;
             }
         };
@@ -63,7 +64,7 @@ async fn main() -> ExitCode {
         let telemetry_handles = match telemetry::init(args.verbose, &config.telemetry) {
             Ok(handles) => handles,
             Err(error) => {
-                tracing::error!(%error, "error initializing '{BIN_NAME}' telemetry");
+                tracing::error!(bin_name = BIN_NAME, %error, "error initializing telemetry");
                 return ExitCode::FAILURE;
             }
         };
@@ -72,11 +73,11 @@ async fn main() -> ExitCode {
         drop(telemetry_handles);
 
         if let Err(error) = run_result {
-            tracing::error!(%error, "error while running '{BIN_NAME}'");
+            tracing::error!(bin_name = BIN_NAME, %error, "error while running process");
             return ExitCode::FAILURE;
         }
     } else if let Err(error) = run(args, None).await {
-        tracing::error!(%error, "error while running '{BIN_NAME}'");
+        tracing::error!(bin_name = BIN_NAME, %error, "error while running process");
         return ExitCode::FAILURE;
     }
     ExitCode::SUCCESS
@@ -87,7 +88,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
     if let Some(command) = args.command {
         match command {
             Command::GenerateConfig { output } => {
-                tracing::info!("Generating configuration template at: {}", output.display());
+                tracing::info!(path = %output.display(), "generating configuration template");
 
                 // Generate the template content
                 let template = generate_config_template();
@@ -103,7 +104,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 std::fs::write(&output, template)
                     .map_err(|e| BloklidError::NonSpecific(format!("Failed to write configuration template: {}", e)))?;
 
-                tracing::info!("Configuration template successfully written to: {}", output.display());
+                tracing::info!(path = %output.display(), "configuration template written");
                 return Ok(());
             }
         }
@@ -127,7 +128,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
         let cfg = config
             .read()
             .map_err(|_| BloklidError::NonSpecific("failed to lock config for logging".into()))?;
-        tracing::info!("{}", cfg.display_redacted());
+        tracing::info!(config = %cfg.display_redacted(), "loaded redacted configuration");
     }
 
     // Initialize components
@@ -390,7 +391,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
     // Abort all chain processes
     for (process_type, handle) in process_handles {
-        tracing::info!("Stopping {:?} process", process_type);
+        tracing::info!(?process_type, "stopping process");
         handle.abort();
     }
     tracing::info!("All BlokliChain processes stopped");

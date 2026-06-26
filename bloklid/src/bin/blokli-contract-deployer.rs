@@ -1,4 +1,7 @@
-use std::{error::Error, fs, path::PathBuf, str::FromStr};
+use std::{
+    any::Any, backtrace::Backtrace, borrow::Cow, error::Error, fs, io::stdout, panic, path::PathBuf, str::FromStr,
+    sync::Once,
+};
 
 use blokli_chain_types::ContractAddresses as BlokliContractAddresses;
 use clap::Parser;
@@ -20,9 +23,11 @@ use hopr_types::{
     primitive::{prelude::HoprBalance, primitives::Address, traits::IntoEndian},
 };
 use serde::Serialize;
+use tracing_subscriber::{Layer as _, prelude::*};
 use url::Url;
 
 const DEFAULT_ANVIL_PRIVATE_KEY: &str = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+static PANIC_HOOK_INSTALLED: Once = Once::new();
 
 #[derive(Debug, Parser)]
 #[command(
@@ -65,11 +70,7 @@ struct ContractsOutput {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
-    tracing_subscriber::fmt()
-        .with_writer(std::io::stdout)
-        .with_target(true)
-        .with_level(true)
-        .init();
+    install_tracing()?;
 
     let args = Args::parse();
 
@@ -109,7 +110,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?
         .watch()
         .await?;
-    tracing::info!("Minter role granted to Anvil account {signer_address}");
+    tracing::info!(%signer_address, "granted minter role to Anvil account");
 
     // Mint 10M tokens to Anvil account 0
     instances
@@ -124,7 +125,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .await?
         .watch()
         .await?;
-    tracing::info!("10M tokens minted to Anvil account {signer_address}");
+    tracing::info!(%signer_address, "minted tokens to Anvil account");
 
     // Update the stake factory to use correct addresses
     let network = instances.stake_factory.defaultHoprNetwork().call().await?;
@@ -172,13 +173,89 @@ async fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn install_tracing() -> Result<(), Box<dyn Error>> {
+    let env_filter = tracing_subscriber::EnvFilter::try_from_default_env()
+        .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info"));
+
+    let format = tracing_subscriber::fmt::layer()
+        .with_writer(stdout)
+        .with_target(true)
+        .with_level(true)
+        .with_thread_ids(true)
+        .with_thread_names(false);
+    let subscriber = tracing_subscriber::registry().with(env_filter).with(
+        if std::env::var("BLOKLI_LOG_FORMAT")
+            .map(|value| value.eq_ignore_ascii_case("json"))
+            .unwrap_or(false)
+        {
+            format.json().boxed()
+        } else {
+            format.boxed()
+        },
+    );
+
+    tracing::subscriber::set_global_default(subscriber)?;
+    set_panic_hook();
+    Ok(())
+}
+
+fn set_panic_hook() {
+    PANIC_HOOK_INSTALLED.call_once(|| {
+        panic::set_hook(Box::new(|info| {
+            let payload = panic_payload_to_str(info.payload());
+            let location = info.location();
+            let panic_file = location.map(|value| value.file()).unwrap_or("unknown");
+            let panic_line = location.map(|value| value.line()).unwrap_or(0);
+            let panic_column = location.map(|value| value.column()).unwrap_or(0);
+            let thread = std::thread::current();
+            let thread_name = thread.name().unwrap_or("unnamed");
+            let backtrace = Backtrace::capture().to_string();
+
+            tracing::error!(
+                panic_payload = %payload,
+                panic_file,
+                panic_line,
+                panic_column,
+                thread_name,
+                thread_id = ?thread.id(),
+                backtrace = %backtrace,
+                "process panic"
+            );
+        }));
+    });
+}
+
+fn panic_payload_to_str(payload: &(dyn Any + Send)) -> Cow<'static, str> {
+    if let Some(payload) = payload.downcast_ref::<&'static str>() {
+        Cow::Borrowed(payload)
+    } else if let Some(payload) = payload.downcast_ref::<String>() {
+        Cow::Owned(payload.clone())
+    } else {
+        Cow::Borrowed("non-string panic payload")
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::any::Any;
+
     use anyhow::Result;
     use clap::Parser;
     use hopr_types::{internal::prelude::WinningProbability, primitive::traits::IntoEndian};
 
-    use super::Args;
+    use super::{Args, panic_payload_to_str};
+
+    #[test]
+    fn test_panic_payload_to_str_from_str() {
+        let payload: &(dyn Any + Send) = &"boom";
+        assert_eq!(panic_payload_to_str(payload), "boom");
+    }
+
+    #[test]
+    fn test_panic_payload_to_str_from_string() {
+        let payload: &(dyn Any + Send) = &"boom".to_string();
+        assert_eq!(panic_payload_to_str(payload), "boom");
+    }
 
     #[test]
     fn ticket_price_arg_default_parses() -> Result<()> {

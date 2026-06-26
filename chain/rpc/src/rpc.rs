@@ -185,7 +185,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
         }
         provider.client().set_poll_interval(cfg.tx_polling_interval);
 
-        debug!("{:?}", cfg.contract_addrs);
+        debug!(contract_addresses = ?cfg.contract_addrs, "configured contract addresses");
 
         Ok(Self {
             contract_instances: Arc::new(ContractInstances::new(
@@ -279,30 +279,26 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
 
         if code.is_empty() {
             // Empty code means EOA (Externally Owned Account), use eth_getTransactionCount
-            debug!("Address {} has no code (EOA), using eth_getTransactionCount", address);
+            debug!(%address, "address has no code, using eth_getTransactionCount");
             let tx_count = provider.get_transaction_count(address_alloy).await?;
             return Ok(tx_count);
         }
 
         // Address has code, verify it's a Safe contract by calling getThreshold()
         // This prevents false positives from non-Safe contracts that have a nonce() method
-        debug!("Address {} has code, verifying if it's a Safe contract", address);
+        debug!(%address, "address has code, verifying Safe contract");
         let safe_contract = SafeSingleton::new(address_alloy, provider.clone());
 
         match safe_contract.getThreshold().call().await {
             Ok(_threshold) => {
                 // Successfully called getThreshold(), this is a Safe contract
                 // Now get the Safe nonce (transaction count)
-                debug!("Address {} is a Safe contract, getting nonce", address);
+                debug!(%address, "address is a Safe contract, getting nonce");
                 match safe_contract.nonce().call().await {
                     Ok(nonce) => nonce.try_into().map_err(|_| RpcError::SafeNonceOverflow(nonce)),
                     Err(e) => {
                         // This should rarely happen if getThreshold() succeeded
-                        tracing::error!(
-                            "Safe contract {} getThreshold() succeeded but nonce() failed: {}",
-                            address,
-                            e
-                        );
+                        tracing::error!(%address, error = %e, "safe getThreshold succeeded but nonce failed");
                         Err(e.into())
                     }
                 }

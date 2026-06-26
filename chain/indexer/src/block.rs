@@ -488,10 +488,10 @@ where
 
             match self.download_snapshot().await {
                 Ok(snapshot_info) => {
-                    info!("Logs snapshot downloaded successfully: {:?}", snapshot_info);
+                    info!(snapshot_info = ?snapshot_info, "logs snapshot downloaded successfully");
                 }
                 Err(e) => {
-                    error!("Failed to download logs snapshot: {}. Continuing with regular sync.", e);
+                    error!(error = %e, "failed to download logs snapshot, continuing with regular sync");
                 }
             }
         }
@@ -504,13 +504,10 @@ where
                     let seconds = period.as_secs();
                     match self.db.set_channel_closure_grace_period(None, seconds).await {
                         Ok(_) => {
-                            info!("Channel closure grace period initialized: {} seconds", seconds);
+                            info!(seconds, "channel closure grace period initialized");
                         }
                         Err(e) => {
-                            warn!(
-                                "Failed to store channel closure grace period in database: {}. Continuing startup.",
-                                e
-                            );
+                            warn!(error = %e, "failed to store channel closure grace period, continuing startup");
                         }
                     }
                 }
