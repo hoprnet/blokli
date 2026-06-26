@@ -10,6 +10,7 @@ pub mod logging;
 pub mod metrics;
 pub mod mutation;
 pub mod query;
+pub mod query_v2;
 pub mod readiness;
 pub mod schema;
 pub mod server;
@@ -71,12 +72,7 @@ fn redact_url(url: &str) -> String {
 }
 
 /// Start the API server
-pub async fn start_server(
-    network: String,
-    finality: u16,
-    indexes_safe_events: bool,
-    config: ApiConfig,
-) -> ApiResult<()> {
+pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> ApiResult<()> {
     // Initialize tracing
     logging::setup_tracing_env_like("blokli_api=info,tower_http=debug")
         .map_err(|error| ApiError::ConfigError(format!("Failed to initialize tracing: {error}")))?;
@@ -148,7 +144,6 @@ pub async fn start_server(
         config.clone(),
         config.expected_block_time,
         finality,
-        indexes_safe_events,
         indexer_state,
         transaction_executor,
         transaction_store,

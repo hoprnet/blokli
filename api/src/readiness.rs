@@ -104,6 +104,11 @@ impl ReadinessChecker {
         self.check_and_update().await;
     }
 
+    /// Unconditionally set the cached state to `Ready`. Only for use in tests.
+    pub async fn force_ready(&self) {
+        *self.cached_state.write().await = ReadinessState::Ready;
+    }
+
     /// Start a background task that periodically updates the readiness state
     /// This ensures the cached state is refreshed even if /readyz is not called
     pub fn start_periodic_updates(self) {

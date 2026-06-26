@@ -1,15 +1,7 @@
 ---
 source: client/tests/query_tests.rs
-assertion_line: 64
 expression: recorder.requests()
 ---
-- method: POST
-  path_and_query: /graphql
-  body:
-    Json:
-      query: "query QueryCompatibility {\n  compatibility {\n    apiVersion\n    supportedClientVersions\n    features\n  }\n}\n"
-      variables: ~
-      operationName: QueryCompatibility
 - method: POST
   path_and_query: /graphql
   body:
