@@ -237,12 +237,12 @@ async fn subscribe_ticket_params_uses_dns_override() -> Result<()> {
                 ip: IpAddr::from([127, 0, 0, 1]),
                 port: None,
             }),
-
             timeout: Duration::from_secs(2),
             stream_reconnect_timeout: Duration::from_secs(2),
             subscription_read_timeout: Some(Duration::from_secs(2)),
             subscription_tcp_keepalive: Duration::from_secs(15),
             subscription_stream_restart_delay: Some(Duration::from_millis(100)),
+            ..Default::default()
         },
     );
 

@@ -182,17 +182,17 @@ async fn unknown_version_returns_400() {
     assert!(body["errors"][0]["message"].as_str().unwrap().contains("99"));
 }
 
-/// A non-numeric version header is treated the same as no header (defaults to v1).
+/// A non-numeric version header is rejected with 400 INVALID_SCHEMA_VERSION_HEADER.
 #[tokio::test]
-async fn malformed_version_header_defaults_to_v1() {
+async fn malformed_version_header_returns_400() {
     let app = build_test_router(build_test_app_state().await);
     let resp = app
         .oneshot(post_graphql("{ schemaVersion }", Some("not-a-number")))
         .await
         .unwrap();
-    assert_eq!(resp.status(), StatusCode::OK);
+    assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
     let body = json_body(resp).await;
-    assert_eq!(body["data"]["schemaVersion"], "v1");
+    assert_eq!(body["errors"][0]["extensions"]["code"], "INVALID_SCHEMA_VERSION_HEADER");
 }
 
 // ---------------------------------------------------------------------------

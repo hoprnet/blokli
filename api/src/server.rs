@@ -443,11 +443,23 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
     let schema: Arc<dyn ErasedSchema> = if is_introspection {
         state.introspection_schema.clone()
     } else {
-        let version = headers
-            .get("x-blokli-schema-version")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse::<u32>().ok())
-            .unwrap_or(1);
+        let raw_version = headers.get("x-blokli-schema-version");
+        let version: u32 = match raw_version {
+            None => 1,
+            Some(v) => match v.to_str().ok().and_then(|s| s.parse::<u32>().ok()) {
+                Some(n) => n,
+                None => {
+                    let err = crate::errors::invalid_schema_version_header();
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "errors": [{"message": err.message, "extensions": err.extensions}]
+                        })),
+                    )
+                        .into_response();
+                }
+            },
+        };
 
         match state.schemas.get(&version) {
             Some(s) => s.clone(),
