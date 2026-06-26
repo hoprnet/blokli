@@ -177,7 +177,8 @@ RPC Endpoint
 
 **Key Features**:
 
-- **Fast Sync**: Downloads pre-built logs database snapshots for quick initial sync, reducing time-to-ready from hours to minutes
+- **Fast Sync**: Downloads an archive containing `hopr_logs.sql`, imports the raw logs tables, rebuilds derived state locally, and then
+  catches up over RPC from the snapshot watermark for faster initial sync
 - **Finality Awareness**: Only processes blocks after configured confirmation count to avoid reorg complications
 - **Reorg Handling**: Detects blockchain reorganizations by tracking block hashes and marks affected logs as removed
 - **Watermark Tracking**: Maintains precise last processed position using (block, tx_index, log_index) triplet for exact resume capability
@@ -239,8 +240,9 @@ The system supports two database configurations:
 **Single Database (PostgreSQL)**: All tables reside in a single PostgreSQL database. This provides simpler management, better transaction
 support across tables, and MVCC-based concurrency control for high read/write throughput.
 
-**Dual Database (SQLite)**: Splits into Index DB (accounts, channels, balances) and Logs DB (raw blockchain logs). The Logs DB can be
-atomically replaced during fast sync, and separation reduces write lock contention in SQLite's locking model.
+**Dual Database (SQLite)**: Splits into Index DB (accounts, channels, balances) and Logs DB (raw blockchain logs). During fast sync, the
+logs tables are repopulated from the imported `hopr_logs.sql` snapshot before derived state is rebuilt, and separation reduces write lock
+contention in SQLite's locking model.
 
 **Key Design Patterns**:
 
@@ -1163,8 +1165,8 @@ Lightweight deployment using SQLite with separated databases:
 **Advantages**:
 
 - No external database server required
-- Logs DB can be atomically replaced from snapshot
-- Fast sync by downloading pre-built logs database
+- Logs tables can be repopulated from an imported logs snapshot
+- Fast sync imports raw logs and rebuilds derived state locally
 - Reduced write lock contention through separation
 - Simple backup and restore (file copy)
 
@@ -1247,7 +1249,7 @@ subscriber count. Database becomes bottleneck at high read volume (consider read
 **SQLite Dual Database Characteristics**:
 
 - Reduces lock contention by separating write-heavy logs from read-heavy index
-- Logs DB can be atomically replaced during fast sync operation
+- Logs tables can be repopulated from an imported `hopr_logs.sql` snapshot during fast sync
 - Suitable for embedded deployments with limited resources
 - Simple backup through file system copy operations
 - No network overhead for database access
@@ -1319,7 +1321,7 @@ The transaction submission system implements defense-in-depth with multiple vali
 - **Reorg Handling**: Detects blockchain reorganizations and marks affected logs
 - **Transaction Safety**: All state changes wrapped in database transactions
 - **Position Constraints**: Unique constraints prevent duplicate event processing
-- **Atomic Snapshot Import**: Logs database replacement is atomic operation
+- **Atomic Snapshot Import**: Logs table import and derived-state rebuild run within a single transaction
 
 **Precision Preservation**: Large integers stored as binary to preserve full precision across language boundaries. GraphQL uses String type
 for UInt64 values to avoid JavaScript Number precision loss.

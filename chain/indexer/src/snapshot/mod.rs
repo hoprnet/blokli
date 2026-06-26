@@ -8,7 +8,7 @@
 //! - **HTTP/HTTPS Downloads**: Secure download with retry logic and progress tracking
 //! - **Local File Support**: Direct installation from local `file://` URLs
 //! - **Archive Extraction**: Safe tar.xz extraction with path traversal protection
-//! - **SQL Validation**: PostgreSQL SQL dump integrity and content verification
+//! - **SQL Validation**: PostgreSQL-style `COPY ... FROM stdin` dump verification
 //! - **Disk Space Management**: Cross-platform space validation before operations
 //! - **Comprehensive Errors**: Actionable error messages with recovery suggestions
 //!
@@ -48,8 +48,11 @@ pub(crate) mod test_utils;
 // Re-export commonly used types
 use std::{fs, path::Path};
 
-use blokli_db::BlokliDbGeneralModelOperations;
+use async_compression::tokio::write::XzEncoder;
+use async_tar::Builder;
+use blokli_db::{BlokliDbGeneralModelOperations, snapshot::SNAPSHOT_SQL_FILE};
 pub use error::{SnapshotError, SnapshotResult};
+use tokio::{fs::File, io::AsyncWriteExt as _};
 use tracing::{debug, error, info};
 pub use validate::SnapshotInfo;
 
@@ -133,9 +136,7 @@ impl SnapshotWorkflow {
         let extracted_files = self.extractor.extract_snapshot(&archive_path, &temp_dir).await?;
         debug!(extracted_files = ?extracted_files, "extracted snapshot files");
 
-        // Validate extracted SQL dump
-        let sql_path = temp_dir.join("hopr_logs.sql");
-        let snapshot_info = self.validator.validate_snapshot(&sql_path).await?;
+        let snapshot_info = self.validator.validate_snapshot(&temp_dir).await?;
 
         // Install using the provided installer
         installer
@@ -164,8 +165,8 @@ impl SnapshotWorkflow {
 ///
 /// - [`SnapshotDownloader`] - HTTP/HTTPS and file:// URL handling with retry logic
 /// - [`SnapshotExtractor`] - Secure tar.xz extraction with path validation
-/// - [`SnapshotValidator`] - SQLite integrity and content verification
-/// - Database integration via [`BlokliDbGeneralModelOperations::import_logs_db`]
+/// - [`SnapshotValidator`] - SQL dump integrity verification
+/// - Database integration via [`BlokliDbGeneralModelOperations::import_logs_snapshot`]
 pub struct SnapshotManager<Db>
 where
     Db: BlokliDbGeneralModelOperations + Clone + Send + Sync + 'static,
@@ -206,8 +207,8 @@ where
     /// Performs the complete snapshot setup workflow:
     /// 1. Downloads archive from URL (HTTP/HTTPS/file://)
     /// 2. Extracts tar.xz archive safely
-    /// 3. Validates database integrity
-    /// 4. Installs via [`BlokliDbGeneralModelOperations::import_logs_db`]
+    /// 3. Validates SQL dump integrity
+    /// 4. Installs via [`BlokliDbGeneralModelOperations::import_logs_snapshot`]
     /// 5. Cleans up temporary files
     ///
     /// # Arguments
@@ -244,6 +245,65 @@ where
     pub async fn download_and_setup_snapshot(&self, url: &str, data_dir: &Path) -> SnapshotResult<SnapshotInfo> {
         self.workflow.execute_workflow(self, url, data_dir, true).await
     }
+
+    /// Exports the current logs database as a `tar.xz` snapshot archive.
+    ///
+    /// The archive written to `output_path` contains a single `hopr_logs.sql`
+    /// file that can later be restored through
+    /// [`SnapshotManager::download_and_setup_snapshot`].
+    ///
+    /// # Arguments
+    ///
+    /// * `output_path` - Destination archive path. Bare filenames are written relative to the current working
+    ///   directory.
+    ///
+    /// # Returns
+    ///
+    /// [`SnapshotInfo`] describing the exported snapshot contents.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`SnapshotError`] if the output directory cannot be created, the
+    /// temporary SQL dump cannot be produced, or archive creation fails.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// # use std::path::Path;
+    /// # use blokli_chain_indexer::snapshot::{SnapshotManager, SnapshotResult};
+    /// # async fn example(db: impl blokli_db::BlokliDbGeneralModelOperations + Clone + Send + Sync + 'static) -> SnapshotResult<()> {
+    /// let manager = SnapshotManager::with_db(db)?;
+    /// let info = manager
+    ///     .export_snapshot(Path::new("logs-snapshot.tar.xz"))
+    ///     .await?;
+    ///
+    /// println!("exported {} logs", info.log_count.unwrap_or(0));
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn export_snapshot(&self, output_path: &Path) -> SnapshotResult<SnapshotInfo> {
+        let parent_dir = match output_path.parent() {
+            Some(parent) if !parent.as_os_str().is_empty() => parent,
+            _ => Path::new("."),
+        };
+        fs::create_dir_all(parent_dir)?;
+
+        let temp_guard = tempfile::tempdir_in(parent_dir)?;
+        let temp_dir = temp_guard.path().to_path_buf();
+        let info = self
+            .db
+            .export_logs_snapshot(temp_dir.clone())
+            .await
+            .map_err(|error| SnapshotError::Installation(error.to_string()))?;
+
+        archive_snapshot_dir(&temp_dir, output_path).await?;
+
+        Ok(SnapshotInfo {
+            log_count: Some(info.log_count),
+            latest_block: info.latest_block,
+            tables: 3,
+        })
+    }
 }
 
 #[async_trait::async_trait]
@@ -260,7 +320,7 @@ where
         // Update database using the imported logs database
         self.db
             .clone()
-            .import_logs_db(temp_dir.to_path_buf())
+            .import_logs_snapshot(temp_dir.to_path_buf())
             .await
             .map_err(|e| SnapshotError::Installation(e.to_string()))?;
 
@@ -268,11 +328,53 @@ where
     }
 }
 
+async fn archive_snapshot_dir(source_dir: &Path, output_path: &Path) -> SnapshotResult<()> {
+    let sql_path = source_dir.join(SNAPSHOT_SQL_FILE);
+    if !sql_path.is_file() {
+        return Err(SnapshotError::Configuration(format!(
+            "snapshot export did not produce {} in {}",
+            SNAPSHOT_SQL_FILE,
+            source_dir.display()
+        )));
+    }
+
+    let output_file = File::create(output_path).await.map_err(SnapshotError::Io)?;
+    let encoder = XzEncoder::new(output_file);
+    let mut builder = Builder::new(encoder);
+    builder.append_path_with_name(&sql_path, SNAPSHOT_SQL_FILE).await?;
+    let mut encoder = builder.into_inner().await?;
+    encoder.shutdown().await.map_err(SnapshotError::Io)?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    use blokli_db::{api::logs::BlokliDbLogOperations, db::BlokliDb, snapshot::SNAPSHOT_SQL_FILE};
+    use hopr_types::{
+        crypto::types::Hash,
+        primitive::prelude::{DateTime, SerializableLog},
+    };
     use tempfile::TempDir;
 
     use super::{test_utils::*, *};
+    use crate::snapshot::SnapshotInfo;
+
+    fn sample_log(block_number: u64, tx_index: u64, log_index: u64) -> SerializableLog {
+        SerializableLog {
+            block_number,
+            tx_index,
+            log_index,
+            block_hash: [block_number as u8; 32].into(),
+            tx_hash: [tx_index as u8; 32].into(),
+            address: [log_index as u8; 20].into(),
+            topics: vec![Hash::create(&[b"topic"]).into()],
+            data: vec![9, 8, 7].into(),
+            removed: false,
+            processed: Some(true),
+            processed_at: Some(DateTime::from_timestamp_millis(1_700_000_000_000).expect("valid timestamp")),
+            checksum: Some("0x1111111111111111111111111111111111111111111111111111111111111111".to_string()),
+        }
+    }
 
     #[tokio::test]
     async fn test_snapshot_manager_integration() {
@@ -294,8 +396,7 @@ mod tests {
         let info = result.unwrap();
         assert_eq!(info.log_count, Some(2));
 
-        // Verify the SQL dump file was installed
-        assert!(data_dir.join("hopr_logs.sql").exists());
+        assert!(data_dir.join(SNAPSHOT_SQL_FILE).exists());
     }
 
     #[tokio::test]
@@ -321,7 +422,7 @@ mod tests {
         assert_eq!(info.log_count, Some(2));
 
         // Verify the SQL dump file exists in the data directory
-        assert!(data_dir.join("hopr_logs.sql").exists());
+        assert!(data_dir.join(SNAPSHOT_SQL_FILE).exists());
 
         // Also test individual component access
         let downloader = manager.workflow.downloader;
@@ -329,5 +430,61 @@ mod tests {
         let download_result = downloader.download_snapshot(&file_url, &downloaded_archive).await;
         assert!(download_result.is_ok(), "file:// URL download should succeed");
         assert!(downloaded_archive.exists(), "Downloaded archive should exist");
+    }
+
+    #[tokio::test]
+    async fn test_snapshot_manager_export_then_import_round_trip() {
+        let source_db = BlokliDb::new_in_memory().await.expect("source db");
+        source_db
+            .ensure_logs_origin(vec![(sample_log(10, 1, 0).address, Hash::create(&[b"topic"]))])
+            .await
+            .expect("logs origin");
+        source_db.store_log(sample_log(10, 1, 0)).await.expect("first log");
+        source_db.store_log(sample_log(11, 1, 1)).await.expect("second log");
+        source_db.update_logs_checksums().await.expect("checksums");
+
+        let temp_dir = TempDir::new().expect("tempdir");
+        let archive_path = temp_dir.path().join("logs-snapshot.tar.xz");
+
+        let exporter = SnapshotManager::with_db(source_db.clone()).expect("snapshot manager");
+        let exported = exporter.export_snapshot(&archive_path).await.expect("export snapshot");
+
+        assert!(archive_path.exists(), "snapshot archive should exist");
+
+        let restored_db = BlokliDb::new_in_memory().await.expect("restored db");
+        let importer = SnapshotManager::with_db(restored_db.clone()).expect("snapshot manager");
+        let restored = importer
+            .download_and_setup_snapshot(&format!("file://{}", archive_path.display()), temp_dir.path())
+            .await
+            .expect("import snapshot");
+
+        assert_eq!(
+            exported,
+            SnapshotInfo {
+                log_count: Some(2),
+                latest_block: Some(11),
+                tables: 3,
+            }
+        );
+        assert_eq!(exported, restored);
+        assert_eq!(restored_db.get_logs_count(None, None).await.expect("logs count"), 2);
+        assert_eq!(
+            restored_db
+                .get_logs_block_numbers(None, None, Some(true))
+                .await
+                .expect("processed block numbers"),
+            vec![10, 11]
+        );
+
+        let restored_logs = restored_db.get_logs(None, None).await.expect("restored logs");
+        assert_eq!(restored_logs.len(), 2);
+        for log in restored_logs {
+            assert_eq!(log.processed, Some(true), "restored log should keep processed state");
+            assert!(
+                log.processed_at.is_some(),
+                "restored log should keep processed timestamp"
+            );
+            assert!(log.checksum.is_some(), "restored log should keep checksum");
+        }
     }
 }
