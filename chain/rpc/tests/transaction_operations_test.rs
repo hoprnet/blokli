@@ -11,7 +11,6 @@ use common::{
     wait_until_tx,
 };
 use hex_literal::hex;
-use hopr_async_runtime::prelude::sleep;
 use hopr_bindings::exports::alloy::{
     network::Ethereum,
     primitives::U256,
@@ -24,6 +23,7 @@ use hopr_types::{
     primitive::prelude::{Address, XDaiBalance},
 };
 use lazy_static::lazy_static;
+use tokio::time::sleep;
 
 lazy_static! {
     static ref RANDY: Address = hex!("762614a5ed652457a2f1cdb8006380530c26ae6a").into();

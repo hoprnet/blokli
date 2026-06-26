@@ -17,7 +17,7 @@ runtime-tokio = [
   "blokli-chain-indexer/runtime-tokio",
   "blokli-db/runtime-tokio",
 ]
-telemetry = ["dep:hopr-metrics", "dep:lazy_static"]
+telemetry = ["dep:lazy_static", "hopr-types/telemetry"]
 
 [dependencies]
 # Async runtime
@@ -82,8 +82,7 @@ tracing-subscriber = { workspace = true, features = ["json"] }
 clap = { workspace = true }
 
 # Metrics
-hopr-metrics = { workspace = true, optional = true }
-lazy_static  = { workspace = true, optional = true }
+lazy_static = { workspace = true, optional = true }
 
 [dev-dependencies]
 base64ct            = { workspace = true, features = ["alloc"] }
