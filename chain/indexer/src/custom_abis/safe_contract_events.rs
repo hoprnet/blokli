@@ -3,8 +3,9 @@
 //! Event definitions here are derived from Safe's official Smart Account contract
 //! documentation and ABI surface, reduced to the subset currently indexed by Blokli:
 //! `SafeSetup`, `AddedOwner`, `RemovedOwner`, `ChangedThreshold`,
-//! `ExecutionSuccess`, `ExecutionFailure`, `ExecutionFromModuleSuccess`,
-//! and `ExecutionFromModuleFailure`.
+//! `ExecutionSuccess`, `ExecutionFailure`, and `ExecutionFromModuleFailure`.
+//! `ExecutionFromModuleSuccess` is defined in the ABI for decoding completeness but is
+//! not subscribed to in the topic filter; its events are silently ignored by the indexer.
 //!
 //! Reference docs:
 //! - https://docs.safe.global/reference-smart-account/events/SafeSetup

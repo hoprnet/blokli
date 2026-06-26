@@ -72,7 +72,7 @@ mod integration_tests {
     use anyhow::anyhow;
     use async_trait::async_trait;
     use blokli_chain_indexer::handlers::ContractEventHandlers;
-    use blokli_chain_rpc::HoprIndexerRpcOperations;
+    use blokli_chain_rpc::{HoprIndexerRpcOperations, errors::RpcError};
     use blokli_chain_types::{
         AlloyAddressExt, ContractAddresses,
         chain_events::{ChainEventType, SignificantChainEvent},
@@ -153,8 +153,8 @@ mod integration_tests {
             Ok(HoprBalance::zero())
         }
 
-        async fn get_transaction_bytes(&self, _tx_hash: Hash) -> blokli_chain_rpc::errors::Result<Vec<u8>> {
-            unreachable!("get_transaction_bytes not used in integration tests")
+        async fn get_transaction_bytes(&self, tx_hash: Hash) -> blokli_chain_rpc::errors::Result<Vec<u8>> {
+            Err(RpcError::TransactionNotFound(tx_hash))
         }
 
         async fn get_xdai_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {

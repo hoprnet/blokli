@@ -745,12 +745,12 @@ type RedeemTicketDetails {
 }
 
 """
-Aggregated redeemed ticket statistics
+Aggregated ticket redemption statistics, covering both successful redemptions and failed attempts.
 """
 type RedeemedStats {
-  "Total redeemed amount from matching ticket redemption events"
+  "Total amount from matching successful ticket redemption events"
   redeemedAmount: TokenValueString!
-  "Total number of matching ticket redemption events"
+  "Total number of matching successful ticket redemption events"
   redemptionCount: UInt64!
   "Total amount from matching failed ticket redemption attempts"
   rejectedAmount: TokenValueString!
