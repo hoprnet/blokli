@@ -75,6 +75,12 @@ pub struct QueryVersion {
 
 #[derive(cynic::QueryFragment, Debug)]
 #[cynic(graphql_type = "QueryRoot")]
+pub struct QueryHealth {
+    pub health: String,
+}
+
+#[derive(cynic::QueryFragment, Debug)]
+#[cynic(graphql_type = "QueryRoot")]
 pub struct QueryCompatibility {
     pub compatibility: Compatibility,
 }
@@ -85,10 +91,4 @@ pub struct Compatibility {
     pub api_version: String,
     pub supported_client_versions: String,
     pub features: Vec<String>,
-}
-
-#[derive(cynic::QueryFragment, Debug)]
-#[cynic(graphql_type = "QueryRoot")]
-pub struct QueryHealth {
-    pub health: String,
 }

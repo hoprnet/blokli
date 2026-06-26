@@ -32,11 +32,9 @@ reqwest = { workspace = true, features = [
   "stream",
   "zstd",
 ] }
-semver = { workspace = true }
 serde = { workspace = true, optional = true }
 serde_json = { workspace = true }
 smart-default = { workspace = true }
-strum = { workspace = true }
 thiserror = { workspace = true }
 tracing = { workspace = true, features = ["release_max_level_debug"] }
 url = { workspace = true }

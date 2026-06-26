@@ -1,8 +1,8 @@
 //! GraphQL schema builder for blokli API
 
-use std::sync::Arc;
+use std::{collections::HashMap, future::Future, pin::Pin, sync::Arc};
 
-use async_graphql::Schema;
+use async_graphql::{ObjectType, Schema, SubscriptionType};
 use blokli_chain_api::{
     DefaultHttpRequestor, rpc_adapter::RpcAdapter, transaction_executor::RawTransactionExecutor,
     transaction_store::TransactionStore,
@@ -10,6 +10,7 @@ use blokli_chain_api::{
 use blokli_chain_indexer::IndexerState;
 use blokli_chain_rpc::{rpc::RpcOperations, transport::HttpRequestor};
 use blokli_chain_types::ContractAddresses;
+use futures::Stream;
 use sea_orm::DatabaseConnection;
 
 use crate::{mutation::MutationRoot, query::QueryRoot, readiness::ReadinessChecker, subscription::SubscriptionRoot};
@@ -34,9 +35,111 @@ pub struct ChainId(pub u64);
 #[derive(Debug, Clone)]
 pub struct NetworkName(pub String);
 
-/// Wrapper type describing whether the server indexes Safe events
-#[derive(Debug, Clone, Copy)]
-pub struct SafeEventIndexingEnabled(pub bool);
+/// Build the registry of all supported versioned schemas.
+///
+/// Each entry maps a schema version number to its type-erased schema handle.
+/// Currently only v1 exists; when a breaking change ships, add v<n+1> here
+/// alongside v1 so old clients continue to work during the transition window.
+#[allow(clippy::too_many_arguments)]
+pub fn build_version_registry<R: HttpRequestor + 'static + Clone>(
+    db: DatabaseConnection,
+    chain_id: u64,
+    network: String,
+    contract_addresses: ContractAddresses,
+    expected_block_time: u64,
+    finality: u16,
+    gas_multiplier: f64,
+    indexer_state: IndexerState,
+    transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
+    transaction_store: Arc<TransactionStore>,
+    rpc_operations: Arc<RpcOperations<R>>,
+    readiness_checker: ReadinessChecker,
+    limits: Option<(usize, usize)>,
+) -> HashMap<u32, Arc<dyn ErasedSchema>> {
+    let v1: Arc<dyn ErasedSchema> = Arc::new(build_schema(
+        db,
+        chain_id,
+        network,
+        contract_addresses,
+        expected_block_time,
+        finality,
+        gas_multiplier,
+        indexer_state,
+        transaction_executor,
+        transaction_store,
+        rpc_operations,
+        readiness_checker,
+        limits,
+    ));
+
+    // -- v2 (uncomment when the first breaking change ships) ------------------
+    //
+    // let v2: Arc<dyn ErasedSchema> = Arc::new(build_schema_v2(
+    //     db,
+    //     chain_id,
+    //     network,
+    //     contract_addresses,
+    //     expected_block_time,
+    //     finality,
+    //     gas_multiplier,
+    //     indexer_state,
+    //     transaction_executor,
+    //     transaction_store,
+    //     rpc_operations,
+    //     readiness_checker,
+    //     limits,
+    // ));
+    //
+    // Also bump LATEST_SCHEMA_VERSION to 2.
+    // -------------------------------------------------------------------------
+
+    HashMap::from([(1, v1)])
+}
+
+/// The latest supported schema version. Stored in `AppState` for use by handlers (e.g. response headers,
+/// introspection). Clients that omit `X-Blokli-Schema-Version` are always routed to v1, not this value.
+pub const LATEST_SCHEMA_VERSION: u32 = 1;
+
+/// Type-erased GraphQL schema handle.
+///
+/// Each supported schema version wraps its typed `Schema<Q, M, S>` behind this trait so
+/// they can all live in the same `HashMap` regardless of their concrete root types.
+pub trait ErasedSchema: Send + Sync {
+    fn execute<'a>(
+        &'a self,
+        request: async_graphql::Request,
+    ) -> Pin<Box<dyn Future<Output = async_graphql::Response> + Send + 'a>>;
+    fn execute_stream(
+        &self,
+        request: async_graphql::Request,
+    ) -> Pin<Box<dyn Stream<Item = async_graphql::Response> + Send>>;
+    fn sdl(&self) -> String;
+}
+
+impl<Q, M, S> ErasedSchema for Schema<Q, M, S>
+where
+    Q: ObjectType + 'static,
+    M: ObjectType + 'static,
+    S: SubscriptionType + 'static,
+{
+    fn execute<'a>(
+        &'a self,
+        request: async_graphql::Request,
+    ) -> Pin<Box<dyn Future<Output = async_graphql::Response> + Send + 'a>> {
+        Box::pin(Schema::execute(self, request))
+    }
+
+    fn execute_stream(
+        &self,
+        request: async_graphql::Request,
+    ) -> Pin<Box<dyn Stream<Item = async_graphql::Response> + Send>> {
+        Box::pin(Schema::execute_stream(self, request))
+    }
+
+    fn sdl(&self) -> String {
+        Schema::sdl(self)
+    }
+}
 
 /// Build the async-graphql schema with database connection, chain ID, network, indexer state, and transaction
 /// components
@@ -70,7 +173,6 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
     expected_block_time: u64,
     finality: u16,
     gas_multiplier: f64,
-    indexes_safe_events: bool,
     indexer_state: IndexerState,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
@@ -86,7 +188,6 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
         .data(ExpectedBlockTime(expected_block_time))
         .data(Finality(finality))
         .data(GasMultiplier(gas_multiplier))
-        .data(SafeEventIndexingEnabled(indexes_safe_events))
         .data(indexer_state)
         .data(transaction_executor)
         .data(transaction_store)
@@ -100,6 +201,55 @@ pub fn build_schema<R: HttpRequestor + 'static + Clone>(
     builder.finish()
 }
 
+// ---------------------------------------------------------------------------
+// V2 schema builder (commented out — uncomment when the first breaking change ships)
+//
+// Steps to activate:
+//   1. Add/move breaking resolvers to `query_v2::QueryRootV2`.
+//   2. Uncomment this function.
+//   3. Uncomment the v2 registration block in `build_version_registry` below.
+//   4. Bump `LATEST_SCHEMA_VERSION` to 2.
+//   5. Update `client/src/client/mod.rs` (`SCHEMA_VERSION`) and regenerate client types.
+//   6. Update `UPDATE.md` if the process differed.
+// ---------------------------------------------------------------------------
+//
+// #[allow(clippy::too_many_arguments)]
+// pub fn build_schema_v2<R: HttpRequestor + 'static + Clone>(
+//     db: DatabaseConnection,
+//     chain_id: u64,
+//     network: String,
+//     contract_addresses: ContractAddresses,
+//     expected_block_time: u64,
+//     finality: u16,
+//     gas_multiplier: f64,
+//     indexer_state: IndexerState,
+//     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
+//     transaction_store: Arc<TransactionStore>,
+//     rpc_operations: Arc<RpcOperations<R>>,
+//     readiness_checker: ReadinessChecker,
+//     limits: Option<(usize, usize)>,
+// ) -> Schema<query_v2::MergedQueryV2, MutationRoot, SubscriptionRoot> {
+//     let mut builder = Schema::build(query_v2::MergedQueryV2::default(), MutationRoot, SubscriptionRoot)
+//         .data(db)
+//         .data(ChainId(chain_id))
+//         .data(NetworkName(network))
+//         .data(contract_addresses)
+//         .data(ExpectedBlockTime(expected_block_time))
+//         .data(Finality(finality))
+//         .data(GasMultiplier(gas_multiplier))
+//         .data(indexer_state)
+//         .data(transaction_executor)
+//         .data(transaction_store)
+//         .data(rpc_operations)
+//         .data(readiness_checker);
+//
+//     if let Some((max_depth, max_complexity)) = limits {
+//         builder = builder.limit_depth(max_depth).limit_complexity(max_complexity);
+//     }
+//
+//     builder.finish()
+// }
+
 /// Export the GraphQL schema to SDL (Schema Definition Language) format
 ///
 /// This generates a string representation of the GraphQL schema that can be used
@@ -109,7 +259,6 @@ pub fn export_schema_sdl<R: HttpRequestor + 'static + Clone>(
     db: DatabaseConnection,
     chain_id: u64,
     contract_addresses: ContractAddresses,
-    indexes_safe_events: bool,
     indexer_state: IndexerState,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
@@ -124,7 +273,6 @@ pub fn export_schema_sdl<R: HttpRequestor + 'static + Clone>(
         5,   // Placeholder expected block time
         8,   // Placeholder finality
         1.0, // Placeholder gas multiplier
-        indexes_safe_events,
         indexer_state,
         transaction_executor,
         transaction_store,

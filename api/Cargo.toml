@@ -42,7 +42,6 @@ async-graphql = { workspace = true }
 # Serialization
 serde      = { workspace = true }
 serde_json = { workspace = true }
-strum      = { workspace = true }
 
 # Error handling
 anyhow    = { workspace = true }
