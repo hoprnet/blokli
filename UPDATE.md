@@ -1,8 +1,8 @@
 # Query Update Guide
 
 Blokli uses **header-based schema versioning** (`X-Blokli-Schema-Version: N`) to maintain backward compatibility across server and client
-deployments. Each schema version is a complete GraphQL schema; unchanged resolvers live in `SharedQuery` / `SharedSubscription` and are
-composed into every version via `#[MergedObject]` / `#[MergedSubscription]`.
+deployments. Each schema version is a complete GraphQL schema; unchanged resolvers live in `QueryRoot` / `SubscriptionRoot` and are composed
+into every version via `#[MergedObject]` / `#[MergedSubscription]`.
 
 Clients that omit the header are served **v1** (the original contract). Updated clients send the version they were built for. Old and new
 clients can safely coexist against the same server.
@@ -30,7 +30,7 @@ A change is non-breaking when **existing clients continue to work unchanged**:
 
 ### Steps
 
-1. Implement the change directly in the existing resolver or in `SharedQuery` / `SharedSubscription`.
+1. Implement the change directly in the existing resolver or in `QueryRoot` / `SubscriptionRoot`.
 2. Run `just quick && just test`.
 3. Optionally update `client/` types if the client needs to use the new field.
 
@@ -58,7 +58,7 @@ A change is breaking when **existing clients would receive a validation error or
 
    ```rust
    // Only implement the resolver(s) that change.
-   // Unchanged resolvers stay in SharedQuery and are composed in automatically.
+   // Unchanged resolvers stay in QueryRoot and are composed in automatically.
    #[derive(Default)]
    pub struct QueryRootV2;
 
@@ -75,10 +75,10 @@ A change is breaking when **existing clients would receive a validation error or
    ```rust
    // api/src/query_v2.rs (or schema_v2.rs)
    #[derive(MergedObject, Default)]
-   pub struct MergedQueryV2(QueryRootV2, SharedQuery);
+   pub struct MergedQueryV2(QueryRootV2, QueryRoot);
    ```
 
-   `SharedQuery` contains every query that was NOT changed between versions.
+   `QueryRoot` contains every query that was NOT changed between versions.
 
 4. **Register the new schema version** in `build_version_registry` (`api/src/schema.rs`):
 
@@ -103,7 +103,7 @@ A change is breaking when **existing clients would receive a validation error or
 1. **Bump `SCHEMA_VERSION`** in `client/src/client/mod.rs`:
 
    ```rust
-   const SCHEMA_VERSION: u32 = 2;
+   pub const SCHEMA_VERSION: u32 = 2;
    ```
 
    The client sends this in every request header. Old clients keep sending `1` and continue to be served by the v1 schema.
@@ -119,7 +119,7 @@ A change is breaking when **existing clients would receive a validation error or
 Same principle as section 2 but for subscription roots.
 
 1. Create the new subscription resolver in a versioned module.
-2. Compose with `SharedSubscription` using `#[MergedSubscription]`.
+2. Compose with `SubscriptionRoot` using `#[MergedSubscription]`.
 3. Build a new `Schema<MergedQueryVN, MutationRoot, MergedSubscriptionVN>` in the registry.
 4. Bump `LATEST_SCHEMA_VERSION` and the client's `SCHEMA_VERSION`.
 

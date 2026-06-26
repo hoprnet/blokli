@@ -29,7 +29,7 @@ use crate::{
 const MIN_RECONNECTION_DELAY: Duration = Duration::from_millis(1);
 
 /// Schema version sent with every request via `X-Blokli-Schema-Version`.
-const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 1;
 
 /// DNS resolution override for the Blokli base URL host.
 ///
@@ -113,6 +113,8 @@ impl SubscriptionStreamState {
             .header("Accept", "text/event-stream")
             .map_err(sse_err)?
             .header("Content-Type", "application/json")
+            .map_err(sse_err)?
+            .header("X-Blokli-Schema-Version", &SCHEMA_VERSION.to_string())
             .map_err(sse_err)?
             .method("POST".into())
             .body(self.query.clone())

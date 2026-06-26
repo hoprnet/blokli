@@ -96,8 +96,8 @@ pub fn build_version_registry<R: HttpRequestor + 'static + Clone>(
     HashMap::from([(1, v1)])
 }
 
-/// The latest supported schema version. Used for introspection and exposed in health responses.
-/// Clients that omit `X-Blokli-Schema-Version` are always routed to v1, not this value.
+/// The latest supported schema version. Stored in `AppState` for use by handlers (e.g. response headers,
+/// introspection). Clients that omit `X-Blokli-Schema-Version` are always routed to v1, not this value.
 pub const LATEST_SCHEMA_VERSION: u32 = 1;
 
 /// Type-erased GraphQL schema handle.

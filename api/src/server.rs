@@ -498,7 +498,7 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
         return Sse::new(sse_stream).into_response();
     }
 
-    // Start timer for request duration. Intentionnaly after the subscription check, as timing a
+    // Start timer for request duration. Intentionally after the subscription check, as timing a
     // subscription is not meaningful - it's a long-lived connection, not a single request.
     let start_time = Instant::now();
 
