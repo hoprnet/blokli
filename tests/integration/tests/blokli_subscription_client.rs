@@ -352,7 +352,7 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
 
         match tokio::time::timeout(wait_time, stream.next()).await {
             Ok(Some(Ok(output))) => {
-                tracing::info!("Received ticket parameters subscription event: {:?}", output);
+                tracing::info!(output = ?output, "received ticket parameters subscription event");
                 latest_output = Some(output);
             }
             Ok(Some(Err(error))) => return Err(error.into()),
@@ -363,11 +363,7 @@ async fn subscribe_ticket_params(#[future(awt)] fixture: IntegrationFixture) -> 
 
     let output = latest_output.ok_or_else(|| anyhow!("no ticket parameters received from subscription"))?;
 
-    tracing::info!(
-        "Received ticket parameters update: {:?}, expected: {:?}",
-        output,
-        new_win_prob
-    );
+    tracing::info!(output = ?output, new_win_prob, "received ticket parameters update");
 
     assert!((output.min_ticket_winning_probability - new_win_prob).abs() < EPSILON);
 
