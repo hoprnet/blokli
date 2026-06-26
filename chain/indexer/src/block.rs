@@ -16,15 +16,19 @@ use blokli_db::{
     safe_contracts::BlokliDbSafeContractOperations,
 };
 use blokli_db_entity::{channel_state, prelude::ChannelState};
-use futures::{StreamExt, channel::mpsc::channel, future::AbortHandle};
+use futures::{
+    StreamExt,
+    channel::mpsc::channel,
+    future::{AbortHandle, abortable},
+};
 use hopr_bindings::{
     exports::alloy::{primitives::Address as AlloyAddress, rpc::types::Filter, sol_types::SolEvent},
     hopr_token::HoprToken::{Approval, Transfer},
 };
 #[cfg(all(feature = "telemetry", not(test)))]
-use hopr_metrics::{MultiGauge, SimpleGauge};
-#[cfg(all(feature = "telemetry", not(test)))]
 use hopr_types::primitive::prelude::ToHex;
+#[cfg(all(feature = "telemetry", not(test)))]
+use hopr_types::telemetry::{MultiGauge, SimpleGauge};
 use hopr_types::{
     crypto::types::Hash,
     primitive::prelude::{Address, SerializableLog},
@@ -340,7 +344,7 @@ where
         info!(next_block_to_process, "Indexer start point");
 
         let indexer_state = self.indexer_state.clone();
-        let indexing_abort_handle = hopr_async_runtime::spawn_as_abortable!(async move {
+        let (indexing_process, indexing_abort_handle) = abortable(async move {
             // Update the chain head once again
             debug!("Updating chain head at indexer startup");
             let historical_sync_head = Self::update_chain_head(&rpc, chain_head.clone()).await;
@@ -463,6 +467,7 @@ where
                 break;
             }
         });
+        let _indexing_task = tokio::spawn(indexing_process);
 
         if rx.next().await.is_some() {
             Ok(indexing_abort_handle)
@@ -483,8 +488,14 @@ where
         if fast_sync_configured && index_empty && !logs_db_has_data && self.cfg.enable_logs_snapshot {
             info!("Logs database is empty, attempting to download logs snapshot...");
 
-            let snapshot_info = self.download_snapshot().await?;
-            info!(?snapshot_info, "Logs snapshot downloaded successfully");
+            match self.download_snapshot().await {
+                Ok(snapshot_info) => {
+                    info!(snapshot_info = ?snapshot_info, "logs snapshot downloaded successfully");
+                }
+                Err(e) => {
+                    error!(error = %e, "failed to download logs snapshot, continuing with regular sync");
+                }
+            }
         }
 
         // Initialize channel closure grace period from contract
@@ -495,13 +506,10 @@ where
                     let seconds = period.as_secs();
                     match self.db.set_channel_closure_grace_period(None, seconds).await {
                         Ok(_) => {
-                            info!("Channel closure grace period initialized: {} seconds", seconds);
+                            info!(seconds, "channel closure grace period initialized");
                         }
                         Err(e) => {
-                            warn!(
-                                "Failed to store channel closure grace period in database: {}. Continuing startup.",
-                                e
-                            );
+                            warn!(error = %e, "failed to store channel closure grace period, continuing startup");
                         }
                     }
                 }
@@ -1428,8 +1436,10 @@ mod tests {
         let mut rpc = MockHoprIndexerOps::new();
         let db = BlokliDb::new_in_memory().await?;
         let indexer_state = IndexerState::default();
-        let mut cfg = IndexerConfig::default();
-        cfg.enable_safe_indexing = true;
+        let cfg = IndexerConfig {
+            enable_safe_indexing: true,
+            ..Default::default()
+        };
 
         let primary_address = Address::new(b"my address 123456789");
         let primary_topic = B256::from_slice(Hash::create(&[b"my topic"]).as_ref());

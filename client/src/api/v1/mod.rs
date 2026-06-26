@@ -288,10 +288,13 @@ pub trait BlokliQueryClient {
     async fn query_chain_info(&self) -> Result<types::ChainInfo>;
     /// Queries the version of the Blokli API.
     async fn query_version(&self) -> Result<String>;
-    /// Queries the client compatibility contract exposed by the Blokli API.
-    async fn query_compatibility(&self) -> Result<types::Compatibility>;
     /// Queries the health of the Blokli server.
     async fn query_health(&self) -> Result<String>;
+    /// Queries server compatibility information.
+    ///
+    /// Legacy endpoint. `supported_client_versions` is always `"*"` on current servers,
+    /// meaning any client version is accepted.
+    async fn query_compatibility(&self) -> Result<types::Compatibility>;
 }
 
 /// Trait defining subscriptions to Blokli API.

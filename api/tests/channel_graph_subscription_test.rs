@@ -16,7 +16,6 @@ use std::{
     time::{Duration, UNIX_EPOCH},
 };
 
-use async_graphql::Schema;
 use blokli_api_types::{Account, Channel, ChannelStatus as ApiChannelStatus, TokenValueString, UInt64};
 use blokli_chain_indexer::state::IndexerEvent;
 use blokli_db::{
@@ -198,7 +197,7 @@ async fn test_opened_channel_graph_subscription_emits_initial_entry() {
     update_watermark(&db, 1000, 0, 0).await;
 
     // Create GraphQL schema
-    let (schema, indexer_state) = common::create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     // Execute subscription query with new schema structure
     let query = r#"
@@ -294,7 +293,7 @@ async fn test_opened_channel_graph_subscription_emits_multiple_entries() {
     // Update watermark to include all test data
     update_watermark(&db, 1000, 0, 0).await;
 
-    let (schema, indexer_state) = common::create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {

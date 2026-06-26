@@ -198,14 +198,14 @@ impl GraphQlQueries {
         QueryVersion::build(())
     }
 
-    /// `Compatibility` GraphQL query.
-    pub fn query_compatibility() -> cynic::Operation<QueryCompatibility, ()> {
-        QueryCompatibility::build(())
-    }
-
     /// `Health` GraphQL query.
     pub fn query_health() -> cynic::Operation<QueryHealth, ()> {
         QueryHealth::build(())
+    }
+
+    /// `Compatibility` GraphQL query.
+    pub fn query_compatibility() -> cynic::Operation<QueryCompatibility, ()> {
+        QueryCompatibility::build(())
     }
 }
 
@@ -361,15 +361,17 @@ impl BlokliQueryClient for BlokliClient {
     }
 
     #[tracing::instrument(level = "debug", skip(self))]
-    async fn query_compatibility(&self) -> Result<Compatibility> {
-        self.query_compatibility_uncached().await
-    }
-
-    #[tracing::instrument(level = "debug", skip(self))]
     async fn query_health(&self) -> Result<String> {
         let resp = self.build_query(GraphQlQueries::query_health())?.await?;
 
         response_to_data(resp).map(|data| data.health)
+    }
+
+    #[tracing::instrument(level = "debug", skip(self))]
+    async fn query_compatibility(&self) -> Result<Compatibility> {
+        let resp = self.build_query(GraphQlQueries::query_compatibility())?.await?;
+
+        response_to_data(resp).map(|data| data.compatibility)
     }
 
     #[tracing::instrument(level = "debug", skip(self), fields(?owner_address))]

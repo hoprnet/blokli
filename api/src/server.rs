@@ -1,9 +1,9 @@
 //! Axum HTTP server configuration with GraphQL support
 
-use std::{pin::Pin, sync::Arc, time::Instant};
+use std::{collections::HashMap, pin::Pin, sync::Arc, time::Instant};
 
 use async_graphql::{
-    Request, Schema,
+    Request,
     http::GraphiQLSource,
     parser::types::{DocumentOperations, ExecutableDocument, OperationDefinition, OperationType, Selection},
 };
@@ -16,7 +16,7 @@ use axum::{
         Html, IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
     },
-    routing::get,
+    routing::{get, post},
 };
 use blokli_chain_api::{
     DefaultHttpRequestor, rpc_adapter::RpcAdapter, transaction_executor::RawTransactionExecutor,
@@ -26,6 +26,8 @@ use blokli_chain_indexer::IndexerState;
 use blokli_chain_rpc::{rpc::RpcOperations, transport::ReqwestClient};
 use blokli_db_entity::prelude::ChainInfo;
 use futures::stream::{Stream, StreamExt};
+#[cfg(feature = "telemetry")]
+use hopr_types::telemetry as hopr_metrics;
 use sea_orm::{DatabaseConnection, EntityTrait};
 use serde::Serialize;
 use serde_json::Value;
@@ -44,11 +46,8 @@ use crate::{
     config::{ApiConfig, HealthConfig},
     errors::ApiResult,
     metrics,
-    mutation::MutationRoot,
-    query::QueryRoot,
     readiness::{ReadinessChecker, ReadinessState},
-    schema::build_schema,
-    subscription::SubscriptionRoot,
+    schema::{ErasedSchema, LATEST_SCHEMA_VERSION, build_version_registry},
 };
 
 /// Health check response for liveness probe
@@ -207,11 +206,10 @@ fn selected_operation_matches(
 
 /// Return `true` only for the narrow pre-ready bypass case.
 ///
-/// The `/graphql` readiness gate has only three pre-ready exceptions while the
+/// The `/graphql` readiness gate has two pre-ready exceptions while the
 /// indexer is still catching up:
 /// - introspection queries, handled separately by `is_introspection_query(...)` so tools such as GraphQL Playground can
 ///   still inspect the schema,
-/// - the `compatibility` query, validated separately so clients can negotiate the API contract before readiness,
 /// - the `health` subscription, validated here so clients can wait for the API to become ready without polling
 ///   `/readyz` out-of-band.
 ///
@@ -229,16 +227,6 @@ fn selected_operation_is_health_subscription(query: &str, operation_name: Option
             && matches!(
                 operation.selection_set.node.items.as_slice(),
                 [selection] if matches!(&selection.node, Selection::Field(field) if field.node.name.node == "health")
-            )
-    })
-}
-
-fn selected_operation_is_compatibility_query(query: &str, operation_name: Option<&str>) -> bool {
-    selected_operation_matches(query, operation_name, |operation| {
-        operation.ty == OperationType::Query
-            && matches!(
-                operation.selection_set.node.items.as_slice(),
-                [selection] if matches!(&selection.node, Selection::Field(field) if field.node.name.node == "compatibility")
             )
     })
 }
@@ -263,9 +251,11 @@ fn is_introspection_query(query: &str, operation_name: Option<&str>) -> bool {
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
-    pub schema: Arc<Schema<QueryRoot, MutationRoot, SubscriptionRoot>>,
+    /// Versioned schemas keyed by `X-Blokli-Schema-Version` header value.
+    pub schemas: Arc<HashMap<u32, Arc<dyn ErasedSchema>>>,
+    pub latest_schema_version: u32,
     /// Schema without depth/complexity limits, used only for introspection queries.
-    pub introspection_schema: Arc<Schema<QueryRoot, MutationRoot, SubscriptionRoot>>,
+    pub introspection_schema: Arc<dyn ErasedSchema>,
     pub playground_enabled: bool,
     pub db: DatabaseConnection,
     pub rpc_operations: Arc<RpcOperations<ReqwestClient>>,
@@ -282,7 +272,6 @@ pub async fn build_app(
     config: ApiConfig,
     expected_block_time: u64,
     finality: u16,
-    indexes_safe_events: bool,
     indexer_state: IndexerState,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
@@ -290,7 +279,7 @@ pub async fn build_app(
 ) -> ApiResult<Router> {
     let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), config.health.clone());
 
-    let schema = build_schema(
+    let schemas = build_version_registry(
         db.clone(),
         config.chain_id,
         network.clone(),
@@ -298,7 +287,6 @@ pub async fn build_app(
         expected_block_time,
         finality,
         config.gas_multiplier,
-        indexes_safe_events,
         indexer_state.clone(),
         transaction_executor.clone(),
         transaction_store.clone(),
@@ -307,7 +295,7 @@ pub async fn build_app(
         Some((config.max_query_depth, config.max_query_complexity)),
     );
 
-    let introspection_schema = build_schema(
+    let introspection_schema: Arc<dyn ErasedSchema> = Arc::new(crate::schema::build_schema(
         db.clone(),
         config.chain_id,
         network,
@@ -315,21 +303,21 @@ pub async fn build_app(
         expected_block_time,
         finality,
         config.gas_multiplier,
-        indexes_safe_events,
         indexer_state,
         transaction_executor,
         transaction_store,
         rpc_operations.clone(),
         readiness_checker.clone(),
         None,
-    );
+    ));
 
     // Start periodic readiness updates in background
     readiness_checker.clone().start_periodic_updates();
 
     let app_state = AppState {
-        schema: Arc::new(schema),
-        introspection_schema: Arc::new(introspection_schema),
+        schemas: Arc::new(schemas),
+        latest_schema_version: LATEST_SCHEMA_VERSION,
+        introspection_schema,
         playground_enabled: config.playground_enabled,
         db,
         rpc_operations,
@@ -381,6 +369,16 @@ pub async fn build_app(
         .with_state(app_state))
 }
 
+/// Build a minimal router from a pre-constructed `AppState`.
+///
+/// Intended for integration tests: lets tests inject custom schemas directly without
+/// going through the full `build_app` parameter list (Anvil, contracts, etc.).
+pub fn build_test_router(app_state: AppState) -> Router {
+    Router::new()
+        .route("/graphql", post(graphql_handler))
+        .with_state(app_state)
+}
+
 /// GraphQL query/mutation/subscription handler
 async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json(request): Json<Value>) -> Response {
     // Parse the GraphQL request
@@ -414,9 +412,8 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
     // Check if the request is a subscription
     let is_subscription = request.query.trim_start().starts_with("subscription");
 
-    // Check if the query should be allowed before readiness. Only allowed if it's a health subscription
-    let allows_pre_ready = selected_operation_is_health_subscription(&request.query, request.operation_name.as_deref())
-        || selected_operation_is_compatibility_query(&request.query, request.operation_name.as_deref());
+    // Check if the query should be allowed before readiness. Only allowed if it's a health subscription.
+    let allows_pre_ready = selected_operation_is_health_subscription(&request.query, request.operation_name.as_deref());
 
     if state.readiness_checker.get().await == ReadinessState::NotReady && !allows_pre_ready && !is_introspection {
         return (
@@ -442,6 +439,43 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
     // Track request count
     metrics::increment_request_count(request_type);
 
+    // Select the versioned schema. Introspection always uses the limit-free latest schema.
+    let schema: Arc<dyn ErasedSchema> = if is_introspection {
+        state.introspection_schema.clone()
+    } else {
+        let raw_version = headers.get("x-blokli-schema-version");
+        let version: u32 = match raw_version {
+            None => 1,
+            Some(v) => match v.to_str().ok().and_then(|s| s.parse::<u32>().ok()) {
+                Some(n) => n,
+                None => {
+                    let err = crate::errors::invalid_schema_version_header();
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "errors": [{"message": err.message, "extensions": err.extensions}]
+                        })),
+                    )
+                        .into_response();
+                }
+            },
+        };
+
+        match state.schemas.get(&version) {
+            Some(s) => s.clone(),
+            None => {
+                let err = crate::errors::unsupported_schema_version(version);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "errors": [{"message": err.message, "extensions": err.extensions}]
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    };
+
     // Handle subscription requests via SSE
     if accepts_sse && is_subscription {
         // Generate unique identifier for this SSE connection
@@ -456,10 +490,9 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
             "SSE connection established"
         );
 
-        let schema = state.schema.clone();
         let sse_stream: Pin<Box<dyn Stream<Item = Result<Event, std::convert::Infallible>> + Send>> =
             Box::pin(stream! {
-                let mut response_stream = schema.as_ref().execute_stream(request);
+                let mut response_stream = schema.execute_stream(request);
                 while let Some(response) = response_stream.next().await {
                     if !response.errors.is_empty() {
                         metrics::increment_errors(request_type);
@@ -479,16 +512,9 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
         return Sse::new(sse_stream).into_response();
     }
 
-    // Start timer for request duration. Intentionnaly after the subscription check, as timing a
+    // Start timer for request duration. Intentionally after the subscription check, as timing a
     // subscription is not meaningful - it's a long-lived connection, not a single request.
     let start_time = Instant::now();
-
-    // Introspection queries use the limit-free schema; everything else uses the guarded one.
-    let schema = if is_introspection {
-        state.introspection_schema.clone()
-    } else {
-        state.schema.clone()
-    };
 
     // Execute regular query/mutation
     let response = schema.execute(request).await;
@@ -1155,19 +1181,37 @@ mod tests {
     }
 
     #[test]
-    fn test_selected_operation_is_compatibility_query_accepts_named_client_query() {
-        assert!(selected_operation_is_compatibility_query(
-            "query QueryCompatibility {\n  compatibility {\n    apiVersion\n    supportedClientVersions\n    \
-             features\n  }\n}\n",
-            Some("QueryCompatibility"),
-        ));
+    fn test_version_header_missing_defaults_to_v1() {
+        let headers = HeaderMap::new();
+        let version = headers
+            .get("x-blokli-schema-version")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(1);
+        assert_eq!(version, 1u32);
     }
 
     #[test]
-    fn test_selected_operation_is_compatibility_query_rejects_mixed_query() {
-        assert!(!selected_operation_is_compatibility_query(
-            "query QueryCompatibility {\n  compatibility {\n    apiVersion\n  }\n  version\n}\n",
-            Some("QueryCompatibility"),
-        ));
+    fn test_version_header_valid_is_parsed() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-blokli-schema-version", HeaderValue::from_static("1"));
+        let version = headers
+            .get("x-blokli-schema-version")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(1);
+        assert_eq!(version, 1u32);
+    }
+
+    #[test]
+    fn test_version_header_non_numeric_defaults_to_v1() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-blokli-schema-version", HeaderValue::from_static("abc"));
+        let version = headers
+            .get("x-blokli-schema-version")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(1);
+        assert_eq!(version, 1u32);
     }
 }
