@@ -20,8 +20,7 @@ use blokli_chain_rpc::{
 };
 use blokli_chain_types::{ChainConfig, ContractAddresses};
 use blokli_db::BlokliDbAllOperations;
-use futures::future::AbortHandle;
-use hopr_async_runtime::spawn_as_abortable;
+use futures::future::{AbortHandle, abortable};
 use hopr_bindings::exports::alloy::{
     providers::Provider,
     rpc::client::ClientBuilder,
@@ -241,10 +240,10 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
     pub async fn start(&self) -> errors::Result<HashMap<BlokliChainProcess, AbortHandle>> {
         let mut processes: HashMap<BlokliChainProcess, AbortHandle> = HashMap::new();
 
-        processes.insert(
-            BlokliChainProcess::TransactionMonitor,
-            spawn_as_abortable!(self.transaction_monitor.clone().start()),
-        );
+        let (transaction_monitor_process, transaction_monitor_abort_handle) =
+            abortable(self.transaction_monitor.clone().start());
+        let _transaction_monitor_task = tokio::spawn(transaction_monitor_process);
+        processes.insert(BlokliChainProcess::TransactionMonitor, transaction_monitor_abort_handle);
         processes.insert(
             BlokliChainProcess::Indexer,
             Indexer::new(

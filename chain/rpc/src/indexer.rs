@@ -19,7 +19,7 @@ use hopr_bindings::exports::alloy::{
     rpc::types::{Filter, Log as AlloyLog},
 };
 #[cfg(all(feature = "telemetry", not(test)))]
-use hopr_metrics::SimpleGauge;
+use hopr_types::telemetry::SimpleGauge;
 use hopr_types::{crypto::types::Hash, primitive::prelude::*};
 use rust_stream_ext_concurrent::then_concurrent::StreamThenConcurrentExt;
 use tracing::{debug, error, trace, warn};
