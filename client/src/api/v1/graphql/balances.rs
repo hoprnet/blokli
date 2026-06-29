@@ -128,6 +128,8 @@ pub struct RedeemedStats {
     pub __typename: String,
     pub redeemed_amount: TokenValueString,
     pub redemption_count: Uint64,
+    pub rejected_amount: TokenValueString,
+    pub rejection_count: Uint64,
 }
 
 #[derive(cynic::QueryFragment, Debug)]

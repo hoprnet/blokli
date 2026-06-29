@@ -717,7 +717,7 @@ type QueryRoot {
 }
 
 """
-Outcome of a ticket redemption attempt.
+Outcome of a single ticket redemption attempt.
 """
 enum RedemptionResult {
   "Ticket was successfully redeemed on-chain."
@@ -745,13 +745,17 @@ type RedeemTicketDetails {
 }
 
 """
-Aggregated redeemed ticket statistics
+Aggregated ticket redemption statistics, covering both successful redemptions and failed attempts.
 """
 type RedeemedStats {
-  "Total redeemed amount from matching TicketRedeemed events"
+  "Total amount from matching successful ticket redemption events"
   redeemedAmount: TokenValueString!
-  "Total number of matching TicketRedeemed events"
+  "Total number of matching successful ticket redemption events"
   redemptionCount: UInt64!
+  "Total amount from matching failed ticket redemption attempts"
+  rejectedAmount: TokenValueString!
+  "Total number of matching failed ticket redemption attempts"
+  rejectionCount: UInt64!
 }
 
 """
