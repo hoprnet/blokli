@@ -366,6 +366,12 @@ pub trait HoprIndexerRpcOperations {
     /// Address of transaction sender (from field)
     async fn get_transaction_sender(&self, tx_hash: Hash) -> Result<Address>;
 
+    /// Retrieves the fully encoded signed transaction bytes for a given transaction hash.
+    ///
+    /// This is used by indexer-side Safe failure handling to decode the original
+    /// outer module transaction and determine which inner HOPR action rejected.
+    async fn get_transaction_bytes(&self, tx_hash: Hash) -> Result<Vec<u8>>;
+
     /// Streams blockchain logs using selective filtering based on synchronization state.
     ///
     /// This method intelligently selects which log filters to use based on whether

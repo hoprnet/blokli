@@ -93,6 +93,10 @@ mod tests {
             Err(RpcError::Other("unused".into()))
         }
 
+        async fn get_transaction_bytes(&self, _tx_hash: Hash) -> blokli_chain_rpc::errors::Result<Vec<u8>> {
+            Err(RpcError::Other("unused".into()))
+        }
+
         fn try_stream_logs<'a>(
             &'a self,
             _start_block_number: u64,

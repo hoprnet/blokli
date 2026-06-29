@@ -143,7 +143,9 @@ CREATE TABLE "hopr_safe_redeemed_stats" (
     "redemption_count" integer NOT NULL DEFAULT 0,
     "last_redeemed_block" integer NOT NULL DEFAULT 0,
     "last_redeemed_tx_index" integer NOT NULL DEFAULT 0,
-    "last_redeemed_log_index" integer NOT NULL DEFAULT 0
+    "last_redeemed_log_index" integer NOT NULL DEFAULT 0,
+    "rejected_amount" blob (32) NOT NULL DEFAULT x'0000000000000000000000000000000000000000000000000000000000000000',
+    "rejection_count" integer NOT NULL DEFAULT 0
 );
 
 CREATE TABLE "hopr_safe_setup_event" (
