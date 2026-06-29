@@ -1,7 +1,7 @@
 ---
 services:
   postgres:
-    image: postgres:18-alpine@sha256:ccfb3a1332f1ade601b73005eda74192167c5ca09c3bd7589c46f61f0490f470 # pinned 2026-06-01, see https://hub.docker.com/layers/library/postgres/18-alpine/images/sha256-ccfb3a1332f1ade601b73005eda74192167c5ca09c3bd7589c46f61f0490f470
+    image: postgres:18-alpine@sha256:72f702819bc91cac2265cbe78e4c3ef4c45694f83d63a6829657581accd038e1 # pinned 2026-06-01, see https://hub.docker.com/layers/library/postgres/18-alpine/images/sha256-ccfb3a1332f1ade601b73005eda74192167c5ca09c3bd7589c46f61f0490f470
     container_name: bloklid-postgres
     environment:
       POSTGRES_USER: bloklid
