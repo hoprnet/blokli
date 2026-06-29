@@ -130,11 +130,11 @@ batch_size = 100
 # Enable or disable the GraphQL API server (default: true)
 enabled = true
 
-# Address and port for the API server to bind to (default: "0.0.0.0:8080")
-bind_address = "0.0.0.0:8080"
+# Address and port for the API server to bind to (default: "127.0.0.1:8080")
+bind_address = "127.0.0.1:8080"
 
-# Enable GraphQL Playground for development and testing (default: true)
-playground_enabled = true
+# Enable the GraphQL Playground for local development only (default: false)
+playground_enabled = false
 
 # Multiplier applied to EIP-1559 gas estimates exposed by chainInfo
 # A value of 1.0 keeps RPC values unchanged; 1.5 increases maxFeePerGas and

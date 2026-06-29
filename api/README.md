@@ -8,7 +8,7 @@ GraphQL API server for HOPR blokli indexer built with Axum and async-graphql.
 - **Subscriptions**: Real-time subscriptions using Server-Sent Events (SSE)
 - **HTTP/2**: High-performance HTTP/2 support
 - **TLS 1.3**: Secure connections with TLS 1.3 (when configured)
-- **GraphQL Playground**: Interactive GraphQL IDE for development
+- **GraphQL Playground**: Interactive GraphQL IDE for development when explicitly enabled
 - **CORS**: Configured for cross-origin requests
 - **Compression**: Zstandard (zstd) compression only for responses >1KB
 - **Logging**: Structured logging with tracing
@@ -62,8 +62,8 @@ use std::path::PathBuf;
 
 // Without TLS
 let config = ApiConfig {
-    bind_address: "0.0.0.0:8080".parse().unwrap(),
-    playground_enabled: true,
+    bind_address: "127.0.0.1:8080".parse().unwrap(),
+    playground_enabled: false,
     gas_multiplier: 1.0,
     tls: None,
     ..Default::default()
@@ -71,8 +71,8 @@ let config = ApiConfig {
 
 // With TLS 1.3
 let config = ApiConfig {
-    bind_address: "0.0.0.0:8443".parse().unwrap(),
-    playground_enabled: true,
+    bind_address: "127.0.0.1:8443".parse().unwrap(),
+    playground_enabled: false,
     gas_multiplier: 1.0,
     tls: Some(TlsConfig {
         cert_path: PathBuf::from("/path/to/cert.pem"),
