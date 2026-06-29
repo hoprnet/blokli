@@ -1,6 +1,6 @@
 //! Creates a build specification for the ORM codegen.
 
-use std::{env, path::Path};
+use std::{env, path::Path, process};
 
 use anyhow::Context;
 use clap::Parser;
@@ -88,7 +88,7 @@ fn main() -> anyhow::Result<()> {
 
     // Use temporary SQLite database for entity generation (no external dependencies needed)
     // The generated entities work with PostgreSQL at runtime since SeaORM abstracts DB differences
-    let tmp_db = std::env::temp_dir().join("blokli_entity_codegen.db");
+    let tmp_db = std::env::temp_dir().join(format!("blokli_entity_codegen-{}.db", process::id()));
 
     // Clean up any existing temp database
     let _ = std::fs::remove_file(&tmp_db);

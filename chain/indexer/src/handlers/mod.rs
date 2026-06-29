@@ -223,10 +223,7 @@ where
                 Ok(res) => Ok(res),
                 Err(CoreEthereumIndexerError::ChannelDoesNotExist) => {
                     // This is not an error, just a log that we don't have the channel in the DB
-                    debug!(
-                        ?log,
-                        "channel didn't exist in the db. Created a corrupted channel entry and ignored event"
-                    );
+                    debug!(?log, "channel didn't exist in the db. Ignored event");
                     Ok(vec![])
                 }
                 Err(e) => Err(e),

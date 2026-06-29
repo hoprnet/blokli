@@ -8,6 +8,7 @@ use pem_rfc7468::decode_vec;
 use rustls::{
     ServerConfig,
     pki_types::{CertificateDer, PrivateKeyDer},
+    version::TLS13,
 };
 use tokio::net::{TcpListener, TcpStream};
 use tokio_rustls::{TlsAcceptor, server::TlsStream};
@@ -23,7 +24,7 @@ pub fn create_tls_acceptor(config: &TlsConfig) -> ApiResult<TlsAcceptor> {
     let (certs, key) = read_cert_and_key(config)?;
 
     // Configure rustls for TLS 1.3 only
-    let mut server_config = ServerConfig::builder()
+    let mut server_config = ServerConfig::builder_with_protocol_versions(&[&TLS13])
         .with_no_client_auth()
         .with_single_cert(certs, key)
         .map_err(|e| ApiError::ConfigError(format!("Invalid TLS configuration: {}", e)))?;

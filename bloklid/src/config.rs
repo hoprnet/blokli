@@ -450,8 +450,8 @@ pub struct ApiConfig {
     #[serde(default = "default_api_bind_address")]
     pub bind_address: std::net::SocketAddr,
 
-    #[default(true)]
-    #[serde(default = "default_true")]
+    #[default(false)]
+    #[serde(default = "default_false")]
     pub playground_enabled: bool,
 
     #[default(1.0)]
@@ -509,7 +509,7 @@ pub struct HealthConfig {
 }
 
 fn default_api_bind_address() -> std::net::SocketAddr {
-    "0.0.0.0:8080".parse().unwrap()
+    "127.0.0.1:8080".parse().unwrap()
 }
 
 // Helper functions for serde defaults that respect SmartDefault values
@@ -792,7 +792,7 @@ mod tests {
 
         // Check API config
         assert!(config.api.enabled);
-        assert_eq!(config.api.bind_address.to_string(), "0.0.0.0:8080");
+        assert_eq!(config.api.bind_address.to_string(), "127.0.0.1:8080");
         assert_eq!(config.api.gas_multiplier, 1.0);
         assert_eq!(config.api.max_query_depth, 8);
         assert_eq!(config.api.max_query_complexity, 500);
@@ -840,8 +840,8 @@ mod tests {
 
         let cfg = res.unwrap();
         assert!(!cfg.api.enabled);
-        assert!(cfg.api.playground_enabled); // Default
-        assert_eq!(cfg.api.bind_address.to_string(), "0.0.0.0:8080"); // Default
+        assert!(!cfg.api.playground_enabled); // Default
+        assert_eq!(cfg.api.bind_address.to_string(), "127.0.0.1:8080"); // Default
         assert_eq!(cfg.api.gas_multiplier, 1.0); // Default
         assert_eq!(cfg.api.health.max_indexer_lag, 10); // Default
         assert_eq!(cfg.api.health.timeout, Duration::from_millis(5000)); // Default
