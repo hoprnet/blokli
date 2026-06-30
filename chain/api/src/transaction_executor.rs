@@ -9,6 +9,7 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use blokli_tx::FilterError;
 use chrono::Utc;
 use hopr_types::crypto::types::Hash;
 use thiserror::Error;
@@ -22,15 +23,15 @@ use crate::{
         record_transaction_status,
     },
     transaction_monitor::{ReceiptProvider, SafeAddressChecker, enrich_safe_execution},
+    transaction_policy::TransactionPolicy,
     transaction_store::{TransactionRecord, TransactionStatus, TransactionStore, TransactionStoreError},
-    transaction_validator::{TransactionValidator, ValidationError},
 };
 
 /// Errors that can occur during transaction execution
 #[derive(Error, Debug)]
 pub enum TransactionExecutorError {
     #[error("Validation failed: {0}")]
-    ValidationFailed(#[from] ValidationError),
+    ValidationFailed(#[from] FilterError),
     #[error("RPC error: {0}")]
     RpcError(String),
     #[error("Transaction store error: {0}")]
@@ -162,7 +163,7 @@ impl Default for RawTransactionExecutorConfig {
 pub struct RawTransactionExecutor<R: RpcClient> {
     rpc_client: Arc<R>,
     transaction_store: Arc<TransactionStore>,
-    validator: Arc<TransactionValidator>,
+    policy: Arc<TransactionPolicy>,
     config: RawTransactionExecutorConfig,
     /// Receipt provider for Safe enrichment in sync mode
     receipt_provider: Option<Arc<dyn ReceiptProvider>>,
@@ -186,13 +187,13 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     pub fn new(
         rpc_client: R,
         transaction_store: TransactionStore,
-        validator: TransactionValidator,
+        policy: TransactionPolicy,
         config: RawTransactionExecutorConfig,
     ) -> Self {
         Self {
             rpc_client: Arc::new(rpc_client),
             transaction_store: Arc::new(transaction_store),
-            validator: Arc::new(validator),
+            policy: Arc::new(policy),
             config,
             receipt_provider: None,
             safe_checker: None,
@@ -207,13 +208,13 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     pub fn with_shared_dependencies(
         rpc_client: Arc<R>,
         transaction_store: Arc<TransactionStore>,
-        validator: Arc<TransactionValidator>,
+        policy: Arc<TransactionPolicy>,
         config: RawTransactionExecutorConfig,
     ) -> Self {
         Self {
             rpc_client,
             transaction_store,
-            validator,
+            policy,
             config,
             receipt_provider: None,
             safe_checker: None,
@@ -289,7 +290,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     /// - Does NOT wait for confirmation
     pub async fn send_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<Hash, TransactionExecutorError> {
         // Validate transaction
-        if let Err(e) = self.validator.validate_raw_transaction(&raw_tx) {
+        if let Err(e) = self.policy.check(&raw_tx) {
             warn!(error = %e, "Transaction validation failed");
             record_transaction_status(STATUS_VALIDATION_FAILED);
             return Err(e.into());
@@ -321,7 +322,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
     /// - Background monitor handles confirmation tracking
     pub async fn send_raw_transaction_async(&self, raw_tx: Vec<u8>) -> Result<Uuid, TransactionExecutorError> {
         // Validate transaction
-        if let Err(e) = self.validator.validate_raw_transaction(&raw_tx) {
+        if let Err(e) = self.policy.check(&raw_tx) {
             warn!(error = %e, "Transaction validation failed");
             record_transaction_status(STATUS_VALIDATION_FAILED);
             return Err(e.into());
@@ -396,7 +397,7 @@ impl<R: RpcClient> RawTransactionExecutor<R> {
         confirmations: Option<u64>,
     ) -> Result<TransactionRecord, TransactionExecutorError> {
         // Validate transaction
-        if let Err(e) = self.validator.validate_raw_transaction(&raw_tx) {
+        if let Err(e) = self.policy.check(&raw_tx) {
             warn!(error = %e, "Transaction validation failed");
             record_transaction_status(STATUS_VALIDATION_FAILED);
             return Err(e.into());
@@ -554,7 +555,7 @@ mod tests {
         RawTransactionExecutor::new(
             rpc_client,
             TransactionStore::new(),
-            TransactionValidator::new(),
+            TransactionPolicy::AllowAll,
             RawTransactionExecutorConfig::default(),
         )
     }
@@ -590,6 +591,22 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_whitelist_policy_rejects_unauthorized() {
+        // An empty whitelist authorizes nothing, so a non-whitelisted transaction is rejected
+        // before it ever reaches the RPC client.
+        let executor = RawTransactionExecutor::new(
+            MockRpcClient::new(),
+            TransactionStore::new(),
+            TransactionPolicy::Whitelist(blokli_tx::TransactionFilter::default()),
+            RawTransactionExecutorConfig::default(),
+        );
+
+        let result = executor.send_raw_transaction(vec![0x02, 0xde, 0xad, 0xbe, 0xef]).await;
+        assert!(matches!(result, Err(TransactionExecutorError::ValidationFailed(_))));
+        assert_eq!(executor.transaction_store().count(), 0);
+    }
+
+    #[tokio::test]
     async fn test_async_mode_returns_uuid() {
         let executor = create_executor(MockRpcClient::new());
         let raw_tx = vec![0x01, 0x02, 0x03];
@@ -620,7 +637,7 @@ mod tests {
         let executor = RawTransactionExecutor::new(
             MockRpcClient::new(),
             TransactionStore::new(),
-            TransactionValidator::new(),
+            TransactionPolicy::AllowAll,
             RawTransactionExecutorConfig {
                 max_submitted_transactions: 1,
                 ..Default::default()
@@ -639,7 +656,7 @@ mod tests {
         let executor = RawTransactionExecutor::new(
             MockRpcClient::with_failure(),
             TransactionStore::new(),
-            TransactionValidator::new(),
+            TransactionPolicy::AllowAll,
             RawTransactionExecutorConfig {
                 max_submitted_transactions: 1,
                 ..Default::default()
@@ -659,7 +676,7 @@ mod tests {
         let executor = RawTransactionExecutor::new(
             MockRpcClient::new(),
             TransactionStore::new(),
-            TransactionValidator::new(),
+            TransactionPolicy::AllowAll,
             RawTransactionExecutorConfig {
                 max_submitted_transactions: 0,
                 max_submitted_transactions_per_identity: 0,
@@ -677,7 +694,7 @@ mod tests {
         let executor = RawTransactionExecutor::new(
             MockRpcClient::new(),
             TransactionStore::new(),
-            TransactionValidator::new(),
+            TransactionPolicy::AllowAll,
             RawTransactionExecutorConfig {
                 max_submitted_transactions: 0,
                 max_submitted_transactions_per_identity: 1,

@@ -28,8 +28,8 @@ use blokli_chain_api::{
     rpc_adapter::RpcAdapter,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
     transaction_monitor::{NoSafeEnrichment, TransactionMonitor, TransactionMonitorConfig},
+    transaction_policy::TransactionPolicy,
     transaction_store::TransactionStore,
-    transaction_validator::TransactionValidator,
 };
 use blokli_chain_indexer::IndexerState;
 use blokli_chain_rpc::{
@@ -109,7 +109,7 @@ fn build_subscription_test_schema(
     indexer_state: IndexerState,
 ) -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
     let transaction_store = Arc::new(TransactionStore::new());
-    let transaction_validator = Arc::new(TransactionValidator::new());
+    let transaction_policy = Arc::new(TransactionPolicy::AllowAll);
     let transport = ReqwestTransport::new("http://localhost:8545".parse().unwrap());
     let rpc_client = ClientBuilder::default().transport(transport.clone(), transport.guess_local());
     let transport_client = ReqwestClient::new();
@@ -129,7 +129,7 @@ fn build_subscription_test_schema(
     let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
         rpc_adapter,
         transaction_store.clone(),
-        transaction_validator,
+        transaction_policy,
         RawTransactionExecutorConfig::default(),
     ));
     let readiness_checker = ReadinessChecker::new(
@@ -254,7 +254,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
 
     // Create transaction components for GraphQL API
     let transaction_store = Arc::new(TransactionStore::new());
-    let transaction_validator = Arc::new(TransactionValidator::new());
+    let transaction_policy = Arc::new(TransactionPolicy::AllowAll);
     let rpc_adapter = Arc::new(RpcAdapter::new(
         RpcOperations::new(
             rpc_client,
@@ -273,7 +273,7 @@ pub async fn setup_test_environment(config: TestEnvironmentConfig) -> anyhow::Re
     let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
         rpc_adapter,
         transaction_store.clone(),
-        transaction_validator,
+        transaction_policy,
         RawTransactionExecutorConfig::default(),
     ));
     let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), HealthConfig::default());
@@ -419,12 +419,12 @@ pub async fn setup_http_test_environment() -> anyhow::Result<HttpTestContext> {
     Migrator::up(&db, None).await?;
 
     let transaction_store = Arc::new(TransactionStore::new());
-    let transaction_validator = Arc::new(TransactionValidator::new());
+    let transaction_policy = Arc::new(TransactionPolicy::AllowAll);
     let rpc_adapter = Arc::new(RpcAdapter::new((*rpc_operations).clone()));
     let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
         rpc_adapter,
         transaction_store.clone(),
-        transaction_validator,
+        transaction_policy,
         RawTransactionExecutorConfig::default(),
     ));
 
@@ -565,12 +565,12 @@ pub async fn setup_transaction_test_environment(
     let rpc_adapter = Arc::new(RpcAdapter::new(rpc_operations));
 
     let transaction_store = Arc::new(TransactionStore::new());
-    let transaction_validator = Arc::new(TransactionValidator::new());
+    let transaction_policy = Arc::new(TransactionPolicy::AllowAll);
 
     let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
         rpc_adapter.clone(),
         transaction_store.clone(),
-        transaction_validator.clone(),
+        transaction_policy.clone(),
         executor_config.unwrap_or_default(),
     ));
 

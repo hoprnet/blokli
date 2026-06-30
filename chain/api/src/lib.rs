@@ -9,8 +9,8 @@ pub mod rpc_adapter;
 pub mod safe_execution;
 pub mod transaction_executor;
 pub mod transaction_monitor;
+pub mod transaction_policy;
 pub mod transaction_store;
-pub mod transaction_validator;
 
 use std::{collections::HashMap, sync::Arc, time::Duration};
 
@@ -52,8 +52,8 @@ use crate::{
     safe_execution::DbSafeAddressChecker,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
     transaction_monitor::{TransactionMonitor, TransactionMonitorConfig},
+    transaction_policy::TransactionPolicy,
     transaction_store::TransactionStore,
-    transaction_validator::TransactionValidator,
 };
 
 pub type DefaultHttpRequestor = blokli_chain_rpc::transport::ReqwestClient;
@@ -99,6 +99,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         rpc_url: String,
         transaction_executor_config: RawTransactionExecutorConfig,
         transaction_monitor_config: TransactionMonitorConfig,
+        tx_policy: TransactionPolicy,
     ) -> Result<Self> {
         if indexer_cfg.enable_curvy_indexing && contract_addresses.curvy_aggregator == Address::default() {
             return Err(BlokliChainError::Configuration(
@@ -154,7 +155,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
 
         // Build transaction submission infrastructure
         let transaction_store = Arc::new(TransactionStore::new());
-        let transaction_validator = Arc::new(TransactionValidator::new());
+        let transaction_policy = Arc::new(tx_policy);
         let rpc_adapter = Arc::new(RpcAdapter::new(rpc_operations.clone()));
 
         let safe_checker = Arc::new(DbSafeAddressChecker::new(db.clone()));
@@ -176,7 +177,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         let mut transaction_executor = RawTransactionExecutor::with_shared_dependencies(
             rpc_adapter.clone(),
             transaction_store.clone(),
-            transaction_validator,
+            transaction_policy,
             transaction_executor_config,
         )
         .with_safe_enrichment(rpc_adapter.clone(), safe_checker.clone());
