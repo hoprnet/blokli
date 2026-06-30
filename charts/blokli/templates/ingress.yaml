@@ -10,6 +10,7 @@ metadata:
     {{- include "blokli.labels" . | nindent 4 }}
   {{- with .Values.ingress.annotations }}
   annotations:
+    argocd.argoproj.io/sync-wave: "3"
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:

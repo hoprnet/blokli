@@ -2,6 +2,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: {{ include "blokli.fullname" . }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
   labels:
     {{- include "blokli.labels" . | nindent 4 }}
 spec:

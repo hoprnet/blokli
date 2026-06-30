@@ -1,6 +1,8 @@
 apiVersion: v1
 kind: ConfigMap
 metadata:
+  annotations:
+    argocd.argoproj.io/sync-wave: "0"
   name: {{ include "blokli.fullname" . }}
   labels:
     {{- include "blokli.labels" . | nindent 4 }}
