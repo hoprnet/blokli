@@ -12,8 +12,8 @@ use blokli_chain_api::{
     rpc_adapter::RpcAdapter,
     transaction_executor::{RawTransactionExecutor, TransactionExecutorError},
     transaction_store::TransactionStore,
-    transaction_validator::ValidationError,
 };
+use blokli_tx::FilterError;
 
 use crate::{conversions::transaction_from_record, errors};
 
@@ -166,11 +166,8 @@ fn hex_to_bytes(hex_str: &str) -> Result<Vec<u8>> {
 /// Convert TransactionExecutorError to SendTransactionResult
 fn executor_error_to_send_result(error: TransactionExecutorError) -> SendTransactionResult {
     match error {
-        TransactionExecutorError::ValidationFailed(ValidationError::ContractNotAllowed(address)) => {
-            SendTransactionResult::ContractNotAllowed(errors::contract_not_allowed(address))
-        }
-        TransactionExecutorError::ValidationFailed(ValidationError::FunctionNotAllowed(address, selector)) => {
-            SendTransactionResult::FunctionNotAllowed(errors::function_not_allowed(address, selector))
+        TransactionExecutorError::ValidationFailed(FilterError::Unauthorized { contract, selector, .. }) => {
+            SendTransactionResult::FunctionNotAllowed(errors::function_not_allowed(contract, selector))
         }
         TransactionExecutorError::ValidationFailed(_) => {
             SendTransactionResult::RpcError(errors::rpc_validation_failed(&error))
@@ -183,11 +180,8 @@ fn executor_error_to_send_result(error: TransactionExecutorError) -> SendTransac
 /// Convert TransactionExecutorError to SendTransactionAsyncResult
 fn executor_error_to_async_result(error: TransactionExecutorError) -> SendTransactionAsyncResult {
     match error {
-        TransactionExecutorError::ValidationFailed(ValidationError::ContractNotAllowed(address)) => {
-            SendTransactionAsyncResult::ContractNotAllowed(errors::contract_not_allowed(address))
-        }
-        TransactionExecutorError::ValidationFailed(ValidationError::FunctionNotAllowed(address, selector)) => {
-            SendTransactionAsyncResult::FunctionNotAllowed(errors::function_not_allowed(address, selector))
+        TransactionExecutorError::ValidationFailed(FilterError::Unauthorized { contract, selector, .. }) => {
+            SendTransactionAsyncResult::FunctionNotAllowed(errors::function_not_allowed(contract, selector))
         }
         TransactionExecutorError::ValidationFailed(_) => {
             SendTransactionAsyncResult::RpcError(errors::rpc_validation_failed(&error))
@@ -202,11 +196,8 @@ fn executor_error_to_async_result(error: TransactionExecutorError) -> SendTransa
 /// Convert TransactionExecutorError to SendTransactionSyncResult
 fn executor_error_to_sync_result(error: TransactionExecutorError) -> SendTransactionSyncResult {
     match error {
-        TransactionExecutorError::ValidationFailed(ValidationError::ContractNotAllowed(address)) => {
-            SendTransactionSyncResult::ContractNotAllowed(errors::contract_not_allowed(address))
-        }
-        TransactionExecutorError::ValidationFailed(ValidationError::FunctionNotAllowed(address, selector)) => {
-            SendTransactionSyncResult::FunctionNotAllowed(errors::function_not_allowed(address, selector))
+        TransactionExecutorError::ValidationFailed(FilterError::Unauthorized { contract, selector, .. }) => {
+            SendTransactionSyncResult::FunctionNotAllowed(errors::function_not_allowed(contract, selector))
         }
         TransactionExecutorError::ValidationFailed(_) => {
             SendTransactionSyncResult::RpcError(errors::rpc_validation_failed(&error))

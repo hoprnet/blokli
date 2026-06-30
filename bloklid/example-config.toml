@@ -185,3 +185,22 @@ timeout = "5s"
 # This controls how often the cached readiness state is updated by a background task
 # Set lower for faster detection of readiness changes, higher to reduce I/O overhead
 readiness_check_interval = "60s"
+
+# Transaction whitelist filtering for the send_transaction API (optional)
+#
+# When disabled (the default), every well-formed transaction submitted to send_transaction is
+# relayed to the chain. When enabled, only transactions whose recovered sender, destination
+# contract and 4-byte function selector match one of the rules below are submitted; everything
+# else (including contract-creation transactions) is rejected.
+[transaction_filter]
+# Whether whitelist enforcement is active. Default: false (accept all transactions).
+enabled = false
+
+# One rule per (sender, contract) pair, listing the selectors that sender may call on it.
+# The sender is the address recovered from the transaction signature, not the relayer.
+# Addresses are 20-byte hex; selectors are the first 4 bytes of keccak256(signature).
+#
+# [[transaction_filter.rule]]
+# sender = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+# contract = "0x1111111111111111111111111111111111111111"
+# selectors = ["0xa9059cbb", "0x095ea7b3"] # ERC-20 transfer, approve

@@ -1746,6 +1746,7 @@ dependencies = [
  "blokli-db",
  "blokli-db-entity",
  "blokli-db-migration",
+ "blokli-tx",
  "chrono",
  "clap",
  "env_logger",
@@ -1802,6 +1803,7 @@ dependencies = [
  "blokli-chain-rpc",
  "blokli-chain-types",
  "blokli-db",
+ "blokli-tx",
  "chrono",
  "dashmap",
  "env_logger",
@@ -2065,6 +2067,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "blokli-tx"
+version = "0.4.0"
+dependencies = [
+ "hex",
+ "hopr-bindings",
+ "hopr-types",
+ "insta",
+ "thiserror 2.0.18",
+]
+
+[[package]]
 name = "bloklid"
 version = "0.11.1"
 dependencies = [
@@ -2078,10 +2091,12 @@ dependencies = [
  "blokli-chain-rpc",
  "blokli-chain-types",
  "blokli-db",
+ "blokli-tx",
  "clap",
  "config",
  "flagset",
  "futures",
+ "hex",
  "hopli",
  "hopr-bindings",
  "hopr-types",

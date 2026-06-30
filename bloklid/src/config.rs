@@ -1,9 +1,12 @@
 use std::time::Duration;
 
+use blokli_chain_api::transaction_policy::TransactionPolicy;
 use blokli_chain_indexer::utils::redact_url;
 use blokli_chain_types::{ChainConfig, ContractAddresses};
+use blokli_tx::TransactionFilter;
+use hopr_types::primitive::prelude::Address;
 
-use crate::network::Network;
+use crate::{errors::ConfigError, network::Network};
 
 /// Redacts username and password from database URLs while keeping host, port, and database visible
 ///
@@ -255,6 +258,34 @@ impl DatabaseConfig {
     }
 }
 
+/// Whitelist policy for the `send_transaction` API.
+///
+/// When `enabled` is `false` (the default), all transactions are accepted. When `enabled` is
+/// `true`, only transactions whose recovered sender, destination contract and 4-byte function
+/// selector match one of the configured rules are submitted to the chain.
+#[derive(Debug, Clone, Default, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransactionFilterConfig {
+    /// Whether whitelist enforcement is active.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Whitelist rules, each authorizing a sender to call specific selectors on a contract.
+    #[serde(default)]
+    pub rule: Vec<TransactionFilterRule>,
+}
+
+/// A single whitelist rule authorizing `sender` to call `selectors` on `contract`.
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TransactionFilterRule {
+    /// Hex-encoded sender address (the recovered transaction signer).
+    pub sender: String,
+    /// Hex-encoded destination contract address.
+    pub contract: String,
+    /// Hex-encoded 4-byte function selectors this sender may call on the contract.
+    pub selectors: Vec<String>,
+}
+
 #[serde_with::serde_as]
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault, validator::Validate)]
 #[serde(deny_unknown_fields)]
@@ -291,6 +322,9 @@ pub struct Config {
     #[serde(default)]
     pub telemetry: TelemetryConfig,
 
+    #[serde(default)]
+    pub transaction_filter: TransactionFilterConfig,
+
     #[serde(default, rename = "contracts")]
     pub contracts_override: Option<ContractAddresses>,
 
@@ -304,6 +338,44 @@ pub struct Config {
 }
 
 impl Config {
+    /// Build the transaction submission policy from the `[transaction_filter]` configuration.
+    ///
+    /// Returns [`TransactionPolicy::AllowAll`] when filtering is disabled (the default). When
+    /// enabled, each rule's hex-encoded sender, contract and selectors are parsed into a
+    /// [`TransactionFilter`] enforcing the `(sender, contract, selector)` whitelist.
+    ///
+    /// # Errors
+    /// Returns [`ConfigError::Parse`] if any sender/contract address or function selector fails to parse.
+    pub fn build_transaction_policy(&self) -> Result<TransactionPolicy, ConfigError> {
+        if !self.transaction_filter.enabled {
+            return Ok(TransactionPolicy::AllowAll);
+        }
+
+        let mut triples: Vec<(Address, Address, [u8; 4])> = Vec::new();
+        for rule in &self.transaction_filter.rule {
+            let sender: Address = rule
+                .sender
+                .parse()
+                .map_err(|e| ConfigError::Parse(format!("invalid transaction_filter sender '{}': {e}", rule.sender)))?;
+            let contract: Address = rule.contract.parse().map_err(|e| {
+                ConfigError::Parse(format!("invalid transaction_filter contract '{}': {e}", rule.contract))
+            })?;
+            for selector in &rule.selectors {
+                let bytes = hex::decode(selector.trim_start_matches("0x").trim_start_matches("0X")).map_err(|e| {
+                    ConfigError::Parse(format!("invalid transaction_filter selector '{selector}': {e}"))
+                })?;
+                let selector: [u8; 4] = bytes.as_slice().try_into().map_err(|_| {
+                    ConfigError::Parse(format!(
+                        "transaction_filter selector '{selector}' must be exactly 4 bytes"
+                    ))
+                })?;
+                triples.push((sender, contract, selector));
+            }
+        }
+
+        Ok(TransactionPolicy::Whitelist(TransactionFilter::from_triples(triples)))
+    }
+
     /// Display the configuration with sensitive data redacted
     pub fn display_redacted(&self) -> String {
         let mut output = String::new();
@@ -940,5 +1012,80 @@ mod tests {
         // Non-URL string should remain unchanged for database URLs
         let not_url = "just-a-string";
         assert_eq!(redact_database_url(not_url), not_url);
+    }
+
+    #[test]
+    fn test_transaction_filter_disabled_by_default() {
+        let config = r#"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let cfg: Config = toml::from_str(config).expect("parse config");
+        assert!(!cfg.transaction_filter.enabled);
+        assert!(matches!(
+            cfg.build_transaction_policy(),
+            Ok(TransactionPolicy::AllowAll)
+        ));
+    }
+
+    #[test]
+    fn test_transaction_filter_builds_whitelist() {
+        let config = r#"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+
+         [transaction_filter]
+         enabled = true
+
+         [[transaction_filter.rule]]
+         sender = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+         contract = "0x1111111111111111111111111111111111111111"
+         selectors = ["0xa9059cbb", "0x095ea7b3"]
+     "#;
+        let cfg: Config = toml::from_str(config).expect("parse config");
+        assert!(matches!(
+            cfg.build_transaction_policy(),
+            Ok(TransactionPolicy::Whitelist(_))
+        ));
+    }
+
+    #[test]
+    fn test_transaction_filter_rejects_invalid_selector() {
+        // A 5-byte selector is not a valid 4-byte function selector.
+        let config = r#"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+
+         [transaction_filter]
+         enabled = true
+
+         [[transaction_filter.rule]]
+         sender = "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266"
+         contract = "0x1111111111111111111111111111111111111111"
+         selectors = ["0xdeadbeefff"]
+     "#;
+        let cfg: Config = toml::from_str(config).expect("parse config");
+        assert!(cfg.build_transaction_policy().is_err());
+    }
+
+    #[test]
+    fn test_transaction_filter_strict() {
+        let config = r#"
+         [transaction_filter]
+         enabled = true
+         unknown_field = "bad"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let res: Result<Config, _> = toml::from_str(config);
+        assert!(res.is_err(), "Should fail on unknown transaction_filter field");
     }
 }
