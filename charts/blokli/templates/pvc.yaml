@@ -6,7 +6,7 @@ metadata:
   labels:
     {{- include "blokli.labels" . | nindent 4 }}
   annotations:
-    argocd.argoproj.io/sync-wave: "0"
+    argocd.argoproj.io/sync-wave: "3"
   {{- with .Values.persistence.annotations }}
     {{- toYaml . | nindent 4 }}
   {{- end }}
