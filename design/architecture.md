@@ -362,10 +362,12 @@ limit) and non-retryable errors (invalid transaction), and respects rate limits 
 
 **Components**:
 
-**TransactionPolicy**: Gates which raw transactions may be submitted. The default policy accepts any well-formed transaction. When a
-whitelist policy is configured, each transaction is decoded by the stand-alone `blokli-tx` filtering crate, which recovers the sender via
-ECDSA, extracts the 4-byte function selector, and authorizes the transaction only if the resulting `(sender, contract, selector)` triple is
-present in the configured whitelist. Contract-creation transactions and unsupported transaction types are always rejected. This prevents
+**TransactionPolicy**: Gates which raw transactions may be submitted. The allow-set is derived from the network's contract addresses
+(rotsee, jura, anvil-localhost, ...) — a property of the network, not operator configuration. Each transaction is decoded by the stand-alone
+`blokli-tx` filtering crate, which recovers the sender via ECDSA, extracts the 4-byte function selector, and unwraps Safe-module
+`execTransactionFromModule` calls so the inner call is validated. A transaction is authorized only if its effective `(contract, selector)`
+pair belongs to the network's curated set of relayable HOPR operations (channel funding/closure/redemption, token approve/transfer/send,
+safe registration). Contract-creation transactions, delegate calls, and unsupported transaction types are always rejected. This prevents
 submission of malicious or unintended transactions while keeping the filtering logic decoupled from the daemon internals.
 
 **TransactionExecutor**: Provides three submission modes with different guarantees:

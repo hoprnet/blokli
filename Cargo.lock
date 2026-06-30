@@ -2070,6 +2070,7 @@ dependencies = [
 name = "blokli-tx"
 version = "0.4.0"
 dependencies = [
+ "alloy-sol-types",
  "hex",
  "hopr-bindings",
  "hopr-types",
@@ -2091,12 +2092,10 @@ dependencies = [
  "blokli-chain-rpc",
  "blokli-chain-types",
  "blokli-db",
- "blokli-tx",
  "clap",
  "config",
  "flagset",
  "futures",
- "hex",
  "hopli",
  "hopr-bindings",
  "hopr-types",

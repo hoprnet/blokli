@@ -68,11 +68,9 @@ blokli-chain-indexer = { workspace = true }
 blokli-chain-rpc     = { workspace = true }
 blokli-chain-types   = { workspace = true }
 blokli-db            = { workspace = true }
-blokli-tx            = { workspace = true }
 
 # HOPR dependencies
 config = { workspace = true }
-hex = { workspace = true }
 hopr-bindings = { workspace = true }
 hopr-types = { workspace = true, features = [
   "chain",

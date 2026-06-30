@@ -133,16 +133,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
     // Initialize components
     let (process_handles, api_handle) = {
-        let (
-            database_path,
-            logs_database_path,
-            chain_network,
-            contracts,
-            indexer_config,
-            rpc_url,
-            api_config,
-            transaction_policy,
-        ) = {
+        let (database_path, logs_database_path, chain_network, contracts, indexer_config, rpc_url, api_config) = {
             let cfg = config
                 .read()
                 .map_err(|_| BloklidError::NonSpecific("failed to lock config".into()))?;
@@ -172,8 +163,6 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 shutdown_signal_capacity: cfg.indexer.subscription.shutdown_signal_capacity,
             };
 
-            let transaction_policy = cfg.build_transaction_policy()?;
-
             (
                 database.to_url(),
                 database.to_logs_url(),
@@ -182,7 +171,6 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 indexer_config,
                 cfg.rpc_url.clone(),
                 cfg.api.clone(),
-                transaction_policy,
             )
         };
 
@@ -255,14 +243,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
         // Create BlokliChain instance
         let enable_safe_indexing = indexer_config.enable_safe_indexing;
-        let blokli_chain = BlokliChain::new(
-            db,
-            chain_network,
-            contracts,
-            indexer_config,
-            rpc_url,
-            transaction_policy,
-        )?;
+        let blokli_chain = BlokliChain::new(db, chain_network, contracts, indexer_config, rpc_url)?;
 
         // Verify RPC supports required capabilities (debug tracing)
         blokli_chain.verify_rpc_capabilities().await?;
