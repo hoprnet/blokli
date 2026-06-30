@@ -1,6 +1,6 @@
 [package]
 authors     = ["HOPR Association <tech@hoprnet.org>"]
-description = "Stand-alone filtering of signed Ethereum transactions against a (sender, contract, selector) whitelist"
+description = "Stand-alone filtering of signed Ethereum transactions against a (contract, selector) allow-set"
 edition     = "2021"
 homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
@@ -12,8 +12,9 @@ version     = "0.4.0"
 crate-type = ["rlib"]
 
 [dependencies]
-hex       = { workspace = true }
-thiserror = { workspace = true }
+alloy-sol-types = { workspace = true }
+hex             = { workspace = true }
+thiserror       = { workspace = true }
 
 hopr-bindings = { workspace = true }
 hopr-types    = { workspace = true, features = ["primitive"] }

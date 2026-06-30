@@ -34,14 +34,20 @@ pub enum FilterError {
     #[error("calldata is too short to contain a 4-byte function selector")]
     MissingSelector,
 
-    /// The `(sender, contract, selector)` triple is not present in the whitelist.
-    #[error("unauthorized: sender {sender} may not call selector {selector} on contract {contract}")]
+    /// A Safe-module `execTransactionFromModule` call could not be decoded.
+    #[error("failed to decode Safe module call: {0}")]
+    ModuleUnwrap(String),
+
+    /// A Safe-module call requested a `DelegateCall`, which is never allowed.
+    #[error("Safe module delegate calls are not allowed")]
+    DelegateCallNotAllowed,
+
+    /// The `(contract, selector)` pair is not present in the allow-set.
+    #[error("unauthorized: selector {selector} is not allowed on contract {contract}")]
     Unauthorized {
-        /// Hex-encoded recovered sender address.
-        sender: String,
-        /// Hex-encoded destination contract address.
+        /// Hex-encoded effective destination contract address.
         contract: String,
-        /// Hex-encoded 4-byte function selector.
+        /// Hex-encoded effective 4-byte function selector.
         selector: String,
     },
 }
