@@ -189,7 +189,7 @@ fn hex_to_bytes(hex_str: &str) -> Result<Vec<u8>> {
 /// Convert TransactionExecutorError to SendTransactionResult
 fn executor_error_to_send_result(error: TransactionExecutorError) -> SendTransactionResult {
     match error {
-        TransactionExecutorError::ValidationFailed(FilterError::Unauthorized { contract, selector, .. }) => {
+        TransactionExecutorError::ValidationFailed(FilterError::Unauthorized { contract, selector }) => {
             SendTransactionResult::FunctionNotAllowed(errors::function_not_allowed(contract, selector))
         }
         TransactionExecutorError::ValidationFailed(_) => {
@@ -220,7 +220,7 @@ fn executor_error_to_send_result(error: TransactionExecutorError) -> SendTransac
 /// Convert TransactionExecutorError to SendTransactionAsyncResult
 fn executor_error_to_async_result(error: TransactionExecutorError) -> SendTransactionAsyncResult {
     match error {
-        TransactionExecutorError::ValidationFailed(FilterError::Unauthorized { contract, selector, .. }) => {
+        TransactionExecutorError::ValidationFailed(FilterError::Unauthorized { contract, selector }) => {
             SendTransactionAsyncResult::FunctionNotAllowed(errors::function_not_allowed(contract, selector))
         }
         TransactionExecutorError::ValidationFailed(_) => {
@@ -256,7 +256,7 @@ fn executor_error_to_async_result(error: TransactionExecutorError) -> SendTransa
 /// Convert TransactionExecutorError to SendTransactionSyncResult
 fn executor_error_to_sync_result(error: TransactionExecutorError) -> SendTransactionSyncResult {
     match error {
-        TransactionExecutorError::ValidationFailed(FilterError::Unauthorized { contract, selector, .. }) => {
+        TransactionExecutorError::ValidationFailed(FilterError::Unauthorized { contract, selector }) => {
             SendTransactionSyncResult::FunctionNotAllowed(errors::function_not_allowed(contract, selector))
         }
         TransactionExecutorError::ValidationFailed(_) => {

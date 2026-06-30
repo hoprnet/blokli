@@ -52,7 +52,7 @@ use crate::{
     safe_execution::DbSafeAddressChecker,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
     transaction_monitor::{TransactionMonitor, TransactionMonitorConfig},
-    transaction_policy::TransactionPolicy,
+    transaction_policy::{TransactionPolicy, network_transaction_filter},
     transaction_store::TransactionStore,
 };
 
@@ -99,7 +99,6 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         rpc_url: String,
         transaction_executor_config: RawTransactionExecutorConfig,
         transaction_monitor_config: TransactionMonitorConfig,
-        tx_policy: TransactionPolicy,
     ) -> Result<Self> {
         if indexer_cfg.enable_curvy_indexing && contract_addresses.curvy_aggregator == Address::default() {
             return Err(BlokliChainError::Configuration(
@@ -155,7 +154,10 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
 
         // Build transaction submission infrastructure
         let transaction_store = Arc::new(TransactionStore::new());
-        let transaction_policy = Arc::new(tx_policy);
+        // The transaction allow-set is a property of the network, derived from its contract addresses.
+        let transaction_policy = Arc::new(TransactionPolicy::Whitelist(network_transaction_filter(
+            &contract_addresses,
+        )));
         let rpc_adapter = Arc::new(RpcAdapter::new(rpc_operations.clone()));
 
         let safe_checker = Arc::new(DbSafeAddressChecker::new(db.clone()));
