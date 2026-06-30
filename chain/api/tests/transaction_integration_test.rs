@@ -13,8 +13,8 @@ use blokli_chain_api::{
     rpc_adapter::RpcAdapter,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
     transaction_monitor::{NoSafeEnrichment, TransactionMonitor, TransactionMonitorConfig},
+    transaction_policy::TransactionPolicy,
     transaction_store::{TransactionStatus, TransactionStore},
-    transaction_validator::TransactionValidator,
 };
 use blokli_chain_rpc::{
     client::DefaultRetryPolicy,
@@ -101,12 +101,12 @@ async fn setup_test_environment(
 
     // Create transaction components
     let transaction_store = Arc::new(TransactionStore::new());
-    let transaction_validator = Arc::new(TransactionValidator::new());
+    let transaction_policy = Arc::new(TransactionPolicy::AllowAll);
 
     let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
         rpc_adapter.clone(),
         transaction_store.clone(),
-        transaction_validator,
+        transaction_policy,
         executor_config,
     ));
 
