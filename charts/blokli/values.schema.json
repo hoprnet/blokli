@@ -32,23 +32,13 @@
     },
     "database": {
       "type": "object",
-      "if": {
-        "properties": {
-          "existingSecret": { "type": "string", "minLength": 1 }
-        },
-        "required": ["existingSecret"]
-      },
-      "then": {},
-      "else": {
-        "required": ["host", "port", "database", "username", "password"],
-        "properties": {
-          "host": { "type": "string", "minLength": 1 },
-          "database": { "type": "string", "minLength": 1 },
-          "username": { "type": "string", "minLength": 1 },
-          "password": { "type": "string", "minLength": 1 }
-        }
-      },
+      "required": ["type"],
       "properties": {
+        "type": {
+          "type": "string",
+          "enum": ["postgresql", "sqlite"],
+          "description": "Database type"
+        },
         "host": {
           "type": "string",
           "description": "PostgreSQL host"
@@ -71,6 +61,14 @@
           "type": "string",
           "description": "PostgreSQL password"
         },
+        "index_path": {
+          "type": "string",
+          "description": "Sqlite database file path"
+        },
+        "logs_path": {
+          "type": "string",
+          "description": "Sqlite logs database file path"
+        },
         "existingSecret": {
           "type": "string",
           "description": "Name of existing secret containing database credentials"
@@ -80,7 +78,44 @@
           "minimum": 1,
           "description": "Maximum number of database connections"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "type": { "const": "postgresql" } },
+            "required": ["type"]
+          },
+          "then": {
+            "if": {
+              "properties": { "existingSecret": { "type": "string", "minLength": 1 } },
+              "required": ["existingSecret"]
+            },
+            "then": {},
+            "else": {
+              "required": ["host", "port", "database", "username", "password"],
+              "properties": {
+                "host": { "minLength": 1 },
+                "database": { "minLength": 1 },
+                "username": { "minLength": 1 },
+                "password": { "minLength": 1 }
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": { "type": { "const": "sqlite" } },
+            "required": ["type"]
+          },
+          "then": {
+            "required": ["index_path", "logs_path"],
+            "properties": {
+              "index_path": { "minLength": 1 },
+              "logs_path": { "minLength": 1 }
+            }
+          }
+        }
+      ]
     },
     "config": {
       "type": "object",
