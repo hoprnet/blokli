@@ -1,6 +1,3 @@
-// Allow casts for block numbers stored as i64, converted to u32 (checked elsewhere)
-#![allow(clippy::cast_sign_loss, clippy::cast_possible_truncation)]
-
 use async_trait::async_trait;
 use blokli_db_entity::{
     account, account_state, announcement,
@@ -25,6 +22,7 @@ use crate::{
     BlokliDbGeneralModelOperations, OptTx,
     db::BlokliDb,
     errors::{DbSqlError, DbSqlError::MissingAccount, Result},
+    numeric::i64_to_u32,
 };
 
 /// A type that can represent both [chain public key](Address) and [packet public key](OffchainPublicKey).
@@ -213,6 +211,7 @@ pub(crate) fn model_to_account_entry(
 ) -> Result<AccountEntry> {
     // Currently, we always take only the most recent announcement
     let announcement = announcements.first();
+    let key_id = i64_to_u32(account.id, "account_id")?;
 
     // Convert Vec<u8> (20 bytes) to Address
     let chain_addr = Address::try_from(account.chain_key.as_slice())?;
@@ -235,7 +234,7 @@ pub(crate) fn model_to_account_entry(
             Some(a) => AccountType::Announced(vec![a.multiaddress.parse().map_err(|_| DbSqlError::DecodingError)?]),
         },
         safe_address,
-        key_id: (account.id as u32).into(),
+        key_id: key_id.into(),
     })
 }
 
@@ -252,10 +251,9 @@ impl BlokliDbAccountOperations for BlokliDb {
         tx_index: u32,
         log_index: u32,
     ) -> Result<()> {
-        // Convert u32 to i64 for database storage
-        let block_i64 = block as i64;
-        let tx_index_i64 = tx_index as i64;
-        let log_index_i64 = log_index as i64;
+        let block_i64 = i64::from(block);
+        let tx_index_i64 = i64::from(tx_index);
+        let log_index_i64 = i64::from(log_index);
 
         self.nest_transaction(tx)
             .await?
@@ -263,7 +261,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                 Box::pin(async move {
                     // Step 1: Insert account identity or reuse existing one
                     let account_model = account::ActiveModel {
-                        id: Set(key_id as i64),
+                        id: Set(i64::from(key_id)),
                         chain_key: Set(chain_key.as_ref().to_vec()),
                         packet_key: Set(hex::encode(packet_key.as_ref())),
                         published_block: Set(block_i64),
@@ -499,7 +497,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                         .find(|(_, announcement)| announcement.multiaddress == multiaddr.to_string())
                     {
                         let mut existing_announcement = existing_announcements.remove(index).into_active_model();
-                        existing_announcement.published_block = Set(published_at as i64);
+                        existing_announcement.published_block = Set(i64::from(published_at));
                         let updated_announcement = existing_announcement.update(tx.as_ref()).await?;
 
                         // To maintain the sort order, insert at the original location
@@ -508,7 +506,7 @@ impl BlokliDbAccountOperations for BlokliDb {
                         let new_announcement = announcement::ActiveModel {
                             account_id: Set(existing_account.id),
                             multiaddress: Set(multiaddr.to_string()),
-                            published_block: Set(published_at as i64),
+                            published_block: Set(i64::from(published_at)),
                             ..Default::default()
                         }
                         .insert(tx.as_ref())
@@ -647,7 +645,7 @@ impl BlokliDbAccountOperations for BlokliDb {
         block: u32,
     ) -> Result<Option<AccountEntry>> {
         let cpk = key.into();
-        let block_i64 = block as i64;
+        let block_i64 = i64::from(block);
 
         self.nest_transaction(tx)
             .await?

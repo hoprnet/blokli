@@ -96,8 +96,12 @@ where
                     Ok(binding) => {
                         let chain_key = binding.chain_key;
                         // key_id is a U256, but we only support u32 for now as it maps to the account ID
-                        // This should be safe as long as we don't have more than 2^32 accounts
-                        let key_id: u32 = key_binding.key_id.try_into().unwrap_or_default();
+                        let key_id: u32 = key_binding.key_id.try_into().map_err(|_| {
+                            CoreEthereumIndexerError::ProcessError(format!(
+                                "key_id {} does not fit into u32",
+                                key_binding.key_id
+                            ))
+                        })?;
 
                         // Check if a safe is already registered for this node
                         let safe_address = match self.db.get_safe_for_registered_node(Some(tx), chain_key).await {

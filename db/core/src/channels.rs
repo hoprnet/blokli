@@ -1,8 +1,3 @@
-// Allow casts for Solidity uint24/uint48 that fit safely in i64
-#![allow(clippy::cast_possible_wrap)]
-// Allow casts from i64 back to u64 for values that originated from Solidity uints
-#![allow(clippy::cast_sign_loss)]
-
 use std::{collections::HashMap, time::SystemTime};
 
 use async_trait::async_trait;
@@ -255,9 +250,14 @@ async fn insert_channel_state_and_emit(
     let state_model = channel_state::ActiveModel {
         channel_id: Set(channel_id),
         balance: Set(balance_bytes_12.to_vec()),
-        status: Set(i8::from(channel_entry.status) as i16),
-        epoch: Set(channel_entry.channel_epoch as i64),
-        ticket_index: Set(channel_entry.ticket_index as i64),
+        status: Set(i16::from(i8::from(channel_entry.status))),
+        epoch: Set(i64::from(channel_entry.channel_epoch)),
+        ticket_index: Set(i64::try_from(channel_entry.ticket_index).map_err(|_| {
+            DbSqlError::InvalidData(format!(
+                "channel ticket_index {} exceeds i64::MAX",
+                channel_entry.ticket_index
+            ))
+        })?),
         closure_time: Set(match &channel_entry.status {
             ChannelStatus::PendingToClose(time) => Some(system_time_to_datetime(time).into()),
             _ => None,
@@ -672,10 +672,9 @@ impl BlokliDbChannelOperations for BlokliDb {
         let dest_addr = channel_entry.destination;
         let db_clone = self.clone();
 
-        // Convert u32 to i64 for database storage
-        let block_i64 = block as i64;
-        let tx_index_i64 = tx_index as i64;
-        let log_index_i64 = log_index as i64;
+        let block_i64 = i64::from(block);
+        let tx_index_i64 = i64::from(tx_index);
+        let log_index_i64 = i64::from(log_index);
 
         self.nest_transaction(tx)
             .await?
@@ -733,7 +732,7 @@ impl BlokliDbChannelOperations for BlokliDb {
         block: u32,
     ) -> Result<Option<ChannelEntry>> {
         let id_hex = hex::encode(id.as_ref());
-        let block_i64 = block as i64;
+        let block_i64 = i64::from(block);
 
         self.nest_transaction(tx)
             .await?
@@ -832,9 +831,9 @@ impl BlokliDbChannelOperations for BlokliDb {
         let id_hex = hex::encode(id.as_ref());
         let id_hex_clone = id_hex.clone();
         let id_hex_clone2 = id_hex.clone();
-        let block_i64 = block as i64;
-        let tx_index_i64 = tx_index as i64;
-        let log_index_i64 = log_index as i64;
+        let block_i64 = i64::from(block);
+        let tx_index_i64 = i64::from(tx_index);
+        let log_index_i64 = i64::from(log_index);
 
         self.nest_transaction(tx)
             .await?
@@ -1398,9 +1397,9 @@ mod tests {
         );
         let channel_id = base_channel.get_id();
 
-        for i in 0..5 {
+        for i in 0_u32..5 {
             let balance = HoprBalance::from((i + 1) * 1000);
-            let ce = build_channel_entry(addr_1, addr_2, balance, i as u64, ChannelStatus::Open, 1u32);
+            let ce = build_channel_entry(addr_1, addr_2, balance, u64::from(i), ChannelStatus::Open, 1u32);
             db.upsert_channel(None, ce, (i + 1) * 100, 0, 0).await?;
         }
 
@@ -1418,7 +1417,8 @@ mod tests {
                 i
             );
             assert_eq!(
-                i as u64, state.ticket_index,
+                u64::try_from(i)?,
+                state.ticket_index,
                 "state {} should have correct ticket_index",
                 i
             );

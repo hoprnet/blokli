@@ -98,6 +98,17 @@ fn checksum_low_32_bits(checksum_hash: &Hash) -> u32 {
     )
 }
 
+fn block_number_to_u32(block_number: u64) -> Result<u32> {
+    u32::try_from(block_number).map_err(|_| {
+        CoreEthereumIndexerError::ProcessError(format!("block_number {block_number} does not fit into u32"))
+    })
+}
+
+fn u64_to_i64(value: u64, field_name: &str) -> Result<i64> {
+    i64::try_from(value)
+        .map_err(|_| CoreEthereumIndexerError::ProcessError(format!("{field_name} {value} does not fit into i64")))
+}
+
 /// Indexer
 ///
 /// Accepts the RPC operational functionality [blokli_chain_rpc::HoprIndexerRpcOperations]
@@ -333,7 +344,7 @@ where
                     start_block = last_indexed,
                     "Resuming from last indexed block (no checksummed logs found)",
                 );
-                (last_indexed + 1) as u64
+                u64::from(last_indexed) + 1
             } else {
                 self.cfg.start_block_number
             }
@@ -401,7 +412,14 @@ where
                     .update_logs_checksums()
                     .await
                     .expect("historical sync checksum finalization should succeed");
-                db.set_indexer_state_info(None, historical_sync_head as u32)
+                let historical_sync_head_u32 = match block_number_to_u32(historical_sync_head) {
+                    Ok(block_number) => block_number,
+                    Err(error) => {
+                        error!(historical_sync_head, %error, "failed to convert historical sync head");
+                        return;
+                    }
+                };
+                db.set_indexer_state_info(None, historical_sync_head_u32)
                     .await
                     .expect("historical sync state finalization should succeed");
 
@@ -911,7 +929,14 @@ where
                 }
 
                 // finally update the block number in the database to the last processed block
-                match db.set_indexer_state_info(None, block_id as u32).await {
+                let block_id_u32 = match block_number_to_u32(block_id) {
+                    Ok(block_number) => block_number,
+                    Err(error) => {
+                        error!(block_id, %error, "failed to convert processed block id");
+                        return None;
+                    }
+                };
+                match db.set_indexer_state_info(None, block_id_u32).await {
                     Ok(_) => {
                         #[cfg(all(feature = "telemetry", not(test)))]
                         METRIC_INDEXER_CURRENT_BLOCK.set(block_id as f64);
@@ -1133,6 +1158,7 @@ where
 
             // Step 3: Insert corrective state at synthetic position (canonical_block, 0, 0)
             // This state represents the canonical state after reorg recovery
+            let canonical_block = u64_to_i64(canonical_block, "canonical_block")?;
             let corrective_state = channel_state::ActiveModel {
                 id: Default::default(), // Auto-increment
                 channel_id: Set(channel_id),
@@ -1142,7 +1168,7 @@ where
                 ticket_index: Set(valid_state.ticket_index),
                 closure_time: Set(valid_state.closure_time),
                 corrupted_state: Set(valid_state.corrupted_state),
-                published_block: Set(canonical_block as i64),
+                published_block: Set(canonical_block),
                 published_tx_index: Set(0),  // Synthetic position
                 published_log_index: Set(0), // Synthetic position
                 reorg_correction: Set(true), // Mark as reorg correction
@@ -1333,7 +1359,7 @@ mod tests {
 
         for i in 0..size {
             let test_multiaddr: Multiaddr = format!("/ip4/1.2.3.4/tcp/{}", 1000 + i).parse()?;
-            let tx_index: u64 = i as u64;
+            let tx_index = u64::try_from(i)?;
             let log_index: u64 = starting_log_index + tx_index;
 
             logs.push(SerializableLog {
@@ -1934,7 +1960,8 @@ mod tests {
             })
             .collect();
 
-        for _ in 0..(blocks.len() as u64) {
+        let block_count = u64::try_from(blocks.len())?;
+        for _ in 0..block_count {
             rpc.expect_block_number().returning(move || Ok(head_block));
         }
 
@@ -2405,9 +2432,9 @@ mod tests {
             ticket_index: Set(0),
             closure_time: Set(None),
             corrupted_state: Set(false),
-            published_block: Set(block as i64),
-            published_tx_index: Set(tx_index as i64),
-            published_log_index: Set(log_index as i64),
+            published_block: Set(i64::try_from(block)?),
+            published_tx_index: Set(i64::try_from(tx_index)?),
+            published_log_index: Set(i64::try_from(log_index)?),
             reorg_correction: Set(reorg_correction),
         };
         state.insert(conn).await?;
@@ -3038,7 +3065,8 @@ mod tests {
         .await?;
 
         assert_eq!(
-            corrected_count as i64, channel_count,
+            i64::try_from(corrected_count)?,
+            channel_count,
             "Should correct all affected channels"
         );
 
