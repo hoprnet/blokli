@@ -271,6 +271,10 @@ You can override any configuration setting using environment variables.
 | `network`                  | `BLOKLI_NETWORK`                  |
 | `rpc_url`                  | `BLOKLI_RPC_URL`                  |
 | `max_rpc_requests_per_sec` | `BLOKLI_MAX_RPC_REQUESTS_PER_SEC` |
+| `max_block_range`          | `BLOKLI_MAX_BLOCK_RANGE`          |
+
+`max_block_range` is the ceiling for adaptive `eth_getLogs` block ranges. Set it to `0` to auto-discover with the default 10000-block
+ceiling.
 
 #### Database Configuration
 

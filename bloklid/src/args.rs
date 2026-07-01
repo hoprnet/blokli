@@ -1067,6 +1067,35 @@ mod tests {
     }
 
     #[test]
+    fn test_max_block_range_zero_enables_auto_mode() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://localhost:8545"
+            max_block_range = 0
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_var("BLOKLI_MAX_BLOCK_RANGE", None::<&str>, || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
+
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(config.max_block_range, 0, "max_block_range=0 should be accepted");
+        });
+    }
+
+    #[test]
     fn test_max_rpc_requests_per_sec_zero_from_config() {
         let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
         writeln!(
