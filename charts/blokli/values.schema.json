@@ -87,7 +87,9 @@
           },
           "then": {
             "if": {
-              "properties": { "existingSecret": { "type": "string", "minLength": 1 } },
+              "properties": {
+                "existingSecret": { "type": "string", "minLength": 1 }
+              },
               "required": ["existingSecret"]
             },
             "then": {},
