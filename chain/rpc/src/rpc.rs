@@ -280,20 +280,23 @@ fn next_probe(last_working: u64, first_failing: u64) -> u64 {
     }
 }
 
-fn message_indicates_log_range_limit(message: &str) -> bool {
+fn message_indicates_known_log_range_limit(message: &str) -> bool {
     let message = message.to_ascii_lowercase();
-    let mentions_limit = message.contains("limit")
-        || message.contains("exceed")
-        || message.contains("too many")
-        || message.contains("too large")
-        || message.contains("too wide")
-        || message.contains("more than")
-        || message.contains("maximum")
-        || message.contains("response size");
-    let mentions_logs_or_blocks = message.contains("log") || message.contains("block") || message.contains("result");
-    let mentions_range = message.contains("range") || message.contains("block") || message.contains("eth_getlogs");
 
-    mentions_limit && mentions_logs_or_blocks && mentions_range
+    message.contains("exceed maximum block range")
+        || message.contains("block range limit exceeded")
+        || message.contains("query exceeds max block range")
+        || message.contains("query block range exceeds server limit")
+        || (message.contains("block range")
+            && message.contains("exceeds the maximum of")
+            && message.contains("blocks per logs request"))
+        || message.contains("too many logs requested. max logs per response is")
+        || (message.contains("query exceeds max results") && message.contains("retry with the range"))
+        || message.contains("query returns too many logs, narrow your filter")
+}
+
+fn is_known_log_range_limit_code(code: i64) -> bool {
+    matches!(code, -32602 | -32005)
 }
 
 pub(crate) fn is_log_block_range_limit_error(error: &RpcError) -> bool {
@@ -302,13 +305,11 @@ pub(crate) fn is_log_block_range_limit_error(error: &RpcError) -> bool {
     };
 
     if let Some(error_payload) = error.as_error_resp() {
-        let known_range_limit_code = matches!(error_payload.code, -32005 | -32016 | 429);
-
-        return message_indicates_log_range_limit(&error_payload.message)
-            || (known_range_limit_code && message_indicates_log_range_limit(&error_payload.to_string()));
+        return is_known_log_range_limit_code(error_payload.code)
+            && message_indicates_known_log_range_limit(&error_payload.message);
     }
 
-    message_indicates_log_range_limit(&error.to_string())
+    message_indicates_known_log_range_limit(&error.to_string())
 }
 
 /// Implementation of `HoprRpcOperations` and `HoprIndexerRpcOperations` trait via `alloy`
@@ -731,7 +732,23 @@ impl<R: HttpRequestor + 'static + Clone> HoprRpcOperations for RpcOperations<R> 
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_AUTO_LOG_BLOCK_RANGE_CAP, LogBlockRangeLimit};
+    use std::borrow::Cow;
+
+    use hopr_bindings::exports::alloy::{
+        rpc::json_rpc::ErrorPayload,
+        transports::{RpcError as AlloyRpcError, TransportErrorKind},
+    };
+
+    use super::{DEFAULT_AUTO_LOG_BLOCK_RANGE_CAP, LogBlockRangeLimit, is_log_block_range_limit_error};
+    use crate::errors::RpcError;
+
+    fn rpc_error_response(code: i64, message: &'static str) -> RpcError {
+        RpcError::AlloyRpcError(AlloyRpcError::<TransportErrorKind>::ErrorResp(ErrorPayload {
+            code,
+            message: Cow::Borrowed(message),
+            data: None,
+        }))
+    }
 
     fn converge_limit(cap: u64, allowed_limit: u64) -> LogBlockRangeLimit {
         let mut range_limit = LogBlockRangeLimit::new(cap);
@@ -806,6 +823,78 @@ mod tests {
         assert!(!update.retry);
         assert!(update.warn_single_block);
         assert_eq!(range_limit.current(), 1);
+    }
+
+    #[test]
+    fn test_log_block_range_limit_error_matches_geth_response() {
+        // Message source:
+        // https://github.com/ethereum/go-ethereum/blob/7e625dd54822499d7fece76de9850377d65957c4/eth/filters/filter.go#L148-L149
+        // Error code source:
+        // https://github.com/ethereum/go-ethereum/blob/7e625dd54822499d7fece76de9850377d65957c4/eth/filters/api.go#L54-L55
+        let error = rpc_error_response(-32602, "exceed maximum block range 5000");
+
+        assert!(is_log_block_range_limit_error(&error));
+    }
+
+    #[test]
+    fn test_log_block_range_limit_error_matches_nethermind_response() {
+        // Message source:
+        // https://github.com/NethermindEth/nethermind/blob/5de23f52669f8ef08a67e2ff4a2c87bf75b5a66c/src/Nethermind/Nethermind.JsonRpc/Modules/Eth/EthRpcModule.cs#L1193-L1206
+        // Error code source:
+        // https://github.com/NethermindEth/nethermind/blob/5de23f52669f8ef08a67e2ff4a2c87bf75b5a66c/src/Nethermind/Nethermind.JsonRpc/ErrorCodes.cs#L30-L33
+        let error = rpc_error_response(
+            -32602,
+            "Block range 1001 exceeds the maximum of 1000 blocks per logs request. Use a narrower fromBlock/toBlock \
+             range or increase Receipt.MaxBlockDepth.",
+        );
+
+        assert!(is_log_block_range_limit_error(&error));
+    }
+
+    #[test]
+    fn test_log_block_range_limit_error_matches_reth_response() {
+        // Limit check source:
+        // https://github.com/paradigmxyz/reth/blob/3d76b93c243f8896f13a39ee865f87241fcd649b/crates/rpc/rpc/src/eth/filter.rs#L638-L642
+        // Message and error code source:
+        // https://github.com/paradigmxyz/reth/blob/3d76b93c243f8896f13a39ee865f87241fcd649b/crates/rpc/rpc/src/eth/filter.rs#L958-L995
+        let error = rpc_error_response(-32602, "query exceeds max block range 1000");
+
+        assert!(is_log_block_range_limit_error(&error));
+    }
+
+    #[test]
+    fn test_log_block_range_limit_error_matches_erigon_response() {
+        // Message source:
+        // https://github.com/erigontech/erigon/blob/f1d79d699ed4b809abc0d177dcb539d8605edc41/rpc/jsonrpc/eth_receipts.go#L298-L305
+        // Error code source:
+        // https://github.com/erigontech/erigon/blob/f1d79d699ed4b809abc0d177dcb539d8605edc41/rpc/errors.go#L51-L103
+        let error = rpc_error_response(
+            -32602,
+            "query block range exceeds server limit, narrow your filter: 1000",
+        );
+
+        assert!(is_log_block_range_limit_error(&error));
+    }
+
+    #[test]
+    fn test_log_block_range_limit_error_rejects_unrelated_limit_errors() {
+        for error in [
+            rpc_error_response(-32602, "Block gas limit exceeded"),
+            rpc_error_response(-32005, "Too many requests"),
+            rpc_error_response(-32602, "block range extends beyond current head block"),
+        ] {
+            assert!(!is_log_block_range_limit_error(&error));
+        }
+    }
+
+    #[test]
+    fn test_log_block_range_limit_error_rejects_unexpected_error_codes() {
+        for error in [
+            rpc_error_response(-32000, "query exceeds max block range 1000"),
+            rpc_error_response(429, "query exceeds max block range 1000"),
+        ] {
+            assert!(!is_log_block_range_limit_error(&error));
+        }
     }
 
     // NOTE: This test is commented out because check_node_safe_module_status() method is commented out
