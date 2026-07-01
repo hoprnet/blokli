@@ -23,7 +23,7 @@ use hopr_bindings::{
 };
 use hopr_types::{
     crypto::prelude::Hash,
-    primitive::prelude::{Address, SerializableLog},
+    primitive::prelude::{Address, SerializableLog, U256},
 };
 use tracing::{debug, error, trace};
 
@@ -45,6 +45,31 @@ mod stake_factory;
 #[cfg(test)]
 mod test_utils;
 mod tokens;
+
+pub(super) fn u64_to_u32(value: u64, field_name: &str) -> Result<u32> {
+    u32::try_from(value)
+        .map_err(|_| CoreEthereumIndexerError::ProcessError(format!("{field_name} {value} does not fit into u32")))
+}
+
+pub(super) fn u256_to_u64(value: U256, field_name: &str) -> Result<u64> {
+    if value.bits() > 64 {
+        return Err(CoreEthereumIndexerError::ProcessError(format!(
+            "{field_name} {value} does not fit into u64"
+        )));
+    }
+
+    Ok(value.low_u64())
+}
+
+pub(super) fn u256_to_u32(value: U256, field_name: &str) -> Result<u32> {
+    if value.bits() > 32 {
+        return Err(CoreEthereumIndexerError::ProcessError(format!(
+            "{field_name} {value} does not fit into u32"
+        )));
+    }
+
+    Ok(value.low_u32())
+}
 
 #[cfg(all(feature = "telemetry", not(test)))]
 use hopr_types::telemetry::MultiCounter;
@@ -198,9 +223,9 @@ where
         })?;
 
         if log.address.eq(&self.addresses.announcements) {
-            let bn = log.block_number as u32;
-            let tx_idx = log.tx_index as u32;
-            let log_idx = log.log_index.as_u32();
+            let bn = u64_to_u32(log.block_number, "block_number")?;
+            let tx_idx = u64_to_u32(log.tx_index, "tx_index")?;
+            let log_idx = u256_to_u32(log.log_index, "log_index")?;
             let event = HoprAnnouncementsEvents::decode_log(&primitive_log)?;
             self.on_announcement_event(tx, event.data, bn, tx_idx, log_idx, is_synced)
                 .await
@@ -208,14 +233,14 @@ where
             let event = HoprNodeStakeFactoryEvents::decode_log(&primitive_log)?;
             let block = log.block_number;
             let tx_idx = log.tx_index;
-            let log_idx = log.log_index.as_u64();
+            let log_idx = u256_to_u64(log.log_index, "log_index")?;
             self.on_stake_factory_event(tx, &slog, event.data, is_synced, block, tx_idx, log_idx)
                 .await
         } else if log.address.eq(&self.addresses.channels) {
             let event = HoprChannelsEvents::decode_log(&primitive_log)?;
-            let block = log.block_number as u32;
-            let tx_idx = log.tx_index as u32;
-            let log_idx = log.log_index.as_u32();
+            let block = u64_to_u32(log.block_number, "block_number")?;
+            let tx_idx = u64_to_u32(log.tx_index, "tx_index")?;
+            let log_idx = u256_to_u32(log.log_index, "log_index")?;
             match self
                 .on_channel_event(tx, event.data, block, tx_idx, log_idx, is_synced)
                 .await
