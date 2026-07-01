@@ -141,6 +141,18 @@ altering deployment models. Keep it conceptual — no code, CLI commands, or con
 `chain/api/src/transaction_store.rs` — in-memory only, by design. Lost on restart. Only tracks `async`/`sync` mode transactions. Use
 on-chain confirmation for permanent records.
 
+### Transaction Filtering
+
+`send_transaction` is gated by a network-derived allow-set: `network_transaction_filter` in `chain/api/src/transaction_policy.rs` maps each
+HOPR contract to the function selectors bloklid relays, using `hopr-bindings` `<…Call as SolCall>::SELECTOR` consts. The set mirrors the
+operations in `hopr-types` `chain/payload/bindings_based.rs` (`PayloadGenerator`/`SafePayloadGenerator`).
+
+**Keep this allow-set in sync with `hopr-types`.** When a `hopr-types` update adds, removes, or renames a relayed operation (or changes its
+target contract or `*Safe` variant), update `network_transaction_filter` to match — otherwise a legitimate operation is silently rejected, or
+a removed one stays allowed. The `blokli-tx` filter unwraps Safe-module `execTransactionFromModule` calls and matches the inner
+`(contract, selector)`, so add the inner call's selector (the `*Safe` variant for module-wrapped ops). Cover any new operation with a test in
+`transaction_policy.rs`.
+
 ## Testing
 
 - Unit tests: `#[cfg(test)]` in same file, `#[tokio::test]` for async
