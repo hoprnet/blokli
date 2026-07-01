@@ -353,7 +353,13 @@ transaction signatures are verified by Ethereum consensus—only successfully mi
 recovered from the transaction's ECDSA signature by the blockchain itself.
 
 **Configuration Parameters**: The RPC layer is configured with network-specific parameters including chain ID, contract addresses, expected
-block time for polling intervals, transaction polling configuration, finality depth, and maximum block range for batch fetching.
+block time for polling intervals, transaction polling configuration, finality depth, and a maximum block range ceiling for log fetching.
+
+**Adaptive Log Range Discovery**: The configured log block range is a ceiling, not a fixed request size. The RPC layer treats real
+`eth_getLogs` requests as observations: it starts with the ceiling, records successful ranges, records rejected ranges, and uses binary
+search to converge on the largest working range. Once a stable range is found, it is reused continuously. If the endpoint later rejects that
+stable range, the previous result is discarded and the same request-driven search moves downward again. If even single-block log requests
+are rejected, the RPC layer stays in single-block mode and surfaces the underlying RPC error while warning that this mode is very slow.
 
 **Retry Strategy**: Implements exponential backoff with jitter for transient failures, distinguishes between retryable errors (network, rate
 limit) and non-retryable errors (invalid transaction), and respects rate limits through request throttling.
@@ -1198,7 +1204,8 @@ Lightweight deployment using SQLite with separated databases:
 **Optimization Strategies**:
 
 - **Fast Sync via Snapshots**: Reduces initial sync from hours to minutes by importing pre-indexed logs database
-- **Batch Log Fetching**: Configurable block range size balances memory usage with RPC call overhead
+- **Adaptive Batch Log Fetching**: Configurable block range ceiling bounds RPC load while request-driven discovery learns the endpoint's
+  current usable range
 - **Dual Database Mode**: Separates high-volume log writes from indexed state reads (SQLite)
 - **Async Event Processing**: Pipeline stages run concurrently where possible
 - **Position-based Deduplication**: Prevents reprocessing same events after restart

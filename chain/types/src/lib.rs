@@ -81,7 +81,7 @@ pub struct ChainConfig {
     pub tx_polling_interval: u64,
     /// Number of confirmations required (finality)
     pub confirmations: u16,
-    /// Maximum block range for RPC queries
+    /// Maximum block range ceiling for adaptive RPC log queries
     pub max_block_range: u32,
     /// Starting block number for channel contract (where indexing should begin)
     pub channel_contract_deploy_block: u32,
