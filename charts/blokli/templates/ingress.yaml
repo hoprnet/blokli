@@ -8,8 +8,9 @@ metadata:
   name: {{ $fullName }}
   labels:
     {{- include "blokli.labels" . | nindent 4 }}
-  {{- with .Values.ingress.annotations }}
   annotations:
+    argocd.argoproj.io/sync-wave: "4"
+  {{- with .Values.ingress.annotations }}
     {{- toYaml . | nindent 4 }}
   {{- end }}
 spec:
