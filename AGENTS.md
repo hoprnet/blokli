@@ -148,10 +148,10 @@ HOPR contract to the function selectors bloklid relays, using `hopr-bindings` `<
 operations in `hopr-types` `chain/payload/bindings_based.rs` (`PayloadGenerator`/`SafePayloadGenerator`).
 
 **Keep this allow-set in sync with `hopr-types`.** When a `hopr-types` update adds, removes, or renames a relayed operation (or changes its
-target contract or `*Safe` variant), update `network_transaction_filter` to match — otherwise a legitimate operation is silently rejected, or
-a removed one stays allowed. The `blokli-tx` filter unwraps Safe-module `execTransactionFromModule` calls and matches the inner
-`(contract, selector)`, so add the inner call's selector (the `*Safe` variant for module-wrapped ops). Cover any new operation with a test in
-`transaction_policy.rs`.
+target contract or `*Safe` variant), update `network_transaction_filter` to match — otherwise a legitimate operation is silently rejected,
+or a removed one stays allowed. The `blokli-tx` filter unwraps Safe-module `execTransactionFromModule` calls and matches the inner
+`(contract, selector)`, so add the inner call's selector (the `*Safe` variant for module-wrapped ops). Cover any new operation with a test
+in `transaction_policy.rs`.
 
 ## Testing
 
