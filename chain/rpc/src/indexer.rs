@@ -124,27 +124,44 @@ fn contains_rpc_fetch_error(results: &[Result<Log>]) -> bool {
         .any(|result| matches!(result, Err(RpcError::AlloyRpcError(_))))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AdaptiveLogSubrange {
+    end_block: u64,
+    requested_span: u64,
+    attempted_limit: u64,
+}
+
 // impl<P: JsonRpcClient + 'static, R: HttpRequestor + 'static> RpcOperations<P, R> {
 impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
+    fn next_adaptive_subrange(&self, next_block: u64, to_block: u64) -> AdaptiveLogSubrange {
+        let attempted_limit = self.log_block_range_limit();
+        let end_block = to_block.min(next_block.saturating_add(attempted_limit.saturating_sub(1)));
+        let requested_span = end_block - next_block + 1;
+
+        AdaptiveLogSubrange {
+            end_block,
+            requested_span,
+            attempted_limit,
+        }
+    }
+
     /// Retrieves logs in the given range (`from_block` and `to_block` are inclusive).
     fn stream_logs(&self, filters: Vec<Filter>, from_block: u64, to_block: u64) -> BoxStream<'_, Result<Log>> {
         stream! {
             let mut next_block = from_block;
 
             while next_block <= to_block {
-                let attempted_limit = self.log_block_range_limit();
-                let end_block = to_block.min(next_block.saturating_add(attempted_limit.saturating_sub(1)));
-                let requested_span = end_block - next_block + 1;
+                let subrange = self.next_adaptive_subrange(next_block, to_block);
                 let ranged_filters = filters
                     .iter()
                     .cloned()
-                    .map(|filter| filter.from_block(next_block).to_block(end_block))
+                    .map(|filter| filter.from_block(next_block).to_block(subrange.end_block))
                     .collect::<Vec<_>>();
 
                 debug!(
                     from_block = next_block,
-                    to_block = end_block,
-                    attempted_block_range = attempted_limit,
+                    to_block = subrange.end_block,
+                    attempted_block_range = subrange.attempted_limit,
                     "polling logs from block subrange"
                 );
 
@@ -168,19 +185,19 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
                 .await;
 
                 if let Some(error) = contains_log_block_range_limit_error(&results) {
-                    let update = self.record_log_block_range_failure(requested_span, error);
+                    let update = self.record_log_block_range_failure(subrange.requested_span, error);
                     if update.retry {
                         continue;
                     }
                 } else if !contains_rpc_fetch_error(&results) {
-                    self.record_log_block_range_success(requested_span, attempted_limit);
+                    self.record_log_block_range_success(subrange.requested_span, subrange.attempted_limit);
                 }
 
                 for result in results {
                     yield result;
                 }
 
-                next_block = end_block + 1;
+                next_block = subrange.end_block + 1;
             }
         }
         .boxed()
@@ -387,31 +404,29 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
         let mut next_block = from_block;
 
         while next_block <= to_block {
-            let attempted_limit = self.log_block_range_limit();
-            let end_block = to_block.min(next_block.saturating_add(attempted_limit.saturating_sub(1)));
-            let requested_span = end_block - next_block + 1;
+            let subrange = self.next_adaptive_subrange(next_block, to_block);
             let filter = Filter::new()
                 .address(AlloyAddress::from_hopr_address(address))
                 .event_signature(topics.clone())
                 .from_block(next_block)
-                .to_block(end_block);
+                .to_block(subrange.end_block);
 
             match self.provider.get_logs(&filter).await {
                 Ok(chunk_logs) => {
-                    self.record_log_block_range_success(requested_span, attempted_limit);
+                    self.record_log_block_range_success(subrange.requested_span, subrange.attempted_limit);
 
                     let mut converted_logs = chunk_logs
                         .into_iter()
                         .map(Log::try_from)
                         .collect::<std::result::Result<Vec<_>, _>>()?;
                     logs.append(&mut converted_logs);
-                    next_block = end_block + 1;
+                    next_block = subrange.end_block + 1;
                 }
                 Err(error) => {
                     let rpc_error = RpcError::from(error);
 
                     if is_log_block_range_limit_error(&rpc_error) {
-                        let update = self.record_log_block_range_failure(requested_span, &rpc_error);
+                        let update = self.record_log_block_range_failure(subrange.requested_span, &rpc_error);
                         if update.retry {
                             continue;
                         }
@@ -665,6 +680,23 @@ mod tests {
         })?;
 
         Ok(bounds)
+    }
+
+    #[test]
+    fn test_next_adaptive_subrange_uses_current_limit() -> anyhow::Result<()> {
+        let rpc = create_test_rpc_operations_with_max_range("http://localhost:8545", 3)?;
+
+        let subrange = rpc.next_adaptive_subrange(5, 9);
+        assert_eq!(subrange.end_block, 7);
+        assert_eq!(subrange.requested_span, 3);
+        assert_eq!(subrange.attempted_limit, 3);
+
+        let final_subrange = rpc.next_adaptive_subrange(8, 9);
+        assert_eq!(final_subrange.end_block, 9);
+        assert_eq!(final_subrange.requested_span, 2);
+        assert_eq!(final_subrange.attempted_limit, 3);
+
+        Ok(())
     }
 
     #[tokio::test]

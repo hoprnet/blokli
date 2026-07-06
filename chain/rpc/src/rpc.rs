@@ -186,8 +186,10 @@ impl LogBlockRangeLimit {
     }
 
     fn record_success(&mut self, requested_span: u64, attempted_limit: u64) -> Option<u64> {
+        let previous_stable = self.stable;
+
         if requested_span == 0 {
-            return self.stable;
+            return None;
         }
 
         match self.first_failing {
@@ -213,7 +215,11 @@ impl LogBlockRangeLimit {
             }
         }
 
-        self.stable
+        if self.stable != previous_stable {
+            self.stable
+        } else {
+            None
+        }
     }
 
     fn record_failure(&mut self, requested_span: u64) -> LogBlockRangeFailureUpdate {
@@ -293,6 +299,8 @@ fn message_indicates_known_log_range_limit(message: &str) -> bool {
         || message.contains("too many logs requested. max logs per response is")
         || (message.contains("query exceeds max results") && message.contains("retry with the range"))
         || message.contains("query returns too many logs, narrow your filter")
+        || message.contains("query returned more than 10000 results")
+        || message.contains("log response size exceeded")
 }
 
 fn is_known_log_range_limit_code(code: i64) -> bool {
@@ -788,6 +796,14 @@ mod tests {
     }
 
     #[test]
+    fn test_log_block_range_limit_reports_stable_limit_once() {
+        let mut range_limit = LogBlockRangeLimit::new(10_000);
+
+        assert_eq!(range_limit.record_success(10_000, 10_000), Some(10_000));
+        assert_eq!(range_limit.record_success(10_000, 10_000), None);
+    }
+
+    #[test]
     fn test_log_block_range_limit_downshifts_after_stable_failure() {
         let mut range_limit = converge_limit(10_000, 100);
 
@@ -872,6 +888,20 @@ mod tests {
             -32602,
             "query block range exceeds server limit, narrow your filter: 1000",
         );
+
+        assert!(is_log_block_range_limit_error(&error));
+    }
+
+    #[test]
+    fn test_log_block_range_limit_error_matches_infura_response() {
+        let error = rpc_error_response(-32005, "query returned more than 10000 results");
+
+        assert!(is_log_block_range_limit_error(&error));
+    }
+
+    #[test]
+    fn test_log_block_range_limit_error_matches_alchemy_response() {
+        let error = rpc_error_response(-32602, "Log response size exceeded");
 
         assert!(is_log_block_range_limit_error(&error));
     }
