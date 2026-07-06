@@ -7,9 +7,7 @@ services:
       POSTGRES_USER: bloklid
       POSTGRES_PASSWORD: bloklid_dev_password
       POSTGRES_DB: bloklid
-    ports:
-      - "5432:5432"
-
+    volumes:
       - postgres_data:/var/lib/postgresql/data
       - ./init-db.sql:/docker-entrypoint-initdb.d/init-db.sql
     healthcheck:
