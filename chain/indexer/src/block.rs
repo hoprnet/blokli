@@ -372,9 +372,17 @@ where
             let mut stream_start_block = next_block_to_process;
 
             if stream_start_block <= historical_sync_head {
-                let historical_sync_head_u32 = block_number_to_u32(historical_sync_head).unwrap_or_else(|error| {
-                    panic!("historical sync head {historical_sync_head} does not fit into u32: {error}");
-                });
+                let historical_sync_head_u32 = match block_number_to_u32(historical_sync_head) {
+                    Ok(block_number) => block_number,
+                    Err(error) => {
+                        error!(
+                            historical_sync_head,
+                            %error,
+                            "historical sync head does not fit into u32, terminating indexer task"
+                        );
+                        return;
+                    }
+                };
 
                 info!(
                     start_block = stream_start_block,
@@ -828,8 +836,13 @@ where
     {
         let _lock = indexer_state.acquire_processing_lock().await;
         let block_id = block.block_id;
-        let block_id_u32 = block_number_to_u32(block_id)
-            .unwrap_or_else(|error| panic!("block id {block_id} does not fit into u32: {error}"));
+        let block_id_u32 = match block_number_to_u32(block_id) {
+            Ok(block_number) => block_number,
+            Err(error) => {
+                error!(block_id, %error, "failed to convert block id to u32, skipping block");
+                return None;
+            }
+        };
         let log_count = block.logs.len();
         debug!(block_id, "processing events");
 

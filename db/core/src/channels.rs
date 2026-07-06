@@ -1612,8 +1612,6 @@ mod tests {
     }
     #[tokio::test]
     async fn test_channel_entry_builder_rejects_oversized_ticket_index() -> anyhow::Result<()> {
-        use hopr_types::internal::channels::ChannelEntry;
-
         let addr_1 = Address::from(random_bytes());
         let addr_2 = Address::from(random_bytes());
 
