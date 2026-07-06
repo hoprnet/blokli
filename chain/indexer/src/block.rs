@@ -372,6 +372,10 @@ where
             let mut stream_start_block = next_block_to_process;
 
             if stream_start_block <= historical_sync_head {
+                let historical_sync_head_u32 = block_number_to_u32(historical_sync_head).unwrap_or_else(|error| {
+                    panic!("historical sync head {historical_sync_head} does not fit into u32: {error}");
+                });
+
                 info!(
                     start_block = stream_start_block,
                     end_block = historical_sync_head,
@@ -414,13 +418,6 @@ where
                     .update_logs_checksums()
                     .await
                     .expect("historical sync checksum finalization should succeed");
-                let historical_sync_head_u32 = match block_number_to_u32(historical_sync_head) {
-                    Ok(block_number) => block_number,
-                    Err(error) => {
-                        error!(historical_sync_head, %error, "failed to convert historical sync head");
-                        return;
-                    }
-                };
                 db.set_indexer_state_info(None, historical_sync_head_u32)
                     .await
                     .expect("historical sync state finalization should succeed");
@@ -831,6 +828,8 @@ where
     {
         let _lock = indexer_state.acquire_processing_lock().await;
         let block_id = block.block_id;
+        let block_id_u32 = block_number_to_u32(block_id)
+            .unwrap_or_else(|error| panic!("block id {block_id} does not fit into u32: {error}"));
         let log_count = block.logs.len();
         debug!(block_id, "processing events");
 
@@ -924,15 +923,6 @@ where
                         }
                     }
                 }
-
-                // finally update the block number in the database to the last processed block
-                let block_id_u32 = match block_number_to_u32(block_id) {
-                    Ok(block_number) => block_number,
-                    Err(error) => {
-                        error!(block_id, %error, "failed to convert processed block id");
-                        return None;
-                    }
-                };
                 match db.set_indexer_state_info(None, block_id_u32).await {
                     Ok(_) => {
                         #[cfg(all(feature = "telemetry", not(test)))]

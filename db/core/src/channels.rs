@@ -1610,4 +1610,65 @@ mod tests {
 
         Ok(())
     }
+    #[tokio::test]
+    async fn test_channel_entry_builder_rejects_oversized_ticket_index() -> anyhow::Result<()> {
+        use hopr_types::internal::channels::ChannelEntry;
+
+        let addr_1 = Address::from(random_bytes());
+        let addr_2 = Address::from(random_bytes());
+
+        // ticket_index above the protocol's MAX_TICKET_INDEX (2^48 - 1) must be
+        // rejected at the builder. The DB layer enforces i64::MAX as defense in
+        // depth, but the builder is the first line of defense and the only one
+        // reachable through the public API.
+        let err = ChannelEntry::builder()
+            .between(addr_1, addr_2)
+            .balance(HoprBalance::from(1000u32))
+            .ticket_index(u64::MAX)
+            .status(ChannelStatus::Open)
+            .epoch(1u32)
+            .build()
+            .expect_err("ticket_index above MAX_TICKET_INDEX should be rejected");
+
+        assert!(
+            err.to_string().contains("ticket index"),
+            "unexpected error message: {err}"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upsert_channel_round_trip_within_builder_limits() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let addr_1 = Address::from(random_bytes());
+        let addr_2 = Address::from(random_bytes());
+
+        let packet_key_addr_1 = *OffchainKeypair::random().public();
+        db.upsert_account(None, 1, addr_1, packet_key_addr_1, None, 1, 0, 0)
+            .await?;
+        let packet_key_addr_2 = *OffchainKeypair::random().public();
+        db.upsert_account(None, 2, addr_2, packet_key_addr_2, None, 1, 0, 0)
+            .await?;
+
+        // A normal, in-range ticket_index must still round-trip through upsert_channel
+        // and come back as the same value. This guards against a regression where the
+        // checked i64 conversion at the DB boundary silently truncates large values.
+        let ce = build_channel_entry(
+            addr_1,
+            addr_2,
+            HoprBalance::from(1000u32),
+            42u64,
+            ChannelStatus::Open,
+            1u32,
+        );
+        db.upsert_channel(None, ce, 100, 0, 0).await?;
+
+        let history = db.get_channel_history(None, ce.get_id()).await?;
+        assert_eq!(1, history.len(), "should have one state record");
+        assert_eq!(42u64, history[0].ticket_index, "ticket_index must round-trip unchanged");
+
+        Ok(())
+    }
 }

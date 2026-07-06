@@ -60,8 +60,12 @@ impl BlokliDbLogOperations for BlokliDb {
                             log_position_to_i64(log.block_number, log.tx_index, log.log_index)
                                 .map_err(DbError::from)?;
 
-                        // First, try to insert the Log and get its ID
+                        // Build both ActiveModels up front so a conversion failure
+                        // cannot leave an orphaned log row without a matching log_status.
                         let log_model = log::ActiveModel::try_from(log.clone())
+                            .map_err(DbSqlError::from)
+                            .map_err(DbError::from)?;
+                        let mut status_model = log_status::ActiveModel::try_from(log)
                             .map_err(DbSqlError::from)
                             .map_err(DbError::from)?;
                         let log_result = Log::insert(log_model)
@@ -80,9 +84,6 @@ impl BlokliDbLogOperations for BlokliDb {
                         match log_result {
                             Ok(insert_result) => {
                                 // Log was inserted successfully, now insert LogStatus with the log_id
-                                let mut status_model = log_status::ActiveModel::try_from(log)
-                                    .map_err(DbSqlError::from)
-                                    .map_err(DbError::from)?;
                                 status_model.log_id = Set(insert_result.last_insert_id);
 
                                 match LogStatus::insert(status_model)
@@ -120,10 +121,7 @@ impl BlokliDbLogOperations for BlokliDb {
                                     .await
                                 {
                                     Ok(Some(existing_log)) => {
-                                        // Found existing log, try to insert LogStatus with its ID
-                                        let mut status_model = log_status::ActiveModel::try_from(log)
-                                            .map_err(DbSqlError::from)
-                                            .map_err(DbError::from)?;
+                                        // Found existing log, reuse the pre-built status model with its ID
                                         status_model.log_id = Set(existing_log.id);
 
                                         match LogStatus::insert(status_model)

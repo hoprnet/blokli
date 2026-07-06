@@ -49,7 +49,8 @@ impl TryFrom<log::Model> for SerializableLog {
             .block_hash
             .try_into()
             .map_err(|_| DbEntityError::Conversion("Invalid block_hash".into()))?;
-        let address = Address::new(value.address.as_ref());
+        let address = Address::try_from(value.address.as_slice())
+            .map_err(|_| DbEntityError::Conversion("Invalid address length".into()))?;
 
         let mut topic_chunks = value.topics.chunks_exact(32);
         let topics: Vec<[u8; 32]> = topic_chunks
@@ -155,5 +156,73 @@ mod tests {
         let err = SerializableLog::try_from(model).expect_err("negative block_number should be rejected");
 
         assert!(matches!(err, DbEntityError::Conversion(message) if message.contains("block_number")));
+    }
+    #[test]
+    fn rejects_invalid_address_length() {
+        let model = log::Model {
+            id: 1,
+            tx_index: 0,
+            log_index: 0,
+            block_number: 1,
+            block_hash: Hash::create(&[b"my block hash"]).as_ref().to_vec(),
+            transaction_hash: Hash::create(&[b"my tx hash"]).as_ref().to_vec(),
+            address: vec![0u8; 19],
+            topics: Hash::create(&[b"my topic"]).as_ref().to_vec(),
+            data: vec![1, 2, 3, 4],
+            removed: false,
+        };
+
+        let err = SerializableLog::try_from(model).expect_err("address length should be rejected");
+
+        assert!(matches!(err, DbEntityError::Conversion(message) if message.contains("address")));
+    }
+
+    #[test]
+    fn rejects_invalid_topics_length() {
+        let mut model = log::Model {
+            id: 1,
+            tx_index: 0,
+            log_index: 0,
+            block_number: 1,
+            block_hash: Hash::create(&[b"my block hash"]).as_ref().to_vec(),
+            transaction_hash: Hash::create(&[b"my tx hash"]).as_ref().to_vec(),
+            address: Address::new(b"my address 123456789").as_ref().to_vec(),
+            topics: Hash::create(&[b"my topic"]).as_ref().to_vec(),
+            data: vec![1, 2, 3, 4],
+            removed: false,
+        };
+        model.topics.push(1);
+
+        let err = SerializableLog::try_from(model).expect_err("topic length should be rejected");
+
+        assert!(matches!(err, DbEntityError::Conversion(message) if message.contains("topics")));
+    }
+
+    #[test]
+    fn rejects_invalid_log_status_checksum() {
+        let mut log = serializable_log(1, 0, 0);
+        log.checksum = Some("not-a-valid-checksum".into());
+
+        let err = log_status::ActiveModel::try_from(log).expect_err("invalid checksum should be rejected");
+
+        assert!(matches!(err, DbEntityError::Conversion(message) if message.contains("Invalid checksum")));
+    }
+
+    #[test]
+    fn rejects_log_status_active_model_position_over_i64() {
+        let err = log_status::ActiveModel::try_from(serializable_log(u64::MAX, 0, 0))
+            .expect_err("block_number should exceed i64::MAX");
+
+        assert!(matches!(err, DbEntityError::Conversion(message) if message.contains("block_number")));
+    }
+
+    #[test]
+    fn converts_log_status_active_model_positions() {
+        let model =
+            log_status::ActiveModel::try_from(serializable_log(1, 2, 3)).expect("valid log status should convert");
+
+        assert!(matches!(model.block_number, Set(1)));
+        assert!(matches!(model.tx_index, Set(2)));
+        assert!(matches!(model.log_index, Set(3)));
     }
 }
