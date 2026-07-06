@@ -18,9 +18,10 @@ rpc_url = "http://localhost:8545"
 # If omitted, defaults to 100 req/sec. Set to 0 for unlimited, or a positive value to override the default.
 max_rpc_requests_per_sec = 0
 
-# Maximum block range for RPC queries when fetching logs (default: 10000)
-# Must be greater than 0. Lower values may be needed for some RPC providers
-# that impose limits on the number of blocks per query
+# Maximum block range ceiling for adaptive RPC log queries (default: 10000)
+# The effective range is learned from real eth_getLogs requests and reused
+# until the RPC endpoint rejects it. Set to 0 to auto-discover with the
+# default 10000-block ceiling.
 max_block_range = 10000
 
 # Optional contract address overrides
