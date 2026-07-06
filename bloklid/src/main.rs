@@ -15,7 +15,7 @@ use std::{
 use args::{Args, Command, generate_config_template, peek_verbosity_from_env_args};
 use async_signal::{Signal, Signals};
 use blokli_chain_api::BlokliChain;
-use blokli_chain_indexer::{startup, utils::redact_url};
+use blokli_chain_indexer::{snapshot::SnapshotManager, startup, utils::redact_url};
 use blokli_db::db::{BlokliDb, BlokliDbConfig};
 use clap::Parser;
 use futures::TryStreamExt;
@@ -23,7 +23,7 @@ use sea_orm::Database;
 use tokio::net::TcpListener;
 
 use crate::{
-    config::{Config, redact_database_url},
+    config::{Config, DatabaseConfig, redact_database_url},
     errors::BloklidError,
 };
 
@@ -52,7 +52,10 @@ async fn main() -> ExitCode {
         }
     };
 
-    if !matches!(args.command, Some(Command::GenerateConfig { .. })) {
+    if !matches!(
+        args.command,
+        Some(Command::GenerateConfig { .. } | Command::ExportLogsSnapshot { .. })
+    ) {
         let config = match args.load_config(true) {
             Ok(config) => config,
             Err(error) => {
@@ -85,28 +88,62 @@ async fn main() -> ExitCode {
 
 async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
     // Handle subcommands
-    if let Some(command) = args.command {
-        match command {
-            Command::GenerateConfig { output } => {
-                tracing::info!(path = %output.display(), "generating configuration template");
+    match &args.command {
+        Some(Command::GenerateConfig { output }) => {
+            tracing::info!(path = %output.display(), "generating configuration template");
 
-                // Generate the template content
-                let template = generate_config_template();
+            // Generate the template content
+            let template = generate_config_template();
 
-                // Create parent directories if they don't exist
-                if let Some(parent) = output.parent() {
-                    std::fs::create_dir_all(parent).map_err(|e| {
-                        BloklidError::NonSpecific(format!("Failed to create parent directories: {}", e))
-                    })?;
-                }
-
-                // Write the template to the specified file
-                std::fs::write(&output, template)
-                    .map_err(|e| BloklidError::NonSpecific(format!("Failed to write configuration template: {}", e)))?;
-
-                tracing::info!(path = %output.display(), "configuration template written");
-                return Ok(());
+            // Create parent directories if they don't exist
+            if let Some(parent) = output.parent() {
+                tokio::fs::create_dir_all(parent)
+                    .await
+                    .map_err(|e| BloklidError::NonSpecific(format!("Failed to create parent directories: {}", e)))?;
             }
+
+            // Write the template to the specified file
+            tokio::fs::write(output, template)
+                .await
+                .map_err(|e| BloklidError::NonSpecific(format!("Failed to write configuration template: {}", e)))?;
+
+            tracing::info!("Configuration template successfully written to: {}", output.display());
+            return Ok(());
+        }
+        Some(Command::ExportLogsSnapshot { output }) => {
+            let config = match initial_config {
+                Some(config) => config,
+                None => args.load_config(true)?,
+            };
+
+            let database = require_database(&config)?;
+
+            let db_config = BlokliDbConfig {
+                max_connections: database.max_connections(),
+                log_slow_queries: Duration::from_secs(1),
+                network_name: config.network.to_string(),
+            };
+
+            let db = if database.is_in_memory() {
+                BlokliDb::new_in_memory().await?
+            } else {
+                BlokliDb::new(&database.to_url(), database.to_logs_url().as_deref(), db_config).await?
+            };
+
+            let snapshot_manager = SnapshotManager::with_db(db)?;
+            let info = snapshot_manager.export_snapshot(output).await?;
+
+            tracing::info!(
+                path = %output.display(),
+                logs = info.log_count.unwrap_or(0),
+                latest_block = info.latest_block.unwrap_or(0),
+                "Logs snapshot exported successfully"
+            );
+
+            return Ok(());
+        }
+        None => {
+            // No subcommand, continue with normal daemon operation
         }
     }
 
@@ -144,13 +181,7 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
                 .ok_or_else(|| BloklidError::NonSpecific("Chain network not configured".into()))?
                 .clone();
 
-            let database = cfg.database.as_ref().ok_or_else(|| {
-                BloklidError::DatabaseNotConfigured(
-                    "Database configuration is missing. Ensure either [database] section is present in config file or \
-                     BLOKLI_DATABASE_TYPE and BLOKLI_DATABASE_URL are set"
-                        .to_string(),
-                )
-            })?;
+            let database = require_database(&cfg)?;
 
             let indexer_config = blokli_chain_indexer::IndexerConfig {
                 start_block_number: chain_network.channel_contract_deploy_block as u64,
@@ -404,4 +435,14 @@ async fn run(args: Args, initial_config: Option<Config>) -> errors::Result<()> {
 
     tracing::info!("bloklid stopped gracefully");
     Ok(())
+}
+
+fn require_database(config: &Config) -> errors::Result<&DatabaseConfig> {
+    config.database.as_ref().ok_or_else(|| {
+        BloklidError::DatabaseNotConfigured(
+            "Database configuration is missing. Ensure either [database] section is present in config file or \
+             BLOKLI_DATABASE_TYPE and BLOKLI_DATABASE_URL are set"
+                .to_string(),
+        )
+    })
 }
