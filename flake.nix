@@ -129,18 +129,6 @@
             );
           };
 
-          # blokli-client crate information
-          blokliClientCrateInfoOriginal = craneLib.crateNameFromCargoToml {
-            cargoToml = ./client/Cargo.toml;
-          };
-          blokliClientCrateInfo = {
-            pname = "blokli-client";
-            # Normalize version to major.minor.patch for consistent caching
-            version = pkgs.lib.strings.concatStringsSep "." (
-              pkgs.lib.lists.take 3 (builtins.splitVersion blokliClientCrateInfoOriginal.version)
-            );
-          };
-
           # Create source trees for different build contexts using nix-lib
           sources = {
             main = nixLib.mkSrc {
@@ -183,17 +171,6 @@
               ;
           };
 
-          blokliClientPackages = import ./nix/packages/blokli-client.nix {
-            inherit
-              lib
-              builders
-              sources
-              blokliClientCrateInfo
-              rev
-              nixLib
-              ;
-          };
-
           # Import Docker configurations
           # Docker images need Linux packages, even when building on macOS
           pkgsLinux = import nixpkgs {
@@ -206,101 +183,95 @@
             inherit overlays;
           };
 
-          blokliAnvilEntrypointX86_64 = pkgsLinux.writeShellScriptBin "blokli-anvil-entrypoint" (
-            builtins.readFile ./docker/blokli-anvil-entrypoint.sh
-          );
+          # Map target platform string to the matching Linux nixpkgs instance.
+          platformPkgsMap = {
+            "x86_64-linux" = pkgsLinux;
+            "aarch64-linux" = pkgsLinuxAarch64;
+          };
 
-          blokliAnvilEntrypointAarch64 = pkgsLinuxAarch64.writeShellScriptBin "blokli-anvil-entrypoint" (
-            builtins.readFile ./docker/blokli-anvil-entrypoint.sh
-          );
+          # Helper: create a /bin symlink to a Nix store binary.
+          # The store path is part of the image closure so the symlink resolves inside the container.
+          mkStaticEntrypoint =
+            {
+              pkgs,
+              binary,
+              name,
+            }:
+            pkgs.runCommand "${name}-entrypoint" { } ''
+              mkdir -p $out/bin
+              ln -s ${binary}/bin/${name} $out/bin/${name}
+            '';
+
+          # Helper: build the anvil shell-script entrypoint for a given target platform.
+          mkBlokliAnvilEntrypoint =
+            targetPlatform:
+            platformPkgsMap.${targetPlatform}.writeShellScriptBin "blokli-anvil-entrypoint" (
+              builtins.readFile ./docker/blokli-anvil-entrypoint.sh
+            );
+
+          # Helper: build a standard bloklid Docker image for a target platform.
+          # variant is null (release), "dev", or "profile".
+          mkBloklidDocker =
+            targetPlatform: variant:
+            let
+              platformPkgs = platformPkgsMap.${targetPlatform};
+              binarySuffix = if variant == null then "" else "-${variant}";
+              dockerName = "bloklid${if variant == null then "" else "-${variant}"}";
+              binary = bloklidPackages."binary-bloklid-${targetPlatform}${binarySuffix}";
+            in
+            nixLib.mkDockerImage {
+              name = dockerName;
+              Entrypoint = [ "/bin/bloklid" ];
+              pkgsLinux = platformPkgs;
+              env = [ "SSL_CERT_FILE=${platformPkgs.cacert}/etc/ssl/certs/ca-bundle.crt" ];
+              extraContents = [
+                binary
+                (mkStaticEntrypoint {
+                  pkgs = platformPkgs;
+                  inherit binary;
+                  name = "bloklid";
+                })
+              ];
+            };
+
+          # Helper: build the bloklid-anvil Docker image for a target platform.
+          mkBloklidAnvilDocker =
+            targetPlatform:
+            let
+              platformPkgs = platformPkgsMap.${targetPlatform};
+              binary = bloklidPackages."binary-bloklid-${targetPlatform}";
+              anvilEntrypoint = mkBlokliAnvilEntrypoint targetPlatform;
+            in
+            nixLib.mkDockerImage {
+              name = "bloklid-anvil";
+              Entrypoint = [ "/bin/blokli-anvil-entrypoint" ];
+              pkgsLinux = platformPkgs;
+              env = [ "SSL_CERT_FILE=${platformPkgs.cacert}/etc/ssl/certs/ca-bundle.crt" ];
+              extraContents = [
+                binary
+                platformPkgs.curl
+                platformPkgs.foundry
+                (mkStaticEntrypoint {
+                  pkgs = platformPkgs;
+                  binary = anvilEntrypoint;
+                  name = "blokli-anvil-entrypoint";
+                })
+              ];
+            };
 
           # Docker images using nix-lib
           bloklidDocker = {
-            # x86_64-linux Docker images
-            docker-blokli-x86_64-linux = nixLib.mkDockerImage {
-              name = "bloklid";
-              Entrypoint = [ "${bloklidPackages.binary-blokli-x86_64-linux}/bin/bloklid" ];
-              pkgsLinux = pkgsLinux;
-              env = [
-                "SSL_CERT_FILE=${pkgsLinux.cacert}/etc/ssl/certs/ca-bundle.crt"
-              ];
-            };
-            docker-blokli-x86_64-linux-dev = nixLib.mkDockerImage {
-              name = "bloklid-dev";
-              Entrypoint = [ "${bloklidPackages.binary-blokli-x86_64-linux-dev}/bin/bloklid" ];
-              pkgsLinux = pkgsLinux;
-              env = [
-                "SSL_CERT_FILE=${pkgsLinux.cacert}/etc/ssl/certs/ca-bundle.crt"
-              ];
-            };
-            docker-blokli-x86_64-linux-profile = nixLib.mkDockerImage {
-              name = "bloklid-profile";
-              Entrypoint = [ "${bloklidPackages.binary-blokli-x86_64-linux-profile}/bin/bloklid" ];
-              pkgsLinux = pkgsLinux;
-              env = [
-                "SSL_CERT_FILE=${pkgsLinux.cacert}/etc/ssl/certs/ca-bundle.crt"
-              ];
-            };
-            docker-blokli-anvil-x86_64-linux = nixLib.mkDockerImage {
-              name = "bloklid-anvil";
-              Entrypoint = [ "${blokliAnvilEntrypointX86_64}/bin/blokli-anvil-entrypoint" ];
-              pkgsLinux = pkgsLinux;
-              env = [
-                "SSL_CERT_FILE=${pkgsLinux.cacert}/etc/ssl/certs/ca-bundle.crt"
-              ];
-              extraContents = [
-                bloklidPackages.binary-blokli-x86_64-linux
-                pkgsLinux.curl
-                pkgsLinux.foundry
-                blokliAnvilEntrypointX86_64
-              ];
-            };
-
-            # aarch64-linux Docker images
-            docker-blokli-aarch64-linux = nixLib.mkDockerImage {
-              name = "bloklid";
-              Entrypoint = [ "${bloklidPackages.binary-blokli-aarch64-linux}/bin/bloklid" ];
-              pkgsLinux = pkgsLinuxAarch64;
-              env = [
-                "SSL_CERT_FILE=${pkgsLinuxAarch64.cacert}/etc/ssl/certs/ca-bundle.crt"
-              ];
-            };
-            docker-blokli-aarch64-linux-dev = nixLib.mkDockerImage {
-              name = "bloklid-dev";
-              Entrypoint = [ "${bloklidPackages.binary-blokli-aarch64-linux-dev}/bin/bloklid" ];
-              pkgsLinux = pkgsLinuxAarch64;
-              env = [
-                "SSL_CERT_FILE=${pkgsLinuxAarch64.cacert}/etc/ssl/certs/ca-bundle.crt"
-              ];
-            };
-            docker-blokli-aarch64-linux-profile = nixLib.mkDockerImage {
-              name = "bloklid-profile";
-              Entrypoint = [ "${bloklidPackages.binary-blokli-aarch64-linux-profile}/bin/bloklid" ];
-              pkgsLinux = pkgsLinuxAarch64;
-              env = [
-                "SSL_CERT_FILE=${pkgsLinuxAarch64.cacert}/etc/ssl/certs/ca-bundle.crt"
-              ];
-            };
-            docker-blokli-anvil-aarch64-linux = nixLib.mkDockerImage {
-              name = "bloklid-anvil";
-              Entrypoint = [ "${blokliAnvilEntrypointAarch64}/bin/blokli-anvil-entrypoint" ];
-              pkgsLinux = pkgsLinuxAarch64;
-              env = [
-                "SSL_CERT_FILE=${pkgsLinuxAarch64.cacert}/etc/ssl/certs/ca-bundle.crt"
-              ];
-              extraContents = [
-                bloklidPackages.binary-blokli-aarch64-linux
-                pkgsLinuxAarch64.curl
-                pkgsLinuxAarch64.foundry
-                blokliAnvilEntrypointAarch64
-              ];
-            };
+            docker-bloklid-x86_64-linux = mkBloklidDocker "x86_64-linux" null;
+            docker-bloklid-x86_64-linux-dev = mkBloklidDocker "x86_64-linux" "dev";
+            docker-bloklid-anvil-x86_64-linux = mkBloklidAnvilDocker "x86_64-linux";
+            docker-bloklid-aarch64-linux = mkBloklidDocker "aarch64-linux" null;
+            docker-bloklid-aarch64-linux-dev = mkBloklidDocker "aarch64-linux" "dev";
+            docker-bloklid-anvil-aarch64-linux = mkBloklidAnvilDocker "aarch64-linux";
           };
 
           # Combine all packages
           packages =
             bloklidPackages
-            // blokliClientPackages
             // bloklidDocker
             // {
               # Additional standalone packages
@@ -383,22 +354,23 @@
             treefmtPrograms = pkgs.lib.attrValues config.treefmt.build.programs;
             shellHook = ''
               echo "Running pre-commit checks..."
+              _github_token="''${GITHUB_TOKEN:-''${GH_TOKEN:-$(gh auth token 2>/dev/null || true)}}"
+              if [ -n "$_github_token" ]; then
+                export GITHUB_TOKEN="$_github_token"
+              fi
+              unset _github_token
               ${packages.pre-commit-check.shellHook}
-
-              # Use a local npm directory
-              export NPM_CONFIG_PREFIX=.npm
-              export PATH=$NPM_CONFIG_PREFIX/bin:$PATH
-
-              echo "Install helm-chart readme-generator"
-              bun install -g @bitnami/readme-generator-for-helm@2.7.2
             '';
             extraPackages = with pkgs; [
-              bun
+              gh
+              nodejs
               ast-grep
               foundry-bin
               pkgs.solc
               kubernetes-helm
+              cargo-insta
               cargo-machete
+              cargo-release
               cargo-shear
               yq
               uv
@@ -430,6 +402,7 @@
               treefmtPrograms = pkgs.lib.attrValues config.treefmt.build.programs;
               extraPackages = with pkgs; [
                 cargo-machete
+                cargo-release
                 cargo-shear
                 zizmor
               ];
@@ -475,11 +448,10 @@
 
               # locally installed npm packages
               ".npm/"
-
-              # ignore any beads files
-              ".beads/"
             ];
             extraFormatters = {
+              programs.nixfmt.package = pkgs.nixfmt;
+              programs.prettier.package = pkgs.prettier;
               settings.formatter.shfmt.includes = [
                 "*.sh"
                 "deploy/compose/.env.sample"
@@ -489,28 +461,25 @@
                 ".github/labeler.yml"
                 ".github/workflows/*.yaml"
               ];
-              # GraphQL formatter
+              # GraphQL formatter — uses prettier (nix-packaged) instead of bunx
               settings.formatter.format-graphql = {
                 command = pkgs.writeShellApplication {
                   name = "format-graphql";
                   runtimeInputs = with pkgs; [
-                    bun
+                    prettier
                   ];
                   text = ''
-                    bunx format-graphql --sort-fields false --write=true "$@"
+                    prettier --parser graphql --write "$@"
                   '';
                 };
                 includes = [ "design/*.graphql" ];
               };
-              # GraphQL linter
               settings.formatter.graphql-schema-linter = {
                 command = pkgs.writeShellApplication {
                   name = "graphql-schema-linter";
-                  runtimeInputs = with pkgs; [
-                    bun
-                  ];
+                  runtimeInputs = [ pkgs.nodejs ];
                   text = ''
-                    bunx graphql-schema-linter "$@"
+                    npx --yes graphql-schema-linter "$@"
                   '';
                 };
                 includes = [ "design/*.graphql" ];

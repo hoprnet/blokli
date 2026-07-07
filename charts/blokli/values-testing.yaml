@@ -1,3 +1,4 @@
+---
 image:
   tag: latest
 ingress:
@@ -32,6 +33,7 @@ config:
   indexer:
     fastSync: true
     enableLogsSnapshot: false
+    enableSafeIndexing: true
     subscription:
       eventBusCapacity: 1000
       shutdownSignalCapacity: 10
@@ -41,3 +43,7 @@ config:
     gasMultiplier: 1.2
   logging:
     level: "info"
+  telemetry:
+    otlpEndpoint: "http://otel-collector:4318"
+    otlpSignals: "metrics"
+    metricExportInterval: "15s"

@@ -1,0 +1,6 @@
+---
+source: api/tests/safe_api_integration_test.rs
+expression: response
+---
+data:
+  safe: ~

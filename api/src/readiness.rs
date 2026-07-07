@@ -6,24 +6,27 @@
 //! 2. RPC is reachable
 //! 3. Indexer lag is within acceptable limits
 //!
-//! The readiness state is cached and updated periodically via a background task.
-//! Out-of-band updates are triggered by:
+//! The readiness state is cached and updated periodically, with out-of-band refreshes for fast transitions.
+//! Updates are triggered by:
 //! - /readyz endpoint calls (immediate check)
 //! - Indexer completion signals (immediate check)
-//! - Periodic background task (every `readiness_check_interval`)
+//! - Readiness subscription connection checks
+//! - Periodic background refreshes (`readiness_check_interval`)
 
 use std::sync::Arc;
 
+use async_broadcast::{Receiver, Sender, broadcast};
+use async_graphql::Enum;
 use blokli_chain_rpc::rpc::RpcOperations;
 use blokli_db_entity::prelude::ChainInfo;
 use sea_orm::{DatabaseConnection, EntityTrait};
 use tokio::sync::RwLock;
 use tracing::{error, info, warn};
 
-use crate::config::HealthConfig;
+use crate::{config::HealthConfig, metrics};
 
 /// Readiness state of the API server
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Enum)]
 pub enum ReadinessState {
     /// Server is ready to accept GraphQL requests
     Ready,
@@ -35,6 +38,8 @@ pub enum ReadinessState {
 #[derive(Clone)]
 pub struct ReadinessChecker {
     cached_state: Arc<RwLock<ReadinessState>>,
+    updates: Sender<ReadinessState>,
+    _updates_rx: Arc<Receiver<ReadinessState>>,
     db: DatabaseConnection,
     rpc_operations: Arc<RpcOperations<blokli_chain_rpc::transport::ReqwestClient>>,
     health_config: HealthConfig,
@@ -47,8 +52,13 @@ impl ReadinessChecker {
         rpc_operations: Arc<RpcOperations<blokli_chain_rpc::transport::ReqwestClient>>,
         health_config: HealthConfig,
     ) -> Self {
+        let (mut updates, updates_rx) = broadcast(16);
+        updates.set_overflow(true);
+
         Self {
             cached_state: Arc::new(RwLock::new(ReadinessState::NotReady)),
+            updates,
+            _updates_rx: Arc::new(updates_rx),
             db,
             rpc_operations,
             health_config,
@@ -60,22 +70,30 @@ impl ReadinessChecker {
         *self.cached_state.read().await
     }
 
+    pub fn subscribe(&self) -> Receiver<ReadinessState> {
+        self.updates.new_receiver()
+    }
+
     /// Perform a full readiness check and update the cached state
     /// This is used by /readyz endpoint and indexer completion signals
     pub async fn check_and_update(&self) {
-        let new_state = self.check_readiness().await;
+        let (new_state, health_status) = self.check_readiness().await;
         let mut cached = self.cached_state.write().await;
         let old_state = *cached;
         *cached = new_state;
 
+        // Update Prometheus metrics
+        metrics::set_health_status(health_status);
+
         // Log state transitions
         if old_state != new_state {
+            let _ = self.updates.try_broadcast(new_state);
             match new_state {
                 ReadinessState::Ready => {
-                    info!("Readiness state transitioned to READY");
+                    info!(status = health_status, "Readiness state transitioned to READY");
                 }
                 ReadinessState::NotReady => {
-                    info!("Readiness state transitioned to NOT_READY");
+                    info!(status = health_status, "Readiness state transitioned to NOT_READY");
                 }
             }
         }
@@ -84,6 +102,11 @@ impl ReadinessChecker {
     /// Trigger an out-of-band readiness check (used by indexer completion signal)
     pub async fn trigger_update(&self) {
         self.check_and_update().await;
+    }
+
+    /// Unconditionally set the cached state to `Ready`. Only for use in tests.
+    pub async fn force_ready(&self) {
+        *self.cached_state.write().await = ReadinessState::Ready;
     }
 
     /// Start a background task that periodically updates the readiness state
@@ -100,17 +123,20 @@ impl ReadinessChecker {
     }
 
     /// Check if the server is ready
-    async fn check_readiness(&self) -> ReadinessState {
+    ///
+    /// Returns a tuple of (`ReadinessState`, health status label) where the
+    /// health status label is one of the `metrics::HEALTH_STATUS_*` constants.
+    async fn check_readiness(&self) -> (ReadinessState, &'static str) {
         // 1. Check database connectivity by querying chain_info
         let indexed_block = match ChainInfo::find().one(&self.db).await {
             Ok(Some(info)) => Some(info.last_indexed_block),
             Ok(None) => {
                 // No chain info yet - indexer hasn't started
-                return ReadinessState::NotReady;
+                return (ReadinessState::NotReady, metrics::HEALTH_STATUS_UNSYNCHED);
             }
             Err(e) => {
                 error!("Database check failed: {}", e);
-                return ReadinessState::NotReady;
+                return (ReadinessState::NotReady, metrics::HEALTH_STATUS_CORRUPTED);
             }
         };
 
@@ -121,7 +147,7 @@ impl ReadinessChecker {
             Ok(block) => Some(block),
             Err(e) => {
                 error!("RPC check failed: {}", e);
-                return ReadinessState::NotReady;
+                return (ReadinessState::NotReady, metrics::HEALTH_STATUS_TIMEOUT);
             }
         };
 
@@ -138,7 +164,7 @@ impl ReadinessChecker {
                     max_lag = self.health_config.max_indexer_lag,
                     "Indexer lag exceeds threshold (lag compared against finality-adjusted RPC block)"
                 );
-                return ReadinessState::NotReady;
+                return (ReadinessState::NotReady, metrics::HEALTH_STATUS_UNSYNCHED);
             }
 
             // Log successful readiness check
@@ -149,9 +175,9 @@ impl ReadinessChecker {
                 "Indexer within acceptable lag of confirmed blocks"
             );
         } else {
-            return ReadinessState::NotReady;
+            return (ReadinessState::NotReady, metrics::HEALTH_STATUS_UNSYNCHED);
         }
 
-        ReadinessState::Ready
+        (ReadinessState::Ready, metrics::HEALTH_STATUS_OK)
     }
 }

@@ -26,7 +26,7 @@ use blokli_db_entity::chain_info;
 use hopr_types::{
     crypto::prelude::{ChainKeypair, Keypair, OffchainKeypair},
     internal::channels::{ChannelEntry, ChannelStatus},
-    primitive::prelude::HoprBalance,
+    primitive::prelude::{Address, HoprBalance},
 };
 use sea_orm::{ActiveModelTrait, EntityTrait, ModelTrait, Set};
 
@@ -108,6 +108,24 @@ fn random_offchain_keypair() -> OffchainKeypair {
     OffchainKeypair::random()
 }
 
+fn build_channel_entry(
+    source: Address,
+    destination: Address,
+    balance: HoprBalance,
+    ticket_index: u64,
+    status: ChannelStatus,
+    channel_epoch: u32,
+) -> ChannelEntry {
+    ChannelEntry::builder()
+        .between(source, destination)
+        .balance(balance)
+        .ticket_index(ticket_index)
+        .status(status)
+        .epoch(channel_epoch)
+        .build()
+        .expect("valid channel entry")
+}
+
 /// Execute a GraphQL query against the schema and return the response
 async fn execute_graphql_query(
     schema: &async_graphql::Schema<QueryRoot, async_graphql::EmptyMutation, async_graphql::EmptySubscription>,
@@ -156,7 +174,7 @@ async fn test_channels_query_by_source_keyid() -> Result<()> {
 
     let balance = HoprBalance::from_str("1000 wxHOPR")?;
     eprintln!("Creating channel with balance={:?}", balance);
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel, 100, 0, 0).await?;
     eprintln!("Channel created successfully");
 
@@ -235,7 +253,7 @@ async fn test_channels_query_by_destination_keyid() -> Result<()> {
         .await?;
 
     let balance = HoprBalance::from_str("1000 wxHOPR")?;
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel, 100, 0, 0).await?;
 
     let schema = async_graphql::Schema::build(
@@ -308,12 +326,12 @@ async fn test_channels_query_with_status_filter() -> Result<()> {
 
     // Open channel
     let balance1 = HoprBalance::from_str("1000 wxHOPR")?;
-    let channel1 = ChannelEntry::new(addr1, addr2, balance1, 0, ChannelStatus::Open, 1);
+    let channel1 = build_channel_entry(addr1, addr2, balance1, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel1, 100, 0, 0).await?;
 
     // Pending to close channel
     let balance2 = HoprBalance::from_str("2000 wxHOPR")?;
-    let channel2 = ChannelEntry::new(
+    let channel2 = build_channel_entry(
         addr1,
         addr3,
         balance2,
@@ -482,11 +500,11 @@ async fn test_channel_count_with_filters() -> Result<()> {
 
     // Insert two channels from addr1
     let balance1 = HoprBalance::from_str("1000 wxHOPR")?;
-    let channel1 = ChannelEntry::new(addr1, addr2, balance1, 0, ChannelStatus::Open, 1);
+    let channel1 = build_channel_entry(addr1, addr2, balance1, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel1, 100, 0, 0).await?;
 
     let balance2 = HoprBalance::from_str("2000 wxHOPR")?;
-    let channel2 = ChannelEntry::new(addr1, addr3, balance2, 0, ChannelStatus::Open, 1);
+    let channel2 = build_channel_entry(addr1, addr3, balance2, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel2, 100, 0, 1).await?;
 
     let schema = async_graphql::Schema::build(
@@ -547,7 +565,7 @@ async fn test_channel_count_all_channels() -> Result<()> {
         .await?;
 
     let balance = HoprBalance::from_str("1000 wxHOPR")?;
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel, 100, 0, 0).await?;
 
     let schema = async_graphql::Schema::build(
@@ -955,12 +973,12 @@ async fn test_channel_count_with_status_filter() -> Result<()> {
 
     // Open channel
     let balance1 = HoprBalance::from_str("1000 wxHOPR")?;
-    let channel1 = ChannelEntry::new(addr1, addr2, balance1, 0, ChannelStatus::Open, 1);
+    let channel1 = build_channel_entry(addr1, addr2, balance1, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel1, 100, 0, 0).await?;
 
     // Closed channel
     let balance2 = HoprBalance::from_str("0 wxHOPR")?;
-    let channel2 = ChannelEntry::new(addr1, addr3, balance2, 0, ChannelStatus::Closed, 1);
+    let channel2 = build_channel_entry(addr1, addr3, balance2, 0, ChannelStatus::Closed, 1);
     db.upsert_channel(None, channel2, 100, 0, 1).await?;
 
     let schema = async_graphql::Schema::build(

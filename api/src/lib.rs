@@ -6,8 +6,11 @@
 pub mod config;
 pub mod conversions;
 pub mod errors;
+pub mod logging;
+pub mod metrics;
 pub mod mutation;
 pub mod query;
+pub mod query_v2;
 pub mod readiness;
 pub mod schema;
 pub mod server;
@@ -71,12 +74,8 @@ fn redact_url(url: &str) -> String {
 /// Start the API server
 pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> ApiResult<()> {
     // Initialize tracing
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "blokli_api=info,tower_http=debug".into()),
-        )
-        .init();
+    logging::setup_tracing_env_like("blokli_api=info,tower_http=debug")
+        .map_err(|error| ApiError::ConfigError(format!("Failed to initialize tracing: {error}")))?;
 
     info!("Starting blokli API server on {}", config.bind_address);
     info!("Connecting to database: {}", redact_url(&config.database_url));
@@ -161,7 +160,12 @@ pub async fn start_server(network: String, finality: u16, config: ApiConfig) -> 
     if config.playground_enabled {
         info!("GraphQL Playground: {}://{}/graphql", protocol, config.bind_address);
     }
-    info!("Health check: {}://{}/health", protocol, config.bind_address);
+    #[cfg(feature = "telemetry")]
+    info!("Metrics endpoint: {}://{}/metrics", protocol, config.bind_address);
+    #[cfg(not(feature = "telemetry"))]
+    info!("Metrics endpoint disabled (build without telemetry feature)");
+    info!("Health check: {}://{}/healthz", protocol, config.bind_address);
+    info!("Readiness check: {}://{}/readyz", protocol, config.bind_address);
 
     // Start the server with TLS if configured
     if let Some(tls_config) = config.tls {

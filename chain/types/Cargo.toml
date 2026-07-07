@@ -6,7 +6,7 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-chain-types"
 repository  = "https://github.com/hoprnet/hoprnet"
-version     = "0.2.0"
+version     = "0.4.0"
 
 [lib]
 crate-type = ["rlib"]
@@ -26,6 +26,7 @@ hopr-types = { workspace = true, features = [
   "crypto",
   "internal",
   "primitive",
+  "serde",
 ] }
 
 [features]

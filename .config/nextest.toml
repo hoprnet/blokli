@@ -1,0 +1,29 @@
+# Integration test binaries run in parallel (each gets its own Docker stack),
+# but tests within each binary run serially (they share a fixture).
+[test-groups.integration-query]
+max-threads = 1
+
+[test-groups.integration-subscription]
+max-threads = 1
+
+[test-groups.integration-transaction]
+max-threads = 1
+
+[test-groups.integration-load]
+max-threads = 1
+
+[[profile.default.overrides]]
+filter     = "binary(blokli_query_client)"
+test-group = "integration-query"
+
+[[profile.default.overrides]]
+filter     = "binary(blokli_subscription_client)"
+test-group = "integration-subscription"
+
+[[profile.default.overrides]]
+filter     = "binary(blokli_transaction_client)"
+test-group = "integration-transaction"
+
+[[profile.default.overrides]]
+filter     = "binary(blokli_load)"
+test-group = "integration-load"

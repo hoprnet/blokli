@@ -284,7 +284,7 @@ prepare_image() {
     log_info "Detected architecture: ${arch}"
 
     # Build the Docker image for the correct architecture
-    (cd "${PROJECT_ROOT}" && nix build .#docker-blokli-${arch}-linux)
+    (cd "${PROJECT_ROOT}" && nix build ".#docker-bloklid-${arch}-linux")
 
     # Load the image
     docker load <"${PROJECT_ROOT}/result"

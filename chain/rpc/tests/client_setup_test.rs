@@ -10,7 +10,6 @@ use std::time::Duration;
 
 use blokli_chain_rpc::client::{DefaultRetryPolicy, SnapshotRequestor, SnapshotRequestorLayer};
 use blokli_chain_types::{ContractAddresses, ContractInstances, utils::create_anvil};
-use hopr_async_runtime::prelude::sleep;
 use hopr_bindings::exports::alloy::{
     primitives::U64,
     providers::{Provider, ProviderBuilder},
@@ -23,6 +22,7 @@ use hopr_types::{
     primitive::prelude::Address,
 };
 use tempfile::NamedTempFile;
+use tokio::time::sleep;
 
 #[tokio::test]
 async fn test_client_should_deploy_contracts_via_reqwest() -> anyhow::Result<()> {

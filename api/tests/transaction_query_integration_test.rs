@@ -18,7 +18,9 @@ use blokli_api::{
     query::QueryRoot,
     schema::{ChainId, NetworkName},
 };
-use blokli_chain_api::transaction_store::{TransactionRecord, TransactionStatus, TransactionStore};
+use blokli_chain_api::transaction_store::{
+    SafeExecutionResult, TransactionRecord, TransactionStatus, TransactionStore,
+};
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, db::BlokliDb};
 use hopr_types::crypto::types::Hash;
@@ -92,6 +94,7 @@ async fn test_transaction_query_finds_existing_transaction() -> Result<()> {
         submitted_at: chrono::Utc::now(),
         confirmed_at: None,
         error_message: None,
+        safe_execution: None,
     };
     ctx.store.insert(record)?;
 
@@ -219,7 +222,6 @@ async fn test_transaction_query_all_status_types() -> Result<()> {
     let ctx = setup_test_environment().await?;
 
     let status_tests = vec![
-        (TransactionStatus::Pending, "PENDING"),
         (TransactionStatus::Submitted, "SUBMITTED"),
         (TransactionStatus::Confirmed, "CONFIRMED"),
         (TransactionStatus::Reverted, "REVERTED"),
@@ -242,6 +244,7 @@ async fn test_transaction_query_all_status_types() -> Result<()> {
                 None
             },
             error_message: None,
+            safe_execution: None,
         };
         ctx.store.insert(record)?;
 
@@ -280,6 +283,7 @@ async fn test_transaction_query_uuid_format_variations() -> Result<()> {
         submitted_at: chrono::Utc::now(),
         confirmed_at: None,
         error_message: None,
+        safe_execution: None,
     };
     ctx.store.insert(record)?;
 
@@ -340,6 +344,155 @@ async fn test_transaction_query_with_special_characters_in_id() -> Result<()> {
 
     // Should return InvalidTransactionIdError
     assert_eq!(data["__typename"], "InvalidTransactionIdError");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_transaction_query_with_safe_execution_success() -> Result<()> {
+    let ctx = setup_test_environment().await?;
+
+    let tx_id = uuid::Uuid::new_v4();
+    let record = TransactionRecord {
+        id: tx_id,
+        raw_transaction: vec![0x01, 0x02, 0x03],
+        transaction_hash: Hash::default(),
+        status: TransactionStatus::Confirmed,
+        submitted_at: chrono::Utc::now(),
+        confirmed_at: Some(chrono::Utc::now()),
+        error_message: None,
+        safe_execution: Some(SafeExecutionResult {
+            success: true,
+            safe_tx_hash: Some(Hash::default()),
+            revert_reason: None,
+        }),
+    };
+    ctx.store.insert(record)?;
+
+    let query = format!(
+        r#"query {{
+            transaction(id: "{}") {{
+                __typename
+                ... on Transaction {{
+                    id
+                    status
+                    safeExecution {{
+                        success
+                        safeTxHash
+                        revertReason
+                    }}
+                }}
+            }}
+        }}"#,
+        tx_id
+    );
+
+    let result = execute_query(&ctx.schema, &query).await;
+    let data = &result["data"]["transaction"];
+
+    assert_eq!(data["__typename"], "Transaction");
+    assert_eq!(data["status"], "CONFIRMED");
+
+    let safe_exec = &data["safeExecution"];
+    assert_eq!(safe_exec["success"], true);
+    assert!(safe_exec["safeTxHash"].is_string(), "safeTxHash should be present");
+    assert!(
+        safe_exec["revertReason"].is_null(),
+        "revertReason should be null on success"
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_transaction_query_with_safe_execution_failure() -> Result<()> {
+    let ctx = setup_test_environment().await?;
+
+    let tx_id = uuid::Uuid::new_v4();
+    let record = TransactionRecord {
+        id: tx_id,
+        raw_transaction: vec![0x01, 0x02, 0x03],
+        transaction_hash: Hash::default(),
+        status: TransactionStatus::Confirmed,
+        submitted_at: chrono::Utc::now(),
+        confirmed_at: Some(chrono::Utc::now()),
+        error_message: None,
+        safe_execution: Some(SafeExecutionResult {
+            success: false,
+            safe_tx_hash: None,
+            revert_reason: Some("Arithmetic overflow".to_string()),
+        }),
+    };
+    ctx.store.insert(record)?;
+
+    let query = format!(
+        r#"query {{
+            transaction(id: "{}") {{
+                __typename
+                ... on Transaction {{
+                    safeExecution {{
+                        success
+                        safeTxHash
+                        revertReason
+                    }}
+                }}
+            }}
+        }}"#,
+        tx_id
+    );
+
+    let result = execute_query(&ctx.schema, &query).await;
+    let safe_exec = &result["data"]["transaction"]["safeExecution"];
+
+    assert_eq!(safe_exec["success"], false);
+    assert!(
+        safe_exec["safeTxHash"].is_null(),
+        "safeTxHash should be null for module execution"
+    );
+    assert_eq!(safe_exec["revertReason"], "Arithmetic overflow");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_transaction_query_without_safe_execution() -> Result<()> {
+    let ctx = setup_test_environment().await?;
+
+    let tx_id = uuid::Uuid::new_v4();
+    let record = TransactionRecord {
+        id: tx_id,
+        raw_transaction: vec![0x01, 0x02, 0x03],
+        transaction_hash: Hash::default(),
+        status: TransactionStatus::Confirmed,
+        submitted_at: chrono::Utc::now(),
+        confirmed_at: Some(chrono::Utc::now()),
+        error_message: None,
+        safe_execution: None,
+    };
+    ctx.store.insert(record)?;
+
+    let query = format!(
+        r#"query {{
+            transaction(id: "{}") {{
+                __typename
+                ... on Transaction {{
+                    safeExecution {{
+                        success
+                    }}
+                }}
+            }}
+        }}"#,
+        tx_id
+    );
+
+    let result = execute_query(&ctx.schema, &query).await;
+    let data = &result["data"]["transaction"];
+
+    assert_eq!(data["__typename"], "Transaction");
+    assert!(
+        data["safeExecution"].is_null(),
+        "safeExecution should be null for non-Safe transactions"
+    );
 
     Ok(())
 }

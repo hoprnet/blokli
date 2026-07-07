@@ -10,7 +10,6 @@ use blokli_chain_rpc::{
     rpc::{RpcOperations, RpcOperationsConfig},
 };
 use common::{TEST_BLOCK_TIME, TEST_FINALITY, create_test_rpc_operations, wait_for_finality};
-use hopr_async_runtime::prelude::sleep;
 use hopr_bindings::exports::alloy::{
     providers::{Provider, ProviderBuilder},
     rpc::client::ClientBuilder,
@@ -18,6 +17,7 @@ use hopr_bindings::exports::alloy::{
     transports::{http::ReqwestTransport, layers::RetryBackoffLayer},
 };
 use hopr_types::crypto::keypairs::{ChainKeypair, Keypair};
+use tokio::time::sleep;
 
 #[tokio::test]
 async fn test_get_timestamp() -> anyhow::Result<()> {

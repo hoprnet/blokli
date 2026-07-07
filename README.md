@@ -89,6 +89,11 @@ just docker-run-anvil trace
 
 Once running, access the GraphQL playground at: <http://localhost:8080/graphql>
 
+Prometheus metrics are available at: <http://localhost:8080/metrics>
+
+To push daemon telemetry to an OpenTelemetry collector, configure the `[telemetry]` section in `bloklid/example-config.toml`. See
+[OTLP.md](OTLP.md) for transport rules, signal selection, environment overrides, and example configurations.
+
 ## Testing
 
 Blokli has comprehensive test coverage for temporal queries, blockchain reorganization handling, subscriptions, and edge cases.
@@ -186,7 +191,7 @@ Blokli implements a temporal database system for tracking blockchain state chang
 ## Repository Layout
 
 - `bloklid/`: Indexer daemon and chain operations
-- `blokli-api/`: GraphQL API server
+- `api/`: GraphQL API server
 - `db/`: Database abstractions, entities, and migrations
 - `design/`: Architecture and target schema references
 - `tests/`: Integration and smoke tests
@@ -194,6 +199,7 @@ Blokli implements a temporal database system for tracking blockchain state chang
 ## Documentation
 
 - **[TESTING.md](TESTING.md)** - Comprehensive testing guide
+- **[docs/guide-internal-tx-debugging.md](docs/guide-internal-tx-debugging.md)** - Debugging Safe internal transactions with `cast`
 - **`design/architecture.md`** - System architecture and data flows
 - **`design/target-api-schema.graphql`** - Target GraphQL schema reference
 - **`design/target-db-schema.mmd`** - Target database schema reference
@@ -206,17 +212,31 @@ Blokli can be configured via a configuration file (TOML) or environment variable
 2. Configuration File
 3. Default Values
 
+The path to the configuration file can be specified via the `-c` flag or the `BLOKLI_CONFIG_PATH` environment variable (`BLOKLI_CONFIG_PATH`
+takes priority). If neither is set, the daemon will try `/etc/bloklid/bloklid.toml` if it exists; otherwise it starts using only environment
+variables and built-in defaults.
+
 To generate a template configuration file:
 
 ```bash
 bloklid generate-config config.toml
 ```
 
+For fast-sync bootstrap, configure `indexer.fast_sync = true`, `indexer.enable_logs_snapshot = true`, and `indexer.logs_snapshot_url` to a
+`.tar.xz` archive that contains `hopr_logs.sql`. On an empty node, `bloklid` imports that file into the raw logs tables, rebuilds derived
+state locally, and then resumes normal RPC catch-up from the snapshot end. If the configured snapshot restore fails, startup fails.
+
 For a complete example with defaults and comments, see `bloklid/example-config.toml`.
 
 ### Environment Variables
 
 You can override any configuration setting using environment variables.
+
+#### Daemon Configuration
+
+| Description             | Environment Variable |
+| :---------------------- | :------------------- |
+| Path to the config file | `BLOKLI_CONFIG_PATH` |
 
 #### Root Configuration
 
@@ -227,6 +247,10 @@ You can override any configuration setting using environment variables.
 | `network`                  | `BLOKLI_NETWORK`                  |
 | `rpc_url`                  | `BLOKLI_RPC_URL`                  |
 | `max_rpc_requests_per_sec` | `BLOKLI_MAX_RPC_REQUESTS_PER_SEC` |
+| `max_block_range`          | `BLOKLI_MAX_BLOCK_RANGE`          |
+
+`max_block_range` is the ceiling for adaptive `eth_getLogs` block ranges. Set it to `0` to auto-discover with the default 10000-block
+ceiling.
 
 #### Database Configuration
 
@@ -249,6 +273,7 @@ You can override any configuration setting using environment variables.
 | :---------------------------------------------- | :----------------------------------------------------- |
 | `indexer.fast_sync`                             | `BLOKLI_INDEXER_FAST_SYNC`                             |
 | `indexer.enable_logs_snapshot`                  | `BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT`                  |
+| `indexer.enable_safe_indexing`                  | `BLOKLI_INDEXER_ENABLE_SAFE_INDEXING`                  |
 | `indexer.logs_snapshot_url`                     | `BLOKLI_INDEXER_LOGS_SNAPSHOT_URL`                     |
 | `indexer.subscription.event_bus_capacity`       | `BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY`       |
 | `indexer.subscription.shutdown_signal_capacity` | `BLOKLI_INDEXER_SUBSCRIPTION_SHUTDOWN_SIGNAL_CAPACITY` |

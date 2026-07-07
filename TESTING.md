@@ -29,9 +29,46 @@ just test-debug
 # Run specific test by name
 cargo test test_get_channel_state_at -F runtime-tokio -- --nocapture
 
-# Run integration tests
+# Run integration tests (requires Docker — see below)
 just test-indexer
 ```
+
+### Manual API Testing (no Docker required)
+
+For interactive exploration — GraphQL playground, manual subscription testing via curl, quick iteration on API behaviour — you can run a
+local stack without building a Docker image.
+
+**Terminal 1 — Anvil:**
+
+```bash
+anvil --host 0.0.0.0 --port 8545 --block-time 1
+```
+
+**Terminal 2 — Deploy contracts, then start bloklid:**
+
+```bash
+# Deploy HOPR contracts and write their addresses to a TOML fragment
+cargo run --bin blokli-contract-deployer -- --output /tmp/contracts-deploy.toml
+
+# Append the [contracts] section to the SQLite config
+cat /tmp/contracts-deploy.toml >> config-sqlite.toml
+
+# Start bloklid with SQLite backend
+just run-sqlite
+```
+
+The GraphQL playground is available at `http://localhost:8080/graphiql` once bloklid is running.
+
+> **Note:** This approach does NOT run the automated integration tests. Those always require Docker (`just test-indexer`) because the test
+> fixture manages its own Anvil + PostgreSQL stack and deploys contracts internally.
+
+**Clean up between runs:**
+
+```bash
+just clean-sqlite   # removes data/bloklid-index.db and data/bloklid-logs.db
+```
+
+Also remove the `[contracts]` block appended to `config-sqlite.toml` before redeploying, or the file will accumulate duplicate sections.
 
 ### Post-Test Workflow
 

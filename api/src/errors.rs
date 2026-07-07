@@ -5,6 +5,7 @@
 //! - GraphQL error codes and message templates for API responses
 //! - Builder functions for creating GraphQL error types with consistent formatting
 
+use async_graphql::ErrorExtensions;
 use blokli_api_types::{
     ContractNotAllowedError, FunctionNotAllowedError, InvalidAddressError, InvalidTransactionIdError,
     MissingFilterError, QueryFailedError, RpcError, TimeoutError,
@@ -107,6 +108,15 @@ pub mod codes {
 
     /// Invalid pagination parameters
     pub const INVALID_PAGINATION: &str = "INVALID_PAGINATION";
+
+    /// Request exceeds an allowed resource limit
+    pub const LIMIT_EXCEEDED: &str = "LIMIT_EXCEEDED";
+
+    /// Requested schema version is not supported by this server
+    pub const UNSUPPORTED_SCHEMA_VERSION: &str = "UNSUPPORTED_SCHEMA_VERSION";
+
+    /// The X-Blokli-Schema-Version header value is not a valid non-negative integer
+    pub const INVALID_SCHEMA_VERSION_HEADER: &str = "INVALID_SCHEMA_VERSION_HEADER";
 }
 
 // ============================================================================
@@ -215,6 +225,14 @@ pub mod messages {
         format!("Invalid pagination parameters: {}", reason)
     }
 
+    /// Resource limit exceeded message
+    pub fn limit_exceeded(resource: &str, actual: impl std::fmt::Display, max: impl std::fmt::Display) -> String {
+        format!(
+            "{} limit exceeded: {} exceeds the maximum of {}; narrow the query with a filter",
+            resource, actual, max
+        )
+    }
+
     /// Ticket parameters missing or incomplete message
     pub fn ticket_params_incomplete() -> String {
         "Ticket parameters are not yet available".to_string()
@@ -315,6 +333,14 @@ pub fn overflow_error(operation: &str, value: impl std::fmt::Display) -> QueryFa
     QueryFailedError {
         code: codes::OVERFLOW.to_string(),
         message: messages::overflow_error(operation, value),
+    }
+}
+
+/// Creates a QueryFailedError for an exceeded resource limit
+pub fn limit_exceeded(resource: &str, actual: impl std::fmt::Display, max: impl std::fmt::Display) -> QueryFailedError {
+    QueryFailedError {
+        code: codes::LIMIT_EXCEEDED.to_string(),
+        message: messages::limit_exceeded(resource, actual, max),
     }
 }
 
@@ -491,4 +517,16 @@ pub fn rpc_internal_error(error: impl std::fmt::Display) -> RpcError {
         code: codes::INTERNAL_ERROR.to_string(),
         message: error.to_string(),
     }
+}
+
+/// Creates an async_graphql::Error for unsupported schema version requests
+pub fn unsupported_schema_version(version: u32) -> async_graphql::Error {
+    async_graphql::Error::new(format!("Unsupported schema version: {}", version))
+        .extend_with(|_, e| e.set("code", codes::UNSUPPORTED_SCHEMA_VERSION))
+}
+
+/// Creates an async_graphql::Error for a malformed X-Blokli-Schema-Version header
+pub fn invalid_schema_version_header() -> async_graphql::Error {
+    async_graphql::Error::new("Invalid X-Blokli-Schema-Version header: expected a non-negative integer")
+        .extend_with(|_, e| e.set("code", codes::INVALID_SCHEMA_VERSION_HEADER))
 }

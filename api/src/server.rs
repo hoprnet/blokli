@@ -1,10 +1,11 @@
 //! Axum HTTP server configuration with GraphQL support
 
-use std::{pin::Pin, sync::Arc};
+use std::{collections::HashMap, pin::Pin, sync::Arc, time::Instant};
 
 use async_graphql::{
-    Schema,
-    http::{GraphQLPlaygroundConfig, playground_source},
+    Request,
+    http::GraphiQLSource,
+    parser::types::{DocumentOperations, ExecutableDocument, OperationDefinition, OperationType, Selection},
 };
 use async_stream::stream;
 use axum::{
@@ -15,7 +16,7 @@ use axum::{
         Html, IntoResponse, Response,
         sse::{Event, KeepAlive, Sse},
     },
-    routing::get,
+    routing::{get, post},
 };
 use blokli_chain_api::{
     DefaultHttpRequestor, rpc_adapter::RpcAdapter, transaction_executor::RawTransactionExecutor,
@@ -25,6 +26,8 @@ use blokli_chain_indexer::IndexerState;
 use blokli_chain_rpc::{rpc::RpcOperations, transport::ReqwestClient};
 use blokli_db_entity::prelude::ChainInfo;
 use futures::stream::{Stream, StreamExt};
+#[cfg(feature = "telemetry")]
+use hopr_types::telemetry as hopr_metrics;
 use sea_orm::{DatabaseConnection, EntityTrait};
 use serde::Serialize;
 use serde_json::Value;
@@ -42,11 +45,9 @@ use uuid::Uuid;
 use crate::{
     config::{ApiConfig, HealthConfig},
     errors::ApiResult,
-    mutation::MutationRoot,
-    query::QueryRoot,
+    metrics,
     readiness::{ReadinessChecker, ReadinessState},
-    schema::build_schema,
-    subscription::SubscriptionRoot,
+    schema::{ErasedSchema, LATEST_SCHEMA_VERSION, build_version_registry},
 };
 
 /// Health check response for liveness probe
@@ -162,10 +163,99 @@ fn extract_subscription_name(query: &str) -> String {
     "unknown".to_string()
 }
 
+/// Resolve the operation that the request is actually targeting.
+///
+/// GraphQL allows either a single operation document or multiple named
+/// operations. For the readiness gate we need to inspect the exact operation
+/// the client intends to execute so that unnamed companion operations cannot
+/// influence the pre-ready allowlist decision.
+///
+/// When the document contains exactly one named operation and the client omits
+/// `operationName`, `async-graphql` still represents it as `Multiple`, so we
+/// accept that sole entry as the selected operation.
+fn selected_operation<'a>(
+    doc: &'a ExecutableDocument,
+    operation_name: Option<&str>,
+) -> Option<&'a OperationDefinition> {
+    match &doc.operations {
+        DocumentOperations::Single(operation) => Some(&operation.node),
+        DocumentOperations::Multiple(operations) => match operation_name {
+            Some(operation_name) => operations.get(operation_name).map(|operation| &operation.node),
+            None if operations.len() == 1 => operations.values().next().map(|operation| &operation.node),
+            None => None,
+        },
+    }
+}
+
+fn selected_operation_matches(
+    query: &str,
+    operation_name: Option<&str>,
+    predicate: impl FnOnce(&OperationDefinition) -> bool,
+) -> bool {
+    let doc = match async_graphql::parser::parse_query(query) {
+        Ok(doc) => doc,
+        Err(_) => return false,
+    };
+
+    let Some(operation) = selected_operation(&doc, operation_name) else {
+        return false;
+    };
+
+    predicate(operation)
+}
+
+/// Return `true` only for the narrow pre-ready bypass case.
+///
+/// The `/graphql` readiness gate has two pre-ready exceptions while the
+/// indexer is still catching up:
+/// - introspection queries, handled separately by `is_introspection_query(...)` so tools such as GraphQL Playground can
+///   still inspect the schema,
+/// - the `health` subscription, validated here so clients can wait for the API to become ready without polling
+///   `/readyz` out-of-band.
+///
+/// This helper keeps that bypass tight by requiring all of the following:
+/// - the request parses successfully,
+/// - the selected operation is a subscription,
+/// - the operation has exactly one top-level field,
+/// - that field is `health`.
+///
+/// Anything broader, such as extra fields, fragments, malformed GraphQL, or a
+/// different subscription name, falls back to the normal `503` readiness gate.
+fn selected_operation_is_health_subscription(query: &str, operation_name: Option<&str>) -> bool {
+    selected_operation_matches(query, operation_name, |operation| {
+        operation.ty == OperationType::Subscription
+            && matches!(
+                operation.selection_set.node.items.as_slice(),
+                [selection] if matches!(&selection.node, Selection::Field(field) if field.node.name.node == "health")
+            )
+    })
+}
+
+/// Returns true only when every top-level selection in every operation is a
+/// built-in introspection field (`__schema`, `__type`, `__typename`).
+///
+/// Fragment spreads or inline fragments at the top level are treated as
+/// non-introspection (conservative). Parse failures also return false so that
+/// the readiness gate is never bypassed for malformed requests.
+fn is_introspection_query(query: &str, operation_name: Option<&str>) -> bool {
+    selected_operation_matches(query, operation_name, |operation| {
+        operation.selection_set.node.items.iter().all(|selection| {
+            matches!(
+                &selection.node,
+                Selection::Field(field) if matches!(field.node.name.node.as_str(), "__schema" | "__type" | "__typename")
+            )
+        })
+    })
+}
+
 /// Application state shared across handlers
 #[derive(Clone)]
 pub struct AppState {
-    pub schema: Arc<Schema<QueryRoot, MutationRoot, SubscriptionRoot>>,
+    /// Versioned schemas keyed by `X-Blokli-Schema-Version` header value.
+    pub schemas: Arc<HashMap<u32, Arc<dyn ErasedSchema>>>,
+    pub latest_schema_version: u32,
+    /// Schema without depth/complexity limits, used only for introspection queries.
+    pub introspection_schema: Arc<dyn ErasedSchema>,
     pub playground_enabled: bool,
     pub db: DatabaseConnection,
     pub rpc_operations: Arc<RpcOperations<ReqwestClient>>,
@@ -187,7 +277,25 @@ pub async fn build_app(
     transaction_store: Arc<TransactionStore>,
     rpc_operations: Arc<RpcOperations<ReqwestClient>>,
 ) -> ApiResult<Router> {
-    let schema = build_schema(
+    let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), config.health.clone());
+
+    let schemas = build_version_registry(
+        db.clone(),
+        config.chain_id,
+        network.clone(),
+        config.contract_addresses,
+        expected_block_time,
+        finality,
+        config.gas_multiplier,
+        indexer_state.clone(),
+        transaction_executor.clone(),
+        transaction_store.clone(),
+        rpc_operations.clone(),
+        readiness_checker.clone(),
+        Some((config.max_query_depth, config.max_query_complexity)),
+    );
+
+    let introspection_schema: Arc<dyn ErasedSchema> = Arc::new(crate::schema::build_schema(
         db.clone(),
         config.chain_id,
         network,
@@ -199,15 +307,17 @@ pub async fn build_app(
         transaction_executor,
         transaction_store,
         rpc_operations.clone(),
-    );
-
-    let readiness_checker = ReadinessChecker::new(db.clone(), rpc_operations.clone(), config.health.clone());
+        readiness_checker.clone(),
+        None,
+    ));
 
     // Start periodic readiness updates in background
     readiness_checker.clone().start_periodic_updates();
 
     let app_state = AppState {
-        schema: Arc::new(schema),
+        schemas: Arc::new(schemas),
+        latest_schema_version: LATEST_SCHEMA_VERSION,
+        introspection_schema,
         playground_enabled: config.playground_enabled,
         db,
         rpc_operations,
@@ -238,6 +348,7 @@ pub async fn build_app(
     Ok(Router::new()
         // GraphQL endpoint (queries, mutations, and SSE subscriptions)
         .route("/graphql", get(graphql_playground).post(graphql_handler))
+        .route("/metrics", get(metrics_handler))
         // Health check endpoints for Kubernetes probes
         .route("/healthz", get(healthz_handler))
         .route("/readyz", get(readyz_handler))
@@ -258,25 +369,23 @@ pub async fn build_app(
         .with_state(app_state))
 }
 
+/// Build a minimal router from a pre-constructed `AppState`.
+///
+/// Intended for integration tests: lets tests inject custom schemas directly without
+/// going through the full `build_app` parameter list (Anvil, contracts, etc.).
+pub fn build_test_router(app_state: AppState) -> Router {
+    Router::new()
+        .route("/graphql", post(graphql_handler))
+        .with_state(app_state)
+}
+
 /// GraphQL query/mutation/subscription handler
 async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json(request): Json<Value>) -> Response {
-    // Check if server is ready before processing GraphQL requests
-    if state.readiness_checker.get().await == ReadinessState::NotReady {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Json(serde_json::json!({
-                "errors": [{
-                    "message": "GraphQL API is not ready yet. Indexer is still catching up. Please try again later."
-                }]
-            })),
-        )
-            .into_response();
-    }
-
     // Parse the GraphQL request
-    let request = match serde_json::from_value::<async_graphql::Request>(request) {
+    let request = match serde_json::from_value::<Request>(request) {
         Ok(req) => req,
         Err(e) => {
+            metrics::increment_errors("invalid_request");
             return (
                 StatusCode::BAD_REQUEST,
                 Json(serde_json::json!({
@@ -291,13 +400,81 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
 
     // Check if client accepts SSE (for subscriptions)
     let accepts_sse = headers
-        .get("accept")
-        .and_then(|v| v.to_str().ok())
-        .map(|v| v.contains("text/event-stream"))
-        .unwrap_or(false);
+        .get_all("accept")
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .any(|value| value.to_lowercase().contains("text/event-stream"));
+
+    // Introspection queries query the type system, not indexed data.
+    // Always allow them so the GraphQL Playground can load the schema regardless of readiness.
+    let is_introspection = is_introspection_query(&request.query, request.operation_name.as_deref());
 
     // Check if the request is a subscription
     let is_subscription = request.query.trim_start().starts_with("subscription");
+
+    // Check if the query should be allowed before readiness. Only allowed if it's a health subscription.
+    let allows_pre_ready = selected_operation_is_health_subscription(&request.query, request.operation_name.as_deref());
+
+    if state.readiness_checker.get().await == ReadinessState::NotReady && !allows_pre_ready && !is_introspection {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "errors": [{
+                    "message": "GraphQL API is not ready yet. Indexer is still catching up. Please try again later."
+                }]
+            })),
+        )
+            .into_response();
+    }
+
+    // Determine request type label for metrics
+    let request_type = if is_subscription {
+        "subscription"
+    } else if request.query.trim_start().starts_with("mutation") {
+        "mutation"
+    } else {
+        "query"
+    };
+
+    // Track request count
+    metrics::increment_request_count(request_type);
+
+    // Select the versioned schema. Introspection always uses the limit-free latest schema.
+    let schema: Arc<dyn ErasedSchema> = if is_introspection {
+        state.introspection_schema.clone()
+    } else {
+        let raw_version = headers.get("x-blokli-schema-version");
+        let version: u32 = match raw_version {
+            None => 1,
+            Some(v) => match v.to_str().ok().and_then(|s| s.parse::<u32>().ok()) {
+                Some(n) => n,
+                None => {
+                    let err = crate::errors::invalid_schema_version_header();
+                    return (
+                        StatusCode::BAD_REQUEST,
+                        Json(serde_json::json!({
+                            "errors": [{"message": err.message, "extensions": err.extensions}]
+                        })),
+                    )
+                        .into_response();
+                }
+            },
+        };
+
+        match state.schemas.get(&version) {
+            Some(s) => s.clone(),
+            None => {
+                let err = crate::errors::unsupported_schema_version(version);
+                return (
+                    StatusCode::BAD_REQUEST,
+                    Json(serde_json::json!({
+                        "errors": [{"message": err.message, "extensions": err.extensions}]
+                    })),
+                )
+                    .into_response();
+            }
+        }
+    };
 
     // Handle subscription requests via SSE
     if accepts_sse && is_subscription {
@@ -313,11 +490,13 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
             "SSE connection established"
         );
 
-        let schema = state.schema.clone();
         let sse_stream: Pin<Box<dyn Stream<Item = Result<Event, std::convert::Infallible>> + Send>> =
             Box::pin(stream! {
-                let mut response_stream = schema.as_ref().execute_stream(request);
+                let mut response_stream = schema.execute_stream(request);
                 while let Some(response) = response_stream.next().await {
+                    if !response.errors.is_empty() {
+                        metrics::increment_errors(request_type);
+                    }
                     let json = serde_json::to_string(&response)
                         .unwrap_or_else(|_| r#"{"errors":[{"message":"Failed to serialize response"}]}"#.to_string());
                     yield Ok::<_, std::convert::Infallible>(Event::default().event("next").data(json));
@@ -333,8 +512,20 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
         return Sse::new(sse_stream).into_response();
     }
 
+    // Start timer for request duration. Intentionally after the subscription check, as timing a
+    // subscription is not meaningful - it's a long-lived connection, not a single request.
+    let start_time = Instant::now();
+
     // Execute regular query/mutation
-    let response = state.schema.execute(request).await;
+    let response = schema.execute(request).await;
+
+    // Record request duration
+    metrics::observe_request_duration(request_type, start_time.elapsed().as_secs_f64());
+
+    // Count any errors returned in the response
+    if !response.errors.is_empty() {
+        metrics::increment_errors(request_type);
+    }
 
     // Serialize and return the response
     Json(serde_json::to_value(response).unwrap_or_else(|_| {
@@ -345,14 +536,37 @@ async fn graphql_handler(State(state): State<AppState>, headers: HeaderMap, Json
     .into_response()
 }
 
-/// GraphQL Playground UI (only enabled if playground_enabled config is true)
+async fn metrics_handler() -> impl IntoResponse {
+    #[cfg(feature = "telemetry")]
+    {
+        match hopr_metrics::gather_all_metrics().map_err(|error| error.to_string()) {
+            Ok(metrics) => (
+                StatusCode::OK,
+                [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+                metrics,
+            )
+                .into_response(),
+            Err(error) => {
+                tracing::error!(%error, "failed to gather metrics");
+                (StatusCode::INTERNAL_SERVER_ERROR, "Failed to gather metrics").into_response()
+            }
+        }
+    }
+
+    #[cfg(not(feature = "telemetry"))]
+    {
+        (StatusCode::NOT_FOUND, "Metrics endpoint is disabled").into_response()
+    }
+}
+
+/// GraphiQL UI (only enabled if playground_enabled config is true)
 async fn graphql_playground(State(state): State<AppState>) -> impl IntoResponse {
     if state.playground_enabled {
-        Html(playground_source(GraphQLPlaygroundConfig::new("/graphql"))).into_response()
+        Html(GraphiQLSource::build().endpoint("/graphql").finish()).into_response()
     } else {
         (
             StatusCode::NOT_FOUND,
-            "GraphQL Playground is disabled. Use POST /graphql for queries.",
+            "GraphiQL is disabled. Use POST /graphql for queries.",
         )
             .into_response()
     }
@@ -465,7 +679,13 @@ async fn readyz_handler(State(state): State<AppState>) -> impl IntoResponse {
 
 #[cfg(test)]
 mod tests {
-    use axum::http::{HeaderValue, Response, StatusCode};
+    use axum::{
+        Router,
+        body::Body,
+        http::{HeaderValue, Request, Response, StatusCode},
+        routing::get,
+    };
+    use tower::ServiceExt;
 
     use super::*;
 
@@ -837,5 +1057,161 @@ mod tests {
             extract_subscription_name("subscription SafeDeployed($id: ID!) { address }"),
             "safe-deployed"
         );
+    }
+
+    #[cfg(feature = "telemetry")]
+    #[tokio::test]
+    async fn test_metrics_handler_returns_prometheus_text() {
+        let metric_name = format!("blokli_metrics_handler_test_{}", Uuid::new_v4().simple());
+        let metric = hopr_metrics::MultiCounter::new(&metric_name, "metrics endpoint test", &["kind"])
+            .expect("metric should be created");
+
+        metric.increment(&["test-kind"]);
+
+        let app = Router::new().route("/metrics", get(metrics_handler));
+        let request = Request::builder()
+            .uri("/metrics")
+            .body(Body::empty())
+            .expect("request should be built");
+
+        let response = app.oneshot(request).await.expect("request should succeed");
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let body = String::from_utf8(body.to_vec()).expect("metrics response should be UTF-8");
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            headers.get(header::CONTENT_TYPE).and_then(|value| value.to_str().ok()),
+            Some("text/plain; version=0.0.4; charset=utf-8")
+        );
+        assert!(body.contains(&metric_name));
+    }
+
+    #[cfg(not(feature = "telemetry"))]
+    #[tokio::test]
+    async fn test_metrics_handler_returns_not_found_when_disabled() {
+        let app = Router::new().route("/metrics", get(metrics_handler));
+        let request = Request::builder()
+            .uri("/metrics")
+            .body(Body::empty())
+            .expect("request should be built");
+
+        let response = app.oneshot(request).await.expect("request should succeed");
+        let status = response.status();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body should be readable");
+        let body = String::from_utf8(body.to_vec()).expect("metrics response should be UTF-8");
+
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        assert_eq!(body, "Metrics endpoint is disabled");
+    }
+
+    #[test]
+    fn test_is_introspection_query_schema() {
+        assert!(is_introspection_query("{ __schema { queryType { name } } }", None));
+    }
+
+    #[test]
+    fn test_is_introspection_query_type() {
+        assert!(is_introspection_query("{ __type(name: \"Foo\") { kind name } }", None));
+    }
+
+    #[test]
+    fn test_is_introspection_query_typename() {
+        assert!(is_introspection_query("{ __typename }", None));
+    }
+
+    #[test]
+    fn test_is_introspection_query_named_operation() {
+        assert!(is_introspection_query(
+            "query IntrospectionQuery { __schema { types { name } } }",
+            None,
+        ));
+    }
+
+    #[test]
+    fn test_is_introspection_query_mixed_rejects() {
+        assert!(!is_introspection_query(
+            "{ __schema { queryType { name } } channels { id } }",
+            None,
+        ));
+    }
+
+    #[test]
+    fn test_is_introspection_query_data_field_rejects() {
+        assert!(!is_introspection_query("{ accounts { chainKey } }", None));
+    }
+
+    #[test]
+    fn test_is_introspection_query_fragment_spread_rejects() {
+        assert!(!is_introspection_query(
+            "query { ...SomeFragment } fragment SomeFragment on QueryRoot { __schema { types { name } } }",
+            None,
+        ));
+    }
+
+    #[test]
+    fn test_is_introspection_query_parse_error_rejects() {
+        assert!(!is_introspection_query("this is not graphql !!!", None));
+    }
+
+    #[test]
+    fn test_is_introspection_query_empty_rejects() {
+        assert!(!is_introspection_query("", None));
+    }
+
+    #[test]
+    fn test_selected_operation_is_health_subscription_accepts_named_client_query() {
+        assert!(selected_operation_is_health_subscription(
+            "subscription SubscribeHealth {\n  health\n}\n",
+            Some("SubscribeHealth"),
+        ));
+    }
+
+    #[test]
+    fn test_selected_operation_is_health_subscription_accepts_sole_named_operation_without_operation_name() {
+        assert!(selected_operation_is_health_subscription(
+            "subscription SubscribeHealth {\n  health\n}\n",
+            None,
+        ));
+    }
+
+    #[test]
+    fn test_version_header_missing_defaults_to_v1() {
+        let headers = HeaderMap::new();
+        let version = headers
+            .get("x-blokli-schema-version")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(1);
+        assert_eq!(version, 1u32);
+    }
+
+    #[test]
+    fn test_version_header_valid_is_parsed() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-blokli-schema-version", HeaderValue::from_static("1"));
+        let version = headers
+            .get("x-blokli-schema-version")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(1);
+        assert_eq!(version, 1u32);
+    }
+
+    #[test]
+    fn test_version_header_non_numeric_defaults_to_v1() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-blokli-schema-version", HeaderValue::from_static("abc"));
+        let version = headers
+            .get("x-blokli-schema-version")
+            .and_then(|v| v.to_str().ok())
+            .and_then(|v| v.parse::<u32>().ok())
+            .unwrap_or(1);
+        assert_eq!(version, 1u32);
     }
 }

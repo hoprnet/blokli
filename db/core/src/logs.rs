@@ -100,7 +100,7 @@ impl BlokliDbLogOperations for BlokliDb {
                                         Ok(())
                                     }
                                     Err(e) => {
-                                        error!(%log_id, "Failed to insert log status into db: {:?}", e);
+                                        error!(%log_id, error = ?e, "failed to insert log status into db");
                                         Err(DbError::General(e.to_string()))
                                     }
                                 }
@@ -138,7 +138,7 @@ impl BlokliDbLogOperations for BlokliDb {
                                                 Ok(())
                                             }
                                             Err(e) => {
-                                                error!(%log_id, "Failed to insert log status into db: {:?}", e);
+                                                error!(%log_id, error = ?e, "failed to insert log status into db");
                                                 Err(DbError::General(e.to_string()))
                                             }
                                         }
@@ -148,13 +148,13 @@ impl BlokliDbLogOperations for BlokliDb {
                                         Err(DbError::General(format!("Log not found: {log_id}")))
                                     }
                                     Err(e) => {
-                                        error!(%log_id, "Failed to find existing log: {:?}", e);
+                                        error!(%log_id, error = ?e, "failed to find existing log");
                                         Err(DbError::General(e.to_string()))
                                     }
                                 }
                             }
                             Err(e) => {
-                                error!("Failed to insert log into db: {:?}", e);
+                                error!(error = ?e, "failed to insert log into db");
                                 Err(DbError::General(e.to_string()))
                             }
                         }
@@ -211,13 +211,13 @@ impl BlokliDbLogOperations for BlokliDb {
                     if let Some(status) = status {
                         create_log(log, status).map_err(DbError::from)
                     } else {
-                        error!("Missing log status for log in db: {:?}", log);
+                        error!(log = ?log, "missing log status for log in db");
                         Err(DbError::MissingLogStatus)
                     }
                 })
                 .collect::<Result<Vec<_>>>(),
             Err(e) => {
-                error!("Failed to get logs from db: {:?}", e);
+                error!(error = ?e, "failed to get logs from db");
                 Err(DbError::from(DbSqlError::from(e)))
             }
         }
@@ -263,7 +263,7 @@ impl BlokliDbLogOperations for BlokliDb {
             .await
             .map(|res| res.into_iter().map(|b| b.block_number as u64).collect())
             .map_err(|e| {
-                error!("Failed to get logs block numbers from db: {:?}", e);
+                error!(error = ?e, "failed to get logs block numbers from db");
                 DbError::from(DbSqlError::from(e))
             })
     }

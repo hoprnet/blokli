@@ -1,7 +1,9 @@
 //! Crate containing the API object for chain operations used by the HOPRd node.
 
 pub mod errors;
+pub(crate) mod revert_decoder;
 pub mod rpc_adapter;
+pub mod safe_execution;
 pub mod transaction_executor;
 pub mod transaction_monitor;
 pub mod transaction_store;
@@ -18,9 +20,9 @@ use blokli_chain_rpc::{
 };
 use blokli_chain_types::{ChainConfig, ContractAddresses};
 use blokli_db::BlokliDbAllOperations;
-use futures::future::AbortHandle;
-use hopr_async_runtime::spawn_as_abortable;
+use futures::future::{AbortHandle, abortable};
 use hopr_bindings::exports::alloy::{
+    providers::Provider,
     rpc::client::ClientBuilder,
     transports::{
         http::{Http, ReqwestTransport},
@@ -37,10 +39,12 @@ use hopr_types::primitive::{
     prelude::{Address, Balance, Currency, HoprBalance, U256, WxHOPR, XDai, XHOPR},
     traits::IntoEndian,
 };
+use tracing::info;
 
 use crate::{
     errors::{BlokliChainError, Result},
     rpc_adapter::RpcAdapter,
+    safe_execution::DbSafeAddressChecker,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
     transaction_monitor::{TransactionMonitor, TransactionMonitorConfig},
     transaction_store::TransactionStore,
@@ -52,7 +56,8 @@ pub type DefaultHttpRequestor = blokli_chain_rpc::transport::ReqwestClient;
 const DEFAULT_MAX_RPC_REQUESTS_PER_SEC: u64 = 100;
 
 fn build_transport_client(url: &str) -> Result<Http<ReqwestClient>> {
-    let parsed_url = url::Url::parse(url).unwrap_or_else(|_| panic!("failed to parse URL: {url}"));
+    let parsed_url =
+        url::Url::parse(url).map_err(|e| BlokliChainError::Configuration(format!("failed to parse RPC URL: {e}")))?;
     Ok(ReqwestTransport::new(parsed_url))
 }
 
@@ -77,7 +82,7 @@ pub struct BlokliChain<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt
     rpc_operations: RpcOperations<DefaultHttpRequestor>,
     transaction_executor: Arc<RawTransactionExecutor<RpcAdapter<DefaultHttpRequestor>>>,
     transaction_store: Arc<TransactionStore>,
-    transaction_monitor: Arc<TransactionMonitor<RpcAdapter<DefaultHttpRequestor>>>,
+    transaction_monitor: Arc<TransactionMonitor<RpcAdapter<DefaultHttpRequestor>, DbSafeAddressChecker<T>>>,
 }
 
 impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static> BlokliChain<T> {
@@ -136,17 +141,23 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         let transaction_validator = Arc::new(TransactionValidator::new());
         let rpc_adapter = Arc::new(RpcAdapter::new(rpc_operations.clone()));
 
-        let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
-            rpc_adapter.clone(),
-            transaction_store.clone(),
-            transaction_validator,
-            RawTransactionExecutorConfig::default(),
-        ));
+        let safe_checker = Arc::new(DbSafeAddressChecker::new(db.clone()));
+
+        let transaction_executor = Arc::new(
+            RawTransactionExecutor::with_shared_dependencies(
+                rpc_adapter.clone(),
+                transaction_store.clone(),
+                transaction_validator,
+                RawTransactionExecutorConfig::default(),
+            )
+            .with_safe_enrichment(rpc_adapter.clone(), safe_checker.clone()),
+        );
 
         let transaction_monitor = Arc::new(TransactionMonitor::new(
             transaction_store.clone(),
             (*rpc_adapter).clone(),
             TransactionMonitorConfig::default(),
+            Some(safe_checker),
         ));
 
         Ok(Self {
@@ -161,6 +172,67 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
         })
     }
 
+    /// Verify that the RPC endpoint supports required capabilities.
+    ///
+    /// Fetches the latest block, picks a real transaction hash from it, and
+    /// attempts to trace it with `debug_traceTransaction`. If the trace
+    /// succeeds, the RPC supports debug tracing. If it fails, startup aborts
+    /// with a clear error.
+    ///
+    /// Walks backwards up to 64 blocks to find a block with transactions.
+    pub async fn verify_rpc_capabilities(&self) -> Result<()> {
+        info!("Verifying RPC debug tracing support...");
+
+        let latest_block = self.rpc_operations.provider.get_block_number().await.map_err(|e| {
+            BlokliChainError::Configuration(format!(
+                "Failed to query latest block number during RPC capability check: {e}"
+            ))
+        })?;
+
+        let mut probe_tx_hash = None;
+        for offset in 0..64u64 {
+            let block_num = latest_block.saturating_sub(offset);
+            if let Ok(Some(block)) = self.rpc_operations.provider.get_block_by_number(block_num.into()).await {
+                if let Some(tx_hash) = block.transactions.hashes().next() {
+                    probe_tx_hash = Some(tx_hash);
+                    break;
+                }
+            }
+            if block_num == 0 {
+                break;
+            }
+        }
+
+        let Some(tx_hash) = probe_tx_hash else {
+            info!(
+                "No transactions found in the last 64 blocks; debug_traceTransaction support could not be verified. \
+                 Revert reason extraction may fail if the RPC does not support debug tracing."
+            );
+            return Ok(());
+        };
+
+        let params = serde_json::json!([
+            format!("{tx_hash:#x}"),
+            { "tracer": "callTracer", "tracerConfig": { "onlyTopCall": true } }
+        ]);
+
+        self.rpc_operations
+            .provider
+            .raw_request::<_, serde_json::Value>("debug_traceTransaction".into(), params)
+            .await
+            .map_err(|e| {
+                BlokliChainError::Configuration(format!(
+                    "RPC does not support debug_traceTransaction: {e}. Blokli requires an RPC endpoint with debug \
+                     tracing enabled (e.g., Nethermind/Erigon with debug API). Revert reason extraction for Safe \
+                     transactions depends on this capability."
+                ))
+            })?;
+
+        let traced_tx_hash = format!("{tx_hash:#x}");
+        info!(tx_hash = %traced_tx_hash, "RPC debug tracing support verified");
+        Ok(())
+    }
+
     /// Execute all processes of the [`BlokliChain`] object.
     ///
     /// This method will spawn the [`BlokliChainProcess::Indexer`] and
@@ -169,10 +241,10 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
     pub async fn start(&self) -> errors::Result<HashMap<BlokliChainProcess, AbortHandle>> {
         let mut processes: HashMap<BlokliChainProcess, AbortHandle> = HashMap::new();
 
-        processes.insert(
-            BlokliChainProcess::TransactionMonitor,
-            spawn_as_abortable!(self.transaction_monitor.clone().start()),
-        );
+        let (transaction_monitor_process, transaction_monitor_abort_handle) =
+            abortable(self.transaction_monitor.clone().start());
+        let _transaction_monitor_task = tokio::spawn(transaction_monitor_process);
+        processes.insert(BlokliChainProcess::TransactionMonitor, transaction_monitor_abort_handle);
         processes.insert(
             BlokliChainProcess::Indexer,
             Indexer::new(
@@ -182,6 +254,7 @@ impl<T: BlokliDbAllOperations + Send + Sync + Clone + std::fmt::Debug + 'static>
                     self.db.clone(),
                     self.rpc_operations.clone(),
                     self.indexer_state.clone(),
+                    self.indexer_cfg.enable_safe_indexing,
                 ),
                 self.db.clone(),
                 self.indexer_cfg.clone(),

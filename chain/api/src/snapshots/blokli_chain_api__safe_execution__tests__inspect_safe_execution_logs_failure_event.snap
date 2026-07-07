@@ -1,0 +1,7 @@
+---
+source: chain/api/src/safe_execution.rs
+expression: "&result"
+---
+success: false
+safe_tx_hash: "0x0000000000000000000000000000000000000000000000000000000000000000"
+revert_reason: ~

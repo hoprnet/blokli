@@ -366,6 +366,12 @@ pub trait HoprIndexerRpcOperations {
     /// Address of transaction sender (from field)
     async fn get_transaction_sender(&self, tx_hash: Hash) -> Result<Address>;
 
+    /// Retrieves the fully encoded signed transaction bytes for a given transaction hash.
+    ///
+    /// This is used by indexer-side Safe failure handling to decode the original
+    /// outer module transaction and determine which inner HOPR action rejected.
+    async fn get_transaction_bytes(&self, tx_hash: Hash) -> Result<Vec<u8>>;
+
     /// Streams blockchain logs using selective filtering based on synchronization state.
     ///
     /// This method intelligently selects which log filters to use based on whether
@@ -390,6 +396,18 @@ pub trait HoprIndexerRpcOperations {
         filters: FilterSet,
         is_synced: bool,
     ) -> Result<Pin<Box<dyn Stream<Item = BlockWithLogs> + Send + 'a>>>;
+
+    /// Retrieves logs for a single address within an inclusive block range.
+    ///
+    /// This is used for targeted backfills when the indexer discovers a Safe
+    /// after its address-scoped stream filters were built.
+    async fn get_logs_for_address(
+        &self,
+        address: Address,
+        topics: Vec<B256>,
+        from_block: u64,
+        to_block: u64,
+    ) -> Result<Vec<Log>>;
 
     /// Retrieves on-chain xdai balance of the given address.
     async fn get_xdai_balance(&self, address: Address) -> Result<XDaiBalance>;

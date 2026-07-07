@@ -66,16 +66,16 @@
 //! use blokli_db::events::BlockPosition;
 //!
 //! // Get current channel state (most recent)
-//! let current = get_current_channel_state(&db.conn(TargetDb::Index), channel_id).await?;
+//! let current = get_current_channel_state(db.conn(TargetDb::Index), channel_id).await?;
 //!
 //! // Get state at a specific position
 //! let position = BlockPosition { block: 1000, tx_index: 5, log_index: 2 };
-//! let historical = get_channel_state_at(&db.conn(TargetDb::Index), channel_id, position).await?;
+//! let historical = get_channel_state_at(db.conn(TargetDb::Index), channel_id, position).await?;
 //!
 //! // Get all state changes in a range
 //! let from = BlockPosition { block: 900, tx_index: 0, log_index: 0 };
 //! let to = BlockPosition { block: 1100, tx_index: 0, log_index: 0 };
-//! let history = get_channel_state_history(&db.conn(TargetDb::Index), channel_id, from, to).await?;
+//! let history = get_channel_state_history(db.conn(TargetDb::Index), channel_id, from, to).await?;
 //! ```
 //!
 //! ## Handling Reorgs
@@ -83,7 +83,7 @@
 //! ```rust,ignore
 //! // Query at position after a reorg correction
 //! let position = BlockPosition { block: 1300, tx_index: 0, log_index: 0 };
-//! let state = get_channel_state_at(&db.conn(TargetDb::Index), channel_id, position).await?;
+//! let state = get_channel_state_at(db.conn(TargetDb::Index), channel_id, position).await?;
 //!
 //! // The returned state may be a corrective state if a reorg occurred
 //! if let Some(s) = state {
@@ -97,8 +97,8 @@
 //!
 //! ```rust,ignore
 //! // Queries are isolated by object ID - account states don't interfere with each other
-//! let account1_state = get_account_state_at(&db.conn(TargetDb::Index), account1_id, position).await?;
-//! let account2_state = get_account_state_at(&db.conn(TargetDb::Index), account2_id, position).await?;
+//! let account1_state = get_account_state_at(db.conn(TargetDb::Index), account1_id, position).await?;
+//! let account2_state = get_account_state_at(db.conn(TargetDb::Index), account2_id, position).await?;
 //! // Results are independent even if positions overlap
 //! ```
 //!
@@ -533,9 +533,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_current_channel_state_empty_db() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
-        let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
+        let channel_id = create_test_channel(db.conn(TargetDb::Index)).await?;
 
-        let result = get_current_channel_state(&db.conn(TargetDb::Index), channel_id).await?;
+        let result = get_current_channel_state(db.conn(TargetDb::Index), channel_id).await?;
         assert!(result.is_none(), "Should return None for channel with no state");
 
         Ok(())
@@ -544,12 +544,12 @@ mod tests {
     #[tokio::test]
     async fn test_get_current_channel_state_single_version() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
-        let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
+        let channel_id = create_test_channel(db.conn(TargetDb::Index)).await?;
 
         let balance = vec![1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
-        insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, balance.clone(), 1).await?;
+        insert_channel_state(db.conn(TargetDb::Index), channel_id, 1000, 5, 2, balance.clone(), 1).await?;
 
-        let result = get_current_channel_state(&db.conn(TargetDb::Index), channel_id).await?;
+        let result = get_current_channel_state(db.conn(TargetDb::Index), channel_id).await?;
         assert!(result.is_some());
 
         let state = result.unwrap();
@@ -563,16 +563,16 @@ mod tests {
     #[tokio::test]
     async fn test_get_current_channel_state_multiple_versions() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
-        let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
+        let channel_id = create_test_channel(db.conn(TargetDb::Index)).await?;
 
         // Insert states at different positions
-        insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
-        insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 10, 0, vec![2; 12], 1).await?;
-        insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 0, 0, vec![3; 12], 1).await?;
+        insert_channel_state(db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
+        insert_channel_state(db.conn(TargetDb::Index), channel_id, 1000, 10, 0, vec![2; 12], 1).await?;
+        insert_channel_state(db.conn(TargetDb::Index), channel_id, 1001, 0, 0, vec![3; 12], 1).await?;
         let latest_state_id =
-            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 5, 1, vec![4; 12], 2).await?;
+            insert_channel_state(db.conn(TargetDb::Index), channel_id, 1001, 5, 1, vec![4; 12], 2).await?;
 
-        let result = get_current_channel_state(&db.conn(TargetDb::Index), channel_id).await?;
+        let result = get_current_channel_state(db.conn(TargetDb::Index), channel_id).await?;
         assert!(result.is_some());
 
         let state = result.unwrap();
@@ -586,9 +586,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_channel_state_at_exact_position() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
-        let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
+        let channel_id = create_test_channel(db.conn(TargetDb::Index)).await?;
 
-        let state_id = insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
+        let state_id = insert_channel_state(db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
 
         let position = BlockPosition {
             block: 1000,
@@ -596,7 +596,7 @@ mod tests {
             log_index: 2,
         };
 
-        let result = get_channel_state_at(&db.conn(TargetDb::Index), channel_id, position).await?;
+        let result = get_channel_state_at(db.conn(TargetDb::Index), channel_id, position).await?;
         assert!(result.is_some());
         assert_eq!(result.unwrap().id, state_id);
 
@@ -606,9 +606,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_channel_state_at_before_first_state() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
-        let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
+        let channel_id = create_test_channel(db.conn(TargetDb::Index)).await?;
 
-        insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
+        insert_channel_state(db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
 
         let position = BlockPosition {
             block: 999,
@@ -616,7 +616,7 @@ mod tests {
             log_index: 0,
         };
 
-        let result = get_channel_state_at(&db.conn(TargetDb::Index), channel_id, position).await?;
+        let result = get_channel_state_at(db.conn(TargetDb::Index), channel_id, position).await?;
         assert!(result.is_none(), "Should return None for position before first state");
 
         Ok(())
@@ -625,11 +625,10 @@ mod tests {
     #[tokio::test]
     async fn test_get_channel_state_at_between_versions() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
-        let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
+        let channel_id = create_test_channel(db.conn(TargetDb::Index)).await?;
 
-        let state_id_1 =
-            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
-        insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 10, 0, vec![2; 12], 2).await?;
+        let state_id_1 = insert_channel_state(db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
+        insert_channel_state(db.conn(TargetDb::Index), channel_id, 1001, 10, 0, vec![2; 12], 2).await?;
 
         // Query at a position between the two states
         let position = BlockPosition {
@@ -638,7 +637,7 @@ mod tests {
             log_index: 0,
         };
 
-        let result = get_channel_state_at(&db.conn(TargetDb::Index), channel_id, position).await?;
+        let result = get_channel_state_at(db.conn(TargetDb::Index), channel_id, position).await?;
         assert!(result.is_some());
         assert_eq!(result.unwrap().id, state_id_1, "Should return first state");
 
@@ -648,11 +647,11 @@ mod tests {
     #[tokio::test]
     async fn test_get_channel_state_at_after_all_versions() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
-        let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
+        let channel_id = create_test_channel(db.conn(TargetDb::Index)).await?;
 
-        insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
+        insert_channel_state(db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
         let state_id_2 =
-            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 10, 0, vec![2; 12], 2).await?;
+            insert_channel_state(db.conn(TargetDb::Index), channel_id, 1001, 10, 0, vec![2; 12], 2).await?;
 
         // Query at a position after all states
         let position = BlockPosition {
@@ -661,7 +660,7 @@ mod tests {
             log_index: 0,
         };
 
-        let result = get_channel_state_at(&db.conn(TargetDb::Index), channel_id, position).await?;
+        let result = get_channel_state_at(db.conn(TargetDb::Index), channel_id, position).await?;
         assert!(result.is_some());
         assert_eq!(result.unwrap().id, state_id_2, "Should return latest state");
 
@@ -671,7 +670,7 @@ mod tests {
     #[tokio::test]
     async fn test_get_channel_state_history_empty() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
-        let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
+        let channel_id = create_test_channel(db.conn(TargetDb::Index)).await?;
 
         let from = BlockPosition {
             block: 1000,
@@ -684,7 +683,7 @@ mod tests {
             log_index: 0,
         };
 
-        let result = get_channel_state_history(&db.conn(TargetDb::Index), channel_id, from, to).await?;
+        let result = get_channel_state_history(db.conn(TargetDb::Index), channel_id, from, to).await?;
         assert_eq!(result.len(), 0, "Should return empty vector");
 
         Ok(())
@@ -693,15 +692,13 @@ mod tests {
     #[tokio::test]
     async fn test_get_channel_state_history_full_range() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
-        let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
+        let channel_id = create_test_channel(db.conn(TargetDb::Index)).await?;
 
         // Insert states at different positions
-        let state_id_1 =
-            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
+        let state_id_1 = insert_channel_state(db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
         let state_id_2 =
-            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 10, 0, vec![2; 12], 1).await?;
-        let state_id_3 =
-            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1002, 0, 0, vec![3; 12], 1).await?;
+            insert_channel_state(db.conn(TargetDb::Index), channel_id, 1001, 10, 0, vec![2; 12], 1).await?;
+        let state_id_3 = insert_channel_state(db.conn(TargetDb::Index), channel_id, 1002, 0, 0, vec![3; 12], 1).await?;
 
         let from = BlockPosition {
             block: 1000,
@@ -714,7 +711,7 @@ mod tests {
             log_index: 0,
         };
 
-        let result = get_channel_state_history(&db.conn(TargetDb::Index), channel_id, from, to).await?;
+        let result = get_channel_state_history(db.conn(TargetDb::Index), channel_id, from, to).await?;
         assert_eq!(result.len(), 3, "Should return all three states");
         assert_eq!(result[0].id, state_id_1);
         assert_eq!(result[1].id, state_id_2);
@@ -726,14 +723,13 @@ mod tests {
     #[tokio::test]
     async fn test_get_channel_state_history_partial_overlap() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
-        let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
+        let channel_id = create_test_channel(db.conn(TargetDb::Index)).await?;
 
         // Insert states
-        insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
+        insert_channel_state(db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
         let state_id_2 =
-            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 10, 0, vec![2; 12], 1).await?;
-        let state_id_3 =
-            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1002, 0, 0, vec![3; 12], 1).await?;
+            insert_channel_state(db.conn(TargetDb::Index), channel_id, 1001, 10, 0, vec![2; 12], 1).await?;
+        let state_id_3 = insert_channel_state(db.conn(TargetDb::Index), channel_id, 1002, 0, 0, vec![3; 12], 1).await?;
 
         // Query range that excludes first state
         let from = BlockPosition {
@@ -747,7 +743,7 @@ mod tests {
             log_index: 0,
         };
 
-        let result = get_channel_state_history(&db.conn(TargetDb::Index), channel_id, from, to).await?;
+        let result = get_channel_state_history(db.conn(TargetDb::Index), channel_id, from, to).await?;
         assert_eq!(result.len(), 2, "Should return two states");
         assert_eq!(result[0].id, state_id_2);
         assert_eq!(result[1].id, state_id_3);
@@ -760,9 +756,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_current_account_state_empty_db() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
-        let account_id = create_test_account(&db.conn(TargetDb::Index)).await?;
+        let account_id = create_test_account(db.conn(TargetDb::Index)).await?;
 
-        let result = get_current_account_state(&db.conn(TargetDb::Index), account_id).await?;
+        let result = get_current_account_state(db.conn(TargetDb::Index), account_id).await?;
         assert!(result.is_none(), "Should return None for account with no state");
 
         Ok(())
@@ -771,14 +767,14 @@ mod tests {
     #[tokio::test]
     async fn test_get_current_account_state_multiple_versions() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
-        let account_id = create_test_account(&db.conn(TargetDb::Index)).await?;
+        let account_id = create_test_account(db.conn(TargetDb::Index)).await?;
 
         // Insert states at different positions
-        insert_account_state(&db.conn(TargetDb::Index), account_id, 1000, 5, 2).await?;
-        insert_account_state(&db.conn(TargetDb::Index), account_id, 1000, 10, 0).await?;
-        let latest_state_id = insert_account_state(&db.conn(TargetDb::Index), account_id, 1001, 5, 1).await?;
+        insert_account_state(db.conn(TargetDb::Index), account_id, 1000, 5, 2).await?;
+        insert_account_state(db.conn(TargetDb::Index), account_id, 1000, 10, 0).await?;
+        let latest_state_id = insert_account_state(db.conn(TargetDb::Index), account_id, 1001, 5, 1).await?;
 
-        let result = get_current_account_state(&db.conn(TargetDb::Index), account_id).await?;
+        let result = get_current_account_state(db.conn(TargetDb::Index), account_id).await?;
         assert!(result.is_some());
 
         let state = result.unwrap();
@@ -790,9 +786,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_account_state_at_exact_position() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
-        let account_id = create_test_account(&db.conn(TargetDb::Index)).await?;
+        let account_id = create_test_account(db.conn(TargetDb::Index)).await?;
 
-        let state_id = insert_account_state(&db.conn(TargetDb::Index), account_id, 1000, 5, 2).await?;
+        let state_id = insert_account_state(db.conn(TargetDb::Index), account_id, 1000, 5, 2).await?;
 
         let position = BlockPosition {
             block: 1000,
@@ -800,7 +796,7 @@ mod tests {
             log_index: 2,
         };
 
-        let result = get_account_state_at(&db.conn(TargetDb::Index), account_id, position).await?;
+        let result = get_account_state_at(db.conn(TargetDb::Index), account_id, position).await?;
         assert!(result.is_some());
         assert_eq!(result.unwrap().id, state_id);
 
@@ -810,9 +806,9 @@ mod tests {
     #[tokio::test]
     async fn test_get_account_state_at_before_first_state() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
-        let account_id = create_test_account(&db.conn(TargetDb::Index)).await?;
+        let account_id = create_test_account(db.conn(TargetDb::Index)).await?;
 
-        insert_account_state(&db.conn(TargetDb::Index), account_id, 1000, 5, 2).await?;
+        insert_account_state(db.conn(TargetDb::Index), account_id, 1000, 5, 2).await?;
 
         let position = BlockPosition {
             block: 999,
@@ -820,7 +816,7 @@ mod tests {
             log_index: 0,
         };
 
-        let result = get_account_state_at(&db.conn(TargetDb::Index), account_id, position).await?;
+        let result = get_account_state_at(db.conn(TargetDb::Index), account_id, position).await?;
         assert!(result.is_none(), "Should return None for position before first state");
 
         Ok(())
@@ -829,12 +825,12 @@ mod tests {
     #[tokio::test]
     async fn test_get_account_state_history_ordering() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
-        let account_id = create_test_account(&db.conn(TargetDb::Index)).await?;
+        let account_id = create_test_account(db.conn(TargetDb::Index)).await?;
 
         // Insert states in non-chronological order
-        let state_id_3 = insert_account_state(&db.conn(TargetDb::Index), account_id, 1002, 0, 0).await?;
-        let state_id_1 = insert_account_state(&db.conn(TargetDb::Index), account_id, 1000, 5, 2).await?;
-        let state_id_2 = insert_account_state(&db.conn(TargetDb::Index), account_id, 1001, 10, 0).await?;
+        let state_id_3 = insert_account_state(db.conn(TargetDb::Index), account_id, 1002, 0, 0).await?;
+        let state_id_1 = insert_account_state(db.conn(TargetDb::Index), account_id, 1000, 5, 2).await?;
+        let state_id_2 = insert_account_state(db.conn(TargetDb::Index), account_id, 1001, 10, 0).await?;
 
         let from = BlockPosition {
             block: 1000,
@@ -847,7 +843,7 @@ mod tests {
             log_index: 0,
         };
 
-        let result = get_account_state_history(&db.conn(TargetDb::Index), account_id, from, to).await?;
+        let result = get_account_state_history(db.conn(TargetDb::Index), account_id, from, to).await?;
         assert_eq!(result.len(), 3);
 
         // Verify chronological ordering
@@ -864,17 +860,16 @@ mod tests {
     async fn test_get_channel_state_at_same_block_different_positions() -> anyhow::Result<()> {
         // Test correct position ordering within same block
         let db = BlokliDb::new_in_memory().await?;
-        let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
+        let channel_id = create_test_channel(db.conn(TargetDb::Index)).await?;
 
         // Insert multiple states at same block with different (tx_index, log_index)
         let _state_id_1 =
-            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
-        let state_id_2 =
-            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 5, vec![2; 12], 1).await?;
+            insert_channel_state(db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
+        let state_id_2 = insert_channel_state(db.conn(TargetDb::Index), channel_id, 1000, 5, 5, vec![2; 12], 1).await?;
         let state_id_3 =
-            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 10, 0, vec![3; 12], 1).await?;
+            insert_channel_state(db.conn(TargetDb::Index), channel_id, 1000, 10, 0, vec![3; 12], 1).await?;
         let _state_id_4 =
-            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 10, 3, vec![4; 12], 1).await?;
+            insert_channel_state(db.conn(TargetDb::Index), channel_id, 1000, 10, 3, vec![4; 12], 1).await?;
 
         // Query at position (1000, 5, 6) - should return state_id_2 at (1000, 5, 5)
         let position = BlockPosition {
@@ -882,7 +877,7 @@ mod tests {
             tx_index: 5,
             log_index: 6,
         };
-        let result = get_channel_state_at(&db.conn(TargetDb::Index), channel_id, position).await?;
+        let result = get_channel_state_at(db.conn(TargetDb::Index), channel_id, position).await?;
         assert!(result.is_some());
         assert_eq!(result.unwrap().id, state_id_2, "Should return state at (1000, 5, 5)");
 
@@ -892,7 +887,7 @@ mod tests {
             tx_index: 8,
             log_index: 0,
         };
-        let result = get_channel_state_at(&db.conn(TargetDb::Index), channel_id, position).await?;
+        let result = get_channel_state_at(db.conn(TargetDb::Index), channel_id, position).await?;
         assert!(result.is_some());
         assert_eq!(
             result.unwrap().id,
@@ -906,7 +901,7 @@ mod tests {
             tx_index: 10,
             log_index: 2,
         };
-        let result = get_channel_state_at(&db.conn(TargetDb::Index), channel_id, position).await?;
+        let result = get_channel_state_at(db.conn(TargetDb::Index), channel_id, position).await?;
         assert!(result.is_some());
         assert_eq!(result.unwrap().id, state_id_3, "Should return state at (1000, 10, 0)");
 
@@ -917,17 +912,14 @@ mod tests {
     async fn test_get_channel_state_history_boundary_conditions() -> anyhow::Result<()> {
         // Test inclusive/exclusive boundary logic for history queries
         let db = BlokliDb::new_in_memory().await?;
-        let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
+        let channel_id = create_test_channel(db.conn(TargetDb::Index)).await?;
 
         // Insert states at precise positions
-        let state_id_1 =
-            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
+        let state_id_1 = insert_channel_state(db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
         let state_id_2 =
-            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 10, 0, vec![2; 12], 1).await?;
-        let state_id_3 =
-            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 0, 0, vec![3; 12], 1).await?;
-        let state_id_4 =
-            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1001, 5, 1, vec![4; 12], 1).await?;
+            insert_channel_state(db.conn(TargetDb::Index), channel_id, 1000, 10, 0, vec![2; 12], 1).await?;
+        let state_id_3 = insert_channel_state(db.conn(TargetDb::Index), channel_id, 1001, 0, 0, vec![3; 12], 1).await?;
+        let state_id_4 = insert_channel_state(db.conn(TargetDb::Index), channel_id, 1001, 5, 1, vec![4; 12], 1).await?;
 
         // Test exact boundary inclusion - from is inclusive
         let from = BlockPosition {
@@ -940,7 +932,7 @@ mod tests {
             tx_index: 5,
             log_index: 1,
         };
-        let result = get_channel_state_history(&db.conn(TargetDb::Index), channel_id, from, to).await?;
+        let result = get_channel_state_history(db.conn(TargetDb::Index), channel_id, from, to).await?;
         assert_eq!(result.len(), 4, "Should include all four states");
         assert_eq!(result[0].id, state_id_1, "Should include from boundary");
         assert_eq!(result[3].id, state_id_4, "Should include to boundary");
@@ -956,7 +948,7 @@ mod tests {
             tx_index: 5,
             log_index: 0,
         };
-        let result = get_channel_state_history(&db.conn(TargetDb::Index), channel_id, from, to).await?;
+        let result = get_channel_state_history(db.conn(TargetDb::Index), channel_id, from, to).await?;
         assert_eq!(result.len(), 2, "Should exclude state_id_1 and state_id_4");
         assert_eq!(result[0].id, state_id_2);
         assert_eq!(result[1].id, state_id_3);
@@ -968,15 +960,15 @@ mod tests {
     async fn test_get_channel_state_with_reorg_corrections() -> anyhow::Result<()> {
         // Test querying with reorg_correction states present
         let db = BlokliDb::new_in_memory().await?;
-        let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
+        let channel_id = create_test_channel(db.conn(TargetDb::Index)).await?;
 
         // Insert normal state before reorg
         let _state_id_1 =
-            insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
+            insert_channel_state(db.conn(TargetDb::Index), channel_id, 1000, 5, 2, vec![1; 12], 1).await?;
 
         // Insert states that will be "reverted" by reorg
-        insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1100, 10, 0, vec![2; 12], 2).await?;
-        insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1200, 0, 0, vec![3; 12], 2).await?;
+        insert_channel_state(db.conn(TargetDb::Index), channel_id, 1100, 10, 0, vec![2; 12], 2).await?;
+        insert_channel_state(db.conn(TargetDb::Index), channel_id, 1200, 0, 0, vec![3; 12], 2).await?;
 
         // Insert reorg correction state at synthetic position (1300, 0, 0)
         let correction_state = channel_state::ActiveModel {
@@ -1001,7 +993,7 @@ mod tests {
             tx_index: 0,
             log_index: 0,
         };
-        let result = get_channel_state_at(&db.conn(TargetDb::Index), channel_id, position).await?;
+        let result = get_channel_state_at(db.conn(TargetDb::Index), channel_id, position).await?;
         assert!(result.is_some());
         let state = result.unwrap();
         assert_eq!(state.id, correction_id, "Should return reorg correction state");
@@ -1019,7 +1011,7 @@ mod tests {
             tx_index: 0,
             log_index: 0,
         };
-        let history = get_channel_state_history(&db.conn(TargetDb::Index), channel_id, from, to).await?;
+        let history = get_channel_state_history(db.conn(TargetDb::Index), channel_id, from, to).await?;
         assert_eq!(history.len(), 4, "Should include all states including correction");
 
         Ok(())
@@ -1029,12 +1021,12 @@ mod tests {
     async fn test_get_channel_state_history_large_range() -> anyhow::Result<()> {
         // Test performance with many state changes (100+)
         let db = BlokliDb::new_in_memory().await?;
-        let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
+        let channel_id = create_test_channel(db.conn(TargetDb::Index)).await?;
 
         // Insert 150 state changes across 150 blocks
         for block in 1000..1150 {
-            let balance = vec![(block % 256) as u8; 12];
-            insert_channel_state(&db.conn(TargetDb::Index), channel_id, block, 0, 0, balance, 1).await?;
+            let balance = vec![u8::try_from(block % 256)?; 12];
+            insert_channel_state(db.conn(TargetDb::Index), channel_id, block, 0, 0, balance, 1).await?;
         }
 
         // Query full range
@@ -1048,7 +1040,7 @@ mod tests {
             tx_index: 0,
             log_index: 0,
         };
-        let history = get_channel_state_history(&db.conn(TargetDb::Index), channel_id, from, to).await?;
+        let history = get_channel_state_history(db.conn(TargetDb::Index), channel_id, from, to).await?;
         assert_eq!(history.len(), 150, "Should return all 150 states");
 
         // Verify ordering is maintained
@@ -1065,11 +1057,11 @@ mod tests {
             tx_index: 0,
             log_index: 0,
         };
-        let result = get_channel_state_at(&db.conn(TargetDb::Index), channel_id, position).await?;
+        let result = get_channel_state_at(db.conn(TargetDb::Index), channel_id, position).await?;
         assert!(result.is_some());
         let state = result.unwrap();
         assert_eq!(state.published_block, 1075);
-        assert_eq!(state.balance, vec![(1075 % 256) as u8; 12]);
+        assert_eq!(state.balance, vec![u8::try_from(1075 % 256)?; 12]);
 
         Ok(())
     }
@@ -1078,10 +1070,10 @@ mod tests {
     async fn test_get_channel_state_at_synthetic_reorg_position() -> anyhow::Result<()> {
         // Test querying at (block, 0, 0) synthetic reorg correction positions
         let db = BlokliDb::new_in_memory().await?;
-        let channel_id = create_test_channel(&db.conn(TargetDb::Index)).await?;
+        let channel_id = create_test_channel(db.conn(TargetDb::Index)).await?;
 
         // Insert state before synthetic position
-        insert_channel_state(&db.conn(TargetDb::Index), channel_id, 999, 10, 5, vec![1; 12], 1).await?;
+        insert_channel_state(db.conn(TargetDb::Index), channel_id, 999, 10, 5, vec![1; 12], 1).await?;
 
         // Insert synthetic reorg correction at (1000, 0, 0)
         let correction_state = channel_state::ActiveModel {
@@ -1101,7 +1093,7 @@ mod tests {
         let correction_id = correction_state.insert(db.conn(TargetDb::Index)).await?.id;
 
         // Insert normal state after synthetic position
-        insert_channel_state(&db.conn(TargetDb::Index), channel_id, 1000, 5, 3, vec![3; 12], 2).await?;
+        insert_channel_state(db.conn(TargetDb::Index), channel_id, 1000, 5, 3, vec![3; 12], 2).await?;
 
         // Query exactly at synthetic position (1000, 0, 0)
         let position = BlockPosition {
@@ -1109,7 +1101,7 @@ mod tests {
             tx_index: 0,
             log_index: 0,
         };
-        let result = get_channel_state_at(&db.conn(TargetDb::Index), channel_id, position).await?;
+        let result = get_channel_state_at(db.conn(TargetDb::Index), channel_id, position).await?;
         assert!(result.is_some());
         assert_eq!(result.unwrap().id, correction_id, "Should find synthetic state");
 
@@ -1119,7 +1111,7 @@ mod tests {
             tx_index: 0,
             log_index: 1,
         };
-        let result = get_channel_state_at(&db.conn(TargetDb::Index), channel_id, position).await?;
+        let result = get_channel_state_at(db.conn(TargetDb::Index), channel_id, position).await?;
         assert!(result.is_some());
         assert_eq!(result.unwrap().id, correction_id, "Should find synthetic state");
 
@@ -1129,7 +1121,7 @@ mod tests {
             tx_index: 3,
             log_index: 0,
         };
-        let result = get_channel_state_at(&db.conn(TargetDb::Index), channel_id, position).await?;
+        let result = get_channel_state_at(db.conn(TargetDb::Index), channel_id, position).await?;
         assert!(result.is_some());
         assert_eq!(result.unwrap().id, correction_id);
 
@@ -1140,15 +1132,15 @@ mod tests {
     async fn test_get_account_state_isolation() -> anyhow::Result<()> {
         // Test that multiple accounts with interleaved positions don't interfere
         let db = BlokliDb::new_in_memory().await?;
-        let account_id_1 = create_test_account(&db.conn(TargetDb::Index)).await?;
-        let account_id_2 = create_test_account(&db.conn(TargetDb::Index)).await?;
+        let account_id_1 = create_test_account(db.conn(TargetDb::Index)).await?;
+        let account_id_2 = create_test_account(db.conn(TargetDb::Index)).await?;
 
         // Insert states for both accounts with interleaved positions
-        let _state_1_a = insert_account_state(&db.conn(TargetDb::Index), account_id_1, 1000, 5, 2).await?;
-        let state_2_a = insert_account_state(&db.conn(TargetDb::Index), account_id_2, 1000, 7, 0).await?;
-        let state_1_b = insert_account_state(&db.conn(TargetDb::Index), account_id_1, 1001, 3, 1).await?;
-        let state_2_b = insert_account_state(&db.conn(TargetDb::Index), account_id_2, 1001, 4, 2).await?;
-        let state_1_c = insert_account_state(&db.conn(TargetDb::Index), account_id_1, 1002, 0, 0).await?;
+        let _state_1_a = insert_account_state(db.conn(TargetDb::Index), account_id_1, 1000, 5, 2).await?;
+        let state_2_a = insert_account_state(db.conn(TargetDb::Index), account_id_2, 1000, 7, 0).await?;
+        let state_1_b = insert_account_state(db.conn(TargetDb::Index), account_id_1, 1001, 3, 1).await?;
+        let state_2_b = insert_account_state(db.conn(TargetDb::Index), account_id_2, 1001, 4, 2).await?;
+        let state_1_c = insert_account_state(db.conn(TargetDb::Index), account_id_1, 1002, 0, 0).await?;
 
         // Query account 1 at position between its states
         let position = BlockPosition {
@@ -1156,7 +1148,7 @@ mod tests {
             tx_index: 4,
             log_index: 0,
         };
-        let result = get_account_state_at(&db.conn(TargetDb::Index), account_id_1, position).await?;
+        let result = get_account_state_at(db.conn(TargetDb::Index), account_id_1, position).await?;
         assert!(result.is_some());
         assert_eq!(
             result.unwrap().id,
@@ -1175,14 +1167,14 @@ mod tests {
             tx_index: 4,
             log_index: 2,
         };
-        let history = get_account_state_history(&db.conn(TargetDb::Index), account_id_2, from, to).await?;
+        let history = get_account_state_history(db.conn(TargetDb::Index), account_id_2, from, to).await?;
         assert_eq!(history.len(), 2, "Should only include account 2's states");
         assert_eq!(history[0].id, state_2_a);
         assert_eq!(history[1].id, state_2_b);
 
         // Verify current state queries are isolated
-        let current_1 = get_current_account_state(&db.conn(TargetDb::Index), account_id_1).await?;
-        let current_2 = get_current_account_state(&db.conn(TargetDb::Index), account_id_2).await?;
+        let current_1 = get_current_account_state(db.conn(TargetDb::Index), account_id_1).await?;
+        let current_2 = get_current_account_state(db.conn(TargetDb::Index), account_id_2).await?;
         assert!(current_1.is_some());
         assert!(current_2.is_some());
         assert_eq!(current_1.unwrap().id, state_1_c);

@@ -7,26 +7,15 @@
 //! - Multiple concurrent subscribers
 //! - Unsubscribe behavior
 
-use std::{sync::Arc, time::Duration};
+mod common;
 
-use async_graphql::Schema;
-use blokli_api::{mutation::MutationRoot, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot};
+use std::time::Duration;
+
+use anyhow::Context;
 use blokli_api_types::Account;
-use blokli_chain_api::{
-    rpc_adapter::RpcAdapter,
-    transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
-    transaction_store::TransactionStore,
-    transaction_validator::TransactionValidator,
-};
-use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
-use blokli_chain_rpc::{
-    rpc::{RpcOperations, RpcOperationsConfig},
-    transport::ReqwestClient,
-};
-use blokli_chain_types::ContractAddresses;
-use blokli_db::{BlokliDbGeneralModelOperations, TargetDb, accounts::BlokliDbAccountOperations, db::BlokliDb};
+use blokli_chain_indexer::state::IndexerEvent;
+use blokli_db::{accounts::BlokliDbAccountOperations, db::BlokliDb};
 use futures::StreamExt;
-use hopr_bindings::exports::alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
 use hopr_types::{
     crypto::prelude::{ChainKeypair, Keypair, OffchainKeypair},
     primitive::{prelude::Address, traits::ToHex},
@@ -41,58 +30,6 @@ fn random_keypair() -> ChainKeypair {
 /// Helper to generate random offchain keypair
 fn random_offchain_keypair() -> OffchainKeypair {
     OffchainKeypair::random()
-}
-
-/// Create a minimal GraphQL schema for testing subscriptions
-/// Returns both the schema and the IndexerState for publishing events
-fn create_test_schema(db: &BlokliDb) -> (Schema<QueryRoot, MutationRoot, SubscriptionRoot>, IndexerState) {
-    let indexer_state = IndexerState::new(10, 100);
-    let transaction_store = Arc::new(TransactionStore::new());
-    let transaction_validator = Arc::new(TransactionValidator::new());
-
-    // Create mock RPC client for testing (won't actually connect)
-    let transport = ReqwestTransport::new("http://localhost:8545".parse().unwrap());
-    let rpc_client = ClientBuilder::default().transport(transport.clone(), transport.guess_local());
-    let transport_client = ReqwestClient::new();
-
-    // Create stub RPC operations (not used for subscription tests)
-    let rpc_ops = Arc::new(
-        RpcOperations::new(
-            rpc_client.clone(),
-            transport_client.clone(),
-            RpcOperationsConfig::default(),
-            None,
-        )
-        .expect("Failed to create RPC operations"),
-    );
-
-    let rpc_adapter = Arc::new(RpcAdapter::new(
-        RpcOperations::new(rpc_client, transport_client, RpcOperationsConfig::default(), None)
-            .expect("Failed to create RPC adapter operations"),
-    ));
-
-    let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
-        rpc_adapter,
-        transaction_store.clone(),
-        transaction_validator,
-        RawTransactionExecutorConfig::default(),
-    ));
-
-    let schema = build_schema(
-        db.conn(TargetDb::Index).clone(),
-        1,
-        "test-network".to_string(),
-        ContractAddresses::default(),
-        1,
-        3, // Test finality value
-        1.0,
-        indexer_state.clone(),
-        transaction_executor,
-        transaction_store,
-        rpc_ops,
-    );
-
-    (schema, indexer_state)
 }
 
 #[tokio::test]
@@ -111,7 +48,7 @@ async fn test_account_subscription_emits_initial_account_with_keyid_filter() {
         .unwrap();
 
     // Create GraphQL schema
-    let (schema, _indexer_state) = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     // Execute subscription query with keyid filter
     let query = r#"
@@ -168,7 +105,7 @@ async fn test_account_subscription_emits_initial_account_with_packet_key_filter(
         .unwrap();
 
     // Create GraphQL schema
-    let (schema, _indexer_state) = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     // Execute subscription query with packetKey filter
     let query = format!(
@@ -219,7 +156,7 @@ async fn test_account_subscription_emits_initial_account_with_chain_key_filter()
         .unwrap();
 
     // Create GraphQL schema
-    let (schema, _indexer_state) = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     // Execute subscription query with chainKey filter
     let query = format!(
@@ -289,7 +226,7 @@ async fn test_account_subscription_without_filters_emits_all_accounts() {
     .unwrap();
 
     // Create GraphQL schema
-    let (schema, _indexer_state) = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     // Execute subscription query without filters
     let query = r#"
@@ -338,7 +275,7 @@ async fn test_account_subscription_receives_safe_address_update() {
         .await
         .unwrap();
 
-    let (schema, indexer_state) = create_test_schema(&db);
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -404,7 +341,7 @@ async fn test_account_subscription_receives_announcement_update() {
         .await
         .unwrap();
 
-    let (schema, indexer_state) = create_test_schema(&db);
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -475,7 +412,7 @@ async fn test_account_subscription_receives_multiple_updates() {
         .await
         .unwrap();
 
-    let (schema, indexer_state) = create_test_schema(&db);
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -583,7 +520,7 @@ async fn test_account_subscription_with_combined_filters() {
     .await
     .unwrap();
 
-    let (schema, _indexer_state) = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     // Subscribe with keyid and chainKey filters (both should match account 1)
     let query = format!(
@@ -650,7 +587,7 @@ async fn test_account_subscription_filter_excludes_non_matching_accounts() {
     .await
     .unwrap();
 
-    let (schema, indexer_state) = create_test_schema(&db);
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     // Subscribe with keyid filter for account 1 only
     let query = r#"
@@ -710,7 +647,7 @@ async fn test_account_subscription_filter_excludes_non_matching_accounts() {
 async fn test_account_subscription_handles_empty_database() {
     let db = BlokliDb::new_in_memory().await.unwrap();
 
-    let (schema, _indexer_state) = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -744,10 +681,16 @@ async fn test_account_subscription_handles_account_with_multiple_announcements()
     // Add multiple announcements
     let multiaddr1: Multiaddr = "/ip4/127.0.0.1/tcp/9091".parse().unwrap();
     let multiaddr2: Multiaddr = "/ip4/127.0.0.1/tcp/9092".parse().unwrap();
-    db.insert_announcement(None, chain_key, multiaddr1, 101).await.unwrap();
-    db.insert_announcement(None, chain_key, multiaddr2, 102).await.unwrap();
+    let _ = db
+        .insert_announcement(None, chain_key, multiaddr1, 101)
+        .await
+        .context("should be able to insert a multiaddress");
+    let _ = db
+        .insert_announcement(None, chain_key, multiaddr2.clone(), 102)
+        .await
+        .context("should be able to insert a multiaddress");
 
-    let (schema, _indexer_state) = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -760,7 +703,7 @@ async fn test_account_subscription_handles_account_with_multiple_announcements()
 
     let mut stream = schema.execute_stream(query).boxed();
 
-    // Should receive account with multiple announcements
+    // Should receive only the latest announced multiaddress
     let result = tokio::time::timeout(Duration::from_secs(2), stream.next())
         .await
         .unwrap()
@@ -769,7 +712,8 @@ async fn test_account_subscription_handles_account_with_multiple_announcements()
     assert!(result.errors.is_empty());
     let data = result.data.into_json().unwrap();
     let multi_addresses = data["accountUpdated"]["multiAddresses"].as_array().unwrap();
-    assert_eq!(multi_addresses.len(), 2);
+    assert_eq!(multi_addresses.len(), 1);
+    assert_eq!(multi_addresses[0].as_str().unwrap(), multiaddr2.to_string());
 }
 
 #[tokio::test]
@@ -786,7 +730,7 @@ async fn test_account_subscription_multiple_concurrent_subscribers() {
         .await
         .unwrap();
 
-    let (schema, indexer_state) = create_test_schema(&db);
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {

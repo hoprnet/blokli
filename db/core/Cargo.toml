@@ -5,20 +5,17 @@ homepage    = "https://hoprnet.org/"
 license     = "GPL-3.0-only"
 name        = "blokli-db"
 repository  = "https://github.com/hoprnet/blokli"
-version     = "0.14.0"
+version     = "0.16.2"
 
 [lints]
 workspace = true
 
 [features]
-default = ["sqlite", "traits"]
-prometheus = ["dep:lazy_static"]
-runtime-tokio = [
-  "sea-orm/runtime-tokio",
-  "sea-orm/runtime-tokio-rustls",
-]
-sqlite = ["sea-orm/sqlx-sqlite", "sea-query/backend-sqlite"]
-traits = []
+default       = ["sqlite", "traits"]
+runtime-tokio = ["sea-orm/runtime-tokio", "sea-orm/runtime-tokio-rustls"]
+sqlite        = ["sea-orm/sqlx-sqlite", "sea-query/backend-sqlite"]
+telemetry     = ["dep:lazy_static"]
+traits        = []
 
 [dependencies]
 async-broadcast = { workspace = true }

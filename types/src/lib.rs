@@ -7,7 +7,8 @@ use std::collections::HashMap;
 
 mod tests;
 
-use async_graphql::{Enum, ID, InputObject, InputValueError, Scalar, ScalarType, SimpleObject, Union, Value};
+pub use async_graphql::ID;
+use async_graphql::{Enum, InputObject, InputValueError, Scalar, ScalarType, SimpleObject, Union, Value};
 use hopr_types::{crypto::types::Hash, primitive::prelude::ToHex};
 
 /// Token value represented as a string to maintain precision
@@ -187,7 +188,7 @@ impl From<ChannelStatus> for i16 {
 }
 
 /// Token type for balance queries
-#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug, serde::Serialize)]
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Token {
     /// wxHOPR token
     #[graphql(name = "WXHOPR")]
@@ -290,7 +291,7 @@ pub struct Account {
     /// HOPR Safe contract address to which the account is linked
     #[graphql(name = "safeAddress")]
     pub safe_address: Option<String>,
-    /// List of multiaddresses associated with the packet key
+    /// Latest announced multiaddress for the packet key, returned as an empty or single-element list
     #[graphql(name = "multiAddresses")]
     pub multi_addresses: Vec<String>,
 }
@@ -490,8 +491,12 @@ pub struct NativeBalance {
 /// Status of a submitted transaction
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum TransactionStatus {
-    /// Transaction is pending submission to the chain
-    #[graphql(name = "PENDING")]
+    /// Transactions are never emitted in this state; they go directly to Submitted.
+    #[graphql(
+        name = "PENDING",
+        deprecation = "Transactions go directly to SUBMITTED. This variant exists only for backwards compatibility \
+                       and will be removed in a future release."
+    )]
     Pending,
     /// Transaction has been submitted and is awaiting confirmation
     #[graphql(name = "SUBMITTED")]
@@ -521,6 +526,27 @@ pub struct TransactionInput {
     pub raw_transaction: String,
 }
 
+/// Internal Safe contract execution result.
+///
+/// This is supplementary to [`TransactionStatus`]: the `status` field on [`Transaction`] is
+/// the authoritative terminal outcome (e.g. `Confirmed` means the outer on-chain tx succeeded).
+/// When `safe_execution` is present, it describes the *internal* Safe module call outcome,
+/// which can differ from the outer tx status — a `Confirmed` transaction may still have
+/// `safe_execution.success == false` if the internal call reverted.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct SafeExecution {
+    /// Whether the internal Safe transaction succeeded
+    pub success: bool,
+    /// Safe internal transaction hash (bytes32 hex).
+    /// Null for module-executed transactions (`execTransactionFromModule`) which do not
+    /// emit a txHash, or if the event data was malformed and the hash could not be extracted.
+    #[graphql(name = "safeTxHash")]
+    pub safe_tx_hash: Option<Hex32>,
+    /// Revert reason (if execution failed and reason is decodable)
+    #[graphql(name = "revertReason")]
+    pub revert_reason: Option<String>,
+}
+
 /// Transaction submission result
 #[derive(SimpleObject, Clone, Debug)]
 pub struct Transaction {
@@ -534,6 +560,9 @@ pub struct Transaction {
     /// Transaction hash from successful blockchain submission
     #[graphql(name = "transactionHash")]
     pub transaction_hash: Hex32,
+    /// Internal Safe execution result (null for non-Safe transactions or before confirmation)
+    #[graphql(name = "safeExecution")]
+    pub safe_execution: Option<SafeExecution>,
 }
 
 /// Success response for fire-and-forget transaction submission
@@ -658,36 +687,84 @@ pub struct RedeemedStatsFilter {
     pub node_address: Option<String>,
 }
 
+/// Outcome of a ticket redemption attempt.
+///
+/// Carried in [`RedeemTicketDetails`] to allow subscribers to distinguish
+/// successful on-chain redemptions from inner Safe transaction failures
+/// (rejected) without polling the chain.
+#[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
+pub enum RedemptionResult {
+    /// Ticket was successfully redeemed on-chain.
+    Redeemed,
+    /// Ticket redemption was rejected (inner Safe transaction failed).
+    Rejected,
+}
+
+/// GraphQL output type for a ticket redemption event.
+///
+/// Uniquely identifies the ticket (`issuerAddress` + `recipientAddress` +
+/// `epoch` + `index`) and reports whether it was accepted or rejected.
+///
+/// Returned by the `ticketRedeemed` subscription.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct RedeemTicketDetails {
+    /// Issuer account on-chain address in hexadecimal format
+    #[graphql(name = "issuerAddress")]
+    pub issuer_address: String,
+    /// Recipient account on-chain address in hexadecimal format
+    #[graphql(name = "recipientAddress")]
+    pub recipient_address: String,
+    /// Epoch of the channel where the ticket was redeemed
+    pub epoch: UInt64,
+    /// Index of the ticket within the channel epoch
+    pub index: UInt64,
+    /// Outcome of the redemption attempt
+    pub result: RedemptionResult,
+}
+
 /// Selector for safe lookup queries.
 ///
 /// This enum is used together with a single `address` argument when querying
 /// for a safe. The selected variant determines how that `address` value is
 /// interpreted:
 /// - `Address`: `address` is the safe contract address
-/// - `ChainKey`: `address` is the owner chain key
+/// - `Owner`: `address` is a current safe owner address
+/// - `ChainKey`: legacy alias for `Owner`
 /// - `RegisteredNode`: `address` is a registered node address
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum SafeSelectorInput {
     /// Safe contract address to filter by (hexadecimal format)
     #[graphql(name = "ADDRESS")]
     Address,
-    /// Chain key (owner address) to filter by (hexadecimal format)
-    #[graphql(name = "CHAIN_KEY")]
+    /// Current safe owner address to filter by (hexadecimal format)
+    #[graphql(name = "OWNER")]
+    Owner,
+    /// Legacy alias for owner address filtering (hexadecimal format)
+    #[graphql(
+        name = "CHAIN_KEY",
+        deprecation = "Use OWNER instead. CHAIN_KEY is a legacy alias for Safe owner lookup."
+    )]
     ChainKey,
     /// Registered node address to filter by (hexadecimal format)
     #[graphql(name = "REGISTERED_NODE")]
     RegisteredNode,
 }
 
-/// Aggregated redeemed ticket statistics
+/// Aggregated ticket redemption attempt statistics
 #[derive(SimpleObject, Clone, Debug)]
 pub struct RedeemedStats {
-    /// Total amount redeemed from matching TicketRedeemed events
+    /// Total amount redeemed from matching ticket redemption events
     #[graphql(name = "redeemedAmount")]
     pub redeemed_amount: TokenValueString,
-    /// Total number of matching TicketRedeemed events
+    /// Total number of matching ticket redemption events
     #[graphql(name = "redemptionCount")]
     pub redemption_count: UInt64,
+    /// Total amount from matching failed ticket redemption attempts
+    #[graphql(name = "rejectedAmount")]
+    pub rejected_amount: TokenValueString,
+    /// Total number of matching failed ticket redemption attempts
+    #[graphql(name = "rejectionCount")]
+    pub rejection_count: UInt64,
 }
 
 /// Transaction count information for any Ethereum address
@@ -711,9 +788,16 @@ pub struct Safe {
     /// HOPR Node Management Module address (hexadecimal format)
     #[graphql(name = "moduleAddress")]
     pub module_address: String,
-    /// Chain key (owner address, hexadecimal format)
-    #[graphql(name = "chainKey")]
+    /// Legacy chain key field retained for backward compatibility
+    #[graphql(
+        name = "chainKey",
+        deprecation = "Use owners instead. chainKey is legacy Safe metadata and may not reflect the current owner set."
+    )]
     pub chain_key: String,
+    /// Current signer threshold reconstructed from indexed Safe events
+    pub threshold: Option<String>,
+    /// Current Safe owner addresses reconstructed from indexed Safe events
+    pub owners: Vec<String>,
     /// List of node addresses (chain keys) registered to this safe via RegisteredNodeSafe events
     #[graphql(name = "registeredNodes")]
     pub registered_nodes: Vec<String>,
@@ -750,6 +834,7 @@ impl From<&blokli_chain_types::ContractAddresses> for ContractAddressMap {
             ("ticket_price_oracle", &addresses.ticket_price_oracle),
             ("winning_probability_oracle", &addresses.winning_probability_oracle),
             ("node_stake_factory", &addresses.node_stake_factory),
+            ("xhopr_token", &addresses.xhopr_token),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))

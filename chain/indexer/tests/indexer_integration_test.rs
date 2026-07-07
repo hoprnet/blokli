@@ -72,7 +72,7 @@ mod integration_tests {
     use anyhow::anyhow;
     use async_trait::async_trait;
     use blokli_chain_indexer::handlers::ContractEventHandlers;
-    use blokli_chain_rpc::HoprIndexerRpcOperations;
+    use blokli_chain_rpc::{HoprIndexerRpcOperations, errors::RpcError};
     use blokli_chain_types::{
         AlloyAddressExt, ContractAddresses,
         chain_events::{ChainEventType, SignificantChainEvent},
@@ -153,6 +153,10 @@ mod integration_tests {
             Ok(HoprBalance::zero())
         }
 
+        async fn get_transaction_bytes(&self, tx_hash: Hash) -> blokli_chain_rpc::errors::Result<Vec<u8>> {
+            Err(RpcError::TransactionNotFound(tx_hash))
+        }
+
         async fn get_xdai_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {
             Ok(XDaiBalance::zero())
         }
@@ -170,6 +174,16 @@ mod integration_tests {
             std::pin::Pin<Box<dyn futures::Stream<Item = blokli_chain_rpc::BlockWithLogs> + Send + 'a>>,
         > {
             unreachable!("try_stream_logs not used in integration tests")
+        }
+
+        async fn get_logs_for_address(
+            &self,
+            _address: Address,
+            _topics: Vec<B256>,
+            _from_block: u64,
+            _to_block: u64,
+        ) -> blokli_chain_rpc::errors::Result<Vec<blokli_chain_rpc::Log>> {
+            unreachable!("get_logs_for_address not used in integration tests")
         }
     }
 

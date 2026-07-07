@@ -4,13 +4,17 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use async_compression::futures::bufread::XzEncoder;
+use async_compression::tokio::bufread::XzEncoder;
 use async_tar::Builder;
-use futures_util::io::{AllowStdIo, AsyncReadExt, BufReader as FuturesBufReader};
+use blokli_db::snapshot::SNAPSHOT_SQL_FILE;
 use tempfile::TempDir;
+use tokio::{
+    fs as tokio_fs,
+    io::{AsyncReadExt, BufReader},
+};
 use tracing::debug;
 
-use crate::snapshot::{SnapshotInfo, SnapshotInstaller, SnapshotWorkflow, error::SnapshotResult};
+use crate::snapshot::{SnapshotInfo, SnapshotInstaller, SnapshotResult, SnapshotWorkflow};
 
 /// Test-only snapshot manager without database dependencies.
 ///
@@ -75,64 +79,24 @@ impl SnapshotInstaller for TestSnapshotManager {
         Ok(())
     }
 }
-
 /// Creates a test SQL dump file for testing
 pub fn create_test_sql_dump(path: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    let sql_content = r#"
---
--- PostgreSQL database dump
---
-
-SET statement_timeout = 0;
-SET lock_timeout = 0;
-SET idle_in_transaction_session_timeout = 0;
-SET client_encoding = 'UTF8';
-
-CREATE TABLE log (
-    transaction_index BIGINT NOT NULL,
-    log_index BIGINT NOT NULL,
-    block_number BIGINT NOT NULL,
-    block_hash BYTEA NOT NULL,
-    transaction_hash BYTEA NOT NULL,
-    address BYTEA NOT NULL,
-    topics BYTEA NOT NULL,
-    data BYTEA NOT NULL,
-    removed BOOLEAN NOT NULL
-);
-
-CREATE TABLE log_status (
-    id SERIAL PRIMARY KEY,
-    status TEXT NOT NULL
-);
-
-CREATE TABLE log_topic_info (
-    id SERIAL PRIMARY KEY,
-    topic_hash TEXT NOT NULL
-);
-
---
--- Data for Name: log; Type: TABLE DATA; Schema: public; Owner: -
+    let sql_content = r#"--
+-- Blokli logs snapshot
 --
 
-COPY log (transaction_index, log_index, block_number, block_hash, transaction_hash, address, topics, data, removed) FROM stdin;
-1	1	1	\\x0000000000000000000000000000000000000000000000000000000000000000	\\x0000000000000000000000000000000000000000000000000000000000000000	\\x0000000000000000000000000000000000000000	\\x00	\\x00	f
-2	2	2	\\x0000000000000000000000000000000000000000000000000000000000000000	\\x0000000000000000000000000000000000000000000000000000000000000000	\\x0000000000000000000000000000000000000000	\\x00	\\x00	f
+COPY log (id, tx_index, log_index, block_number, block_hash, transaction_hash, address, topics, data, removed) FROM stdin;
+1	1	1	1	\x0000000000000000000000000000000000000000000000000000000000000000	\x0000000000000000000000000000000000000000000000000000000000000001	\x0000000000000000000000000000000000000001	\x010203	\x0405	f
+2	2	2	2	\x0000000000000000000000000000000000000000000000000000000000000002	\x0000000000000000000000000000000000000000000000000000000000000002	\x0000000000000000000000000000000000000002	\x060708	\x090a	t
 \.
 
---
--- Data for Name: log_status; Type: TABLE DATA; Schema: public; Owner: -
---
-
-COPY log_status (id, status) FROM stdin;
-1	active
+COPY log_status (id, log_id, tx_index, log_index, block_number, processed, processed_at, checksum) FROM stdin;
+1	1	1	1	1	t	2026-01-01 00:00:00.000000	\x1111111111111111111111111111111111111111111111111111111111111111
+2	2	2	2	2	f	\N	\N
 \.
 
---
--- Data for Name: log_topic_info; Type: TABLE DATA; Schema: public; Owner: -
---
-
-COPY log_topic_info (id, topic_hash) FROM stdin;
-1	0x123
+COPY log_topic_info (id, address, topic) FROM stdin;
+1	\x0000000000000000000000000000000000000001	\xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 \.
 "#;
 
@@ -146,21 +110,22 @@ pub(crate) async fn create_test_archive(
     sql_target_path: Option<String>,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
     // Create the SQL dump
-    let sql_target_path_final = sql_target_path.unwrap_or_else(|| "hopr_logs.sql".to_string());
-    let sql_path = temp_dir.path().join("hopr_logs.sql");
+    let sql_target_path = sql_target_path.unwrap_or_else(|| SNAPSHOT_SQL_FILE.to_string());
+    let sql_path = temp_dir.path().join(SNAPSHOT_SQL_FILE);
     create_test_sql_dump(&sql_path)?;
 
-    // First create uncompressed tar in memory
-    let mut tar_data = Vec::new();
-    {
-        let mut tar = Builder::new(&mut tar_data);
-        tar.append_path_with_name(&sql_path, sql_target_path_final).await?;
-        tar.into_inner().await?;
-    }
+    // First create an uncompressed tar file using Tokio I/O.
+    let tar_path = temp_dir.path().join("test_snapshot.tar");
+    let tar_file = tokio_fs::File::create(&tar_path).await?;
+    let mut tar = Builder::new(tar_file);
+    tar.append_path_with_name(&sql_path, sql_target_path).await?;
+    let tar_file = tar.into_inner().await?;
+    tar_file.sync_all().await?;
 
-    // Now compress with xz using async_compression
+    // Now compress with xz using Tokio I/O.
+    let tar_data = tokio_fs::read(&tar_path).await?;
     let cursor = Cursor::new(tar_data);
-    let buf_reader = FuturesBufReader::new(AllowStdIo::new(cursor));
+    let buf_reader = BufReader::new(cursor);
     let mut encoder = XzEncoder::new(buf_reader);
 
     // Read compressed data
@@ -169,10 +134,11 @@ pub(crate) async fn create_test_archive(
 
     // Write to final archive file
     let archive_path = temp_dir.path().join("test_snapshot.tar.xz");
-    fs::write(&archive_path, compressed_data)?;
+    tokio_fs::write(&archive_path, compressed_data).await?;
 
-    // Clean up the temporary SQL file to avoid test interference
-    fs::remove_file(&sql_path)?;
+    // Clean up temporary files to avoid test interference.
+    tokio_fs::remove_file(&sql_path).await?;
+    tokio_fs::remove_file(&tar_path).await?;
 
     Ok(archive_path)
 }

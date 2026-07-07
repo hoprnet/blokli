@@ -71,43 +71,33 @@ fn test_contract_address_map_roundtrip_serialization() {
 
 #[test]
 fn test_contract_address_map_from_chain_types() {
-    // Create a ContractAddresses instance
     let chain_addresses = ContractAddresses::default();
-
-    // Convert to ContractAddressMap
     let map: ContractAddressMap = (&chain_addresses).into();
-
-    // Serialize it
     let serialized = map.to_value();
 
-    // Verify it's a string
     assert!(
         matches!(serialized, async_graphql::Value::String(_)),
         "Should serialize to string"
     );
 
-    // Extract and validate the JSON string
     if let async_graphql::Value::String(json_str) = serialized {
         let parsed: serde_json::Value = serde_json::from_str(&json_str).expect("Should be valid JSON");
-
         let obj = parsed.as_object().expect("Should be an object");
+        let expected = serde_json::to_value(chain_addresses)
+            .expect("ContractAddresses should serialize")
+            .as_object()
+            .expect("ContractAddresses should serialize to object")
+            .keys()
+            .cloned()
+            .collect::<std::collections::HashSet<_>>();
+        let actual = obj.keys().cloned().collect::<std::collections::HashSet<_>>();
+        assert_eq!(
+            actual, expected,
+            "contractAddresses keys should match ContractAddresses fields"
+        );
 
-        // Verify all required keys are present
-        let expected_keys = vec![
-            "token",
-            "channels",
-            "announcements",
-            "module_implementation",
-            "node_safe_migration",
-            "node_safe_registry",
-            "ticket_price_oracle",
-            "winning_probability_oracle",
-            "node_stake_factory",
-        ];
-
-        for key in expected_keys {
-            assert!(obj.contains_key(key), "contractAddresses should contain key: {}", key);
-            let value = obj.get(key).and_then(|v| v.as_str());
+        for key in actual {
+            let value = obj.get(&key).and_then(|v| v.as_str());
             assert!(
                 !value.unwrap_or("").is_empty(),
                 "contractAddresses[{}] should not be empty",

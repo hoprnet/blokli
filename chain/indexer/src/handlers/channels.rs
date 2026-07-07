@@ -1,25 +1,23 @@
+use blokli_api_types::RedemptionResult;
 use blokli_chain_rpc::HoprIndexerRpcOperations;
 use blokli_chain_types::AlloyAddressExt;
-use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator};
-use hopr_bindings::hopr_channels::HoprChannels::HoprChannelsEvents;
+use blokli_db::{BlokliDbAllOperations, OpenTransaction, api::info::DomainSeparator, errors::DbSqlError};
+use hopr_bindings::{exports::alloy::hex, hopr_channels::HoprChannels::HoprChannelsEvents};
 use hopr_types::{
+    crypto::types::Hash,
     internal::channels::{ChannelEntry, ChannelStatus, generate_channel_id},
     primitive::prelude::Address,
 };
 use tracing::{error, trace, warn};
 
+#[cfg(all(feature = "telemetry", not(test)))]
+use super::increment_indexer_contract_log_count;
 use super::{ContractEventHandlers, channel_utils::decode_channel, helpers::construct_channel_update};
-use crate::errors::{CoreEthereumIndexerError, Result};
-
-#[cfg(all(feature = "prometheus", not(test)))]
-lazy_static::lazy_static! {
-    static ref METRIC_INDEXER_LOG_COUNTERS: hopr_metrics::MultiCounter =
-        hopr_metrics::MultiCounter::new(
-            "hopr_indexer_contract_log_count",
-            "Counts of different HOPR contract logs processed by the Indexer",
-            &["contract"]
-    ).unwrap();
-}
+use crate::{
+    errors::{CoreEthereumIndexerError, Result},
+    handlers::helpers::build_channel_entry,
+    state::{IndexerEvent, RedeemTicketDetailsInfo},
+};
 
 impl<T, Db> ContractEventHandlers<T, Db>
 where
@@ -34,9 +32,9 @@ where
         tx_index: u32,
         log_index: u32,
         is_synced: bool,
-    ) -> Result<Vec<crate::state::IndexerEvent>> {
-        #[cfg(all(feature = "prometheus", not(test)))]
-        METRIC_INDEXER_LOG_COUNTERS.increment(&["channels"]);
+    ) -> Result<Vec<IndexerEvent>> {
+        #[cfg(all(feature = "telemetry", not(test)))]
+        increment_indexer_contract_log_count("channels");
 
         let mut events = Vec::new();
 
@@ -80,6 +78,29 @@ where
                     "ChannelBalanceDecreased: decoded channel state"
                 );
 
+                if is_synced {
+                    let min_ticket_price = match self.db.get_indexer_data(tx.into()).await {
+                        Ok(data) => data.ticket_price,
+                        Err(e) => {
+                            warn!(%channel_id, %e, "ChannelBalanceDecreased: failed to get ticket price filter");
+                            None
+                        }
+                    };
+                    let above_minimum = min_ticket_price.is_none_or(|min| diff >= min);
+                    if above_minimum {
+                        events.push(IndexerEvent::TicketRedeemed(RedeemTicketDetailsInfo {
+                            issuer_address: existing_channel.source.to_string(),
+                            recipient_address: existing_channel.destination.to_string(),
+                            epoch: decoded.epoch,
+                            index: decoded.ticket_index.saturating_sub(1),
+                            channel_id: hex::encode(channel_id),
+                            result: RedemptionResult::Redeemed,
+                        }));
+                    } else if let Some(min) = min_ticket_price {
+                        trace!(%channel_id, diff = %diff, min = %min, "ChannelBalanceDecreased: skipping low-value ticket redemption event");
+                    }
+                }
+
                 let destination_account = self.db.get_account(tx.into(), existing_channel.destination).await?;
 
                 if let Some(destination_account) = destination_account {
@@ -111,14 +132,14 @@ where
                 }
 
                 // Create updated channel entry with new state
-                let updated_channel = ChannelEntry::new(
+                let updated_channel = build_channel_entry(
                     existing_channel.source,
                     existing_channel.destination,
                     new_balance,
                     decoded.ticket_index,
                     decoded.status,
                     decoded.epoch,
-                );
+                )?;
 
                 // Atomically upsert the new state
                 self.db
@@ -129,7 +150,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for ChannelBalanceDecreased");
@@ -179,14 +200,14 @@ where
                 );
 
                 // Create updated channel entry with new state
-                let updated_channel = ChannelEntry::new(
+                let updated_channel = build_channel_entry(
                     existing_channel.source,
                     existing_channel.destination,
                     new_balance,
                     decoded.ticket_index,
                     decoded.status,
                     decoded.epoch,
-                );
+                )?;
 
                 // Atomically upsert the new state
                 self.db
@@ -197,7 +218,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for ChannelBalanceIncreased");
@@ -245,14 +266,14 @@ where
                 );
 
                 // Create updated channel entry with all new state from decoded values
-                let updated_channel = ChannelEntry::new(
+                let updated_channel = build_channel_entry(
                     existing_channel.source,
                     existing_channel.destination,
                     decoded.balance,
                     decoded.ticket_index,
                     decoded.status,
                     decoded.epoch,
-                );
+                )?;
 
                 // Atomically upsert the new state
                 self.db
@@ -263,7 +284,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for ChannelClosed");
@@ -315,33 +336,31 @@ where
                     trace!(%source, %destination, %channel_id, "on_channel_reopened_event");
 
                     // Reopen channel with state from decoded event payload
-                    let reopened_channel = ChannelEntry::new(
+                    let reopened_channel = build_channel_entry(
                         source,
                         destination,
                         decoded.balance,
                         decoded.ticket_index,
                         decoded.status,
                         decoded.epoch,
-                    );
+                    )?;
 
-                    self.db
-                        .upsert_channel(tx.into(), reopened_channel, block, tx_index, log_index)
+                    self.try_upsert_channel_opened(tx, reopened_channel, block, tx_index, log_index)
                         .await?;
                 } else {
                     // Channel doesn't exist - create new one with state from decoded event payload
                     trace!(%source, %destination, %channel_id, "on_channel_opened_event");
 
-                    let new_channel = ChannelEntry::new(
+                    let new_channel = build_channel_entry(
                         source,
                         destination,
                         decoded.balance,
                         decoded.ticket_index,
                         decoded.status,
                         decoded.epoch,
-                    );
+                    )?;
 
-                    self.db
-                        .upsert_channel(tx.into(), new_channel, block, tx_index, log_index)
+                    self.try_upsert_channel_opened(tx, new_channel, block, tx_index, log_index)
                         .await?;
                 }
 
@@ -349,7 +368,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for ChannelOpened");
@@ -391,14 +410,14 @@ where
                 );
 
                 // Create updated channel entry with new balance and ticket index
-                let updated_channel = ChannelEntry::new(
+                let updated_channel = build_channel_entry(
                     existing_channel.source,
                     existing_channel.destination,
                     decoded.balance,
                     decoded.ticket_index,
                     decoded.status,
                     decoded.epoch,
-                );
+                )?;
 
                 // Atomically upsert the new state
                 self.db
@@ -409,7 +428,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for TicketRedeemed");
@@ -451,14 +470,14 @@ where
                 );
 
                 // Create updated channel entry with new status (PendingToClose)
-                let updated_channel = ChannelEntry::new(
+                let updated_channel = build_channel_entry(
                     existing_channel.source,
                     existing_channel.destination,
                     decoded.balance,
                     decoded.ticket_index,
                     decoded.status, // Should be PendingToClose with proper timestamp
                     decoded.epoch,
-                );
+                )?;
 
                 // Atomically upsert the new state
                 self.db
@@ -469,7 +488,7 @@ where
                 if is_synced {
                     match construct_channel_update(tx.as_ref(), &channel_id).await {
                         Ok(channel_update) => {
-                            events.push(crate::state::IndexerEvent::ChannelUpdated(Box::new(channel_update)));
+                            events.push(IndexerEvent::ChannelUpdated(Box::new(channel_update)));
                         }
                         Err(e) => {
                             warn!(%channel_id, %e, "Failed to construct channel update for OutgoingChannelClosureInitiated");
@@ -501,6 +520,37 @@ where
 
                 Ok(events)
             }
+        }
+    }
+
+    pub(super) async fn try_upsert_channel_opened(
+        &self,
+        tx: &OpenTransaction,
+        channel: ChannelEntry,
+        block: u32,
+        tx_index: u32,
+        log_index: u32,
+    ) -> Result<()> {
+        let source = channel.source;
+        let destination = channel.destination;
+        let channel_id: Hash = *channel.get_id();
+        match self
+            .db
+            .upsert_channel(tx.into(), channel, block, tx_index, log_index)
+            .await
+        {
+            Ok(()) => Ok(()),
+            Err(DbSqlError::MissingChannelAccount(missing_account)) => {
+                warn!(
+                    %source,
+                    %destination,
+                    %channel_id,
+                    %missing_account,
+                    "ignoring ChannelOpened event because destination account is unknown"
+                );
+                Err(CoreEthereumIndexerError::ChannelDoesNotExist)
+            }
+            Err(error) => Err(error.into()),
         }
     }
 }
@@ -545,7 +595,25 @@ mod tests {
     use primitive_types::H256;
     use sea_orm::{ColumnTrait, EntityTrait, QueryFilter};
 
-    use crate::handlers::test_utils::test_helpers::*;
+    use crate::{errors::CoreEthereumIndexerError, handlers::test_utils::test_helpers::*};
+
+    fn build_channel_entry(
+        source: Address,
+        destination: Address,
+        balance: HoprBalance,
+        ticket_index: u64,
+        status: ChannelStatus,
+        channel_epoch: u32,
+    ) -> ChannelEntry {
+        ChannelEntry::builder()
+            .between(source, destination)
+            .balance(balance)
+            .ticket_index(ticket_index)
+            .status(status)
+            .epoch(channel_epoch)
+            .build()
+            .expect("valid channel entry")
+    }
 
     #[tokio::test]
     async fn test_on_channel_event_balance_increased() -> anyhow::Result<()> {
@@ -560,7 +628,7 @@ mod tests {
         // Create required accounts before channel operations
         create_test_accounts(&db).await?;
 
-        let channel = ChannelEntry::new(
+        let channel = build_channel_entry(
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
             0.into(),
@@ -569,7 +637,7 @@ mod tests {
             0u32,
         );
 
-        db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
+        db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let solidity_balance: HoprBalance = primitive_types::U256::from((1u128 << 96) - 1).into();
         let channel_state = encode_channel_state(
@@ -594,7 +662,7 @@ mod tests {
             .await?;
 
         let channel = db
-            .get_channel_by_id(None, &channel.get_id())
+            .get_channel_by_id(None, channel.get_id())
             .await?
             .context("a value should be present")?;
 
@@ -661,7 +729,7 @@ mod tests {
         // Create required accounts before channel operations
         create_test_accounts(&db).await?;
 
-        let channel = ChannelEntry::new(
+        let channel = build_channel_entry(
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
             HoprBalance::from(primitive_types::U256::from((1u128 << 96) - 1)),
@@ -670,7 +738,7 @@ mod tests {
             0u32,
         );
 
-        db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
+        db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let solidity_balance: HoprBalance = primitive_types::U256::from((1u128 << 96) - 2).into();
         let channel_state = encode_channel_state(
@@ -695,7 +763,7 @@ mod tests {
             .await?;
 
         let channel = db
-            .get_channel_by_id(None, &channel.get_id())
+            .get_channel_by_id(None, channel.get_id())
             .await?
             .context("a value should be present")?;
 
@@ -720,7 +788,7 @@ mod tests {
 
         let starting_balance = HoprBalance::from(primitive_types::U256::from((1u128 << 96) - 1));
 
-        let channel = ChannelEntry::new(
+        let channel = build_channel_entry(
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
             starting_balance,
@@ -729,7 +797,7 @@ mod tests {
             0u32,
         );
 
-        db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
+        db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         // When channel is closed, balance is 0, ticket_index is reset to 0, and status is Closed
         let channel_state =
@@ -749,7 +817,7 @@ mod tests {
             .await?;
 
         let closed_channel = db
-            .get_channel_by_id(None, &channel.get_id())
+            .get_channel_by_id(None, channel.get_id())
             .await?
             .context("a value should be present")?;
 
@@ -794,7 +862,7 @@ mod tests {
 
         let starting_balance = HoprBalance::from(primitive_types::U256::from((1u128 << 96) - 1));
 
-        let channel = ChannelEntry::new(
+        let channel = build_channel_entry(
             foreign_addr1,
             foreign_addr2,
             starting_balance,
@@ -803,7 +871,7 @@ mod tests {
             0u32,
         );
 
-        db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
+        db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         // When channel is closed, balance is 0, ticket_index is reset to 0, and status is Closed
         let channel_state =
@@ -823,7 +891,7 @@ mod tests {
             .await?;
 
         let closed_channel = db
-            .get_channel_by_id(None, &channel.get_id())
+            .get_channel_by_id(None, channel.get_id())
             .await?
             .context("channel should still exist after closing")?;
 
@@ -886,6 +954,110 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_try_upsert_channel_opened_succeeds_when_accounts_exist() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let rpc_operations = MockIndexerRpcOperations::new();
+        let clonable_rpc_operations = ClonableMockOperations {
+            inner: Arc::new(rpc_operations),
+        };
+        let handlers = init_handlers(clonable_rpc_operations, db.clone());
+
+        create_test_accounts(&db).await?;
+
+        let channel = build_channel_entry(
+            *SELF_CHAIN_ADDRESS,
+            *COUNTERPARTY_CHAIN_ADDRESS,
+            HoprBalance::zero(),
+            0,
+            ChannelStatus::Open,
+            1,
+        );
+        let channel_id = *channel.get_id();
+
+        db.begin_transaction()
+            .await?
+            .perform(|tx| Box::pin(async move { handlers.try_upsert_channel_opened(tx, channel, 10, 0, 0).await }))
+            .await?;
+
+        let inserted = db
+            .get_channel_by_id(None, &channel_id)
+            .await?
+            .context("channel should be inserted")?;
+        assert_eq!(inserted.status, ChannelStatus::Open);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_try_upsert_channel_opened_maps_missing_account_to_channel_does_not_exist() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let rpc_operations = MockIndexerRpcOperations::new();
+        let clonable_rpc_operations = ClonableMockOperations {
+            inner: Arc::new(rpc_operations),
+        };
+        let handlers = init_handlers(clonable_rpc_operations, db.clone());
+
+        db.upsert_account(None, 1, *SELF_CHAIN_ADDRESS, *SELF_PRIV_KEY.public(), None, 1, 0, 0)
+            .await?;
+
+        let unknown_destination: Address = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".parse()?;
+        let channel = build_channel_entry(
+            *SELF_CHAIN_ADDRESS,
+            unknown_destination,
+            HoprBalance::zero(),
+            0,
+            ChannelStatus::Open,
+            1,
+        );
+
+        let err = db
+            .begin_transaction()
+            .await?
+            .perform(|tx| Box::pin(async move { handlers.try_upsert_channel_opened(tx, channel, 10, 0, 0).await }))
+            .await
+            .expect_err("missing destination account should map to ChannelDoesNotExist");
+
+        assert!(matches!(err, CoreEthereumIndexerError::ChannelDoesNotExist));
+
+        Ok(())
+    }
+
+    #[test_log::test(tokio::test)]
+    async fn test_on_channel_opened_with_unknown_destination_account_is_ignored() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let rpc_operations = MockIndexerRpcOperations::new();
+        let clonable_rpc_operations = ClonableMockOperations {
+            inner: Arc::new(rpc_operations),
+        };
+        let handlers = init_handlers(clonable_rpc_operations, db.clone());
+
+        db.upsert_account(None, 1, *SELF_CHAIN_ADDRESS, *SELF_PRIV_KEY.public(), None, 1, 0, 0)
+            .await?;
+
+        let unknown_destination: Address = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa".parse()?;
+        let channel_id = generate_channel_id(&SELF_CHAIN_ADDRESS, &unknown_destination);
+        let channel_state = encode_channel_state(HoprBalance::zero(), 0, 0, 1, ChannelStatus::Open);
+
+        let event = ChannelOpened {
+            channelId: FixedBytes::from_slice(channel_id.as_ref()),
+            source: AlloyAddress::from_hopr_address(*SELF_CHAIN_ADDRESS),
+            destination: AlloyAddress::from_hopr_address(unknown_destination),
+            channel: channel_state,
+        };
+
+        let channel_opened_log = event_to_log(event, handlers.addresses.channels);
+
+        db.begin_transaction()
+            .await?
+            .perform(|tx| Box::pin(async move { handlers.process_log_event(tx, channel_opened_log, true).await }))
+            .await?;
+
+        assert!(db.get_channel_by_id(None, &channel_id).await?.is_none());
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_on_channel_reopened() -> anyhow::Result<()> {
         let db = BlokliDb::new_in_memory().await?;
         let rpc_operations = MockIndexerRpcOperations::new();
@@ -899,7 +1071,7 @@ mod tests {
         // Create required accounts before channel operations
         create_test_accounts(&db).await?;
 
-        let channel = ChannelEntry::new(
+        let channel = build_channel_entry(
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
             HoprBalance::zero(),
@@ -929,7 +1101,7 @@ mod tests {
             .await?;
 
         let channel = db
-            .get_channel_by_id(None, &channel.get_id())
+            .get_channel_by_id(None, channel.get_id())
             .await?
             .context("a value should be present")?;
 
@@ -957,7 +1129,7 @@ mod tests {
 
         create_test_accounts(&db).await?;
 
-        let channel = ChannelEntry::new(
+        let channel = build_channel_entry(
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
             0.into(),
@@ -1081,7 +1253,7 @@ mod tests {
     //         };
     //         let handlers = init_handlers(clonable_rpc_operations, db.clone());
     //
-    //         let channel = ChannelEntry::new(
+    //         let channel = build_channel_entry(
     //             *COUNTERPARTY_CHAIN_ADDRESS,
     //             *SELF_CHAIN_ADDRESS,
     //             HoprBalance::from(primitive_types::U256::from((1u128 << 96) - 1)),
@@ -1196,7 +1368,7 @@ mod tests {
     //         };
     //         let handlers = init_handlers(clonable_rpc_operations, db.clone());
     //
-    //         let channel = ChannelEntry::new(
+    //         let channel = build_channel_entry(
     //             *COUNTERPARTY_CHAIN_ADDRESS,
     //             *SELF_CHAIN_ADDRESS,
     //             primitive_types::U256::from((1u128 << 96) - 1).into(),
@@ -1310,7 +1482,7 @@ mod tests {
 
         create_test_accounts(&db).await?;
 
-        let channel = ChannelEntry::new(
+        let channel = build_channel_entry(
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
             primitive_types::U256::from((1u128 << 96) - 1).into(),
@@ -1347,7 +1519,7 @@ mod tests {
             .await?;
 
         let channel = db
-            .get_channel_by_id(None, &channel.get_id())
+            .get_channel_by_id(None, channel.get_id())
             .await?
             .context("a value should be present")?;
 
@@ -1387,7 +1559,7 @@ mod tests {
 
         create_test_accounts(&db).await?;
 
-        let channel = ChannelEntry::new(
+        let channel = build_channel_entry(
             *COUNTERPARTY_CHAIN_ADDRESS,
             *SELF_CHAIN_ADDRESS,
             primitive_types::U256::from((1u128 << 96) - 1).into(),
@@ -1423,7 +1595,7 @@ mod tests {
             .await?;
 
         let channel = db
-            .get_channel_by_id(None, &channel.get_id())
+            .get_channel_by_id(None, channel.get_id())
             .await?
             .context("a value should be present")?;
 
@@ -1461,7 +1633,7 @@ mod tests {
         db.upsert_account(None, 2, foreign_addr2, *foreign_key2.public(), None, 1, 0, 1)
             .await?;
 
-        let channel = ChannelEntry::new(
+        let channel = build_channel_entry(
             foreign_addr1,
             foreign_addr2,
             primitive_types::U256::from((1u128 << 96) - 1).into(),
@@ -1470,7 +1642,7 @@ mod tests {
             0u32,
         );
 
-        db.upsert_channel(None, channel.clone(), 1, 0, 0).await?;
+        db.upsert_channel(None, channel, 1, 0, 0).await?;
 
         let next_ticket_index = primitive_types::U256::from((1u128 << 48) - 1);
         let channel_state = encode_channel_state(
@@ -1495,7 +1667,7 @@ mod tests {
             .await?;
 
         let channel = db
-            .get_channel_by_id(None, &channel.get_id())
+            .get_channel_by_id(None, channel.get_id())
             .await?
             .context("a value should be present")?;
 
@@ -1522,7 +1694,7 @@ mod tests {
 
         create_test_accounts(&db).await?;
 
-        let channel = ChannelEntry::new(
+        let channel = build_channel_entry(
             *SELF_CHAIN_ADDRESS,
             *COUNTERPARTY_CHAIN_ADDRESS,
             primitive_types::U256::from((1u128 << 96) - 1).into(),
@@ -1559,7 +1731,7 @@ mod tests {
             .await?;
 
         let channel = db
-            .get_channel_by_id(None, &channel.get_id())
+            .get_channel_by_id(None, channel.get_id())
             .await?
             .context("a value should be present")?;
 
@@ -1585,6 +1757,9 @@ mod tests {
         rpc_operations
             .expect_get_hopr_module_from_safe()
             .returning(move |_| Ok(Some(module_address)));
+        rpc_operations
+            .expect_get_logs_for_address()
+            .returning(|_, _, _, _| Ok(vec![]));
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),

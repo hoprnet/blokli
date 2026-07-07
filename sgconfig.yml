@@ -1,3 +1,4 @@
+---
 # ast-grep configuration for Blokli project
 ruleDirs:
   - .ast-grep/rules

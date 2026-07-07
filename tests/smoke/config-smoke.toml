@@ -27,6 +27,9 @@ fast_sync = false
 # Disable logs snapshot for smoke tests
 enable_logs_snapshot = false
 
+# Enable safe indexing
+enable_safe_indexing = true
+
 # GraphQL subscription configuration
 [indexer.subscription]
 batch_size               = 50

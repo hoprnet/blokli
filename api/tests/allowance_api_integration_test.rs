@@ -204,7 +204,7 @@ async fn test_allowance_api_integration() -> anyhow::Result<()> {
         // Verify allowance
         assert!(allowance.is_some(), "Allowance should be returned");
         let allowance_str = allowance.unwrap();
-        tracing::info!("HOPR allowance: {allowance_str}");
+        tracing::info!(allowance = %allowance_str, unit = "HOPR", "retrieved allowance");
 
         let parsed_allowance =
             HoprBalance::from_str(&allowance_str).expect("Allowance string should be valid HoprBalance format");

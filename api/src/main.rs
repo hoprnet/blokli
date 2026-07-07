@@ -2,7 +2,7 @@
 
 use std::{path::PathBuf, sync::Arc};
 
-use blokli_api::schema::export_schema_sdl;
+use blokli_api::{config::HealthConfig, logging, readiness::ReadinessChecker, schema::export_schema_sdl};
 use blokli_chain_api::{
     rpc_adapter::RpcAdapter,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
@@ -53,6 +53,7 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    logging::setup_tracing_env_like("blokli_api=info,tower_http=debug")?;
     let args = Args::parse();
 
     // Handle subcommands
@@ -94,7 +95,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         chain_id,
                         contract_addrs: ContractAddresses {
                             token: Address::default(),
-                            xtoken: Address::default(),
                             channels: Address::default(),
                             announcements: Address::default(),
                             module_implementation: Address::default(),
@@ -103,6 +103,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             ticket_price_oracle: Address::default(),
                             winning_probability_oracle: Address::default(),
                             node_stake_factory: Address::default(),
+                            xhopr_token: Address::default(),
                         },
                         ..Default::default()
                     },
@@ -121,13 +122,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Generate schema SDL
                 let schema_sdl = export_schema_sdl(
-                    db,
+                    db.clone(),
                     chain_id,
                     ContractAddresses::default(),
                     indexer_state,
                     transaction_executor,
                     transaction_store,
-                    Arc::new(rpc_operations),
+                    Arc::new(rpc_operations.clone()),
+                    ReadinessChecker::new(db.clone(), Arc::new(rpc_operations.clone()), HealthConfig::default()),
                 );
 
                 // Write to file or stdout

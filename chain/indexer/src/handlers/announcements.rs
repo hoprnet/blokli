@@ -13,21 +13,13 @@ use hopr_types::{
 };
 use tracing::{debug, error, warn};
 
+#[cfg(all(feature = "telemetry", not(test)))]
+use super::increment_indexer_contract_log_count;
 use super::{ContractEventHandlers, helpers::construct_account_update};
 use crate::{
     errors::{CoreEthereumIndexerError, Result},
     state::IndexerEvent,
 };
-
-#[cfg(all(feature = "prometheus", not(test)))]
-lazy_static::lazy_static! {
-    static ref METRIC_INDEXER_LOG_COUNTERS: hopr_metrics::MultiCounter =
-        hopr_metrics::MultiCounter::new(
-            "hopr_indexer_contract_log_count",
-            "Counts of different HOPR contract logs processed by the Indexer",
-            &["contract"]
-    ).unwrap();
-}
 
 impl<T, Db> ContractEventHandlers<T, Db>
 where
@@ -43,8 +35,8 @@ where
         log_index: u32,
         is_synced: bool,
     ) -> Result<Vec<IndexerEvent>> {
-        #[cfg(all(feature = "prometheus", not(test)))]
-        METRIC_INDEXER_LOG_COUNTERS.increment(&["announcements"]);
+        #[cfg(all(feature = "telemetry", not(test)))]
+        increment_indexer_contract_log_count("announcements");
 
         let mut events = Vec::new();
 

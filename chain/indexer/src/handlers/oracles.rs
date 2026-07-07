@@ -12,17 +12,9 @@ use hopr_types::{
 use tracing::{debug, info, trace};
 
 use super::ContractEventHandlers;
+#[cfg(all(feature = "telemetry", not(test)))]
+use super::increment_indexer_contract_log_count;
 use crate::{errors::Result, state::IndexerEvent};
-
-#[cfg(all(feature = "prometheus", not(test)))]
-lazy_static::lazy_static! {
-    static ref METRIC_INDEXER_LOG_COUNTERS: hopr_metrics::MultiCounter =
-        hopr_metrics::MultiCounter::new(
-            "hopr_indexer_contract_log_count",
-            "Counts of different HOPR contract logs processed by the Indexer",
-            &["contract"]
-    ).unwrap();
-}
 
 impl<T, Db> ContractEventHandlers<T, Db>
 where
@@ -35,8 +27,8 @@ where
         event: HoprWinningProbabilityOracleEvents,
         _is_synced: bool,
     ) -> Result<Vec<IndexerEvent>> {
-        #[cfg(all(feature = "prometheus", not(test)))]
-        METRIC_INDEXER_LOG_COUNTERS.increment(&["winning_probability_oracle"]);
+        #[cfg(all(feature = "telemetry", not(test)))]
+        increment_indexer_contract_log_count("winning_probability_oracle");
 
         match event {
             HoprWinningProbabilityOracleEvents::WinProbUpdated(update) => {
@@ -97,8 +89,8 @@ where
         event: HoprTicketPriceOracleEvents,
         _is_synced: bool,
     ) -> Result<Vec<IndexerEvent>> {
-        #[cfg(all(feature = "prometheus", not(test)))]
-        METRIC_INDEXER_LOG_COUNTERS.increment(&["ticket_price_oracle"]);
+        #[cfg(all(feature = "telemetry", not(test)))]
+        increment_indexer_contract_log_count("ticket_price_oracle");
 
         match event {
             HoprTicketPriceOracleEvents::TicketPriceUpdated(update) => {

@@ -13,9 +13,12 @@ use hopr_bindings::exports::alloy::{
     providers::Provider,
 };
 use hopr_types::crypto::types::Hash;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
-use crate::{transaction_executor::RpcClient, transaction_monitor::ReceiptProvider};
+use crate::{
+    transaction_executor::RpcClient,
+    transaction_monitor::{ReceiptLog, ReceiptProvider},
+};
 
 /// RPC adapter that implements RpcClient and ReceiptProvider traits for RpcOperations
 ///
@@ -40,7 +43,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
     /// Converts the raw transaction bytes to alloy Bytes format and submits to the RPC provider.
     /// Returns the transaction hash immediately without waiting for confirmation.
     async fn send_raw_transaction(&self, raw_tx: Vec<u8>) -> Result<Hash, String> {
-        debug!("Sending raw transaction ({} bytes)", raw_tx.len());
+        debug!(length = raw_tx.len(), "sending raw transaction");
 
         // Convert Vec<u8> to alloy Bytes
         let bytes = Bytes::from(raw_tx);
@@ -49,14 +52,14 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
         match self.rpc.provider.send_raw_transaction(&bytes).await {
             Ok(pending_tx) => {
                 let tx_hash = pending_tx.tx_hash();
-                debug!("Transaction submitted with hash: {:?}", tx_hash);
+                debug!(?tx_hash, "transaction submitted");
 
                 // Convert alloy B256 to Hash
                 let hash = Hash::from(tx_hash.0);
                 Ok(hash)
             }
             Err(e) => {
-                error!("Failed to send raw transaction: {}", e);
+                error!(error = %e, "failed to send raw transaction");
                 Err(format!("RPC error: {}", e))
             }
         }
@@ -73,9 +76,8 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
         timeout: Option<Duration>,
     ) -> Result<Hash, String> {
         debug!(
-            "Sending raw transaction ({} bytes) and waiting for {} confirmations",
-            raw_tx.len(),
-            confirmations
+            raw_tx_len = raw_tx.len(),
+            confirmations, "sending raw transaction and waiting for confirmations"
         );
 
         // Convert Vec<u8> to alloy Bytes
@@ -85,7 +87,7 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
         match self.rpc.provider.send_raw_transaction(&bytes).await {
             Ok(pending_tx) => {
                 let tx_hash = *pending_tx.tx_hash();
-                debug!("Transaction submitted with hash: {:?}", tx_hash);
+                debug!(?tx_hash, "transaction submitted");
 
                 // Use configured timeout or default to 60 seconds
                 let timeout_duration = timeout.unwrap_or(Duration::from_secs(60));
@@ -95,29 +97,29 @@ impl<R: HttpRequestor + 'static + Clone> RpcClient for RpcAdapter<R> {
 
                 match tokio::time::timeout(timeout_duration, receipt_future).await {
                     Ok(Ok(receipt)) => {
-                        debug!("Transaction {:?} confirmed", tx_hash);
+                        debug!(?tx_hash, "Transaction confirmed");
 
                         // Check transaction status
                         if receipt.status() {
                             let hash = Hash::from(receipt.transaction_hash.0);
                             Ok(hash)
                         } else {
-                            error!("Transaction {:?} reverted", tx_hash);
+                            error!(?tx_hash, "Transaction reverted");
                             Err(format!("Transaction reverted: {:?}", tx_hash))
                         }
                     }
                     Ok(Err(e)) => {
-                        error!("Error waiting for transaction confirmation: {}", e);
+                        error!(error = %e, "error waiting for transaction confirmation");
                         Err(format!("Confirmation error: {}", e))
                     }
                     Err(_) => {
-                        error!("Transaction {:?} timed out after {:?}", tx_hash, timeout_duration);
+                        error!(?timeout_duration, ?tx_hash, "Transaction timed out");
                         Err(format!("Transaction timeout: timed out after {:?}", timeout_duration))
                     }
                 }
             }
             Err(e) => {
-                error!("Failed to send raw transaction: {}", e);
+                error!(error = %e, "failed to send raw transaction");
                 Err(format!("RPC error: {}", e))
             }
         }
@@ -133,7 +135,7 @@ impl<R: HttpRequestor + 'static + Clone> ReceiptProvider for RpcAdapter<R> {
     /// - Some(false) if the transaction is confirmed but reverted
     /// - None if the transaction is still pending or not found
     async fn get_transaction_status(&self, tx_hash: Hash) -> Result<Option<bool>, String> {
-        debug!("Checking transaction status for hash: {:?}", tx_hash);
+        debug!(?tx_hash, "checking transaction status");
 
         // Convert Hash to alloy B256
         let b256_hash = B256::from_slice(tx_hash.as_ref());
@@ -143,21 +145,75 @@ impl<R: HttpRequestor + 'static + Clone> ReceiptProvider for RpcAdapter<R> {
             Ok(Some(receipt)) => {
                 // Transaction found - check status
                 let success = receipt.status();
-                debug!(
-                    "Transaction {:?} status: {}",
-                    tx_hash,
-                    if success { "confirmed" } else { "reverted" }
-                );
+                debug!(?tx_hash, success, "transaction status retrieved");
                 Ok(Some(success))
             }
             Ok(None) => {
                 // Transaction not found (still pending)
-                debug!("Transaction {:?} still pending", tx_hash);
+                debug!(?tx_hash, "transaction still pending");
                 Ok(None)
             }
             Err(e) => {
-                error!("Error getting transaction receipt for {:?}: {}", tx_hash, e);
+                error!(?tx_hash, error = %e, "error getting transaction receipt");
                 Err(format!("Receipt error: {}", e))
+            }
+        }
+    }
+
+    async fn get_transaction_receipt_logs(&self, tx_hash: Hash) -> Result<Option<Vec<ReceiptLog>>, String> {
+        debug!(?tx_hash, "fetching receipt logs");
+
+        let b256_hash = B256::from_slice(tx_hash.as_ref());
+
+        match self.rpc.provider.get_transaction_receipt(b256_hash).await {
+            Ok(Some(receipt)) => {
+                let logs = receipt
+                    .inner
+                    .logs()
+                    .iter()
+                    .map(|log| ReceiptLog {
+                        address: log.address().into_array(),
+                        topics: log.topics().iter().map(|t| t.0).collect(),
+                        data: log.data().data.to_vec(),
+                    })
+                    .collect();
+                Ok(Some(logs))
+            }
+            Ok(None) => {
+                debug!(?tx_hash, "no receipt found, transaction still pending");
+                Ok(None)
+            }
+            Err(e) => {
+                error!(?tx_hash, error = %e, "error getting receipt logs");
+                Err(format!("Receipt error: {}", e))
+            }
+        }
+    }
+
+    async fn get_revert_reason(&self, tx_hash: Hash) -> Result<Option<String>, String> {
+        let b256_hash = B256::from_slice(tx_hash.as_ref());
+
+        let params = serde_json::json!([
+            format!("{b256_hash:#x}"),
+            { "tracer": "callTracer", "tracerConfig": { "onlyTopCall": false } }
+        ]);
+
+        match self
+            .rpc
+            .provider
+            .raw_request::<_, serde_json::Value>("debug_traceTransaction".into(), params)
+            .await
+        {
+            Ok(trace) => {
+                let output = crate::revert_decoder::extract_revert_output_from_trace(&trace);
+                Ok(output.and_then(|b| crate::revert_decoder::decode_revert_reason(&b)))
+            }
+            Err(e) => {
+                // RPC supports tracing (verified at startup) but this specific
+                // call failed — log and return None rather than blocking confirmation.
+                let tx_hash = format!("{b256_hash:#x}");
+                warn!(tx_hash = %tx_hash, error = %e, "debug_traceTransaction failed");
+                Ok(None)
             }
         }
     }

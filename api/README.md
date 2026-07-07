@@ -8,7 +8,7 @@ GraphQL API server for HOPR blokli indexer built with Axum and async-graphql.
 - **Subscriptions**: Real-time subscriptions using Server-Sent Events (SSE)
 - **HTTP/2**: High-performance HTTP/2 support
 - **TLS 1.3**: Secure connections with TLS 1.3 (when configured)
-- **GraphQL Playground**: Interactive GraphQL IDE for development
+- **GraphQL Playground**: Interactive GraphQL IDE for development when explicitly enabled
 - **CORS**: Configured for cross-origin requests
 - **Compression**: Zstandard (zstd) compression only for responses >1KB
 - **Logging**: Structured logging with tracing
@@ -31,7 +31,9 @@ cargo run --release -p blokli-api
 
 - **GraphQL API**: `http://localhost:8080/graphql` (GET for playground, POST for queries)
 - **GraphQL Subscriptions**: `http://localhost:8080/graphql/subscriptions` (SSE)
-- **Health Check**: `http://localhost:8080/health`
+- **Metrics**: `http://localhost:8080/metrics` (Prometheus text format)
+- **Liveness Check**: `http://localhost:8080/healthz`
+- **Readiness Check**: `http://localhost:8080/readyz`
 
 ## GraphQL Schema
 
@@ -39,6 +41,7 @@ cargo run --release -p blokli-api
 
 - `health`: Health check endpoint
 - `version`: Get API version
+- `compatibility`: Get the API version plus the supported `blokli-client` semver range
 - `blocks(limit: Int)`: Get indexed blocks (placeholder)
 
 ### Mutations
@@ -59,8 +62,8 @@ use std::path::PathBuf;
 
 // Without TLS
 let config = ApiConfig {
-    bind_address: "0.0.0.0:8080".parse().unwrap(),
-    playground_enabled: true,
+    bind_address: "127.0.0.1:8080".parse().unwrap(),
+    playground_enabled: false,
     gas_multiplier: 1.0,
     tls: None,
     ..Default::default()
@@ -68,8 +71,8 @@ let config = ApiConfig {
 
 // With TLS 1.3
 let config = ApiConfig {
-    bind_address: "0.0.0.0:8443".parse().unwrap(),
-    playground_enabled: true,
+    bind_address: "127.0.0.1:8443".parse().unwrap(),
+    playground_enabled: false,
     gas_multiplier: 1.0,
     tls: Some(TlsConfig {
         cert_path: PathBuf::from("/path/to/cert.pem"),
@@ -106,6 +109,18 @@ query {
 ```graphql
 query {
   version
+}
+```
+
+### Get Client Compatibility
+
+```graphql
+query {
+  compatibility {
+    apiVersion
+    supportedClientVersions
+    features
+  }
 }
 ```
 

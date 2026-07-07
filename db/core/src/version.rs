@@ -27,7 +27,7 @@ use crate::errors::{DbSqlError, Result};
 ///
 /// Version history:
 /// - `"1.1.0"`: Initial schema (consolidated from prior migration stack)
-pub const SCHEMA_VERSION: &str = "1.1.0";
+pub const SCHEMA_VERSION: &str = "1.2.0";
 
 /// The singleton ID used for the schema_version table.
 const SCHEMA_VERSION_TABLE_ID: i64 = 1;
@@ -328,10 +328,24 @@ mod tests {
         assert!(!sqlite_object_exists(db.conn(crate::TargetDb::Index), "table", "legacy_artifact").await?);
         assert!(sqlite_object_exists(db.conn(crate::TargetDb::Index), "table", "account").await?);
         assert!(sqlite_object_exists(db.conn(crate::TargetDb::Index), "table", "seaql_migrations").await?);
+
+        let stored_after_major_reset = get_stored_version(db.conn(crate::TargetDb::Index)).await?;
         assert_eq!(
-            get_stored_version(db.conn(crate::TargetDb::Index)).await?,
-            code_version()
+            stored_after_major_reset.major, code.major,
+            "Major reset should recreate the schema in the current major epoch"
         );
+        assert!(
+            stored_after_major_reset <= code,
+            "Fresh migrations should not produce a schema version newer than the running code"
+        );
+
+        let did_minor_reset = check_and_reset_if_needed(db.conn(crate::TargetDb::Index), None).await?;
+        assert_eq!(
+            did_minor_reset,
+            stored_after_major_reset.minor < code.minor,
+            "Post-migration reset should only run when the recreated schema is from an older minor version"
+        );
+        assert_eq!(get_stored_version(db.conn(crate::TargetDb::Index)).await?, code);
 
         Ok(())
     }

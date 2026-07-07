@@ -1,0 +1,13 @@
+---
+source: chain/api/src/transaction_monitor.rs
+expression: updated
+---
+id: 01020304-0506-0708-090a-0b0c0d0e0f10
+raw_transaction:
+  - 1
+transaction_hash: "0xabababababababababababababababababababababababababababababababab"
+status: Confirmed
+submitted_at: "[timestamp]"
+confirmed_at: "[timestamp]"
+error_message: ~
+safe_execution: ~

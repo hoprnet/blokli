@@ -7,6 +7,7 @@ use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::ContractAddresses;
 use blokli_db::{api::logs::BlokliDbLogOperations, db::BlokliDb, info::BlokliDbInfoOperations};
 use futures::stream::{self, StreamExt};
+use hopr_bindings::exports::alloy::primitives::B256;
 use hopr_types::{crypto::types::Hash, primitive::prelude::*};
 use tempfile::TempDir;
 use tokio::sync::Mutex;
@@ -43,6 +44,10 @@ impl HoprIndexerRpcOperations for MockRpcOperations {
         Ok(Address::from([0u8; 20]))
     }
 
+    async fn get_transaction_bytes(&self, _tx_hash: Hash) -> blokli_chain_rpc::errors::Result<Vec<u8>> {
+        Ok(vec![])
+    }
+
     fn try_stream_logs<'a>(
         &'a self,
         start_block_number: u64,
@@ -76,12 +81,22 @@ impl HoprIndexerRpcOperations for MockRpcOperations {
         Ok(Box::pin(stream))
     }
 
+    async fn get_logs_for_address(
+        &self,
+        _address: Address,
+        _topics: Vec<B256>,
+        _from_block: u64,
+        _to_block: u64,
+    ) -> blokli_chain_rpc::errors::Result<Vec<blokli_chain_rpc::Log>> {
+        Ok(vec![])
+    }
+
     async fn get_xdai_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {
-        Ok(self.xdai_balance.clone())
+        Ok(self.xdai_balance)
     }
 
     async fn get_hopr_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance> {
-        Ok(self.hopr_balance.clone())
+        Ok(self.hopr_balance)
     }
 
     async fn get_xhopr_balance(&self, _address: Address) -> blokli_chain_rpc::errors::Result<XHoprBalance> {
@@ -93,7 +108,7 @@ impl HoprIndexerRpcOperations for MockRpcOperations {
         _owner: Address,
         _spender: Address,
     ) -> blokli_chain_rpc::errors::Result<HoprBalance> {
-        Ok(self.hopr_balance.clone())
+        Ok(self.hopr_balance)
     }
 
     async fn get_transaction_count(&self, _address: Address) -> blokli_chain_rpc::errors::Result<u64> {
@@ -127,22 +142,28 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
     // Create contract addresses with some non-zero values
     let contract_addresses = ContractAddresses {
         token: Address::from([1; 20]),
-        xtoken: Address::from([2; 20]),
-        channels: Address::from([3; 20]),
-        announcements: Address::from([4; 20]),
-        module_implementation: Address::from([5; 20]),
-        node_safe_migration: Address::from([6; 20]),
-        node_safe_registry: Address::from([7; 20]),
-        ticket_price_oracle: Address::from([8; 20]),
-        winning_probability_oracle: Address::from([9; 20]),
-        node_stake_factory: Address::from([10; 20]),
+        channels: Address::from([2; 20]),
+        announcements: Address::from([3; 20]),
+        module_implementation: Address::from([8; 20]),
+        node_safe_migration: Address::from([9; 20]),
+        node_safe_registry: Address::from([4; 20]),
+        ticket_price_oracle: Address::from([5; 20]),
+        winning_probability_oracle: Address::from([6; 20]),
+        node_stake_factory: Address::from([7; 20]),
+        xhopr_token: Address::from([10; 20]),
     };
 
     // Create indexer state for subscriptions (must be created before handlers)
     let indexer_state = blokli_chain_indexer::IndexerState::new(1000, 10);
 
     // Create event handlers
-    let handlers = ContractEventHandlers::new(contract_addresses, db.clone(), mock_rpc.clone(), indexer_state.clone());
+    let handlers = ContractEventHandlers::new(
+        contract_addresses,
+        db.clone(),
+        mock_rpc.clone(),
+        indexer_state.clone(),
+        false,
+    );
 
     // Initialize logs origin data using the proper contract addresses and topics
     let mut address_topics = vec![];
@@ -161,6 +182,7 @@ async fn test_indexer_startup() -> anyhow::Result<()> {
         start_block_number: 0,
         fast_sync: false, // Disable fast sync for testing
         enable_logs_snapshot: false,
+        enable_safe_indexing: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
@@ -203,22 +225,28 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
     // Create contract addresses with some non-zero values
     let contract_addresses = ContractAddresses {
         token: Address::from([1; 20]),
-        xtoken: Address::from([2; 20]),
-        channels: Address::from([3; 20]),
-        announcements: Address::from([4; 20]),
-        module_implementation: Address::from([5; 20]),
-        node_safe_migration: Address::from([6; 20]),
-        node_safe_registry: Address::from([7; 20]),
-        ticket_price_oracle: Address::from([8; 20]),
-        winning_probability_oracle: Address::from([9; 20]),
-        node_stake_factory: Address::from([10; 20]),
+        channels: Address::from([2; 20]),
+        announcements: Address::from([3; 20]),
+        module_implementation: Address::from([8; 20]),
+        node_safe_migration: Address::from([9; 20]),
+        node_safe_registry: Address::from([4; 20]),
+        ticket_price_oracle: Address::from([5; 20]),
+        winning_probability_oracle: Address::from([6; 20]),
+        node_stake_factory: Address::from([7; 20]),
+        xhopr_token: Address::from([10; 20]),
     };
 
     // Create indexer state for subscriptions (must be created before handlers)
     let indexer_state = blokli_chain_indexer::IndexerState::new(1000, 10);
 
     // Create event handlers
-    let handlers = ContractEventHandlers::new(contract_addresses, db.clone(), mock_rpc.clone(), indexer_state.clone());
+    let handlers = ContractEventHandlers::new(
+        contract_addresses,
+        db.clone(),
+        mock_rpc.clone(),
+        indexer_state.clone(),
+        false,
+    );
 
     // Initialize logs origin data using the proper contract addresses and topics
     let mut address_topics = vec![];
@@ -237,6 +265,7 @@ async fn test_indexer_with_fast_sync() -> anyhow::Result<()> {
         start_block_number: 100, // Start from a later block
         fast_sync: true,
         enable_logs_snapshot: false, // Don't try to download snapshots
+        enable_safe_indexing: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
@@ -284,6 +313,10 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
             self.inner.get_transaction_sender(tx_hash).await
         }
 
+        async fn get_transaction_bytes(&self, tx_hash: Hash) -> blokli_chain_rpc::errors::Result<Vec<u8>> {
+            self.inner.get_transaction_bytes(tx_hash).await
+        }
+
         fn try_stream_logs<'a>(
             &'a self,
             start_block_number: u64,
@@ -320,6 +353,18 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
             });
 
             Ok(Box::pin(stream))
+        }
+
+        async fn get_logs_for_address(
+            &self,
+            address: Address,
+            topics: Vec<B256>,
+            from_block: u64,
+            to_block: u64,
+        ) -> blokli_chain_rpc::errors::Result<Vec<blokli_chain_rpc::Log>> {
+            self.inner
+                .get_logs_for_address(address, topics, from_block, to_block)
+                .await
         }
 
         async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {
@@ -367,15 +412,15 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
     // Create contract addresses with some non-zero values
     let contract_addresses = ContractAddresses {
         token: Address::from([1; 20]),
-        xtoken: Address::from([2; 20]),
-        channels: Address::from([3; 20]),
-        announcements: Address::from([4; 20]),
-        module_implementation: Address::from([5; 20]),
-        node_safe_migration: Address::from([6; 20]),
-        node_safe_registry: Address::from([7; 20]),
-        ticket_price_oracle: Address::from([8; 20]),
-        winning_probability_oracle: Address::from([9; 20]),
-        node_stake_factory: Address::from([10; 20]),
+        channels: Address::from([2; 20]),
+        announcements: Address::from([3; 20]),
+        module_implementation: Address::from([8; 20]),
+        node_safe_migration: Address::from([9; 20]),
+        node_safe_registry: Address::from([4; 20]),
+        ticket_price_oracle: Address::from([5; 20]),
+        winning_probability_oracle: Address::from([6; 20]),
+        node_stake_factory: Address::from([7; 20]),
+        xhopr_token: Address::from([10; 20]),
     };
 
     // Create indexer state for subscriptions (must be created before handlers)
@@ -387,6 +432,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         db.clone(),
         tracking_rpc.clone(),
         indexer_state.clone(),
+        false,
     );
 
     // Initialize logs origin data using the proper contract addresses and topics
@@ -407,6 +453,7 @@ async fn test_indexer_handles_start_block_configuration() -> anyhow::Result<()> 
         start_block_number: expected_start_block,
         fast_sync: false,
         enable_logs_snapshot: false,
+        enable_safe_indexing: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,
@@ -471,22 +518,28 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
     // Create contract addresses
     let contract_addresses = ContractAddresses {
         token: Address::from([1; 20]),
-        xtoken: Address::from([2; 20]),
-        channels: Address::from([3; 20]),
-        announcements: Address::from([4; 20]),
-        module_implementation: Address::from([5; 20]),
-        node_safe_migration: Address::from([6; 20]),
-        node_safe_registry: Address::from([7; 20]),
-        ticket_price_oracle: Address::from([8; 20]),
-        winning_probability_oracle: Address::from([9; 20]),
-        node_stake_factory: Address::from([10; 20]),
+        channels: Address::from([2; 20]),
+        announcements: Address::from([3; 20]),
+        module_implementation: Address::from([8; 20]),
+        node_safe_migration: Address::from([9; 20]),
+        node_safe_registry: Address::from([4; 20]),
+        ticket_price_oracle: Address::from([5; 20]),
+        winning_probability_oracle: Address::from([6; 20]),
+        node_stake_factory: Address::from([7; 20]),
+        xhopr_token: Address::from([10; 20]),
     };
 
     // Create indexer state for subscriptions
     let indexer_state = blokli_chain_indexer::IndexerState::new(1000, 10);
 
     // Create event handlers
-    let handlers = ContractEventHandlers::new(contract_addresses, db.clone(), mock_rpc.clone(), indexer_state.clone());
+    let handlers = ContractEventHandlers::new(
+        contract_addresses,
+        db.clone(),
+        mock_rpc.clone(),
+        indexer_state.clone(),
+        false,
+    );
 
     // Initialize logs origin data
     let mut address_topics = vec![];
@@ -505,6 +558,7 @@ async fn test_channel_closure_grace_period_initialized_on_startup() -> anyhow::R
         start_block_number: 0,
         fast_sync: false,
         enable_logs_snapshot: false,
+        enable_safe_indexing: false,
         logs_snapshot_url: None,
         data_directory: db_path.to_string_lossy().to_string(),
         event_bus_capacity: 1000,

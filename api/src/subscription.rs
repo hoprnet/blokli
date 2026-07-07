@@ -6,56 +6,45 @@ use async_broadcast::Receiver;
 use async_graphql::{Context, ID, Result, Subscription};
 use async_stream::stream;
 use blokli_api_types::{
-    Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, Safe, TicketParameters, TokenValueString,
-    Transaction, TransactionStatus as GqlTransactionStatus, UInt64,
+    Account, Channel, ChannelUpdate, Hex32, OpenedChannelsGraphEntry, RedeemTicketDetails, Safe, TicketParameters,
+    TokenValueString, Transaction, UInt64,
 };
 use blokli_chain_api::transaction_store::{
     TransactionEvent, TransactionStatus as StoreTransactionStatus, TransactionStore,
 };
-use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
+use blokli_chain_indexer::{
+    IndexerState,
+    state::{IndexerEvent, RedeemTicketDetailsInfo},
+};
 use blokli_db_entity::{
     chain_info,
     chain_info::Entity as ChainInfoEntity,
     channel, channel_state,
-    conversions::account_aggregation::{fetch_accounts_by_keyids, fetch_accounts_with_filters},
+    conversions::{
+        account_aggregation::{fetch_accounts_by_keyids, fetch_accounts_with_filters},
+        safe_aggregation::{CurrentSafe, fetch_safe_by_address, fetch_safe_threshold_by_address},
+    },
     hopr_node_safe_registration,
 };
 use chrono::Utc;
 use futures::Stream;
+use hopr_bindings::exports::alloy::hex;
 use hopr_types::primitive::{
     prelude::HoprBalance as PrimitiveHoprBalance,
     primitives::Address,
     traits::{IntoEndian, ToHex},
 };
 use rand::seq::SliceRandom;
-use sea_orm::{
-    ColumnTrait, Condition, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder,
-    Statement,
-};
+use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
-use crate::errors;
-
-#[derive(Debug)]
-struct SafeContractCurrentRow {
-    address: Vec<u8>,
-    module_address: Vec<u8>,
-    chain_key: Vec<u8>,
-}
-
-fn current_row_statement(backend: DatabaseBackend, value: Vec<u8>) -> Statement {
-    let placeholder = if backend == DatabaseBackend::Postgres {
-        "$1"
-    } else {
-        "?"
-    };
-    let sql = format!(
-        "SELECT address, module_address, chain_key FROM safe_contract_current WHERE address = {}",
-        placeholder
-    );
-    Statement::from_sql_and_values(backend, sql, vec![value.into()])
-}
+use crate::{
+    conversions::{convert_safe_execution, convert_transaction_status},
+    errors,
+    query::owners_for_safe,
+    readiness::{ReadinessChecker, ReadinessState},
+};
 
 /// Watermark representing the last fully processed blockchain position
 ///
@@ -399,22 +388,6 @@ async fn query_channels_at_watermark_with_filters(
     Ok(results)
 }
 
-/// Convert StoreTransactionStatus to GraphQL TransactionStatus
-///
-/// Provides a single source of truth for status conversion, eliminating
-/// duplicated match expressions throughout the codebase.
-fn convert_transaction_status(status: StoreTransactionStatus) -> GqlTransactionStatus {
-    match status {
-        StoreTransactionStatus::Pending => GqlTransactionStatus::Pending,
-        StoreTransactionStatus::Submitted => GqlTransactionStatus::Submitted,
-        StoreTransactionStatus::Confirmed => GqlTransactionStatus::Confirmed,
-        StoreTransactionStatus::Reverted => GqlTransactionStatus::Reverted,
-        StoreTransactionStatus::Timeout => GqlTransactionStatus::Timeout,
-        StoreTransactionStatus::ValidationFailed => GqlTransactionStatus::ValidationFailed,
-        StoreTransactionStatus::SubmissionFailed => GqlTransactionStatus::SubmissionFailed,
-    }
-}
-
 /// Builds SeaORM condition for filtering channel_state by watermark
 ///
 /// Creates a condition that matches all channel states published in blocks up to
@@ -431,6 +404,43 @@ pub struct SubscriptionRoot;
 
 #[Subscription]
 impl SubscriptionRoot {
+    /// Subscribe to health status updates of the API
+    ///
+    /// Provides updates whenever the server state changes.
+    #[graphql(name = "health")]
+    async fn health(&self, ctx: &Context<'_>) -> Result<impl Stream<Item = ReadinessState>> {
+        let readiness_checker = ctx
+            .data::<ReadinessChecker>()
+            .map_err(|e| async_graphql::Error::new(errors::messages::context_error("ReadinessChecker", e.message)))?
+            .clone();
+
+        Ok(stream! {
+            let mut updates = readiness_checker.subscribe();
+            readiness_checker.trigger_update().await;
+
+            let mut last_state = readiness_checker.get().await;
+            yield last_state;
+
+            loop {
+                match updates.recv().await {
+                    Ok(state) if state != last_state => {
+                        last_state = state;
+                        yield state;
+                    }
+                    Ok(_) => {}
+                    Err(async_broadcast::RecvError::Closed) => return,
+                    Err(async_broadcast::RecvError::Overflowed(_)) => {
+                        let current = readiness_checker.get().await;
+                        if current != last_state {
+                            last_state = current;
+                            yield current;
+                        }
+                    }
+                }
+            }
+        })
+    }
+
     /// Subscribe to real-time updates of payment channels
     ///
     /// **Streaming Behavior:**
@@ -500,7 +510,7 @@ impl SubscriptionRoot {
                     }
                 }
                 Err(e) => {
-                    error!("Failed to query historical channels: {:?}", e);
+                    error!(error = ?e, "failed to query historical channels");
                     return; // Terminate subscription on error
                 }
             }
@@ -560,6 +570,9 @@ impl SubscriptionRoot {
                             Ok(IndexerEvent::TicketParametersUpdated(_)) => {
                                 // Ticket parameter updates don't affect this subscription
                             }
+                            Ok(IndexerEvent::TicketRedeemed(_)) => {
+                                // Ticket redeemed don't affect this subscription
+                            }
                             Err(async_broadcast::RecvError::Closed) => {
                                 info!("Event bus closed, ending channelUpdated subscription");
                                 return;
@@ -581,7 +594,7 @@ impl SubscriptionRoot {
     /// - Emits one OpenedChannelsGraphEntry per open channel
     /// - Each entry contains a single channel with its source and destination accounts
     /// - On subscription start, emits all existing open channels as separate entries
-    /// - Subsequently, emits updates when any channel changes
+    /// - Subsequently, emits updates when any channel changes, including non-open states
     ///
     /// **Phase 1 Ordering:**
     /// The initial snapshot (Phase 1) emits channels in randomized order to prevent
@@ -590,13 +603,15 @@ impl SubscriptionRoot {
     ///
     /// **Building the Graph:**
     /// Clients receive entries incrementally (one per channel) and should accumulate
-    /// them to build the complete network topology. The full graph is the union of all entries.
+    /// them to build the complete network topology. Entries should be merged by
+    /// concrete channel ID. Closed-channel entries are intentional removal signals
+    /// for consumers that maintain an open-channel graph.
     ///
     /// **Update Triggers:**
     /// An entry is re-emitted for a channel when:
     /// - The channel's status changes (e.g., OPEN -> PENDINGTOCLOSE)
     /// - The channel's balance changes
-    /// - The channel closes (no longer emitted)
+    /// - The channel closes (emitted with CLOSED status so consumers can remove it)
     /// - A new channel opens (new entry emitted)
     ///
     /// **Example:**
@@ -635,7 +650,7 @@ impl SubscriptionRoot {
                     }
                 }
                 Err(e) => {
-                    error!("Failed to query historical channels: {:?}", e);
+                    error!(error = ?e, "failed to query historical channels");
                     return; // Terminate subscription on error
                 }
             }
@@ -683,6 +698,9 @@ impl SubscriptionRoot {
                             }
                             Ok(IndexerEvent::TicketParametersUpdated(_)) => {
                                 // Ticket parameter updates don't affect this subscription
+                            }
+                            Ok(IndexerEvent::TicketRedeemed(_)) => {
+                                // Ticket redeemed don't affect this subscription
                             }
                             Err(async_broadcast::RecvError::Closed) => {
                                 info!("Event bus closed, ending subscription");
@@ -742,7 +760,7 @@ impl SubscriptionRoot {
                     }
                 }
                 Err(e) => {
-                    error!("Failed to fetch initial accounts: {:?}", e);
+                    error!(error = ?e, "failed to fetch initial accounts");
                 }
             }
 
@@ -827,7 +845,7 @@ impl SubscriptionRoot {
                     warn!("Ticket parameters not initialized when subscribing to ticketParametersUpdated");
                 }
                 Err(e) => {
-                    error!("Failed to fetch ticket parameters: {:?}", e);
+                    error!(error = ?e, "failed to fetch ticket parameters");
                 }
             }
 
@@ -871,6 +889,9 @@ impl SubscriptionRoot {
                             }
                             Ok(IndexerEvent::SafeDeployed(_)) => {
                                 // Irrelevant for this subscription
+                            }
+                            Ok(IndexerEvent::TicketRedeemed(_)) => {
+                                // Ticket redeemed don't affect this subscription
                             }
                             Err(async_broadcast::RecvError::Closed) => {
                                 info!("Event bus closed, ending ticketParametersUpdated subscription");
@@ -934,7 +955,7 @@ impl SubscriptionRoot {
                     warn!("chain_info not initialized when subscribing to keyBindingFeeUpdated");
                 }
                 Err(e) => {
-                    error!("Failed to fetch chain_info for keyBindingFeeUpdated: {:?}", e);
+                    error!(error = ?e, "failed to fetch chain_info for keyBindingFeeUpdated");
                 }
             }
 
@@ -976,6 +997,9 @@ impl SubscriptionRoot {
                             }
                             Ok(IndexerEvent::TicketParametersUpdated(_)) => {
                                 // Irrelevant for this subscription
+                            }
+                            Ok(IndexerEvent::TicketRedeemed(_)) => {
+                                // Ticket redeemed don't affect this subscription
                             }
                             Err(async_broadcast::RecvError::Closed) => {
                                 info!("Event bus closed, ending keyBindingFeeUpdated subscription");
@@ -1047,9 +1071,8 @@ impl SubscriptionRoot {
                             Ok(IndexerEvent::SafeDeployed(safe_addr)) => {
                                 let safe_addr_bytes = safe_addr.as_ref().to_vec();
                                 debug!(?safe_addr_bytes, "safe address");
-                                let stmt = current_row_statement(db.get_database_backend(), safe_addr_bytes);
-                                let row = match db.query_one_raw(stmt).await {
-                                    Ok(Some(row)) => row,
+                                let current = match fetch_safe_by_address(&db, &safe_addr_bytes).await {
+                                    Ok(Some(current)) => current,
                                     Ok(None) => {
                                         error!("Safe deployed event received but safe not found in DB: {}", safe_addr);
                                         continue;
@@ -1060,32 +1083,24 @@ impl SubscriptionRoot {
                                     }
                                 };
 
-                                let address: Vec<u8> = match row.try_get("", "address") {
-                                    Ok(value) => value,
+                                let current_safe_address = current.address.clone();
+                                let threshold = match fetch_safe_threshold_by_address(&db, &current_safe_address).await {
+                                    Ok(threshold) => threshold,
                                     Err(e) => {
-                                        error!("Failed to parse safe address from view: {}", e);
-                                        continue;
-                                    }
-                                };
-                                let module_address: Vec<u8> = match row.try_get("", "module_address") {
-                                    Ok(value) => value,
-                                    Err(e) => {
-                                        error!("Failed to parse module address from view: {}", e);
-                                        continue;
-                                    }
-                                };
-                                let chain_key: Vec<u8> = match row.try_get("", "chain_key") {
-                                    Ok(value) => value,
-                                    Err(e) => {
-                                        error!("Failed to parse chain key from view: {}", e);
-                                        continue;
+                                        warn!(
+                                            safe_address = ?current_safe_address,
+                                            error = %e,
+                                            "Failed to fetch threshold for safe, returning null"
+                                        );
+                                        None
                                     }
                                 };
 
-                                let current = SafeContractCurrentRow {
-                                    address,
-                                    module_address,
-                                    chain_key,
+                                let current = CurrentSafe {
+                                    threshold,
+                                    address: current.address,
+                                    module_address: current.module_address,
+                                    chain_key: current.chain_key,
                                 };
 
                                 debug!(safe_address = ?current.address, "processing SafeDeployed event");
@@ -1109,10 +1124,25 @@ impl SubscriptionRoot {
                                     }
                                 };
                                 debug!(?current, "yielding Safe from SafeDeployed event");
+                                let owners = match owners_for_safe(&db, current.address.clone()).await {
+                                    Ok(owners) => owners,
+                                    Err(e) => {
+                                        warn!(
+                                            safe_address = ?current.address,
+                                            code = %e.code,
+                                            message = %e.message,
+                                            "Failed to fetch safe owners, skipping subscription payload"
+                                        );
+                                        continue;
+                                    }
+                                };
+
                                 yield Safe {
                                     address: Address::new(&current.address).to_hex(),
                                     module_address: Address::new(&current.module_address).to_hex(),
                                     chain_key: Address::new(&current.chain_key).to_hex(),
+                                    threshold: current.threshold,
+                                    owners,
                                     registered_nodes,
                                 };
                             }
@@ -1158,32 +1188,56 @@ impl SubscriptionRoot {
         let mut event_receiver = transaction_store.subscribe();
 
         Ok(stream! {
+            let is_terminal_status = |s: &StoreTransactionStatus| {
+                matches!(
+                    s,
+                    StoreTransactionStatus::Confirmed
+                        | StoreTransactionStatus::Reverted
+                        | StoreTransactionStatus::Timeout
+                        | StoreTransactionStatus::ValidationFailed
+                        | StoreTransactionStatus::SubmissionFailed
+                )
+            };
+
             // Phase 1: Emit current state if transaction exists
             if let Ok(record) = transaction_store.get(transaction_id) {
+                let is_terminal = is_terminal_status(&record.status);
+
                 yield Transaction {
                     id: ID::from(record.id.to_string()),
                     status: convert_transaction_status(record.status),
                     submitted_at: record.submitted_at,
                     transaction_hash: Hex32(record.transaction_hash.to_hex()),
+                    safe_execution: convert_safe_execution(record.safe_execution),
                 };
+
+                if is_terminal {
+                    return;
+                }
             }
 
             // Phase 2: Listen for future status update events
             loop {
                 match event_receiver.recv().await {
                     // Use pattern matching guard to filter for matching transaction ID
-                    Ok(TransactionEvent::StatusUpdated { id, status, .. })
+                    Ok(TransactionEvent::StatusUpdated { id, .. })
                         if id == transaction_id =>
                     {
-                        // Fetch full record to get transaction_hash and submitted_at
-                        // (event only contains delta fields)
+                        // Fetch full record to get consistent status + safe_execution
                         if let Ok(record) = transaction_store.get(transaction_id) {
+                            let is_terminal = is_terminal_status(&record.status);
+
                             yield Transaction {
                                 id: ID::from(id.to_string()),
-                                status: convert_transaction_status(status),
+                                status: convert_transaction_status(record.status),
                                 submitted_at: record.submitted_at,
                                 transaction_hash: Hex32(record.transaction_hash.to_hex()),
+                                safe_execution: convert_safe_execution(record.safe_execution),
                             };
+
+                            if is_terminal {
+                                break;
+                            }
                         }
                     }
                     Ok(_) => {
@@ -1198,6 +1252,100 @@ impl SubscriptionRoot {
                         // This is acceptable since we only care about the latest status
                         warn!("Transaction subscription for {} missed some events due to overflow", transaction_id);
                         continue;
+                    }
+                }
+            }
+        })
+    }
+
+    /// Subscribe to real-time updates of ticket redemptions.
+    ///
+    /// Streams a [`RedeemTicketDetails`] item each time a ticket redemption event
+    /// is observed on-chain. Covers both successful redemptions and inner Safe
+    /// transaction rejections (see [`RedemptionResult`]).
+    ///
+    /// At most one of the three filter arguments is typically supplied. When none
+    /// are given, all ticket redemption events are emitted. Input addresses and
+    /// channel IDs are validated as hex before the stream is established.
+    #[graphql(name = "ticketRedeemed")]
+    async fn ticket_redeemed(
+        &self,
+        ctx: &Context<'_>,
+        #[graphql(desc = "Filter by channel ID (hexadecimal format)")] channel_id: Option<ID>,
+        #[graphql(desc = "Filter by ticket issuer (hexadecimal format)")] issuer_address: Option<ID>,
+        #[graphql(desc = "Filter by ticket recipient (hexadecimal format)")] recipient_address: Option<ID>,
+    ) -> Result<impl Stream<Item = RedeemTicketDetails>> {
+        // Validate correctness of input parameters
+        if let Some(channel_id) = &channel_id {
+            let stripped = channel_id.strip_prefix("0x").unwrap_or(channel_id.as_str());
+            if stripped.len() != 64 {
+                return Err(async_graphql::Error::new(
+                    "Invalid channel ID format: must be a 32-byte hex value (64 hex chars, optional 0x prefix)",
+                ));
+            }
+            hex::decode(stripped).map_err(|e| {
+                async_graphql::Error::new(format!("Invalid channel ID format: {}. Expected hex format.", e))
+            })?;
+        }
+        if let Some(issuer_address) = &issuer_address {
+            Address::from_hex(issuer_address.as_str()).map_err(|e| {
+                async_graphql::Error::new(format!("Invalid issuer address format: {}. Expected hex format.", e))
+            })?;
+        }
+        if let Some(recipient_address) = &recipient_address {
+            Address::from_hex(recipient_address.as_str()).map_err(|e| {
+                async_graphql::Error::new(format!("Invalid recipient address format: {}. Expected hex format.", e))
+            })?;
+        }
+
+        let indexer_state = ctx
+            .data::<IndexerState>()
+            .map_err(|e| async_graphql::Error::new(errors::messages::context_error("IndexerState", e.message)))?
+            .clone();
+
+        Ok(stream! {
+            // Subscribe to events and shutdown first to avoid missing events
+            let mut event_receiver = indexer_state.subscribe_to_events();
+            let mut shutdown_receiver = indexer_state.subscribe_to_shutdown();
+
+            // Stream updates from event bus
+            loop {
+                tokio::select! {
+                    biased;
+
+                    shutdown_result = shutdown_receiver.recv() => {
+                        match shutdown_result {
+                            Ok(_) => {
+                                info!("ticketRedeemed subscription shutting down due to reorg");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                warn!("Shutdown channel closed for ticketRedeemed");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Shutdown signal overflowed ({}), continuing", n);
+                            }
+                        }
+                    }
+                    event_result = event_receiver.recv() => {
+                        match event_result {
+                            Ok(IndexerEvent::TicketRedeemed(ticket_redeemed)) => {
+                                if match_ticket_filters(&ticket_redeemed, &channel_id, &issuer_address, &recipient_address) {
+                                yield ticket_redeemed.into();
+                                }
+                            }
+                            Ok(_) => {
+                                // Other events (ChannelUpdated, etc.) - ignore
+                            }
+                            Err(async_broadcast::RecvError::Closed) => {
+                                info!("Event bus closed, ending ticketRedeemed subscription");
+                                return;
+                            }
+                            Err(async_broadcast::RecvError::Overflowed(n)) => {
+                                warn!("Event bus overflowed ({}); ticketRedeemed may miss events", n);
+                            }
+                        }
                     }
                 }
             }
@@ -1256,6 +1404,76 @@ impl SubscriptionRoot {
 
         Ok(result)
     }
+}
+
+/// Check whether a ticket redemption event matches the subscription filters.
+///
+/// Filters are ANDed — all non-`None` arguments must match. An absent filter
+/// matches everything.
+///
+/// * Channel ID comparison strips the `0x` prefix from the filter value if present, then compares against the lowercase
+///   hex stored in [`RedeemTicketDetailsInfo::channel_id`].
+/// * Address comparisons normalise both the filter value and the stored address via [`Address::from_hex`], giving
+///   case-insensitive, prefix-agnostic matching.
+///
+/// Returns `false` and silently drops the event if either address is unparseable
+/// (this is a defensive fallback — inputs are validated before the stream starts).
+fn match_ticket_filters(
+    info: &RedeemTicketDetailsInfo,
+    channel_id: &Option<ID>,
+    issuer_address: &Option<ID>,
+    recipient_address: &Option<ID>,
+) -> bool {
+    if let Some(channel_id) = channel_id {
+        let channel_id_normalized = channel_id
+            .strip_prefix("0x")
+            .unwrap_or(channel_id.as_str())
+            .to_lowercase();
+        if info.channel_id != channel_id_normalized {
+            return false;
+        }
+    }
+
+    if let Some(iss_addr) = issuer_address {
+        let iss = match Address::from_hex(iss_addr) {
+            Ok(iss) => iss,
+            Err(_) => {
+                // Invalid address - this should never happen due to early validation of inputs
+                return false;
+            }
+        };
+        let iss_info = match Address::from_hex(&info.issuer_address) {
+            Ok(iss) => iss,
+            Err(_) => {
+                // Invalid address
+                return false;
+            }
+        };
+        if iss != iss_info {
+            return false;
+        }
+    }
+
+    if let Some(rec_addr) = recipient_address {
+        let rec = match Address::from_hex(rec_addr) {
+            Ok(rec) => rec,
+            Err(_) => {
+                // Invalid address - this should never happen due to early validation of inputs
+                return false;
+            }
+        };
+        let rec_info = match Address::from_hex(&info.recipient_address) {
+            Ok(rec) => rec,
+            Err(_) => {
+                // Invalid address
+                return false;
+            }
+        };
+        if rec != rec_info {
+            return false;
+        }
+    }
+    true
 }
 
 /// Helper to check if an account matches the subscription filters
@@ -1354,7 +1572,8 @@ mod tests {
     use std::time::Duration;
 
     use async_graphql::{EmptyMutation, Object, Schema};
-    use blokli_chain_indexer::state::IndexerEvent;
+    use blokli_api_types::RedemptionResult;
+    use blokli_chain_indexer::state::{IndexerEvent, RedeemTicketDetailsInfo};
     use blokli_db::{BlokliDbGeneralModelOperations, db::BlokliDb};
     use blokli_db_entity::{hopr_safe_contract, hopr_safe_contract_state};
     use futures::StreamExt;
@@ -2567,6 +2786,171 @@ mod tests {
         assert!(
             seen_different,
             "5 subscription runs of 10 accounts should produce at least one different Phase 1 ordering"
+        );
+    }
+
+    // ── match_ticket_filters ──────────────────────────────────────────────────
+
+    const TEST_ISSUER_ADDR: &str = "0x1111111111111111111111111111111111111111";
+    const TEST_RECIPIENT_ADDR: &str = "0x2222222222222222222222222222222222222222";
+    const TEST_OTHER_ADDR: &str = "0x3333333333333333333333333333333333333333";
+    /// Lowercase hex without 0x prefix — matches how `hex::encode` stores channel IDs.
+    const TEST_CHANNEL_ID: &str = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
+    const TEST_CHANNEL_ID_0X: &str = "0xabcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
+    const TEST_CHANNEL_ID_OTHER: &str = "0000000000000000000000000000000000000000000000000000000000000000";
+
+    fn make_test_ticket_info() -> RedeemTicketDetailsInfo {
+        RedeemTicketDetailsInfo {
+            issuer_address: TEST_ISSUER_ADDR.to_string(),
+            recipient_address: TEST_RECIPIENT_ADDR.to_string(),
+            epoch: 1,
+            index: 42,
+            channel_id: TEST_CHANNEL_ID.to_string(),
+            result: RedemptionResult::Redeemed,
+        }
+    }
+
+    #[rstest::rstest]
+    #[case(None, None, None, true)]
+    #[case(Some(ID::from(TEST_CHANNEL_ID)), None, None, true)]
+    #[case(Some(ID::from(TEST_CHANNEL_ID_0X)), None, None, true)]
+    #[case(Some(ID::from(TEST_CHANNEL_ID_OTHER)), None, None, false)]
+    #[case(None, Some(ID::from(TEST_ISSUER_ADDR)), None, true)]
+    #[case(None, Some(ID::from(TEST_OTHER_ADDR)), None, false)]
+    #[case(None, None, Some(ID::from(TEST_RECIPIENT_ADDR)), true)]
+    #[case(None, None, Some(ID::from(TEST_OTHER_ADDR)), false)]
+    #[case(
+        Some(ID::from(TEST_CHANNEL_ID)),
+        Some(ID::from(TEST_ISSUER_ADDR)),
+        Some(ID::from(TEST_RECIPIENT_ADDR)),
+        true
+    )]
+    #[case(
+        Some(ID::from(TEST_CHANNEL_ID)),
+        Some(ID::from(TEST_OTHER_ADDR)),
+        Some(ID::from(TEST_RECIPIENT_ADDR)),
+        false
+    )]
+    fn test_match_ticket_filters(
+        #[case] channel_id: Option<ID>,
+        #[case] issuer: Option<ID>,
+        #[case] recipient: Option<ID>,
+        #[case] expected: bool,
+    ) {
+        let info = make_test_ticket_info();
+        assert_eq!(match_ticket_filters(&info, &channel_id, &issuer, &recipient), expected);
+    }
+
+    // ── ticketRedeemed subscription ───────────────────────────────────────────
+
+    fn make_subscription_schema(
+        conn: &DatabaseConnection,
+        indexer_state: &IndexerState,
+    ) -> Schema<DummyQuery, EmptyMutation, SubscriptionRoot> {
+        Schema::build(DummyQuery, EmptyMutation, SubscriptionRoot)
+            .data(conn.clone())
+            .data(indexer_state.clone())
+            .data(GasMultiplier(1.0))
+            .finish()
+    }
+
+    #[tokio::test]
+    async fn test_ticket_redeemed_subscription_yields_on_event() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let indexer_state = IndexerState::new(10, 100);
+        let schema = make_subscription_schema(db.conn(blokli_db::TargetDb::Index), &indexer_state);
+
+        let query = r#"subscription { ticketRedeemed { issuerAddress recipientAddress epoch index result } }"#;
+        let mut stream = schema.execute_stream(query).boxed();
+
+        let ticket_info = make_test_ticket_info();
+        let indexer_clone = indexer_state.clone();
+        let info_clone = ticket_info.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            indexer_clone.publish_event(IndexerEvent::TicketRedeemed(info_clone));
+        });
+
+        let response = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout waiting for ticketRedeemed event")
+            .expect("stream ended early");
+        let data = response.into_result().expect("response error").data;
+
+        assert_eq!(
+            data,
+            async_graphql::Value::from_json(serde_json::json!({
+                "ticketRedeemed": {
+                    "issuerAddress": TEST_ISSUER_ADDR,
+                    "recipientAddress": TEST_RECIPIENT_ADDR,
+                    "epoch": "1",
+                    "index": "42",
+                    "result": "REDEEMED"
+                }
+            }))
+            .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ticket_redeemed_subscription_filters_by_channel_id() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let indexer_state = IndexerState::new(10, 100);
+        let schema = make_subscription_schema(db.conn(blokli_db::TargetDb::Index), &indexer_state);
+
+        let query = format!(
+            r#"subscription {{ ticketRedeemed(channelId: "{}") {{ issuerAddress }} }}"#,
+            TEST_CHANNEL_ID
+        );
+        let mut stream = schema.execute_stream(query.as_str()).boxed();
+
+        let matching = make_test_ticket_info();
+        let non_matching = RedeemTicketDetailsInfo {
+            channel_id: TEST_CHANNEL_ID_OTHER.to_string(),
+            ..make_test_ticket_info()
+        };
+
+        let indexer_clone = indexer_state.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            indexer_clone.publish_event(IndexerEvent::TicketRedeemed(non_matching));
+            indexer_clone.publish_event(IndexerEvent::TicketRedeemed(matching));
+        });
+
+        let response = tokio::time::timeout(Duration::from_secs(2), stream.next())
+            .await
+            .expect("timeout waiting for matching ticketRedeemed event")
+            .expect("stream ended early");
+        let data = response.into_result().expect("response error").data;
+
+        assert_eq!(
+            data,
+            async_graphql::Value::from_json(serde_json::json!({
+                "ticketRedeemed": { "issuerAddress": TEST_ISSUER_ADDR }
+            }))
+            .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ticket_redeemed_subscription_ignores_other_indexer_events() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+        let indexer_state = IndexerState::new(10, 100);
+        let schema = make_subscription_schema(db.conn(blokli_db::TargetDb::Index), &indexer_state);
+
+        let query = r#"subscription { ticketRedeemed { issuerAddress } }"#;
+        let mut stream = schema.execute_stream(query).boxed();
+
+        let indexer_clone = indexer_state.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(50)).await;
+            indexer_clone.publish_event(IndexerEvent::KeyBindingFeeUpdated(TokenValueString("999".to_string())));
+        });
+
+        let timeout_result = tokio::time::timeout(Duration::from_millis(500), stream.next()).await;
+        assert!(
+            timeout_result.is_err(),
+            "non-TicketRedeemed events must not produce subscription items"
         );
     }
 }

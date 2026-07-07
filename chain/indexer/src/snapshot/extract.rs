@@ -3,17 +3,15 @@
 //! Provides safe extraction of snapshot archives with security validations
 //! to prevent malicious archives from escaping the target directory.
 
-use std::{
-    fs,
-    fs::File,
-    path::{Component::ParentDir, Path},
-};
+use std::path::{Component, Component::ParentDir, Path};
 
-use async_compression::futures::bufread::XzDecoder;
+use async_compression::tokio::bufread::XzDecoder;
 use async_tar::Archive;
-use futures_util::{
-    StreamExt,
-    io::{AllowStdIo, BufReader as FuturesBufReader},
+use blokli_db::snapshot::SNAPSHOT_SQL_FILE;
+use futures_util::StreamExt;
+use tokio::{
+    fs::{self, File},
+    io::BufReader,
 };
 use tracing::{debug, error, info};
 
@@ -31,11 +29,10 @@ pub struct SnapshotExtractor {
 impl SnapshotExtractor {
     /// Creates a new extractor with predefined expected files.
     ///
-    /// Expected files include PostgreSQL SQL dump:
-    /// - `hopr_logs.sql` - SQL dump file from pg_dump
+    /// Expected files include a single PostgreSQL-style SQL dump.
     pub fn new() -> Self {
         Self {
-            expected_files: vec!["hopr_logs.sql".to_string()],
+            expected_files: vec![SNAPSHOT_SQL_FILE.to_string()],
         }
     }
 
@@ -67,7 +64,7 @@ impl SnapshotExtractor {
         info!(from = %archive_path.display(), to = %target_dir.display(), "Extracting snapshot");
 
         // Create target directory if it doesn't exist
-        fs::create_dir_all(target_dir)?;
+        fs::create_dir_all(target_dir).await.map_err(SnapshotError::Io)?;
 
         let extracted_files = self.extract_tar_xz(archive_path, target_dir).await?;
 
@@ -77,12 +74,11 @@ impl SnapshotExtractor {
 
     /// Extracts a tar.xz archive using async operations
     async fn extract_tar_xz(&self, archive_path: &Path, target_dir: &Path) -> SnapshotResult<Vec<String>> {
-        // Open file using AllowStdIo to make File work with futures-io
-        let file = File::open(archive_path).map_err(SnapshotError::Io)?;
-        let file_reader = AllowStdIo::new(file);
+        // Open file using Tokio I/O
+        let file = File::open(archive_path).await.map_err(SnapshotError::Io)?;
 
-        // Create XZ decoder with parallel decompression using futures-io
-        let buf_reader = FuturesBufReader::new(file_reader);
+        // Create XZ decoder with parallel decompression using Tokio I/O
+        let buf_reader = BufReader::new(file);
         let decoder = XzDecoder::new(buf_reader);
         let archive = Archive::new(decoder);
 
@@ -95,10 +91,17 @@ impl SnapshotExtractor {
 
             // Security check: prevent directory traversal
             // Although tar archives should not allow this.
-            if !path_is_safe(path_buf.as_path().into()) {
+            if !path_is_safe(path_buf.as_path()) {
                 return Err(SnapshotError::InvalidFormat(
                     "Archive contains parent directory references".to_string(),
                 ));
+            }
+
+            if !path_is_root_file(Path::new(path_buf.as_os_str())) {
+                return Err(SnapshotError::InvalidFormat(format!(
+                    "Archive entry must be a root-level file: {}",
+                    path_buf.display()
+                )));
             }
 
             // Get the filename
@@ -120,10 +123,10 @@ impl SnapshotExtractor {
         }
 
         // Verify we got the SQL dump file
-        if !extracted_files.contains(&"hopr_logs.sql".to_string()) {
-            return Err(SnapshotError::InvalidFormat(
-                "Archive does not contain hopr_logs.sql".to_string(),
-            ));
+        if !extracted_files.iter().any(|f| f == SNAPSHOT_SQL_FILE) {
+            return Err(SnapshotError::InvalidFormat(format!(
+                "Archive does not contain {SNAPSHOT_SQL_FILE}"
+            )));
         }
 
         Ok(extracted_files)
@@ -136,12 +139,11 @@ impl SnapshotExtractor {
 
     /// Lists the contents of a tar.xz archive
     async fn list_archive_contents(&self, archive_path: &Path) -> SnapshotResult<Vec<String>> {
-        // Open file using AllowStdIo to make File work with futures-io
-        let file = File::open(archive_path).map_err(SnapshotError::Io)?;
-        let file_reader = AllowStdIo::new(file);
+        // Open file using Tokio I/O
+        let file = File::open(archive_path).await.map_err(SnapshotError::Io)?;
 
-        // Create XZ decoder using futures-io
-        let buf_reader = FuturesBufReader::new(file_reader);
+        // Create XZ decoder using Tokio I/O
+        let buf_reader = BufReader::new(file);
         let decoder = XzDecoder::new(buf_reader);
         let archive = Archive::new(decoder);
 
@@ -166,6 +168,11 @@ fn path_is_safe(path: &Path) -> bool {
     !path.components().any(|c| c == ParentDir)
 }
 
+fn path_is_root_file(path: &Path) -> bool {
+    let mut components = path.components();
+    matches!(components.next(), Some(Component::Normal(_))) && components.next().is_none()
+}
+
 impl Default for SnapshotExtractor {
     fn default() -> Self {
         Self::new()
@@ -174,6 +181,7 @@ impl Default for SnapshotExtractor {
 
 #[cfg(test)]
 mod tests {
+    use blokli_db::snapshot::SNAPSHOT_SQL_FILE;
     use tempfile::TempDir;
 
     use super::*;
@@ -193,22 +201,23 @@ mod tests {
 
         assert!(result.is_ok(), "Extraction should succeed");
         let files = result.unwrap();
-        assert!(files.contains(&"hopr_logs.sql".to_string()));
-        assert!(extract_dir.join("hopr_logs.sql").exists());
+        assert!(files.contains(&SNAPSHOT_SQL_FILE.to_string()));
+        assert!(extract_dir.join(SNAPSHOT_SQL_FILE).exists());
     }
 
     #[tokio::test]
     async fn test_archive_security_validation() {
-        let temp_dir = TempDir::new().unwrap();
+        let archive_temp_dir = TempDir::new().unwrap();
+        let extraction_temp_dir = TempDir::new().unwrap();
         let extractor = SnapshotExtractor::new();
 
         // Test with valid archive
-        let archive_path = create_test_archive(&temp_dir, None).await.unwrap();
+        let archive_path = create_test_archive(&archive_temp_dir, None).await.unwrap();
 
-        let extract_dir = temp_dir.path().join("extract");
+        let extract_dir = extraction_temp_dir.path().join("extract");
 
         // verify files before extraction
-        assert!(!extract_dir.parent().unwrap().join("hopr_logs.sql").exists());
+        assert!(!extract_dir.parent().unwrap().join(SNAPSHOT_SQL_FILE).exists());
 
         let result = extractor.extract_snapshot(&archive_path, &extract_dir).await;
 
@@ -216,8 +225,8 @@ mod tests {
 
         // verify files after extraction
         let extracted_files = result.unwrap();
-        assert!(extracted_files.contains(&"hopr_logs.sql".to_string()));
-        assert!(!extract_dir.parent().unwrap().join("hopr_logs.sql").exists());
+        assert!(extracted_files.contains(&SNAPSHOT_SQL_FILE.to_string()));
+        assert!(!extract_dir.parent().unwrap().join(SNAPSHOT_SQL_FILE).exists());
     }
 
     #[tokio::test]
@@ -227,7 +236,7 @@ mod tests {
 
         // Create invalid archive (just a text file)
         let archive_path = temp_dir.path().join("invalid.tar.xz");
-        fs::write(&archive_path, "not a valid archive").unwrap();
+        fs::write(&archive_path, "not a valid archive").await.unwrap();
 
         let extract_dir = temp_dir.path().join("extracted");
         let result = extractor.extract_snapshot(&archive_path, &extract_dir).await;
@@ -235,9 +244,29 @@ mod tests {
         assert!(result.is_err(), "Extraction should fail for invalid archive");
     }
 
+    #[tokio::test]
+    async fn test_rejects_nested_snapshot_sql_path() {
+        let temp_dir = TempDir::new().unwrap();
+        let extractor = SnapshotExtractor::new();
+        let archive_path = create_test_archive(&temp_dir, Some(format!("nested/{SNAPSHOT_SQL_FILE}")))
+            .await
+            .unwrap();
+
+        let extract_dir = temp_dir.path().join("extracted");
+        let result = extractor.extract_snapshot(&archive_path, &extract_dir).await;
+
+        assert!(result.is_err(), "Extraction should fail for nested snapshot paths");
+        let error = result.unwrap_err();
+        assert!(error.to_string().contains("root-level file"));
+        assert!(!extract_dir.join(SNAPSHOT_SQL_FILE).exists());
+    }
+
     #[test_log::test(tokio::test)]
     async fn test_path_traversal_protection() {
         assert!(path_is_safe(Path::new("good.db")));
+        assert!(path_is_root_file(Path::new("good.db")));
+        assert!(!path_is_root_file(Path::new("nested/good.db")));
+        assert!(!path_is_root_file(Path::new("./good.db")));
 
         assert!(!path_is_safe(Path::new("../malicious.db")));
         assert!(!path_is_safe(Path::new("../../malicious.db")));

@@ -81,7 +81,7 @@ pub struct ChainConfig {
     pub tx_polling_interval: u64,
     /// Number of confirmations required (finality)
     pub confirmations: u16,
-    /// Maximum block range for RPC queries
+    /// Maximum block range ceiling for adaptive RPC log queries
     pub max_block_range: u32,
     /// Starting block number for channel contract (where indexing should begin)
     pub channel_contract_deploy_block: u32,
@@ -96,8 +96,6 @@ pub struct ChainConfig {
 pub struct ContractAddresses {
     /// wxHOPR token contract
     pub token: Address,
-    /// xHOPR token contract
-    pub xtoken: Address,
     /// Channels contract
     pub channels: Address,
     /// Announcements contract
@@ -114,13 +112,16 @@ pub struct ContractAddresses {
     pub winning_probability_oracle: Address,
     /// Stake factory contract
     pub node_stake_factory: Address,
+    /// xHOPR token contract
+    #[serde(default)]
+    pub xhopr_token: Address,
 }
 
 /// Holds instances to contracts.
 #[derive(Debug)]
 pub struct ContractInstances<P> {
     pub token: HoprTokenInstance<P>,
-    pub xtoken: HoprTokenInstance<P>,
+    pub xhopr_token: HoprTokenInstance<P>,
     pub channels: HoprChannelsInstance<P>,
     pub announcements: HoprAnnouncementsInstance<P>,
     pub module_implementation: HoprNodeManagementModuleInstance<P>,
@@ -141,8 +142,8 @@ where
                 AlloyAddress::from_hopr_address(contract_addresses.token),
                 provider.clone(),
             ),
-            xtoken: HoprTokenInstance::new(
-                AlloyAddress::from_hopr_address(contract_addresses.xtoken),
+            xhopr_token: HoprTokenInstance::new(
+                AlloyAddress::from_hopr_address(contract_addresses.xhopr_token),
                 provider.clone(),
             ),
             channels: HoprChannelsInstance::new(
@@ -225,8 +226,8 @@ where
                                               * decimal values */
         )
         .await?;
-        let token = HoprToken::deploy(provider.clone()).await?; // TODO(xHOPR): update to deploy a separate wxHOPR token. Requires a contract's repo update
-        let xtoken = token.clone(); // TODO(xHOPR): update to deploy a separate wxHOPR token. Requires a contract's repo update
+        let token = HoprToken::deploy(provider.clone()).await?;
+        let xhopr_token = token.clone(); // TODO(xHOPR): update to deploy a separate xHOPR token. Requires a contract's repo update
         let channels = HoprChannels::deploy(
             provider.clone(),
             AlloyAddress::from(token.address().as_ref()),
@@ -242,7 +243,7 @@ where
 
         Ok(Self {
             token,
-            xtoken,
+            xhopr_token,
             channels,
             announcements,
             module_implementation,
@@ -276,7 +277,6 @@ where
     fn from(instances: &ContractInstances<P>) -> Self {
         Self {
             token: instances.token.address().to_hopr_address(),
-            xtoken: instances.xtoken.address().to_hopr_address(),
             channels: instances.channels.address().to_hopr_address(),
             announcements: instances.announcements.address().to_hopr_address(),
             module_implementation: instances.module_implementation.address().to_hopr_address(),
@@ -285,6 +285,7 @@ where
             ticket_price_oracle: instances.ticket_price_oracle.address().to_hopr_address(),
             winning_probability_oracle: instances.winning_probability_oracle.address().to_hopr_address(),
             node_stake_factory: instances.node_stake_factory.address().to_hopr_address(),
+            xhopr_token: instances.xhopr_token.address().to_hopr_address(),
         }
     }
 }

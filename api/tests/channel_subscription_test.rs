@@ -7,27 +7,15 @@
 //! - Balance updates
 //! - Multiple concurrent subscribers
 
+mod common;
+
 use std::{
     str::FromStr,
-    sync::Arc,
     time::{Duration, SystemTime},
 };
 
-use async_graphql::Schema;
-use blokli_api::{mutation::MutationRoot, query::QueryRoot, schema::build_schema, subscription::SubscriptionRoot};
 use blokli_api_types::{Account, Channel, ChannelStatus as ApiChannelStatus, TokenValueString, UInt64};
-use blokli_chain_api::{
-    rpc_adapter::RpcAdapter,
-    transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
-    transaction_store::TransactionStore,
-    transaction_validator::TransactionValidator,
-};
-use blokli_chain_indexer::{IndexerState, state::IndexerEvent};
-use blokli_chain_rpc::{
-    rpc::{RpcOperations, RpcOperationsConfig},
-    transport::ReqwestClient,
-};
-use blokli_chain_types::ContractAddresses;
+use blokli_chain_indexer::state::IndexerEvent;
 use blokli_db::{
     BlokliDbGeneralModelOperations, TargetDb, accounts::BlokliDbAccountOperations, channels::BlokliDbChannelOperations,
     db::BlokliDb,
@@ -37,12 +25,11 @@ use blokli_db_entity::{
 };
 use chrono::Utc;
 use futures::StreamExt;
-use hopr_bindings::exports::alloy::{rpc::client::ClientBuilder, transports::http::ReqwestTransport};
 use hopr_types::{
     crypto::prelude::{ChainKeypair, Keypair, OffchainKeypair},
     internal::channels::{ChannelEntry, ChannelStatus},
     primitive::{
-        prelude::HoprBalance,
+        prelude::{Address, HoprBalance},
         traits::{IntoEndian, ToHex},
     },
 };
@@ -58,60 +45,22 @@ fn random_offchain_keypair() -> OffchainKeypair {
     OffchainKeypair::random()
 }
 
-/// Create a minimal GraphQL schema for testing subscriptions
-fn create_test_schema(db: &BlokliDb) -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
-    create_test_schema_with_state(db, IndexerState::new(10, 100))
-}
-
-/// Create a minimal GraphQL schema for testing subscriptions with a specific IndexerState
-fn create_test_schema_with_state(
-    db: &BlokliDb,
-    indexer_state: IndexerState,
-) -> Schema<QueryRoot, MutationRoot, SubscriptionRoot> {
-    let transaction_store = Arc::new(TransactionStore::new());
-    let transaction_validator = Arc::new(TransactionValidator::new());
-
-    // Create mock RPC client for testing (won't actually connect)
-    let transport = ReqwestTransport::new("http://localhost:8545".parse().unwrap());
-    let rpc_client = ClientBuilder::default().transport(transport.clone(), transport.guess_local());
-    let transport_client = ReqwestClient::new();
-
-    // Create stub RPC operations (not used for subscription tests)
-    let rpc_ops = Arc::new(
-        RpcOperations::new(
-            rpc_client.clone(),
-            transport_client.clone(),
-            RpcOperationsConfig::default(),
-            None,
-        )
-        .expect("Failed to create RPC operations"),
-    );
-
-    let rpc_adapter = Arc::new(RpcAdapter::new(
-        RpcOperations::new(rpc_client, transport_client, RpcOperationsConfig::default(), None)
-            .expect("Failed to create RPC adapter operations"),
-    ));
-
-    let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
-        rpc_adapter,
-        transaction_store.clone(),
-        transaction_validator,
-        RawTransactionExecutorConfig::default(),
-    ));
-
-    build_schema(
-        db.conn(TargetDb::Index).clone(),
-        1,
-        "test-network".to_string(),
-        ContractAddresses::default(),
-        1,
-        3, // Test finality value
-        1.0,
-        indexer_state,
-        transaction_executor,
-        transaction_store,
-        rpc_ops,
-    )
+fn build_channel_entry(
+    source: Address,
+    destination: Address,
+    balance: HoprBalance,
+    ticket_index: u64,
+    status: ChannelStatus,
+    channel_epoch: u32,
+) -> ChannelEntry {
+    ChannelEntry::builder()
+        .between(source, destination)
+        .balance(balance)
+        .ticket_index(ticket_index)
+        .status(status)
+        .epoch(channel_epoch)
+        .build()
+        .expect("valid channel entry")
 }
 
 /// Helper to update chain_info watermark for tests
@@ -242,13 +191,13 @@ async fn test_channel_subscription_emits_initial_channel_with_source_filter() {
 
     // Create channel
     let balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
     // Update watermark to include all test data
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     // Execute subscription query with sourceKeyId filter
     let query = r#"
@@ -311,13 +260,13 @@ async fn test_channel_subscription_emits_initial_channel_with_destination_filter
 
     // Create channel
     let balance = HoprBalance::from_str("500 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
     // Update watermark to include all test data
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     // Subscribe with destinationKeyId filter
     let query = r#"
@@ -368,7 +317,7 @@ async fn test_channel_subscription_emits_initial_channel_with_concrete_channel_i
 
     // Create channel
     let balance = HoprBalance::from_str("500 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     let channel_id = channel.get_id().to_hex();
 
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
@@ -376,7 +325,7 @@ async fn test_channel_subscription_emits_initial_channel_with_concrete_channel_i
     // Update watermark to include all test data
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     // Subscribe with concreteChannelId filter
     let query = format!(
@@ -429,13 +378,13 @@ async fn test_channel_subscription_emits_initial_channel_with_status_filter() {
 
     // Create OPEN channel
     let balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
     // Update watermark to include all test data
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     // Subscribe with status filter for OPEN channels
     let query = r#"
@@ -489,17 +438,17 @@ async fn test_channel_subscription_without_filters_emits_all_channels() {
 
     // Create two channels
     let balance1 = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel1 = ChannelEntry::new(addr1, addr2, balance1, 0, ChannelStatus::Open, 1);
+    let channel1 = build_channel_entry(addr1, addr2, balance1, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel1, 100, 0, 0).await.unwrap();
 
     let balance2 = HoprBalance::from_str("2000 wxHOPR").unwrap();
-    let channel2 = ChannelEntry::new(addr2, addr3, balance2, 0, ChannelStatus::Open, 1);
+    let channel2 = build_channel_entry(addr2, addr3, balance2, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel2, 101, 0, 0).await.unwrap();
 
     // Update watermark to include all test data
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     // Subscribe without filters
     let query = r#"
@@ -546,7 +495,6 @@ async fn test_channel_subscription_without_filters_emits_all_channels() {
 #[tokio::test]
 async fn test_channel_subscription_receives_balance_update() {
     let db = BlokliDb::new_in_memory().await.unwrap();
-    let indexer_state = IndexerState::new(10, 100);
 
     // Create accounts
     let keypair1 = random_keypair();
@@ -565,14 +513,14 @@ async fn test_channel_subscription_receives_balance_update() {
 
     // Create channel with initial balance
     let initial_balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, initial_balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, initial_balance, 0, ChannelStatus::Open, 1);
     let channel_id = channel.get_id().to_hex();
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
     // Update watermark to include all test data
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = create_test_schema_with_state(&db, indexer_state.clone());
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -602,7 +550,7 @@ async fn test_channel_subscription_receives_balance_update() {
 
     // Update channel balance
     let updated_balance = HoprBalance::from_str("2000 wxHOPR").unwrap();
-    let updated_channel = ChannelEntry::new(addr1, addr2, updated_balance, 0, ChannelStatus::Open, 1);
+    let updated_channel = build_channel_entry(addr1, addr2, updated_balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, updated_channel, 110, 0, 0).await.unwrap();
 
     // Publish event to trigger Phase 2 update
@@ -627,7 +575,6 @@ async fn test_channel_subscription_receives_balance_update() {
 #[tokio::test]
 async fn test_channel_subscription_receives_status_transition_open_to_pending() {
     let db = BlokliDb::new_in_memory().await.unwrap();
-    let indexer_state = IndexerState::new(10, 100);
 
     // Create accounts
     let keypair1 = random_keypair();
@@ -646,14 +593,14 @@ async fn test_channel_subscription_receives_status_transition_open_to_pending() 
 
     // Create OPEN channel
     let balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     let channel_id = channel.get_id().to_hex();
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
     // Update watermark to include all test data
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = create_test_schema_with_state(&db, indexer_state.clone());
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -679,7 +626,7 @@ async fn test_channel_subscription_receives_status_transition_open_to_pending() 
 
     // Transition to PENDINGTOCLOSE
     let closure_time = SystemTime::now() + Duration::from_secs(1000);
-    let pending_channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::PendingToClose(closure_time), 1);
+    let pending_channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::PendingToClose(closure_time), 1);
     db.upsert_channel(None, pending_channel, 110, 0, 0).await.unwrap();
 
     // Publish event to trigger Phase 2 update
@@ -704,7 +651,6 @@ async fn test_channel_subscription_receives_status_transition_open_to_pending() 
 #[tokio::test]
 async fn test_channel_subscription_receives_status_transition_pending_to_closed() {
     let db = BlokliDb::new_in_memory().await.unwrap();
-    let indexer_state = IndexerState::new(10, 100);
 
     // Create accounts
     let keypair1 = random_keypair();
@@ -724,14 +670,14 @@ async fn test_channel_subscription_receives_status_transition_pending_to_closed(
     // Create PENDINGTOCLOSE channel
     let balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
     let closure_time = SystemTime::now() + Duration::from_secs(1000);
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::PendingToClose(closure_time), 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::PendingToClose(closure_time), 1);
     let channel_id = channel.get_id().to_hex();
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
     // Update watermark to include all test data
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = create_test_schema_with_state(&db, indexer_state.clone());
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -757,7 +703,7 @@ async fn test_channel_subscription_receives_status_transition_pending_to_closed(
     );
 
     // Transition to CLOSED
-    let closed_channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Closed, 1);
+    let closed_channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Closed, 1);
     db.upsert_channel(None, closed_channel, 110, 0, 0).await.unwrap();
 
     // Publish event to trigger Phase 2 update
@@ -778,7 +724,6 @@ async fn test_channel_subscription_receives_status_transition_pending_to_closed(
 #[tokio::test]
 async fn test_channel_subscription_receives_epoch_update() {
     let db = BlokliDb::new_in_memory().await.unwrap();
-    let indexer_state = IndexerState::new(10, 100);
 
     // Create accounts
     let keypair1 = random_keypair();
@@ -797,14 +742,14 @@ async fn test_channel_subscription_receives_epoch_update() {
 
     // Create channel with epoch 1
     let balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     let channel_id = channel.get_id().to_hex();
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
     // Update watermark to include all test data
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = create_test_schema_with_state(&db, indexer_state.clone());
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -827,7 +772,7 @@ async fn test_channel_subscription_receives_epoch_update() {
     assert_eq!(initial_data["channelUpdated"]["epoch"].as_i64().unwrap(), 1);
 
     // Update channel to epoch 2
-    let updated_channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 2);
+    let updated_channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 2);
     db.upsert_channel(None, updated_channel, 110, 0, 0).await.unwrap();
 
     // Publish event to trigger Phase 2 update
@@ -848,7 +793,6 @@ async fn test_channel_subscription_receives_epoch_update() {
 #[tokio::test]
 async fn test_channel_subscription_filter_excludes_non_matching_channels() {
     let db = BlokliDb::new_in_memory().await.unwrap();
-    let indexer_state = IndexerState::new(10, 100);
 
     // Create accounts
     let keypair1 = random_keypair();
@@ -873,19 +817,19 @@ async fn test_channel_subscription_filter_excludes_non_matching_channels() {
 
     // Create two channels
     let balance1 = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel1 = ChannelEntry::new(addr1, addr2, balance1, 0, ChannelStatus::Open, 1);
+    let channel1 = build_channel_entry(addr1, addr2, balance1, 0, ChannelStatus::Open, 1);
     let channel1_id = channel1.get_id().to_hex();
     db.upsert_channel(None, channel1, 100, 0, 0).await.unwrap();
 
     let balance2 = HoprBalance::from_str("2000 wxHOPR").unwrap();
-    let channel2 = ChannelEntry::new(addr2, addr3, balance2, 0, ChannelStatus::Open, 1);
+    let channel2 = build_channel_entry(addr2, addr3, balance2, 0, ChannelStatus::Open, 1);
     let channel2_id = channel2.get_id().to_hex();
     db.upsert_channel(None, channel2, 101, 0, 0).await.unwrap();
 
     // Update watermark to include all test data
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = create_test_schema_with_state(&db, indexer_state.clone());
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     // Subscribe with sourceKeyId filter for channel 1 only
     let query = r#"
@@ -911,7 +855,7 @@ async fn test_channel_subscription_filter_excludes_non_matching_channels() {
 
     // Update channel 2 and publish event - should NOT appear in subscription (filtered out)
     let updated_balance2 = HoprBalance::from_str("3000 wxHOPR").unwrap();
-    let updated_channel2 = ChannelEntry::new(addr2, addr3, updated_balance2, 0, ChannelStatus::Open, 1);
+    let updated_channel2 = build_channel_entry(addr2, addr3, updated_balance2, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, updated_channel2, 110, 0, 0).await.unwrap();
 
     let channel2_update = create_channel_update_event(&db, &channel2_id).await.unwrap();
@@ -919,7 +863,7 @@ async fn test_channel_subscription_filter_excludes_non_matching_channels() {
 
     // Update channel 1 and publish event - should appear in subscription
     let updated_balance1 = HoprBalance::from_str("1500 wxHOPR").unwrap();
-    let updated_channel1 = ChannelEntry::new(addr1, addr2, updated_balance1, 0, ChannelStatus::Open, 1);
+    let updated_channel1 = build_channel_entry(addr1, addr2, updated_balance1, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, updated_channel1, 111, 0, 0).await.unwrap();
 
     let channel1_update = create_channel_update_event(&db, &channel1_id).await.unwrap();
@@ -946,7 +890,7 @@ async fn test_channel_subscription_handles_empty_database() {
     // Update watermark to include all test data
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -966,7 +910,6 @@ async fn test_channel_subscription_handles_empty_database() {
 #[tokio::test]
 async fn test_channel_subscription_multiple_concurrent_subscribers() {
     let db = BlokliDb::new_in_memory().await.unwrap();
-    let indexer_state = IndexerState::new(10, 100);
 
     // Create accounts
     let keypair1 = random_keypair();
@@ -985,14 +928,14 @@ async fn test_channel_subscription_multiple_concurrent_subscribers() {
 
     // Create channel
     let balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     let channel_id = channel.get_id().to_hex();
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
     // Update watermark to include all test data
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = create_test_schema_with_state(&db, indexer_state.clone());
+    let (schema, indexer_state) = common::create_test_schema(&db);
 
     let query = r#"
         subscription {
@@ -1022,7 +965,7 @@ async fn test_channel_subscription_multiple_concurrent_subscribers() {
 
     // Update channel balance
     let updated_balance = HoprBalance::from_str("2000 wxHOPR").unwrap();
-    let updated_channel = ChannelEntry::new(addr1, addr2, updated_balance, 0, ChannelStatus::Open, 1);
+    let updated_channel = build_channel_entry(addr1, addr2, updated_balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, updated_channel, 110, 0, 0).await.unwrap();
 
     // Publish event to trigger Phase 2 update for both subscribers
@@ -1072,13 +1015,13 @@ async fn test_channel_subscription_with_combined_filters() {
 
     // Create channel
     let balance = HoprBalance::from_str("1000 wxHOPR").unwrap();
-    let channel = ChannelEntry::new(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
+    let channel = build_channel_entry(addr1, addr2, balance, 0, ChannelStatus::Open, 1);
     db.upsert_channel(None, channel, 100, 0, 0).await.unwrap();
 
     // Update watermark to include all test data
     update_watermark(&db, 1000, 0, 0).await;
 
-    let schema = create_test_schema(&db);
+    let (schema, _indexer_state) = common::create_test_schema(&db);
 
     // Subscribe with multiple filters (sourceKeyId and destinationKeyId)
     let query = r#"

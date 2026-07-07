@@ -1,0 +1,15 @@
+---
+source: chain/api/src/transaction_store.rs
+expression: retrieved
+---
+id: 01020304-0506-0708-090a-0b0c0d0e0f10
+raw_transaction:
+  - 1
+  - 2
+  - 3
+transaction_hash: "0xabababababababababababababababababababababababababababababababab"
+status: Confirmed
+submitted_at: "2023-11-14T22:13:20Z"
+confirmed_at: "2023-11-14T22:13:20Z"
+error_message: ~
+safe_execution: ~

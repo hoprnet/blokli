@@ -277,7 +277,6 @@ pub struct Config {
     #[serde(default)]
     pub max_rpc_requests_per_sec: Option<u32>,
 
-    #[validate(range(min = 1))]
     #[default(10000)]
     #[serde(default = "default_max_block_range")]
     pub max_block_range: u32,
@@ -287,6 +286,9 @@ pub struct Config {
 
     #[serde(default)]
     pub api: ApiConfig,
+
+    #[serde(default)]
+    pub telemetry: TelemetryConfig,
 
     #[serde(default, rename = "contracts")]
     pub contracts_override: Option<ContractAddresses>,
@@ -325,6 +327,10 @@ impl Config {
             "  indexer.enable_logs_snapshot: {}\n",
             self.indexer.enable_logs_snapshot
         ));
+        output.push_str(&format!(
+            "  indexer.enable_safe_indexing: {}\n",
+            self.indexer.enable_safe_indexing
+        ));
 
         if let Some(snapshot_url) = &self.indexer.logs_snapshot_url {
             output.push_str(&format!("  indexer.logs_snapshot_url: {}\n", redact_url(snapshot_url)));
@@ -334,6 +340,11 @@ impl Config {
         output.push_str(&format!("  api.bind_address: {}\n", self.api.bind_address));
         output.push_str(&format!("  api.playground_enabled: {}\n", self.api.playground_enabled));
         output.push_str(&format!("  api.gas_multiplier: {}\n", self.api.gas_multiplier));
+        output.push_str(&format!("  api.max_query_depth: {}\n", self.api.max_query_depth));
+        output.push_str(&format!(
+            "  api.max_query_complexity: {}\n",
+            self.api.max_query_complexity
+        ));
         output.push_str(&format!(
             "  api.sse_keepalive.enabled: {}\n",
             self.api.sse_keepalive.enabled
@@ -352,9 +363,32 @@ impl Config {
             "  api.health.readiness_check_interval: {:?}\n",
             self.api.health.readiness_check_interval
         ));
+        output.push_str(&format!(
+            "  telemetry.metric_export_interval: {:?}\n",
+            self.telemetry.metric_export_interval
+        ));
+        output.push_str(&format!("  telemetry.otlp_signals: {}\n", self.telemetry.otlp_signals));
+        if let Some(otlp_endpoint) = &self.telemetry.otlp_endpoint {
+            output.push_str(&format!("  telemetry.otlp_endpoint: {}\n", redact_url(otlp_endpoint)));
+        }
 
         output
     }
+}
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
+#[serde(deny_unknown_fields)]
+pub struct TelemetryConfig {
+    #[serde(default)]
+    pub otlp_endpoint: Option<String>,
+
+    #[default(_code = "Duration::from_secs(15)")]
+    #[serde(default = "default_metric_export_interval", with = "humantime_serde")]
+    pub metric_export_interval: Duration,
+
+    #[default(_code = "default_otlp_signals()")]
+    #[serde(default = "default_otlp_signals")]
+    pub otlp_signals: String,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
@@ -367,6 +401,10 @@ pub struct IndexerConfig {
     #[default(false)]
     #[serde(default = "default_false")]
     pub enable_logs_snapshot: bool,
+
+    #[default(false)]
+    #[serde(default = "default_false")]
+    pub enable_safe_indexing: bool,
 
     #[serde(default)]
     pub logs_snapshot_url: Option<String>,
@@ -411,8 +449,8 @@ pub struct ApiConfig {
     #[serde(default = "default_api_bind_address")]
     pub bind_address: std::net::SocketAddr,
 
-    #[default(true)]
-    #[serde(default = "default_true")]
+    #[default(false)]
+    #[serde(default = "default_false")]
     pub playground_enabled: bool,
 
     #[default(1.0)]
@@ -424,6 +462,14 @@ pub struct ApiConfig {
 
     #[serde(default)]
     pub health: HealthConfig,
+
+    #[default(8)]
+    #[serde(default = "default_max_query_depth")]
+    pub max_query_depth: usize,
+
+    #[default(500)]
+    #[serde(default = "default_max_query_complexity")]
+    pub max_query_complexity: usize,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize, smart_default::SmartDefault)]
@@ -462,7 +508,7 @@ pub struct HealthConfig {
 }
 
 fn default_api_bind_address() -> std::net::SocketAddr {
-    "0.0.0.0:8080".parse().unwrap()
+    "127.0.0.1:8080".parse().unwrap()
 }
 
 // Helper functions for serde defaults that respect SmartDefault values
@@ -502,6 +548,14 @@ fn default_sse_keepalive_text() -> String {
     "keep-alive".to_string()
 }
 
+fn default_max_query_depth() -> usize {
+    8
+}
+
+fn default_max_query_complexity() -> usize {
+    500
+}
+
 fn default_max_indexer_lag() -> u64 {
     10
 }
@@ -512,6 +566,14 @@ fn default_health_timeout() -> Duration {
 
 fn default_readiness_check_interval() -> Duration {
     Duration::from_secs(60)
+}
+
+fn default_metric_export_interval() -> Duration {
+    Duration::from_secs(15)
+}
+
+fn default_otlp_signals() -> String {
+    "metrics".to_string()
 }
 
 #[cfg(test)]
@@ -615,6 +677,21 @@ mod tests {
     }
 
     #[test]
+    fn test_telemetry_strict() {
+        let config = r#"
+         [telemetry]
+         otlp_endpoint = "http://localhost:4318/v1/metrics"
+         unknown_telemetry_field = "bad"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let res: Result<Config, _> = toml::from_str(config);
+        assert!(res.is_err(), "Should fail on unknown telemetry field");
+    }
+
+    #[test]
     fn test_valid_postgres_config() {
         let config = r#"
          [database]
@@ -691,8 +768,6 @@ mod tests {
         let project_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
         let config_path = project_root.join("example-config.toml");
 
-        println!("Loading config from: {:?}", config_path);
-
         let config_content = fs::read_to_string(&config_path).expect("Failed to read example-config.toml");
 
         let config: Config = toml::from_str(&config_content).expect("Failed to parse example-config.toml");
@@ -711,12 +786,19 @@ mod tests {
 
         // Check indexer config
         assert!(config.indexer.fast_sync);
+        assert!(!config.indexer.enable_safe_indexing);
         assert_eq!(config.indexer.subscription.event_bus_capacity, 1000);
 
         // Check API config
         assert!(config.api.enabled);
-        assert_eq!(config.api.bind_address.to_string(), "0.0.0.0:8080");
+        assert_eq!(config.api.bind_address.to_string(), "127.0.0.1:8080");
         assert_eq!(config.api.gas_multiplier, 1.0);
+        assert_eq!(config.api.max_query_depth, 8);
+        assert_eq!(config.api.max_query_complexity, 500);
+
+        assert!(config.telemetry.otlp_endpoint.is_some());
+        assert_eq!(config.telemetry.metric_export_interval, Duration::from_secs(60));
+        assert_eq!(config.telemetry.otlp_signals, "metrics");
     }
 
     #[test]
@@ -736,6 +818,7 @@ mod tests {
         let cfg = res.unwrap();
         assert!(!cfg.indexer.fast_sync);
         assert!(!cfg.indexer.enable_logs_snapshot); // Default
+        assert!(!cfg.indexer.enable_safe_indexing); // Default
         assert_eq!(cfg.indexer.subscription.event_bus_capacity, 1000); // Default
         assert_eq!(cfg.indexer.subscription.batch_size, 100); // Default
     }
@@ -756,8 +839,8 @@ mod tests {
 
         let cfg = res.unwrap();
         assert!(!cfg.api.enabled);
-        assert!(cfg.api.playground_enabled); // Default
-        assert_eq!(cfg.api.bind_address.to_string(), "0.0.0.0:8080"); // Default
+        assert!(!cfg.api.playground_enabled); // Default
+        assert_eq!(cfg.api.bind_address.to_string(), "127.0.0.1:8080"); // Default
         assert_eq!(cfg.api.gas_multiplier, 1.0); // Default
         assert_eq!(cfg.api.health.max_indexer_lag, 10); // Default
         assert_eq!(cfg.api.health.timeout, Duration::from_millis(5000)); // Default
@@ -776,6 +859,35 @@ mod tests {
      "#;
         let cfg: Config = toml::from_str(config).expect("Failed to parse config");
         assert_eq!(cfg.api.gas_multiplier, 1.5);
+    }
+
+    #[test]
+    fn test_api_graphql_limits_defaults() {
+        let config = r#"
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let cfg: Config = toml::from_str(config).expect("Failed to parse config");
+        assert_eq!(cfg.api.max_query_depth, 8);
+        assert_eq!(cfg.api.max_query_complexity, 500);
+    }
+
+    #[test]
+    fn test_api_graphql_limits_override() {
+        let config = r#"
+         [api]
+         max_query_depth = 4
+         max_query_complexity = 200
+         [database]
+         type = "sqlite"
+         index_path = ":memory:"
+         logs_path = ":memory:"
+     "#;
+        let cfg: Config = toml::from_str(config).expect("Failed to parse config");
+        assert_eq!(cfg.api.max_query_depth, 4);
+        assert_eq!(cfg.api.max_query_complexity, 200);
     }
 
     #[test]

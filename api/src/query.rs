@@ -4,10 +4,11 @@ use std::{collections::HashMap, sync::Arc};
 
 use async_graphql::{Context, ID, Object, Result, SimpleObject, Union};
 use blokli_api_types::{
-    Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelsList, ChannelsResult,
-    ContractAddressMap, CountResult, HoprBalance, InvalidAddressError, MissingFilterError, ModuleAddress,
-    NativeBalance, QueryFailedError, RedeemedStats, RedeemedStatsFilter, Safe, SafeHoprAllowance, SafeSelectorInput, 
-    SafesBalance, SafesBalanceResult, Token,TokenValueString, Transaction, TransactionCount, UInt64,
+    Account, AccountsList, AccountsResult, ChainInfo, ChainInfoResult, Channel, ChannelStats, ChannelStatsResult,
+    ChannelsList, ChannelsResult, ContractAddressMap, CountResult, HoprBalance, InvalidAddressError,
+    MissingFilterError, ModuleAddress, NativeBalance, QueryFailedError, RedeemedStats, RedeemedStatsFilter, Safe,
+    SafeHoprAllowance, SafeSelectorInput, SafesBalance, SafesBalanceResult, Token, TokenValueString, TransactionCount,
+    UInt64,
 };
 use blokli_chain_api::transaction_store::TransactionStore;
 use blokli_chain_rpc::{HoprIndexerRpcOperations, HoprRpcOperations, rpc::RpcOperations};
@@ -17,11 +18,16 @@ use blokli_db_entity::{
     conversions::{
         account_aggregation::fetch_accounts_with_filters,
         channel_aggregation::{fetch_channel_stats as fetch_channel_stats_db, fetch_channels_with_state},
-        node_safe_registration::fetch_registered_nodes_for_safe,
+        node_safe_registration::fetch_registered_nodes_for_safes,
         redemptions_aggregation::fetch_aggregated_redeemed_stats,
+        safe_aggregation::{
+            CurrentSafe, fetch_all_current_safes, fetch_safe_addresses as fetch_safe_addresses_db,
+            fetch_safe_by_address as fetch_safe_by_address_db, fetch_safe_owners, fetch_safe_owners_for_safes,
+            fetch_safes_by_chain_key as fetch_safes_by_chain_key_db, fetch_safes_by_owner as fetch_safes_by_owner_db,
+        },
     },
     hopr_node_safe_registration,
-    views::{account_current, channel_current, safe_contract_current},
+    views::{account_current, channel_current},
 };
 use futures::future::try_join_all;
 use hopr_types::{
@@ -32,13 +38,12 @@ use hopr_types::{
         traits::{IntoEndian, ToHex},
     },
 };
-use sea_orm::{
-    ColumnTrait, ConnectionTrait, DatabaseBackend, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter,
-    Statement,
-};
+use sea_orm::{ColumnTrait, DatabaseConnection, EntityTrait, PaginatorTrait, QueryFilter};
 use tracing::warn;
 
-use crate::{errors, mutation::TransactionResult, validation::validate_eth_address};
+use crate::{
+    conversions::transaction_from_record, errors, mutation::TransactionResult, validation::validate_eth_address,
+};
 
 /// Result type for HOPR balance queries
 #[derive(Union)]
@@ -81,12 +86,31 @@ pub enum TransactionCountResult {
     QueryFailed(QueryFailedError),
 }
 
-/// Result type for single safe queries
+/// Result type for deprecated single-safe queries (`safe`, `safeByChainKey`, `safeByRegisteredNode`).
 #[derive(Union)]
 pub enum SafeResult {
     Safe(Safe),
     InvalidAddress(InvalidAddressError),
     QueryFailed(QueryFailedError),
+}
+
+/// Result type for safe-by-selector query
+#[derive(Union)]
+pub enum SafeByResult {
+    Safes(SafesList),
+    InvalidAddress(InvalidAddressError),
+    QueryFailed(QueryFailedError),
+}
+
+/// Response for the legacy `compatibility` query.
+#[derive(SimpleObject)]
+pub struct Compatibility {
+    /// Server version (semver).
+    pub api_version: String,
+    /// Semver range of compatible client versions. Always `"*"` — any client is accepted.
+    pub supported_client_versions: String,
+    /// Feature flags advertised by this server. Always empty since versioning is now header-based.
+    pub features: Vec<String>,
 }
 
 /// Success response for safes list query
@@ -180,13 +204,11 @@ fn scale_wei_by_multiplier(value: u128, multiplier: f64) -> u128 {
         / denominator
 }
 
-struct SafeContractCurrentRow {
-    address: Vec<u8>,
-    module_address: Vec<u8>,
-    chain_key: Vec<u8>,
-}
-
-fn safe_from_current_row(current: SafeContractCurrentRow, registered_nodes: Vec<String>) -> Result<Safe, String> {
+fn safe_from_current_row(
+    current: CurrentSafe,
+    registered_nodes: Vec<String>,
+    owners: Vec<String>,
+) -> Result<Safe, String> {
     let address = Address::try_from(&current.address[..]).map_err(|_| {
         format!(
             "Invalid address length in database: expected 20 bytes, got {}",
@@ -212,99 +234,104 @@ fn safe_from_current_row(current: SafeContractCurrentRow, registered_nodes: Vec<
         address: address.to_hex(),
         module_address: module_address.to_hex(),
         chain_key: chain_key.to_hex(),
+        threshold: current.threshold,
+        owners,
         registered_nodes,
     })
 }
 
-fn current_row_statement(backend: DatabaseBackend, column: &str, value: Vec<u8>) -> Statement {
-    let placeholder = if backend == DatabaseBackend::Postgres {
-        "$1"
+async fn registered_nodes_by_safe(
+    db: &DatabaseConnection,
+    safe_addresses: &[Vec<u8>],
+) -> std::result::Result<HashMap<Vec<u8>, Vec<String>>, QueryFailedError> {
+    Ok(fetch_registered_nodes_for_safes(db, safe_addresses)
+        .await
+        .map_err(|e| errors::query_failed("fetch registered nodes for list query", e))?
+        .into_iter()
+        .map(|(safe_address, nodes)| {
+            (
+                safe_address,
+                nodes.into_iter().map(|node_address| node_address.to_hex()).collect(),
+            )
+        })
+        .collect())
+}
+
+pub(crate) async fn owners_for_safe(
+    db: &DatabaseConnection,
+    safe_address: Vec<u8>,
+) -> std::result::Result<Vec<String>, QueryFailedError> {
+    fetch_safe_owners(db, &safe_address)
+        .await
+        .map_err(|e| errors::query_failed("fetch safe owners", e))?
+        .into_iter()
+        .map(|owner_address| Ok(owner_address.to_hex()))
+        .collect()
+}
+
+async fn owners_by_safe(
+    db: &DatabaseConnection,
+    safe_addresses: &[Vec<u8>],
+) -> std::result::Result<HashMap<Vec<u8>, Vec<String>>, QueryFailedError> {
+    Ok(fetch_safe_owners_for_safes(db, safe_addresses)
+        .await
+        .map_err(|e| errors::query_failed("fetch safe owners for list query", e))?
+        .into_iter()
+        .map(|(safe_address, owners)| (safe_address, owners.into_iter().map(|owner| owner.to_hex()).collect()))
+        .collect())
+}
+
+async fn build_safes_list_from_current_rows(
+    db: &DatabaseConnection,
+    current_rows: Vec<CurrentSafe>,
+) -> std::result::Result<SafesList, QueryFailedError> {
+    let safe_addresses = current_rows
+        .iter()
+        .map(|current| current.address.clone())
+        .collect::<Vec<_>>();
+    let owners_by_safe = owners_by_safe(db, &safe_addresses).await?;
+    let registered_nodes_by_safe = registered_nodes_by_safe(db, &safe_addresses).await?;
+    let safes = current_rows
+        .into_iter()
+        .map(|current| {
+            let registered_nodes = registered_nodes_by_safe
+                .get(&current.address)
+                .cloned()
+                .unwrap_or_default();
+            let owners = owners_by_safe.get(&current.address).cloned().unwrap_or_default();
+            safe_from_current_row(current, registered_nodes, owners)
+        })
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|e| errors::invalid_db_data("safe addresses", &e))?;
+    Ok(SafesList { safes })
+}
+
+async fn build_safe_by_result_from_current_rows(
+    db: &DatabaseConnection,
+    current_rows: Vec<CurrentSafe>,
+) -> SafeByResult {
+    match build_safes_list_from_current_rows(db, current_rows).await {
+        Ok(safes) => SafeByResult::Safes(safes),
+        Err(e) => SafeByResult::QueryFailed(e),
+    }
+}
+
+/// Maximum number of safes `safesBalance` will fan out RPC balance calls for in a single request.
+/// Bounds RPC load; over this, the caller must narrow the query with `owner_address`.
+const SAFES_BALANCE_MAX_SAFES: usize = 1000;
+
+/// Enforces the [`SAFES_BALANCE_MAX_SAFES`] cap on the number of safes a single `safesBalance`
+/// request may fan out RPC calls for. Returns an error to surface to the caller when exceeded.
+fn check_safes_balance_cap(count: usize) -> std::result::Result<(), QueryFailedError> {
+    if count > SAFES_BALANCE_MAX_SAFES {
+        Err(errors::limit_exceeded("safes balance", count, SAFES_BALANCE_MAX_SAFES))
     } else {
-        "?"
-    };
-    let sql = format!(
-        "SELECT address, module_address, chain_key FROM safe_contract_current WHERE {} = {}",
-        column, placeholder
-    );
-    Statement::from_sql_and_values(backend, sql, vec![value.into()])
-}
-
-async fn fetch_safe_addresses(
-    db: &DatabaseConnection,
-    owner_chain_key: Option<Vec<u8>>,
-) -> Result<Vec<Vec<u8>>, sea_orm::DbErr> {
-    let mut query = safe_contract_current::Entity::find();
-    if let Some(chain_key_bytes) = owner_chain_key {
-        query = query.filter(safe_contract_current::Column::ChainKey.eq(chain_key_bytes));
-    }
-    Ok(query.all(db).await?.into_iter().map(|row| row.address).collect())
-}
-
-/// Fetch a Safe contract by its address with current (latest) state
-///
-/// Retrieves the safe identity and joins with the most recent state entry.
-async fn fetch_safe_by_address(
-    db: &DatabaseConnection,
-    safe_address_bytes: Vec<u8>,
-) -> Result<Option<SafeContractCurrentRow>, sea_orm::DbErr> {
-    let stmt = current_row_statement(db.get_database_backend(), "address", safe_address_bytes);
-    let row = db.query_one_raw(stmt).await?;
-
-    let row = match row {
-        Some(row) => row,
-        None => return Ok(None),
-    };
-
-    Ok(Some(SafeContractCurrentRow {
-        address: row.try_get("", "address")?,
-        module_address: row.try_get("", "module_address")?,
-        chain_key: row.try_get("", "chain_key")?,
-    }))
-}
-
-/// Fetch a Safe contract by chain key with current (latest) state
-///
-/// Searches for a state entry with the given chain key, then retrieves the identity.
-async fn fetch_safe_by_chain_key(
-    db: &DatabaseConnection,
-    chain_key_bytes: Vec<u8>,
-) -> Result<Option<SafeContractCurrentRow>, sea_orm::DbErr> {
-    let stmt = current_row_statement(db.get_database_backend(), "chain_key", chain_key_bytes);
-    let row = db.query_one_raw(stmt).await?;
-
-    let row = match row {
-        Some(row) => row,
-        None => return Ok(None),
-    };
-
-    Ok(Some(SafeContractCurrentRow {
-        address: row.try_get("", "address")?,
-        module_address: row.try_get("", "module_address")?,
-        chain_key: row.try_get("", "chain_key")?,
-    }))
-}
-
-async fn registered_nodes_for_safe(db: &DatabaseConnection, safe_address: Vec<u8>) -> Vec<String> {
-    match fetch_registered_nodes_for_safe(db, &safe_address).await {
-        Ok(nodes) => nodes.into_iter().map(|addr| addr.to_hex()).collect(),
-        Err(e) => {
-            warn!(
-                error = %e,
-                "Failed to fetch registered nodes for safe, returning empty list"
-            );
-            Vec::new()
-        }
-    }
-}
-
-fn safe_result_from_row(current: SafeContractCurrentRow, registered_nodes: Vec<String>) -> SafeResult {
-    match safe_from_current_row(current, registered_nodes) {
-        Ok(safe_data) => SafeResult::Safe(safe_data),
-        Err(e) => SafeResult::QueryFailed(errors::invalid_db_data("safe addresses", &e)),
+        Ok(())
     }
 }
 
 /// Root query type providing read-only access to indexed blockchain data
+#[derive(Default)]
 pub struct QueryRoot;
 
 #[Object]
@@ -698,7 +725,7 @@ impl QueryRoot {
     ///
     /// This query makes a direct RPC call to the blockchain to get a current token balance.
     /// No database storage is used - balance is fetched directly from the chain.
-    #[graphql(name = "hoprBalance")]
+    #[graphql(name = "hoprBalance", complexity = 50)]
     async fn hopr_balance(
         &self,
         ctx: &Context<'_>,
@@ -751,7 +778,7 @@ impl QueryRoot {
     ///
     /// This query makes a direct RPC call to the blockchain to get the current native token (xDAI) balance.
     /// No database storage is used - balance is fetched directly from the chain.
-    #[graphql(name = "nativeBalance")]
+    #[graphql(name = "nativeBalance", complexity = 50)]
     async fn native_balance(
         &self,
         ctx: &Context<'_>,
@@ -791,7 +818,7 @@ impl QueryRoot {
     ///
     /// This query makes a direct RPC call to the blockchain to get the current allowance.
     /// No database storage is used - allowance is fetched directly from the chain.
-    #[graphql(name = "safeHoprAllowance")]
+    #[graphql(name = "safeHoprAllowance", complexity = 50)]
     async fn safe_hopr_allowance(
         &self,
         ctx: &Context<'_>,
@@ -831,7 +858,7 @@ impl QueryRoot {
     /// Retrieve aggregated TicketRedeemed statistics filtered by safe, node, or both.
     ///
     /// At least one filter field must be provided. If both are provided, both filters are applied.
-    #[graphql(name = "ticketRedemptionStats")]
+    #[graphql(name = "ticketRedemptionStats", complexity = 100)]
     async fn ticket_redemption_stats(
         &self,
         ctx: &Context<'_>,
@@ -899,6 +926,8 @@ impl QueryRoot {
         Ok(RedeemedStatsResult::RedeemedStats(RedeemedStats {
             redeemed_amount: TokenValueString(stats.redeemed_amount.to_string()),
             redemption_count: UInt64(stats.redemption_count),
+            rejected_amount: TokenValueString(stats.rejected_amount.to_string()),
+            rejection_count: UInt64(stats.rejection_count),
         }))
     }
 
@@ -940,6 +969,7 @@ impl QueryRoot {
     ///     TransactionCountResult::QueryFailed(err) => panic!("query failed: {}", err.message),
     /// }
     /// ```
+    #[graphql(complexity = 50)]
     async fn transaction_count(
         &self,
         ctx: &Context<'_>,
@@ -978,42 +1008,49 @@ impl QueryRoot {
         ctx: &Context<'_>,
         #[graphql(desc = "Selector type for safe lookup")] selector: SafeSelectorInput,
         #[graphql(desc = "Address value for the selector (hexadecimal format)")] address: String,
-    ) -> Result<Option<SafeResult>> {
+    ) -> Result<Option<SafeByResult>> {
         let db = ctx.data::<DatabaseConnection>()?;
 
         match selector {
             SafeSelectorInput::Address => {
                 let safe_address = match parse_eth_address(address) {
                     Ok(addr) => addr.as_ref().to_vec(),
-                    Err(e) => return Ok(Some(SafeResult::InvalidAddress(e))),
+                    Err(e) => return Ok(Some(SafeByResult::InvalidAddress(e))),
                 };
 
-                match fetch_safe_by_address(db, safe_address.clone()).await {
-                    Ok(Some(current)) => Ok(Some(safe_result_from_row(
-                        current,
-                        registered_nodes_for_safe(db, safe_address).await,
-                    ))),
+                match fetch_safe_by_address_db(db, &safe_address).await {
+                    Ok(Some(current)) => Ok(Some(build_safe_by_result_from_current_rows(db, vec![current]).await)),
                     Ok(None) => Ok(None),
-                    Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed("fetch safe", e)))),
+                    Err(e) => Ok(Some(SafeByResult::QueryFailed(errors::query_failed("fetch safe", e)))),
+                }
+            }
+
+            SafeSelectorInput::Owner => {
+                let owner_address = match parse_eth_address(address) {
+                    Ok(addr) => addr.as_ref().to_vec(),
+                    Err(e) => return Ok(Some(SafeByResult::InvalidAddress(e))),
+                };
+
+                match fetch_safes_by_owner_db(db, &owner_address).await {
+                    Ok(safes) if safes.is_empty() => Ok(None),
+                    Ok(safes) => Ok(Some(build_safe_by_result_from_current_rows(db, safes).await)),
+                    Err(e) => Ok(Some(SafeByResult::QueryFailed(errors::query_failed(
+                        "fetch safe by owner",
+                        e,
+                    )))),
                 }
             }
 
             SafeSelectorInput::ChainKey => {
-                let chain_key_address = match parse_eth_address(address) {
+                let chain_key = match parse_eth_address(address) {
                     Ok(addr) => addr.as_ref().to_vec(),
-                    Err(e) => return Ok(Some(SafeResult::InvalidAddress(e))),
+                    Err(e) => return Ok(Some(SafeByResult::InvalidAddress(e))),
                 };
 
-                match fetch_safe_by_chain_key(db, chain_key_address).await {
-                    Ok(Some(current)) => {
-                        let safe_address = current.address.clone();
-                        Ok(Some(safe_result_from_row(
-                            current,
-                            registered_nodes_for_safe(db, safe_address).await,
-                        )))
-                    }
-                    Ok(None) => Ok(None),
-                    Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed(
+                match fetch_safes_by_chain_key_db(db, &chain_key).await {
+                    Ok(safes) if safes.is_empty() => Ok(None),
+                    Ok(safes) => Ok(Some(build_safe_by_result_from_current_rows(db, safes).await)),
+                    Err(e) => Ok(Some(SafeByResult::QueryFailed(errors::query_failed(
                         "fetch safe by chain key",
                         e,
                     )))),
@@ -1023,7 +1060,7 @@ impl QueryRoot {
             SafeSelectorInput::RegisteredNode => {
                 let node_address = match parse_eth_address(address) {
                     Ok(addr) => addr.as_ref().to_vec(),
-                    Err(e) => return Ok(Some(SafeResult::InvalidAddress(e))),
+                    Err(e) => return Ok(Some(SafeByResult::InvalidAddress(e))),
                 };
 
                 let registration = match hopr_node_safe_registration::Entity::find()
@@ -1034,23 +1071,20 @@ impl QueryRoot {
                     Ok(Some(reg)) => reg,
                     Ok(None) => return Ok(None),
                     Err(e) => {
-                        return Ok(Some(SafeResult::QueryFailed(errors::query_failed(
+                        return Ok(Some(SafeByResult::QueryFailed(errors::query_failed(
                             "fetch safe by registered node",
                             e,
                         ))));
                     }
                 };
 
-                match fetch_safe_by_address(db, registration.safe_address.clone()).await {
-                    Ok(Some(current)) => Ok(Some(safe_result_from_row(
-                        current,
-                        registered_nodes_for_safe(db, registration.safe_address).await,
-                    ))),
-                    Ok(None) => Ok(Some(SafeResult::QueryFailed(errors::query_failed(
+                match fetch_safe_by_address_db(db, &registration.safe_address).await {
+                    Ok(Some(current)) => Ok(Some(build_safe_by_result_from_current_rows(db, vec![current]).await)),
+                    Ok(None) => Ok(Some(SafeByResult::QueryFailed(errors::query_failed(
                         "fetch safe by registered node",
                         "Safe not found for registered node",
                     )))),
-                    Err(e) => Ok(Some(SafeResult::QueryFailed(errors::query_failed(
+                    Err(e) => Ok(Some(SafeByResult::QueryFailed(errors::query_failed(
                         "fetch safe by registered node",
                         e,
                     )))),
@@ -1090,10 +1124,15 @@ impl QueryRoot {
         ctx: &Context<'_>,
         #[graphql(desc = "Safe contract address to query (hexadecimal format)")] address: String,
     ) -> Result<Option<SafeResult>> {
-        self.safe_by(ctx, SafeSelectorInput::Address, address).await
+        match self.safe_by(ctx, SafeSelectorInput::Address, address).await? {
+            Some(SafeByResult::Safes(mut safes)) => Ok(safes.safes.drain(..).next().map(SafeResult::Safe)),
+            Some(SafeByResult::InvalidAddress(e)) => Ok(Some(SafeResult::InvalidAddress(e))),
+            Some(SafeByResult::QueryFailed(e)) => Ok(Some(SafeResult::QueryFailed(e))),
+            None => Ok(None),
+        }
     }
 
-    /// Finds a Safe by its chain key (owner address) given as a hexadecimal string.
+    /// Finds a Safe by chain key using the deprecated `safeByChainKey` resolver.
     ///
     /// The function validates the provided `chain_key` as an Ethereum-style hex address and returns one of the GraphQL
     /// union variants describing the outcome:
@@ -1109,8 +1148,8 @@ impl QueryRoot {
     /// # Returns
     ///
     /// `Some(SafeResult::Safe)` with the found `Safe` if a record exists; `None` if no record exists;
-    /// `Some(SafeResult::InvalidAddress)` if the chain key format is invalid; `Some(SafeResult::QueryFailed)` if the
-    /// database query fails.
+    /// `Some(SafeResult::InvalidAddress)` if the chain key format is invalid; `Some(SafeResult::QueryFailed)` if
+    /// the database query fails.
     ///
     /// # Examples
     ///
@@ -1130,7 +1169,12 @@ impl QueryRoot {
         ctx: &Context<'_>,
         #[graphql(desc = "Chain key to query (hexadecimal format)")] chain_key: String,
     ) -> Result<Option<SafeResult>> {
-        self.safe_by(ctx, SafeSelectorInput::ChainKey, chain_key).await
+        match self.safe_by(ctx, SafeSelectorInput::ChainKey, chain_key).await? {
+            Some(SafeByResult::Safes(mut safes)) => Ok(safes.safes.drain(..).next().map(SafeResult::Safe)),
+            Some(SafeByResult::InvalidAddress(e)) => Ok(Some(SafeResult::InvalidAddress(e))),
+            Some(SafeByResult::QueryFailed(e)) => Ok(Some(SafeResult::QueryFailed(e))),
+            None => Ok(None),
+        }
     }
 
     /// Fetches a Safe contract by registered node address.
@@ -1175,7 +1219,12 @@ impl QueryRoot {
         ctx: &Context<'_>,
         #[graphql(name = "chainKey")] chain_key: String,
     ) -> Result<Option<SafeResult>> {
-        self.safe_by(ctx, SafeSelectorInput::RegisteredNode, chain_key).await
+        match self.safe_by(ctx, SafeSelectorInput::RegisteredNode, chain_key).await? {
+            Some(SafeByResult::Safes(mut safes)) => Ok(safes.safes.drain(..).next().map(SafeResult::Safe)),
+            Some(SafeByResult::InvalidAddress(e)) => Ok(Some(SafeResult::InvalidAddress(e))),
+            Some(SafeByResult::QueryFailed(e)) => Ok(Some(SafeResult::QueryFailed(e))),
+            None => Ok(None),
+        }
     }
 
     /// Fetches all indexed Safe contracts.
@@ -1207,72 +1256,14 @@ impl QueryRoot {
     async fn safes(&self, ctx: &Context<'_>) -> Result<SafesResult> {
         let db = ctx.data::<DatabaseConnection>()?;
 
-        let stmt = Statement::from_string(
-            db.get_database_backend(),
-            "SELECT address, module_address, chain_key FROM safe_contract_current".to_string(),
-        );
-
-        let rows = match db.query_all_raw(stmt).await {
+        let current_rows = match fetch_all_current_safes(db).await {
             Ok(rows) => rows,
             Err(e) => return Ok(SafesResult::QueryFailed(errors::query_failed("fetch safes", e))),
         };
 
-        let mut current_rows = Vec::new();
-        for row in rows {
-            let current = SafeContractCurrentRow {
-                address: match row.try_get("", "address") {
-                    Ok(value) => value,
-                    Err(e) => return Ok(SafesResult::QueryFailed(errors::query_failed("fetch safes", e))),
-                },
-                module_address: match row.try_get("", "module_address") {
-                    Ok(value) => value,
-                    Err(e) => return Ok(SafesResult::QueryFailed(errors::query_failed("fetch safes", e))),
-                },
-                chain_key: match row.try_get("", "chain_key") {
-                    Ok(value) => value,
-                    Err(e) => return Ok(SafesResult::QueryFailed(errors::query_failed("fetch safes", e))),
-                },
-            };
-
-            current_rows.push(current);
-        }
-
-        // Fetch all registrations in a single query to avoid N+1
-        let all_registrations = match hopr_node_safe_registration::Entity::find().all(db).await {
-            Ok(registrations) => registrations,
-            Err(e) => {
-                return Ok(SafesResult::QueryFailed(errors::query_failed(
-                    "fetch safe registrations",
-                    e,
-                )));
-            }
-        };
-
-        // Group registrations by safe address
-        let mut registrations_by_safe: HashMap<Vec<u8>, Vec<String>> = HashMap::new();
-        for reg in all_registrations {
-            if let Ok(node_addr) = Address::try_from(reg.node_address.as_slice()) {
-                registrations_by_safe
-                    .entry(reg.safe_address.clone())
-                    .or_default()
-                    .push(node_addr.to_hex());
-            }
-        }
-
-        let safe_results: Result<Vec<Safe>, String> = current_rows
-            .into_iter()
-            .map(|current| {
-                let registered_nodes = registrations_by_safe
-                    .get(&current.address)
-                    .cloned()
-                    .unwrap_or_else(Vec::new);
-                safe_from_current_row(current, registered_nodes)
-            })
-            .collect();
-
-        match safe_results {
-            Ok(safe_list) => Ok(SafesResult::Safes(SafesList { safes: safe_list })),
-            Err(e) => Ok(SafesResult::QueryFailed(errors::invalid_db_data("safe addresses", &e))),
+        match build_safes_list_from_current_rows(db, current_rows).await {
+            Ok(safes) => Ok(SafesResult::Safes(safes)),
+            Err(e) => Ok(SafesResult::QueryFailed(e)),
         }
     }
 
@@ -1295,6 +1286,7 @@ impl QueryRoot {
     /// // Inspect returned `ChainInfo` in the GraphQL response
     /// # }
     /// ```
+    #[graphql(complexity = 50)]
     async fn chain_info(&self, ctx: &Context<'_>) -> ChainInfoResult {
         let db = match ctx.data::<DatabaseConnection>() {
             Ok(db) => db,
@@ -1503,10 +1495,24 @@ impl QueryRoot {
         "ok"
     }
 
+    /// Client compatibility information
+    ///
+    /// Legacy endpoint retained for backward compatibility with older clients.
+    /// Always reports `supported_client_versions = "*"` so any client version
+    /// that calls this query is considered compatible.
+    async fn compatibility(&self) -> Compatibility {
+        Compatibility {
+            api_version: env!("CARGO_PKG_VERSION").to_string(),
+            supported_client_versions: "*".to_string(),
+            features: vec![],
+        }
+    }
+
     /// Calculate the predicted module address for a Safe deployment
     ///
     /// Calls the HoprNodeStakeFactory.predictModuleAddress_1 function to compute
     /// the deterministic CREATE2 address for a HOPR node management module.
+    #[graphql(complexity = 50)]
     async fn calculate_module_address(
         &self,
         ctx: &Context<'_>,
@@ -1553,13 +1559,13 @@ impl QueryRoot {
 
     /// Sum the wxHOPR token balances across indexed safe contracts.
     ///
-    /// When `owner_address` is provided, restricts to safes whose current safe
-    /// contract chain key matches that owner address.
-    #[graphql(name = "safesBalance")]
+    /// When `owner_address` is provided, restricts to safes whose indexed owner
+    /// set currently contains that address.
+    #[graphql(name = "safesBalance", complexity = 100)]
     async fn safes_balance(
         &self,
         ctx: &Context<'_>,
-        #[graphql(desc = "Restrict to safes associated with this chain key (owner address, hexadecimal format)")]
+        #[graphql(desc = "Restrict to safes whose current owner set contains this address (hexadecimal format)")]
         owner_address: Option<String>,
     ) -> SafesBalanceResult {
         let parsed_owner_address = match parse_optional_eth_address(&owner_address) {
@@ -1575,7 +1581,7 @@ impl QueryRoot {
         };
 
         let mut safe_addresses =
-            match fetch_safe_addresses(db, parsed_owner_address.as_ref().map(|owner| owner.as_ref().to_vec())).await {
+            match fetch_safe_addresses_db(db, parsed_owner_address.as_ref().map(|owner| owner.as_ref())).await {
                 Ok(addresses) => addresses,
                 Err(e) => {
                     return SafesBalanceResult::QueryFailed(errors::query_failed(
@@ -1603,6 +1609,12 @@ impl QueryRoot {
                 balance: TokenValueString(PrimitiveHoprBalance::zero().to_string()),
                 count: safe_count,
             });
+        }
+
+        // Bound RPC fan-out: each safe triggers a get_hopr_balance call, so cap the count
+        // rather than firing an unbounded number of concurrent RPC requests.
+        if let Err(e) = check_safes_balance_cap(safe_addresses.len()) {
+            return SafesBalanceResult::QueryFailed(e);
         }
 
         let rpc = match ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>() {
@@ -1671,16 +1683,7 @@ impl QueryRoot {
 
         // Try to retrieve the transaction
         match store.get(uuid) {
-            Ok(record) => {
-                // Convert to GraphQL Transaction type
-                let transaction = Transaction {
-                    id: ID::from(record.id.to_string()),
-                    status: crate::conversions::store_status_to_graphql(record.status),
-                    submitted_at: record.submitted_at,
-                    transaction_hash: record.transaction_hash.into(),
-                };
-                Ok(Some(TransactionResult::Transaction(transaction)))
-            }
+            Ok(record) => Ok(Some(TransactionResult::Transaction(transaction_from_record(record)))),
             Err(_) => Ok(None), // Transaction not found
         }
     }
@@ -1688,7 +1691,57 @@ impl QueryRoot {
 
 #[cfg(test)]
 mod tests {
-    use super::scale_wei_by_multiplier;
+    use anyhow::anyhow;
+    use async_graphql::Schema;
+    use blokli_chain_types::ContractAddresses;
+    use blokli_db::{
+        BlokliDbGeneralModelOperations, TargetDb,
+        db::BlokliDb,
+        node_safe_registrations::BlokliDbNodeSafeRegistrationOperations,
+        safe_contracts::BlokliDbSafeContractOperations,
+        safe_history::{BlokliDbSafeHistoryOperations, SafeActivityKind},
+    };
+    use blokli_db_entity::conversions::safe_aggregation::{
+        CurrentSafe, fetch_safe_addresses, fetch_safe_threshold_by_address, fetch_safes_by_chain_key,
+        fetch_safes_by_owner,
+    };
+    use hopr_types::{
+        crypto::types::Hash,
+        primitive::{prelude::Address, traits::ToHex},
+    };
+
+    use super::{
+        QueryRoot, SAFES_BALANCE_MAX_SAFES, check_safes_balance_cap, owners_for_safe, safe_from_current_row,
+        scale_wei_by_multiplier,
+    };
+    use crate::{
+        errors,
+        schema::{ChainId, GasMultiplier, NetworkName},
+    };
+
+    fn random_address() -> Address {
+        Address::from(rand::random::<[u8; 20]>())
+    }
+
+    fn random_hash() -> Hash {
+        Hash::from(rand::random::<[u8; 32]>())
+    }
+
+    fn build_test_schema(
+        db: &BlokliDb,
+    ) -> Schema<QueryRoot, async_graphql::EmptyMutation, async_graphql::EmptySubscription> {
+        Schema::build(
+            QueryRoot,
+            async_graphql::EmptyMutation,
+            async_graphql::EmptySubscription,
+        )
+        .data(db.conn(TargetDb::Index).clone())
+        .data(ContractAddresses::default())
+        .data(ChainId(100))
+        .data(NetworkName("test".to_string()))
+        .data(GasMultiplier(1.0))
+        .finish()
+    }
 
     #[test]
     fn test_scale_wei_by_multiplier_identity() {
@@ -1791,6 +1844,326 @@ mod tests {
         assert!(
             !requires_filter_with_safe,
             "Should not require filter when safe_address is provided"
+        );
+    }
+
+    #[test]
+    fn test_safes_balance_cap_allows_count_at_limit() {
+        assert!(check_safes_balance_cap(0).is_ok());
+        assert!(check_safes_balance_cap(SAFES_BALANCE_MAX_SAFES - 1).is_ok());
+        assert!(check_safes_balance_cap(SAFES_BALANCE_MAX_SAFES).is_ok());
+    }
+
+    #[test]
+    fn test_safes_balance_cap_rejects_count_over_limit() {
+        let err =
+            check_safes_balance_cap(SAFES_BALANCE_MAX_SAFES + 1).expect_err("count over the cap must be rejected");
+        assert_eq!(err.code, errors::codes::LIMIT_EXCEEDED);
+        assert!(err.message.contains("safes balance limit exceeded"));
+    }
+
+    #[tokio::test]
+    async fn test_complexity_limit_rejects_weighted_fields() {
+        let schema = Schema::build(
+            QueryRoot,
+            async_graphql::EmptyMutation,
+            async_graphql::EmptySubscription,
+        )
+        .limit_complexity(10)
+        .finish();
+
+        let zero = "0x0000000000000000000000000000000000000000";
+        let query = format!(
+            r#"{{
+                a: hoprBalance(address: "{zero}") {{ __typename }}
+                b: nativeBalance(address: "{zero}") {{ __typename }}
+                c: safeHoprAllowance(address: "{zero}") {{ __typename }}
+                d: transactionCount(address: "{zero}") {{ __typename }}
+                e: chainInfo {{ __typename }}
+                f: safesBalance {{ __typename }}
+                g: ticketRedemptionStats(filter: {{}}) {{ __typename }}
+                h: calculateModuleAddress(owner: "{zero}", nonce: 0, safeAddress: "{zero}") {{ __typename }}
+            }}"#
+        );
+
+        let res = schema.execute(query).await;
+
+        assert!(!res.errors.is_empty());
+    }
+
+    #[tokio::test]
+    async fn test_safe_helpers_return_current_owners_and_threshold() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let safe_address = random_address();
+        let module_address = random_address();
+        let chain_key = random_address();
+        let owner_one = random_address();
+        let owner_two = random_address();
+
+        db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+            .await?;
+        db.upsert_safe_owner_state(None, safe_address, owner_one, true, 101, 0, 0)
+            .await?;
+        db.upsert_safe_owner_state(None, safe_address, owner_two, true, 102, 0, 0)
+            .await?;
+        db.record_safe_setup(
+            None,
+            safe_address,
+            random_hash(),
+            vec![owner_one, owner_two],
+            "2".to_string(),
+            Some(owner_one),
+            101,
+            0,
+            0,
+        )
+        .await?;
+        db.record_safe_activity(
+            None,
+            safe_address,
+            SafeActivityKind::ChangedThreshold,
+            random_hash(),
+            None,
+            None,
+            Some("3".to_string()),
+            None,
+            None,
+            105,
+            0,
+            0,
+        )
+        .await?;
+
+        let conn = db.conn(TargetDb::Index);
+
+        let mut owners = owners_for_safe(conn, safe_address.as_ref().to_vec())
+            .await
+            .map_err(|error| anyhow!("owners_for_safe failed: {} ({})", error.message, error.code))?;
+        owners.sort();
+        let mut expected_owners = vec![owner_one.to_hex(), owner_two.to_hex()];
+        expected_owners.sort();
+
+        assert_eq!(owners, expected_owners);
+        assert_eq!(
+            fetch_safe_threshold_by_address(conn, safe_address.as_ref())
+                .await
+                .map_err(|error| anyhow!("fetch_safe_threshold_by_address failed: {}", error))?,
+            Some("3".to_string())
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_safe_queries_filter_by_owner_membership() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let safe_address = random_address();
+        let module_address = random_address();
+        let chain_key = random_address();
+        let owner = random_address();
+        let unrelated_owner = random_address();
+
+        db.create_safe_contract(None, safe_address, module_address, chain_key, 100, 0, 0)
+            .await?;
+        db.upsert_safe_owner_state(None, safe_address, owner, true, 101, 0, 0)
+            .await?;
+        db.upsert_safe_owner_state(None, safe_address, unrelated_owner, false, 102, 0, 0)
+            .await?;
+
+        let conn = db.conn(TargetDb::Index);
+
+        let safe_addresses = fetch_safe_addresses(conn, Some(owner.as_ref()))
+            .await
+            .map_err(|error| anyhow!("fetch_safe_addresses failed: {}", error))?;
+        assert_eq!(safe_addresses, vec![safe_address.as_ref().to_vec()]);
+
+        let current_safe = fetch_safes_by_owner(conn, owner.as_ref())
+            .await?
+            .into_iter()
+            .next()
+            .expect("safe should exist for current owner");
+        assert_eq!(current_safe.address, safe_address.as_ref().to_vec());
+        assert_eq!(current_safe.module_address, module_address.as_ref().to_vec());
+        assert_eq!(current_safe.chain_key, chain_key.as_ref().to_vec());
+
+        let no_safe = fetch_safes_by_owner(conn, unrelated_owner.as_ref()).await?;
+        assert!(
+            no_safe.is_empty(),
+            "former owners should not match current-owner lookup"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_safe_by_owner_returns_prefetched_owners_and_registered_nodes() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let safe_one = random_address();
+        let safe_two = random_address();
+        let module_one = random_address();
+        let module_two = random_address();
+        let chain_key_one = random_address();
+        let chain_key_two = random_address();
+        let owner = random_address();
+        let extra_owner = random_address();
+        let node_one = random_address();
+        let node_two = random_address();
+
+        db.create_safe_contract(None, safe_one, module_one, chain_key_one, 100, 0, 0)
+            .await?;
+        db.create_safe_contract(None, safe_two, module_two, chain_key_two, 101, 0, 1)
+            .await?;
+        db.upsert_safe_owner_state(None, safe_one, owner, true, 102, 0, 0)
+            .await?;
+        db.upsert_safe_owner_state(None, safe_one, extra_owner, true, 103, 0, 0)
+            .await?;
+        db.upsert_safe_owner_state(None, safe_two, owner, true, 104, 0, 1)
+            .await?;
+        db.register_node_to_safe(None, safe_one, node_one, 105, 0, 0).await?;
+        db.register_node_to_safe(None, safe_two, node_two, 106, 0, 1).await?;
+
+        let schema = build_test_schema(&db);
+        let query = format!(
+            r#"
+            query {{
+              safeBy(selector: OWNER, address: "{}") {{
+                ... on SafesList {{
+                  safes {{
+                    address
+                    owners
+                    registeredNodes
+                  }}
+                }}
+              }}
+            }}
+            "#,
+            owner.to_hex()
+        );
+
+        let response = schema.execute(query).await;
+        let body = response.data.into_json()?;
+        let safes = body["safeBy"]["safes"]
+            .as_array()
+            .ok_or_else(|| anyhow!("expected safeBy.safes array"))?;
+        assert_eq!(safes.len(), 2);
+
+        let safe_one_hex = safe_one.to_hex();
+        let safe_two_hex = safe_two.to_hex();
+        let node_one_hex = node_one.to_hex();
+        let node_two_hex = node_two.to_hex();
+        let owner_hex = owner.to_hex();
+
+        let safe_one_result = safes
+            .iter()
+            .find(|safe| safe["address"] == safe_one_hex)
+            .ok_or_else(|| anyhow!("safe one not found in response"))?;
+        let safe_two_result = safes
+            .iter()
+            .find(|safe| safe["address"] == safe_two_hex)
+            .ok_or_else(|| anyhow!("safe two not found in response"))?;
+
+        assert!(
+            safe_one_result["owners"]
+                .as_array()
+                .is_some_and(|owners| owners.iter().any(|value| value == &owner_hex)),
+            "safe one should include owner in owners list"
+        );
+        assert_eq!(
+            safe_one_result["registeredNodes"].as_array(),
+            Some(&vec![serde_json::Value::String(node_one_hex)])
+        );
+        assert_eq!(
+            safe_two_result["registeredNodes"].as_array(),
+            Some(&vec![serde_json::Value::String(node_two_hex)])
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_safe_by_chain_key_uses_chain_key_lookup() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let safe = random_address();
+        let module = random_address();
+        let chain_key = random_address();
+        let owner = random_address();
+        let node = random_address();
+
+        db.create_safe_contract(None, safe, module, chain_key, 100, 0, 0)
+            .await?;
+        db.upsert_safe_owner_state(None, safe, owner, true, 101, 0, 0).await?;
+        db.register_node_to_safe(None, safe, node, 102, 0, 0).await?;
+
+        let conn = db.conn(TargetDb::Index);
+        let fetched = fetch_safes_by_chain_key(conn, chain_key.as_ref()).await?;
+        assert_eq!(fetched.len(), 1, "chain-key lookup should match one safe");
+        assert_eq!(fetched[0].address, safe.as_ref().to_vec());
+
+        let schema = build_test_schema(&db);
+        let query = format!(
+            r#"
+            query {{
+              safeBy(selector: CHAIN_KEY, address: "{}") {{
+                ... on SafesList {{
+                  safes {{
+                    address
+                    chainKey
+                    owners
+                    registeredNodes
+                  }}
+                }}
+              }}
+            }}
+            "#,
+            chain_key.to_hex()
+        );
+
+        let response = schema.execute(query).await;
+        let body = response.data.into_json()?;
+        let safes = body["safeBy"]["safes"]
+            .as_array()
+            .ok_or_else(|| anyhow!("expected safeBy.safes array"))?;
+        assert_eq!(safes.len(), 1);
+
+        let safe_item = &safes[0];
+        assert_eq!(safe_item["address"], safe.to_hex());
+        assert_eq!(safe_item["chainKey"], chain_key.to_hex());
+        assert!(
+            safe_item["owners"].as_array().is_some_and(|owners| owners
+                .iter()
+                .any(|value| value == &serde_json::Value::String(owner.to_hex()))),
+            "owners should include current owner"
+        );
+        assert_eq!(
+            safe_item["registeredNodes"].as_array(),
+            Some(&vec![serde_json::Value::String(node.to_hex())])
+        );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_safe_from_current_row_validates_address_lengths() {
+        let result = safe_from_current_row(
+            CurrentSafe {
+                address: vec![1; 20],
+                module_address: vec![2; 19],
+                chain_key: vec![3; 20],
+                threshold: Some("2".to_string()),
+            },
+            Vec::new(),
+            Vec::new(),
+        );
+
+        assert!(result.is_err());
+        assert!(
+            result
+                .expect_err("invalid module address length should fail")
+                .contains("Invalid module address length")
         );
     }
 }

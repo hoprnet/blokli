@@ -14,6 +14,26 @@
 let
   lib = pkgs.lib;
 
+  # pre-commit in nixpkgs bundles heavyweight test-only dependencies
+  # (dotnet-sdk, nodejs, go, coursier, …) into nativeBuildInputs via
+  # its preCheck string interpolation, even though doCheck is already
+  # false on Darwin. Filter them out so `direnv allow` / `nix develop`
+  # doesn't have to build dotnet from source.
+  pre-commit-lightweight = pkgs.pre-commit.overridePythonAttrs {
+    nativeCheckInputs = [ ];
+    doCheck = false;
+    doInstallCheck = false;
+    dontUsePytestCheck = true;
+    preCheck = "";
+    postCheck = "";
+  };
+
+  # Wrapper script that provides gawk to the generate-metrics-docs hook.
+  generateMetricsDocsWrapper = pkgs.writeShellScript "generate-metrics-docs-hook" ''
+    export PATH="${lib.makeBinPath [ pkgs.gawk ]}:$PATH"
+    exec bash .github/scripts/generate-metrics-docs.sh --fix
+  '';
+
   # Wrapper script that provides cargo and other tools to the export-db-schema hook.
   # Pre-commit system hooks run outside the devshell, so tools must be explicitly
   # added to PATH.
@@ -24,18 +44,21 @@ let
       echo "Skipping export-db-schema (nix build sandbox detected)"
       exit 0
     fi
-    export PATH="${lib.makeBinPath [
-      stableToolchain
-      pkgs.just
-      pkgs.sqlite
-      pkgs.pgformatter
-    ]}:$PATH"
+    export PATH="${
+      lib.makeBinPath [
+        stableToolchain
+        pkgs.just
+        pkgs.sqlite
+        pkgs.pgformatter
+      ]
+    }:$PATH"
     exec ${pkgs.just}/bin/just export-db-schema
   '';
 in
 
 pre-commit.lib.${system}.run {
   src = ./../..; # Root of the project
+  package = pre-commit-lightweight;
 
   # Configure the pre-commit hooks to run
   hooks = {
@@ -66,6 +89,15 @@ pre-commit.lib.${system}.run {
       pass_filenames = false;
     };
 
+    generate-metrics-docs = {
+      enable = true;
+      name = "METRICS.md must stay in sync with code";
+      entry = toString generateMetricsDocsWrapper;
+      files = "(METRICS\\.md|\\.rs)$";
+      pass_filenames = false;
+      language = "system";
+    };
+
     # Custom immutable files check (disabled by default)
     immutable-files = {
       enable = false;
@@ -74,10 +106,39 @@ pre-commit.lib.${system}.run {
       files = "";
       language = "system";
     };
-  };
 
-  # Tools available to the pre-commit environment
-  tools = pkgs;
+    renovate-config-validator = {
+      enable = true;
+      name = "Renovate config validator";
+      entry = "${pkgs.renovate}/bin/renovate-config-validator";
+      files = "renovate\\.json$";
+      language = "system";
+      pass_filenames = true;
+    };
+
+    actionlint = {
+      enable = true;
+      files = "^\\.github/workflows/.*\\.yaml$";
+    };
+
+    pinact = {
+      enable = true;
+      name = "pinact";
+      description = "Check GitHub Action refs are SHA-pinned and resolvable";
+      entry = "${pkgs.writeShellScript "pinact-check" ''
+        token="''${GITHUB_TOKEN:-''${GH_TOKEN:-$(${pkgs.gh}/bin/gh auth token 2>/dev/null || true)}}"
+        if [ -z "$token" ]; then
+          echo "pinact: skipping — no GITHUB_TOKEN/GH_TOKEN and gh not authenticated" >&2
+          exit 0
+        fi
+        export GITHUB_TOKEN="$token"
+        exec ${pkgs.pinact}/bin/pinact run --check
+      ''}";
+      files = "^\\.github/workflows/.*\\.ya?ml$";
+      language = "system";
+      pass_filenames = false;
+    };
+  };
 
   # Exclude certain paths from pre-commit checks
   excludes = [

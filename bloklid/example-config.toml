@@ -18,9 +18,10 @@ rpc_url = "http://localhost:8545"
 # If omitted, defaults to 100 req/sec. Set to 0 for unlimited, or a positive value to override the default.
 max_rpc_requests_per_sec = 0
 
-# Maximum block range for RPC queries when fetching logs (default: 10000)
-# Must be greater than 0. Lower values may be needed for some RPC providers
-# that impose limits on the number of blocks per query
+# Maximum block range ceiling for adaptive RPC log queries (default: 10000)
+# The effective range is learned from real eth_getLogs requests and reused
+# until the RPC endpoint rejects it. Set to 0 to auto-discover with the
+# default 10000-block ceiling.
 max_block_range = 10000
 
 # Optional contract address overrides
@@ -70,16 +71,46 @@ url = "postgresql://bloklid:password@localhost:5432/bloklid"
 # logs_path = "data/bloklid-logs.db"    # Use ":memory:" for in-memory database
 # max_connections = 10
 
+# OpenTelemetry export configuration
+[telemetry]
+# OTLP collector endpoint.
+# Leave this unset to disable OTLP export.
+# Transport is inferred from the scheme:
+# - http:// or https:// -> OTLP/HTTP
+# - grpc:// -> OTLP/gRPC
+# For OTLP/HTTP, use the collector base URL.
+# bloklid appends /v1/traces, /v1/logs, or /v1/metrics internally per signal.
+# For multi-signal export, prefer the collector gRPC endpoint
+# (for example "grpc://localhost:4317").
+otlp_endpoint = "http://localhost:4318"
+
+# Comma-separated OTLP signals to export (default: "metrics")
+# Supported values: "metrics", "traces", "logs"
+# Examples:
+# otlp_signals = "metrics"
+# otlp_signals = "metrics,traces,logs"
+otlp_signals = "metrics"
+
+# Interval between OTLP metric exports (default: 60s)
+# Must be greater than 0. Supports humantime syntax like "15s", "1m", or "500ms".
+# Runtime use is limited to OTLP metrics export. Current config validation still
+# requires a value greater than 0 whenever otlp_endpoint is set.
+metric_export_interval = "60s"
+
 # Indexer configuration
 [indexer]
 # Enable fast sync mode for initial synchronization
 fast_sync = true
 
-# Enable downloading logs snapshot for faster initial sync
+# Enable downloading a `hopr_logs.sql` snapshot archive for faster initial sync
 enable_logs_snapshot = false
 
 # URL to download logs snapshot from (optional)
 logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
+
+# Enable indexing of Safe contract events after a Safe has been discovered
+# Safe discovery via registry/stake-factory events remains enabled regardless
+enable_safe_indexing = false
 
 # GraphQL subscription behavior configuration
 [indexer.subscription]
@@ -100,17 +131,27 @@ batch_size = 100
 # Enable or disable the GraphQL API server (default: true)
 enabled = true
 
-# Address and port for the API server to bind to (default: "0.0.0.0:8080")
-bind_address = "0.0.0.0:8080"
+# Address and port for the API server to bind to (default: "127.0.0.1:8080")
+bind_address = "127.0.0.1:8080"
 
-# Enable GraphQL Playground for development and testing (default: true)
-playground_enabled = true
+# Enable the GraphQL Playground for local development only (default: false)
+playground_enabled = false
 
 # Multiplier applied to EIP-1559 gas estimates exposed by chainInfo
 # A value of 1.0 keeps RPC values unchanged; 1.5 increases maxFeePerGas and
 # maxPriorityFeePerGas by 50% (rounded up to the nearest wei).
 # Must be greater than or equal to 1.
 gas_multiplier = 1.0
+
+# Maximum GraphQL query nesting depth. Queries exceeding this are rejected.
+# Real queries reach depth ~4; the default of 8 gives ample headroom.
+max_query_depth = 8
+
+# Maximum GraphQL query complexity budget. Each field costs 1 point by default;
+# RPC-backed resolvers carry higher weights (see query.rs `complexity` attributes).
+# The default of 500 comfortably fits any real query while capping RPC fan-out
+# (e.g. aliased nativeBalance calls) to ~10 per request.
+max_query_complexity = 500
 
 # SSE keepalive configuration
 [api.sse_keepalive]

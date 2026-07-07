@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use hopr_types::primitive::{primitives::Address, traits::ToHex};
-use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter};
+use sea_orm::{ColumnTrait, ConnectionTrait, EntityTrait, QueryFilter, QueryOrder};
 
 use crate::{codegen::announcement, views::account_current};
 
@@ -46,26 +46,29 @@ where
     // Batch fetch all announcements
     let announcements = announcement::Entity::find()
         .filter(announcement::Column::AccountId.is_in(account_ids))
+        .order_by_desc(announcement::Column::PublishedBlock)
+        .order_by_desc(announcement::Column::PublishedTxIndex)
+        .order_by_desc(announcement::Column::PublishedLogIndex)
+        .order_by_desc(announcement::Column::Id)
         .all(conn)
         .await?;
 
-    // Group announcements by account_id
-    let mut announcements_by_account: HashMap<i64, Vec<String>> = HashMap::new();
+    let mut latest_announcement_by_account: HashMap<i64, String> = HashMap::new();
     for ann in announcements {
-        announcements_by_account
+        latest_announcement_by_account
             .entry(ann.account_id)
-            .or_default()
-            .push(ann.multiaddress);
+            .or_insert(ann.multiaddress);
     }
 
     // Aggregate all data
     current_accounts
         .into_iter()
         .map(|row| {
-            let multi_addresses = announcements_by_account
+            let multi_addresses = latest_announcement_by_account
                 .get(&row.account_id)
                 .cloned()
-                .unwrap_or_default();
+                .into_iter()
+                .collect();
 
             let chain_key_str = bytes_to_address_hex(&row.chain_key)?;
 

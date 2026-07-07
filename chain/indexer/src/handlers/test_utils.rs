@@ -32,7 +32,7 @@ pub(super) mod test_helpers {
         pub static ref STAKE_ADDRESS: Address = "4331eaa9542b6b034c43090d9ec1c2198758dbc3".parse().expect("lazy static address should be constructible");
         pub static ref CHANNELS_ADDR: Address = "bab20aea98368220baa4e3b7f151273ee71df93b".parse().expect("lazy static address should be constructible"); // just a dummy
         pub static ref TOKEN_ADDR: Address = "47d1677e018e79dcdd8a9c554466cb1556fa5007".parse().expect("lazy static address should be constructible"); // just a dummy
-        pub static ref XTOKEN_ADDR: Address = "47d1677e018e79dcdd8a9c554466cb1556fa5007".parse().expect("lazy static address should be constructible"); // just a dummy // TODO(xHOPR)
+        pub static ref XHOPR_TOKEN_ADDR: Address = "47d1677e018e79dcdd8a9c554466cb1556fa5007".parse().expect("lazy static address should be constructible"); // just a dummy // TODO(xHOPR)
         pub static ref NODE_SAFE_REGISTRY_ADDR: Address = "0dcd1bf9a1b36ce34237eeafef220932846bcd82".parse().expect("lazy static address should be constructible"); // just a dummy
         pub static ref ANNOUNCEMENTS_ADDR: Address = "11db4791bf45ef31a10ea4a1b5cb90f46cc72c7e".parse().expect("lazy static address should be constructible"); // just a dummy
         pub static ref TICKET_PRICE_ORACLE_ADDR: Address = "11db4391bf45ef31a10ea4a1b5cb90f46cc72c7e".parse().expect("lazy static address should be constructible"); // just a dummy
@@ -46,6 +46,7 @@ pub(super) mod test_helpers {
         impl HoprIndexerRpcOperations for IndexerRpcOperations {
             async fn block_number(&self) -> blokli_chain_rpc::errors::Result<u64>;
             async fn get_transaction_sender(&self, tx_hash: hopr_types::crypto::types::Hash) -> blokli_chain_rpc::errors::Result<Address>;
+            async fn get_transaction_bytes(&self, tx_hash: hopr_types::crypto::types::Hash) -> blokli_chain_rpc::errors::Result<Vec<u8>>;
 
             fn try_stream_logs<'a>(
                 &'a self,
@@ -53,6 +54,14 @@ pub(super) mod test_helpers {
                 filters: blokli_chain_rpc::FilterSet,
                 is_synced: bool,
             ) -> blokli_chain_rpc::errors::Result<std::pin::Pin<Box<dyn futures::Stream<Item=blokli_chain_rpc::BlockWithLogs> + Send + 'a> > >;
+
+            async fn get_logs_for_address(
+                &self,
+                address: Address,
+                topics: Vec<B256>,
+                from_block: u64,
+                to_block: u64,
+            ) -> blokli_chain_rpc::errors::Result<Vec<blokli_chain_rpc::Log>>;
 
             async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance>;
             async fn get_hopr_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<HoprBalance>;
@@ -82,6 +91,13 @@ pub(super) mod test_helpers {
             self.inner.get_transaction_sender(tx_hash).await
         }
 
+        async fn get_transaction_bytes(
+            &self,
+            tx_hash: hopr_types::crypto::types::Hash,
+        ) -> blokli_chain_rpc::errors::Result<Vec<u8>> {
+            self.inner.get_transaction_bytes(tx_hash).await
+        }
+
         fn try_stream_logs<'a>(
             &'a self,
             start_block_number: u64,
@@ -91,6 +107,18 @@ pub(super) mod test_helpers {
             std::pin::Pin<Box<dyn futures::Stream<Item = blokli_chain_rpc::BlockWithLogs> + Send + 'a>>,
         > {
             self.inner.try_stream_logs(start_block_number, filters, is_synced)
+        }
+
+        async fn get_logs_for_address(
+            &self,
+            address: Address,
+            topics: Vec<B256>,
+            from_block: u64,
+            to_block: u64,
+        ) -> blokli_chain_rpc::errors::Result<Vec<blokli_chain_rpc::Log>> {
+            self.inner
+                .get_logs_for_address(address, topics, from_block, to_block)
+                .await
         }
 
         async fn get_xdai_balance(&self, address: Address) -> blokli_chain_rpc::errors::Result<XDaiBalance> {
@@ -148,7 +176,6 @@ pub(super) mod test_helpers {
             ContractAddresses {
                 channels: *CHANNELS_ADDR,
                 token: *TOKEN_ADDR,
-                xtoken: *XTOKEN_ADDR,
                 node_safe_registry: *NODE_SAFE_REGISTRY_ADDR,
                 announcements: *ANNOUNCEMENTS_ADDR,
                 module_implementation: Default::default(),
@@ -156,10 +183,12 @@ pub(super) mod test_helpers {
                 ticket_price_oracle: *TICKET_PRICE_ORACLE_ADDR,
                 winning_probability_oracle: *WIN_PROB_ORACLE_ADDR,
                 node_stake_factory: Default::default(),
+                xhopr_token: *XHOPR_TOKEN_ADDR,
             },
             db,
             rpc_operations,
             indexer_state.clone(),
+            true,
         );
 
         (handlers, indexer_state, event_receiver)

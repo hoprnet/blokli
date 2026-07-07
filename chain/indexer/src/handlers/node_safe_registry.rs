@@ -7,21 +7,13 @@ use hopr_bindings::hopr_node_safe_registry::HoprNodeSafeRegistry::HoprNodeSafeRe
 use hopr_types::primitive::prelude::{Address, ToHex};
 use tracing::{debug, info, warn};
 
+#[cfg(all(feature = "telemetry", not(test)))]
+use super::increment_indexer_contract_log_count;
 use super::{ContractEventHandlers, helpers::construct_account_update};
 use crate::{
     errors::{CoreEthereumIndexerError, Result},
     state::IndexerEvent,
 };
-
-#[cfg(all(feature = "prometheus", not(test)))]
-lazy_static::lazy_static! {
-    static ref METRIC_INDEXER_LOG_COUNTERS: hopr_metrics::MultiCounter =
-        hopr_metrics::MultiCounter::new(
-            "hopr_indexer_contract_log_count",
-            "Counts of different HOPR contract logs processed by the Indexer",
-            &["contract"]
-    ).unwrap();
-}
 
 impl<T, Db> ContractEventHandlers<T, Db>
 where
@@ -113,8 +105,8 @@ where
         event: HoprNodeSafeRegistryEvents,
         is_synced: bool,
     ) -> Result<Vec<IndexerEvent>> {
-        #[cfg(all(feature = "prometheus", not(test)))]
-        METRIC_INDEXER_LOG_COUNTERS.increment(&["node_safe_registry"]);
+        #[cfg(all(feature = "telemetry", not(test)))]
+        increment_indexer_contract_log_count("node_safe_registry");
 
         let mut events = Vec::new();
 
@@ -136,21 +128,15 @@ where
                 );
 
                 // Check for existing safe entry with non-zero module address
-                let existing_module = match self.db.get_safe_contract_by_address(Some(tx), safe_addr).await {
-                    Ok(Some(safe)) => {
+                let existing_safe = self.db.get_safe_contract_by_address(Some(tx), safe_addr).await?;
+                let safe_previously_known = existing_safe.is_some();
+                let existing_module = match existing_safe {
+                    Some(safe) => {
                         let module = Address::try_from(safe.module_address.as_slice()).ok();
                         // Only use if non-zero
                         module.filter(|addr| *addr != Address::default())
                     }
-                    Ok(None) => None,
-                    Err(e) => {
-                        warn!(
-                            safe_address = %safe_addr.to_hex(),
-                            error = %e,
-                            "DB lookup failed for safe address, will fetch module from RPC"
-                        );
-                        None
-                    }
+                    None => None,
                 };
 
                 let module_addr = if let Some(addr) = existing_module {
@@ -198,6 +184,16 @@ where
                     .db
                     .register_node_to_safe(Some(tx), safe_addr, node_addr, block, tx_index, log_index)
                     .await?;
+
+                if !safe_previously_known && is_synced {
+                    self.backfill_safe_logs_in_discovery_block(tx, safe_addr, block).await?;
+                    let epoch = self.indexer_state.mark_safe_filters_dirty();
+                    info!(
+                        safe_address = %safe_addr.to_hex(),
+                        epoch,
+                        "Backfilled discovery-block Safe logs and marked Safe filters for refresh after new Safe registration"
+                    );
+                }
 
                 self.update_account_safe_address(tx, node_addr, Some(safe_addr), block, tx_index, log_index)
                     .await?;
@@ -331,6 +327,9 @@ mod tests {
         rpc_operations
             .expect_get_hopr_module_from_safe()
             .returning(move |_| Ok(Some(module_address)));
+        rpc_operations
+            .expect_get_logs_for_address()
+            .returning(|_, _, _, _| Ok(vec![]));
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
@@ -523,6 +522,9 @@ mod tests {
         rpc_operations
             .expect_get_hopr_module_from_safe()
             .returning(|_| Ok(None));
+        rpc_operations
+            .expect_get_logs_for_address()
+            .returning(|_, _, _, _| Ok(vec![]));
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
@@ -579,6 +581,10 @@ mod tests {
         rpc_operations
             .expect_get_hopr_module_from_safe()
             .returning(move |_| Ok(Some(module_address)));
+        rpc_operations
+            .expect_get_logs_for_address()
+            .times(1)
+            .returning(|_, _, _, _| Ok(vec![]));
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),
@@ -737,6 +743,10 @@ mod tests {
         rpc_operations
             .expect_get_hopr_module_from_safe()
             .returning(|_| Ok(None));
+        rpc_operations
+            .expect_get_logs_for_address()
+            .times(2)
+            .returning(|_, _, _, _| Ok(vec![]));
 
         let clonable_rpc_operations = ClonableMockOperations {
             inner: Arc::new(rpc_operations),

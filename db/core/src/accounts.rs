@@ -261,26 +261,41 @@ impl BlokliDbAccountOperations for BlokliDb {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
-                    // Step 1: Insert or find account identity record
-                    let account_id = if let Some(existing_account) = account::Entity::find()
-                        .filter(account::Column::ChainKey.eq(chain_key.as_ref().to_vec()))
-                        .one(tx.as_ref())
-                        .await?
+                    // Step 1: Insert account identity or reuse existing one
+                    let account_model = account::ActiveModel {
+                        id: Set(key_id as i64),
+                        chain_key: Set(chain_key.as_ref().to_vec()),
+                        packet_key: Set(hex::encode(packet_key.as_ref())),
+                        published_block: Set(block_i64),
+                        published_tx_index: Set(tx_index_i64),
+                        published_log_index: Set(log_index_i64),
+                    };
+                    let account_id = match Account::insert(account_model)
+                        .on_conflict(
+                            OnConflict::columns([account::Column::ChainKey, account::Column::PacketKey])
+                                .do_nothing()
+                                .to_owned(),
+                        )
+                        .exec(tx.as_ref())
+                        .await
                     {
-                        // Account exists - we're adding a new state
-                        existing_account.id
-                    } else {
-                        // Account doesn't exist - create identity + initial state
-                        let account_model = account::ActiveModel {
-                            id: Set(key_id as i64),
-                            chain_key: Set(chain_key.as_ref().to_vec()),
-                            packet_key: Set(hex::encode(packet_key.as_ref())),
-                            published_block: Set(block_i64),
-                            published_tx_index: Set(tx_index_i64),
-                            published_log_index: Set(log_index_i64),
-                        };
-                        let inserted = account_model.insert(tx.as_ref()).await?;
-                        inserted.id
+                        Ok(insert_result) => insert_result.last_insert_id,
+                        Err(DbErr::RecordNotInserted) => {
+                            account::Entity::find()
+                                .filter(account::Column::ChainKey.eq(chain_key.as_ref().to_vec()))
+                                .filter(account::Column::PacketKey.eq(hex::encode(packet_key.as_ref())))
+                                .one(tx.as_ref())
+                                .await?
+                                .ok_or_else(|| {
+                                    DbSqlError::LogicalError(
+                                        "Account insert was skipped but account record was not found for chain_key \
+                                         and packet_key"
+                                            .to_string(),
+                                    )
+                                })?
+                                .id
+                        }
+                        Err(e) => return Err(e.into()),
                     };
 
                     // Step 2: Insert account_state record with state information
@@ -294,7 +309,26 @@ impl BlokliDbAccountOperations for BlokliDb {
                         ..Default::default()
                     };
 
-                    AccountState::insert(state_model).exec(tx.as_ref()).await?;
+                    match AccountState::insert(state_model)
+                        .on_conflict(
+                            OnConflict::columns([
+                                account_state::Column::AccountId,
+                                account_state::Column::PublishedBlock,
+                                account_state::Column::PublishedTxIndex,
+                                account_state::Column::PublishedLogIndex,
+                            ])
+                            .do_nothing()
+                            .to_owned(),
+                        )
+                        .exec(tx.as_ref())
+                        .await
+                    {
+                        Ok(_) => {}
+                        Err(DbErr::RecordNotInserted) => {
+                            // Idempotent: record already exists from a previous incomplete sync
+                        }
+                        Err(e) => return Err(e.into()),
+                    }
 
                     Ok::<_, DbSqlError>(())
                 })
@@ -1570,6 +1604,114 @@ mod tests {
             0.into(),
             "key_id should still be set even without safe_address"
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upsert_account_idempotent_on_same_position() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let chain_key = ChainKeypair::random().public().to_address();
+        let packet_key = *OffchainKeypair::random().public();
+        let safe_addr = Address::from(hopr_types::crypto_random::random_bytes());
+
+        // Insert account state at (block=100, tx_index=5, log_index=3)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr), 100, 5, 3)
+            .await?;
+
+        // Insert again with the same position - should succeed (idempotent)
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr), 100, 5, 3)
+            .await?;
+
+        // Verify only one state record exists
+        let history = db.get_account_history(None, chain_key).await?;
+        assert_eq!(
+            1,
+            history.len(),
+            "should have exactly 1 state record despite double insert"
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upsert_account_reuses_existing_identity_after_conflict() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let chain_key = ChainKeypair::random().public().to_address();
+        let packet_key = *OffchainKeypair::random().public();
+        let safe_addr_1 = Address::from(hopr_types::crypto_random::random_bytes());
+        let safe_addr_2 = Address::from(hopr_types::crypto_random::random_bytes());
+
+        db.upsert_account(None, 1, chain_key, packet_key, Some(safe_addr_1), 100, 0, 0)
+            .await?;
+        let initial_account = db.get_account(None, chain_key).await?.expect("account should exist");
+
+        db.upsert_account(None, 999, chain_key, packet_key, Some(safe_addr_2), 200, 0, 0)
+            .await?;
+
+        let account = db.get_account(None, chain_key).await?.expect("account should exist");
+        assert_eq!(
+            initial_account.key_id, account.key_id,
+            "existing account identity key_id must be reused"
+        );
+
+        let history = db.get_account_history(None, chain_key).await?;
+        assert_eq!(2, history.len(), "both state records should be present");
+        assert_eq!(Some(safe_addr_2), history.last().and_then(|entry| entry.safe_address));
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_upsert_account_conflict_lookup_uses_chain_and_packet_key() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+
+        let chain_key = ChainKeypair::random().public().to_address();
+        let packet_key_1 = *OffchainKeypair::random().public();
+        let packet_key_2 = *OffchainKeypair::random().public();
+        let safe_addr_1 = Address::from(hopr_types::crypto_random::random_bytes());
+        let safe_addr_2 = Address::from(hopr_types::crypto_random::random_bytes());
+
+        db.upsert_account(None, 1, chain_key, packet_key_1, Some(safe_addr_1), 100, 0, 0)
+            .await?;
+        db.upsert_account(None, 2, chain_key, packet_key_2, Some(safe_addr_2), 101, 0, 0)
+            .await?;
+
+        let initial_1 = db
+            .get_account(None, packet_key_1)
+            .await?
+            .expect("account for packet key 1 should exist");
+        let initial_2 = db
+            .get_account(None, packet_key_2)
+            .await?
+            .expect("account for packet key 2 should exist");
+
+        // Trigger RecordNotInserted path for packet_key_2 by replaying same identity
+        db.upsert_account(None, 999, chain_key, packet_key_2, Some(safe_addr_2), 200, 0, 0)
+            .await?;
+
+        let account_1 = db
+            .get_account(None, packet_key_1)
+            .await?
+            .expect("account for packet key 1 should exist");
+        let account_2 = db
+            .get_account(None, packet_key_2)
+            .await?
+            .expect("account for packet key 2 should exist");
+
+        assert_eq!(
+            initial_1.key_id, account_1.key_id,
+            "packet_key_1 identity must remain unchanged"
+        );
+        assert_eq!(
+            initial_2.key_id, account_2.key_id,
+            "packet_key_2 identity must remain unchanged"
+        );
+
+        let history_2 = db.get_account_history(None, packet_key_2).await?;
+        assert_eq!(2, history_2.len(), "packet_key_2 should have its own two state records");
 
         Ok(())
     }
