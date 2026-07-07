@@ -13,7 +13,6 @@ members = [
   "db/entity",
   "db/migration",
   "helper",
-  "tests/integration",
   "types",
 ]
 
