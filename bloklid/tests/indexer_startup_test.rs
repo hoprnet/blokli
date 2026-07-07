@@ -1,7 +1,6 @@
 use std::{sync::Arc, time::Duration};
 
 use async_trait::async_trait;
-use blokli_api_types::Token;
 use blokli_chain_indexer::{IndexerConfig, block::Indexer, handlers::ContractEventHandlers, traits::ChainLogHandler};
 use blokli_chain_rpc::{BlockWithLogs, FilterSet, HoprIndexerRpcOperations};
 use blokli_chain_types::ContractAddresses;
