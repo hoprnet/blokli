@@ -18,9 +18,10 @@ rpc_url = "http://localhost:8545"
 # If omitted, defaults to 100 req/sec. Set to 0 for unlimited, or a positive value to override the default.
 max_rpc_requests_per_sec = 0
 
-# Maximum block range for RPC queries when fetching logs (default: 10000)
-# Must be greater than 0. Lower values may be needed for some RPC providers
-# that impose limits on the number of blocks per query
+# Maximum block range ceiling for adaptive RPC log queries (default: 10000)
+# The effective range is learned from real eth_getLogs requests and reused
+# until the RPC endpoint rejects it. Set to 0 to auto-discover with the
+# default 10000-block ceiling.
 max_block_range = 10000
 
 # Optional contract address overrides
@@ -101,15 +102,15 @@ metric_export_interval = "60s"
 # Enable fast sync mode for initial synchronization
 fast_sync = true
 
-# Enable downloading logs snapshot for faster initial sync
+# Enable downloading a `hopr_logs.sql` snapshot archive for faster initial sync
 enable_logs_snapshot = false
+
+# URL to download logs snapshot from (optional)
+logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
 
 # Enable indexing of Safe contract events after a Safe has been discovered
 # Safe discovery via registry/stake-factory events remains enabled regardless
 enable_safe_indexing = false
-
-# URL to download logs snapshot from (optional)
-logs_snapshot_url = "https://example.com/logs-snapshot.tar.xz"
 
 # GraphQL subscription behavior configuration
 [indexer.subscription]
@@ -130,11 +131,11 @@ batch_size = 100
 # Enable or disable the GraphQL API server (default: true)
 enabled = true
 
-# Address and port for the API server to bind to (default: "0.0.0.0:8080")
-bind_address = "0.0.0.0:8080"
+# Address and port for the API server to bind to (default: "127.0.0.1:8080")
+bind_address = "127.0.0.1:8080"
 
-# Enable GraphQL Playground for development and testing (default: true)
-playground_enabled = true
+# Enable the GraphQL Playground for local development only (default: false)
+playground_enabled = false
 
 # Multiplier applied to EIP-1559 gas estimates exposed by chainInfo
 # A value of 1.0 keeps RPC values unchanged; 1.5 increases maxFeePerGas and

@@ -208,9 +208,11 @@ erDiagram
         binary(20) node_address "Destination node address (40-character hex string in bytes, NOT NULL; part of unique (safe_address,node_address) pair)"
         binary(32) redeemed_amount "Total redeemed amount across anchored redeemed-stat events (original u256 stored in bytes, NOT NULL)"
         bigint redemption_count "Number of anchored redeemed-stat events (NOT NULL)"
-        bigint last_redeemed_block "Latest anchored redeemed-stat block (NOT NULL)"
-        bigint last_redeemed_tx_index "Latest anchored redeemed-stat tx index (NOT NULL)"
-        bigint last_redeemed_log_index "Latest anchored redeemed-stat log index (NOT NULL)"
+        binary(32) rejected_amount "Total rejected amount from failed ticket redemption attempts (original u256 stored in bytes, NOT NULL)"
+        bigint rejection_count "Number of failed ticket redemption attempts (NOT NULL)"
+        bigint last_redeemed_block "Last successful redemption block, or 0 when none has succeeded yet (NOT NULL)"
+        bigint last_redeemed_tx_index "Last successful redemption tx index, or 0 when none has succeeded yet (NOT NULL)"
+        bigint last_redeemed_log_index "Last successful redemption log index, or 0 when none has succeeded yet (NOT NULL)"
     }
 
     %% ========================================

@@ -22,7 +22,7 @@ let
       cargoToml = ./../../bloklid/Cargo.toml;
     };
 
-  # Production builds include blokli-inspector alongside bloklid in each platform derivation.
+  # Production builds includes bloklid in each platform derivation.
   # prependPackageName = false lets us specify both packages explicitly via cargoExtraArgs.
   mkBloklidPlatformPackages =
     platform:
@@ -34,7 +34,7 @@ let
         })
         // {
           prependPackageName = false;
-          cargoExtraArgs = "-p bloklid -p blokli-inspector --bins";
+          cargoExtraArgs = "-p bloklid --bins";
         };
       name = "binary-bloklid-${platform}";
     in
@@ -68,15 +68,6 @@ in
     src = sources.main;
     depsSrc = sources.deps;
   });
-
-  blokli-inspector = builders.local.callPackage nixLib.mkRustPackage {
-    src = sources.main;
-    depsSrc = sources.deps;
-    inherit rev;
-    prependPackageName = false;
-    cargoExtraArgs = "-p blokli-inspector --bins";
-    cargoToml = ./../../inspector/Cargo.toml;
-  };
 
   bloklid-dev = builders.local.callPackage nixLib.mkRustPackage (
     (mkbloklidBuildArgs {

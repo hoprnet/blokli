@@ -129,18 +129,6 @@
             );
           };
 
-          # blokli-client crate information
-          blokliClientCrateInfoOriginal = craneLib.crateNameFromCargoToml {
-            cargoToml = ./client/Cargo.toml;
-          };
-          blokliClientCrateInfo = {
-            pname = "blokli-client";
-            # Normalize version to major.minor.patch for consistent caching
-            version = pkgs.lib.strings.concatStringsSep "." (
-              pkgs.lib.lists.take 3 (builtins.splitVersion blokliClientCrateInfoOriginal.version)
-            );
-          };
-
           # Create source trees for different build contexts using nix-lib
           sources = {
             main = nixLib.mkSrc {
@@ -179,17 +167,6 @@
               bloklidCrateInfo
               rev
               buildPlatform
-              nixLib
-              ;
-          };
-
-          blokliClientPackages = import ./nix/packages/blokli-client.nix {
-            inherit
-              lib
-              builders
-              sources
-              blokliClientCrateInfo
-              rev
               nixLib
               ;
           };
@@ -297,7 +274,6 @@
           # Combine all packages
           packages =
             bloklidPackages
-            // blokliClientPackages
             // bloklidDocker
             // {
               # Additional standalone packages

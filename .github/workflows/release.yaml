@@ -99,7 +99,6 @@ jobs:
           file: bloklid/Cargo.toml
           release_type: ${{ inputs.release_type }}
           cachix_cache_name: blokli
-          release_tag_prefix: bloklid-v
           cachix_auth_token: ${{ secrets.CACHIX_AUTH_TOKEN }}
           zulip_api_key: ${{ secrets.ZULIP_API_KEY }}
           zulip_email: ${{ secrets.ZULIP_EMAIL }}

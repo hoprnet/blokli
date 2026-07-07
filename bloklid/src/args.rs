@@ -35,9 +35,13 @@ pub(crate) struct Args {
     pub(crate) command: Option<Command>,
 }
 
-#[derive(Debug, Subcommand)]
+#[derive(Debug, Clone, Subcommand)]
 pub(crate) enum Command {
     GenerateConfig {
+        #[arg(value_name = "FILE")]
+        output: PathBuf,
+    },
+    ExportLogsSnapshot {
         #[arg(value_name = "FILE")]
         output: PathBuf,
     },
@@ -1063,6 +1067,35 @@ mod tests {
                 config.max_block_range, 2500,
                 "BLOKLI_MAX_BLOCK_RANGE env var should override config file"
             );
+        });
+    }
+
+    #[test]
+    fn test_max_block_range_zero_enables_auto_mode() {
+        let mut file = tempfile::Builder::new().suffix(".toml").tempfile().unwrap();
+        writeln!(
+            file,
+            r#"
+            network = "rotsee"
+            rpc_url = "http://localhost:8545"
+            max_block_range = 0
+            [database]
+            type = "postgresql"
+            url = "postgres://file:5432/db"
+        "#
+        )
+        .unwrap();
+        let path = file.path().to_path_buf();
+
+        temp_env::with_var("BLOKLI_MAX_BLOCK_RANGE", None::<&str>, || {
+            let args = Args {
+                verbose: 0,
+                config: Some(path),
+                command: None,
+            };
+
+            let config = args.load_config(false).expect("Failed to load config");
+            assert_eq!(config.max_block_range, 0, "max_block_range=0 should be accepted");
         });
     }
 

@@ -177,7 +177,8 @@ RPC Endpoint
 
 **Key Features**:
 
-- **Fast Sync**: Downloads pre-built logs database snapshots for quick initial sync, reducing time-to-ready from hours to minutes
+- **Fast Sync**: Downloads an archive containing `hopr_logs.sql`, imports the raw logs tables, rebuilds derived state locally, and then
+  catches up over RPC from the snapshot watermark for faster initial sync
 - **Finality Awareness**: Only processes blocks after configured confirmation count to avoid reorg complications
 - **Reorg Handling**: Detects blockchain reorganizations by tracking block hashes and marks affected logs as removed
 - **Watermark Tracking**: Maintains precise last processed position using (block, tx_index, log_index) triplet for exact resume capability
@@ -239,8 +240,9 @@ The system supports two database configurations:
 **Single Database (PostgreSQL)**: All tables reside in a single PostgreSQL database. This provides simpler management, better transaction
 support across tables, and MVCC-based concurrency control for high read/write throughput.
 
-**Dual Database (SQLite)**: Splits into Index DB (accounts, channels, balances) and Logs DB (raw blockchain logs). The Logs DB can be
-atomically replaced during fast sync, and separation reduces write lock contention in SQLite's locking model.
+**Dual Database (SQLite)**: Splits into Index DB (accounts, channels, balances) and Logs DB (raw blockchain logs). During fast sync, the
+logs tables are repopulated from the imported `hopr_logs.sql` snapshot before derived state is rebuilt, and separation reduces write lock
+contention in SQLite's locking model.
 
 **Key Design Patterns**:
 
@@ -353,7 +355,13 @@ transaction signatures are verified by Ethereum consensus—only successfully mi
 recovered from the transaction's ECDSA signature by the blockchain itself.
 
 **Configuration Parameters**: The RPC layer is configured with network-specific parameters including chain ID, contract addresses, expected
-block time for polling intervals, transaction polling configuration, finality depth, and maximum block range for batch fetching.
+block time for polling intervals, transaction polling configuration, finality depth, and a maximum block range ceiling for log fetching.
+
+**Adaptive Log Range Discovery**: The configured log block range is a ceiling, not a fixed request size. The RPC layer treats real
+`eth_getLogs` requests as observations: it starts with the ceiling, records successful ranges, records rejected ranges, and uses binary
+search to converge on the largest working range. Once a stable range is found, it is reused continuously. If the endpoint later rejects that
+stable range, the previous result is discarded and the same request-driven search moves downward again. If even single-block log requests
+are rejected, the RPC layer stays in single-block mode and surfaces the underlying RPC error while warning that this mode is very slow.
 
 **Retry Strategy**: Implements exponential backoff with jitter for transient failures, distinguishes between retryable errors (network, rate
 limit) and non-retryable errors (invalid transaction), and respects rate limits through request throttling.
@@ -874,14 +882,15 @@ Clients can query Safe contracts through three methods:
 1. **By Safe Address**: `safe(address: "0x...")` - Direct lookup by Safe contract address
 2. **By Chain Key**: `safeByChainKey(chainKey: "0x...")` - Find Safe by owner's address
 3. **List All**: `safes()` - Retrieve all indexed Safe contracts
-4. **Redeemed Ticket Aggregates**: `ticketRedemptionStats(filter: {safeAddress, nodeAddress})` - Retrieve total redeemed amount and
-   redemption count derived from `TicketRedeemed` events
+4. **Ticket Redemption Attempt Aggregates**: `ticketRedemptionStats(filter: {safeAddress, nodeAddress})` - Retrieve total redeemed and
+   failed redemption amounts and counts for the selected Safe and/or node
 
 `TicketRedeemed` processing now writes two layers of storage. First, it records an immutable redeemed-stat event anchor keyed by
 `(safe_address, node_address, published_block, published_tx_index, published_log_index)` so replaying the same chain log cannot
 double-count. Second, it folds newly anchored events into a dedicated aggregate table keyed by `(safe_address, node_address)`. Attribution
-uses the destination account of the redeemed channel and resolves the account's current `safe_address` when the event is processed. Query
-behavior is:
+uses the destination account of the redeemed channel and resolves the account's current `safe_address` when the event is processed. Failed
+Safe module ticket redemptions update the same aggregate table by incrementing rejection counters and amounts when the indexer observes
+`ExecutionFromModuleFailure` and decodes the rejected outer transaction as a `redeemTicket` call. Query behavior is:
 
 - safe-only filter aggregates all rows for that safe
 - node-only filter aggregates all rows for that node
@@ -895,8 +904,8 @@ The unique constraint on `(deployed_block, deployed_tx_index, deployed_log_index
 **Safe Contract Event Indexing**:
 
 In addition to HOPR contract events, the indexer subscribes to the Safe event topics `SafeSetup`, `AddedOwner`, `RemovedOwner`,
-`ChangedThreshold`, `ExecutionSuccess`, and `ExecutionFailure` through address-scoped filters built from the current set of indexed Safe
-contracts. Unknown Safe addresses are not streamed globally.
+`ChangedThreshold`, `ExecutionSuccess`, `ExecutionFailure`, and `ExecutionFromModuleFailure` through address-scoped filters built from the
+current set of indexed Safe contracts. Unknown Safe addresses are not streamed globally.
 
 When a Safe becomes known during block processing, the indexer refreshes its Safe-address filter set and performs a targeted RPC backfill
 for the discovery block so setup and owner-management events emitted earlier in that same block are still indexed. Historical Safe backfill
@@ -1166,8 +1175,8 @@ Lightweight deployment using SQLite with separated databases:
 **Advantages**:
 
 - No external database server required
-- Logs DB can be atomically replaced from snapshot
-- Fast sync by downloading pre-built logs database
+- Logs tables can be repopulated from an imported logs snapshot
+- Fast sync imports raw logs and rebuilds derived state locally
 - Reduced write lock contention through separation
 - Simple backup and restore (file copy)
 
@@ -1200,7 +1209,8 @@ Lightweight deployment using SQLite with separated databases:
 **Optimization Strategies**:
 
 - **Fast Sync via Snapshots**: Reduces initial sync from hours to minutes by importing pre-indexed logs database
-- **Batch Log Fetching**: Configurable block range size balances memory usage with RPC call overhead
+- **Adaptive Batch Log Fetching**: Configurable block range ceiling bounds RPC load while request-driven discovery learns the endpoint's
+  current usable range
 - **Dual Database Mode**: Separates high-volume log writes from indexed state reads (SQLite)
 - **Async Event Processing**: Pipeline stages run concurrently where possible
 - **Position-based Deduplication**: Prevents reprocessing same events after restart
@@ -1250,7 +1260,7 @@ subscriber count. Database becomes bottleneck at high read volume (consider read
 **SQLite Dual Database Characteristics**:
 
 - Reduces lock contention by separating write-heavy logs from read-heavy index
-- Logs DB can be atomically replaced during fast sync operation
+- Logs tables can be repopulated from an imported `hopr_logs.sql` snapshot during fast sync
 - Suitable for embedded deployments with limited resources
 - Simple backup through file system copy operations
 - No network overhead for database access
@@ -1322,7 +1332,7 @@ The transaction submission system implements defense-in-depth with multiple vali
 - **Reorg Handling**: Detects blockchain reorganizations and marks affected logs
 - **Transaction Safety**: All state changes wrapped in database transactions
 - **Position Constraints**: Unique constraints prevent duplicate event processing
-- **Atomic Snapshot Import**: Logs database replacement is atomic operation
+- **Atomic Snapshot Import**: Logs table import and derived-state rebuild run within a single transaction
 
 **Precision Preservation**: Large integers stored as binary to preserve full precision across language boundaries. GraphQL uses String type
 for UInt64 values to avoid JavaScript Number precision loss.

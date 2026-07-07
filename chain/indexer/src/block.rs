@@ -1,3 +1,5 @@
+#[cfg(test)]
+use std::error::Error as StdError;
 use std::{
     collections::HashSet,
     path::Path,
@@ -486,14 +488,9 @@ where
         if fast_sync_configured && index_empty && !logs_db_has_data && self.cfg.enable_logs_snapshot {
             info!("Logs database is empty, attempting to download logs snapshot...");
 
-            match self.download_snapshot().await {
-                Ok(snapshot_info) => {
-                    info!(snapshot_info = ?snapshot_info, "logs snapshot downloaded successfully");
-                }
-                Err(e) => {
-                    error!(error = %e, "failed to download logs snapshot, continuing with regular sync");
-                }
-            }
+            self.download_snapshot().await.map(|snapshot_info| {
+                info!(snapshot_info = ?snapshot_info, "logs snapshot downloaded successfully");
+            })?;
         }
 
         // Initialize channel closure grace period from contract
@@ -1565,6 +1562,7 @@ mod tests {
         impl HoprIndexerRpcOperations for HoprIndexerOps {
             async fn block_number(&self) -> blokli_chain_rpc::errors::Result<u64>;
             async fn get_transaction_sender(&self, tx_hash: hopr_types::crypto::types::Hash) -> blokli_chain_rpc::errors::Result<Address>;
+            async fn get_transaction_bytes(&self, tx_hash: hopr_types::crypto::types::Hash) -> blokli_chain_rpc::errors::Result<Vec<u8>>;
 
             fn try_stream_logs<'a>(
                 &'a self,
@@ -2304,6 +2302,51 @@ mod tests {
             "historical sync should overlap the 150ms next-block fetch with the 150ms first-block processing step, \
              elapsed={elapsed:?}"
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_pre_start_fails_when_configured_snapshot_restore_fails() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let rpc = MockHoprIndexerOps::new();
+        let handlers = MockChainLogHandler::new();
+        let temp_dir = tempfile::tempdir()?;
+
+        let indexer = Indexer::new(
+            rpc,
+            handlers,
+            db,
+            IndexerConfig::new(
+                0,
+                true,
+                true,
+                false,
+                Some("file:///definitely/missing/snapshot.tar.xz".to_string()),
+                temp_dir.path().display().to_string(),
+                1000,
+                10,
+            ),
+            IndexerState::default(),
+        );
+
+        let error = indexer
+            .pre_start()
+            .await
+            .expect_err("configured snapshot bootstrap failures must abort startup");
+        let mut contains_missing_file = error.to_string().contains("Local file not found")
+            || error.to_string().contains("No such file or directory");
+        let mut source = StdError::source(&error);
+        while let Some(cause) = source {
+            if cause.to_string().contains("Local file not found")
+                || cause.to_string().contains("No such file or directory")
+            {
+                contains_missing_file = true;
+                break;
+            }
+            source = cause.source();
+        }
+        assert!(contains_missing_file, "unexpected snapshot bootstrap error: {error:#}");
 
         Ok(())
     }

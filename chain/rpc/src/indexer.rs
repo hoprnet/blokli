@@ -14,6 +14,7 @@ use async_trait::async_trait;
 use blokli_chain_types::AlloyAddressExt;
 use futures::{Stream, StreamExt, stream::BoxStream};
 use hopr_bindings::exports::alloy::{
+    eips::eip2718::Encodable2718,
     primitives::{Address as AlloyAddress, B256, U256},
     providers::Provider,
     rpc::types::{Filter, Log as AlloyLog},
@@ -27,7 +28,7 @@ use tracing::{debug, error, trace, warn};
 use crate::{
     BlockWithLogs, FilterSet, HoprIndexerRpcOperations, Log,
     errors::{Result, RpcError, RpcError::FilterIsEmpty},
-    rpc::{HoprModule, RpcOperations, SafeSingleton},
+    rpc::{HoprModule, RpcOperations, SafeSingleton, is_log_block_range_limit_error},
     transport::HttpRequestor,
 };
 
@@ -54,6 +55,7 @@ lazy_static::lazy_static! {
 ///
 /// # Returns
 /// * `impl Stream<Item = Vec<Filter>>` - Stream of filter vectors, one per chunk
+#[cfg(test)]
 fn split_range<'a>(
     filters: Vec<Filter>,
     from_block: u64,
@@ -109,20 +111,61 @@ where
     results
 }
 
+fn contains_log_block_range_limit_error(results: &[Result<Log>]) -> Option<&RpcError> {
+    results.iter().find_map(|result| match result {
+        Err(error) if is_log_block_range_limit_error(error) => Some(error),
+        _ => None,
+    })
+}
+
+fn contains_rpc_fetch_error(results: &[Result<Log>]) -> bool {
+    results
+        .iter()
+        .any(|result| matches!(result, Err(RpcError::AlloyRpcError(_))))
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct AdaptiveLogSubrange {
+    end_block: u64,
+    requested_span: u64,
+    attempted_limit: u64,
+}
+
 // impl<P: JsonRpcClient + 'static, R: HttpRequestor + 'static> RpcOperations<P, R> {
 impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
+    fn next_adaptive_subrange(&self, next_block: u64, to_block: u64) -> AdaptiveLogSubrange {
+        let attempted_limit = self.log_block_range_limit();
+        let end_block = to_block.min(next_block.saturating_add(attempted_limit.saturating_sub(1)));
+        let requested_span = end_block - next_block + 1;
+
+        AdaptiveLogSubrange {
+            end_block,
+            requested_span,
+            attempted_limit,
+        }
+    }
+
     /// Retrieves logs in the given range (`from_block` and `to_block` are inclusive).
     fn stream_logs(&self, filters: Vec<Filter>, from_block: u64, to_block: u64) -> BoxStream<'_, Result<Log>> {
-        let fetch_ranges = split_range(filters, from_block, to_block, self.cfg.max_block_range_fetch_size);
+        stream! {
+            let mut next_block = from_block;
 
-        debug!(
-            "polling logs from blocks #{from_block} - #{to_block} (via {:?} chunks)",
-            (to_block - from_block) / self.cfg.max_block_range_fetch_size + 1
-        );
+            while next_block <= to_block {
+                let subrange = self.next_adaptive_subrange(next_block, to_block);
+                let ranged_filters = filters
+                    .iter()
+                    .cloned()
+                    .map(|filter| filter.from_block(next_block).to_block(subrange.end_block))
+                    .collect::<Vec<_>>();
 
-        fetch_ranges
-            .then(move |subrange_filters| async move {
-                let results = fetch_subrange_logs_concurrently(subrange_filters, |filter| async move {
+                debug!(
+                    from_block = next_block,
+                    to_block = subrange.end_block,
+                    attempted_block_range = subrange.attempted_limit,
+                    "polling logs from block subrange"
+                );
+
+                let results = fetch_subrange_logs_concurrently(ranged_filters, |filter| async move {
                     let prov_clone = self.provider.clone();
 
                     match prov_clone.get_logs(&filter).await {
@@ -134,16 +177,30 @@ impl<R: HttpRequestor + 'static + Clone> RpcOperations<R> {
                                 error = %error,
                                 "failed to fetch logs in block subrange"
                             );
-                            Err(RpcError::from(error))
+                            let rpc_error = RpcError::from(error);
+                            Err(rpc_error)
                         }
                     }
                 })
                 .await;
 
-                futures::stream::iter(results)
-            })
-            .flatten()
-            .boxed()
+                if let Some(error) = contains_log_block_range_limit_error(&results) {
+                    let update = self.record_log_block_range_failure(subrange.requested_span, error);
+                    if update.retry {
+                        continue;
+                    }
+                } else if !contains_rpc_fetch_error(&results) {
+                    self.record_log_block_range_success(subrange.requested_span, subrange.attempted_limit);
+                }
+
+                for result in results {
+                    yield result;
+                }
+
+                next_block = subrange.end_block + 1;
+            }
+        }
+        .boxed()
     }
 }
 
@@ -177,6 +234,16 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
             .ok_or_else(|| RpcError::TransactionNotFound(tx_hash))?;
 
         Ok(tx.inner.signer().to_hopr_address())
+    }
+
+    async fn get_transaction_bytes(&self, tx_hash: Hash) -> Result<Vec<u8>> {
+        let tx = self
+            .provider
+            .get_transaction_by_hash(B256::from_slice(tx_hash.as_ref()))
+            .await?
+            .ok_or_else(|| RpcError::TransactionNotFound(tx_hash))?;
+
+        Ok(tx.inner.encoded_2718())
     }
 
     /// Produces an incremental stream of completed block log batches starting from a given block.
@@ -333,19 +400,42 @@ impl<R: HttpRequestor + 'static + Clone> HoprIndexerRpcOperations for RpcOperati
         from_block: u64,
         to_block: u64,
     ) -> Result<Vec<Log>> {
-        let filter = Filter::new()
-            .address(AlloyAddress::from_hopr_address(address))
-            .event_signature(topics)
-            .from_block(from_block)
-            .to_block(to_block);
+        let mut logs = Vec::new();
+        let mut next_block = from_block;
 
-        let mut logs = self
-            .provider
-            .get_logs(&filter)
-            .await?
-            .into_iter()
-            .map(Log::try_from)
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+        while next_block <= to_block {
+            let subrange = self.next_adaptive_subrange(next_block, to_block);
+            let filter = Filter::new()
+                .address(AlloyAddress::from_hopr_address(address))
+                .event_signature(topics.clone())
+                .from_block(next_block)
+                .to_block(subrange.end_block);
+
+            match self.provider.get_logs(&filter).await {
+                Ok(chunk_logs) => {
+                    self.record_log_block_range_success(subrange.requested_span, subrange.attempted_limit);
+
+                    let mut converted_logs = chunk_logs
+                        .into_iter()
+                        .map(Log::try_from)
+                        .collect::<std::result::Result<Vec<_>, _>>()?;
+                    logs.append(&mut converted_logs);
+                    next_block = subrange.end_block + 1;
+                }
+                Err(error) => {
+                    let rpc_error = RpcError::from(error);
+
+                    if is_log_block_range_limit_error(&rpc_error) {
+                        let update = self.record_log_block_range_failure(subrange.requested_span, &rpc_error);
+                        if update.retry {
+                            continue;
+                        }
+                    }
+
+                    return Err(rpc_error);
+                }
+            }
+        }
 
         logs.sort();
         Ok(logs)
@@ -478,11 +568,13 @@ mod tests {
         },
         transports::http::ReqwestTransport,
     };
+    use hopr_types::primitive::prelude::Address;
     use serde_json::json;
     use tokio::time::sleep;
     use url::Url;
 
     use crate::{
+        HoprIndexerRpcOperations,
         errors::{HttpRequestError, RpcError},
         indexer::{fetch_subrange_logs_concurrently, split_range},
         rpc::{RpcOperations, RpcOperationsConfig},
@@ -500,17 +592,64 @@ mod tests {
     }
 
     fn create_test_rpc_operations(server_url: &str) -> anyhow::Result<RpcOperations<TestRequestor>> {
+        create_test_rpc_operations_with_max_range(server_url, 10)
+    }
+
+    fn create_test_rpc_operations_with_max_range(
+        server_url: &str,
+        max_block_range_fetch_size: u64,
+    ) -> anyhow::Result<RpcOperations<TestRequestor>> {
         let transport_client = ReqwestTransport::new(Url::parse(server_url)?);
         let rpc_client = ClientBuilder::default().transport(transport_client.clone(), transport_client.guess_local());
         let cfg = RpcOperationsConfig {
             contract_addrs: ContractAddresses::default(),
             gas_oracle_url: None,
             tx_polling_interval: Duration::from_secs(1),
-            max_block_range_fetch_size: 10,
+            max_block_range_fetch_size,
             ..RpcOperationsConfig::default()
         };
 
         RpcOperations::new(rpc_client, TestRequestor, cfg, Some(true)).map_err(Into::into)
+    }
+
+    fn empty_logs_response() -> String {
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "result": []
+        })
+        .to_string()
+    }
+
+    fn range_limit_error_response() -> String {
+        json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "error": {
+                "code": -32005,
+                "message": "eth_getLogs block range limit exceeded"
+            }
+        })
+        .to_string()
+    }
+
+    fn mock_get_logs_range(
+        server: &mut mockito::ServerGuard,
+        from_block: u64,
+        to_block: u64,
+        body: String,
+    ) -> mockito::Mock {
+        server
+            .mock("POST", "/")
+            .match_body(mockito::Matcher::AllOf(vec![
+                mockito::Matcher::Regex(r#""method"\s*:\s*"eth_getLogs""#.to_string()),
+                mockito::Matcher::Regex(format!(r#""fromBlock"\s*:\s*"0x{from_block:x}""#)),
+                mockito::Matcher::Regex(format!(r#""toBlock"\s*:\s*"0x{to_block:x}""#)),
+            ]))
+            .with_status(200)
+            .with_body(body)
+            .expect(1)
+            .create()
     }
 
     fn filter_bounds(filters: &[Filter]) -> anyhow::Result<(u64, u64)> {
@@ -541,6 +680,23 @@ mod tests {
         })?;
 
         Ok(bounds)
+    }
+
+    #[test]
+    fn test_next_adaptive_subrange_uses_current_limit() -> anyhow::Result<()> {
+        let rpc = create_test_rpc_operations_with_max_range("http://localhost:8545", 3)?;
+
+        let subrange = rpc.next_adaptive_subrange(5, 9);
+        assert_eq!(subrange.end_block, 7);
+        assert_eq!(subrange.requested_span, 3);
+        assert_eq!(subrange.attempted_limit, 3);
+
+        let final_subrange = rpc.next_adaptive_subrange(8, 9);
+        assert_eq!(final_subrange.end_block, 9);
+        assert_eq!(final_subrange.requested_span, 2);
+        assert_eq!(final_subrange.attempted_limit, 3);
+
+        Ok(())
     }
 
     #[tokio::test]
@@ -688,6 +844,51 @@ mod tests {
         mock.assert();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].as_ref().expect("log fetch should succeed").block_number, 5);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_stream_logs_discovers_block_range_limit_from_request_failures() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let rpc = create_test_rpc_operations_with_max_range(&server.url(), 8)?;
+        let range_limit_error = range_limit_error_response();
+        let empty_logs = empty_logs_response();
+
+        let failed_cap = mock_get_logs_range(&mut server, 0, 7, range_limit_error.clone());
+        let failed_midpoint = mock_get_logs_range(&mut server, 0, 3, range_limit_error);
+        let working_low = mock_get_logs_range(&mut server, 0, 1, empty_logs.clone());
+        let working_limit = mock_get_logs_range(&mut server, 2, 4, empty_logs.clone());
+        let stable_reuse = mock_get_logs_range(&mut server, 5, 7, empty_logs);
+
+        let results = rpc.stream_logs(vec![Filter::new()], 0, 7).collect::<Vec<_>>().await;
+
+        failed_cap.assert();
+        failed_midpoint.assert();
+        working_low.assert();
+        working_limit.assert();
+        stable_reuse.assert();
+        assert!(results.is_empty());
+        assert_eq!(rpc.log_block_range_limit(), 3);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_get_logs_for_address_uses_adaptive_block_range_limit() -> anyhow::Result<()> {
+        let mut server = mockito::Server::new_async().await;
+        let rpc = create_test_rpc_operations_with_max_range(&server.url(), 3)?;
+        let first_range = mock_get_logs_range(&mut server, 5, 7, empty_logs_response());
+        let second_range = mock_get_logs_range(&mut server, 8, 9, empty_logs_response());
+
+        let logs = rpc
+            .get_logs_for_address(Address::from([0_u8; 20]), vec![B256::ZERO], 5, 9)
+            .await?;
+
+        first_range.assert();
+        second_range.assert();
+        assert!(logs.is_empty());
+        assert_eq!(rpc.log_block_range_limit(), 3);
 
         Ok(())
     }

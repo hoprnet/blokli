@@ -27,6 +27,8 @@ pub struct SafeRedeemedStatsEntry {
     pub node_address: Address,
     pub redeemed_amount: HoprBalance,
     pub redemption_count: u64,
+    pub rejected_amount: HoprBalance,
+    pub rejection_count: u64,
     pub last_redeemed_block: u64,
     pub last_redeemed_tx_index: u64,
     pub last_redeemed_log_index: u64,
@@ -78,12 +80,15 @@ fn model_to_entry(model: hopr_safe_redeemed_stats::Model) -> Result<SafeRedeemed
     let safe_address: Address = Address::try_from(model.safe_address.as_slice())?;
     let node_address: Address = Address::try_from(model.node_address.as_slice())?;
     let redeemed_amount: HoprBalance = HoprBalance::from_be_bytes(model.redeemed_amount.as_slice());
+    let rejected_amount: HoprBalance = HoprBalance::from_be_bytes(model.rejected_amount.as_slice());
 
     Ok(SafeRedeemedStatsEntry {
         safe_address,
         node_address,
         redeemed_amount,
         redemption_count: u64::try_from(model.redemption_count).map_err(|_| DbSqlError::DecodingError)?,
+        rejected_amount,
+        rejection_count: u64::try_from(model.rejection_count).map_err(|_| DbSqlError::DecodingError)?,
         last_redeemed_block: u64::try_from(model.last_redeemed_block).map_err(|_| DbSqlError::DecodingError)?,
         last_redeemed_tx_index: u64::try_from(model.last_redeemed_tx_index).map_err(|_| DbSqlError::DecodingError)?,
         last_redeemed_log_index: u64::try_from(model.last_redeemed_log_index).map_err(|_| DbSqlError::DecodingError)?,
@@ -500,6 +505,24 @@ pub trait BlokliDbSafeRedeemedStatsOperations {
         mutations: Vec<StagedSafeRedeemedStatMutation>,
     ) -> Result<Vec<SafeRedeemedStatsEntry>>;
 
+    #[allow(clippy::too_many_arguments)]
+    async fn record_safe_ticket_rejected<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        safe_address: Address,
+        destination_node_address: Address,
+        rejected_amount: HoprBalance,
+        block: u32,
+        tx_index: u32,
+        log_index: u32,
+    ) -> Result<SafeRedeemedStatsEntry>;
+
+    /// Returns aggregated redeemed ticket statistics matching the provided optional filters.
+    ///
+    /// When both filters are `None`, aggregates across all rows.
+    /// When only `safe_address` is provided, aggregates all rows for that safe.
+    /// When only `node_address` is provided, aggregates all rows for that node.
+    /// When both are provided, returns the single matching safe/node pair row.
     async fn get_aggregated_redeemed_stats(
         &self,
         safe_address: Option<Address>,
@@ -547,6 +570,24 @@ impl BlokliDbSafeRedeemedStatsOperations for BlokliDb {
         .await
     }
 
+    async fn record_safe_ticket_rejected<'a>(
+        &'a self,
+        tx: OptTx<'a>,
+        safe_address: Address,
+        node_address: Address,
+        rejected_amount: HoprBalance,
+        _block: u32,
+        _tx_index: u32,
+        _log_index: u32,
+    ) -> Result<SafeRedeemedStatsEntry> {
+        with_opt_transaction(self, tx, TargetDb::Index, |tx| {
+            Box::pin(async move {
+                record_safe_ticket_rejected_in(tx.as_ref(), safe_address, node_address, rejected_amount).await
+            })
+        })
+        .await
+    }
+
     async fn get_aggregated_redeemed_stats(
         &self,
         safe_address: Option<Address>,
@@ -554,6 +595,55 @@ impl BlokliDbSafeRedeemedStatsOperations for BlokliDb {
     ) -> Result<AggregatedRedeemedStats> {
         Ok(fetch_aggregated_redeemed_stats(self.conn(TargetDb::Index), safe_address, node_address).await?)
     }
+}
+
+async fn record_safe_ticket_rejected_in<C: ConnectionTrait>(
+    conn: &C,
+    safe_address: Address,
+    node_address: Address,
+    rejected_amount: HoprBalance,
+) -> Result<SafeRedeemedStatsEntry> {
+    let safe_address_bytes = safe_address.as_ref().to_vec();
+    let node_address_bytes = node_address.as_ref().to_vec();
+
+    let existing = HoprSafeRedeemedStats::find()
+        .filter(hopr_safe_redeemed_stats::Column::SafeAddress.eq(safe_address_bytes.clone()))
+        .filter(hopr_safe_redeemed_stats::Column::NodeAddress.eq(node_address_bytes.clone()))
+        .one(conn)
+        .await?;
+
+    let stored = match existing {
+        Some(model) => {
+            let current_rejected_amount = HoprBalance::from_be_bytes(model.rejected_amount.as_slice());
+            let next_rejection_count = model
+                .rejection_count
+                .checked_add(1)
+                .ok_or_else(|| DbSqlError::LogicalError("safe rejection count overflow".to_string()))?;
+
+            let mut active: hopr_safe_redeemed_stats::ActiveModel = model.into();
+            active.rejected_amount = Set((current_rejected_amount + rejected_amount).to_be_bytes().to_vec());
+            active.rejection_count = Set(next_rejection_count);
+            active.update(conn).await?
+        }
+        None => {
+            hopr_safe_redeemed_stats::ActiveModel {
+                safe_address: Set(safe_address_bytes),
+                node_address: Set(node_address_bytes),
+                redeemed_amount: Set(HoprBalance::zero().to_be_bytes().to_vec()),
+                redemption_count: Set(0),
+                rejected_amount: Set(rejected_amount.to_be_bytes().to_vec()),
+                rejection_count: Set(1),
+                last_redeemed_block: Set(0),
+                last_redeemed_tx_index: Set(0),
+                last_redeemed_log_index: Set(0),
+                ..Default::default()
+            }
+            .insert(conn)
+            .await?
+        }
+    };
+
+    model_to_entry(stored)
 }
 
 #[cfg(test)]
@@ -602,6 +692,8 @@ mod tests {
             .await?;
         assert_eq!(first.redeemed_amount, HoprBalance::from(10_u64));
         assert_eq!(first.redemption_count, 1);
+        assert_eq!(first.rejected_amount, HoprBalance::zero());
+        assert_eq!(first.rejection_count, 0);
         assert_eq!(first.node_address, node_address);
 
         let second = db
@@ -609,6 +701,8 @@ mod tests {
             .await?;
         assert_eq!(second.redeemed_amount, HoprBalance::from(15_u64));
         assert_eq!(second.redemption_count, 2);
+        assert_eq!(second.rejected_amount, HoprBalance::zero());
+        assert_eq!(second.rejection_count, 0);
         assert_eq!(second.node_address, node_address);
         assert_eq!(second.last_redeemed_block, 110);
         assert_eq!(second.last_redeemed_tx_index, 2);
@@ -668,18 +762,24 @@ mod tests {
             .await?;
         assert_eq!(first.redeemed_amount, HoprBalance::from(10_u64));
         assert_eq!(first.redemption_count, 1);
+        assert_eq!(first.rejected_amount, HoprBalance::zero());
+        assert_eq!(first.rejection_count, 0);
 
         let second = db
             .record_safe_ticket_redeemed(None, safe_address, second_node, HoprBalance::from(3_u64), 101, 1, 2)
             .await?;
         assert_eq!(second.redeemed_amount, HoprBalance::from(3_u64));
         assert_eq!(second.redemption_count, 1);
+        assert_eq!(second.rejected_amount, HoprBalance::zero());
+        assert_eq!(second.rejection_count, 0);
 
         let first_updated = db
             .record_safe_ticket_redeemed(None, safe_address, first_node, HoprBalance::from(5_u64), 102, 2, 0)
             .await?;
         assert_eq!(first_updated.redeemed_amount, HoprBalance::from(15_u64));
         assert_eq!(first_updated.redemption_count, 2);
+        assert_eq!(first_updated.rejected_amount, HoprBalance::zero());
+        assert_eq!(first_updated.rejection_count, 0);
 
         let loaded_first = load_stats_entry(&db, safe_address, first_node)
             .await?
@@ -690,8 +790,12 @@ mod tests {
 
         assert_eq!(loaded_first.redeemed_amount, HoprBalance::from(15_u64));
         assert_eq!(loaded_first.redemption_count, 2);
+        assert_eq!(loaded_first.rejected_amount, HoprBalance::zero());
+        assert_eq!(loaded_first.rejection_count, 0);
         assert_eq!(loaded_second.redeemed_amount, HoprBalance::from(3_u64));
         assert_eq!(loaded_second.redemption_count, 1);
+        assert_eq!(loaded_second.rejected_amount, HoprBalance::zero());
+        assert_eq!(loaded_second.rejection_count, 0);
         assert_eq!(redeemed_anchor_count(&db).await?, 3);
 
         Ok(())
@@ -836,6 +940,53 @@ mod tests {
                 .all(|entry| entry.redeemed_amount == HoprBalance::from(3_u64) && entry.redemption_count == 2)
         );
         assert_eq!(redeemed_anchor_count(&db).await?, 1_200);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_record_rejected_stats_and_aggregate() -> anyhow::Result<()> {
+        let db = BlokliDb::new_in_memory().await?;
+        let safe_address = random_address();
+        let node_address = random_address();
+
+        let first = db
+            .record_safe_ticket_rejected(None, safe_address, node_address, HoprBalance::from(7_u64), 200, 1, 1)
+            .await?;
+        assert_eq!(first.redeemed_amount, HoprBalance::zero());
+        assert_eq!(first.redemption_count, 0);
+        assert_eq!(first.rejected_amount, HoprBalance::from(7_u64));
+        assert_eq!(first.rejection_count, 1);
+        assert_eq!(first.last_redeemed_block, 0);
+        assert_eq!(first.last_redeemed_tx_index, 0);
+        assert_eq!(first.last_redeemed_log_index, 0);
+
+        let second = db
+            .record_safe_ticket_redeemed(None, safe_address, node_address, HoprBalance::from(3_u64), 201, 1, 2)
+            .await?;
+        assert_eq!(second.redeemed_amount, HoprBalance::from(3_u64));
+        assert_eq!(second.redemption_count, 1);
+        assert_eq!(second.rejected_amount, HoprBalance::from(7_u64));
+        assert_eq!(second.rejection_count, 1);
+
+        let third = db
+            .record_safe_ticket_rejected(None, safe_address, node_address, HoprBalance::from(5_u64), 202, 1, 3)
+            .await?;
+        assert_eq!(third.redeemed_amount, HoprBalance::from(3_u64));
+        assert_eq!(third.redemption_count, 1);
+        assert_eq!(third.rejected_amount, HoprBalance::from(12_u64));
+        assert_eq!(third.rejection_count, 2);
+        assert_eq!(third.last_redeemed_block, 201);
+        assert_eq!(third.last_redeemed_tx_index, 1);
+        assert_eq!(third.last_redeemed_log_index, 2);
+
+        let aggregated = db
+            .get_aggregated_redeemed_stats(Some(safe_address), Some(node_address))
+            .await?;
+        assert_eq!(aggregated.redeemed_amount, HoprBalance::from(3_u64));
+        assert_eq!(aggregated.redemption_count, 1);
+        assert_eq!(aggregated.rejected_amount, HoprBalance::from(12_u64));
+        assert_eq!(aggregated.rejection_count, 2);
 
         Ok(())
     }
