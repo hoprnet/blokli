@@ -277,7 +277,6 @@ pub struct Config {
     #[serde(default)]
     pub max_rpc_requests_per_sec: Option<u32>,
 
-    #[validate(range(min = 1))]
     #[default(10000)]
     #[serde(default = "default_max_block_range")]
     pub max_block_range: u32,

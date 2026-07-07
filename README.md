@@ -222,6 +222,10 @@ To generate a template configuration file:
 bloklid generate-config config.toml
 ```
 
+For fast-sync bootstrap, configure `indexer.fast_sync = true`, `indexer.enable_logs_snapshot = true`, and `indexer.logs_snapshot_url` to a
+`.tar.xz` archive that contains `hopr_logs.sql`. On an empty node, `bloklid` imports that file into the raw logs tables, rebuilds derived
+state locally, and then resumes normal RPC catch-up from the snapshot end. If the configured snapshot restore fails, startup fails.
+
 For a complete example with defaults and comments, see `bloklid/example-config.toml`.
 
 ### Environment Variables
@@ -243,6 +247,10 @@ You can override any configuration setting using environment variables.
 | `network`                  | `BLOKLI_NETWORK`                  |
 | `rpc_url`                  | `BLOKLI_RPC_URL`                  |
 | `max_rpc_requests_per_sec` | `BLOKLI_MAX_RPC_REQUESTS_PER_SEC` |
+| `max_block_range`          | `BLOKLI_MAX_BLOCK_RANGE`          |
+
+`max_block_range` is the ceiling for adaptive `eth_getLogs` block ranges. Set it to `0` to auto-discover with the default 10000-block
+ceiling.
 
 #### Database Configuration
 
