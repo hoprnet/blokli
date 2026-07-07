@@ -21,7 +21,7 @@ members = [
 
 [workspace.dependencies]
 alloy-sol-types = "1.5.7"
-anyhow = "1.0.102"
+anyhow = "1.0.103"
 async-broadcast = "0.7.2"
 async-compression = "0.4.42"
 async-graphql = { version = "7.2.1", features = [
