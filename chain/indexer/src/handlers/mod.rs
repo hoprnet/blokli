@@ -48,12 +48,12 @@ mod tokens;
 
 pub(super) fn u64_to_u32(value: u64, field_name: &str) -> Result<u32> {
     u32::try_from(value)
-        .map_err(|_| CoreEthereumIndexerError::ValidationError(format!("{field_name} {value} does not fit into u32")))
+        .map_err(|_| CoreEthereumIndexerError::ProcessError(format!("{field_name} {value} does not fit into u32")))
 }
 
 pub(super) fn u256_to_u64(value: U256, field_name: &str) -> Result<u64> {
     if value.bits() > 64 {
-        return Err(CoreEthereumIndexerError::ValidationError(format!(
+        return Err(CoreEthereumIndexerError::ProcessError(format!(
             "{field_name} {value} does not fit into u64"
         )));
     }
@@ -63,7 +63,7 @@ pub(super) fn u256_to_u64(value: U256, field_name: &str) -> Result<u64> {
 
 pub(super) fn u256_to_u32(value: U256, field_name: &str) -> Result<u32> {
     if value.bits() > 32 {
-        return Err(CoreEthereumIndexerError::ValidationError(format!(
+        return Err(CoreEthereumIndexerError::ProcessError(format!(
             "{field_name} {value} does not fit into u32"
         )));
     }
