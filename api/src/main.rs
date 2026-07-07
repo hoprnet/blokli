@@ -6,8 +6,8 @@ use blokli_api::{config::HealthConfig, logging, readiness::ReadinessChecker, sch
 use blokli_chain_api::{
     rpc_adapter::RpcAdapter,
     transaction_executor::{RawTransactionExecutor, RawTransactionExecutorConfig},
+    transaction_policy::TransactionPolicy,
     transaction_store::TransactionStore,
-    transaction_validator::TransactionValidator,
 };
 use blokli_chain_indexer::IndexerState;
 use blokli_chain_rpc::{
@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                 // Create stub transaction components for schema export
                 let transaction_store = Arc::new(TransactionStore::new());
-                let transaction_validator = Arc::new(TransactionValidator::new());
+                let transaction_policy = Arc::new(TransactionPolicy::AllowAll);
 
                 // Create a minimal RPC connection for stub purposes
                 let transport_client = ReqwestTransport::new(
@@ -116,7 +116,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let transaction_executor = Arc::new(RawTransactionExecutor::with_shared_dependencies(
                     rpc_adapter,
                     transaction_store.clone(),
-                    transaction_validator,
+                    transaction_policy,
                     RawTransactionExecutorConfig::default(),
                 ));
 

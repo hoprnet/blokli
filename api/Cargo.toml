@@ -67,6 +67,7 @@ blokli-chain-rpc     = { workspace = true }
 blokli-chain-types   = { workspace = true }
 blokli-db            = { workspace = true }
 blokli-db-entity     = { workspace = true }
+blokli-tx            = { workspace = true }
 hopr-bindings        = { workspace = true }
 hopr-types           = { workspace = true, features = ["crypto", "primitive"] }
 

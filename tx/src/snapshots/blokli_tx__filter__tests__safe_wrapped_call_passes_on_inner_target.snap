@@ -1,0 +1,15 @@
+---
+source: tx/src/filter.rs
+expression: result
+---
+FilteredTransaction {
+    sender: 0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266,
+    to: 0x1111111111111111111111111111111111111111,
+    selector: [
+        9,
+        94,
+        167,
+        179,
+    ],
+    via_module: true,
+}

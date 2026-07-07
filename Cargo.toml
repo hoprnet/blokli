@@ -16,6 +16,7 @@ members = [
   "helper",
   "inspector",
   "tests/integration",
+  "tx",
   "types",
 ]
 
@@ -49,6 +50,7 @@ blokli-client = { path = "client" }
 blokli-db = { path = "db/core" }
 blokli-db-entity = { path = "db/entity" }
 blokli-db-migration = { path = "db/migration" }
+blokli-tx = { path = "tx" }
 bytes = "1.11.1"
 chrono = "0.4.45"
 clap = { version = "4.6.1", features = ["derive", "env", "string"] }
