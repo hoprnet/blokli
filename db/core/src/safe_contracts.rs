@@ -43,8 +43,9 @@ pub struct SafeContractEntry {
 /// Safes with this block number were loaded from CSV files during migration,
 /// not from real blockchain events. This allows identifying which safes
 /// need their module addresses refreshed on startup.
-pub const PRESEEDED_BLOCK: i64 = 30_000_000;
-const PRESEEDED_BLOCK_U64: u64 = 30_000_000;
+const PRESEEDED_BLOCK_U32: u32 = 30_000_000;
+pub const PRESEEDED_BLOCK: i64 = i64::from(PRESEEDED_BLOCK_U32);
+const PRESEEDED_BLOCK_U64: u64 = u64::from(PRESEEDED_BLOCK_U32);
 
 struct SafeCsvEntry {
     address: Address,
