@@ -730,7 +730,7 @@ impl QueryRoot {
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "On-chain address to query (hexadecimal format)")] address: String,
-        #[graphql(desc = "Token type to query (defaults to wxHOPR)", default_with = "Token::WxHOPR")] token: Token,
+        #[graphql(desc = "Token type to query (defaults to wxHOPR)")] token: Option<Token>,
     ) -> Result<HoprBalanceResult> {
         // Validate address format
         if let Err(e) = validate_eth_address(&address) {
@@ -747,6 +747,7 @@ impl QueryRoot {
         let rpc = ctx.data::<Arc<RpcOperations<blokli_chain_rpc::ReqwestClient>>>()?;
 
         // Make RPC call to get balance from blockchain
+        let token = token.unwrap_or(Token::WxHOPR);
         let result = match token {
             Token::WxHOPR => rpc
                 .get_hopr_balance(parsed_address)
@@ -1860,6 +1861,20 @@ mod tests {
             check_safes_balance_cap(SAFES_BALANCE_MAX_SAFES + 1).expect_err("count over the cap must be rejected");
         assert_eq!(err.code, errors::codes::LIMIT_EXCEEDED);
         assert!(err.message.contains("safes balance limit exceeded"));
+    }
+
+    #[test]
+    fn test_hopr_balance_token_argument_is_optional_for_legacy_clients() {
+        let schema = Schema::build(
+            QueryRoot,
+            async_graphql::EmptyMutation,
+            async_graphql::EmptySubscription,
+        )
+        .finish();
+        let sdl = schema.sdl();
+
+        assert!(sdl.contains("token: Token"));
+        assert!(!sdl.contains("token: Token!"));
     }
 
     #[tokio::test]
