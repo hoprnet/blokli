@@ -32,8 +32,7 @@ Add OTLP settings under `[telemetry]` in your `bloklid` config file.
 
 ## Metric Interval
 
-`telemetry.metric_export_interval` is a single interval applied to OTLP metric export. It does not support per-metric or per-prefix
-overrides.
+`telemetry.metric_export_interval` is a single interval applied to OTLP metric export. It does not support per-metric or per-prefix overrides.
 
 Examples:
 
@@ -51,11 +50,9 @@ Current code behavior:
 
 ## Endpoint Notes
 
-- `grpc://...` selects OTLP/gRPC. Internally, `bloklid` normalizes this to the `http://...` URI form expected by the Rust tonic client, but
-  users should keep configuring `grpc://...`.
+- `grpc://...` selects OTLP/gRPC. Internally, `bloklid` normalizes this to the `http://...` URI form expected by the Rust tonic client, but users should keep configuring `grpc://...`.
 - `http://...` and `https://...` select OTLP/HTTP.
-- For OTLP/HTTP, configure a collector base URL such as `http://localhost:4318`. `bloklid` appends `/v1/traces`, `/v1/logs`, or
-  `/v1/metrics` internally per enabled signal.
+- For OTLP/HTTP, configure a collector base URL such as `http://localhost:4318`. `bloklid` appends `/v1/traces`, `/v1/logs`, or `/v1/metrics` internally per enabled signal.
 - Legacy HTTP endpoints that already include `/v1/traces`, `/v1/logs`, or `/v1/metrics` are still accepted and normalized per signal.
 - If you want to export `metrics`, `traces`, and `logs` together, OTLP/gRPC remains the cleaner single-endpoint option.
 

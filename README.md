@@ -12,8 +12,7 @@ This repository contains `Blokli`: On-chain Indexer of HOPR smart contracts and 
 
 ## Development
 
-This project uses [just](https://github.com/casey/just) as a command runner and
-[Nix Flake](https://nix.dev/manual/nix/2.30/command-ref/new-cli/nix3-flake.html#description) as the build system.
+This project uses [just](https://github.com/casey/just) as a command runner and [Nix Flake](https://nix.dev/manual/nix/2.30/command-ref/new-cli/nix3-flake.html#description) as the build system.
 
 ### Quick Start
 
@@ -59,8 +58,7 @@ just run-api
 
 ### Blokli + Anvil (single container)
 
-This image runs `anvil` with a 1s block time, deploys contracts, and starts `bloklid` against the local chain. Only the GraphQL API port is
-exposed.
+This image runs `anvil` with a 1s block time, deploys contracts, and starts `bloklid` against the local chain. Only the GraphQL API port is exposed.
 
 ```bash
 # Build the image
@@ -91,8 +89,7 @@ Once running, access the GraphQL playground at: <http://localhost:8080/graphql>
 
 Prometheus metrics are available at: <http://localhost:8080/metrics>
 
-To push daemon telemetry to an OpenTelemetry collector, configure the `[telemetry]` section in `bloklid/example-config.toml`. See
-[OTLP.md](OTLP.md) for transport rules, signal selection, environment overrides, and example configurations.
+To push daemon telemetry to an OpenTelemetry collector, configure the `[telemetry]` section in `bloklid/example-config.toml`. See [OTLP.md](OTLP.md) for transport rules, signal selection, environment overrides, and example configurations.
 
 ## Testing
 
@@ -110,15 +107,11 @@ just test-package blokli-chain-indexer  # Indexer and reorg handling tests
 
 # Run tests with debug output (single-threaded, shows println!)
 just test-debug
-
-# Run integration tests
-just test-indexer
 ```
 
 ### Smoke Tests
 
-Smoke tests verify that `bloklid` can start and connect to external dependencies. Logs are automatically saved to local files for inspection
-after each test run.
+Smoke tests verify that `bloklid` can start and connect to external dependencies. Logs are automatically saved to local files for inspection after each test run.
 
 ```bash
 # Test with local Anvil (fast, 30s timeout, no external deps)
@@ -147,8 +140,7 @@ SMOKE_CONFIG=config-smoke-gnosis.toml ./run-smoke-test.sh
 SMOKE_CONFIG=config-smoke-gnosis-full-sync.toml ./run-smoke-test.sh
 ```
 
-**Log Files**: After each test run, logs are saved as `blokli-smoke-{config}-{timestamp}.log` in the `tests/smoke/` directory for debugging
-failed tests.
+**Log Files**: After each test run, logs are saved as `blokli-smoke-{config}-{timestamp}.log` in the `tests/smoke/` directory for debugging failed tests.
 
 ### Testing Guide
 
@@ -212,9 +204,7 @@ Blokli can be configured via a configuration file (TOML) or environment variable
 2. Configuration File
 3. Default Values
 
-The path to the configuration file can be specified via the `-c` flag or the `BLOKLI_CONFIG_PATH` environment variable (`BLOKLI_CONFIG_PATH`
-takes priority). If neither is set, the daemon will try `/etc/bloklid/bloklid.toml` if it exists; otherwise it starts using only environment
-variables and built-in defaults.
+The path to the configuration file can be specified via the `-c` flag or the `BLOKLI_CONFIG_PATH` environment variable (`BLOKLI_CONFIG_PATH` takes priority). If neither is set, the daemon will try `/etc/bloklid/bloklid.toml` if it exists; otherwise it starts using only environment variables and built-in defaults.
 
 To generate a template configuration file:
 
@@ -222,9 +212,7 @@ To generate a template configuration file:
 bloklid generate-config config.toml
 ```
 
-For fast-sync bootstrap, configure `indexer.fast_sync = true`, `indexer.enable_logs_snapshot = true`, and `indexer.logs_snapshot_url` to a
-`.tar.xz` archive that contains `hopr_logs.sql`. On an empty node, `bloklid` imports that file into the raw logs tables, rebuilds derived
-state locally, and then resumes normal RPC catch-up from the snapshot end. If the configured snapshot restore fails, startup fails.
+For fast-sync bootstrap, configure `indexer.fast_sync = true`, `indexer.enable_logs_snapshot = true`, and `indexer.logs_snapshot_url` to a `.tar.xz` archive that contains `hopr_logs.sql`. On an empty node, `bloklid` imports that file into the raw logs tables, rebuilds derived state locally, and then resumes normal RPC catch-up from the snapshot end. If the configured snapshot restore fails, startup fails.
 
 For a complete example with defaults and comments, see `bloklid/example-config.toml`.
 
@@ -249,8 +237,7 @@ You can override any configuration setting using environment variables.
 | `max_rpc_requests_per_sec` | `BLOKLI_MAX_RPC_REQUESTS_PER_SEC` |
 | `max_block_range`          | `BLOKLI_MAX_BLOCK_RANGE`          |
 
-`max_block_range` is the ceiling for adaptive `eth_getLogs` block ranges. Set it to `0` to auto-discover with the default 10000-block
-ceiling.
+`max_block_range` is the ceiling for adaptive `eth_getLogs` block ranges. Set it to `0` to auto-discover with the default 10000-block ceiling.
 
 #### Database Configuration
 
@@ -294,15 +281,11 @@ ceiling.
 | `api.health.timeout`                  | `BLOKLI_API_HEALTH_TIMEOUT`                  |
 | `api.health.readiness_check_interval` | `BLOKLI_API_HEALTH_READINESS_CHECK_INTERVAL` |
 
-GraphQL subscriptions stream over SSE and send periodic keep-alive events to prevent idle connection timeouts. Keep-alive is enabled by
-default with a 15s interval and `keep-alive` payload, and can be customized via the `api.sse_keepalive.*` settings. `api.gas_multiplier`
-(default `1.0`, minimum `1.0`) scales `chainInfo.maxFeePerGas` and `chainInfo.maxPriorityFeePerGas` (rounded up to whole wei).
-`chainInfo.gasPrice` is not scaled.
+GraphQL subscriptions stream over SSE and send periodic keep-alive events to prevent idle connection timeouts. Keep-alive is enabled by default with a 15s interval and `keep-alive` payload, and can be customized via the `api.sse_keepalive.*` settings. `api.gas_multiplier` (default `1.0`, minimum `1.0`) scales `chainInfo.maxFeePerGas` and `chainInfo.maxPriorityFeePerGas` (rounded up to whole wei). `chainInfo.gasPrice` is not scaled.
 
 ### Contract Address Overrides
 
-You can override contract addresses via the configuration file. By default, addresses are resolved from hopr-bindings based on the selected
-network.
+You can override contract addresses via the configuration file. By default, addresses are resolved from hopr-bindings based on the selected network.
 
 ```toml
 [contracts]
