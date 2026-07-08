@@ -452,21 +452,6 @@
             extraFormatters = {
               programs.nixfmt.package = pkgs.nixfmt;
               programs.prettier.package = pkgs.prettier;
-              # Markdown/MDX is handled by the custom format-markdown formatter below
-              # (uses --prose-wrap never), and YAML by yamlfmt; excluding both here
-              # avoids formatters fighting over the same files with conflicting
-              # settings. Both glob forms are needed since bare "*.ext" only
-              # matches root-level files, not nested paths.
-              settings.formatter.prettier.excludes = [
-                "*.md"
-                "**/*.md"
-                "*.mdx"
-                "**/*.mdx"
-                "*.yaml"
-                "**/*.yaml"
-                "*.yml"
-                "**/*.yml"
-              ];
               settings.formatter.shfmt.includes = [
                 "*.sh"
                 "deploy/compose/.env.sample"
