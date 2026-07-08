@@ -19,7 +19,7 @@ services:
       - bloklid-network
   bloklid:
     # image built locally:
-    image: bloklid:latest # Built from: nix build .#bloklid-docker && docker load < result or from 
+    image: bloklid:latest # Built from: nix build .#bloklid-docker && docker load < result or from
     # image from registry (uncomment the following line and comment the previous one):
     # image: europe-west3-docker.pkg.dev/hoprassociation/docker-images/bloklid:latest
     container_name: bloklid

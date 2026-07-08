@@ -85,12 +85,12 @@ See `api/src/errors.rs` for available builders and codes. When a pattern repeats
 
 **Always prefer these over creating new types** for addresses, balances, channels, accounts, and crypto primitives:
 
-| Crate                  | Key Types                                                                                               |
-| ---------------------- | ------------------------------------------------------------------------------------------------------- |
+| Crate | Key Types |
+| --- | --- |
 | `hopr-primitive-types` | `Address`, `Balance<C>`, `HoprBalance`, `XDaiBalance`, `U256`, `SerializableLog`, `ToHex`, `IntoEndian` |
-| `hopr-crypto-types`    | `Hash`, `OffchainPublicKey`, `ChainKeypair`, `OffchainKeypair`                                          |
-| `hopr-internal-types`  | `ChannelEntry`, `ChannelStatus`, `AccountEntry`, `AccountType`, `AcknowledgedTicket`                    |
-| `hopr-bindings`        | Smart contract bindings and event encoding/decoding                                                     |
+| `hopr-crypto-types` | `Hash`, `OffchainPublicKey`, `ChainKeypair`, `OffchainKeypair` |
+| `hopr-internal-types` | `ChannelEntry`, `ChannelStatus`, `AccountEntry`, `AccountType`, `AcknowledgedTicket` |
+| `hopr-bindings` | Smart contract bindings and event encoding/decoding |
 
 Use prelude modules: `hopr_types::primitive::prelude`, `hopr_types::crypto::prelude`. Implement `From`/`TryFrom` for DB model conversions (see `db/entity/src/conversions/`). Run `cargo doc --package <crate-name> --open` to explore the full API.
 

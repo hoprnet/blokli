@@ -76,14 +76,14 @@ just docker-run-anvil trace
 
 **Environment Variables:**
 
-| Variable                     | Default         | Description                                     |
-| ---------------------------- | --------------- | ----------------------------------------------- |
-| `RUST_LOG`                   | `info`          | Logging level (error, warn, info, debug, trace) |
-| `ANVIL_BLOCK_TIME`           | `1`             | Block time in seconds                           |
-| `ANVIL_ACCOUNTS`             | `10`            | Number of accounts to create                    |
-| `ANVIL_BALANCE`              | `10000`         | Initial balance per account (ETH)               |
-| `ANVIL_DEPLOYER_PRIVATE_KEY` | (first account) | Private key for contract deployment             |
-| `BLOKLI_DATA_DIRECTORY`      | `/data`         | Data directory for SQLite databases             |
+| Variable | Default | Description |
+| --- | --- | --- |
+| `RUST_LOG` | `info` | Logging level (error, warn, info, debug, trace) |
+| `ANVIL_BLOCK_TIME` | `1` | Block time in seconds |
+| `ANVIL_ACCOUNTS` | `10` | Number of accounts to create |
+| `ANVIL_BALANCE` | `10000` | Initial balance per account (ETH) |
+| `ANVIL_DEPLOYER_PRIVATE_KEY` | (first account) | Private key for contract deployment |
+| `BLOKLI_DATA_DIRECTORY` | `/data` | Data directory for SQLite databases |
 
 Once running, access the GraphQL playground at: <http://localhost:8080/graphql>
 
@@ -241,44 +241,44 @@ You can override any configuration setting using environment variables.
 
 #### Database Configuration
 
-| Config Key                 | Primary Env Var                   | Canonical Env Vars                |
-| :------------------------- | :-------------------------------- | :-------------------------------- |
-| `database.url`             | `BLOKLI_DATABASE_URL`             | `DATABASE_URL`                    |
-| `database.host`            | `BLOKLI_DATABASE_HOST`            | `PGHOST`, `POSTGRES_HOST`         |
-| `database.port`            | `BLOKLI_DATABASE_PORT`            | `PGPORT`, `POSTGRES_PORT`         |
-| `database.username`        | `BLOKLI_DATABASE_USERNAME`        | `PGUSER`, `POSTGRES_USER`         |
-| `database.password`        | `BLOKLI_DATABASE_PASSWORD`        | `PGPASSWORD`, `POSTGRES_PASSWORD` |
-| `database.database`        | `BLOKLI_DATABASE_DATABASE`        | `PGDATABASE`, `POSTGRES_DB`       |
-| `database.type`            | `BLOKLI_DATABASE_TYPE`            | -                                 |
-| `database.max_connections` | `BLOKLI_DATABASE_MAX_CONNECTIONS` | -                                 |
-| `database.index_path`      | `BLOKLI_DATABASE_INDEX_PATH`      | -                                 |
-| `database.logs_path`       | `BLOKLI_DATABASE_LOGS_PATH`       | -                                 |
+| Config Key | Primary Env Var | Canonical Env Vars |
+| :-- | :-- | :-- |
+| `database.url` | `BLOKLI_DATABASE_URL` | `DATABASE_URL` |
+| `database.host` | `BLOKLI_DATABASE_HOST` | `PGHOST`, `POSTGRES_HOST` |
+| `database.port` | `BLOKLI_DATABASE_PORT` | `PGPORT`, `POSTGRES_PORT` |
+| `database.username` | `BLOKLI_DATABASE_USERNAME` | `PGUSER`, `POSTGRES_USER` |
+| `database.password` | `BLOKLI_DATABASE_PASSWORD` | `PGPASSWORD`, `POSTGRES_PASSWORD` |
+| `database.database` | `BLOKLI_DATABASE_DATABASE` | `PGDATABASE`, `POSTGRES_DB` |
+| `database.type` | `BLOKLI_DATABASE_TYPE` | - |
+| `database.max_connections` | `BLOKLI_DATABASE_MAX_CONNECTIONS` | - |
+| `database.index_path` | `BLOKLI_DATABASE_INDEX_PATH` | - |
+| `database.logs_path` | `BLOKLI_DATABASE_LOGS_PATH` | - |
 
 #### Indexer Configuration
 
-| Config Key                                      | Environment Variable                                   |
-| :---------------------------------------------- | :----------------------------------------------------- |
-| `indexer.fast_sync`                             | `BLOKLI_INDEXER_FAST_SYNC`                             |
-| `indexer.enable_logs_snapshot`                  | `BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT`                  |
-| `indexer.enable_safe_indexing`                  | `BLOKLI_INDEXER_ENABLE_SAFE_INDEXING`                  |
-| `indexer.logs_snapshot_url`                     | `BLOKLI_INDEXER_LOGS_SNAPSHOT_URL`                     |
-| `indexer.subscription.event_bus_capacity`       | `BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY`       |
+| Config Key | Environment Variable |
+| :-- | :-- |
+| `indexer.fast_sync` | `BLOKLI_INDEXER_FAST_SYNC` |
+| `indexer.enable_logs_snapshot` | `BLOKLI_INDEXER_ENABLE_LOGS_SNAPSHOT` |
+| `indexer.enable_safe_indexing` | `BLOKLI_INDEXER_ENABLE_SAFE_INDEXING` |
+| `indexer.logs_snapshot_url` | `BLOKLI_INDEXER_LOGS_SNAPSHOT_URL` |
+| `indexer.subscription.event_bus_capacity` | `BLOKLI_INDEXER_SUBSCRIPTION_EVENT_BUS_CAPACITY` |
 | `indexer.subscription.shutdown_signal_capacity` | `BLOKLI_INDEXER_SUBSCRIPTION_SHUTDOWN_SIGNAL_CAPACITY` |
-| `indexer.subscription.batch_size`               | `BLOKLI_INDEXER_SUBSCRIPTION_BATCH_SIZE`               |
+| `indexer.subscription.batch_size` | `BLOKLI_INDEXER_SUBSCRIPTION_BATCH_SIZE` |
 
 #### API Configuration
 
-| Config Key                            | Environment Variable                         |
-| ------------------------------------- | -------------------------------------------- |
-| `api.enabled`                         | `BLOKLI_API_ENABLED`                         |
-| `api.bind_address`                    | `BLOKLI_API_BIND_ADDRESS`                    |
-| `api.playground_enabled`              | `BLOKLI_API_PLAYGROUND_ENABLED`              |
-| `api.gas_multiplier`                  | `BLOKLI_API_GAS_MULTIPLIER`                  |
-| `api.sse_keepalive.enabled`           | `BLOKLI_API_SSE_KEEPALIVE_ENABLED`           |
-| `api.sse_keepalive.interval`          | `BLOKLI_API_SSE_KEEPALIVE_INTERVAL`          |
-| `api.sse_keepalive.text`              | `BLOKLI_API_SSE_KEEPALIVE_TEXT`              |
-| `api.health.max_indexer_lag`          | `BLOKLI_API_HEALTH_MAX_INDEXER_LAG`          |
-| `api.health.timeout`                  | `BLOKLI_API_HEALTH_TIMEOUT`                  |
+| Config Key | Environment Variable |
+| --- | --- |
+| `api.enabled` | `BLOKLI_API_ENABLED` |
+| `api.bind_address` | `BLOKLI_API_BIND_ADDRESS` |
+| `api.playground_enabled` | `BLOKLI_API_PLAYGROUND_ENABLED` |
+| `api.gas_multiplier` | `BLOKLI_API_GAS_MULTIPLIER` |
+| `api.sse_keepalive.enabled` | `BLOKLI_API_SSE_KEEPALIVE_ENABLED` |
+| `api.sse_keepalive.interval` | `BLOKLI_API_SSE_KEEPALIVE_INTERVAL` |
+| `api.sse_keepalive.text` | `BLOKLI_API_SSE_KEEPALIVE_TEXT` |
+| `api.health.max_indexer_lag` | `BLOKLI_API_HEALTH_MAX_INDEXER_LAG` |
+| `api.health.timeout` | `BLOKLI_API_HEALTH_TIMEOUT` |
 | `api.health.readiness_check_interval` | `BLOKLI_API_HEALTH_READINESS_CHECK_INTERVAL` |
 
 GraphQL subscriptions stream over SSE and send periodic keep-alive events to prevent idle connection timeouts. Keep-alive is enabled by default with a 15s interval and `keep-alive` payload, and can be customized via the `api.sse_keepalive.*` settings. `api.gas_multiplier` (default `1.0`, minimum `1.0`) scales `chainInfo.maxFeePerGas` and `chainInfo.maxPriorityFeePerGas` (rounded up to whole wei). `chainInfo.gasPrice` is not scaled.

@@ -141,10 +141,10 @@ Removing a query is a breaking change — existing clients that call it will rec
 
 ## Quick reference
 
-| Scenario                          | New version? | `LATEST_SCHEMA_VERSION` bump? | Client `SCHEMA_VERSION` bump? |
-| --------------------------------- | ------------ | ----------------------------- | ----------------------------- |
-| Add optional field                | No           | No                            | No (optional)                 |
-| Add new query / subscription      | No           | No                            | No (optional)                 |
-| Remove / rename field or argument | Yes          | Yes                           | Yes                           |
-| Change return type incompatibly   | Yes          | Yes                           | Yes                           |
-| Remove query entirely             | Yes          | Yes                           | Yes                           |
+| Scenario | New version? | `LATEST_SCHEMA_VERSION` bump? | Client `SCHEMA_VERSION` bump? |
+| --- | --- | --- | --- |
+| Add optional field | No | No | No (optional) |
+| Add new query / subscription | No | No | No (optional) |
+| Remove / rename field or argument | Yes | Yes | Yes |
+| Change return type incompatibly | Yes | Yes | Yes |
+| Remove query entirely | Yes | Yes | Yes |

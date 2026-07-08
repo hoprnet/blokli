@@ -2,7 +2,6 @@
 # ast-grep configuration for Blokli project
 ruleDirs:
   - .ast-grep/rules
-
 # Test configuration (optional)
 # testConfigs:
 #   - testDir: rule-test
