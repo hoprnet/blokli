@@ -1,8 +1,11 @@
 # Query Update Guide
 
-Blokli uses **header-based schema versioning** (`X-Blokli-Schema-Version: N`) to maintain backward compatibility across server and client deployments. Each schema version is a complete GraphQL schema; unchanged resolvers live in `QueryRoot` / `SubscriptionRoot` and are composed into every version via `#[MergedObject]` / `#[MergedSubscription]`.
+Blokli uses **header-based schema versioning** (`X-Blokli-Schema-Version: N`) to maintain backward compatibility across server and client
+deployments. Each schema version is a complete GraphQL schema; unchanged resolvers live in `QueryRoot` / `SubscriptionRoot` and are composed
+into every version via `#[MergedObject]` / `#[MergedSubscription]`.
 
-Clients that omit the header are served **v1** (the original contract). Updated clients send the version they were built for. Old and new clients can safely coexist against the same server.
+Clients that omit the header are served **v1** (the original contract). Updated clients send the version they were built for. Old and new
+clients can safely coexist against the same server.
 
 ---
 
@@ -48,7 +51,8 @@ A change is breaking when **existing clients would receive a validation error or
 
 #### Server side
 
-1. **Determine the next version number** — currently `LATEST_SCHEMA_VERSION` in `api/src/schema.rs`. If the current latest is `N`, the new version is `N+1`.
+1. **Determine the next version number** — currently `LATEST_SCHEMA_VERSION` in `api/src/schema.rs`. If the current latest is `N`, the new
+   version is `N+1`.
 
 2. **Create the new resolver** in a versioned module, e.g. `api/src/query_v2.rs`:
 
@@ -134,17 +138,18 @@ Removing a query is a breaking change — existing clients that call it will rec
 ## 5. Version lifecycle and retirement
 
 - Keep the previous version(s) in the registry while old clients are still in deployment.
-- Retire a version by removing its entry from `build_version_registry` and deleting its resolver module. Old clients will receive a `400 UNSUPPORTED_SCHEMA_VERSION` error — a clear signal to upgrade.
+- Retire a version by removing its entry from `build_version_registry` and deleting its resolver module. Old clients will receive a
+  `400 UNSUPPORTED_SCHEMA_VERSION` error — a clear signal to upgrade.
 - A reasonable retirement window is one full deployment cycle (typically one release after the breaking change ships).
 
 ---
 
 ## Quick reference
 
-| Scenario | New version? | `LATEST_SCHEMA_VERSION` bump? | Client `SCHEMA_VERSION` bump? |
-| --- | --- | --- | --- |
-| Add optional field | No | No | No (optional) |
-| Add new query / subscription | No | No | No (optional) |
-| Remove / rename field or argument | Yes | Yes | Yes |
-| Change return type incompatibly | Yes | Yes | Yes |
-| Remove query entirely | Yes | Yes | Yes |
+| Scenario                          | New version? | `LATEST_SCHEMA_VERSION` bump? | Client `SCHEMA_VERSION` bump? |
+| --------------------------------- | ------------ | ----------------------------- | ----------------------------- |
+| Add optional field                | No           | No                            | No (optional)                 |
+| Add new query / subscription      | No           | No                            | No (optional)                 |
+| Remove / rename field or argument | Yes          | Yes                           | Yes                           |
+| Change return type incompatibly   | Yes          | Yes                           | Yes                           |
+| Remove query entirely             | Yes          | Yes                           | Yes                           |

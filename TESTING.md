@@ -1,6 +1,7 @@
 # Testing Guide
 
-This document provides comprehensive guidance for testing the Blokli indexer and API, with special focus on temporal queries, blockchain reorganization handling, and edge cases.
+This document provides comprehensive guidance for testing the Blokli indexer and API, with special focus on temporal queries, blockchain
+reorganization handling, and edge cases.
 
 ## Table of Contents
 
@@ -31,7 +32,8 @@ cargo test test_get_channel_state_at -F runtime-tokio -- --nocapture
 
 ### Manual API Testing (no Docker required)
 
-For interactive exploration — GraphQL playground, manual subscription testing via curl, quick iteration on API behaviour — you can run a local stack without building a Docker image.
+For interactive exploration — GraphQL playground, manual subscription testing via curl, quick iteration on API behaviour — you can run a
+local stack without building a Docker image.
 
 **Terminal 1 — Anvil:**
 

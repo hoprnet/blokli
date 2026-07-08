@@ -500,12 +500,12 @@
                 includes = [ "design/*.graphql" ];
               };
               # Markdown formatter
-              settings.formatter.format-markdown = {
+              settings.formatter.deno = {
                 command = pkgs.writeShellApplication {
-                  name = "format-markdown";
-                  runtimeInputs = [ pkgs.prettier ];
+                  name = "deno-fmt";
+                  runtimeInputs = [ pkgs.deno ];
                   text = ''
-                    prettier --parser markdown --prose-wrap never --write "$@"
+                    deno fmt --config deno.json "$@"
                   '';
                 };
                 includes = [
