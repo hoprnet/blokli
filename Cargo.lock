@@ -1946,6 +1946,7 @@ dependencies = [
  "blokli-db",
  "clap",
  "config",
+ "curvy-bindings",
  "flagset",
  "futures",
  "hopli",
@@ -1958,6 +1959,7 @@ dependencies = [
  "opentelemetry_sdk",
  "sea-orm",
  "serde",
+ "serde_json",
  "serde_with",
  "smart-default",
  "strum 0.28.0",
@@ -2598,6 +2600,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "curvy-bindings"
+version = "1.0.0"
+dependencies = [
+ "alloy",
+ "hex",
+ "serde",
+ "serde_json",
+ "serde_with",
+ "tracing",
+]
+
+[[package]]
 name = "darling"
 version = "0.20.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2704,7 +2718,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7ab67060fc6b8ef687992d439ca0fa36e7ed17e9a0b16b25b601e8757df720de"
 dependencies = [
  "data-encoding",
- "syn 1.0.109",
+ "syn 2.0.117",
 ]
 
 [[package]]

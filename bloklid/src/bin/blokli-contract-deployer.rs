@@ -5,6 +5,7 @@ use std::{
 
 use blokli_chain_types::ContractAddresses as BlokliContractAddresses;
 use clap::Parser;
+use curvy_bindings::{CurvyContractAddresses, config::CurvyContractInstances};
 use hopli_lib::utils::{a2h, h2a};
 use hopr_bindings::{
     config::ContractInstances,
@@ -61,11 +62,34 @@ struct Args {
     /// Optional output path for TOML configuration
     #[arg(long)]
     output: Option<PathBuf>,
+
+    /// Also deploy + initialise the Curvy v2 contract suite after the HOPR suite,
+    /// reusing the same provider/signer (Curvy × HOPR PoC integration). Default: off,
+    /// so the stock HOPR-only behaviour is unchanged unless explicitly requested.
+    #[arg(long, default_value_t = false)]
+    with_curvy: bool,
+
+    /// Where to write Curvy's Ignition-style `deployed_addresses.json` (the Curvy SDK /
+    /// hopr runner read these keys). Implies `--with-curvy`.
+    #[arg(long)]
+    curvy_json_out: Option<PathBuf>,
+
+    /// Where to write Curvy's `[curvy_contracts]` TOML section. IMPORTANT: this is a
+    /// SEPARATE file, never bloklid's own config — bloklid's `Config` is
+    /// `#[serde(deny_unknown_fields)]` and rejects any extra top-level section. Implies
+    /// `--with-curvy`.
+    #[arg(long)]
+    curvy_toml_out: Option<PathBuf>,
 }
 
 #[derive(Debug, Serialize)]
 struct ContractsOutput {
     contracts: BlokliContractAddresses,
+}
+
+#[derive(Debug, Serialize)]
+struct CurvyContractsOutput {
+    curvy_contracts: CurvyContractAddresses,
 }
 
 #[tokio::main]
@@ -82,8 +106,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let rpc_client = ClientBuilder::default().http(rpc_url);
     let provider = ProviderBuilder::new().wallet(signer).connect_client(rpc_client);
 
+    // Clone the (cheap, Arc-backed) provider so it survives the HOPR deploy and can be
+    // reused for the optional Curvy suite below (`--with-curvy`).
     let instances =
-        ContractInstances::deploy_for_testing(provider, a2h(signer_chain_key.public().to_address())).await?;
+        ContractInstances::deploy_for_testing(provider.clone(), a2h(signer_chain_key.public().to_address()))
+            .await?;
     let contracts = ContractAddresses::from(&instances);
     let output = ContractsOutput {
         contracts: BlokliContractAddresses {
@@ -168,6 +195,35 @@ async fn main() -> Result<(), Box<dyn Error>> {
         fs::write(path, toml_output)?;
     } else {
         print!("{toml_output}");
+    }
+
+    // ── Curvy v2 suite (Curvy × HOPR PoC) ─────────────────────────────────────────────
+    // Optionally deploy + initialise the entire Curvy v2 suite on the SAME chain,
+    // reusing the SAME wallet+filler provider — the exact analogue of the HOPR
+    // `ContractInstances::deploy_for_testing` above (deploy → wire → init → read-back
+    // all live inside `curvy_bindings::config::CurvyContractInstances`). Outputs go to
+    // their OWN files: an Ignition-style JSON (Curvy SDK consumers) and a
+    // `[curvy_contracts]` TOML — never appended to bloklid's config (deny_unknown_fields).
+    if args.with_curvy || args.curvy_json_out.is_some() || args.curvy_toml_out.is_some() {
+        tracing::info!("deploying Curvy v2 contract suite (--with-curvy)");
+        let curvy_instances = CurvyContractInstances::deploy_for_testing(provider.clone(), signer_address).await?;
+        let curvy_contracts = CurvyContractAddresses::from(&curvy_instances);
+        tracing::info!(
+            aggregator = %curvy_contracts.aggregator_proxy,
+            vault = %curvy_contracts.vault_proxy,
+            portal_factory = %curvy_contracts.portal_factory,
+            "Curvy v2 suite deployed + initialised"
+        );
+
+        if let Some(path) = &args.curvy_json_out {
+            fs::write(path, serde_json::to_string_pretty(&curvy_contracts.to_ignition_json())?)?;
+            tracing::info!(path = %path.display(), "wrote Curvy deployed_addresses.json");
+        }
+        if let Some(path) = &args.curvy_toml_out {
+            let curvy_output = CurvyContractsOutput { curvy_contracts };
+            fs::write(path, toml::to_string(&curvy_output)?)?;
+            tracing::info!(path = %path.display(), "wrote Curvy [curvy_contracts] TOML");
+        }
     }
 
     Ok(())

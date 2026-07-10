@@ -49,6 +49,7 @@ opentelemetry_sdk = { workspace = true, features = [
 ] }
 sea-orm = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 serde_with = { workspace = true }
 smart-default = { workspace = true }
 strum = { workspace = true }
@@ -83,6 +84,16 @@ hopr-types = { workspace = true, features = [
 # Needed for test deployment, because deploy_for_testing from blokli_chain_types is outdated
 # TODO: remove blokli-chain-types completely and only use hopr-chain-types
 hopli = { workspace = true }
+
+# Curvy PoC integration: the `blokli-contract-deployer` bin can optionally deploy the
+# Curvy v2 contract suite alongside HOPR (behind `--with-curvy`, default off).
+# `curvy-bindings` is the structural mirror of `hopr-bindings` above (committed
+# forge-bind codegen, typed ContractAddresses/ContractInstances, a deploy_for_testing
+# doing the full deploy+wire+init) living in the Curvy contracts package; alloy is
+# pinned =2.1.0 exactly like hopr-bindings, and no heavy crypto (arkworks) exists in
+# the crate at all. Path dep for the PoC; hosting (git/crates.io, like hopli /
+# hopr-bindings) is the final step before upstreaming.
+curvy-bindings = { path = "/Users/vanja/Projects/v3-e2e/packages/contracts/evm/bindings/curvy-bindings" }
 
 [dev-dependencies]
 anyhow      = { workspace = true }
