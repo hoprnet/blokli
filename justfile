@@ -47,7 +47,7 @@ clean:
 
 # Run all tests in workspace
 test:
-    cargo test --workspace --exclude blokli-integration-tests --no-fail-fast
+    cargo test --workspace --no-fail-fast
 
 # Run tests for a specific package
 test-package package:
@@ -63,15 +63,11 @@ test-profile package:
 
 # Run all tests in workspace using nextest
 nextest:
-    cargo nextest run --workspace --exclude blokli-integration-tests
+    cargo nextest run --workspace
 
 # Run tests for a specific package using nextest
 nextest-package package:
     cargo nextest run -p {{ package }}
-
-# Run integration tests (requires Docker image with BLOKLI_TEST_REMOTE_IMAGE env var)
-integration-test:
-    cargo test -p blokli-integration-tests
 
 # Run system tests (full smoke test suite)
 system-test: smoke-test-full
