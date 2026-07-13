@@ -191,7 +191,7 @@ impl From<ChannelStatus> for i16 {
 #[derive(Enum, Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Token {
     /// wxHOPR token
-    #[graphql(name = "WXHOPR")]
+    #[graphql(name = "HOPR")]
     WxHOPR,
     /// xHOPR token
     #[graphql(name = "XHOPR")]
