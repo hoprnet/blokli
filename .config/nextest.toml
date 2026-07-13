@@ -1,3 +1,9 @@
+# Terminate any test that runs longer than 3×60s = 180s. This turns a single
+# hung/slow test into a fast, attributable failure instead of a silent 30-min
+# CI job timeout.
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 3 }
+
 # Integration test binaries run in parallel (each gets its own Docker stack),
 # but tests within each binary run serially (they share a fixture).
 [test-groups.integration-query]

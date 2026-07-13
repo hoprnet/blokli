@@ -101,7 +101,7 @@ jobs:
     with:
       source_branch: ${{ github.event.pull_request.head.ref || github.ref }}
       enable_unit_tests: true
-      unit_test_command: "nix run -L .#test"
+      unit_test_command: "nix run -L .#nextest"
       enable_unit_coverage: true
       unit_coverage_command: "nix run .#coverage-unit"
       runner_unit: depot-ubuntu-24.04-4
