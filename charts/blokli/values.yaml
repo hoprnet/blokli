@@ -35,6 +35,8 @@ serviceAccount:
   ## @param serviceAccount.name The name of the service account to use. If not set and create is true, a name is generated using the fullname template
   ##
   name: ""
+## @param deploymentAnnotations Annotations to add to the deployment
+deploymentAnnotations: {}
 ## @param podAnnotations Annotations to add to the pod
 podAnnotations: {}
 podSecurityContext:
