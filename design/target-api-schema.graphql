@@ -571,7 +571,7 @@ type QueryRoot {
   hoprBalance(
     "On-chain address to query (hexadecimal format)"
     address: String!
-    "Token type to query (defaults to wxHOPR)"
+    "HOPR token to query: WXHOPR (default) or XHOPR. NATIVE is not accepted here — use nativeBalance instead."
     token: Token = WXHOPR
   ): HoprBalanceResult!
   """

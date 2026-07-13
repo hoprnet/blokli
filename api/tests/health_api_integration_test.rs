@@ -111,7 +111,13 @@ async fn test_readyz_all_healthy() -> anyhow::Result<()> {
     // Seed chain_info to the current RPC block so the indexer looks caught up (lag ≈ 0),
     // independent of how many blocks contract deployment produced.
     let (_, probe) = make_request(ctx.app.clone(), "/readyz").await;
-    let rpc_block = probe["checks"]["rpc"]["block_number"].as_i64().unwrap_or(0);
+    assert_eq!(
+        probe["checks"]["rpc"]["status"], "healthy",
+        "readyz probe RPC check should be healthy"
+    );
+    let rpc_block = probe["checks"]["rpc"]["block_number"]
+        .as_i64()
+        .expect("readyz probe should report the current RPC block number");
     update_chain_info(&ctx.db, rpc_block).await?;
 
     let (status, json) = make_request(ctx.app, "/readyz").await;
@@ -133,7 +139,13 @@ async fn test_readyz_shows_indexer_lag() -> anyhow::Result<()> {
     // Seed chain_info to the current RPC block so the indexer looks caught up (lag ≈ 0),
     // independent of how many blocks contract deployment produced.
     let (_, probe) = make_request(ctx.app.clone(), "/readyz").await;
-    let rpc_block = probe["checks"]["rpc"]["block_number"].as_i64().unwrap_or(0);
+    assert_eq!(
+        probe["checks"]["rpc"]["status"], "healthy",
+        "readyz probe RPC check should be healthy"
+    );
+    let rpc_block = probe["checks"]["rpc"]["block_number"]
+        .as_i64()
+        .expect("readyz probe should report the current RPC block number");
     update_chain_info(&ctx.db, rpc_block).await?;
 
     let (status, json) = make_request(ctx.app, "/readyz").await;

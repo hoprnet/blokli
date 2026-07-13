@@ -725,12 +725,19 @@ impl QueryRoot {
     ///
     /// This query makes a direct RPC call to the blockchain to get a current token balance.
     /// No database storage is used - balance is fetched directly from the chain.
+    ///
+    /// Only the HOPR token variants `WXHOPR` and `XHOPR` are supported. `NATIVE` is rejected —
+    /// use the `nativeBalance` query for the native (xDAI) balance.
     #[graphql(name = "hoprBalance", complexity = 50)]
     async fn hopr_balance(
         &self,
         ctx: &Context<'_>,
         #[graphql(desc = "On-chain address to query (hexadecimal format)")] address: String,
-        #[graphql(desc = "Token type to query (defaults to wxHOPR)")] token: Option<Token>,
+        #[graphql(
+            desc = "HOPR token to query: WXHOPR (default) or XHOPR. NATIVE is not accepted here — use nativeBalance \
+                    instead."
+        )]
+        token: Option<Token>,
     ) -> Result<HoprBalanceResult> {
         // Validate address format
         if let Err(e) = validate_eth_address(&address) {
