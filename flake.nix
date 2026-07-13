@@ -137,6 +137,7 @@
               extraExtensions = [
                 "csv"
                 "graphql"
+                "hex"
               ];
             };
             test = nixLib.mkTestSrc {
@@ -145,6 +146,7 @@
               extraExtensions = [
                 "csv"
                 "graphql"
+                "hex"
               ];
             };
             deps = nixLib.mkDepsSrc {

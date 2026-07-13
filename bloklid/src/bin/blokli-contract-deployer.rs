@@ -109,8 +109,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // Clone the (cheap, Arc-backed) provider so it survives the HOPR deploy and can be
     // reused for the optional Curvy suite below (`--with-curvy`).
     let instances =
-        ContractInstances::deploy_for_testing(provider.clone(), a2h(signer_chain_key.public().to_address()))
-            .await?;
+        ContractInstances::deploy_for_testing(provider.clone(), a2h(signer_chain_key.public().to_address())).await?;
     let contracts = ContractAddresses::from(&instances);
     let output = ContractsOutput {
         contracts: BlokliContractAddresses {

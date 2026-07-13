@@ -93,7 +93,7 @@ hopli = { workspace = true }
 # pinned =2.1.0 exactly like hopr-bindings, and no heavy crypto (arkworks) exists in
 # the crate at all. Path dep for the PoC; hosting (git/crates.io, like hopli /
 # hopr-bindings) is the final step before upstreaming.
-curvy-bindings = { path = "/Users/vanja/Projects/v3-e2e/packages/contracts/evm/bindings/curvy-bindings" }
+curvy-bindings = { path = "../vendor/curvy-bindings" }
 
 [dev-dependencies]
 anyhow      = { workspace = true }
