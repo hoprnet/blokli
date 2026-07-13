@@ -110,9 +110,6 @@ just test-package blokli-chain-indexer  # Indexer and reorg handling tests
 
 # Run tests with debug output (single-threaded, shows println!)
 just test-debug
-
-# Run integration tests
-just test-indexer
 ```
 
 ### Smoke Tests
