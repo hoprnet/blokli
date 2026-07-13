@@ -2601,14 +2601,16 @@ dependencies = [
 
 [[package]]
 name = "curvy-bindings"
-version = "1.0.0"
+version = "1.0.0-rc-1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "17072d890f37cafa605470488075155c7942be71988fcc157754313a7436c62e"
 dependencies = [
  "alloy",
+ "anyhow",
  "hex",
  "serde",
  "serde_json",
  "serde_with",
- "tokio",
  "tracing",
 ]
 
