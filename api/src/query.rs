@@ -759,9 +759,9 @@ impl QueryRoot {
                 .await
                 .map(|b| b.to_string())
                 .map_err(|e| ("query xHOPR balance", e)),
-            _ => {
+            Token::Native => {
                 return Ok(HoprBalanceResult::QueryFailed(errors::not_implemented(
-                    "Unsupported token",
+                    "Native balance is not available via hoprBalance; use the nativeBalance query instead",
                 )));
             }
         };

@@ -559,7 +559,7 @@ type QueryRoot {
 
   # Request 2: Query the Safe's HOPR balance using address from first response
   query GetSafeHoprBalance($safeAddress: String!) {
-    hoprBalance(address: $safeAddress, token: wxHOPR) {
+    hoprBalance(address: $safeAddress, token: WXHOPR) {
       ... on HoprBalance {
         address
         balance
@@ -572,7 +572,7 @@ type QueryRoot {
     "On-chain address to query (hexadecimal format)"
     address: String!
     "Token type to query (defaults to wxHOPR)"
-    token: Token = wxHOPR
+    token: Token = WXHOPR
   ): HoprBalanceResult!
   """
   Retrieve native token balance for a specific address

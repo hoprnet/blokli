@@ -189,3 +189,10 @@ cast_sign_loss           = "deny"
 [profile.dev.package]
 insta.opt-level   = 3
 similar.opt-level = 3
+
+# TODO(xHOPR): drop this patch once the xHOPR-instance changes are released to crates.io.
+# Pinned to hoprnet/contracts#121 (branch q/add-wxhopr-instance), which adds a distinct xHOPR
+# (ERC677Mock) token instance to the test deployment and populates `xhopr_token` in the network
+# config.
+[patch.crates-io]
+hopr-bindings = { git = "https://github.com/hoprnet/contracts", rev = "b4c6041e91ade772a184aff3315f45017a0415be" }

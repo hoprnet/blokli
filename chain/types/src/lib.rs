@@ -1,6 +1,7 @@
 //! This crate contains various on-chain related modules and types.
 use constants::{ERC_1820_DEPLOYER, ERC_1820_REGISTRY_DEPLOY_CODE, ETH_VALUE_FOR_ERC1820_DEPLOYER};
 use hopr_bindings::{
+    erc677_mock::ERC677Mock::{self, ERC677MockInstance},
     exports::alloy::{
         contract::Result as ContractResult,
         network::TransactionBuilder,
@@ -121,7 +122,8 @@ pub struct ContractAddresses {
 #[derive(Debug)]
 pub struct ContractInstances<P> {
     pub token: HoprTokenInstance<P>,
-    pub xhopr_token: HoprTokenInstance<P>,
+    /// xHOPR token — a distinct ERC677 token, not the wxHOPR (`token`) contract.
+    pub xhopr_token: ERC677MockInstance<P>,
     pub channels: HoprChannelsInstance<P>,
     pub announcements: HoprAnnouncementsInstance<P>,
     pub module_implementation: HoprNodeManagementModuleInstance<P>,
@@ -131,6 +133,11 @@ pub struct ContractInstances<P> {
     pub winning_probability_oracle: HoprWinningProbabilityOracleInstance<P>,
     pub node_stake_factory: HoprNodeStakeFactoryInstance<P>,
 }
+
+/// Amount of xHOPR (18 decimals) minted to the deployer in the testing deployment.
+///
+/// Deliberately distinct from any wxHOPR amount so tests can assert xHOPR ≠ wxHOPR balances.
+const XHOPR_MINT_AMOUNT: u128 = 777_000_000_000_000_000_000;
 
 impl<P> ContractInstances<P>
 where
@@ -142,7 +149,7 @@ where
                 AlloyAddress::from_hopr_address(contract_addresses.token),
                 provider.clone(),
             ),
-            xhopr_token: HoprTokenInstance::new(
+            xhopr_token: ERC677MockInstance::new(
                 AlloyAddress::from_hopr_address(contract_addresses.xhopr_token),
                 provider.clone(),
             ),
@@ -227,7 +234,15 @@ where
         )
         .await?;
         let token = HoprToken::deploy(provider.clone()).await?;
-        let xhopr_token = token.clone(); // TODO(xHOPR): update to deploy a separate xHOPR token. Requires a contract's repo update
+        // Deploy a distinct xHOPR token (ERC677) so its balance is independent of wxHOPR, and
+        // seed the deployer with a recognisably different amount for balance assertions in tests.
+        let xhopr_token = ERC677Mock::deploy(provider.clone()).await?;
+        xhopr_token
+            .batchMintInternal(vec![self_address], primitives::U256::from(XHOPR_MINT_AMOUNT))
+            .send()
+            .await?
+            .watch()
+            .await?;
         let channels = HoprChannels::deploy(
             provider.clone(),
             AlloyAddress::from(token.address().as_ref()),
