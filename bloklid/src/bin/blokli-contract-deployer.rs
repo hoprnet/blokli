@@ -1,3 +1,5 @@
+#[cfg(unix)]
+use std::os::unix::fs::PermissionsExt;
 use std::{
     any::Any,
     backtrace::Backtrace,
@@ -110,7 +112,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!(
-                "refusing local-development deployment on chain {chain_id}; expected {ANVIL_CHAIN_ID} (use --allow-unsafe-chain to override)"
+                "refusing local-development deployment on chain {chain_id}; expected {ANVIL_CHAIN_ID} (use \
+                 --allow-unsafe-chain to override)"
             ),
         )
         .into());
@@ -287,9 +290,7 @@ fn atomic_write(path: &Path, contents: &[u8]) -> io::Result<()> {
     let mut temporary = NamedTempFile::new_in(parent)?;
     temporary.write_all(contents)?;
     #[cfg(unix)]
-    temporary
-        .as_file()
-        .set_permissions(std::os::unix::fs::PermissionsExt::from_mode(0o644))?;
+    temporary.as_file().set_permissions(PermissionsExt::from_mode(0o644))?;
     temporary.as_file().sync_all()?;
     temporary.persist(path).map_err(|error| error.error)?;
     Ok(())
@@ -359,10 +360,9 @@ fn panic_payload_to_str(payload: &(dyn Any + Send)) -> Cow<'static, str> {
 
 #[cfg(test)]
 mod tests {
-    use std::{any::Any, fs};
-
     #[cfg(unix)]
     use std::os::unix::fs::PermissionsExt as _;
+    use std::{any::Any, fs};
 
     use anyhow::Result;
     use clap::Parser;
