@@ -5,13 +5,15 @@ image remain HOPR-only.
 
 ## Dependency handoff
 
-The review branch pins `curvy-bindings` to a full Curvy Git commit. The repository
-must be anonymously readable over HTTPS. After the crate is published, replace the
-workspace dependency with the exact registry version and refresh `Cargo.lock`:
+The workspace pins `curvy-bindings` to the exact published pre-release on
+crates.io:
 
 ```toml
 curvy-bindings = { version = "=1.0.0-rc-1" }
 ```
+
+After acceptance and the production legal review, publish stable `1.0.0`, move
+Blokli to that exact version, and refresh `Cargo.lock`:
 
 ```bash
 cargo update -p curvy-bindings
@@ -19,9 +21,6 @@ cargo check --locked -p bloklid --bin blokli-contract-deployer
 cargo check --locked -p bloklid --bin blokli-contract-deployer \
   --features curvy-test-deployment
 ```
-
-After acceptance and the production legal review, publish stable `1.0.0` and move
-Blokli to that exact version.
 
 ## Linux/Nix validation
 

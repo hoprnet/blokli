@@ -18,7 +18,7 @@ let
     { src, depsSrc }:
     {
       inherit src depsSrc rev;
-      cargoExtraArgs = "--bins --locked";
+      cargoExtraArgs = "--bins"; # Build all binary targets
       cargoToml = ./../../bloklid/Cargo.toml;
     };
 
@@ -34,7 +34,7 @@ let
         })
         // {
           prependPackageName = false;
-          cargoExtraArgs = "-p bloklid --bins --locked";
+          cargoExtraArgs = "-p bloklid --bins";
         };
       name = "binary-bloklid-${platform}";
     in
@@ -48,7 +48,7 @@ let
       "${name}-curvy" = builders.${platform}.callPackage nixLib.mkRustPackage (
         args
         // {
-          cargoExtraArgs = "-p bloklid --bins --locked --features curvy-test-deployment";
+          cargoExtraArgs = "-p bloklid --bins --features curvy-test-deployment";
         }
       );
     };
@@ -99,7 +99,7 @@ in
     })
     // {
       runTests = true;
-      cargoExtraArgs = "--locked -Z panic-abort-tests"; # Nightly feature for test optimization
+      cargoExtraArgs = "-Z panic-abort-tests"; # Nightly feature for test optimization
     }
   );
 

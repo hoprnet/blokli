@@ -52,19 +52,16 @@ if [ "${anvil_ready}" != "true" ]; then
 fi
 
 CONTRACTS_PATH="${DATA_DIR}/contracts-deploy.toml"
-CONTRACTS_DIR="$(dirname "${CONTRACTS_PATH}")"
-
-mkdir -p "${CONTRACTS_DIR}"
-
 DEPLOYER_ARGS=()
 if [ -n "${ANVIL_DEPLOYER_PRIVATE_KEY:-}" ]; then
   DEPLOYER_ARGS+=(--private-key "${ANVIL_DEPLOYER_PRIVATE_KEY}")
 fi
 if [ "${BLOKLI_DEPLOY_CURVY}" = "true" ]; then
-  CURVY_JSON_PATH="${CURVY_JSON_PATH:-${CONTRACTS_DIR}/curvy_deployed_addresses.json}"
+  CURVY_JSON_PATH="${CURVY_JSON_PATH:-${DATA_DIR}/curvy_deployed_addresses.json}"
   DEPLOYER_ARGS+=(--with-curvy --curvy-json-out "${CURVY_JSON_PATH}")
 fi
 
+# Deploy contracts with error handling
 if ! blokli-contract-deployer \
   --rpc-url "${ANVIL_RPC_URL}" \
   --output "${CONTRACTS_PATH}" \
