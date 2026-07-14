@@ -29,4 +29,4 @@ rule:
           kind: use_declaration
           stopBy: end
     - not:
-        regex: '^crate::'
+        regex: "^crate::"
