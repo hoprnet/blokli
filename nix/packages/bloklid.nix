@@ -45,6 +45,12 @@ let
       "${name}-dev" = builders.${platform}.callPackage nixLib.mkRustPackage (
         args // { CARGO_PROFILE = "dev"; }
       );
+      "${name}-curvy" = builders.${platform}.callPackage nixLib.mkRustPackage (
+        args
+        // {
+          cargoExtraArgs = "-p bloklid --bins --features curvy-test-deployment";
+        }
+      );
     };
 
   bloklidPackages = builtins.foldl' (a: b: a // b) { } (
