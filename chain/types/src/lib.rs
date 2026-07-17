@@ -24,6 +24,7 @@ use hopr_types::{
     primitive::primitives::Address,
 };
 use serde::{Deserialize, Serialize};
+use serde_with::{DisplayFromStr, serde_as};
 
 pub mod actions;
 pub mod chain_events;
@@ -93,27 +94,38 @@ pub struct ChainConfig {
 }
 
 /// Holds addresses of all smart contracts.
+#[serde_as]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub struct ContractAddresses {
     /// wxHOPR token contract
+    #[serde_as(as = "DisplayFromStr")]
     pub token: Address,
     /// Channels contract
+    #[serde_as(as = "DisplayFromStr")]
     pub channels: Address,
     /// Announcements contract
+    #[serde_as(as = "DisplayFromStr")]
     pub announcements: Address,
     /// Node management module contract
+    #[serde_as(as = "DisplayFromStr")]
     pub module_implementation: Address,
     /// Node safe migration contract
+    #[serde_as(as = "DisplayFromStr")]
     pub node_safe_migration: Address,
     /// Safe registry contract
+    #[serde_as(as = "DisplayFromStr")]
     pub node_safe_registry: Address,
     /// Price oracle contract
+    #[serde_as(as = "DisplayFromStr")]
     pub ticket_price_oracle: Address,
     /// Minimum ticket winning probability contract
+    #[serde_as(as = "DisplayFromStr")]
     pub winning_probability_oracle: Address,
     /// Stake factory contract
+    #[serde_as(as = "DisplayFromStr")]
     pub node_stake_factory: Address,
     /// xHOPR token contract
+    #[serde_as(as = "DisplayFromStr")]
     #[serde(default)]
     pub xhopr_token: Address,
 }
