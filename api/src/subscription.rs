@@ -35,7 +35,10 @@ use hopr_types::primitive::{
     traits::{IntoEndian, ToHex},
 };
 use rand::seq::SliceRandom;
-use sea_orm::{ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter, QueryOrder};
+use sea_orm::{
+    ColumnTrait, Condition, DatabaseConnection, EntityTrait, QueryFilter,
+    sea_query::{Alias, Expr, ExprTrait, Query},
+};
 use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
@@ -144,27 +147,10 @@ async fn query_channels_at_watermark(
         return Ok(Vec::new());
     }
 
-    let channel_ids: Vec<i64> = channels.iter().map(|c| c.id).collect();
-
-    // Query channel_state for all channels, filtered by watermark
-    // Only get states published at or before the watermark
-    let channel_states_query = channel_state::Entity::find()
-        .filter(channel_state::Column::ChannelId.is_in(channel_ids.clone()))
-        .filter(watermark_condition(watermark))
-        .order_by_desc(channel_state::Column::PublishedBlock)
-        .order_by_desc(channel_state::Column::PublishedTxIndex)
-        .order_by_desc(channel_state::Column::PublishedLogIndex);
-
-    let channel_states = channel_states_query
-        .all(db)
-        .await
-        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channel_state query", e)))?;
-
-    // Build map of channel_id -> latest state (first occurrence due to ordering)
-    let mut state_map: HashMap<i64, channel_state::Model> = HashMap::new();
-    for state in channel_states {
-        state_map.entry(state.channel_id).or_insert(state);
-    }
+    // Fetch the latest state per channel at or before the watermark. The reduction
+    // is done in the database (one row per channel) rather than by loading the full
+    // state history and collapsing it in memory.
+    let state_map = fetch_latest_channel_states(db, watermark).await?;
 
     // Filter to only OPEN channels (status = 1)
     let open_channels: Vec<_> = channels
@@ -322,26 +308,9 @@ async fn query_channels_at_watermark_with_filters(
         return Ok(Vec::new());
     }
 
-    let channel_ids: Vec<i64> = channels.iter().map(|c| c.id).collect();
-
-    // Query channel_state for all channels, filtered by watermark
-    let channel_states_query = channel_state::Entity::find()
-        .filter(channel_state::Column::ChannelId.is_in(channel_ids))
-        .filter(watermark_condition(watermark))
-        .order_by_desc(channel_state::Column::PublishedBlock)
-        .order_by_desc(channel_state::Column::PublishedTxIndex)
-        .order_by_desc(channel_state::Column::PublishedLogIndex);
-
-    let channel_states = channel_states_query
-        .all(db)
-        .await
-        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channel_state query", e)))?;
-
-    // Build map of channel_id -> latest state
-    let mut state_map: HashMap<i64, channel_state::Model> = HashMap::new();
-    for state in channel_states {
-        state_map.entry(state.channel_id).or_insert(state);
-    }
+    // Fetch the latest state per channel at or before the watermark (DB-side reduction).
+    // Channels the caller filtered out are simply never looked up in the map below.
+    let state_map = fetch_latest_channel_states(db, watermark).await?;
 
     // Filter channels by status and build result
     let mut results = Vec::new();
@@ -388,14 +357,88 @@ async fn query_channels_at_watermark_with_filters(
     Ok(results)
 }
 
-/// Builds SeaORM condition for filtering channel_state by watermark
+/// Fetches the latest `channel_state` at or before the watermark for every channel,
+/// returning a `channel_id -> state` map with exactly one row per channel.
 ///
-/// Creates a condition that matches all channel states published in blocks up to
-/// and including the watermark block. The indexer processes blocks atomically —
-/// all events from a block are committed before the watermark is advanced — so
-/// block-level granularity is sufficient.
-fn watermark_condition(watermark: &Watermark) -> Condition {
-    Condition::all().add(channel_state::Column::PublishedBlock.lte(watermark.block))
+/// The "latest per channel" reduction is pushed into the database via a correlated
+/// `ORDER BY ... LIMIT 1` subquery (served by `idx_channel_state_position`), so this
+/// returns O(channels) rows instead of loading the full state history and collapsing
+/// it in memory — which previously scanned hundreds of thousands of rows per call.
+///
+/// The `published_block <= watermark` bound is required by the 2-phase subscription
+/// model: the historical snapshot must reflect state exactly at the captured
+/// watermark, since any state change after it is delivered separately via the event
+/// bus. The indexer commits blocks atomically, so block-level granularity is
+/// sufficient. The query is portable across PostgreSQL and SQLite.
+async fn fetch_latest_channel_states(
+    db: &DatabaseConnection,
+    watermark: &Watermark,
+) -> Result<HashMap<i64, channel_state::Model>> {
+    // Alias for the correlated inner reference to the same table.
+    let later = Alias::new("later");
+
+    // A row is "the latest at the watermark" for its channel when no other row for
+    // the same channel (also within the watermark bound) has a strictly greater
+    // position. Position is the (block, tx_index, log_index) triple, compared
+    // lexicographically — the same ordering used by `idx_channel_state_position`,
+    // which serves this anti-join efficiently.
+    let has_later_state = Query::select()
+        .expr(Expr::val(1))
+        .from_as(channel_state::Entity, later.clone())
+        .and_where(
+            Expr::col((later.clone(), channel_state::Column::ChannelId))
+                .equals((channel_state::Entity, channel_state::Column::ChannelId)),
+        )
+        .and_where(Expr::col((later.clone(), channel_state::Column::PublishedBlock)).lte(watermark.block))
+        .cond_where(
+            Condition::any()
+                .add(
+                    Expr::col((later.clone(), channel_state::Column::PublishedBlock)).gt(Expr::col((
+                        channel_state::Entity,
+                        channel_state::Column::PublishedBlock,
+                    ))),
+                )
+                .add(
+                    Condition::all()
+                        .add(
+                            Expr::col((later.clone(), channel_state::Column::PublishedBlock))
+                                .equals((channel_state::Entity, channel_state::Column::PublishedBlock)),
+                        )
+                        .add(
+                            Expr::col((later.clone(), channel_state::Column::PublishedTxIndex)).gt(Expr::col((
+                                channel_state::Entity,
+                                channel_state::Column::PublishedTxIndex,
+                            ))),
+                        ),
+                )
+                .add(
+                    Condition::all()
+                        .add(
+                            Expr::col((later.clone(), channel_state::Column::PublishedBlock))
+                                .equals((channel_state::Entity, channel_state::Column::PublishedBlock)),
+                        )
+                        .add(
+                            Expr::col((later.clone(), channel_state::Column::PublishedTxIndex))
+                                .equals((channel_state::Entity, channel_state::Column::PublishedTxIndex)),
+                        )
+                        .add(
+                            Expr::col((later.clone(), channel_state::Column::PublishedLogIndex)).gt(Expr::col((
+                                channel_state::Entity,
+                                channel_state::Column::PublishedLogIndex,
+                            ))),
+                        ),
+                ),
+        )
+        .to_owned();
+
+    let states = channel_state::Entity::find()
+        .filter(channel_state::Column::PublishedBlock.lte(watermark.block))
+        .filter(Expr::not_exists(has_later_state))
+        .all(db)
+        .await
+        .map_err(|e| async_graphql::Error::new(errors::messages::query_error("channel_state query", e)))?;
+
+    Ok(states.into_iter().map(|s| (s.channel_id, s)).collect())
 }
 
 /// fetch_channel_update is no longer needed - events now contain complete data
