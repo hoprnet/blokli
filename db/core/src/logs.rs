@@ -13,11 +13,11 @@ use hopr_types::{
     primitive::prelude::{Address, DateTime, SerializableLog, ToHex, Utc},
 };
 use sea_orm::{
-    ActiveModelTrait, ColumnTrait, DbErr, EntityTrait, FromQueryResult, IntoActiveModel, PaginatorTrait, QueryFilter,
-    QueryOrder, QuerySelect,
+    ColumnTrait, DbErr, EntityTrait, FromQueryResult, JoinType, PaginatorTrait, QueryFilter, QueryOrder, QuerySelect,
+    RelationTrait,
     entity::Set,
     query::QueryTrait,
-    sea_query::{Expr, OnConflict, Value},
+    sea_query::{CaseStatement, Expr, ExprTrait, OnConflict, Value},
 };
 use tracing::{error, trace};
 
@@ -34,6 +34,25 @@ use crate::{
 #[derive(FromQueryResult)]
 struct BlockNumber {
     block_number: i64,
+}
+
+/// Number of `log_status` rows whose checksum is recomputed and flushed per
+/// round-trip in [`update_logs_checksums`]. Bounds peak memory to one chunk and
+/// collapses the historical backfill from one UPDATE per row into one UPDATE per
+/// chunk.
+const CHECKSUM_UPDATE_CHUNK_SIZE: u64 = 1000;
+
+/// Minimal projection needed to compute a log checksum: the `log_status` row id
+/// to update, plus the `block_hash` / `transaction_hash` / `log_index` from the
+/// joined `log` row. Deliberately excludes `log.topics` / `log.data` (unbounded
+/// blobs the checksum does not use) to keep the streamed read cheap.
+#[derive(FromQueryResult)]
+struct ChecksumInput {
+    id: i64,
+    block_number: i64,
+    block_hash: Vec<u8>,
+    transaction_hash: Vec<u8>,
+    log_index: i64,
 }
 
 #[async_trait]
@@ -359,6 +378,8 @@ impl BlokliDbLogOperations for BlokliDb {
             .await?
             .perform(|tx| {
                 Box::pin(async move {
+                    // Seed the rolling hash from the highest already-checksummed row. This is a
+                    // single index-backed lookup (idx_log_status_composite serves the ordering).
                     let mut last_checksum = LogStatus::find()
                         .filter(log_status::Column::Checksum.is_not_null())
                         .order_by_desc(log_status::Column::BlockNumber)
@@ -371,46 +392,79 @@ impl BlokliDbLogOperations for BlokliDb {
                         .and_then(|c| Hash::try_from(c.as_slice()).ok())
                         .unwrap_or_default();
 
-                    let query = LogStatus::find()
-                        .filter(log_status::Column::Checksum.is_null())
-                        .order_by_asc(log_status::Column::BlockNumber)
-                        .order_by_asc(log_status::Column::TxIndex)
-                        .order_by_asc(log_status::Column::LogIndex)
-                        .find_also_related(Log);
+                    // The checksum is a rolling hash (each row folds in the previous row's
+                    // checksum), so it must be computed sequentially in application code — a
+                    // single bulk SQL statement cannot express the carry. What we *can* bound is
+                    // memory and round-trips: process the un-checksummed rows in ordered chunks,
+                    // flushing each chunk with one UPDATE instead of one UPDATE per row.
+                    //
+                    // Each iteration re-fetches the earliest rows still lacking a checksum. Because
+                    // the writes are visible within this transaction, processed rows drop out of the
+                    // `checksum IS NULL` set, so the query naturally advances (no OFFSET drift).
+                    loop {
+                        let chunk = LogStatus::find()
+                            .select_only()
+                            .column_as(log_status::Column::Id, "id")
+                            .column_as(log_status::Column::BlockNumber, "block_number")
+                            .column_as(log::Column::BlockHash, "block_hash")
+                            .column_as(log::Column::TransactionHash, "transaction_hash")
+                            .column_as(log::Column::LogIndex, "log_index")
+                            .join(JoinType::InnerJoin, log_status::Relation::Log.def())
+                            .filter(log_status::Column::Checksum.is_null())
+                            .order_by_asc(log_status::Column::BlockNumber)
+                            .order_by_asc(log_status::Column::TxIndex)
+                            .order_by_asc(log_status::Column::LogIndex)
+                            .limit(CHECKSUM_UPDATE_CHUNK_SIZE)
+                            .into_model::<ChecksumInput>()
+                            .all(tx.as_ref())
+                            .await
+                            .map_err(|e| DbError::from(DbSqlError::from(e)))?;
 
-                    match query.all(tx.as_ref()).await {
-                        Ok(entries) => {
-                            let mut entries = entries.into_iter();
-                            while let Some((status, Some(log_entry))) = entries.next() {
-                                let slog = create_log(log_entry.clone(), status.clone())?;
-                                // we compute the hash of a single log as a combination of the block
-                                // hash, TX hash, and the log index
-                                let log_hash = Hash::create(&[
-                                    log_entry.block_hash.as_slice(),
-                                    log_entry.transaction_hash.as_slice(),
-                                    &(log_entry.log_index as u64).to_be_bytes(),
-                                ]);
-
-                                let next_checksum = Hash::create(&[last_checksum.as_ref(), log_hash.as_ref()]);
-
-                                let mut updated_status = status.into_active_model();
-                                updated_status.checksum = Set(Some(next_checksum.as_ref().to_vec()));
-
-                                match updated_status.update(tx.as_ref()).await {
-                                    Ok(_) => {
-                                        last_checksum = next_checksum;
-                                        trace!(log = %slog, checksum = %next_checksum, "Generated log checksum");
-                                    }
-                                    Err(error) => {
-                                        error!(%error, "Failed to update log status checksum in db");
-                                        break;
-                                    }
-                                }
-                            }
-                            Ok(last_checksum)
+                        if chunk.is_empty() {
+                            break;
                         }
-                        Err(e) => Err(DbError::from(DbSqlError::from(e))),
+
+                        // Compute the chunk's checksums sequentially and fold them into a single
+                        // CASE expression keyed by row id.
+                        let mut case = CaseStatement::new();
+                        let mut ids: Vec<i64> = Vec::with_capacity(chunk.len());
+                        for row in &chunk {
+                            // The per-log hash combines the block hash, TX hash, and the log index.
+                            let log_hash = Hash::create(&[
+                                row.block_hash.as_slice(),
+                                row.transaction_hash.as_slice(),
+                                &(row.log_index as u64).to_be_bytes(),
+                            ]);
+
+                            let next_checksum = Hash::create(&[last_checksum.as_ref(), log_hash.as_ref()]);
+
+                            case = case.case(
+                                Expr::col(log_status::Column::Id).eq(row.id),
+                                Expr::value(next_checksum.as_ref().to_vec()),
+                            );
+                            ids.push(row.id);
+                            last_checksum = next_checksum;
+
+                            trace!(
+                                id = row.id,
+                                block_number = row.block_number,
+                                checksum = %next_checksum,
+                                "Generated log checksum"
+                            );
+                        }
+
+                        // A failed write aborts the transaction; propagate so the whole pass rolls
+                        // back rather than committing a partial chain. The next invocation reseeds
+                        // from the last committed checksum and recomputes.
+                        LogStatus::update_many()
+                            .col_expr(log_status::Column::Checksum, case.into())
+                            .filter(log_status::Column::Id.is_in(ids))
+                            .exec(tx.as_ref())
+                            .await
+                            .map_err(|e| DbError::from(DbSqlError::from(e)))?;
                     }
+
+                    Ok(last_checksum)
                 })
             })
             .await
@@ -945,6 +999,83 @@ mod tests {
             updated_log_3.clone().checksum.unwrap(),
         );
         assert_ne!(updated_log_1, updated_log_3);
+    }
+
+    #[tokio::test]
+    async fn test_update_logs_checksums_spans_multiple_chunks_and_resumes() {
+        let db = BlokliDb::new_in_memory().await.unwrap();
+
+        // Fixed hash inputs shared by every log — only `block_number` varies, so all logs
+        // produce the same per-log hash and the checksum chain depends purely on position.
+        let block_hash = Hash::create(&[b"block_hash"]);
+        let tx_hash = Hash::create(&[b"tx_hash"]);
+        let log_index: u64 = 1;
+        let template = SerializableLog {
+            address: Address::new(b"my address 123456789"),
+            topics: [Hash::create(&[b"topic"]).into()].into(),
+            data: [1, 2, 3, 4].into(),
+            tx_index: 1,
+            block_number: 0,
+            block_hash: block_hash.into(),
+            tx_hash: tx_hash.into(),
+            log_index,
+            removed: false,
+            ..Default::default()
+        };
+
+        // Reference rolling hash computed independently of the chunking logic.
+        let per_log_hash = Hash::create(&[block_hash.as_ref(), tx_hash.as_ref(), &log_index.to_be_bytes()]);
+        let fold = |acc: &Hash| Hash::create(&[acc.as_ref(), per_log_hash.as_ref()]);
+
+        // Cross two chunk boundaries (chunk size is 1000).
+        let count: u64 = 2005;
+        let logs: Vec<SerializableLog> = (1..=count)
+            .map(|block_number| SerializableLog {
+                block_number,
+                ..template.clone()
+            })
+            .collect();
+        db.store_logs(logs)
+            .await
+            .unwrap()
+            .into_iter()
+            .for_each(|r| assert!(r.is_ok()));
+
+        let last = db.update_logs_checksums().await.unwrap();
+
+        // The chunked computation must equal the straight sequential fold.
+        let mut expected = Hash::default();
+        for _ in 0..count {
+            expected = fold(&expected);
+        }
+        assert_eq!(last, expected, "chunked checksum chain must match sequential reference");
+
+        // Every row must be checksummed.
+        db.get_logs(None, None).await.unwrap().into_iter().for_each(|log| {
+            assert!(log.checksum.is_some());
+        });
+
+        // Idempotency: with no un-checksummed rows left the pass is a no-op and reproduces
+        // the same terminal checksum (exercising the seed-from-existing path).
+        let last_again = db.update_logs_checksums().await.unwrap();
+        assert_eq!(last, last_again);
+
+        // Continuation: a newly appended log must extend the existing chain by exactly one
+        // fold — proving the seed was taken from the prior terminal checksum, not recomputed.
+        db.store_log(SerializableLog {
+            block_number: count + 1,
+            ..template.clone()
+        })
+        .await
+        .unwrap();
+
+        let extended = db.update_logs_checksums().await.unwrap();
+        assert_ne!(last, extended);
+        assert_eq!(
+            extended,
+            fold(&expected),
+            "resume must fold onto the prior terminal checksum"
+        );
     }
 
     #[tokio::test]
