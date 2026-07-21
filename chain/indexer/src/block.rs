@@ -32,7 +32,8 @@ use hopr_types::{
     primitive::prelude::{Address, SerializableLog},
 };
 use sea_orm::{
-    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, strum::Display,
+    ActiveModelTrait, ActiveValue::Set, ColumnTrait, Condition, EntityTrait, QueryFilter, QueryOrder, QuerySelect,
+    strum::Display,
 };
 use tracing::{debug, error, info, trace, warn};
 
@@ -1085,22 +1086,27 @@ where
             max_block, canonical_block, "Processing reorg: identifying affected channels"
         );
 
-        // Step 1: Query channel_state table for all states in the affected block range
-        // This tells us which channels were affected by the reorg
-        let affected_states = ChannelState::find()
+        // Step 1: Query channel_state table for the distinct channels touched in the
+        // affected block range. Only the `channel_id` column is selected so the planner
+        // can satisfy this with an index-only scan on `idx_channel_state_block_channel`
+        // (leading with `published_block`) instead of hydrating full rows.
+        let affected_channel_ids: HashSet<i64> = ChannelState::find()
             .filter(
                 Condition::all()
                     .add(channel_state::Column::PublishedBlock.gte(min_block))
                     .add(channel_state::Column::PublishedBlock.lte(max_block)),
             )
+            .select_only()
+            .column(channel_state::Column::ChannelId)
+            .distinct()
+            .into_tuple::<i64>()
             .all(db_conn)
             .await
             .map_err(|e| {
                 CoreEthereumIndexerError::ProcessError(format!("Failed to query affected channel states: {}", e))
-            })?;
-
-        // Extract unique channel IDs
-        let affected_channel_ids: HashSet<i64> = affected_states.iter().map(|state| state.channel_id).collect();
+            })?
+            .into_iter()
+            .collect();
 
         info!(affected_count = affected_channel_ids.len(), "Found affected channels");
 
