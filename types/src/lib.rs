@@ -110,6 +110,152 @@ impl ScalarType for UInt64 {
     }
 }
 
+/// Unsigned 256-bit integer represented as a decimal string.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UInt256(pub String);
+
+#[Scalar(name = "UInt256")]
+impl ScalarType for UInt256 {
+    fn parse(value: Value) -> async_graphql::InputValueResult<Self> {
+        let value = match value {
+            Value::String(value) => value,
+            Value::Number(value) => value.to_string(),
+            _ => return Err("UInt256 must be a decimal string or non-negative integer".into()),
+        };
+        let normalized = value.trim_start_matches('0');
+        let normalized = if normalized.is_empty() { "0" } else { normalized };
+        const MAX_U256: &str = "115792089237316195423570985008687907853269984665640564039457584007913129639935";
+        if !normalized.bytes().all(|byte| byte.is_ascii_digit())
+            || normalized.len() > MAX_U256.len()
+            || (normalized.len() == MAX_U256.len() && normalized > MAX_U256)
+        {
+            return Err("UInt256 must be a decimal integer between 0 and 2^256 - 1".into());
+        }
+        Ok(Self(normalized.to_string()))
+    }
+
+    fn to_value(&self) -> Value {
+        Value::String(self.0.clone())
+    }
+}
+
+/// Position and transaction identity shared by indexed Curvy events.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyEventPosition {
+    #[graphql(name = "transactionHash")]
+    pub transaction_hash: Hex32,
+    pub block: UInt64,
+    #[graphql(name = "transactionIndex")]
+    pub transaction_index: UInt64,
+    #[graphql(name = "logIndex")]
+    pub log_index: UInt64,
+}
+
+/// One note emitted by `PendingNotes`.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyPendingNote {
+    #[graphql(name = "noteId")]
+    pub note_id: UInt256,
+    #[graphql(name = "ephemeralKey")]
+    pub ephemeral_key: Vec<UInt256>,
+    #[graphql(name = "viewTag")]
+    pub view_tag: i32,
+    #[graphql(name = "tokenId")]
+    pub token_id: UInt256,
+    pub amount: UInt256,
+    #[graphql(name = "isPlaintext")]
+    pub is_plaintext: bool,
+    pub position: CurvyEventPosition,
+}
+
+/// One note emitted by `CommittedNotes`.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyCommittedNote {
+    #[graphql(name = "batchIndex")]
+    pub batch_index: UInt256,
+    #[graphql(name = "noteId")]
+    pub note_id: UInt256,
+    pub position: CurvyEventPosition,
+}
+
+/// One nullifier emitted by `CommittedNullifiers`.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyCommittedNullifier {
+    #[graphql(name = "batchIndex")]
+    pub batch_index: UInt256,
+    pub nullifier: UInt256,
+    pub position: CurvyEventPosition,
+}
+
+/// A Curvy Aggregator commitment gas-fee root update.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyCommitmentGasFeeRootUpdate {
+    pub root: UInt256,
+    pub position: CurvyEventPosition,
+}
+
+/// A token registered by the Curvy Vault.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyTokenRegistration {
+    #[graphql(name = "tokenAddress")]
+    pub token_address: String,
+    #[graphql(name = "tokenId")]
+    pub token_id: UInt256,
+    pub position: CurvyEventPosition,
+}
+
+/// Per-token gas fees emitted by `CommitmentGasCostsUpdated`.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyGasFees {
+    #[graphql(name = "tokenId")]
+    pub token_id: UInt256,
+    #[graphql(name = "portalDeployment")]
+    pub portal_deployment: UInt256,
+    #[graphql(name = "pendingNoteCommitment")]
+    pub pending_note_commitment: UInt256,
+    pub withdrawal: UInt256,
+}
+
+/// One item in a Curvy Vault commitment gas-cost update.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyCommitmentGasCostUpdate {
+    #[graphql(name = "gasFees")]
+    pub gas_fees: CurvyGasFees,
+    pub root: UInt256,
+    pub position: CurvyEventPosition,
+}
+
+/// Current Curvy Aggregator indices and notes-tree root.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyAggregatorState {
+    #[graphql(name = "notesTreeRoot")]
+    pub notes_tree_root: UInt256,
+    #[graphql(name = "notesBatchIndex")]
+    pub notes_batch_index: UInt256,
+    #[graphql(name = "nullifiersBatchIndex")]
+    pub nullifiers_batch_index: UInt256,
+    #[graphql(name = "noteIndex")]
+    pub note_index: UInt256,
+}
+
+/// Current Curvy Vault protocol-level fees.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyVaultFees {
+    #[graphql(name = "depositFee")]
+    pub deposit_fee: UInt256,
+    #[graphql(name = "withdrawalFee")]
+    pub withdrawal_fee: UInt256,
+}
+
+/// A Curvy Vault token and its configured gas fees.
+#[derive(SimpleObject, Clone, Debug)]
+pub struct CurvyVaultToken {
+    #[graphql(name = "tokenAddress")]
+    pub token_address: String,
+    #[graphql(name = "gasFees")]
+    pub gas_fees: CurvyGasFees,
+}
+
 /// Map of contract identifiers to contract addresses
 ///
 /// This scalar type represents a mapping from contract identifier strings
@@ -832,6 +978,9 @@ impl From<&blokli_chain_types::ContractAddresses> for ContractAddressMap {
             ("winning_probability_oracle", &addresses.winning_probability_oracle),
             ("node_stake_factory", &addresses.node_stake_factory),
             ("xhopr_token", &addresses.xhopr_token),
+            ("curvy_aggregator", &addresses.curvy_aggregator),
+            ("curvy_vault", &addresses.curvy_vault),
+            ("curvy_portal_factory", &addresses.curvy_portal_factory),
         ]
         .into_iter()
         .map(|(k, v)| (k.to_string(), v.to_string()))

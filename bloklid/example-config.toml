@@ -37,6 +37,9 @@ max_block_range = 10000
 # ticket_price_oracle = "0x0000000000000000000000000000000000000000"
 # winning_probability_oracle = "0x0000000000000000000000000000000000000000"
 # node_stake_factory = "0x0000000000000000000000000000000000000000"
+# curvy_aggregator = "0x0000000000000000000000000000000000000000"
+# curvy_vault = "0x0000000000000000000000000000000000000000"
+# curvy_portal_factory = "0x0000000000000000000000000000000000000000"
 
 # Database configuration - supports PostgreSQL or SQLite
 # IMPORTANT: This section is OPTIONAL if using environment variables.

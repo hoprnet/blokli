@@ -14,7 +14,9 @@ use std::sync::{
 
 use async_broadcast::{Receiver, Sender, broadcast};
 use blokli_api_types::{
-    Account, ChannelUpdate, RedeemTicketDetails, RedemptionResult, TicketParameters, TokenValueString, UInt64,
+    Account, ChannelUpdate, CurvyCommitmentGasCostUpdate, CurvyCommitmentGasFeeRootUpdate, CurvyCommittedNote,
+    CurvyCommittedNullifier, CurvyPendingNote, CurvyTokenRegistration, RedeemTicketDetails, RedemptionResult,
+    TicketParameters, TokenValueString, UInt64,
 };
 use hopr_types::primitive::prelude::Address;
 use tokio::sync::RwLock;
@@ -76,6 +78,18 @@ impl From<RedeemTicketDetailsInfo> for RedeemTicketDetails {
 /// and to ensure temporal consistency.
 #[derive(Clone, Debug)]
 pub enum IndexerEvent {
+    /// A note emitted by the Curvy Aggregator's `PendingNotes` event.
+    CurvyPendingNote(CurvyPendingNote),
+    /// A note emitted by the Curvy Aggregator's `CommittedNotes` event.
+    CurvyCommittedNote(CurvyCommittedNote),
+    /// A nullifier emitted by the Curvy Aggregator's `CommittedNullifiers` event.
+    CurvyCommittedNullifier(CurvyCommittedNullifier),
+    /// The Curvy Aggregator commitment gas-fee root changed.
+    CurvyCommitmentGasFeeRootUpdated(CurvyCommitmentGasFeeRootUpdate),
+    /// A token was registered in the Curvy Vault.
+    CurvyTokenRegistered(CurvyTokenRegistration),
+    /// Per-token Curvy Vault gas costs changed.
+    CurvyCommitmentGasCostsUpdated(CurvyCommitmentGasCostUpdate),
     /// An account was updated (balance change, announcement, safe registration, etc.)
     ///
     /// Contains complete account data including all balances and multiaddresses.

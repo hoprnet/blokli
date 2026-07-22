@@ -530,3 +530,21 @@ pub fn invalid_schema_version_header() -> async_graphql::Error {
     async_graphql::Error::new("Invalid X-Blokli-Schema-Version header: expected a non-negative integer")
         .extend_with(|_, e| e.set("code", codes::INVALID_SCHEMA_VERSION_HEADER))
 }
+
+/// Creates a top-level GraphQL error for a database query failure.
+pub fn graphql_query_error(operation: &str, error: impl std::fmt::Display) -> async_graphql::Error {
+    async_graphql::Error::new(messages::query_error(operation, error))
+        .extend_with(|_, extensions| extensions.set("code", codes::QUERY_FAILED))
+}
+
+/// Creates a top-level GraphQL error for a blockchain RPC failure.
+pub fn graphql_rpc_error(operation: &str, error: impl std::fmt::Display) -> async_graphql::Error {
+    async_graphql::Error::new(messages::rpc_error(operation, error))
+        .extend_with(|_, extensions| extensions.set("code", codes::RPC_ERROR))
+}
+
+/// Creates a top-level GraphQL error for invalid pagination input.
+pub fn graphql_pagination_error(reason: &str) -> async_graphql::Error {
+    async_graphql::Error::new(messages::invalid_pagination(reason))
+        .extend_with(|_, extensions| extensions.set("code", codes::INVALID_PAGINATION))
+}

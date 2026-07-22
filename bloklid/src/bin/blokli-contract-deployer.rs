@@ -119,7 +119,8 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let instances =
         ContractInstances::deploy_for_testing(provider.clone(), a2h(signer_chain_key.public().to_address())).await?;
     let contracts = ContractAddresses::from(&instances);
-    let output = ContractsOutput {
+    #[cfg_attr(not(feature = "curvy-test-deployment"), allow(unused_mut))]
+    let mut output = ContractsOutput {
         contracts: BlokliContractAddresses {
             token: h2a(contracts.token),
             channels: h2a(contracts.channels),
@@ -131,9 +132,11 @@ async fn main() -> Result<(), Box<dyn Error>> {
             winning_probability_oracle: h2a(contracts.winning_probability_oracle),
             node_stake_factory: h2a(contracts.node_stake_factory),
             xhopr_token: Address::default(), // xHOPR is not deployed by this script, so we set it to zero address
+            curvy_aggregator: Address::default(),
+            curvy_vault: Address::default(),
+            curvy_portal_factory: Address::default(),
         },
     };
-    let toml_output = toml::to_string(&output)?;
 
     // Assign minter role to Anvil account 0
     let minter_role = instances.token.MINTER_ROLE().call().await?;
@@ -210,6 +213,9 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 portal_factory = %curvy_contracts.portal_factory,
                 "Curvy contracts ready"
             );
+            output.contracts.curvy_aggregator = h2a(curvy_contracts.aggregator_proxy);
+            output.contracts.curvy_vault = h2a(curvy_contracts.vault_proxy);
+            output.contracts.curvy_portal_factory = h2a(curvy_contracts.portal_factory);
             Some(format!(
                 "{}\n",
                 serde_json::to_string_pretty(&curvy_contracts.to_ignition_json())?
@@ -220,6 +226,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     } else {
         None
     };
+    let toml_output = toml::to_string(&output)?;
 
     // Publish outputs only after every requested deployment and serialization succeeds.
     if let Some(path) = args.output.as_deref() {

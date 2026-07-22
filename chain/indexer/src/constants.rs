@@ -5,6 +5,12 @@ pub const LOGS_SNAPSHOT_DOWNLOADER_TIMEOUT: Duration = Duration::from_secs(1800)
 pub const LOGS_SNAPSHOT_DOWNLOADER_MAX_RETRIES: u32 = 3;
 
 pub mod topics {
+    use curvy_bindings::{
+        curvy_aggregator_alpha_v2::CurvyAggregatorAlphaV2::{
+            CommitmentGasFeeRootUpdated, CommittedNotes, CommittedNullifiers, PendingNotes,
+        },
+        curvy_vault_v2::CurvyVaultV2::{CommitmentGasCostsUpdated, TokenRegistration},
+    };
     use hopr_bindings::{
         exports::alloy::{primitives::B256, sol_types::SolEvent},
         hopr_announcements_events::HoprAnnouncementsEvents::{
@@ -122,6 +128,22 @@ pub mod topics {
             ExecutionSuccess::SIGNATURE_HASH,
             ExecutionFailure::SIGNATURE_HASH,
             ExecutionFromModuleFailure::SIGNATURE_HASH,
+        ]
+    }
+
+    pub fn curvy_aggregator() -> Vec<B256> {
+        vec![
+            PendingNotes::SIGNATURE_HASH,
+            CommittedNotes::SIGNATURE_HASH,
+            CommittedNullifiers::SIGNATURE_HASH,
+            CommitmentGasFeeRootUpdated::SIGNATURE_HASH,
+        ]
+    }
+
+    pub fn curvy_vault() -> Vec<B256> {
+        vec![
+            TokenRegistration::SIGNATURE_HASH,
+            CommitmentGasCostsUpdated::SIGNATURE_HASH,
         ]
     }
 

@@ -5,6 +5,7 @@
 
 pub mod config;
 pub mod conversions;
+mod curvy;
 pub mod errors;
 pub mod logging;
 pub mod metrics;
