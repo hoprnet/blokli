@@ -1938,7 +1938,7 @@ dependencies = [
 
 [[package]]
 name = "blokli-db-migration"
-version = "0.12.0"
+version = "0.12.1"
 dependencies = [
  "hopr-types",
  "sea-orm",
